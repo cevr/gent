@@ -19,6 +19,8 @@ import {
   CurrentWorkspaceId,
   WorkspaceId,
 } from "./ids.js"
+import { ModelId, ReasoningEffort } from "./agent.js"
+import { omitUndefined } from "./guards.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import * as Prompt from "effect/ai/Prompt"
 import { Actor } from "effect-encore"
@@ -121,8 +123,9 @@ export type ModelContextMetrics = typeof ModelContextMetrics.Type
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Finite,
   durationMs: Schema.Finite,
-  /** Cumulative USD cost: sum of `StreamEnded.costUsd` and of the compaction
-   * summaries' `ModelContextProjected.costUsd` across the session's event
+  /** Cumulative USD cost: sum of `StreamEnded.costUsd`, of the compaction
+   * summaries' `ModelContextProjected.costUsd` and of the routes'
+   * `ModelRouted.costUsd` across the session's event
    * log. Cost is frozen into each event at emit time against the
    * pricing snapshot available then, so replays always sum to the same
    * total regardless of later registry refreshes. */
@@ -133,6 +136,16 @@ export const SessionRuntimeMetrics = Schema.Struct({
    * count is never divided by another model's window after a switch. */
   lastInputTokens: Schema.Finite,
   context: Schema.optional(ModelContextMetrics),
+  /** The newest route of a virtual model (`ModelRouted`): what the status row shows. */
+  routed: Schema.optional(
+    Schema.Struct({
+      selected: ModelId,
+      model: ModelId,
+      effort: Schema.optional(ReasoningEffort),
+      reason: Schema.String,
+      fallback: Schema.optional(Schema.Boolean),
+    }),
+  ),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
@@ -186,6 +199,17 @@ export const stepSessionMetrics = (
         },
       }
     }
+    case "ModelRouted":
+      return {
+        ...metrics,
+        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
+        routed: {
+          selected: event.selected,
+          model: event.model,
+          reason: event.reason,
+          ...omitUndefined({ effort: event.effort, fallback: event.fallback }),
+        },
+      }
     case "StreamEnded":
       return {
         ...metrics,

@@ -62,7 +62,7 @@ You need at most 6 concepts to write a complete extension:
 | 6   | `AgentDefinition` | Agent profile registered under `"agent"`            |
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
-`"modelDriver"`. Hook kinds: `"systemPrompt"`,
+`"modelDriver"`, `"apiClass"`, `"modelRouter"`. Hook kinds: `"systemPrompt"`,
 `"turnProjection"`, `"turnAfter"`, `"loopOpen"`, `"sessionDeleted"`.
 
 Extensions import authoring primitives from one path:
@@ -468,6 +468,64 @@ export default defineExtension({
 })
 ```
 
+## Model router
+
+A `modelRouter` serves virtual models: ids `<router id>/<name>` that pick one
+of their choices at the start of each turn. Each choice names a model, an
+effort, or both, and a `reason`. Core calls `route` once per turn, before its
+first request, records the pick (`ModelRouted`) and runs every step on it. A
+route that fails, takes over 10 s or picks a choice the turn cannot run falls
+back to the default choice (`fallback`, an index). `route` may ask classifiers
+through `ExtensionContext.Models`; `input.current` says whether the branch's
+prompt cache is warm and how many history tokens a switch writes again. The
+shipped `@gent/router` builds its routers from the `routers` config key.
+
+```ts
+import {
+  defineExtension,
+  ExtensionHost,
+  type Message,
+  ModelId,
+  type ModelRouterContribution,
+} from "@gent/core/extensions/api"
+import { Effect } from "effect"
+
+const textLength = (message: Message) =>
+  message.parts.reduce((sum, part) => {
+    if (part.type !== "text") return sum
+    return sum + part.text.length
+  }, 0)
+
+const byLength: ModelRouterContribution = {
+  id: "by-length",
+  name: "By length",
+  models: [
+    {
+      name: "auto",
+      label: "By length",
+      fallback: 0,
+      choices: [
+        { model: ModelId.make("anthropic/claude-haiku-4-5"), reason: "short requests" },
+        { model: ModelId.make("anthropic/claude-sonnet-5"), effort: "high", reason: "long ones" },
+      ],
+    },
+  ],
+  route: (input) =>
+    Effect.sync(() => {
+      const chars = input.messages.reduce((sum, message) => sum + textLength(message), 0)
+      return { choice: Number(chars > 2_000), reason: `${chars} characters` }
+    }),
+}
+
+export default defineExtension({
+  id: "by-length-router",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("modelRouter", byLength)
+  }),
+})
+```
+
 ## Validation
 
 The framework validates all loaded extensions before creating the registry:
@@ -485,6 +543,7 @@ builtin).
 | -------------------------------------- | --------------------------------------------- |
 | `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
 | `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
+| `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier      |
 | `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
 | `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
 

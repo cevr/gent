@@ -15,6 +15,7 @@ import {
   Predicate,
   Random,
   Ref,
+  Result,
   Schedule,
   Schema,
   Scope,
@@ -57,6 +58,7 @@ import {
   DriverFailureId,
   type ModelCatalogView,
   type ModelDriverContribution,
+  type ModelRouterContribution,
   modelFromCatalog,
   ReasoningOption,
   type PersistAuth,
@@ -66,6 +68,7 @@ import {
   type ProviderResolution,
   type RetryPolicy,
   type StoredOAuthCredentials,
+  type VirtualModel,
 } from "../domain/driver.js"
 import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
 import type { ProviderConfig, ProviderConfigEntry } from "./config.js"
@@ -2868,9 +2871,130 @@ const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(functio
       ),
     ),
   )
-  yield* catalogRecord.record(profile, catalog.failures)
-  return { served, models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
+  const virtual = virtualModelCatalog(profile)
+  const failures = [...catalog.failures, ...virtual.failures]
+  yield* catalogRecord.record(profile, failures)
+  return {
+    served,
+    models: [...byReleaseDateDesc(catalog.models), ...virtual.models],
+    failures,
+  }
 })
+
+// ── virtual models ──────────────────────────────────────────────────────────
+
+/** A virtual model the profile serves: its router and its definition. */
+export interface ServedVirtualModel {
+  readonly router: ModelRouterContribution
+  readonly model: VirtualModel
+}
+
+/** Why `<router>/<name>` cannot be served; none when it can. */
+const virtualModelProblem = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+  model: VirtualModel,
+): Option.Option<string> => {
+  const routed = model.choices.flatMap((choice) =>
+    Option.toArray(Option.fromUndefinedOr(choice.model)),
+  )
+  const nested = routed.find((id) =>
+    Option.exists(
+      parseModelId(id),
+      ([provider]) => profile.modelRouters.has(provider) && !profile.modelDrivers.has(provider),
+    ),
+  )
+  if (Predicate.isNotUndefined(nested))
+    return Option.some(`a router cannot route to a router: choice "${nested}"`)
+  if (model.choices.length === 0) return Option.some("it has no choices")
+  if (model.fallback < 0 || model.fallback >= model.choices.length)
+    return Option.some(`its default choice ${model.fallback} is not one of its choices`)
+  return Option.none()
+}
+
+/**
+ * The profile's routers' virtual models as catalog entries (`kind:
+ * "virtual"`), and each one refused as a catalog failure under its router.
+ * A virtual model none of whose choices names a model only sets an effort:
+ * it is not a model, so it is not listed. A router whose id a model driver
+ * holds serves nothing: the driver wins the id.
+ */
+const virtualModelCatalog = (profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">) => {
+  const models: Array<Model> = []
+  const failures: Array<ModelCatalogFailure> = []
+  for (const router of profile.modelRouters.values()) {
+    if (profile.modelDrivers.has(router.id)) {
+      failures.push({
+        driverId: router.id,
+        error: `router id "${router.id}" is a model driver's id; the driver serves it`,
+      })
+      continue
+    }
+    for (const problem of router.problems ?? [])
+      failures.push({
+        driverId: router.id,
+        error: `${router.id}/${problem.name}: ${problem.reason}`,
+      })
+    for (const model of router.models) {
+      if (!model.choices.some((choice) => Predicate.isNotUndefined(choice.model))) continue
+      const problem = virtualModelProblem(profile, model)
+      if (Option.isSome(problem)) {
+        failures.push({
+          driverId: router.id,
+          error: `${router.id}/${model.name}: ${problem.value}`,
+        })
+        continue
+      }
+      models.push(
+        Model.make({
+          id: ModelId.make(`${router.id}/${model.name}`),
+          name: model.label,
+          provider: ProviderId.make(router.id),
+          kind: "virtual",
+        }),
+      )
+    }
+  }
+  return { models, failures }
+}
+
+/**
+ * The virtual model `modelId` names, or why it cannot run; none when the id
+ * is no router's (a driver with the router's id wins).
+ */
+export const servedVirtualModel = (
+  profile: Pick<ResolvedProfile, "modelDrivers" | "modelRouters">,
+  modelId: string,
+): Option.Option<Result.Result<ServedVirtualModel, string>> =>
+  Option.flatMap(parseModelId(modelId), ([provider, name]) => {
+    const router = profile.modelRouters.get(provider)
+    if (Predicate.isUndefined(router) || profile.modelDrivers.has(provider)) return Option.none()
+    const model = router.models.find((entry) => entry.name === name)
+    if (Predicate.isUndefined(model)) {
+      const problem = (router.problems ?? []).find((entry) => entry.name === name)
+      if (Predicate.isNotUndefined(problem))
+        return Option.some(Result.fail(`Model router "${modelId}": ${problem.reason}`))
+      return Option.some(
+        Result.fail(
+          `Unknown virtual model "${modelId}": router "${router.id}" serves no "${name}"`,
+        ),
+      )
+    }
+    const problem = virtualModelProblem(profile, model)
+    if (Option.isSome(problem))
+      return Option.some(Result.fail(`Model router "${modelId}": ${problem.value}`))
+    return Option.some(Result.succeed({ router, model }))
+  })
+
+/**
+ * The model a virtual model runs on when its router does not choose: its
+ * default choice's, else the first model a choice names.
+ */
+export const virtualDefaultModel = (model: VirtualModel): Option.Option<ModelId> =>
+  Option.orElse(Option.fromUndefinedOr(model.choices[model.fallback]?.model), () =>
+    Option.fromUndefinedOr(
+      model.choices.find((choice) => Predicate.isNotUndefined(choice.model))?.model,
+    ),
+  )
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {

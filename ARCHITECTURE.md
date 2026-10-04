@@ -789,6 +789,47 @@ Shape:
   `packages/extensions/src/cell.ts` (models host),
   `packages/extensions/src/typesafe.ts`, `packages/extensions/src/cloudflare.ts`
   (Clef decisions section), `packages/core/src/domain/driver.ts`.
+- Virtual models (owner, Pass 30: "the virtual router should be some sort of
+  json, with models that have a reason or description"). A `modelRouter`
+  contribution (`ModelRouterContribution`, `domain/driver.ts`) serves ids
+  `<router id>/<name>` that name no model: each is a list of choices (a
+  model, an effort, or both, with the `reason` a classifier reads) and a
+  default. The catalog lists one as `Model.kind: "virtual"` under its label;
+  one the router reports as a problem, or one whose choice names a router, is
+  a catalog failure, and a turn on it fails with `ErrorOccurred` naming why.
+  The turn routes once, before its first request (`routeTurn`,
+  `runtime/turn.ts`, model-routing section): it calls `route` with the
+  model-visible messages, each choice's catalog entry, and the model the
+  branch last ran on with whether its prompt cache is warm and the history
+  tokens a switch writes again (`estimateHistoryTokens`, the estimate
+  `coldHandoffPays` reads). It records the pick as `ModelRouted` (selected,
+  model, choice, effort, reason, fallback, classifier, cost, duration) and
+  runs the turn on it. Every later step, a replay and a recovered turn read
+  the recorded event; nothing routes again. A route that fails, dies, takes
+  over 10 s or picks a choice the turn cannot run falls back to the current
+  model when it is a choice, else the default; a turn never fails on its
+  route. The turn routes only where the request ends on the user's input: at
+  a later step (the selection changed mid-turn) or on a history that ends on
+  an assistant message (Anthropic 4.6 and later refuse that prefill) it keeps
+  the model the branch runs on. Routing writes nothing the model reads: it
+  happens before the model-change check, so a routed switch writes the notice
+  a hand switch writes and sends the same bytes, and the earlier model's
+  reasoning goes back as text only (`toPromptMessages`). The router's
+  classifier calls go through the run's own `ExtensionContext.Models`; their
+  cost lands on the event and the session's cost. The auth gate asks for the
+  driver of a virtual model's default choice (`routeCredentialDriver`).
+  The shipped router (`packages/extensions/src/router.ts`, `@gent/router`)
+  reads `routers` from `~/.gent/config.json` and from a trusted project's
+  `.gent/config.json` (by name over the user's) when the extensions load; a
+  bad entry (two `default` choices, no choices, a name with `/`) is a
+  problem with its reason. It asks one classifier (the entry's `classifier`,
+  else the cheapest credentialed one) which choice's reason fits the latest
+  request (head and tail, 3,000 characters, with the end of the request
+  before it; 4,000 at most) and holds a warm model unless the switch pays: a
+  stronger choice needs confidence 0.6; a cheaper one must cost less on the
+  turn with the history written to its cache (the cache-write rate of the
+  lifetime it asks for) than staying costs with the history read. A pick on
+  the current model is no switch, whatever its effort.
 - Response projection treats token usage as known only when both totals are
   nonnegative safe integers. Missing or invalid totals remain absent, not zero.
   Compaction uses the same conversion and stores reported usage plus model ID in
@@ -1799,7 +1840,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `apiClass`, `modelRouter`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 

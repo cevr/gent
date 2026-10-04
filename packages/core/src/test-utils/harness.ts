@@ -1730,6 +1730,7 @@ export const registerContributions = (contributions: ExtensionContributions) =>
     yield* host.register("request", ...(contributions.requests ?? []))
     yield* host.register("agent", ...(contributions.agents ?? []))
     yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
+    yield* host.register("modelRouter", ...(contributions.modelRouters ?? []))
     for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
   })
 

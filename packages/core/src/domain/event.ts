@@ -85,6 +85,36 @@ export const AgentEvent = Schema.TaggedUnion({
     branchId: BranchId,
     chunk: Schema.String,
   },
+  /**
+   * A turn on a virtual model (`router/auto`) runs on this concrete model.
+   * Written once, before the turn's first request; every step of the turn,
+   * a replay and a recovered turn read it and never route again.
+   */
+  ModelRouted: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    messageId: MessageId,
+    /** The virtual model the session selected. */
+    selected: ModelId,
+    /** The concrete model every step of the turn runs on. */
+    model: ModelId,
+    /** The choice's effort; absent when the choice names none. */
+    effort: Schema.optional(ReasoningEffort),
+    /**
+     * The index of the choice in the router's list; absent when the turn
+     * could not route and kept the model the branch runs on.
+     */
+    choice: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    /** Why the choice fits, as the router said, or why the turn did not route. */
+    reason: Schema.String,
+    /** True when the router did not choose: the turn kept its model or took the default choice. */
+    fallback: Schema.optional(Schema.Boolean),
+    /** The classifier model the router asked; absent when it asked none. */
+    classifier: Schema.optional(ModelId),
+    /** What the classifier calls cost at the catalog's price; absent when unpriced or none. */
+    costUsd: Schema.optional(Schema.Finite),
+    durationMs: Schema.Finite,
+  },
   StreamEnded: {
     sessionId: SessionId,
     branchId: BranchId,
@@ -330,6 +360,8 @@ export const StreamChunk = AgentEvent.cases.StreamChunk
 export type StreamChunk = typeof AgentEvent.cases.StreamChunk.Type
 export const StreamEnded = AgentEvent.cases.StreamEnded
 export type StreamEnded = typeof AgentEvent.cases.StreamEnded.Type
+export const ModelRouted = AgentEvent.cases.ModelRouted
+export type ModelRouted = typeof AgentEvent.cases.ModelRouted.Type
 export const TurnCompleted = AgentEvent.cases.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
 export const ModelContextProjected = AgentEvent.cases.ModelContextProjected

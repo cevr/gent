@@ -6,8 +6,10 @@ import {
   calculateCost,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
+  type DriverRef,
   effectiveModelDriver,
   type EffectiveModelDriver,
+  type Model,
   type ModelId,
   type ModelId as ModelIdType,
   promptCacheTtlMsFor,
@@ -56,21 +58,29 @@ import {
 } from "../domain/ids.js"
 import {
   Cause,
+  Clock,
   Context,
   DateTime,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Match,
   Option,
   Predicate,
   Ref,
+  Result,
   Schema,
   type Scope,
   Semaphore,
   Stream,
 } from "effect"
-import type { ExtensionHostContext, TurnNotice, TurnProjection } from "../domain/extension.js"
+import type {
+  ExtensionHostContext,
+  ExtensionModelsService,
+  TurnNotice,
+  TurnProjection,
+} from "../domain/extension.js"
 import {
   ApprovalService,
   CurrentExtensionHostContext,
@@ -79,12 +89,14 @@ import {
   type ExtensionTurnNotice,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
+  provideExtensionLeaf,
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
 import {
   credentialFailureMessage,
   isWindowFullStopReason,
+  type ModelRouteCurrent,
   type ProviderAuthError,
   type ProviderHints,
   ProviderStopReason,
@@ -97,6 +109,7 @@ import {
   StreamChunk as EventStreamChunk,
   MessageReceived,
   ModelContextProjected,
+  ModelRouted,
   ProviderRetrying,
   StreamEnded,
   StreamStarted,
@@ -149,10 +162,14 @@ import {
   type ResolveModelRequest,
   retryProviderCall,
   retryReason,
+  type ServedVirtualModel,
+  servedVirtualModel,
+  virtualDefaultModel,
 } from "./provider.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
   currentHandoffId,
+  estimateHistoryTokens,
   estimateTextTokens,
   estimateToolSchemaTokens,
   messagesInCurrentWindow,
@@ -727,6 +744,11 @@ interface TurnLedger {
    * step's.
    */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
+  /**
+   * The classifier calls that routed this turn, and their price: none when a
+   * classifier has no price, which leaves the turn without a cost.
+   */
+  readonly noteRoute: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
   /** A step's request carried these notices. */
@@ -818,6 +840,8 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         }
       }),
     noteCompaction: (costUsd) =>
+      Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
+    noteRoute: (costUsd) =>
       Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
     total: Ref.get(metrics),
     noteNotices: (notices) =>
@@ -1204,6 +1228,10 @@ interface ResolvedTurnContext {
   dateNotice: Option.Option<TurnNotice>
   /** The session is a spawned child (`isSpawnedSession`): its requests say so to the driver. */
   child: boolean
+  /** The driver the agent names; a routed turn derives `modelDriver` from it again. */
+  driverRef: Option.Option<DriverRef>
+  /** The effort the session itself set; it wins over a routed choice's. */
+  sessionReasoning: Option.Option<ReasoningEffort>
 }
 
 /** The notices a step's request carries after the conversation: the date first, then the extensions'. */
@@ -1274,6 +1302,8 @@ interface SessionRoute {
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The driver the model dispatches through, and the catalog id it reaches. */
   readonly modelDriver: EffectiveModelDriver
+  /** The driver the agent names (its own, else config `driverOverrides`). */
+  readonly driverRef: Option.Option<DriverRef>
 }
 
 /**
@@ -1315,6 +1345,11 @@ export const resolveSessionRoute = (params: {
       onSome: resolveAgentModel,
     }),
   )
+  const driverRef = Option.flatMap(definition, (agent) =>
+    Option.orElse(Option.fromUndefinedOr(agent.driver), () =>
+      Option.fromUndefinedOr(params.config.driverOverrides?.[agent.name]),
+    ),
+  )
   return {
     name,
     definition,
@@ -1322,16 +1357,29 @@ export const resolveSessionRoute = (params: {
     reasoningLevel: Option.orElse(Option.fromUndefinedOr(params.session.reasoningLevel), () =>
       Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
     ),
-    modelDriver: effectiveModelDriver(
-      Option.flatMap(definition, (agent) =>
-        Option.orElse(Option.fromUndefinedOr(agent.driver), () =>
-          Option.fromUndefinedOr(params.config.driverOverrides?.[agent.name]),
-        ),
-      ),
-      modelId,
-    ),
+    modelDriver: effectiveModelDriver(driverRef, modelId),
+    driverRef,
   }
 }
+
+/**
+ * The driver a route's turn needs a credential for. A virtual model needs its
+ * default choice's: the model its turn runs on when its router does not choose.
+ */
+export const routeCredentialDriver = (
+  route: SessionRoute,
+  profile: Parameters<typeof servedVirtualModel>[0],
+): Option.Option<string> =>
+  Option.match(
+    servedVirtualModel(profile, route.modelId).pipe(
+      Option.flatMap(Result.getSuccess),
+      Option.flatMap((served) => virtualDefaultModel(served.model)),
+    ),
+    {
+      onNone: () => route.modelDriver.driverId,
+      onSome: (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
+    },
+  )
 
 /** The agent a session's turns run as, by name; the default when the session names none. */
 export const sessionAgentName = Effect.fn("TurnHelpers.sessionAgentName")(function* (
@@ -1474,7 +1522,283 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
+    driverRef: route.driverRef,
+    sessionReasoning: Option.flatMap(session, (value) =>
+      Option.fromUndefinedOr(value.reasoningLevel),
+    ),
   }
+})
+
+// ── model-routing ───────────────────────────────────────────────────────────
+
+/*
+ * A turn on a virtual model (`router/auto`) runs on one concrete model. The
+ * router picks it once, before the turn's first request; the `ModelRouted`
+ * event records the pick, and every later step, a replay and a recovered
+ * turn read it and never route again. Routing writes nothing the model
+ * reads: the request on the routed model is the one the same turn sends on
+ * that model selected by hand, model-change notice included.
+ *
+ * A route that fails, times out or picks a choice the turn cannot run falls
+ * back: the model the branch runs on when it is a choice, else the default
+ * choice. Where a turn cannot route (a later step, after the selection
+ * changed mid-turn, or a conversation that ends on an assistant message,
+ * which Anthropic 4.6 and later refuse as a prefill), the router is not
+ * asked and the turn keeps the model the branch runs on. A turn never fails
+ * on its route.
+ */
+
+/** The most a router may take, its classifier calls included; past it the turn falls back. */
+const ROUTE_DEADLINE_MS = 10_000
+
+/** The most of a router's reason a `ModelRouted` keeps. */
+const ROUTE_REASON_CHARS = 200
+
+/** What routing reads from the branch's log. */
+interface RoutingLog {
+  /** The concrete model the branch runs on: its last request's, or a notice's. */
+  readonly current: Option.Option<ModelIdType>
+  readonly lastCallModel: Option.Option<ModelIdType>
+  readonly lastCallAtMillis: Option.Option<number>
+  readonly measure: Option.Option<StepMeasure>
+  /** The branch's newest `ModelRouted`. */
+  readonly routed: Option.Option<ModelRouted>
+}
+
+/** Where a routed turn runs, and whether an earlier step (or process) recorded it. */
+interface TurnRoute {
+  readonly event: ModelRouted
+  readonly recorded: boolean
+}
+
+/** One classifier call a route made: its model and its price, none when unpriced. */
+interface RouteCall {
+  readonly model: ModelIdType
+  readonly costUsd: Option.Option<number>
+}
+
+/** A request may end here: on the user's message or a tool result, never an assistant prefill. */
+const endsOnInput = (messages: ReadonlyArray<Message>): boolean =>
+  Option.exists(
+    Option.fromUndefinedOr(messages.at(-1)),
+    (message) => message.role === "user" || message.role === "tool",
+  )
+
+/**
+ * The turn on its routed model: the driver derived again for it, and the
+ * choice's effort unless the session set its own.
+ */
+const applyTurnRoute = <Resolved extends ResolvedTurnContext>(
+  resolved: Resolved,
+  route: ModelRouted,
+): Resolved => {
+  const reasoning = Option.orElse(resolved.sessionReasoning, () =>
+    Option.orElse(Option.fromUndefinedOr(route.effort), () =>
+      Option.fromUndefinedOr(resolved.reasoning),
+    ),
+  )
+  return {
+    ...resolved,
+    modelId: route.model,
+    modelDriver: effectiveModelDriver(resolved.driverRef, route.model),
+    ...omitUndefined({ reasoning: Option.getOrUndefined(reasoning) }),
+  }
+}
+
+/** The sum of the calls' prices; none when one is unpriced or there was no call. */
+const routeCost = (calls: ReadonlyArray<RouteCall>): Option.Option<number> => {
+  if (calls.length === 0) return Option.none()
+  return Option.map(Option.all(calls.map((call) => call.costUsd)), (costs) =>
+    costs.reduce((sum, cost) => sum + cost, 0),
+  )
+}
+
+/**
+ * Route one turn of `served`. None when no choice names a model the catalog
+ * lists: the turn cannot run.
+ */
+const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly step: number
+  readonly resolved: ResolvedTurnContext
+  readonly served: ServedVirtualModel
+  readonly log: RoutingLog
+}) {
+  const { resolved, served, log } = params
+  const selected = resolved.modelId
+  const recorded = Option.filter(
+    log.routed,
+    (event) => event.messageId === params.messageId && event.selected === selected,
+  )
+  if (Option.isSome(recorded)) {
+    return Option.some<TurnRoute>({ event: recorded.value, recorded: true })
+  }
+  const startedAt = yield* Clock.currentTimeMillis
+  const modelRegistry = yield* ModelRegistry
+  // A turn runs only on a chat model the catalog lists.
+  const entryOf = (id: ModelIdType) =>
+    modelRegistry.get(id).pipe(
+      Effect.map(Option.filter((model) => Predicate.isUndefined(model.kind))),
+      Effect.catchEager(() => Effect.succeedNone),
+    )
+  const choices = served.model.choices
+  // A choice that names no model keeps the model the branch runs on.
+  const kept = Option.orElse(log.current, () => virtualDefaultModel(served.model))
+  const candidates = yield* Effect.forEach(choices, (choice) =>
+    Option.match(
+      Option.orElse(Option.fromUndefinedOr(choice.model), () => kept),
+      {
+        onNone: () => Effect.succeed(Option.none<Model>()),
+        onSome: entryOf,
+      },
+    ),
+  )
+  const candidateAt = (index: number) => Option.flatten(Option.fromUndefinedOr(candidates[index]))
+  const runnable = (index: number) => Option.isSome(candidateAt(index))
+  const runsOnCurrent = (index: number) =>
+    Option.exists(candidateAt(index), (model) => Option.contains(log.current, model.id))
+  const indexes = choices.map((_, index) => index)
+  // The current model when it is a choice (the default first, then one
+  // that names it), else the default choice, else the first that runs.
+  const fallbackIndex = Option.liftPredicate(served.model.fallback, runsOnCurrent).pipe(
+    Option.orElse(() =>
+      Option.fromUndefinedOr(
+        indexes.find(
+          (index) => runsOnCurrent(index) && Predicate.isNotUndefined(choices[index]?.model),
+        ),
+      ),
+    ),
+    Option.orElse(() => Option.liftPredicate(served.model.fallback, runnable)),
+    Option.orElse(() => Option.fromUndefinedOr(indexes.find(runnable))),
+  )
+  const atChoice = (index: number, reason: string, fellBack: boolean) =>
+    Option.map(candidateAt(index), (model) => ({
+      choice: Option.some(index),
+      model,
+      reason,
+      fellBack,
+    }))
+  const fallback = (reason: string) =>
+    Option.flatMap(fallbackIndex, (index) => atChoice(index, reason, true))
+
+  const host = yield* CurrentExtensionHostContext
+  const calls = yield* Ref.make<ReadonlyArray<RouteCall>>([])
+  // The router's classifier calls go through the run's own facet; core
+  // records each one's model and price for the event and the turn's cost.
+  const Models: ExtensionModelsService = {
+    ...host.Models,
+    decide: (request) =>
+      host.Models.decide(request).pipe(
+        Effect.tap((reply) =>
+          Ref.update(calls, (all) => [
+            ...all,
+            { model: reply.model, costUsd: Option.fromUndefinedOr(reply.costUsd) },
+          ]),
+        ),
+      ),
+  }
+  const now = yield* Clock.currentTimeMillis
+  const current = yield* Option.match(log.current, {
+    onNone: () => Effect.succeed(Option.none<ModelRouteCurrent>()),
+    onSome: (id) =>
+      Effect.map(
+        entryOf(id),
+        Option.map((model: Model): ModelRouteCurrent => ({
+          model,
+          // A cache belongs to the model of the last request. A model whose
+          // entry names no lifetime never goes cold.
+          warm:
+            Option.contains(log.lastCallModel, model.id) &&
+            Option.exists(log.lastCallAtMillis, (at) =>
+              Option.match(promptCacheTtlMsFor(model, resolved.child), {
+                onNone: () => true,
+                onSome: (ttlMs) => now < at + ttlMs,
+              }),
+            ),
+          historyTokens: estimateHistoryTokens(resolved.messages, log.measure),
+        })),
+      ),
+  })
+
+  // A router's failure, timeout or defect is a reason to fall back, never the turn's.
+  const askRouter = served.router
+    .route({
+      model: served.model,
+      messages: resolved.messages,
+      candidates,
+      current,
+      child: resolved.child,
+    })
+    .pipe(
+      provideExtensionLeaf({}),
+      Effect.provideService(CurrentExtensionHostContext, { ...host, Models }),
+      Effect.map((pick) => Result.succeed(pick)),
+      Effect.timeoutOrElse({
+        duration: Duration.millis(ROUTE_DEADLINE_MS),
+        orElse: () =>
+          Effect.succeed(Result.fail(`the router gave no answer within ${ROUTE_DEADLINE_MS} ms`)),
+      }),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+        return Effect.succeed(
+          Result.fail(`the router failed: ${causeMessage(Cause.squash(cause))}`),
+        )
+      }),
+    )
+  // Where the turn cannot route, it keeps the model the branch runs on, a
+  // choice or not, and sets no effort: a switch there would rewrite the
+  // cache mid-turn or send a prefill. A branch with no request yet takes the
+  // default choice.
+  const keep = (reason: string) =>
+    Option.match(current, {
+      onNone: () => fallback(reason),
+      onSome: ({ model }) =>
+        Option.some({ choice: Option.none<number>(), model, reason, fellBack: true }),
+    })
+  let decision = keep("a turn routes only before its first request")
+  const firstRequest = params.step <= 1
+  if (firstRequest && !endsOnInput(resolved.messages))
+    decision = keep("the conversation ends on an assistant message, so the turn keeps its model")
+  if (firstRequest && endsOnInput(resolved.messages)) {
+    const picked = yield* askRouter
+    if (Result.isFailure(picked)) {
+      yield* Effect.logWarning("turn.route-fell-back").pipe(
+        Effect.annotateLogs({ model: selected, reason: picked.failure }),
+      )
+      decision = fallback(picked.failure)
+    } else if (!Number.isInteger(picked.success.choice) || !runnable(picked.success.choice)) {
+      decision = fallback(
+        `the router picked choice ${picked.success.choice}, which the turn cannot run`,
+      )
+    } else {
+      decision = atChoice(picked.success.choice, picked.success.reason, false)
+    }
+  }
+  if (Option.isNone(decision)) return Option.none<TurnRoute>()
+
+  const spent = yield* Ref.get(calls)
+  const { choice, model, reason, fellBack } = decision.value
+  const event = ModelRouted.make({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.messageId,
+    selected,
+    model: model.id,
+    reason: reason.slice(0, ROUTE_REASON_CHARS),
+    durationMs: (yield* Clock.currentTimeMillis) - startedAt,
+    ...omitUndefined({
+      choice: Option.getOrUndefined(choice),
+      effort: Option.getOrUndefined(
+        Option.flatMap(choice, (index) => Option.fromUndefinedOr(choices[index]?.effort)),
+      ),
+      fallback: Option.getOrUndefined(Option.liftPredicate(fellBack, Boolean)),
+      classifier: spent.at(-1)?.model,
+      costUsd: Option.getOrUndefined(routeCost(spent)),
+    }),
+  })
+  return Option.some<TurnRoute>({ event, recorded: false })
 })
 
 // ── turn-source ─────────────────────────────────────────────────────────────
@@ -2163,18 +2487,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (event._tag !== "StreamEnded") return Option.none()
       return Option.fromUndefinedOr(event.model)
     }
+    // The newest `ModelRouted` holds the route of the turn it names: a
+    // later step and a recovered turn run on it rather than route again.
+    const knownRoute = ({ event }: EventEnvelope): Option.Option<ModelRouted> => {
+      if (event._tag !== "ModelRouted") return Option.none()
+      return Option.some(event)
+    }
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
       readonly measure: Option.Option<StepMeasure>
       readonly lastCallAtMillis: Option.Option<number>
       readonly lastCallModel: Option.Option<ModelIdType>
+      readonly routed: Option.Option<ModelRouted>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
       measure: Option.none<StepMeasure>(),
       lastCallAtMillis: Option.none<number>(),
       lastCallModel: Option.none<ModelIdType>(),
+      routed: Option.none<ModelRouted>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -2204,6 +2536,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: newest(events, knownStepMeasure, known.measure),
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
         lastCallModel: newest(events, knownRequestModel, known.lastCallModel),
+        routed: newest(events, knownRoute, known.routed),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -3426,6 +3759,47 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         ),
       )
+      // A virtual model runs the turn on the concrete model its router picks,
+      // before the model-change notice compares models: a routed switch
+      // writes the transcript a hand switch writes.
+      const virtual = servedVirtualModel((yield* ExtensionRegistry).getResolved(), resolved.modelId)
+      if (Option.isSome(virtual)) {
+        const unrunnable = (error: string) =>
+          publishEventOrDie(
+            ErrorOccurred.make({ sessionId: scope.sessionId, branchId: scope.branchId, error }),
+          ).pipe(Effect.as(endStep(params.currentTurnAgent, { unanswered: true })))
+        if (Result.isFailure(virtual.value)) return yield* unrunnable(virtual.value.failure)
+        const route = yield* routeTurn({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          messageId: params.state.message.id,
+          step: params.step,
+          resolved,
+          served: virtual.value.success,
+          log: {
+            current: knownSteps.model,
+            lastCallModel: knownSteps.lastCallModel,
+            lastCallAtMillis: knownSteps.lastCallAtMillis,
+            measure: knownSteps.measure,
+            routed: knownSteps.routed,
+          },
+        })
+        if (Option.isNone(route))
+          return yield* unrunnable(
+            `Model router "${resolved.modelId}": no choice names a model the catalog lists`,
+          )
+        if (!route.value.recorded) {
+          yield* publishEventOrDie(route.value.event)
+          yield* scope.turnLedger.noteRoute(
+            Option.fromUndefinedOr(route.value.event.costUsd).pipe(
+              Option.orElse(() =>
+                Option.liftPredicate(0, () => Predicate.isUndefined(route.value.event.classifier)),
+              ),
+            ),
+          )
+        }
+        resolved = applyTurnRoute(resolved, route.value.event)
+      }
       const previousModel = knownSteps.model
       if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
         yield* appendBoundaryLine(

@@ -160,6 +160,7 @@ import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent
 import {
   type AgentLoopTurnProfile,
   resolveSessionRoute,
+  routeCredentialDriver,
   runAgentLoopTurnProfile,
   turnRegistry,
 } from "../runtime/turn.js"
@@ -1657,9 +1658,13 @@ const RpcHandlers = GentRpcs.toLayer(
           const config = yield* configService.get(Option.getOrUndefined(cwd))
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
-          // config override, else the model id's provider segment.
+          // config override, else the model id's provider segment; for a
+          // virtual model, its default choice's.
           const driverFor = (admission: Option.Option<SessionAdmission>) =>
-            resolveSessionRoute({ agents, admission, config, session }).modelDriver.driverId
+            routeCredentialDriver(
+              resolveSessionRoute({ agents, admission, config, session }),
+              registry.getResolved(),
+            )
           // The session's own agent, then an agent the caller asks about.
           const admissions = [Option.fromUndefinedOr(session.admission)]
           if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))

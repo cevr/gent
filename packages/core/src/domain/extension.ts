@@ -34,7 +34,11 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "./capability.js"
-import type { ApiClassContribution, ModelDriverContribution } from "./driver.js"
+import type {
+  ApiClassContribution,
+  ModelDriverContribution,
+  ModelRouterContribution,
+} from "./driver.js"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
@@ -221,6 +225,8 @@ export interface ExtensionContributions {
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   /** Wire protocols the model drivers' catalog entries speak, by class id. */
   readonly apiClasses?: ReadonlyArray<ApiClassContribution>
+  /** Virtual models (`<router id>/<name>`) that pick a concrete model per turn. */
+  readonly modelRouters?: ReadonlyArray<ModelRouterContribution>
 }
 
 // ── extension ───────────────────────────────────────────────────────────────
@@ -601,6 +607,7 @@ interface RegistrationDomainMap {
   readonly resource: "resources"
   readonly modelDriver: "modelDrivers"
   readonly apiClass: "apiClasses"
+  readonly modelRouter: "modelRouters"
 }
 
 const registrationDomains: RegistrationDomainMap = {
@@ -610,6 +617,7 @@ const registrationDomains: RegistrationDomainMap = {
   resource: "resources",
   modelDriver: "modelDrivers",
   apiClass: "apiClasses",
+  modelRouter: "modelRouters",
 }
 
 type RegistrationDomain = keyof typeof registrationDomains
@@ -1234,6 +1242,14 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
     }
     classIds.set(apiClass.id, i)
   }
+  for (const [i, router] of (contribs.modelRouters ?? []).entries()) {
+    if (allDriverIds.has(router.id)) {
+      return Option.some(
+        `modelRouters[${i}] (${router.id}): router id already used by ${allDriverIds.get(router.id)}`,
+      )
+    }
+    allDriverIds.set(router.id, `modelRouters[${i}]`)
+  }
   return Option.none()
 }
 
@@ -1245,6 +1261,7 @@ const allowedContributionBuckets = new Set([
   "hooks",
   "modelDrivers",
   "apiClasses",
+  "modelRouters",
 ])
 
 const unknownBucketMessage = (key: string) =>
