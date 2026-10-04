@@ -2184,4 +2184,42 @@ export default {
         expect(yield* fixture.readLog).toEqual(["setup:v1", "refused", "refused"])
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
+
+  it.scopedLive(
+    "a replacement that fails setup brings back no disabled extension and no claimed id",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* reloadFixture
+        const renamedRefused = `import { Effect } from "effect"
+export default { id: "@test/renamed", setup: Effect.fail(new Error("setup refused")) }`
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+        yield* fixture.write("other.client.ts", commandModule("@test/other", "other"))
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v1-plain", "other"])
+
+        // The file now holds another id, refused, and its old id is disabled.
+        yield* fixture.write("logged.client.ts", renamedRefused)
+        yield* Ref.set(fixture.disabled, ["@test/logged"])
+        const disabled = yield* fixture.load
+        yield* disabled.retire
+        expect(commandIds(disabled)).toEqual(["other"])
+        expect(disabled.resolved.failures).toEqual([
+          { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
+        ])
+        expect(yield* fixture.readLog).toEqual(["setup:v1", "cleanup:v1", "released:v1"])
+
+        // The file runs its old id again; then it holds another id, refused,
+        // while a second file takes the old id.
+        yield* Ref.set(fixture.disabled, [])
+        yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v2"))
+        expect(commandIds(yield* fixture.load)).toEqual(["logged-v2-plain", "other"])
+        yield* fixture.write("logged.client.ts", renamedRefused)
+        yield* fixture.write("other.client.ts", commandModule("@test/logged", "claimed"))
+        const claimed = yield* fixture.load
+        yield* claimed.retire
+        expect(commandIds(claimed)).toEqual(["claimed"])
+        expect(claimed.resolved.failures).toEqual([
+          { id: "@test/renamed", reason: "setup failed: Error: setup refused" },
+        ])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
 })

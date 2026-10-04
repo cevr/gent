@@ -1028,6 +1028,30 @@ const keptFailures = (
     return [outcome.failure.value]
   })
 
+/**
+ * Whether the last good version of a file may run on after its new version
+ * failed setup. The load chose the new version by its own id, so the last
+ * one's id is checked here: it runs on only while it is not disabled and no
+ * other extension of the load holds its id in its scope.
+ */
+const mayRunOn = (
+  prior: LiveExtension,
+  replacement: FileOutcome,
+  chosen: ReadonlyArray<{
+    readonly outcome: FileOutcome
+    readonly module: AnyExtensionClientModule
+    readonly scope: ExtensionScope
+  }>,
+  disabled: ReadonlySet<string>,
+) =>
+  !disabled.has(prior.loaded.id) &&
+  !chosen.some(
+    (other) =>
+      other.outcome !== replacement &&
+      other.module.id === prior.loaded.id &&
+      other.scope === prior.loaded.scope,
+  )
+
 /** A failed version's failure ends with its file, and with its disabled id. */
 const forgetEndedAttempts = (
   attempts: Map<string, FailedAttempt>,
@@ -1269,9 +1293,12 @@ export const makeTuiExtensionLoader = (opts: {
           version: outcome.imported.version,
           failure: set.failure,
         })
-        if (Option.isSome(previous)) {
-          next.set(outcome.imported.filePath, previous.value)
-          setupFailures.push(keptOver(previous.value, set.failure))
+        const fallback = Option.filter(previous, (prior) =>
+          mayRunOn(prior, outcome, enabled.unique, disabled),
+        )
+        if (Option.isSome(fallback)) {
+          next.set(outcome.imported.filePath, fallback.value)
+          setupFailures.push(keptOver(fallback.value, set.failure))
         } else setupFailures.push(set.failure)
       }
       const kept = new Set(next.values())
