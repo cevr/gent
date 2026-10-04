@@ -325,6 +325,16 @@ export const buildExtensionHealthSnapshot = (
         }),
       )
     } else {
+      // A failed reload: the new version failed, the last good one runs.
+      if (!Predicate.isUndefined(status.reloadFailed)) {
+        issues.push(
+          ExtensionHealthIssue.cases.ActivationFailed.make({
+            phase: status.reloadFailed.phase,
+            error: status.reloadFailed.error,
+            runningVersion: status.version,
+          }),
+        )
+      }
       issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
     }
 

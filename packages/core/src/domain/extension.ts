@@ -263,6 +263,12 @@ export interface LoadedExtension {
    */
   readonly version?: string
   /**
+   * Set when this is the last good version of an extension whose newer
+   * version failed: the phase that stopped the new version and why. The
+   * profile runs this version in its place (`SessionProfileCache`).
+   */
+  readonly reloadFailed?: ReloadFailure
+  /**
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (the registry, the hook compiler, the profile build) read each
    * bucket directly — `contributions.tools`,
@@ -286,9 +292,18 @@ export interface FailedExtension {
 /** An extension the config's `disabledExtensions` names: found, and never set up. */
 export type DisabledExtension = Pick<LoadedExtension, "manifest" | "scope" | "sourcePath">
 
-/** An extension as health reports it: active, failed with its phase and error, or disabled. */
+/** Why a newer version of a running extension did not replace it. */
+interface ReloadFailure {
+  readonly phase: FailedExtensionPhase
+  readonly error: string
+}
+
+/**
+ * An extension as health reports it: active, failed with its phase and error,
+ * or disabled. An active one with `reloadFailed` runs its last good version.
+ */
 export type ExtensionStatusInfo =
-  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version"> & {
+  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version" | "reloadFailed"> & {
       readonly status: "active"
     })
   | (FailedExtension & { readonly status: "failed" })
@@ -300,18 +315,28 @@ const ExtensionStatusIdentity = {
   sourcePath: Schema.String,
 }
 
+const ExtensionStatusPhase = Schema.Literals(["load", "setup", "validation", "startup"])
+
 /**
  * One extension of a profile as the `Extensions` facet reports it. `Active`
- * names the file version it loaded from (none for a builtin); `Failed` names
- * the phase that stopped it: `load` (the file did not import), `setup`,
- * `validation` or `startup` (a Resource did not build); `Disabled` is named
- * by the config's `disabledExtensions`.
+ * names the version it loaded from (none for a builtin); with `reloadFailed`
+ * it is the last good version, still running because a newer version failed
+ * at that phase. `Failed` names the phase that stopped it: `load` (the file
+ * did not build or import), `setup`, `validation` or `startup` (a Resource did
+ * not build); `Disabled` is named by the config's `disabledExtensions`.
  */
 export const ExtensionStatus = Schema.TaggedUnion({
-  Active: { ...ExtensionStatusIdentity, version: Schema.optional(Schema.String) },
+  Active: {
+    ...ExtensionStatusIdentity,
+    version: Schema.optional(Schema.String),
+    // Optional, so a status written before the field decodes as it did.
+    reloadFailed: Schema.optional(
+      Schema.Struct({ phase: ExtensionStatusPhase, error: Schema.String }),
+    ),
+  },
   Failed: {
     ...ExtensionStatusIdentity,
-    phase: Schema.Literals(["load", "setup", "validation", "startup"]),
+    phase: ExtensionStatusPhase,
     error: Schema.String,
   },
   Disabled: ExtensionStatusIdentity,

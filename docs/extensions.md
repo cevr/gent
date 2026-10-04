@@ -41,7 +41,11 @@ edited, added or removed extension file reaches the next turn the same way, with
 no restart. An extension is built with the modules it imports by a relative
 path, so an edit to one of them reaches the next turn too, and a save of the
 same bytes changes nothing. Its top level runs once per version; setup runs
-again on each new profile.
+again on each new profile. An edit that breaks an extension that ran (it does
+not build or import, its setup fails, it fails validation, or a process
+Resource fails to build) keeps the last good version running, and health
+reports the extension degraded with why the new version failed. Deleting the
+file or disabling the id removes the extension; nothing is kept after that.
 
 For the smallest complete product loop, see
 `examples/extensions/session-notes.ts`. It is still one file, but covers the
@@ -121,9 +125,10 @@ interaction, file lock, classifier, extension, and state-pulse accessors
 (`Session`, `Interaction`, `FileLock`, `Models`, `Extensions`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. `Extensions.status` lists every extension of the session's profile
-as an `ExtensionStatus` (`Active` with its file version, `Failed` with the
+as an `ExtensionStatus` (`Active` with its version, `Failed` with the
 phase that stopped it, or `Disabled`), and each config file that did not
-load; it reads the extension files as they are now, so an extension an agent
+load. An `Active` status with `reloadFailed` is a last good version still
+running: a newer version of its file failed at that phase. It reads the extension files as they are now, so an extension an agent
 just wrote shows there. `Extensions.reload(id)` runs every setup of the
 profile again and returns the new statuses; an unchanged extension keeps its
 process and branch Resources, a run that is going on keeps its profile, and
@@ -611,7 +616,9 @@ builtin).
   storage Tags, event stores, and process helpers are not public extension API.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
-  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An extension the
+  `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An
+  `"ActivationFailed"` issue with `runningVersion` is a failed reload: the new
+  version failed and that last good version still runs. An extension the
   disabled list names is `"Disabled"`, in the optional `disabledExtensions`
   list of the snapshot. Match on the tag
   through the exported schema rather than a string literal where possible.

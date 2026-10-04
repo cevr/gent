@@ -437,7 +437,19 @@ including it. A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
-only. An extension the disabled list names is reported `disabled`
+only. The cache keeps, per (place, scope, source path), the last version of
+each user and project extension the place's current profile ran (`lastGood`).
+A new version that fails `load`, `setup` or `validation`
+(`loadRuntimeProfileDeclarations`), or whose process Resources fail at
+`startup` (`buildScopeResources` `fallback`), runs that last good version in
+its place, marked with the failure (`LoadedExtension.reloadFailed`); it keeps
+the Resources the profile before it built, by their build key. The profile key
+names the version it runs. Health reports such an extension `Degraded` with an
+`ActivationFailed` issue that carries the optional `runningVersion`, and the
+facet reports it `Active` with the optional `reloadFailed`: both fields are
+optional on the wire, so an older client reads a failed activation. A deleted
+file, a disabled id and an untrusted project keep nothing. Branch Resources
+have no fallback yet. An extension the disabled list names is reported `disabled`
 (`resolveExtensions` takes it as a third list): `ExtensionHealth.Disabled` on
 the wire, in the optional `disabledExtensions` field of both snapshot cases.
 The `Extensions` facet (`status`, `reload`) reads and reloads the session's

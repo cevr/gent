@@ -721,6 +721,115 @@ export default defineExtension({
       }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // A new version that fails to load, set up or start keeps the last good
+  // version running, reported with why the new one failed. A deleted file
+  // and a disabled id are removals: nothing is kept after them.
+  it.scopedLive(
+    "a broken edit keeps the last good version, and a delete or a disable removes it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-last-good-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const entry = path.join(home, ".gent", "extensions", "probe.ts")
+        const userConfig = path.join(home, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+        yield* fs.makeDirectory(launch, { recursive: true })
+        const write = (version: "good" | "load" | "setup" | "startup", value: string) => {
+          if (version === "load") return writeFileAtomic(entry, "export const = ;\n")
+          let setup = "Effect.void"
+          let layer = `Layer.succeed(Marker, Marker.of({ value: "${value}" }))`
+          if (version === "setup") setup = `Effect.die("setup broke")`
+          if (version === "startup") layer = `Layer.effect(Marker, Effect.die("startup broke"))`
+          return writeFileAtomic(
+            entry,
+            `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-last-good",
+  setup: Effect.gen(function* () {
+    yield* ${setup};
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-last-good/marker",
+      scope: "process",
+      layer: ${layer},
+    }));
+  }),
+});
+`,
+          )
+        }
+        const marker = (profile: SessionProfile) =>
+          Context.getOption(profile.layerContext, SessionProfileResourceMarker).pipe(
+            Option.map((service) => service.value),
+          )
+        const status = (profile: SessionProfile) =>
+          profile.resolved.extensionStatuses.find(
+            (info) => info.manifest.id === "profile-last-good" || info.sourcePath === entry,
+          )
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* write("good", "first")
+          const first = yield* resolve
+          expect(marker(first)).toEqual(Option.some("first"))
+          const firstStatus = status(first)
+          if (firstStatus?.status !== "active") return expect.unreachable()
+          expect(firstStatus.reloadFailed).toBeUndefined()
+
+          for (const phase of ["load", "setup", "startup"] as const) {
+            yield* write(phase, "never runs")
+            const kept = yield* resolve
+            expect(marker(kept)).toEqual(Option.some("first"))
+            expect(kept.resolved.failedExtensions).toEqual([])
+            expect(status(kept)).toMatchObject({
+              status: "active",
+              version: firstStatus.version,
+              reloadFailed: { phase, error: expect.stringContaining("") },
+            })
+          }
+
+          yield* write("good", "fixed")
+          const fixed = yield* resolve
+          expect(marker(fixed)).toEqual(Option.some("fixed"))
+          const fixedStatus = status(fixed)
+          if (fixedStatus?.status !== "active") return expect.unreachable()
+          expect(fixedStatus.reloadFailed).toBeUndefined()
+
+          // A delete removes it: a broken file written later has nothing to keep.
+          yield* fs.remove(entry)
+          expect(marker(yield* resolve)).toEqual(Option.none())
+          yield* write("load", "")
+          expect(status(yield* resolve)).toMatchObject({ status: "failed", phase: "load" })
+
+          // A disable removes it the same way.
+          yield* write("good", "again")
+          expect(marker(yield* resolve)).toEqual(Option.some("again"))
+          yield* writeFileAtomic(
+            userConfig,
+            encodeJson({ disabledExtensions: ["profile-last-good"] }),
+          )
+          expect(status(yield* resolve)).toMatchObject({ status: "disabled" })
+          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: [] }))
+          yield* write("setup", "")
+          expect(status(yield* resolve)).toMatchObject({ status: "failed", phase: "setup" })
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({ cwd: launch, home, extensions: [], allowFailedExtensions: true }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   // A branch's loop closes while one of its fibers resolves: the lease lands
   // on a scope that is already closed, and is released at once.
   it.scopedLive(
@@ -1180,7 +1289,7 @@ export default defineExtension({
   // A profile is keyed on the extension files on disk as well as the config:
   // a file added, broken, fixed or edited reaches the next resolve without a
   // restart or a config edit.
-  it.scopedLive("an added, broken, fixed or edited extension file reaches the next resolve", () =>
+  it.scopedLive("a broken, fixed or edited extension file reaches the next resolve", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -1209,19 +1318,22 @@ export default defineExtension({
         const resolve = Effect.scoped(cache.resolve(launch))
         expect(ids(yield* resolve)).toEqual(["@gent/test-session-profile/files-kept"])
 
-        yield* writeExtension("@gent/test-file-added")
-        expect(ids(yield* resolve)).toContain("@gent/test-file-added")
-
+        // Broken from its first save: no good version to keep, so it fails.
         yield* fs.writeFileString(extensionFile, "export const = ;\n")
         const broken = yield* resolve
         expect(ids(broken)).toEqual(["@gent/test-session-profile/files-kept"])
         expect(failedPaths(broken)).toEqual([extensionFile])
+
+        yield* writeExtension("@gent/test-file-added")
+        expect(ids(yield* resolve)).toContain("@gent/test-file-added")
+        expect(failedPaths(yield* resolve)).toEqual([])
 
         // The same path again, with new content: imported afresh, not from
         // the module cache.
         yield* writeExtension("@gent/test-file-fixed-and-renamed")
         const fixed = yield* resolve
         expect(ids(fixed)).toContain("@gent/test-file-fixed-and-renamed")
+        expect(ids(fixed)).not.toContain("@gent/test-file-added")
         expect(failedPaths(fixed)).toEqual([])
         // Nothing changed since: the same profile.
         expect(yield* resolve).toBe(fixed)
