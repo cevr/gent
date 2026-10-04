@@ -3,6 +3,7 @@ import {
   Clock,
   Context,
   Crypto,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -26,6 +27,7 @@ import {
   defineExtension,
   ExtensionHost,
   type ExtensionHostService,
+  failureResponse,
   isRecord,
   isRecordArray,
   type JsonRecord,
@@ -38,6 +40,7 @@ import {
   clampEffort,
   ReasoningEffort,
   reportProviderStopReason,
+  retryAfterAt,
   type RunEffort,
   runProcess,
   writeFileAtomic,
@@ -78,6 +81,7 @@ import {
   writesPromptCache,
   MessagesTransientStreamEvent,
   ModelHttpClient,
+  spentLimitsReset,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
@@ -2174,6 +2178,65 @@ export const buildKeychainTransformClient = (
     return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
   })
 
+// ── rate-limit reset ──
+
+/** A limit's left count, and when it is full again (RFC 3339), as Anthropic's 429 headers name them. */
+const LimitRemaining = Schema.OptionFromOptionalKey(Schema.FiniteFromString)
+const LimitReset = Schema.OptionFromOptionalKey(Schema.DateTimeUtcFromString)
+
+/** Anthropic's rate-limit headers, one pair per limit. */
+const AnthropicRateLimitHeaders = Schema.Struct({
+  "anthropic-ratelimit-requests-remaining": LimitRemaining,
+  "anthropic-ratelimit-requests-reset": LimitReset,
+  "anthropic-ratelimit-tokens-remaining": LimitRemaining,
+  "anthropic-ratelimit-tokens-reset": LimitReset,
+  "anthropic-ratelimit-input-tokens-remaining": LimitRemaining,
+  "anthropic-ratelimit-input-tokens-reset": LimitReset,
+  "anthropic-ratelimit-output-tokens-remaining": LimitRemaining,
+  "anthropic-ratelimit-output-tokens-reset": LimitReset,
+})
+
+/**
+ * When a retry of an Anthropic failure can succeed: the typed retry-after,
+ * else the reset of the limits the rate-limit headers report spent
+ * (`spentLimitsReset`). The Claude plan's own reset headers are not read:
+ * no recorded plan 429 shows them yet.
+ */
+const anthropicRetryAt = (cause: unknown, nowMs: number): Option.Option<number> =>
+  retryAfterAt(cause, nowMs).pipe(
+    Option.orElse(() =>
+      Option.flatMap(failureResponse(cause), (response) =>
+        Option.flatMap(
+          Schema.decodeOption(AnthropicRateLimitHeaders)(response.headers),
+          (headers) => {
+            const limit = (
+              remaining: Option.Option<number>,
+              reset: Option.Option<DateTime.Utc>,
+            ) => ({ remaining, resetAt: Option.map(reset, DateTime.toEpochMillis) })
+            return spentLimitsReset([
+              limit(
+                headers["anthropic-ratelimit-requests-remaining"],
+                headers["anthropic-ratelimit-requests-reset"],
+              ),
+              limit(
+                headers["anthropic-ratelimit-tokens-remaining"],
+                headers["anthropic-ratelimit-tokens-reset"],
+              ),
+              limit(
+                headers["anthropic-ratelimit-input-tokens-remaining"],
+                headers["anthropic-ratelimit-input-tokens-reset"],
+              ),
+              limit(
+                headers["anthropic-ratelimit-output-tokens-remaining"],
+                headers["anthropic-ratelimit-output-tokens-reset"],
+              ),
+            ])
+          },
+        ),
+      ),
+    ),
+  )
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 // Credential cache + refresh logic live in `makeAnthropicCredentialCache`.
@@ -2822,6 +2885,7 @@ export const buildAnthropicModelDriver = (
   retry: {
     ...DEFAULT_RETRY_POLICY,
     transientStreamEvent: MessagesTransientStreamEvent,
+    retryAt: anthropicRetryAt,
   },
   resolveModel: (modelName, authInfo, hints, catalog) =>
     Effect.gen(function* () {

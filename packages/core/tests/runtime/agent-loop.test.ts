@@ -2202,6 +2202,112 @@ describe("a turn's joined steers", () => {
   )
 })
 
+/**
+ * A model whose every call fails with a rate limit that resets in five hours,
+ * the HTTP answer attached as a driver sees it.
+ */
+const limitedForHours = (calls: Ref.Ref<number>) =>
+  LanguageModelLayers.testStream(() =>
+    Effect.gen(function* () {
+      yield* Ref.update(calls, (n) => n + 1)
+      return Stream.fail(
+        AiError.make({
+          module: "Test",
+          method: "streamText",
+          reason: new AiError.RateLimitError({
+            retryAfter: Duration.hours(5),
+            http: {
+              request: {
+                method: "POST",
+                url: "https://model.test/v1/responses",
+                urlParams: [],
+                headers: {},
+              },
+              response: { status: 429, headers: { "retry-after": "18000" } },
+            },
+          }),
+        }),
+      )
+    }),
+  )
+
+describe("a usage limit's reset time", () => {
+  it.scopedLive("the turn's error and its turnAfter name the same reset time", () =>
+    Effect.gen(function* () {
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const watch = defineExtension({
+        id: "@gent/test-turn-after-reset",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Ref.update(inputs, (all) => [...all, input]),
+          )
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: limitedForHours(calls),
+        extensionInputs: [...e2ePreset.extensionInputs, watch],
+      })
+      const events = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map(({ event }) => event),
+        Stream.takeUntil((event) => event._tag === "TurnCompleted"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      const before = yield* Clock.currentTimeMillis
+      yield* client.message.send({ sessionId, branchId, content: "answer me" })
+      const errors = (yield* Fiber.join(events)).filter((event) => event._tag === "ErrorOccurred")
+      const after = yield* Clock.currentTimeMillis
+      const [ended] = yield* waitFor(
+        Ref.get(inputs),
+        (all) => all.length === 1,
+        5_000,
+        "turnAfter fired",
+      )
+      const fiveHours = Duration.toMillis(Duration.hours(5))
+      const retryAt = Option.getOrThrow(Option.fromUndefinedOr(errors[0]?.retryAt))
+      expect(errors).toHaveLength(1)
+      expect(retryAt).toBeGreaterThanOrEqual(before + fiveHours)
+      expect(retryAt).toBeLessThanOrEqual(after + fiveHours)
+      expect(ended?.streamFailed).toBe(true)
+      expect(ended?.retryAt).toEqual(Option.some(retryAt))
+      // No retry inside the cap can clear a limit that resets in hours.
+      expect(yield* Ref.get(calls)).toBe(1)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a turn that answers gives turnAfter no reset time", () =>
+    Effect.gen(function* () {
+      const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
+      const watch = defineExtension({
+        id: "@gent/test-turn-after-no-reset",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Ref.update(inputs, (all) => [...all, input]),
+          )
+        }),
+      })
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: answeringProvider(),
+        extensionInputs: [...e2ePreset.extensionInputs, watch],
+      })
+      yield* client.message.send({ sessionId, branchId, content: "answer me" })
+      const [ended] = yield* waitFor(
+        Ref.get(inputs),
+        (all) => all.length === 1,
+        5_000,
+        "turnAfter fired",
+      )
+      expect(ended?.streamFailed).toBe(false)
+      expect(ended?.retryAt).toEqual(Option.none())
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
 describe("a step that does not settle", () => {
   // Each `StreamEnded` names the model the step ran on, so a usage row is
   // never modelless: the step spent tokens on that model whether or not it

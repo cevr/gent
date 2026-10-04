@@ -1209,6 +1209,39 @@ export const ResponsesTransientStreamEvent = Schema.Struct({
   code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
 })
 
+// ── rate-limit resets ───────────────────────────────────────────────────────
+//
+// A 429 can name when each rate limit is full again in its headers. Each
+// driver decodes its own header names by schema into these limits; the rule
+// that picks the time a retry can succeed is one for every driver.
+
+/** One rate limit as a response reports it: what is left of it, and when it is full again (epoch ms). */
+interface ReportedLimit {
+  readonly remaining: Option.Option<number>
+  readonly resetAt: Option.Option<number>
+}
+
+/**
+ * When a retry can succeed: once every spent limit (none left) is full
+ * again, the latest of their resets. A limit with some left does not hold
+ * the retry, so its reset does not count; none when no limit reports itself
+ * spent with a reset.
+ */
+export const spentLimitsReset = (limits: ReadonlyArray<ReportedLimit>): Option.Option<number> =>
+  limits.reduce<Option.Option<number>>((latest, limit) => {
+    if (!Option.contains(limit.remaining, 0)) return latest
+    return Option.match(limit.resetAt, {
+      onNone: () => latest,
+      onSome: (at) =>
+        Option.some(
+          Math.max(
+            at,
+            Option.getOrElse(latest, () => at),
+          ),
+        ),
+    })
+  }, Option.none())
+
 // ── messages prompt cache ───────────────────────────────────────────────────
 //
 // The block rule both Messages drivers (Anthropic, and the OpenCode gateways'

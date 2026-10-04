@@ -390,7 +390,9 @@ export default defineExtension({
 A `turnAfter` hook that sends a `"queue"` message starts another model turn,
 at full price, and that turn's end runs the hook again. A fixed `sourceId`
 makes the follow-up once per session. Send from `turnAfter` only when the
-model must answer.
+model must answer. A turn that a usage limit failed carries `retryAt`
+(`Option`, epoch milliseconds): the time the model's driver says the limit
+resets, so a hook can wait for it instead of sending into the same limit.
 
 Lifecycle extension points are typed hook kinds, not keyed middleware bags:
 `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was

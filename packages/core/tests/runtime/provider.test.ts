@@ -47,6 +47,7 @@ import {
   DecisionModelResolver,
   removeSignIn,
   listAuthMethods,
+  limitResetAt,
   listCatalogProviders,
   retryProviderCall,
   listModelCatalog,
@@ -133,6 +134,17 @@ const rateLimited = (retryAfter: Duration.Duration) =>
       reason: new AiError.RateLimitError({ retryAfter }),
     }),
   })
+
+/** A rate limit with no retry-after: the reset, if any, is in the body only the driver reads. */
+const usageLimited = new ProviderError({
+  message: "Usage limit",
+  model: "test",
+  cause: AiError.make({
+    module: "Test",
+    method: "streamText",
+    reason: new AiError.RateLimitError({}),
+  }),
+})
 
 const invalidKey = new ProviderError({
   message: "Invalid API key",
@@ -262,6 +274,54 @@ describe("provider retry", () => {
       )
       expect(Exit.isFailure(yield* Effect.exit(untyped.run))).toBe(true)
       expect(untyped.calls()).toBe(1)
+    }),
+  )
+
+  // A ChatGPT usage limit names its reset in the body, not in a retry-after.
+  it.effect("a reset time past maxDelay that the driver reads fails at once without a retry", () =>
+    Effect.gen(function* () {
+      const { run, delays, calls } = failThenSucceed(usageLimited, 1, {
+        ...fast,
+        maxDelay: 30_000,
+        retryAt: (_cause, nowMs) => Option.some(nowMs + Duration.toMillis(Duration.hours(5))),
+      })
+      const exit = yield* Effect.exit(run)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls()).toBe(1)
+      expect(delays).toEqual([])
+    }),
+  )
+
+  it.effect("a reset time inside maxDelay is the wait before the retry", () =>
+    Effect.gen(function* () {
+      const { run, delays } = failThenSucceed(usageLimited, 1, {
+        ...fast,
+        maxDelay: 60_000,
+        retryAt: (_cause, nowMs) => Option.some(nowMs + 20_000),
+      })
+      const fiber = yield* Effect.forkChild(run)
+      yield* TestClock.adjust("20 seconds")
+      expect(yield* Fiber.join(fiber)).toBe("ok")
+      expect(delays).toEqual([20_000])
+    }),
+  )
+
+  it.effect("the default reset time is the retry-after counted from now", () =>
+    Effect.sync(() => {
+      const hinted = rateLimited(Duration.seconds(30))
+      expect(DEFAULT_RETRY_POLICY.retryAt(hinted.cause, 1_000)).toEqual(Option.some(31_000))
+      expect(DEFAULT_RETRY_POLICY.retryAt(usageLimited.cause, 1_000)).toEqual(Option.none())
+    }),
+  )
+
+  it.effect("only a reset past maxDelay is a limit reset the turn reports", () =>
+    Effect.sync(() => {
+      const capped = { ...policy, maxDelay: 30_000 }
+      expect(limitResetAt(capped, rateLimited(Duration.hours(5)), 0)).toEqual(
+        Option.some(Duration.toMillis(Duration.hours(5))),
+      )
+      expect(limitResetAt(capped, rateLimited(Duration.seconds(10)), 0)).toEqual(Option.none())
+      expect(limitResetAt(capped, usageLimited, 0)).toEqual(Option.none())
     }),
   )
 })
