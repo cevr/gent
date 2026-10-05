@@ -579,9 +579,14 @@ describe("a child's completion", () => {
           expect(completion?.metadata?.details).toMatchObject({
             requestId: "start-1",
             agentName: DELEGATE_AGENT_NAME,
+            // The child's session name: the row heads with it, as the tray and the `»` row do.
+            name: `${DELEGATE_AGENT_NAME}: ${childTask}`,
             outcome: {},
             tools: [{ name: "read", summary: "", status: "error" }],
             toolCount: 1,
+            // Every call by tool and outcome: the head summarizes all, not only the kept ones.
+            toolCounts: [{ name: "read", status: "error", count: 1 }],
+            durationMs: expect.any(Number),
           })
           // The model still reads the same envelope.
           expect(messageTexts([completion!])[0]).toContain(

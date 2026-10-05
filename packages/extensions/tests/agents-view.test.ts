@@ -1,9 +1,21 @@
+import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Effect, Fiber, Option, Predicate, Queue, Ref, Schema, Stream } from "effect"
+import {
+  Clock,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Predicate,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import { BranchId, ExtensionContext, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import { AgentEvent } from "@gent/core/protocol"
 import {
-  activityText,
+  activityOf,
   AgentActivity,
   AgentActivityLive,
   type AgentRow,
@@ -29,7 +41,7 @@ import {
   testToolContext,
   waitFor,
 } from "@gent/core/test-utils"
-import { e2ePreset } from "./helpers/test-preset"
+import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 
 // ── projection ──────────────────────────────────────────────────────────────
 
@@ -587,12 +599,16 @@ describe("agents view live activity", () => {
 
   test("a streamed reply shows its last line", () => {
     const state = fold([chunk("Reading the loader.\nChecking"), chunk(" the tests")])
-    expect(Option.getOrUndefined(activityText(state))).toBe("Checking the tests")
+    expect(Option.getOrUndefined(activityOf(state))).toEqual({ line: "Checking the tests" })
   })
 
-  test("a running tool wins over the text, and the newest running tool is named", () => {
+  test("the newest running call rides beside the streamed line, by tool and input", () => {
     const state = fold([chunk("thinking"), started("tc-cell", "cell"), started("tc-bash", "bash")])
-    expect(Option.getOrUndefined(activityText(state))).toBe("running bash")
+    // The client words the call, as its own live line words one: the server sends no words.
+    expect(Option.getOrUndefined(activityOf(state))).toEqual({
+      line: "thinking",
+      call: { tool: "bash", input: {} },
+    })
     const afterBash = foldActivity(
       state,
       AgentEvent.cases.ToolCallSucceeded.make({
@@ -602,20 +618,33 @@ describe("agents view live activity", () => {
         toolName: "bash",
       }),
     )
-    expect(Option.getOrUndefined(activityText(afterBash))).toBe("running cell")
+    expect(Option.getOrUndefined(activityOf(afterBash))?.call).toEqual({ tool: "cell", input: {} })
   })
 
-  test("a running tool names the first line of the command, path or pattern it works on", () => {
+  test("a running call keeps the fields that say what it works on, bounded", () => {
     const bash = fold([
       started("tc-bash", "bash", { command: "  bun test tests/money.test.ts\necho done" }),
     ])
-    expect(Option.getOrUndefined(activityText(bash))).toBe(
-      "running bash bun test tests/money.test.ts",
-    )
-    const read = fold([started("tc-read", "read", { path: "src/loader.ts" })])
-    expect(Option.getOrUndefined(activityText(read))).toBe("running read src/loader.ts")
+    expect(Option.getOrUndefined(activityOf(bash))?.call).toEqual({
+      tool: "bash",
+      input: { command: "bun test tests/money.test.ts" },
+    })
+    const read = fold([started("tc-read", "read", { path: "src/loader.ts", content: "x" })])
+    expect(Option.getOrUndefined(activityOf(read))?.call).toEqual({
+      tool: "read",
+      input: { path: "src/loader.ts" },
+    })
     const long = fold([started("tc-long", "bash", { command: "x".repeat(200) })])
-    expect([...(Option.getOrUndefined(activityText(long)) ?? "")].length).toBe(80)
+    expect([...(Option.getOrUndefined(activityOf(long))?.call?.input.command ?? "")].length).toBe(
+      80,
+    )
+    // A cell keeps its source, whose calls the client reads as verbs; a long one is cut.
+    const source = `await tools.read({ path: "a.ts" })\n${"// x\n".repeat(2_000)}`
+    const cell = Option.getOrUndefined(
+      activityOf(fold([started("tc-c", "cell", { code: source })])),
+    )
+    expect(cell?.call?.input.code?.startsWith('await tools.read({ path: "a.ts" })\n')).toBe(true)
+    expect([...(cell?.call?.input.code ?? "")].length).toBe(2_000)
   })
 
   test("a completed turn reports nothing", () => {
@@ -624,7 +653,7 @@ describe("agents view live activity", () => {
       started("tc-read", "read"),
       AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
     ])
-    expect(Option.isNone(activityText(state))).toBe(true)
+    expect(Option.isNone(activityOf(state))).toBe(true)
   })
 })
 
@@ -759,7 +788,7 @@ describe("AgentActivity watchers", () => {
           2_000,
           "the next turn's line",
         )
-        expect(Option.getOrUndefined(next)).toBe("Checking the tests.")
+        expect(Option.getOrUndefined(next)).toEqual({ line: "Checking the tests." })
       }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
     6_000,
   )
@@ -801,6 +830,54 @@ describe("AgentActivity watchers", () => {
 })
 
 describe("AgentsViewExtension via RPC", () => {
+  it.live(
+    "a delegate child's running call reaches its row with what the call works on",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+          // The shipped composition: the child runs its ops through a cell.
+          const harness = yield* createRpcHarness({
+            ...shippedPreset,
+            providerLayer: LanguageModelLayers.debug(),
+            cwd: directory,
+          })
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "debug delegate",
+          })
+          const RowCalls = Schema.Struct({
+            rows: Schema.Array(
+              Schema.Struct({
+                runningCall: Schema.optional(
+                  Schema.Struct({
+                    tool: Schema.String,
+                    input: Schema.Struct({ command: Schema.optional(Schema.String) }),
+                  }),
+                ),
+              }),
+            ),
+          })
+          const bash = yield* waitFor(
+            requestRows(harness, {}).pipe(
+              Effect.flatMap(({ raw }) => Schema.decodeUnknownEffect(RowCalls)(raw)),
+              Effect.map((reply) =>
+                Option.fromUndefinedOr(
+                  reply.rows.map((row) => row.runningCall).find((call) => call?.tool === "bash"),
+                ),
+              ),
+            ),
+            Option.isSome,
+            15_000,
+            "the child's running bash call",
+          )
+          expect(Option.getOrUndefined(bash)?.input.command).toContain("mkdir -p gent-debug-tools")
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("18 seconds")),
+      ),
+    20_000,
+  )
+
   it.live(
     "the harness session appears as a row with its stored cwd",
     () =>

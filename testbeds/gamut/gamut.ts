@@ -878,8 +878,11 @@ const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestE
  */
 const isIdle = (paneText: string, record: RunRecord): boolean => {
   const lines = paneText.split("\n").map((line) => line.trim())
-  // The live line (`✻ Thinking`, `✻ Running …`) shows while a turn runs.
-  const busy = lines.some((line) => / working · /.test(line) || /^✻ /.test(line))
+  // The live line (`✻ Thinking`, `✻ Running …`) shows while a turn runs; a
+  // running child's tray row starts with its pulse (`◇◈◆◈`). `◆` is also a
+  // done thread's glyph, so only the other two frames read busy: idle needs
+  // several reads in a row, and the record's open turns cover a child too.
+  const busy = lines.some((line) => /^[◇◈] /.test(line) || /^✻ /.test(line))
   return record.open.length === 0 && !busy
 }
 

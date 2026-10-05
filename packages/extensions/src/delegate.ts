@@ -304,8 +304,8 @@ const receiptTotal = (receipt: TurnCompleted): Option.Option<TurnUsage["known"]>
     costUsd: Option.fromUndefinedOr(receipt.costUsd),
   }))
 
-/** The outcome in words a model reads. */
-const failureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
+/** How a turn ended badly, in words a model reads; none for a turn that completed. */
+export const childFailureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
   const names: Array<string> = []
   if (outcome.interrupted === true) names.push("interrupted")
   if (outcome.streamFailed === true) names.push("model stream failed")
@@ -314,8 +314,8 @@ const failureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
 }
 
 /** How a child's turn ended, in the words the parent model and the completion row both show. */
-export const childOutcomeWords = (outcome: ChildOutcome): string => {
-  const failures = failureNames(outcome)
+const childOutcomeWords = (outcome: ChildOutcome): string => {
+  const failures = childFailureNames(outcome)
   if (failures.length === 0) return "completed"
   return `ended (${failures.join(", ")})`
 }
@@ -346,13 +346,16 @@ const startTurnMessages = <
   return messages.slice(start, start + 1 + end)
 }
 
-/** The child branch's start-turn messages, from the session detail. */
+/** The child session's name and its branch's start-turn messages, from the session detail. */
 const childMessages = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const detail = yield* ctx.Session.getDetail(entry.sessionId)
     const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
-    return startTurnMessages(branch?.messages ?? [], startMessageId(entry))
+    return {
+      name: detail.session.name,
+      messages: startTurnMessages(branch?.messages ?? [], startMessageId(entry)),
+    }
   })
 
 /** Children never spend the parent's patience on a broken model. */
@@ -378,7 +381,7 @@ const maximumErrorChars = 1_000
  */
 const completionError = (outcome: ChildOutcome, error: Option.Option<string>) =>
   error.pipe(
-    Option.filter(() => failureNames(outcome).length > 0),
+    Option.filter(() => childFailureNames(outcome).length > 0),
     Option.map((text) => {
       const line = text.replace(/\s+/g, " ").trim()
       if (line.length <= maximumErrorChars) return line
@@ -468,9 +471,23 @@ export const ChildCompletionDetails = Schema.Struct({
   usage: Schema.optionalKey(ChildUsage),
   /** The error a turn that ended badly ended on, one bounded line. Absent on older rows. */
   error: Schema.optionalKey(Schema.String),
+  /** The child session's name, as the tray and the sessions pane show it. Absent on older rows. */
+  name: Schema.optionalKey(Schema.String),
   /** The child's last calls, oldest first. `toolCount` counts every call. */
   tools: Schema.optionalKey(Schema.Array(ChildToolLine)),
   toolCount: Schema.optionalKey(Schema.Finite),
+  /** Every call by tool and outcome, so the row's summary counts more than the kept calls. Absent on older rows. */
+  toolCounts: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        status: ChildToolLine.fields.status,
+        count: Schema.Finite,
+      }),
+    ),
+  ),
+  /** From the child's start message to its last message of the turn. Absent on older rows. */
+  durationMs: Schema.optionalKey(Schema.Finite),
   /** A snapshot child's work: its copy, the branch that holds it, and its size. Absent for a shared child. */
   workspace: Schema.optionalKey(
     Schema.Struct({
@@ -528,6 +545,27 @@ const childToolLines = (
       return [{ name: part.name, summary: "", status }]
     }),
   )
+
+/** Every call by tool and outcome, in the order each pair first ran. */
+const toolCountsOf = (tools: ReadonlyArray<ChildToolLine>) => {
+  const counts = new Map<string, { name: string; status: ChildToolLine["status"]; count: number }>()
+  for (const tool of tools) {
+    const key = `${tool.name}\u0000${tool.status}`
+    const current = counts.get(key)
+    if (Predicate.isUndefined(current))
+      counts.set(key, { name: tool.name, status: tool.status, count: 1 })
+    else current.count += 1
+  }
+  return Array.from(counts.values())
+}
+
+/** The time the start turn took: its first message to its last. */
+const turnDuration = (messages: ReadonlyArray<{ readonly createdAt: Date }>): number => {
+  const first = messages.at(0)
+  const last = messages.at(-1)
+  if (Predicate.isUndefined(first) || Predicate.isUndefined(last)) return 0
+  return Math.max(0, last.createdAt.getTime() - first.createdAt.getTime())
+}
 
 /** An Option usage becomes a `usage` field, or nothing. */
 const usageField = (
@@ -620,7 +658,7 @@ const deliverCompletion = (
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const messages = yield* childMessages(entry)
+    const { name, messages } = yield* childMessages(entry)
     const text = latestAssistantText(messages)
     const tools = childToolLines(messages)
     const error = Option.getOrUndefined(completionError(outcome, turnError))
@@ -630,11 +668,14 @@ const deliverCompletion = (
       sessionId: entry.sessionId,
       branchId: entry.branchId,
       agentName: entry.agentName,
+      ...Record.filter({ name }, Predicate.isNotUndefined),
       outcome,
       ...usageField(usage),
       ...Record.filter({ error }, Predicate.isNotUndefined),
       tools: tools.slice(-MAX_COMPLETION_TOOLS),
       toolCount: tools.length,
+      toolCounts: toolCountsOf(tools),
+      durationMs: turnDuration(messages),
       ...Option.match(work, {
         onNone: () => ({}),
         onSome: (found) => ({ workspace: found.details }),
@@ -1194,7 +1235,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
       // The hook runs after the receipt is stored, so the turn's error is in
       // the child's events; a turn that completed has none to read.
       let error = Option.none<string>()
-      if (failureNames(outcome).length > 0) {
+      if (childFailureNames(outcome).length > 0) {
         error = Option.flatMap(yield* turnEnd(input), (end) => end.error)
       }
       const marked = yield* deliverCompletion(

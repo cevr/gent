@@ -7323,8 +7323,7 @@ describe("debug playground", () => {
           const frame = yield* waitForTerminal(
             setup,
             (text) =>
-              text.includes("Review the TUI renderer cleanup") &&
-              text.includes("✓ explore completed"),
+              text.includes("Review the TUI renderer cleanup") && text.includes("◆ explore"),
             "seeded transcript",
             5_000,
           )
@@ -7338,7 +7337,9 @@ describe("debug playground", () => {
           expect(frame).toContain(
             "  » child explore · 0e493eaf · The double border comes from two surfaces drawing one",
           )
-          expect(frame).toContain("  ✓ explore completed · 0e493eaf · 6 tools")
+          expect(frame).toContain(
+            "  ◆ explore · Read 4 files · searched 2 patterns · 41s · ↑1.2k ↓300 $0.01",
+          )
           expect(frame).toContain("┃ Review the TUI renderer cleanup")
           expect(frame).not.toContain("┃ » ")
         }).pipe(Effect.timeout("15 seconds")),

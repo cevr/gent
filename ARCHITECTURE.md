@@ -1418,8 +1418,15 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   first), marks the row current when the shell is on any of its sessions,
   and a second Ctrl+X deletes each session of the thread, newest first, since
   a session delete keeps a same-thread handoff.
-- The tray adds `done · <name>` after its `working` rows (three rows at most,
-  the rest counted) for a side thread that a listing showed running and a
+- The tray draws one row per running child, its glyph the state: the
+  `◇◈◆` pulse, then `<name> · <doing>`, with no state word. `<doing>` is the
+  child's newest running call in the live line's words (`Reading src/loader.ts`,
+  a cell's `Reading 2 files`), else its last streamed line: `ListAgents`
+  sends the line as `activity` and the call as the wire-only `runningCall`
+  (the tool and its bounded command, path, pattern or cell source), and the
+  TUI words it, so the server holds no copy of the TUI's vocabulary. The
+  tray adds `◆ <name>` after its running rows (three rows at most, the rest
+  counted as `+N more`) for a side thread that a listing showed running and a
   later one idle while the shell was not on it, in the subtree of the shell's
   thread. The thread the shell is on counts as seen too, so a finish the
   reader watched inside the thread is no done row back at its starter; a done

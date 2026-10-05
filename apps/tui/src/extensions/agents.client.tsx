@@ -25,7 +25,9 @@ import {
   groupedRows,
   keyHint,
   KeyHints,
+  type PathPlace,
   PickerFrame,
+  runningCallLabel,
   selectable,
   SelectList,
   type SelectListRow,
@@ -109,17 +111,17 @@ const nameFor = (row: AgentRowEntry): string =>
   )
 
 /**
- * fx's subagent rows: `working · <name>`, one per running child and
- * nothing else, with what the child is doing now when the server reports it
- * (`· running bash`, or its last streamed line). Past the cap the rest
- * collapse into one count line.
- *
- * A child's name is often its whole task text. The activity keeps up to half
- * the row and the name is cut to what is left, so a long task never pushes
- * what the child is doing off the row.
+ * What a running agent does now, in the live line's words: its newest
+ * running call (`Running bun test`, `Reading src/loader.ts`, a cell's
+ * `Reading 2 files`), else its last streamed line. A call's paths read
+ * against the agent's own directory, else where the TUI launched.
  */
-const trayText = (row: AgentRowEntry, width: number): string =>
-  truncate(rowLabel("working · ", nameFor(row), row.activity ?? "", width), width)
+const doingFor = (row: AgentRowEntry, place: PathPlace): string =>
+  Option.match(Option.fromUndefinedOr(row.runningCall), {
+    onNone: () => row.activity ?? "",
+    onSome: (call) =>
+      runningCallLabel(call.tool, call.input, { cwd: row.cwd ?? place.cwd, home: place.home }),
+  })
 
 /**
  * Rows in the order their sessions were created. The listing orders by last
@@ -136,26 +138,35 @@ const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRo
     )
   })
 
+/** A tray row's glyph: the pulse for a running child, `◆` for a done thread, none for the count. */
+type TrayMark = "running" | "done" | "none"
+
 /**
- * The tray's rows: `working · <name>` per running child, then `done ·
- * <name>` per finished thread (`done`, oldest first), up to the cap; the rest
- * collapse into one count line.
+ * The tray's rows, the glyph standing for the state: `<name> · <doing>` per
+ * running child (the pulse), then `<name>` per finished thread (`◆`, oldest
+ * first), up to the cap; the rest collapse into one `+N more` line.
+ *
+ * A child's name is often its whole task text. What it does keeps up to half
+ * the row and the name is cut to what is left, so a long task never pushes
+ * what the child is doing off the row.
  */
 export const trayLines = (
   running: ReadonlyArray<AgentRowEntry>,
   width: number,
-  done: ReadonlyArray<AgentRowEntry> = [],
-): ReadonlyArray<{ readonly pulse: boolean; readonly text: string }> => {
+  done: ReadonlyArray<AgentRowEntry>,
+  place: PathPlace,
+): ReadonlyArray<{ readonly mark: TrayMark; readonly text: string }> => {
   const working = inStartOrder(running).slice(0, TRAY_MAX_ROWS)
   const finished = done.slice(0, TRAY_MAX_ROWS - working.length)
-  const lines = [
-    ...working.map((row) => ({ pulse: true, text: trayText(row, width) })),
-    ...finished.map((row) => ({ pulse: false, text: truncate(`done · ${nameFor(row)}`, width) })),
+  const lines: Array<{ readonly mark: TrayMark; readonly text: string }> = [
+    ...working.map((row) => ({
+      mark: "running" as const,
+      text: truncate(rowLabel("", nameFor(row), doingFor(row, place), width), width),
+    })),
+    ...finished.map((row) => ({ mark: "done" as const, text: truncate(nameFor(row), width) })),
   ]
-  const rest: Array<string> = []
-  if (running.length > working.length) rest.push(`${running.length - working.length} more working`)
-  if (done.length > finished.length) rest.push(`${done.length - finished.length} more done`)
-  if (rest.length > 0) lines.push({ pulse: false, text: `+${rest.join(", ")}` })
+  const rest = running.length - working.length + done.length - finished.length
+  if (rest > 0) lines.push({ mark: "none", text: `+${rest} more` })
   return lines
 }
 
@@ -166,7 +177,7 @@ export const trayLines = (
  */
 const finishesSilently = (row: AgentRowEntry): boolean => row.sideThread && row.delegate !== true
 
-export function SubagentTray(props: { controller: AgentsController }) {
+export function SubagentTray(props: { controller: AgentsController; place: PathPlace }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const tick = useSpinnerClock()
@@ -177,12 +188,13 @@ export function SubagentTray(props: { controller: AgentsController }) {
   // A done thread the shell is on is shown, so it leaves the tray at once.
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
-  // Two columns of padding, the pulse and its space, and the hint on the first line.
+  // Two columns of padding, the glyph and its space, and the hint on the first line.
   const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
-  const lines = () => trayLines(running(), rowWidth(), finished())
-  const glyph = (pulse: boolean): string => {
-    if (pulse) return workingIconFrame(tick())
-    return " "
+  const lines = () => trayLines(running(), rowWidth(), finished(), props.place)
+  const glyph = (mark: TrayMark) => {
+    if (mark === "running") return { text: workingIconFrame(tick()), color: theme.success }
+    if (mark === "done") return { text: "◆", color: theme.textMuted }
+    return { text: " ", color: theme.textMuted }
   }
   return (
     <Show when={running().length > 0 || finished().length > 0}>
@@ -190,7 +202,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
         <For each={lines()}>
           {(line, index) => (
             <text wrapMode="none">
-              <span style={{ fg: theme.success }}>{`${glyph(line.pulse)} `}</span>
+              <span style={{ fg: glyph(line.mark).color }}>{`${glyph(line.mark).text} `}</span>
               <span style={{ fg: theme.textMuted }}>{line.text}</span>
               <Show when={index() === 0}>
                 <span style={{ fg: theme.textMuted }}>
@@ -593,25 +605,48 @@ const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
 /** Tree prefix from depth. The server already ordered parents before children. */
 const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
+/** The selected row's live detail: the listing reports a resident loop as idle. */
+const liveDetail = (
+  selected: boolean,
+  detail: Option.Option<ExtensionAgentDetail>,
+): Option.Option<ExtensionAgentDetail> => Option.filter(detail, () => selected)
+
 /**
- * What a row's agent is doing now: the server's activity line (its running
- * tool, else its last streamed line). A row without one says only when it is
- * selected, with the status its detail read names.
+ * What a row's agent is doing now, as the tray says it (`doingFor`). The
+ * glyph says running or idle, so no state word repeats it; a selected row
+ * whose detail waits on an answer says so, which no glyph shows.
  */
 const activityFor = (
   row: AgentRowEntry,
   selected: boolean,
   detail: Option.Option<ExtensionAgentDetail>,
-): string =>
-  Option.fromUndefinedOr(row.activity).pipe(
-    Option.orElse(() =>
-      Option.map(
-        Option.filter(detail, () => selected),
-        (value) => value.status.toLowerCase(),
-      ),
-    ),
-    Option.getOrElse(() => ""),
+  place: PathPlace,
+): string => {
+  const doing = doingFor(row, place)
+  if (doing.length > 0) return doing
+  return liveDetail(selected, detail).pipe(
+    Option.filter((value) => value.status === "WaitingForInteraction"),
+    Option.match({ onNone: () => "", onSome: () => "waiting for an answer" }),
   )
+}
+
+/**
+ * The section a row's glyph draws: the listing reports a resident loop as
+ * idle (it never reads state), so the selected row's live detail shows the
+ * pulse when the loop runs. The row stays under its listed heading.
+ */
+const glyphSection = (
+  row: AgentRowEntry,
+  selected: boolean,
+  detail: Option.Option<ExtensionAgentDetail>,
+): AgentRowEntry["section"] =>
+  Option.match(liveDetail(selected, detail), {
+    onNone: () => row.section,
+    onSome: (value) => {
+      if (value.status === "Running" || value.status === "WaitingForInteraction") return "running"
+      return row.section
+    },
+  })
 
 /** Age from the row's last update; blank when the row never ran. */
 const ageFor = (row: AgentRowEntry, now: number): string =>
@@ -751,6 +786,8 @@ export function AgentsPane(props: {
   onClose: () => void
   controller: AgentsController
   onSelect: (row: AgentRowEntry) => void
+  /** Where the TUI launched: a row's running call reads its paths against it. */
+  place: PathPlace
   /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
   onDelete: (row: AgentRowEntry) => void
 }) {
@@ -826,9 +863,9 @@ export function AgentsPane(props: {
     const width = Math.max(0, rowWidth() - textWidth(right) - 2)
     const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
     const label = rowLabel(
-      `${lead}${glyphFor(row.section)} `,
+      `${lead}${glyphFor(glyphSection(row, selected, props.controller.detail()))} `,
       nameFor(row),
-      activityFor(row, selected, props.controller.detail()),
+      activityFor(row, selected, props.controller.detail(), props.place),
       width,
     )
     const left = fitWidth(label, width)
@@ -875,7 +912,7 @@ export function AgentsPane(props: {
             if (selected()) return theme.primary
             return "transparent"
           }
-          const section = () => row.section
+          const section = () => glyphSection(row, selected(), props.controller.detail())
           const line = () => rowLine(row, selected())
           return (
             <box id={id} backgroundColor={background()} paddingLeft={1}>
@@ -958,7 +995,8 @@ export function AgentsPane(props: {
 
 export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const { transport, shell } = yield* ClientContext
+    const { transport, shell, workspace } = yield* ClientContext
+    const place = { cwd: workspace.cwd, home: workspace.home }
 
     const controller = yield* makeAgentsController(
       (input) =>
@@ -981,7 +1019,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         // the tray is chrome about background work, and the reply stays next
         // to the prompt it answers.
         slot: "below-input",
-        component: () => <SubagentTray controller={controller} />,
+        component: () => <SubagentTray controller={controller} place={place} />,
       }),
       clientCommandContribution({
         id: "agents.view",
@@ -1016,6 +1054,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         slot: "below-input",
         component: () => (
           <AgentsPane
+            place={place}
             open={controller.open()}
             controller={controller}
             onClose={() => shell.pane.close(AGENTS_PANE)}
