@@ -16,7 +16,8 @@ import {
   ToolResultFailure,
 } from "@gent/core/extensions/api"
 import {
-  CellBranchTools,
+  CellKernelResource,
+  CellStorageResource,
   CellOperationHost,
   CellTool,
   CellWorker,
@@ -801,6 +802,7 @@ describe("large host replies", () => {
             sourcePath: "cell-large-reply",
             artifactIdentity: LoadedArtifactIdentity.make("cell-large-reply-source"),
             contributions: {
+              resources: [CellStorageResource, CellKernelResource],
               tools: [
                 CellTool,
                 tool({
@@ -856,7 +858,6 @@ describe("large host replies", () => {
         const harness = yield* createRpcHarness({
           extensions,
           providerLayer,
-          branchTools: CellBranchTools,
           agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
         })
         const { client, sessionId, branchId } = harness

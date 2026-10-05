@@ -23,7 +23,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import { ToolRunner } from "../../src/runtime/tools"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   dateFromMillis,
@@ -283,7 +283,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
 ) => {
   const registry = params.registry ?? makeExtRegistry()
   const baseDeps = Layer.mergeAll(
-    params.storage ?? testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
+    params.storage ?? testSqliteStorage,
     actorTestModelLayer(params),
     registry,
     fixedSessionProfiles(new Map(), registry),

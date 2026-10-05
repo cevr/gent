@@ -758,8 +758,6 @@ const ContextWindowDetails = Schema.TaggedStruct(CONTEXT_WINDOW_MESSAGE_TYPE, {
   /** Present when the marker's notice carries a summary of what left the window. */
   summarized: Schema.optional(ContextHandoffSummary),
 })
-type ContextWindowDetails = typeof ContextWindowDetails.Type
-
 const isWindowDetails = Schema.is(ContextWindowDetails)
 
 /**
@@ -794,11 +792,35 @@ export const windowMarkerMessage = (params: {
   })
 }
 
-export const windowDetails = (message: Message): Option.Option<ContextWindowDetails> => {
+/** A context window as its marker opens it. */
+interface ContextWindow {
+  /** The first durable message the model still sees; everything earlier leaves the projection. */
+  readonly keepFromMessageId: MessageId
+  /** Present on a handoff: the history its notice summarizes. */
+  readonly summarized?: ContextHandoffSummary
+  /** The marker's text, the model reads it at the head of the window. */
+  readonly notice: string
+}
+
+/**
+ * The window `message` opens, when it is a marker the runtime wrote
+ * (`windowMarkerMessage`): its custom type is the window's and its details
+ * decode. Only the runtime writes that type, since an extension's send and a
+ * client's message have it removed, so a notice copied into any other message,
+ * or the type with details the runtime never wrote, opens no window.
+ */
+export const contextWindowOf = (message: Message): Option.Option<ContextWindow> => {
   if (message.metadata?.customType !== CONTEXT_WINDOW_MESSAGE_TYPE) return Option.none()
   const details = message.metadata.details
   if (!isWindowDetails(details)) return Option.none()
-  return Option.some(details)
+  return Option.some({
+    keepFromMessageId: details.keepFromMessageId,
+    ...omitUndefined({ summarized: details.summarized }),
+    notice: message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join(""),
+  })
 }
 
 /**
@@ -830,13 +852,13 @@ export const messagesInCurrentWindow = (
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const marker = messages[index]
     if (Predicate.isUndefined(marker)) continue
-    const details = windowDetails(marker)
+    const details = contextWindowOf(marker)
     if (Option.isNone(details)) continue
     const anchor = messages.findIndex((message) => message.id === details.value.keepFromMessageId)
     if (anchor < 0) continue
     return [
       marker,
-      ...messages.slice(anchor).filter((message) => Option.isNone(windowDetails(message))),
+      ...messages.slice(anchor).filter((message) => Option.isNone(contextWindowOf(message))),
     ]
   }
   return messages
@@ -874,7 +896,7 @@ export const settledMessages = (messages: ReadonlyArray<Message>): ReadonlyArray
 export const currentHandoffId = (window: ReadonlyArray<Message>): Option.Option<MessageId> => {
   const first = Option.fromUndefinedOr(window[0])
   return Option.flatMap(first, (marker) =>
-    Option.flatMap(windowDetails(marker), (details) => {
+    Option.flatMap(contextWindowOf(marker), (details) => {
       if (Predicate.isUndefined(details.summarized)) return Option.none()
       return Option.some(marker.id)
     }),
@@ -1057,7 +1079,7 @@ const measureInCurrentWindow = (
   Option.filter(measure, (value) => {
     const at = messages.findIndex((message) => message.id === value.replyId)
     if (at < 0) return false
-    return messages.slice(at + 1).every((message) => Option.isNone(windowDetails(message)))
+    return messages.slice(at + 1).every((message) => Option.isNone(contextWindowOf(message)))
   })
 
 /** Schema-backed failures found before a prompt projection is returned. */
@@ -1871,24 +1893,6 @@ export class ModelContextLedger extends Context.Service<
   })
 
   static Branch = Layer.effect(ModelContextLedger, ModelContextLedger.make)
-
-  /**
-   * The ledger a branch gets when nothing schedules directives.
-   *
-   * Only a dispatching tool writes this ledger -- the model asks for a fresh
-   * window or a focused summary from inside one. A branch without such a tool
-   * still projects its context every turn, so the read side must resolve to
-   * something rather than fail. Absence means "no directive, and nowhere to
-   * record", not an error.
-   */
-  static readonly inert: ModelContextLedgerService = {
-    status: Effect.succeedNone,
-    recordProjection: () => Effect.void,
-    schedule: () => Effect.void,
-    pendingDirective: Effect.succeedNone,
-    acknowledgeDirective: () => Effect.void,
-    discardDirective: Effect.void,
-  }
 }
 
 // ── turn-window ─────────────────────────────────────────────────────────────
@@ -1961,7 +1965,7 @@ const handoffPlan = (params: {
             ),
           ),
       })
-      if (before.some((message) => Option.isNone(windowDetails(message)))) {
+      if (before.some((message) => Option.isNone(contextWindowOf(message)))) {
         return Result.succeed({ anchor: latestUser, overflowing: true })
       }
       return Result.succeed({ anchor: withinTurn(), overflowing: true })
@@ -2222,13 +2226,13 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
-  const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
+  const summarizable = history.some((message) => Option.isNone(contextWindowOf(message)))
   // A refused window whose only history is an earlier handoff: that
   // handoff's summary is all that is left to give up. A truncation marker at
   // the same message replaces it, so the retry sends a smaller window. A
   // window already cut to a bare marker has nothing left to drop.
   const headSummary = Option.fromUndefinedOr(window[0]).pipe(
-    Option.flatMap(windowDetails),
+    Option.flatMap(contextWindowOf),
     Option.filter((details) => Predicate.isNotUndefined(details.summarized)),
   )
   if (params.overflowed && !summarizable && Option.isSome(headSummary)) {

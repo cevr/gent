@@ -59,7 +59,11 @@ export {
   toolCallPart,
   toolCallStep,
 } from "../runtime/provider.js"
-export { KNOWN_IMAGE_COSTS, turnNoticesText } from "../runtime/model-context.js"
+export {
+  KNOWN_IMAGE_COSTS,
+  turnNoticesText,
+  windowMarkerMessage,
+} from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
 export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"

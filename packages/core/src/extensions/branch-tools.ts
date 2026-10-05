@@ -4,46 +4,28 @@
  * A second, narrower entry point than `@gent/core/extensions/api`. That API is
  * for extensions that *use* the loop: they register tools, agents, and hooks,
  * and reach the host through `ExtensionContext`. This one is for the rarer
- * extension that *implements* a loop seam — a feature whose tools hold
- * branch-scoped state, dispatch inner operations, and recover their own calls
- * across a restart.
+ * extension whose tools hold branch-scoped state, dispatch inner operations,
+ * and recover their own calls across a restart.
  *
- * Such a feature ships a `BranchToolFeature`: its migrations, its storage, and
- * the factory that builds its per-branch services. The loop installs whatever
- * it is given and never looks inside.
+ * Such an extension uses the ordinary vocabulary for its state: a process
+ * `defineResource` owns its tables and migrates them, a branch
+ * `defineResource` owns its per-branch services, a tool reads its turn's stop
+ * through `CurrentTurnStop`, and `tool({ recover })` settles the calls a
+ * crash left in flight. This entry adds only the core services such a tool
+ * reads and the seams it implements.
  *
  * Two entry points rather than one wide surface: nothing here belongs in an
  * ordinary extension's vocabulary, and an ordinary extension importing
- * `ToolRunner` or `BranchToolWork` is a design mistake this split keeps
- * visible. Add a name here only when a branch-tool feature cannot be written
- * without it.
- *
- * @example
- * ```ts
- * import { type BranchToolFeature, BranchToolWork } from "@gent/core/extensions/branch-tools"
- *
- * export const MyBranchTools: BranchToolFeature<MyStorageTags> = {
- *   id: "my-feature",
- *   migrations: myMigrations,
- *   storage: myStorageLayer,
- *   branchLayer: myBranchLayer,
- * }
- * ```
+ * `ToolRunner` is a design mistake this split keeps visible. Add a name here
+ * only when such a tool cannot be written without it.
  *
  * @module
  */
 
-// The feature contract itself: what a root installs, and what the loop reads.
-export {
-  type BranchToolFeature,
-  type BranchToolHostServices,
-  type BranchToolLayerFactory,
-  BranchToolWork,
-} from "../runtime/tools.js"
-export { eraseResourceLayer } from "../runtime/extension-host.js"
+// The core services a tool body may yield besides its context and platform.
+export { type BranchToolHostServices } from "../runtime/tools.js"
 
-// Storage the feature contributes and reads.
-export type { FeatureMigrations } from "../storage/schema.js"
+// Storage a tool reads.
 export { InteractionStorage } from "../storage/storage.js"
 export { MessageStorage } from "../storage/storage.js"
 export { EventStore } from "../domain/event.js"
@@ -52,11 +34,11 @@ export { makeOwnedToolCallReader, type OwnedToolCallAddress } from "../storage/s
 export { StorageError } from "../domain/errors.js"
 export { EventStoreError } from "../domain/event.js"
 
-// The questions core asks a dispatching feature.
+// What a tool's `recover` reads and answers.
 export {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
-  ToolCallRecoveryService,
+  type ToolRecoveryCall,
 } from "../runtime/tools.js"
 
 // Identifying and resolving the calls a feature dispatches.
@@ -74,7 +56,7 @@ export {
   type AgentLoopTurnProfile,
   runAgentLoopTurnProfile,
 } from "../runtime/turn.js"
-export { neverInterrupted, type TurnInterruptionStatus } from "../runtime/tools.js"
+export { CurrentTurnStop, type TurnStop } from "../runtime/tools.js"
 export { AgentLoopError } from "../domain/agent-loop.js"
 
 // Reporting what the feature did to the model's context.

@@ -95,6 +95,41 @@ describe("the repo's compiler options", () => {
     }).pipe(Effect.timeout("25 seconds")),
   )
 
+  contextTest("a test block lints as a test module: it may run on the platform layer", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repoRoot = path.resolve(yield* path.fromFileUrl(new URL("../../..", import.meta.url)))
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guide-test-scope-" })
+      const platformTest = [
+        'import { BunServices } from "@effect/platform-bun"',
+        'import { Effect } from "effect"',
+        'import { it } from "effect-bun-test"',
+        'it.scopedLive.layer(BunServices.layer)("runs on the platform", () => Effect.void)',
+        "```",
+      ]
+      const blocks = guideCodeBlocks(
+        "docs/extensions.md",
+        ["```ts", ...platformTest, "```ts lint=test", ...platformTest].join("\n"),
+      )
+      const names = blocks.map((block, index) => guideBlockFile(index, block))
+      yield* Effect.forEach(blocks, (block, index) =>
+        fs
+          .makeDirectory(path.dirname(path.join(directory, names[index]!)), { recursive: true })
+          .pipe(
+            Effect.andThen(fs.writeFileString(path.join(directory, names[index]!), block.code)),
+          ),
+      )
+      const failures = (yield* compileContext(repoRoot, directory, extension, names)).map((line) =>
+        guideDiagnosticLine(line, blocks),
+      )
+      // Only the extension block provides a platform layer outside an entry.
+      expect(failures.filter((line) => line.includes(": lint "))).toEqual([
+        expect.stringMatching(/^docs\/extensions\.md:5:\d+.*effect\(noPlatformLayerOutsideEntry\)/),
+      ])
+    }).pipe(Effect.timeout("25 seconds")),
+  )
+
   contextTest("TUI guide code keeps JSX dependencies and terminal-width policy", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -297,6 +332,10 @@ describe("steering prose code blocks", () => {
     expect(
       guideDiagnosticLine("/tmp/gent-guide-code-x/extension/b2.ts(1,1): suggestion TS2: y", blocks),
     ).toBe("docs/extensions.md:10:1: suggestion TS2: y")
+    // A test block's module is a test module by name.
+    expect(guideDiagnosticLine("examples/tests/b2.test.ts(3,4): lint x", blocks)).toBe(
+      "docs/extensions.md:12:4: lint x",
+    )
     expect(guideDiagnosticLine("tui/b3.tsx(1,2): error TS3: z", blocks)).toBe(
       "apps/tui/AGENTS.md:3:2: error TS3: z",
     )

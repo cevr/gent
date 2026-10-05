@@ -1,5 +1,4 @@
 import { BunServices } from "@effect/platform-bun"
-import { test } from "bun:test"
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
@@ -37,15 +36,6 @@ const toolLayer = (config: {
 class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: number }>()(
   "@gent/core/tests/test-utils/index.test/ResourceInstance",
 ) {}
-
-test("branch tool storage tags require a branch tool feature", () => {
-  const config = { providerLayer: LanguageModelLayers.debug(), agents: [], extensionInputs: [] }
-  // @ts-expect-error -- omitted branch tools cannot promise a storage service
-  createE2ELayer<ResourceInstance>(config)
-  // @ts-expect-error -- a widened configuration cannot promise uninstalled storage
-  const missingFeature: E2ELayerConfig<ResourceInstance> = config
-  expect(missingFeature.agents).toEqual([])
-})
 
 describe("extension tool test layer", () => {
   it.live("uses the one built resource instance and releases it once", () =>

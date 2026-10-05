@@ -15,6 +15,7 @@ import {
   Exit,
   Fiber,
   Predicate,
+  Result,
 } from "effect"
 import {
   assistantMessageIdForTurn,
@@ -54,6 +55,7 @@ import {
   RequestId,
   ToolId,
   ProcessGenerationId,
+  type InteractionRequestId,
 } from "../../src/domain/ids"
 import {
   AgentDefinition,
@@ -101,7 +103,6 @@ import {
 } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import {
-  noBranchTools,
   captureCurrentToolBinding,
   innerOperationBindingIdentity,
   processLocalReplayBindingKey,
@@ -109,6 +110,8 @@ import {
   type ResolvedToolCapability,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
+  ToolCallRecoveryError,
+  ToolCallRecoveryOutcome,
   ToolRunner,
 } from "../../src/runtime/tools"
 import {
@@ -148,7 +151,7 @@ import {
   waitFor as waitForOption,
   waitForPhase,
 } from "../helpers/agent-loop"
-import { windowDetails } from "../../src/runtime/model-context"
+import { contextWindowOf } from "../../src/runtime/model-context"
 import { e2ePreset, rangeCompactorLayer, testAgent, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
 import {
@@ -545,7 +548,7 @@ describe("classifyStep", () => {
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
-const storage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+const storage = testSqliteStorage
 const layer = Layer.provideMerge(Layer.provide(EventStoreLive, storage), storage)
 
 const assistantWithCall = (params: {
@@ -789,7 +792,7 @@ describe("durable message persistence", () => {
           (event) => event._tag === "MessageReceived" && event.message.id === summaryMessage.id,
         )
         expect(received).toHaveLength(1)
-      }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), publisher.layer)))
+      }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, publisher.layer)))
     }),
   )
 })
@@ -2131,7 +2134,7 @@ describe("native model compaction integration", () => {
         expect(markers).toHaveLength(1)
         const marker = markers[0]
         if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
-        const details = Option.getOrThrow(windowDetails(marker))
+        const details = Option.getOrThrow(contextWindowOf(marker))
         expect(details.summarized).toMatchObject({
           firstMessageId: "native-old-1",
           lastMessageId: "native-old-12",
@@ -5936,7 +5939,7 @@ describe("tool binding replay", () => {
           toolCallId,
         }),
       ).toBeUndefined()
-    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), EventStore.Memory))),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
   it.live("replays the structured terminal result for the current assistant only", () =>
     Effect.gen(function* () {
@@ -6002,7 +6005,7 @@ describe("tool binding replay", () => {
         toolCalls: [toolCall],
       })
       expect(results.get(toolCallId)?.result).toEqual({ value: "current" })
-    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), EventStore.Memory))),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
   it.live("does not replay a terminal result without its assistant anchor", () =>
     Effect.gen(function* () {
@@ -6036,7 +6039,7 @@ describe("tool binding replay", () => {
         ],
       })
       expect(results.size).toBe(0)
-    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), EventStore.Memory))),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
   it.live("stops result replay at the next assistant message", () =>
     Effect.gen(function* () {
@@ -6102,7 +6105,7 @@ describe("tool binding replay", () => {
         ],
       })
       expect(results.get(toolCallId)?.result).toEqual({ value: "current" })
-    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), EventStore.Memory))),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
   it.live("rejects a corrupt structured terminal result", () =>
     Effect.gen(function* () {
@@ -6159,7 +6162,7 @@ describe("tool binding replay", () => {
         const error = Cause.findErrorOption(exit.cause)
         expect(Option.isSome(error) && Schema.is(ToolResultReplayError)(error.value)).toBe(true)
       }
-    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage(Layer.empty, {}), EventStore.Memory))),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
   it.live("isolates process-local replay state between server scopes", () =>
     Effect.scoped(
@@ -6389,6 +6392,378 @@ describe("a tool call a restart cut short", () => {
           "the turn ended instead of parking",
         )
         expect(settled.runtime._tag).toBe("Idle")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "each tool settles its own crashed call as its extension's leaf, and a tool without recover is reported interrupted",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-tool-recover-")
+        const dbPath = `${tempDir}/gent.db`
+        const runs = yield* Ref.make(0)
+        const allRunning = yield* Deferred.make<void>()
+        // Every call starts, and the process stops while the three run.
+        const hang = Ref.updateAndGet(runs, (n) => n + 1).pipe(
+          Effect.flatMap((n) =>
+            Effect.when(Deferred.succeed(allRunning, void 0), Effect.succeed(n === 3)),
+          ),
+          Effect.andThen(Effect.never),
+        )
+        const settling = (id: string) =>
+          tool({
+            id,
+            description: "Keeps a receipt it settles from",
+            params: Schema.Struct({}),
+            output: Schema.String,
+            execute: () => hang,
+            recover: (call) =>
+              Effect.gen(function* () {
+                const ctx = yield* ExtensionContext
+                return ToolCallRecoveryOutcome.cases.Settled.make({
+                  result: Prompt.toolResultPart({
+                    id: call.toolCall.id,
+                    name: call.toolCall.name,
+                    isFailure: false,
+                    providerExecuted: false,
+                    result: {
+                      settledBy: ctx.extensionId,
+                      ownCall: ctx.toolCallId === call.toolCall.id,
+                    },
+                  }),
+                })
+              }),
+          })
+        const plain = tool({
+          id: "no_recover",
+          description: "Keeps no receipt",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => hang,
+        })
+        // A build identity gives each call a durable binding, as a shipped tool has.
+        const extensionOf = (
+          id: string,
+          tools: NonNullable<LoadedExtension["contributions"]["tools"]>,
+        ): LoadedExtension => ({
+          manifest: { id: ExtensionId.make(id) },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make(`${id}@artifact-1`),
+          contributions: { tools },
+        })
+        const extensions = [
+          extensionOf("@test/recover-one", [settling("settle_one")]),
+          extensionOf("@test/recover-two", [settling("settle_two")]),
+          extensionOf("@test/recover-none", [plain]),
+        ]
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions,
+            storagePath: dbPath,
+          })
+
+        // First process: the model calls the three tools, and the process stops while they run.
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              multiToolCallStep(
+                { toolName: "settle_one", input: {} },
+                { toolName: "settle_two", input: {} },
+                { toolName: "no_recover", input: {} },
+              ),
+            ])
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const { sessionId, branchId } = yield* client.session.create({})
+            yield* client.message.send({ sessionId, branchId, content: "run all three" })
+            yield* Deferred.await(allRunning)
+            return { sessionId, branchId }
+          }),
+        )
+
+        // Second process: the turn resumes; the model reads what each tool settled.
+        const seen = yield* Ref.make(Option.none<Prompt.Prompt>())
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) =>
+              Ref.set(seen, Option.some(Prompt.make(options.prompt))).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("read the settled calls"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              ),
+            )
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* waitFor(
+              client.session.getSnapshot(target),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "read the settled calls"),
+              5_000,
+              "the resumed turn answered",
+            )
+          }),
+        )
+        expect(yield* Ref.get(runs)).toBe(3)
+        const prompt = Option.getOrThrow(yield* Ref.get(seen))
+        const results = prompt.content.flatMap((message) => {
+          if (message.role !== "tool") return []
+          return message.content.filter((part) => part.type === "tool-result")
+        })
+        const byName = new Map(results.map((part) => [part.name, part]))
+        expect(byName.get("settle_one")).toMatchObject({
+          isFailure: false,
+          result: { settledBy: "@test/recover-one", ownCall: true },
+        })
+        expect(byName.get("settle_two")).toMatchObject({
+          isFailure: false,
+          result: { settledBy: "@test/recover-two", ownCall: true },
+        })
+        expect(byName.get("no_recover")).toMatchObject({
+          isFailure: true,
+          result: { reason: "Interrupted" },
+        })
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a tool's recover that waits on an interaction parks the turn, and settles the call once it is answered",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-recover-asks-")
+        const dbPath = `${tempDir}/gent.db`
+        const runs = yield* Ref.make(0)
+        const recovers = yield* Ref.make(0)
+        const answered = yield* Ref.make(false)
+        const asked = yield* Ref.make(Option.none<InteractionRequestId>())
+        const asking = tool({
+          id: "ask_then_recover",
+          description: "Asks, and keeps the request it waits on",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: Effect.fn("ask_then_recover")(function* () {
+            yield* Ref.update(runs, (n) => n + 1)
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: "proceed?" })
+            return `executed: ${String(decision.approved)}`
+          }),
+          // The receipt the tool keeps is the request it asked; once that is
+          // answered, the receipt settles the call.
+          recover: (call) =>
+            Effect.gen(function* () {
+              yield* Ref.update(recovers, (n) => n + 1)
+              const requestId = Option.getOrThrow(yield* Ref.get(asked))
+              if (!(yield* Ref.get(answered)))
+                return ToolCallRecoveryOutcome.cases.Suspended.make({ requestId })
+              return ToolCallRecoveryOutcome.cases.Settled.make({
+                result: Prompt.toolResultPart({
+                  id: call.toolCall.id,
+                  name: call.toolCall.name,
+                  isFailure: false,
+                  providerExecuted: false,
+                  result: "settled after the answer",
+                }),
+              })
+            }),
+        })
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/recover-asks") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/recover-asks@artifact-1"),
+          contributions: { tools: [asking] },
+        }
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensions: [extension],
+            approvalLayer: ApprovalService.Live,
+            storagePath: dbPath,
+          })
+
+        // First process: the call asks, the turn parks, and the process stops.
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              toolCallStep("ask_then_recover", {}),
+            ])
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const { sessionId, branchId } = yield* client.session.create({})
+            const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filterMap((envelope) => {
+                if (envelope.event._tag === "InteractionPresented")
+                  return Result.succeed(envelope.event.requestId)
+                return Result.failVoid
+              }),
+              Stream.take(1),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content: "ask first" })
+            yield* Ref.set(asked, yield* Fiber.join(presented))
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) => snapshot.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "parked before the restart",
+            )
+            return { sessionId, branchId }
+          }),
+        )
+
+        // Second process: the tool's recover parks the turn on its request; the answer settles it.
+        const seen = yield* Ref.make(Option.none<Prompt.Prompt>())
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) =>
+              Ref.set(seen, Option.some(Prompt.make(options.prompt))).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("read the settled call"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              ),
+            )
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* waitFor(
+              Effect.all([client.session.getSnapshot(target), Ref.get(recovers)]),
+              ([snapshot, count]) =>
+                snapshot.runtime._tag === "WaitingForInteraction" && count === 1,
+              5_000,
+              "the recovered call parked the turn",
+            )
+            yield* Ref.set(answered, true)
+            yield* client.interaction.respondInteraction({
+              ...target,
+              requestId: Option.getOrThrow(yield* Ref.get(asked)),
+              approved: true,
+            })
+            yield* waitFor(
+              client.session.getSnapshot(target),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "read the settled call"),
+              5_000,
+              "the resumed turn answered",
+            )
+          }),
+        )
+        expect(yield* Ref.get(runs)).toBe(1)
+        expect(yield* Ref.get(recovers)).toBe(2)
+        const prompt = Option.getOrThrow(yield* Ref.get(seen))
+        const results = prompt.content.flatMap((message) => {
+          if (message.role !== "tool") return []
+          return message.content.filter((part) => part.type === "tool-result")
+        })
+        expect(results).toHaveLength(1)
+        expect(results[0]).toMatchObject({ isFailure: false, result: "settled after the answer" })
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "answering a parked call never runs recover for a sibling that already finished, and the turn continues",
+    () =>
+      Effect.gen(function* () {
+        const recovers = yield* Ref.make(0)
+        const finished = tool({
+          id: "finished_work",
+          description: "Finishes at once",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => Effect.succeed("finished"),
+          // The call has a result: a recover that ran would end the turn.
+          recover: () =>
+            Ref.update(recovers, (n) => n + 1).pipe(
+              Effect.andThen(
+                Effect.fail(new ToolCallRecoveryError({ message: "no receipt to settle from" })),
+              ),
+            ),
+        })
+        const asking = tool({
+          id: "asking_work",
+          description: "Asks before it works",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: Effect.fn("asking_work")(function* () {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+            if (!decision.approved) return "declined"
+            return "worked"
+          }),
+        })
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/finished-sibling") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: { tools: [finished, asking] },
+        }
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "finished_work", input: {} },
+            { toolName: "asking_work", input: {} },
+          ),
+          {
+            ...textStep("read both results"),
+            assertOptions: (options) => {
+              const results = Prompt.make(options.prompt).content.flatMap((message) => {
+                if (message.role !== "tool") return []
+                return message.content.filter((part) => part.type === "tool-result")
+              })
+              const byName = new Map(results.map((part) => [part.name, part]))
+              expect(byName.get("finished_work")).toMatchObject({
+                isFailure: false,
+                result: "finished",
+              })
+              expect(byName.get("asking_work")).toMatchObject({
+                isFailure: false,
+                result: "worked",
+              })
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: [extension],
+          approvalLayer: ApprovalService.Live,
+        })
+        const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filterMap((envelope) => {
+            if (envelope.event._tag === "InteractionPresented")
+              return Result.succeed(envelope.event.requestId)
+            return Result.failVoid
+          }),
+          Stream.take(1),
+          Stream.runHead,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "finish one, ask on the other" })
+        const requestId = Option.getOrThrow(yield* Fiber.join(presented))
+        yield* client.interaction.respondInteraction({
+          sessionId,
+          branchId,
+          requestId,
+          approved: true,
+        })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            hasAssistantText(snapshot.messages, "read both results"),
+          5_000,
+          "the answered turn continued",
+        )
+        yield* controls.assertDone
+        expect(yield* Ref.get(recovers)).toBe(0)
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )

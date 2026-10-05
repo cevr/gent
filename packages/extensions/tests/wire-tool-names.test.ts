@@ -1,8 +1,10 @@
 /**
- * Tool names on the wire. Gent tool ids hold dots (`session.send`,
+ * Tools on the wire. Gent tool ids hold dots (`session.send`,
  * `delegate.start`); Anthropic and OpenAI take only `[a-zA-Z0-9_-]` names.
  * A direct turn (no cell) through each real driver sends wire names in its
  * tool declarations and history, and the call it reads back runs the gent tool.
+ * Each driver's tool declarations are pinned byte for byte, and a call the
+ * tool runner refuses comes back to the model as a failed result.
  */
 import { describe, expect, it } from "effect-bun-test"
 import {
@@ -10,11 +12,11 @@ import {
   Crypto,
   Effect,
   Fiber,
-  type FileSystem,
+  FileSystem,
   Layer,
   Match,
   Option,
-  type Path,
+  Path,
   Predicate,
   Schema,
   Stream,
@@ -29,14 +31,32 @@ import {
   type ClaudeCredentials,
 } from "../src/anthropic.js"
 import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
+import { buildCloudflareModelDriver } from "../src/cloudflare.js"
+import { McpExtension, McpServers } from "../src/mcp.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
+  AgentDefinition,
+  defineExtension,
   type DriverError,
+  ExtensionHost,
+  type GentExtension,
   type ProviderAuthError,
   ProviderAuthInfo,
+  tool,
 } from "@gent/core/extensions/api"
-import { createRpcHarness, makeTempDirectoryScoped } from "@gent/core/test-utils"
-import { fakeFetchLayer, makeFakeFetchState } from "./helpers/fake-http-client.js"
+import {
+  createRpcHarness,
+  makeTempDirectoryScoped,
+  modelCatalogFromBodies,
+  testAgent,
+  testTurnExtension,
+} from "@gent/core/test-utils"
+import { resolveShipped } from "./helpers/api-classes.js"
+import {
+  type CapturedRequest,
+  fakeFetchLayer,
+  makeFakeFetchState,
+} from "./helpers/fake-http-client.js"
 import type { AgentEvent } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
@@ -143,13 +163,13 @@ const openaiResponse = <O extends { readonly type: string }>(output: O) => ({
   usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
 })
 
-const openaiToolCall = (name: string) => {
+const openaiToolCall = (name: string, input: Schema.Json = {}) => {
   const item = {
     type: "function_call",
     id: "fc-wire",
     call_id: "call-wire",
     name,
-    arguments: "{}",
+    arguments: encodeExternalJson(input),
     status: "completed",
   }
   return openaiEvents([
@@ -203,6 +223,84 @@ const openaiModel = Effect.gen(function* () {
   return yield* driver.resolveModel("gpt-5.4", apiKey)
 }).pipe(Effect.provide(BunServices.layer))
 
+// ── chat completions ────────────────────────────────────────────────────────
+
+const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+/** One Chat Completions stream: each chunk's choice delta and finish reason, then `[DONE]`. */
+const chatReply = (
+  choices: ReadonlyArray<{ readonly delta: object; readonly finish_reason: Schema.Json }>,
+) =>
+  eventStream([
+    ...choices.map(
+      (choice) =>
+        `data: ${encodeExternalJson({
+          id: "chatcmpl-wire",
+          object: "chat.completion.chunk",
+          created: 1700000000,
+          model: CHAT_MODEL,
+          choices: [{ index: 0, ...choice }],
+        })}\n\n`,
+    ),
+    "data: [DONE]\n\n",
+  ])
+
+const chatToolCall = (name: string, input: Schema.Json = {}) =>
+  chatReply([
+    {
+      delta: {
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-wire",
+            type: "function",
+            function: { name, arguments: encodeExternalJson(input) },
+          },
+        ],
+      },
+      finish_reason: externalWireNull,
+    },
+    { delta: {}, finish_reason: "tool_calls" },
+  ])
+
+const chatText = (text: string) =>
+  chatReply([
+    { delta: { role: "assistant", content: text }, finish_reason: externalWireNull },
+    { delta: {}, finish_reason: "stop" },
+  ])
+
+/** A Workers AI model: the shipped Chat Completions class, as models.dev lists it. */
+const chatModel = resolveShipped(
+  buildCloudflareModelDriver({
+    token: Option.none(),
+    accountId: Option.none(),
+    gatewayId: Option.none(),
+  }),
+  modelCatalogFromBodies({
+    chat: encodeExternalJson({
+      "cloudflare-workers-ai": {
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+        models: {
+          [CHAT_MODEL]: {
+            name: "Llama 3.3 70B Instruct fp8 Fast",
+            reasoning: false,
+            tool_call: true,
+            temperature: true,
+            limit: { context: 24000, output: 24000 },
+          },
+        },
+      },
+    }),
+    decision: "{}",
+  }),
+  CHAT_MODEL,
+  Option.some(
+    ProviderAuthInfo.cases.Api.make({ key: "wire-test-key", metadata: { accountId: "acct-1" } }),
+  ),
+)
+
 // ── the turn ────────────────────────────────────────────────────────────────
 
 const Named = Schema.Struct({
@@ -245,7 +343,8 @@ interface WireCase {
     Layer.Layer<LanguageModel.LanguageModel>,
     ProviderAuthError | DriverError
   >
-  readonly toolCall: (name: string) => FakeReply
+  /** A reply that calls the tool `name` with `input` (no input: `{}`). */
+  readonly toolCall: (name: string, input?: Schema.Json) => FakeReply
   readonly text: (text: string) => FakeReply
   /** The tool names one request body's history calls. */
   readonly called: (body: Body) => ReadonlyArray<string>
@@ -255,7 +354,7 @@ const cases: ReadonlyArray<WireCase> = [
   {
     provider: "anthropic",
     model: anthropicModel,
-    toolCall: (name) =>
+    toolCall: (name, input = {}) =>
       anthropicReply(
         [
           {
@@ -266,7 +365,7 @@ const cases: ReadonlyArray<WireCase> = [
           {
             type: "content_block_delta",
             index: 0,
-            delta: { type: "input_json_delta", partial_json: "{}" },
+            delta: { type: "input_json_delta", partial_json: encodeExternalJson(input) },
           },
         ],
         "tool_use",
@@ -350,5 +449,551 @@ describe("tool names on the wire", () => {
         }).pipe(Effect.timeout("20 seconds")),
       ),
     )
+  }
+})
+
+// ── declarations and refused calls ──────────────────────────────────────────
+
+/** Each shipped driver: one per SDK that writes tool declarations. */
+const drivers: ReadonlyArray<Pick<WireCase, "provider" | "model" | "toolCall" | "text">> = [
+  ...cases,
+  { provider: "chat-completions", model: chatModel, toolCall: chatToolCall, text: chatText },
+]
+
+const Todo = Schema.Struct({ todo: Schema.String, done: Schema.Boolean })
+
+/**
+ * Tools whose parameters hold each schema shape a provider's declaration
+ * codec rewrites: optional and nullable keys, literals, arrays, a nested
+ * struct, a record, descriptions, and a dotted id.
+ */
+const declarationsExtension = (ran: Array<typeof Todo.Type>) =>
+  defineExtension({
+    id: "@gent/test/declarations",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "shapes",
+          description: "Every shape",
+          params: Schema.Struct({
+            text: Schema.String.annotate({ description: "Free text" }),
+            count: Schema.optional(Schema.Finite),
+            mode: Schema.Literals(["fast", "slow"]),
+            tags: Schema.Array(Schema.String),
+            nested: Schema.Struct({ flag: Schema.Boolean }),
+            note: Schema.optional(Schema.NullOr(Schema.String)),
+            limits: Schema.Record(Schema.String, Schema.Finite),
+          }),
+          output: Schema.String,
+          execute: () => Effect.succeed("shaped"),
+        }),
+        tool({
+          id: "plain.note",
+          description: "A dotted id",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.String,
+          execute: () => Effect.succeed("noted"),
+        }),
+        tool({
+          id: "todo",
+          description: "Add a todo",
+          params: Todo,
+          output: Schema.String,
+          execute: (input) => Effect.sync(() => ran.push(input)).pipe(Effect.as("added")),
+        }),
+      )
+    }),
+  })
+
+const decodeJsonBody = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+)
+
+/** The request body's fields as JSON. */
+const jsonBody = (request: CapturedRequest) => decodeJsonBody(request.body ?? "{}")
+
+/** A request body's `tools` and `tool_choice`, as sent. */
+const declarationsOf = (body: Record<string, Schema.Json> = {}) =>
+  encodeExternalJson({ tools: body["tools"], tool_choice: body["tool_choice"] })
+
+/** What one turn runs with, beside the driver and `testTurnExtension`. */
+interface TurnSetup {
+  /** The agent; `testAgent` when absent. */
+  readonly agent?: AgentDefinition
+  /** The extensions that register tools; `declarationsExtension` when absent. */
+  readonly extensions?: ReadonlyArray<GentExtension>
+  /** The home directory; a new temporary one when absent. */
+  readonly home?: string
+  /** Receives each input the `todo` tool runs with. */
+  readonly ran?: Array<typeof Todo.Type>
+}
+
+/** One turn through `wire`'s driver: the replies answer each request in order. */
+const runTurn = (
+  wire: (typeof drivers)[number],
+  replies: ReadonlyArray<FakeReply>,
+  setup: TurnSetup = {},
+) =>
+  Effect.gen(function* () {
+    const model = yield* wire.model
+    const state = makeFakeFetchState()
+    const providerLayer = Layer.provide(
+      model,
+      fakeFetchLayer(state, (_request, call) => replies[call] ?? wire.text("unexpected")),
+    )
+    const cwd = yield* makeTempDirectoryScoped("wire-tools-cwd-")
+    const home = yield* Option.match(Option.fromUndefinedOr(setup.home), {
+      onNone: () => makeTempDirectoryScoped("wire-tools-home-"),
+      onSome: Effect.succeed,
+    })
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      agents: [setup.agent ?? testAgent],
+      extensionInputs: [
+        testTurnExtension,
+        ...(setup.extensions ?? [declarationsExtension(setup.ran ?? [])]),
+      ],
+      providerLayer,
+      cwd,
+      home,
+    })
+    const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.map((envelope) => envelope.event),
+      Stream.takeUntil(Predicate.isTagged("TurnCompleted")),
+      Stream.runCollect,
+      Effect.forkScoped,
+    )
+    yield* client.message.send({ sessionId, branchId, content: "add a todo" })
+    const events = Array.from(yield* Fiber.join(turn))
+    return { bodies: state.captured.map(jsonBody), events }
+  })
+
+/**
+ * The `tools` and `tool_choice` each driver sends for the tools above, as
+ * sent. A change to how the turn builds its toolkit, or to a driver's
+ * declaration codec, changes these bytes and the cached prefix with them.
+ */
+const PINNED_DECLARATIONS = new Map([
+  [
+    "anthropic",
+    '{"tools":[{"name":"shapes","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"description":"Every shape","strict":true},{"name":"plain__note","input_schema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"description":"A dotted id","strict":true},{"name":"todo","input_schema":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"description":"Add a todo","strict":true}],"tool_choice":{"type":"auto"}}',
+  ],
+  [
+    "openai",
+    '{"tools":[{"type":"function","name":"shapes","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":true,"description":"Every shape"},{"type":"function","name":"plain__note","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":true,"description":"A dotted id"},{"type":"function","name":"todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":true,"description":"Add a todo"}],"tool_choice":"auto"}',
+  ],
+  [
+    "chat-completions",
+    '{"tools":[{"type":"function","function":{"name":"shapes","description":"Every shape","parameters":{"type":"object","properties":{"text":{"type":"string","description":"Free text"},"count":{"anyOf":[{"anyOf":[{"type":"number"},{"type":"null"}]},{"type":"null"}]},"mode":{"type":"string","enum":["fast","slow"]},"tags":{"type":"array","items":{"type":"string"}},"nested":{"type":"object","properties":{"flag":{"type":"boolean"}},"required":["flag"],"additionalProperties":false},"note":{"anyOf":[{"anyOf":[{"anyOf":[{"type":"string"},{"type":"null"}]},{"type":"null"}]},{"type":"null"}]},"limits":{"type":"array","items":{"type":"object","properties":{"0":{"type":"string"},"1":{"type":"number"}},"required":["0","1"],"additionalProperties":false,"description":"Tuple encoded as an object with numeric string keys (\'0\', \'1\', ...). If present, \'__rest__\' contains remaining elements"},"description":"Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object"}},"required":["text","count","mode","tags","nested","note","limits"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"plain__note","description":"A dotted id","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false},"strict":false}},{"type":"function","function":{"name":"todo","description":"Add a todo","parameters":{"type":"object","properties":{"todo":{"type":"string"},"done":{"type":"boolean"}},"required":["todo","done"],"additionalProperties":false},"strict":false}}],"tool_choice":"auto"}',
+  ],
+])
+
+describe("tool declarations on the wire", () => {
+  for (const wire of drivers) {
+    it.live(`${wire.provider}: a turn sends the pinned tool declarations`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bodies } = yield* runTurn(wire, [wire.text("done")])
+          expect(Option.some(declarationsOf(bodies[0]))).toEqual(
+            Option.fromUndefinedOr(PINNED_DECLARATIONS.get(wire.provider)),
+          )
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    )
+  }
+})
+
+/** The agent whose first step is its last: that step runs with `toolChoice: "none"`. */
+const oneStepAgent = AgentDefinition.make({
+  name: testAgent.name,
+  description: testAgent.description,
+  maxSteps: 1,
+})
+
+/**
+ * The `tools` and `tool_choice` each driver sends on a turn's last step for
+ * the tools above. The OpenAI SDKs send the pinned declarations byte for
+ * byte with `"none"`; the Anthropic SDK sends no tools.
+ */
+const withChoiceNone = (provider: string) =>
+  PINNED_DECLARATIONS.get(provider)?.replace('"tool_choice":"auto"', '"tool_choice":"none"')
+const PINNED_FINAL_STEP = new Map([
+  ["anthropic", "{}"],
+  ["openai", withChoiceNone("openai")],
+  ["chat-completions", withChoiceNone("chat-completions")],
+])
+
+describe("final step declarations on the wire", () => {
+  for (const wire of drivers) {
+    it.live(`${wire.provider}: a turn's last step sends the pinned declarations`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bodies } = yield* runTurn(wire, [wire.text("done")], { agent: oneStepAgent })
+          expect(Option.some(declarationsOf(bodies[0]))).toEqual(
+            Option.fromUndefinedOr(PINNED_FINAL_STEP.get(wire.provider)),
+          )
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    )
+  }
+})
+
+/** Each refused call: the input or name the model sent, and what its failed result names. */
+const REFUSED: ReadonlyArray<{
+  readonly label: string
+  readonly name: string
+  readonly input: Schema.Json
+  readonly names: ReadonlyArray<string>
+}> = [
+  {
+    label: "a wrong-typed input",
+    name: "todo",
+    input: { todo: 42, done: false },
+    names: ["Tool 'todo' input failed", "todo"],
+  },
+  {
+    label: "a missing required key",
+    name: "todo",
+    input: { todo: "milk" },
+    names: ["Tool 'todo' input failed", "done"],
+  },
+  {
+    label: "a tool no extension registers",
+    name: "nowhere",
+    input: { todo: "milk" },
+    names: ["Unknown tool: nowhere"],
+  },
+]
+
+describe("refused tool calls on the wire", () => {
+  for (const wire of drivers) {
+    for (const refused of REFUSED) {
+      it.live(`${wire.provider}: ${refused.label} fails as its result and the turn goes on`, () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const ran: Array<typeof Todo.Type> = []
+            const { bodies, events } = yield* runTurn(
+              wire,
+              [wire.toolCall(refused.name, refused.input), wire.text("done")],
+              { ran },
+            )
+            // The failed result went back to the model in the next request.
+            expect(bodies).toHaveLength(2)
+            const failed = events.flatMap((event) =>
+              Match.value(event).pipe(
+                Match.tags({ ToolCallFailed: (call) => [call] }),
+                Match.orElse(() => []),
+              ),
+            )
+            expect(failed.map((event) => event.toolName)).toEqual([refused.name])
+            for (const text of refused.names) {
+              expect(failed[0]?.output ?? "").toContain(text)
+              expect(encodeExternalJson(bodies[1] ?? {})).toContain(text)
+            }
+            expect(ran).toEqual([])
+            expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+            expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+              { streamFailed: false },
+            ])
+          }).pipe(Effect.timeout("20 seconds")),
+        ),
+      )
+    }
+  }
+})
+
+describe("a turn that advertises no tool", () => {
+  for (const wire of drivers) {
+    it.live(`${wire.provider}: the request declares no tool, and a call fails as its result`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bodies, events } = yield* runTurn(
+            wire,
+            [wire.toolCall("todo", { todo: "milk", done: false }), wire.text("done")],
+            { extensions: [] },
+          )
+          expect(bodies).toHaveLength(2)
+          // No `tools` and no `tool_choice`, as before tool calls were checked by the runner.
+          expect(bodies.map((body) => declarationsOf(body))).toEqual(["{}", "{}"])
+          const failed = events.flatMap((event) =>
+            Match.value(event).pipe(
+              Match.tags({ ToolCallFailed: (call) => [call] }),
+              Match.orElse(() => []),
+            ),
+          )
+          expect(failed.map((event) => event.toolName)).toEqual(["todo"])
+          expect(failed[0]?.output ?? "").toContain("Unknown tool: todo")
+          expect(encodeExternalJson(bodies[1] ?? {})).toContain("Unknown tool: todo")
+          expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+          expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+            { streamFailed: false },
+          ])
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    )
+  }
+})
+
+// ── tools with no arguments ─────────────────────────────────────────────────
+
+/**
+ * A home whose MCP config holds one entry with no transport: the MCP
+ * extension registers `mcp.status` (parameters `Schema.Struct({})`) for it
+ * and starts no server.
+ */
+const misconfiguredMcpHome = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const home = yield* makeTempDirectoryScoped("wire-mcp-home-")
+  yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+  yield* fs.writeFileString(
+    path.join(home, ".gent", "mcp.json"),
+    encodeExternalJson({ mcpServers: { typo: { comand: "x" } } }),
+  )
+  return home
+})
+
+const decodeDeclarations = Schema.decodeUnknownOption(Schema.Array(Schema.Json))
+
+/** The declaration a request body sends for the tool `name`, as sent. */
+const declarationNamed = (body: Record<string, Schema.Json> = {}, name: string) =>
+  Option.getOrElse(decodeDeclarations(body["tools"]), () => [])
+    .map((entry) => encodeExternalJson(entry))
+    .find((entry) => entry.includes(`"name":"${name}"`))
+
+const MCP_STATUS_DESCRIPTION =
+  "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions"
+
+/** The object root a tool with no arguments declares: the codecs' form of an object with no keys. */
+const NO_ARGUMENTS = '{"type":"object","properties":{},"required":[],"additionalProperties":false}'
+
+/** The `mcp.status` declaration each driver sends. */
+const PINNED_NO_ARGUMENTS = new Map([
+  [
+    "anthropic",
+    `{"name":"mcp__status","input_schema":${NO_ARGUMENTS},"description":"${MCP_STATUS_DESCRIPTION}","strict":true}`,
+  ],
+  [
+    "openai",
+    `{"type":"function","name":"mcp__status","parameters":${NO_ARGUMENTS},"strict":true,"description":"${MCP_STATUS_DESCRIPTION}"}`,
+  ],
+  [
+    "chat-completions",
+    `{"type":"function","function":{"name":"mcp__status","description":"${MCP_STATUS_DESCRIPTION}","parameters":${NO_ARGUMENTS},"strict":false}}`,
+  ],
+])
+
+describe("tools with no arguments on the wire", () => {
+  for (const wire of drivers) {
+    it.live(
+      `${wire.provider}: a direct turn declares mcp.status with an object root and runs it`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const home = yield* misconfiguredMcpHome
+            const { bodies, events } = yield* runTurn(
+              wire,
+              [wire.toolCall("mcp__status"), wire.text("done")],
+              { extensions: [McpExtension], home },
+            )
+            expect(bodies).toHaveLength(2)
+            for (const body of bodies) {
+              expect(Option.fromUndefinedOr(declarationNamed(body, "mcp__status"))).toEqual(
+                Option.fromUndefinedOr(PINNED_NO_ARGUMENTS.get(wire.provider)),
+              )
+            }
+            expect(events.flatMap(toolRun)).toEqual([
+              "ToolCallStarted:mcp.status",
+              "ToolCallSucceeded:mcp.status",
+            ])
+            expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+            expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+              { streamFailed: false },
+            ])
+          }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+        ),
+    )
+  }
+})
+
+// ── tools that take any key ─────────────────────────────────────────────────
+
+/**
+ * A stdio MCP server whose tools take keys they do not name. `open` lists
+ * `{ type: "object", properties: {} }` and `search` a property without
+ * `additionalProperties: false`: gent imports both with an index signature.
+ * gent cannot read the `$ref` of `opaque`, so it takes any object
+ * (`AnyInput`). A call answers the arguments it got.
+ */
+const ANY_KEY_SERVER = String.raw`
+const tools = [
+  { name: "open", description: "Any object", inputSchema: { type: "object", properties: {} } },
+  { name: "search", description: "A query and any other key", inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } },
+  { name: "opaque", description: "A schema gent cannot read", inputSchema: { type: "object", properties: { x: { $ref: "#/$defs/missing" } } } },
+]
+let buffer = ""
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  let end
+  while ((end = buffer.indexOf("\n")) >= 0) {
+    const line = buffer.slice(0, end)
+    buffer = buffer.slice(end + 1)
+    if (line.trim() === "") continue
+    const request = JSON.parse(line)
+    if (request.id === undefined) continue
+    const result =
+      request.method === "initialize"
+        ? { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "any-key", version: "1" } }
+        : request.method === "tools/list"
+          ? { tools }
+          : { content: [{ type: "text", text: "got " + JSON.stringify(request.params.arguments ?? {}) }] }
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n")
+  }
+})
+`
+
+/** The MCP extension over `ANY_KEY_SERVER`, as the server `remote`. */
+const anyKeyMcp = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const directory = yield* makeTempDirectoryScoped("wire-mcp-server-")
+  const server = path.join(directory, "server.cjs")
+  yield* fs.writeFileString(server, ANY_KEY_SERVER)
+  return McpServers("@test/any-key", { remote: { command: process.execPath, args: [server] } })
+})
+
+/** A user tool whose parameters are a record: any name, each a number. */
+const tallyExtension = defineExtension({
+  id: "@test/tally",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: "tally",
+        description: "Count by name",
+        params: Schema.Record(Schema.String, Schema.Finite),
+        output: Schema.String,
+        execute: (input) => Effect.succeed(`tally ${encodeExternalJson(input)}`),
+      }),
+    )
+  }),
+})
+
+/** Each driver's declaration of a tool that takes any key: an open object, not strict. */
+const openDeclaration = new Map<
+  string,
+  (name: string, description: string, parameters: string) => string
+>([
+  [
+    "anthropic",
+    (name, description, parameters) =>
+      `{"name":"${name}","input_schema":${parameters},"description":"${description}","strict":false}`,
+  ],
+  [
+    "openai",
+    (name, description, parameters) =>
+      `{"type":"function","name":"${name}","parameters":${parameters},"strict":false,"description":"${description}"}`,
+  ],
+  [
+    "chat-completions",
+    (name, description, parameters) =>
+      `{"type":"function","function":{"name":"${name}","description":"${description}","parameters":${parameters},"strict":false}}`,
+  ],
+])
+
+const ANY_JSON = '{"type":"object","additionalProperties":{"description":"JSON value"}}'
+
+/** Each tool that takes any key: its wire name, description and declared parameters. */
+const ANY_KEY_TOOLS: ReadonlyArray<readonly [string, string, string]> = [
+  ["mcp__remote__open", "Any object", ANY_JSON],
+  [
+    "mcp__remote__search",
+    "A query and any other key",
+    '{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":{"description":"JSON value"}}',
+  ],
+  ["mcp__remote__opaque", "A schema gent cannot read", ANY_JSON],
+  [
+    "tally",
+    "Count by name",
+    '{"type":"object","additionalProperties":{"type":"number","description":"a finite number"}}',
+  ],
+]
+
+/** Each call the model makes, the tool id it runs, and the output it gets. */
+const ANY_KEY_CALLS: ReadonlyArray<{
+  readonly name: string
+  readonly input: Schema.Json
+  readonly toolId: string
+  readonly output: string
+}> = [
+  { name: "mcp__remote__open", input: {}, toolId: "mcp.remote.open", output: "got {}" },
+  {
+    name: "mcp__remote__open",
+    input: { any: 1 },
+    toolId: "mcp.remote.open",
+    output: 'got {"any":1}',
+  },
+  {
+    name: "mcp__remote__search",
+    input: { q: "milk", extra: true },
+    toolId: "mcp.remote.search",
+    output: 'got {"q":"milk","extra":true}',
+  },
+  {
+    name: "mcp__remote__opaque",
+    input: { x: "y" },
+    toolId: "mcp.remote.opaque",
+    output: 'got {"x":"y"}',
+  },
+  { name: "tally", input: { milk: 2 }, toolId: "tally", output: 'tally {"milk":2}' },
+]
+
+describe("tools that take any key on the wire", () => {
+  for (const wire of drivers) {
+    for (const call of ANY_KEY_CALLS) {
+      it.live(
+        `${wire.provider}: a turn declares each as an open object and runs ${call.name} with ${encodeExternalJson(call.input)}`,
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const mcp = yield* anyKeyMcp
+              const { bodies, events } = yield* runTurn(
+                wire,
+                [wire.toolCall(call.name, call.input), wire.text("done")],
+                { extensions: [mcp, tallyExtension] },
+              )
+              // Both requests reached HTTP: no codec refused a declaration.
+              expect(bodies).toHaveLength(2)
+              const declare = openDeclaration.get(wire.provider)
+              for (const body of bodies) {
+                for (const [name, description, parameters] of ANY_KEY_TOOLS) {
+                  expect(Option.fromUndefinedOr(declarationNamed(body, name))).toEqual(
+                    Option.map(Option.fromUndefinedOr(declare), (make) =>
+                      make(name, description, parameters),
+                    ),
+                  )
+                }
+              }
+              expect(events.flatMap(toolRun)).toEqual([
+                `ToolCallStarted:${call.toolId}`,
+                `ToolCallSucceeded:${call.toolId}`,
+              ])
+              const outputs = events.flatMap((event) =>
+                Match.value(event).pipe(
+                  Match.tags({ ToolCallSucceeded: (succeeded) => [succeeded.output ?? ""] }),
+                  Match.orElse(() => []),
+                ),
+              )
+              expect(outputs.join("")).toContain(call.output)
+              expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+              expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+                { streamFailed: false },
+              ])
+            }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+          ),
+      )
+    }
   }
 })

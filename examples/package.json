@@ -8,7 +8,8 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../packages/tooling/src/test-preload.ts --timeout=30000 --reporter=dots tests"
   },
   "dependencies": {
-    "@gent/core": "workspace:*"
+    "@gent/core": "workspace:*",
+    "@gent/extensions": "workspace:*"
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",

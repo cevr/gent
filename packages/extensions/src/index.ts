@@ -6,7 +6,7 @@ import {
 } from "@gent/core/extensions/api"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import * as EffectPlatformBun from "@effect/platform-bun"
-import { CellBranchTools, CellExtension } from "./cell.js"
+import { CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
@@ -52,13 +52,6 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Result.tr
 )
 
 // ── builtin composition ─────────────────────────────────────────────────────
-
-/**
- * The branch-tool feature the cell in `BuiltinExtensions` needs. A root that
- * installs the builtins passes this too: in a root without it, the cell
- * extension fails to load, because its `cell` tool declares this feature.
- */
-export { CellBranchTools }
 
 export const BuiltinExtensions: ReadonlyArray<
   GentExtension<

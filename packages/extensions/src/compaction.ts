@@ -11,6 +11,7 @@ import {
 } from "effect"
 import {
   BranchId,
+  contextWindowOf,
   defineExtension,
   defineResource,
   ExtensionHost,
@@ -280,13 +281,6 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
  */
 const HANDOFF_USER_MESSAGES = 12
 
-/**
- * `metadata.customType` of the marker that starts a context window (core's
- * `RuntimeUserMessageType` "context-window"). An earlier handoff's marker
- * leads the history of the next one.
- */
-const CONTEXT_WINDOW_TYPE = "context-window"
-
 /** Characters of one listed user message's one-line preview. */
 const HANDOFF_PREVIEW_CHARS = 120
 
@@ -328,22 +322,20 @@ const askedByUser = (message: Message): boolean => {
  * The user's messages by id with a preview each, oldest first, then how many
  * the cap left out. The branch's first user message is always listed: it is
  * the task, also when an extension sent it (a child's task from its parent).
- * An earlier window marker gets its own line: the messages before it are
- * listed there.
+ * An earlier window marker (one the runtime wrote: `contextWindowOf`) gets its
+ * own line: the messages before it are listed there.
  */
 const userMessageLines = (history: ReadonlyArray<Message>): ReadonlyArray<string> => {
   const task = history.find((message) => message.role === "user")
   const asked = history.filter(
     (message) =>
       message.role === "user" &&
-      (message === task ||
-        message.metadata?.customType === CONTEXT_WINDOW_TYPE ||
-        askedByUser(message)),
+      (message === task || Option.isSome(contextWindowOf(message)) || askedByUser(message)),
   )
   if (asked.length === 0) return []
   const listed = asked.slice(0, HANDOFF_USER_MESSAGES)
   const lineOf = (message: Message) => {
-    if (message.metadata?.customType === CONTEXT_WINDOW_TYPE) {
+    if (Option.isSome(contextWindowOf(message))) {
       return `- ${message.id}: the earlier handoff; it, or context.history, lists the user's messages before it.`
     }
     return `- ${message.id}: ${previewOf(message)}`

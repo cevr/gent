@@ -92,9 +92,7 @@ import {
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import { omitUndefined } from "../domain/guards.js"
 import {
-  type BranchToolFeature,
   captureCurrentToolBinding,
-  noBranchTools,
   type ResolvedToolCapability,
   ToolRunner,
 } from "../runtime/tools.js"
@@ -127,7 +125,6 @@ import {
   AgentLoopQueueStorage,
   BranchStorage,
   EventStorage,
-  type ExtraRepositories,
   InteractionStorage,
   SessionStorage,
   SqliteStorage,
@@ -137,7 +134,6 @@ import { type AgentEvent, EventStore, type EventStoreService } from "../domain/e
 import { type LanguageModel, Model as AiModel } from "effect/ai"
 import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
-import type { FeatureMigrations } from "../storage/schema.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -447,13 +443,9 @@ export const collectTestContributions = <E, R>(
  * tests yield it without wiring a platform layer; product callers use
  * `SqliteStorage.LiveWithSql` / `MemoryWithSql` under the host's platform.
  */
-export const testSqliteStorage = <A>(
-  extra: ExtraRepositories<A>,
-  featureMigrations: FeatureMigrations,
-) =>
-  SqliteStorage.MemoryWithSql(extra, featureMigrations).pipe(
-    Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
-  )
+export const testSqliteStorage = SqliteStorage.MemoryWithSql.pipe(
+  Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
+)
 
 const sameAdmission = Schema.toEquivalence(SessionAdmission)
 
@@ -570,6 +562,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
     turnCapabilityContext: profile.layerContext,
+    turnResourceBuilds: profile.resourceBuilds,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(hostRun(run)),
     turnInteractive: hostRun(run).interactive,
@@ -1631,6 +1624,10 @@ export const fixedSessionProfiles = (
               layerContext,
               registryService: Context.get(layerContext, ExtensionRegistry),
               baseSections: [],
+              resourceBuilds: {
+                host: Context.merge(Context.makeUnsafe<unknown>(new Map()), layerContext),
+                process: new Map(),
+              },
               generationId: ProcessGenerationId.make("test"),
             }
             cache.set(cwd, profile)
@@ -1726,15 +1723,7 @@ interface E2ELayerOptions {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
 }
 
-/** Storage services are provided only when the test installs their feature. */
-type E2ELayerWithFeature<A> = E2ELayerOptions &
-  E2EExtensionSource & { readonly branchTools: BranchToolFeature<A> }
-
-export type E2ELayerConfig<A = never> =
-  | E2ELayerWithFeature<A>
-  | ([A] extends [never]
-      ? E2ELayerOptions & E2EExtensionSource & { readonly branchTools?: never }
-      : never)
+export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -1801,13 +1790,7 @@ const extensionInputsForConfig = (
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */
-export function createE2ELayer<A>(config: E2ELayerWithFeature<A>): ReturnType<typeof e2eLayer<A>>
-export function createE2ELayer(config: E2ELayerConfig): ReturnType<typeof e2eLayer<never>>
-export function createE2ELayer(config: E2ELayerConfig) {
-  return e2eLayer({ ...config, branchTools: config.branchTools ?? noBranchTools })
-}
-
-const e2eLayer = <A>(config: E2ELayerWithFeature<A>) =>
+export const createE2ELayer = (config: E2ELayerConfig) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const home = yield* Option.match(Option.fromUndefinedOr(config.home), {
@@ -1845,8 +1828,8 @@ const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "sign
   return LanguageModelLayers.resolver(config.providerLayer)
 }
 
-const e2eDependencies = <A>(
-  config: E2ELayerWithFeature<A>,
+const e2eDependencies = (
+  config: E2ELayerConfig,
   directories: { readonly cwd: string; readonly home: string },
 ) => {
   const options = {
@@ -1877,7 +1860,7 @@ const e2eDependencies = <A>(
       extraLayers: config.extraLayers,
     },
   }
-  return createDependencies<A>({ ...options, branchTools: config.branchTools })
+  return createDependencies(options)
 }
 
 // ── in-process-layer ────────────────────────────────────────────────────────
@@ -1925,9 +1908,8 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 // caller passes pre-loaded extensions and an agents bucket — the same
 // fragments callers already pass to `createE2ELayer`.
 
-type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> & {
-  readonly branchTools?: BranchToolFeature<never>
-} & E2EExtensionSource & {
+type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
+  E2EExtensionSource & {
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
   }

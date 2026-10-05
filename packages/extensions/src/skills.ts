@@ -16,6 +16,7 @@ import { Hex } from "effect/encoding"
 import {
   defineExtension,
   defineRequests,
+  BranchAddress,
   defineResource,
   ExtensionHost,
   ExtensionId,
@@ -506,22 +507,11 @@ When you see \`$skill-name\`, read the local skill first, or the global skill if
 </available_skills>`
 }
 
-/**
- * Where a profile's skills live: its working directory and the gent home.
- * The extension's setup knows them and registers them as a process
- * resource, so the skills resource that reads them can be a top-level value
- * the `skills-list` request names.
- */
-class SkillsLocation extends Context.Service<
-  SkillsLocation,
-  { readonly cwd: string; readonly home: string }
->()("@gent/extensions/src/skills/SkillsLocation") {}
-
-/** The branch's skills, read once from the profile's `SkillsLocation`. */
+/** The branch's skills, read once from its working directory and home. */
 const SkillsResource = defineResource({
   id: "@gent/skills/service",
   scope: "branch",
-  layer: Layer.unwrap(Effect.map(SkillsLocation, Skills.Live)),
+  layer: Layer.unwrap(Effect.map(BranchAddress, ({ cwd, home }) => Skills.Live({ cwd, home }))),
 })
 
 // ── protocol ────────────────────────────────────────────────────────────────
@@ -561,14 +551,6 @@ export const SkillsExtension = defineExtension({
   id: "@gent/skills",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/skills/location",
-        scope: "process",
-        layer: Layer.succeed(SkillsLocation, SkillsLocation.of({ cwd: host.cwd, home: host.home })),
-      }),
-    )
     yield* host.register("resource", SkillsResource)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {

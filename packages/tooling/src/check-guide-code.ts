@@ -10,7 +10,10 @@
  * the way the code it teaches does. A `tsc` exit other than 0 fails the
  * check, as does oxlint, with each diagnostic at its original Markdown line.
  * Extracted modules mirror extension/TUI paths; `lint=test` on the fence
- * selects the corresponding test scope without changing compile dependencies.
+ * selects the corresponding test scope without changing compile dependencies:
+ * its module is a `tests/b<n>.test.ts`, which every test rule reads as test
+ * code by its name (the generated lint config does not inherit the repo's
+ * `effect.testFiles` setting).
  *
  * The steering files come from the guards' one file set, the git index
  * (`fileSet` in `check-guardrails.ts`), and each is read by its real path, so
@@ -115,15 +118,19 @@ export const guideBlockFile = (index: number, block: GuideBlock): string => {
   const tui = guideCodeContextOf(block.file) === TUI_CONTEXT
   let root = "examples"
   let directory = "extensions"
+  let kind = ""
   if (tui) {
     root = "apps/tui"
     directory = "src"
   }
-  if (block.testCode) directory = "tests"
-  return `${root}/${directory}/b${index + 1}.${block.extension}`
+  if (block.testCode) {
+    directory = "tests"
+    kind = ".test"
+  }
+  return `${root}/${directory}/b${index + 1}${kind}.${block.extension}`
 }
 
-const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)\.tsx?\((\d+),(\d+)\)/
+const BLOCK_DIAGNOSTIC = /(?:^|[/\\])b(\d+)(?:\.test)?\.tsx?\((\d+),(\d+)\)/
 
 /** A `tsc` output line with its block position replaced by the position in the block's file. */
 export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlock>): string =>

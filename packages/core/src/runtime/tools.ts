@@ -6,6 +6,7 @@ import {
   Exit,
   Fiber,
   FileSystem,
+  type JsonSchema,
   Layer,
   Match,
   Option,
@@ -13,12 +14,12 @@ import {
   Predicate,
   Ref,
   Schema,
+  SchemaAST,
   Sink,
   Stream,
 } from "effect"
 import { encodeToolOutput, stringifyOutput, ToolResultFailure } from "../domain/message.js"
 import {
-  type ExtraRepositories,
   type InteractionStorage,
   type MessageStorage,
   type OwnedToolCallAddress,
@@ -51,8 +52,6 @@ import {
 import {
   ApprovalService,
   CurrentExtensionHostContext,
-  emptyErasedResourceLayer,
-  type ErasedResourceLayer,
   ExtensionRegistry,
   type ExtensionRegistryService,
   provideCurrentHostCtx,
@@ -61,34 +60,29 @@ import {
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/ai/Tool"
 import { GentPlatform } from "./gent-platform.js"
-import type { FeatureMigrations } from "../storage/schema.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { EventStore, ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../domain/event.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiToolkit from "effect/ai/Toolkit"
 import * as AiError from "effect/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
-import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 
 // ── turn-interruption ───────────────────────────────────────────────────────
 
 /*
  * Whether the turn now running has been interrupted.
  *
- * The loop, the turn executor and the branch's tools all need this one bit,
- * but they need different halves of it: the worker interrupts a turn and
- * begins the next one, while a running turn and the tools it dispatches only
- * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
- * fresh turn starts uninterrupted.
+ * The loop and the turn executor both need this one bit, but they need
+ * different halves of it: the worker interrupts a turn and begins the next
+ * one, while a running turn only asks. A tool call reads it through its
+ * `CurrentTurnStop`. `interrupt` stops the turn now running, and `beginTurn`
+ * declares that a fresh turn starts uninterrupted.
  */
 
-/** Asks whether the turn now running has been interrupted. */
-export interface TurnInterruptionStatus {
+/** The control surface: the read side plus the two transitions. */
+export interface TurnInterruption {
+  /** Whether the turn now running has been interrupted. */
   readonly interrupted: Effect.Effect<boolean>
-}
-
-/** The full control surface: the read side plus the two transitions. */
-export interface TurnInterruption extends TurnInterruptionStatus {
   /** Stop the turn now running. Work that checks `interrupted` will see it. */
   readonly interrupt: Effect.Effect<void>
   /** `interrupt`; when it is the turn's first, `by` is recorded as the stop's requester. */
@@ -129,39 +123,57 @@ export const makeTurnInterruption: Effect.Effect<TurnInterruption> = Effect.gen(
   }
 })
 
-/**
- * A status that is never interrupted.
- *
- * Branch work built outside a running loop -- a test that exercises a tool on
- * its own -- has no turn to be interrupted.
- */
-export const neverInterrupted: TurnInterruptionStatus = {
-  interrupted: Effect.succeed(false),
+/** The stop of the turn a tool call runs in, as the call sees it. */
+export interface TurnStop {
+  /** Completes when the turn is interrupted or its loop closes; work races it to stop. */
+  readonly stopped: Effect.Effect<void>
+  /** Whether the turn is stopped now: interrupted, or its loop closing. */
+  readonly isStopped: Effect.Effect<boolean>
+  /**
+   * Whether the loop closes. Work a close stops records nothing, as a crash
+   * would, so a restart recovers it; work an interrupt stops reports what it
+   * did.
+   */
+  readonly closing: Effect.Effect<boolean>
 }
 
 /**
- * The running turn's interrupt, as a tool call sees it. The loop provides it
- * for every call it dispatches; a tool run with no turn -- a test, a direct
- * host call -- is never interrupted.
+ * The stop of the running turn, for each tool call. The loop provides it for
+ * every call it dispatches; a tool run with no turn -- a test, a direct host
+ * call -- is never stopped. A tool that runs uninterruptibly reads it to stop
+ * its own work: it cancels on an interrupt, and stops on a close.
  */
-const TurnInterruptSignal = Context.Reference<Effect.Effect<void>>(
-  "@gent/core/src/runtime/tools/TurnInterruptSignal",
-  { defaultValue: () => Effect.never },
+export const CurrentTurnStop = Context.Reference<TurnStop>(
+  "@gent/core/src/runtime/tools/CurrentTurnStop",
+  {
+    defaultValue: () => ({
+      stopped: Effect.never,
+      isStopped: Effect.succeed(false),
+      closing: Effect.succeed(false),
+    }),
+  },
 )
 
 /**
  * A tool stops with its turn, and its call still gets a result. The interrupt
  * waits for the tool to exit: a tool that runs uninterruptible and cancels its
- * own work reports what it chose to; any other tool reports the interrupt.
+ * own work reports what it chose to; any other tool reports the interrupt. A
+ * close interrupts the turn itself, which ends the call.
  */
 const stopWithTurn = <A, E, R>(execute: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const interruption = yield* TurnInterruptSignal
+    const stop = yield* CurrentTurnStop
     const fiber = yield* Effect.forkChild(execute)
-    const exit = yield* Effect.raceFirst(
-      Fiber.await(fiber),
-      interruption.pipe(Effect.andThen(Fiber.interrupt(fiber)), Effect.andThen(Fiber.await(fiber))),
+    const interruptOnStop = stop.stopped.pipe(
+      Effect.andThen(
+        Effect.when(
+          Fiber.interrupt(fiber),
+          Effect.map(stop.closing, (closing) => !closing),
+        ),
+      ),
+      Effect.andThen(Fiber.await(fiber)),
     )
+    const exit = yield* Effect.raceFirst(Fiber.await(fiber), interruptOnStop)
     if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
       return yield* new ToolResultFailure({
         message: "The turn was interrupted.",
@@ -554,80 +566,7 @@ export class ProcessLocalToolReplay extends Context.Service<
   )
 }
 
-// ── branch-tool-feature ─────────────────────────────────────────────────────
-
-/**
- * Everything a branch-tool feature contributes to the runtime it plugs into.
- *
- * A feature whose tools hold branch-scoped state — a worker process, a
- * namespace, a dispatch log — installs three things that only work together:
- * the migrations creating its tables, the storage tags reading them, and the
- * factory building its per-branch services. Install one without the others and
- * the failure is silent until first use: tables with no migrations fail on
- * read, storage with no branch layer leaves the tools unbuilt.
- *
- * Binding them into one value makes that impossible to get half-right, and
- * gives composition roots a single thing to name. Core takes the feature as
- * input and never looks inside it; `noBranchTools` is the honest value for a
- * deployment whose tools are all stateless.
- */
-
-interface BranchToolLayerInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  /** The session's working directory, where branch work such as a worker process runs. */
-  readonly cwd: string
-  /** Lets branch work notice that the turn was interrupted, and stop. */
-  readonly turnInterruption: TurnInterruptionStatus
-}
-
-/**
- * Per-branch services a tool needs built with the loop and torn down with it:
- * a worker process, a session, a namespace. What the layer provides is erased
- * on purpose: the loop merges it into the branch context and reads only what
- * it knows to look for, such as `BranchToolWork`.
- */
-export type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedResourceLayer
-
-interface BranchToolWorkApi {
-  /** Cancel in-flight work. Must be safe to call when nothing is running. */
-  readonly cancel: Effect.Effect<void>
-  /**
-   * The loop is closing, as when the server stops. End in-flight work and
-   * record no outcome for it, so that after a restart recovery finds the work
-   * as a crash leaves it. Must be safe to call when nothing is running.
-   */
-  readonly stop: Effect.Effect<void>
-}
-
-/**
- * Cancellation for tool work that outlives a single call. A tool holding a
- * branch-scoped process must be told when the loop is interrupted; the turn's
- * fiber interrupt alone does not reach it. A tool with nothing to cancel does
- * not provide this, and interruption is a no-op.
- */
-export class BranchToolWork extends Context.Service<BranchToolWork, BranchToolWorkApi>()(
-  "@gent/core/src/runtime/tools/BranchToolWork",
-) {}
-
-export interface BranchToolFeature<A> {
-  /**
-   * Names the feature where a load failure reports it: a tool or request
-   * that declares this feature (`branchTools`) in a root that installs
-   * another fails its extension's load, naming both.
-   */
-  readonly id: string
-  /** Migrations creating the feature's tables, merged into core's chain. */
-  readonly migrations: FeatureMigrations
-  /**
-   * The feature's storage tags, built over core's SQL client and interaction
-   * storage, which the storage entry provides once beneath it; the live,
-   * memory and test storage entries take the same layer.
-   */
-  readonly storage: ExtraRepositories<A>
-  /** Per-branch services, built with the loop and torn down with it. */
-  readonly branchLayer: BranchToolLayerFactory
-}
+// ── leaf host services ───────────────────────────────────────────────────────
 
 /**
  * The core services every root gives a tool body, which the branch-tools entry
@@ -637,27 +576,128 @@ export interface BranchToolFeature<A> {
  */
 export type BranchToolHostServices = EventStore | MessageStorage | InteractionStorage | ToolRunner
 
-/** The feature a deployment installs when its tools hold no branch state. */
-export const noBranchTools: BranchToolFeature<never> = {
-  id: "none",
-  migrations: {},
-  storage: Layer.empty,
-  branchLayer: () => emptyErasedResourceLayer,
+// ── model toolkit ───────────────────────────────────────────────────────────
+
+/**
+ * The parameters a tool with no arguments declares. Its schema encodes to an
+ * object with no keys (`Schema.Struct({})`), which Effect's JSON Schema reads
+ * as any value but `null`: the OpenAI codecs refuse that root, and the
+ * Anthropic codec declares `{}`. Every driver gets this object root instead,
+ * the form the codecs give an object with keys. The tool runner still decodes
+ * each call with the tool's own schema.
+ */
+const NO_ARGUMENTS = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
 }
 
 /**
- * The branch-tool feature this runtime installs.
- *
- * A `Context.Reference`, not a required service: `noBranchTools` is a real
- * deployment (all tools stateless), not a stub that dies when used. A root
- * shipping a feature binds it; core reads it and merges what it gets.
+ * True when an encoded object takes keys it does not name: it holds an index
+ * signature (a record, a struct with rest, an MCP input schema without
+ * `additionalProperties: false`). The codecs encode such an object as an array
+ * of `[key, value]` pairs, which no driver takes as a tool's root: the OpenAI
+ * codecs refuse it, and the Anthropic codec declares an array. The one index
+ * signature the codecs keep as an object is Effect's `Tool.EmptyParams`
+ * (string keys with `never` values, no property): it takes no key.
  */
-export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<never>>(
-  "@gent/core/src/runtime/tools/CurrentBranchToolFeature",
-  { defaultValue: () => noBranchTools },
-)
+const takesAnyKey = (encoded: SchemaAST.Objects) => {
+  const emptyParams =
+    encoded.propertySignatures.length === 0 &&
+    encoded.indexSignatures.length === 1 &&
+    encoded.indexSignatures.every(
+      (signature) => signature.parameter === SchemaAST.string && SchemaAST.isNever(signature.type),
+    )
+  return encoded.indexSignatures.length > 0 && !emptyParams
+}
 
-// ── model toolkit ───────────────────────────────────────────────────────────
+/** The one `allOf` member Effect writes for an index signature beside properties. */
+const RestMember = Schema.Tuple([
+  Schema.Struct({ type: Schema.Literal("object"), additionalProperties: Schema.Unknown }),
+])
+const decodeRestMember = Schema.decodeUnknownOption(RestMember, { onExcessProperty: "error" })
+
+/**
+ * `root` with the index signature Effect puts in `allOf` beside the properties
+ * as its own `additionalProperties`. The two forms take the same objects; some
+ * providers refuse a composition keyword at a tool's root. Any other `allOf`
+ * stays.
+ */
+const withRestAsAdditional = (root: JsonSchema.JsonSchema): JsonSchema.JsonSchema => {
+  const { allOf, ...rest } = root
+  return decodeRestMember(allOf).pipe(
+    Option.filter(() => !Predicate.hasProperty(rest, "additionalProperties")),
+    Option.match({
+      onNone: () => root,
+      onSome: ([member]) => ({ ...rest, additionalProperties: member.additionalProperties }),
+    }),
+  )
+}
+
+/**
+ * The JSON Schema of an object root that takes any key: the plain JSON Schema
+ * of the schema, with the options the codecs use (a nested struct refuses
+ * excess keys, so it stays closed), a top-level reference resolved so the
+ * root is the object itself, and the rest as `additionalProperties`.
+ */
+const openObjectParameters = (schema: Schema.Top): JsonSchema.JsonSchema => {
+  const document = Schema.toJsonSchemaDocument(schema, {
+    generateDescriptions: true,
+    onExcessProperty: "error",
+  })
+  const root = Option.liftPredicate(document.schema["$ref"], Predicate.isString).pipe(
+    Option.flatMap((reference) =>
+      Option.fromUndefinedOr(document.definitions[reference.replace(/^#\/\$defs\//, "")]),
+    ),
+    Option.getOrElse(() => document.schema),
+    withRestAsAdditional,
+  )
+  return Option.liftPredicate(
+    document.definitions,
+    (definitions) => Object.keys(definitions).length > 0,
+  ).pipe(
+    Option.match({
+      onNone: () => root,
+      onSome: (definitions) => ({ ...root, $defs: definitions }),
+    }),
+  )
+}
+
+/**
+ * What a request declares for a tool's parameters, and the strict mode it
+ * sets (none: the tool's own annotation, else the driver's default).
+ */
+interface Declaration {
+  readonly parameters: Schema.Top | JsonSchema.JsonSchema
+  readonly strict: Option.Option<boolean>
+}
+
+/**
+ * What a request declares for `schema`. Each declaration is an object root on
+ * every driver:
+ *
+ * - An object with no keys and no index signature: `NO_ARGUMENTS`.
+ * - An object that takes keys it does not name (`takesAnyKey`): its own JSON
+ *   Schema, an open object, and not strict. Strict mode (Anthropic, OpenAI
+ *   Responses) needs `additionalProperties: false` on each object, so it
+ *   cannot hold an open object; a closed root would tell the model that the
+ *   tool takes no other key.
+ * - Any other schema: the schema, which each driver's codec declares.
+ *
+ * The tool runner still decodes each call with the tool's own schema.
+ */
+const declaredParameters = (schema: Schema.Top): Declaration => {
+  const encoded = SchemaAST.toEncoded(schema.ast)
+  if (!SchemaAST.isObjects(encoded)) return { parameters: schema, strict: Option.none() }
+  if (encoded.propertySignatures.length === 0 && encoded.indexSignatures.length === 0) {
+    return { parameters: NO_ARGUMENTS, strict: Option.none() }
+  }
+  if (takesAnyKey(encoded)) {
+    return { parameters: openObjectParameters(schema), strict: Option.some(false) }
+  }
+  return { parameters: schema, strict: Option.none() }
+}
 
 /**
  * The toolkit a model request declares: each tool under its wire name
@@ -667,14 +707,19 @@ export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<neve
  */
 export function convertTools(tools: ReadonlyArray<ToolCapability>) {
   return AiToolkit.make(
-    ...tools.map((tool) =>
-      AiTool.dynamic(wireToolName(getToolId(tool)), {
+    ...tools.map((tool) => {
+      const declaration = declaredParameters(tool.parametersSchema)
+      const declared = AiTool.dynamic(wireToolName(getToolId(tool)), {
         description: tool.description,
-        parameters: tool.parametersSchema,
+        parameters: declaration.parameters,
         success: tool.successSchema,
         failure: tool.failureSchema,
-      }).annotateMerge(tool.annotations),
-    ),
+      }).annotateMerge(tool.annotations)
+      return Option.match(declaration.strict, {
+        onNone: () => declared,
+        onSome: (strict) => declared.annotate(AiTool.Strict, strict),
+      })
+    }),
   )
 }
 
@@ -1086,8 +1131,8 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   currentTurnAgent: AgentNameType
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
-  /** Completes when the turn is interrupted; a call still running then stops. */
-  interruption: Effect.Effect<void>
+  /** The turn's stop; a call still running then stops (`CurrentTurnStop`). */
+  stop: TurnStop
   /**
    * Records a call that parked on an interaction as soon as it parks, before
    * its siblings finish. The call's exit waits for it.
@@ -1147,7 +1192,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                 assistantMessageId: params.assistantMessageId,
                 toolCallId: toolCallInput.toolCallId,
               }),
-              Effect.provideService(TurnInterruptSignal, params.interruption),
+              Effect.provideService(CurrentTurnStop, params.stop),
               ownCall(toolCallInput.toolCallId),
             )
         }),
@@ -1258,14 +1303,20 @@ export const compileToolPolicy = (
  *
  * The loop knows a call was admitted and never recorded a result. It does not
  * know whether the tool kept a durable receipt it can settle from. A tool that
- * keeps such receipts answers here. Any other call is reported to the model as
- * interrupted and does not run again, unless its last run parked on an
- * interaction (the turn record marks it), in which case it runs again to take
- * the answer.
- *
- * Core defines the question. No implementation means every pending call that
- * did not park is reported as interrupted.
+ * keeps such receipts answers through its own `recover` (`tool({ recover })`),
+ * which runs as a leaf of the extension that registered it. Any other call is
+ * reported to the model as interrupted and does not run again, unless its last
+ * run parked on an interaction (the turn record marks it), in which case it
+ * runs again to take the answer.
  */
+
+/** The call a crash left in flight, as a tool's `recover` reads it. */
+export interface ToolRecoveryCall {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly assistantMessageId: MessageId
+  readonly toolCall: Prompt.ToolCallPart
+}
 
 /**
  * What recovering one pending call produced.
@@ -1282,30 +1333,7 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
 })
 export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 
-/** Recovery runs inside the turn and settles receipts with the turn's runtime services. */
-type ToolCallRecoveryServices =
-  | CurrentAgentLoopTurnProfile
-  | EventStore
-  | GentPlatform
-  | MessageStorage
-  | ToolRunner
-
-interface ToolCallRecoveryApi {
-  /** Recover one pending call, or report that it is not recoverable here. */
-  readonly recover: (params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly assistantMessageId: MessageId
-    readonly toolCall: Prompt.ToolCallPart
-  }) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
-}
-
 export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(
   "@gent/core/src/runtime/tools/ToolCallRecoveryError",
   { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
-
-export class ToolCallRecoveryService extends Context.Service<
-  ToolCallRecoveryService,
-  ToolCallRecoveryApi
->()("@gent/core/src/runtime/tools/ToolCallRecoveryService") {}

@@ -4,6 +4,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Hash,
   type JsonSchema,
@@ -22,8 +23,10 @@ import {
 } from "effect"
 import {
   AGENT_PROMPT_PRIORITY,
+  BranchAddress,
   BranchId,
   defineExtension,
+  defineResource,
   ExtensionContext,
   type ExtensionModelsService,
   ExtensionServiceError,
@@ -48,18 +51,14 @@ import {
   AgentLoopError,
   type AgentLoopTurnProfile,
   ApprovalDecisionSchema,
-  type BranchToolFeature,
   type BranchToolHostServices,
-  type BranchToolLayerFactory,
-  BranchToolWork,
   ContextDirective,
   CurrentAgentLoopTurnProfile,
   CurrentDispatchingCall,
   CurrentInteractionOwner,
   CurrentToolCall,
-  eraseResourceLayer,
+  CurrentTurnStop,
   EventStoreError,
-  type FeatureMigrations,
   GentPlatform,
   getToolMetadata,
   innerOperationBindingIdentity,
@@ -70,7 +69,6 @@ import {
   makeOwnedToolCallReader,
   MessageStorage,
   ModelContextLedger,
-  neverInterrupted,
   type OwnedToolCallAddress,
   partToText,
   type ResolvedToolCapability,
@@ -80,12 +78,12 @@ import {
   ToolBindingIdentity,
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
-  ToolCallRecoveryService,
+  type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
-  type TurnInterruptionStatus,
+  type TurnStop,
 } from "@gent/core/extensions/branch-tools"
-import { SqlClient } from "effect/sql"
+import { Migrator, SqlClient } from "effect/sql"
 import { Decision } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
@@ -711,10 +709,72 @@ const makeNamespaceStorage = Effect.gen(function* () {
 // ── cell storage ────────────────────────────────────────────────────────────
 
 /**
+ * The tables the cell owns, in the session database.
+ *
+ * The cell runs its own migrations, recorded in its own table
+ * (`cell_migrations`), so its ids never meet core's chain. The tables first
+ * shipped as migrations 012-014 of core's chain: a database from that time
+ * has them and keeps those three ids in `gent_storage_migrations`, which core
+ * never reuses. So the first migration creates each table only where it is
+ * missing, with the same columns, keys and checks; on such a database it
+ * changes nothing. A later migration must be additive: a server that still
+ * runs the code before it reads the same tables.
+ */
+const cellTablesMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS cell_executions (
+      assistant_message_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      result_json TEXT,
+      completed_at INTEGER,
+      PRIMARY KEY (assistant_message_id, tool_call_id),
+      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
+      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS cell_tool_operations (
+      assistant_message_id TEXT NOT NULL,
+      cell_tool_call_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      request_id TEXT UNIQUE,
+      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
+      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
+        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS cell_namespaces (
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id),
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+})
+
+/**
+ * Runs the cell's migrations that the database has not recorded. It runs in
+ * one transaction, and a run that finds another one recording the same ids
+ * treats them as done, so two builds over one database are safe.
+ */
+const migrateCellTables = Migrator.make({})({
+  loader: Migrator.fromRecord({ "1_cell_tables": cellTablesMigration }),
+  table: "cell_migrations",
+}).pipe(
+  Effect.mapError((cause) => new StorageError({ message: "Cell table migration failed", cause })),
+)
+
+/**
  * The cell's three tables as one service: inner operation receipts, outer
  * cell receipts, and the namespace snapshot. The cell runs other tools inside
- * itself, so all three travel with the turn together. Core does not name
- * them: it carries whatever the branch tool layer builds.
+ * itself, so all three travel with the turn together. Building it creates the
+ * tables where they are missing.
  */
 export class CellStorage extends Context.Service<
   CellStorage,
@@ -727,6 +787,7 @@ export class CellStorage extends Context.Service<
   static Live = Layer.effect(
     CellStorage,
     Effect.gen(function* () {
+      yield* migrateCellTables
       return CellStorage.of({
         operations: yield* makeToolOperationStorage,
         executions: yield* makeExecutionStorage,
@@ -2434,40 +2495,10 @@ interface CellExecutionService {
 export class CellExecution extends Context.Service<CellExecution, CellExecutionService>()(
   "@gent/extensions/src/cell/CellExecution",
 ) {
-  /** The cell owns its worker: `cellWorkerLaunch` says where it lives. */
-  static Branch = (address: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly cwd: string
-    readonly turnInterruption: TurnInterruptionStatus
-  }) =>
-    Layer.unwrap(
-      Effect.gen(function* () {
-        const worker = yield* cellWorkerLaunch
-        const live = CellExecution.Live({ ...address, worker })
-        // The loop cancels branch work through `BranchToolWork`; the cell's
-        // own cancel is what that means here. The context ledger ships with the
-        // cell too: the cell is what schedules directives into it.
-        return Layer.provideMerge(
-          Layer.merge(
-            Layer.effect(
-              BranchToolWork,
-              Effect.map(CellExecution, (cells) =>
-                BranchToolWork.of({ cancel: cells.cancel, stop: cells.stop }),
-              ),
-            ),
-            ModelContextLedger.Branch,
-          ),
-          live,
-        )
-      }),
-    )
-
   static Live = (
     input: Parameters<typeof openCellKernel>[0] & {
       readonly sessionId: SessionId
       readonly branchId: BranchId
-      readonly turnInterruption?: TurnInterruptionStatus
     },
   ) =>
     Layer.effect(
@@ -2705,10 +2736,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           // Set once the cell may act. A run stopped before then never ran.
           let started = false
           const evaluate = Effect.gen(function* () {
-            if (
-              cancellationEpoch !== runEpoch ||
-              (yield* (input.turnInterruption ?? neverInterrupted).interrupted)
-            )
+            // A turn already stopped runs no cell: its stop came before the
+            // run could see it.
+            if (cancellationEpoch !== runEpoch || (yield* (yield* CurrentTurnStop).isStopped))
               return yield* new CellEvaluationError({
                 phase: "execute",
                 message: "Cell did not start because execution was cancelled.",
@@ -2959,118 +2989,44 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
 // ── tool call recovery ──────────────────────────────────────────────────────
 
 /**
- * The cell's answer to core's crash-recovery question.
+ * The cell's `recover`: settles a cell call a crash left in flight.
  *
  * A cell that was mid-flight when the process died left receipts: an outer
  * admission, and one row per inner call. Those settle the call without running
- * it again. A tool call that is not a cell, or a cell that was never admitted,
- * is left to the loop, which reports it as interrupted.
+ * it again. A cell that was never admitted has no receipt; the loop reports it
+ * as interrupted.
  */
-
-const cellToolCallRecovery = Layer.effect(
-  ToolCallRecoveryService,
-  Effect.gen(function* () {
-    const cells = (yield* CellStorage).executions
-    // `recoverCellExecution` reads the cell's own storage. The layer already
-    // has it, so capture it once here; the service's Effect then requires only
-    // the per-turn profile, which the loop supplies at the call.
-    const cellContext = yield* Effect.context<CellStorage | InteractionStorage>()
-    const recover = (input: Parameters<typeof recoverCellExecution>[0]) =>
-      Effect.provide(recoverCellExecution(input), cellContext)
-    return ToolCallRecoveryService.of({
-      recover: Effect.fn("CellToolCallRecovery.recover")(function* (params) {
-        if (params.toolCall.name !== CELL_TOOL_ID)
-          return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
-        const cell = {
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          assistantMessageId: params.assistantMessageId,
-          toolCallId: ToolCallId.make(params.toolCall.id),
-        }
-        const saved = yield* cells
-          .get(cell)
-          .pipe(
-            Effect.mapError(
-              (cause) => new ToolCallRecoveryError({ message: "Cannot read the receipt", cause }),
-            ),
-          )
-        // Never admitted: no receipt to settle from; the loop reports it.
-        if (Option.isNone(saved)) return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
-        const profile = yield* CurrentAgentLoopTurnProfile
-        return yield* recover({ cell, profile }).pipe(
-          Effect.map((result) => ToolCallRecoveryOutcome.cases.Settled.make({ result })),
-          Effect.catchTag("InteractionPendingError", (pending) =>
-            Effect.succeed(
-              ToolCallRecoveryOutcome.cases.Suspended.make({ requestId: pending.requestId }),
-            ),
-          ),
-          Effect.mapError(
-            (cause) => new ToolCallRecoveryError({ message: "Recovery failed", cause }),
-          ),
-        )
-      }),
-    })
-  }),
-)
-
-// ── storage ─────────────────────────────────────────────────────────────────
-
-/**
- * The tables the cell owns.
- *
- * Ids continue core's chain rather than starting a new one: one migration
- * sequence runs against one database, so a feature picks the next free ids
- * and keeps them for the life of the schema. These three shipped as 012-014
- * and must keep those ids or an existing database re-runs them.
- */
-const cellMigrations: FeatureMigrations = {
-  "012_cell_executions": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    yield* sql.unsafe(`
-    CREATE TABLE cell_executions (
-      assistant_message_id TEXT NOT NULL,
-      tool_call_id TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      result_json TEXT,
-      completed_at INTEGER,
-      PRIMARY KEY (assistant_message_id, tool_call_id),
-      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
-      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
+const recoverCellCall = Effect.fn("CellTool.recover")(function* (call: ToolRecoveryCall) {
+  const cell = {
+    sessionId: call.sessionId,
+    branchId: call.branchId,
+    assistantMessageId: call.assistantMessageId,
+    toolCallId: ToolCallId.make(call.toolCall.id),
+  }
+  const saved = yield* (yield* CellStorage).executions
+    .get(cell)
+    .pipe(
+      Effect.mapError(
+        (cause) => new ToolCallRecoveryError({ message: "Cannot read the receipt", cause }),
+      ),
     )
-  `)
-  }),
-  "013_cell_tool_operations": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    yield* sql.unsafe(`
-    CREATE TABLE cell_tool_operations (
-      assistant_message_id TEXT NOT NULL,
-      cell_tool_call_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      request_id TEXT UNIQUE,
-      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
-      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
-        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
-    )
-  `)
-  }),
-  "014_cell_namespaces": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    yield* sql.unsafe(`
-    CREATE TABLE cell_namespaces (
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      snapshot_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-  }),
-}
+  // Never admitted: no receipt to settle from; the loop reports it.
+  if (Option.isNone(saved)) return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
+  const profile = yield* Effect.serviceOption(CurrentAgentLoopTurnProfile)
+  if (Option.isNone(profile))
+    return yield* new ToolCallRecoveryError({ message: "Cell recovery requires a turn" })
+  return yield* recoverCellExecution({ cell, profile: profile.value }).pipe(
+    Effect.map((result) => ToolCallRecoveryOutcome.cases.Settled.make({ result })),
+    Effect.catchTag("InteractionPendingError", (pending) =>
+      Effect.succeed(
+        ToolCallRecoveryOutcome.cases.Suspended.make({ requestId: pending.requestId }),
+      ),
+    ),
+    Effect.mapError((cause) => new ToolCallRecoveryError({ message: "Recovery failed", cause })),
+  )
+})
 
-/** What the cell's storage installs. Core merges it without naming it. */
-type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
+// ── resources ───────────────────────────────────────────────────────────────
 
 /**
  * The cell's answer to core's retained-names question: its namespace bindings.
@@ -3094,55 +3050,65 @@ const cellRetainedBindings = Layer.effect(
 )
 
 /**
- * The cell's storage layers, assembled as one unit.
- *
- * Core's SQLite assembler builds the kernel's tables and installs any extra
- * repositories over its SQL client and interaction storage. This is the
- * cell's contribution: the three tables it owns, so core never names them.
- * Operation receipts and interaction records share core's one interaction
- * storage, or a suspended approval would be written to a store nothing reads
- * back. The projections ship with the tables: without the answers core reads
- * from it, a handoff would silently report no retained names.
+ * The cell's storage, one per process place: its tables in the session
+ * database and the projections read from them. It writes over the session's
+ * SQL client and core's one interaction storage, so a suspended approval and
+ * its operation receipt are written in one transaction. It holds no memory
+ * state, so an old and a new build read the same rows while the old one
+ * drains.
  */
-const cellStorageLayer: Layer.Layer<
-  CellStorageTags,
-  never,
-  SqlClient.SqlClient | InteractionStorage | GentPlatform
-> = Layer.provideMerge(Layer.mergeAll(cellRetainedBindings, cellToolCallRecovery), CellStorage.Live)
+export const CellStorageResource = defineResource({
+  id: "@gent/cell/storage",
+  scope: "process",
+  layer: Layer.provideMerge(cellRetainedBindings, CellStorage.Live),
+})
 
 /**
- * The cell's branch-scoped layer, as the feature's per-branch factory.
- *
- * The cell kernel lives for the life of a branch: one worker process holding a
- * namespace across turns. It is built with the loop and torn down with it.
+ * The cell kernel, one per branch: one worker process that holds the
+ * namespace across turns. It starts lazily on the first cell, and restores
+ * the namespace the storage saved after each cell when a new build replaces
+ * it. Its build reads only its branch and the cell's storage, so an edit to
+ * an extension that is neither keeps the worker.
  */
-const cellBranchLayer: BranchToolLayerFactory = (input) =>
-  eraseResourceLayer(CellExecution.Branch(input))
-
-/**
- * The cell, as one thing a composition root can install.
- *
- * Its tables, the migrations that create them, and its per-branch kernel are
- * useless apart: the kernel writes rows only the cell's storage reads back.
- * Bundling them is what lets core take the cell as input instead of naming it.
- */
-export const CellBranchTools: BranchToolFeature<CellStorageTags> = {
-  id: "cell",
-  migrations: cellMigrations,
-  storage: cellStorageLayer,
-  branchLayer: cellBranchLayer,
-}
+export const CellKernelResource = defineResource({
+  id: "@gent/cell/kernel",
+  scope: "branch",
+  resources: [CellStorageResource],
+  layer: Layer.unwrap(
+    Effect.gen(function* () {
+      const address = yield* BranchAddress
+      const worker = yield* cellWorkerLaunch
+      return CellExecution.Live({
+        sessionId: address.sessionId,
+        branchId: address.branchId,
+        cwd: address.cwd,
+        worker,
+      })
+    }),
+  ),
+})
 
 // ── tool ────────────────────────────────────────────────────────────────────
 
 /** The model-facing name of the cell tool. */
 const CELL_TOOL_ID = "cell"
 
+/**
+ * Ends the cell's work when its turn stops. An interrupt cancels it: the run
+ * reports what the cancel cost. A close stops it: the run records nothing, as
+ * a crash would, so a restart recovers it.
+ */
+const stopCellWith = (stop: TurnStop, cells: CellExecution["Service"]) =>
+  Effect.gen(function* () {
+    yield* stop.stopped
+    if (yield* stop.closing) return yield* cells.stop
+    return yield* cells.cancel
+  })
+
 /** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
 export const CellTool = tool({
   id: CELL_TOOL_ID,
-  // The cell's storage comes from the feature the root installs.
-  branchTools: CellBranchTools,
+  resources: [CellStorageResource, CellKernelResource],
   description: "Run TypeScript in this branch's Bun process. Bindings persist across cells.",
   // The cell calls host tools from inside itself, so recovery must restore
   // host bindings for it, not just its own.
@@ -3164,15 +3130,20 @@ export const CellTool = tool({
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],
+  recover: recoverCellCall,
   execute: Effect.fn("CellTool.execute")(function* () {
-    const saved = yield* dispatchCell()
+    // The cell ends its own work when the turn stops, and reports what a
+    // cancel cost. A fiber interrupt would cut that report short, so the body
+    // runs uninterruptibly and only the watcher can be interrupted.
+    const watcher = yield* Effect.forkChild(
+      Effect.interruptible(stopCellWith(yield* CurrentTurnStop, yield* CellExecution)),
+    )
+    const saved = yield* dispatchCell().pipe(Effect.ensuring(Fiber.interrupt(watcher)))
     const result = yield* Schema.decodeUnknownEffect(Schema.Json)(saved.result)
     if (saved.isFailure) {
       return yield* new ToolResultFailure({ message: "Cell execution failed", result })
     }
     return result
-    // The cell cancels its own work through `BranchToolWork` and reports what
-    // the cancel cost. A fiber interrupt would cut that report short.
   }, Effect.uninterruptible),
 })
 
@@ -3195,6 +3166,7 @@ export const CellExtension = defineExtension({
   id: CELL_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
+    yield* host.register("resource", CellStorageResource, CellKernelResource)
     yield* host.register("tool", CellTool)
     yield* host.on("turnProjection", ({ agent }) =>
       Effect.gen(function* () {

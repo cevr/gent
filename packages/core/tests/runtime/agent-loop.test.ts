@@ -106,6 +106,7 @@ import {
   toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import {
+  BranchAddress,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -155,7 +156,11 @@ import {
   TurnCompleted,
 } from "../../src/domain/event"
 import { type ActiveStreamHandle, ToolResultReplayError, TurnOutcome } from "../../src/runtime/turn"
-import { windowMarkerMessage } from "../../src/runtime/model-context"
+import {
+  ContextDirective,
+  ModelContextLedger,
+  windowMarkerMessage,
+} from "../../src/runtime/model-context"
 import { e2ePreset, testAgents } from "../helpers/test-preset"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
@@ -167,7 +172,7 @@ import {
   resolveExtensions,
 } from "../../src/runtime/extension-host"
 import {
-  noBranchTools,
+  CurrentTurnStop,
   ProcessLocalToolReplay,
   ToolRunner,
   makeTurnInterruption,
@@ -191,6 +196,7 @@ import type { LanguageModel } from "effect/ai"
 import { SingleRunner } from "effect/cluster"
 import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
+import { SqlClient } from "effect/sql"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
 import {
@@ -1466,7 +1472,6 @@ const makeHarness = (
       residency: yield* makeHoldCount(options.keepAlive ?? (() => Effect.void)),
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption,
-      interruptToolWork: Effect.void,
       inbox,
       admissionGateRef: gateRef,
       recordTurnFailure: (cause, messageId) =>
@@ -1635,7 +1640,7 @@ describe("a loop whose session cannot be read", () => {
               }),
           }),
         ),
-      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      ).pipe(Layer.provideMerge(testSqliteStorage))
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       yield* Effect.gen(function* () {
         const now = dateFromMillis(1_767_225_600_000)
@@ -2384,7 +2389,7 @@ describe("a usage limit's reset time", () => {
               ),
           }),
         ),
-      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      ).pipe(Layer.provideMerge(testSqliteStorage))
       const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
       const resolved = resolveExtensions([
         {
@@ -3291,6 +3296,223 @@ describe("branch resources follow the profile", () => {
   )
 })
 
+/** A tool that runs uninterruptibly until its turn stops, and reports whether the loop closed. */
+const turnStopProbe = (started: Deferred.Deferred<void>, seen: Deferred.Deferred<boolean>) =>
+  defineExtension({
+    id: "@test/turn-stop",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "stop_probe",
+          description: "Wait for the turn to stop",
+          params: Schema.Struct({}),
+          output: Schema.Boolean,
+          execute: () =>
+            Effect.gen(function* () {
+              const stop = yield* CurrentTurnStop
+              yield* Deferred.succeed(started, void 0)
+              yield* stop.stopped
+              const closing = yield* stop.closing
+              expect(yield* stop.isStopped).toBe(true)
+              yield* Deferred.succeed(seen, closing)
+              return closing
+            }).pipe(Effect.uninterruptible),
+        }),
+      )
+    }),
+  })
+
+describe("turn stop", () => {
+  it.scopedLive("a tool sees an interrupt as its turn's stop, and not as a close", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const seen = yield* Deferred.make<boolean>()
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("stop_probe", {}),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [testTurnExtension, turnStopProbe(started, seen)],
+        providerLayer,
+      })
+      const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "wait" })
+      yield* Deferred.await(started)
+      yield* client.steer.command({
+        command: {
+          _tag: "Cancel",
+          sessionId,
+          branchId,
+          requestId: "req-turn-stop-interrupt",
+        } satisfies SteerCommand,
+      })
+      expect(yield* Deferred.await(seen)).toBe(false)
+      yield* Fiber.join(completed)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a tool sees the loop's close as its turn's stop", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const seen = yield* Deferred.make<boolean>()
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("stop_probe", {}),
+      ])
+      // The harness closes with its scope, and its loop with it.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: [testAgent],
+            extensionInputs: [testTurnExtension, turnStopProbe(started, seen)],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "wait" })
+          yield* Deferred.await(started)
+        }),
+      )
+      expect(yield* Deferred.await(seen)).toBe(true)
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "every branch has a ledger: a directive a plain tool schedules reaches the next step",
+    () =>
+      Effect.gen(function* () {
+        const notice = "A plain tool asked for a fresh window."
+        const freshWindow = defineExtension({
+          id: "@test/fresh-window",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "fresh_window",
+                description: "Ask for a fresh window",
+                params: Schema.Struct({}),
+                output: Schema.Boolean,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const ledger = yield* Effect.serviceOption(ModelContextLedger)
+                    if (Option.isNone(ledger)) return false
+                    yield* ledger.value.schedule(ContextDirective.cases.NewWindow.make({ notice }))
+                    return true
+                  }),
+              }),
+            )
+          }),
+        })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("fresh_window", {}),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: [testAgent],
+          extensionInputs: [testTurnExtension, freshWindow],
+          providerLayer,
+        })
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "fresh" })
+        yield* Fiber.join(completed)
+        yield* controls.assertDone
+        const messages = yield* client.message.list({ branchId })
+        const texts = messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+        expect(texts).toContain(notice)
+      }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
+class NoteRows extends Context.Service<
+  NoteRows,
+  { readonly add: (text: string) => Effect.Effect<number> }
+>()("@gent/core/tests/runtime/agent-loop.test/NoteRows") {}
+
+describe("resource host context", () => {
+  // A process Resource owns a table in the session database: its build
+  // reads the `SqlClient` the host gives every Resource build.
+  const noteRows = defineResource({
+    id: "@test/note-rows/rows",
+    scope: "process",
+    layer: Layer.effect(
+      NoteRows,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`CREATE TABLE IF NOT EXISTS test_note_rows (text TEXT NOT NULL)`.pipe(
+          Effect.orDie,
+        )
+        return NoteRows.of({
+          add: (text) =>
+            Effect.gen(function* () {
+              yield* sql`INSERT INTO test_note_rows (text) VALUES (${text})`
+              const rows = yield* sql<{ readonly count: number }>`
+                SELECT COUNT(*) AS count FROM test_note_rows`
+              return rows[0]?.count ?? 0
+            }).pipe(Effect.orDie),
+        })
+      }),
+    ),
+  })
+  const noteRowsExtension = defineExtension({
+    id: "@test/note-rows",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("resource", noteRows)
+      yield* host.register(
+        "tool",
+        tool({
+          id: "note_row",
+          description: "Store a note row",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Finite,
+          resources: [noteRows],
+          execute: ({ text }) => Effect.flatMap(NoteRows, (rows) => rows.add(text)),
+        }),
+      )
+    }),
+  })
+
+  it.scopedLive("a tool writes and reads rows of a table its process Resource created", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("note_row", { text: "first" }),
+        toolCallStep("note_row", { text: "second" }),
+        textStep("done"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [testTurnExtension, noteRowsExtension],
+        providerLayer,
+      })
+      const outputs = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+        Stream.flatMap(({ event }) => {
+          if (event._tag !== "ToolCallSucceeded") return Stream.empty
+          return Stream.make(event.output)
+        }),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "store two" })
+      expect(Array.from(yield* Fiber.join(outputs))).toEqual(["1", "2"])
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
 const SHARED_KEY = "@gent/core/tests/runtime/agent-loop.test/Shared"
 
 class Shared extends Context.Service<Shared, { readonly version: string }>()(
@@ -3301,10 +3523,18 @@ class Captured extends Context.Service<Captured, { readonly version: string }>()
   "@gent/core/tests/runtime/agent-loop.test/Captured",
 ) {}
 
-/** A user extension whose process Resource overrides the builtin's `Shared`. */
-const sharedOverrideSource = (version: string) => `import { Context, Effect, Layer } from "effect";
+/**
+ * A user extension whose process Resource also provides `Shared`, and logs
+ * when its instance closes.
+ */
+const sharedOverrideSource = (
+  version: string,
+  log: string,
+) => `import { appendFileSync } from "node:fs";
+import { Context, Effect, Layer } from "effect";
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
 class Shared extends Context.Service<Shared, { readonly version: string }>()(${encodeJsonText(SHARED_KEY)}) {}
+const version = ${encodeJsonText(version)};
 export default defineExtension({
   id: "@test/shared-override",
   setup: Effect.gen(function* () {
@@ -3312,24 +3542,37 @@ export default defineExtension({
     yield* host.register("resource", defineResource({
       id: "@test/shared-override/shared",
       scope: "process",
-      layer: Layer.succeed(Shared, Shared.of({ version: ${encodeJsonText(version)} })),
+      layer: Layer.effect(Shared, Effect.acquireRelease(
+        Effect.sync(() => Shared.of({ version })),
+        () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "release:" + version + "\\n")),
+      )),
     }));
   }),
 });
 `
 
 describe("branch resources over process services", () => {
-  // A builtin's branch Resource reads `Shared` when it builds. A user
-  // extension later in resolution order overrides `Shared`; editing it must
-  // build the branch Resource again over the new service.
+  // A builtin's branch Resource reads the `Shared` its own process Resource
+  // builds, and its branch. A user extension later in resolution order
+  // provides `Shared` too; its services never reach the branch build.
+  const builds: Array<string> = []
+  const sharedResource = defineResource({
+    id: "@test/captures-shared/shared",
+    scope: "process",
+    layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
+  })
   const capturedResource = defineResource({
     id: "@test/captures-shared/captured",
     scope: "branch",
+    resources: [sharedResource],
     layer: Layer.effect(
       Captured,
       Effect.gen(function* () {
         const shared = yield* Shared
-        return Captured.of({ version: shared.version })
+        const address = yield* BranchAddress
+        const version = `${shared.version}@${address.sessionId}/${address.branchId}:${address.cwd}`
+        builds.push(version)
+        return Captured.of({ version })
       }),
     ),
   })
@@ -3337,15 +3580,7 @@ describe("branch resources over process services", () => {
     id: "@test/captures-shared",
     setup: Effect.gen(function* () {
       const host = yield* ExtensionHost
-      yield* host.register(
-        "resource",
-        defineResource({
-          id: "@test/captures-shared/shared",
-          scope: "process",
-          layer: Layer.succeed(Shared, Shared.of({ version: "builtin" })),
-        }),
-        capturedResource,
-      )
+      yield* host.register("resource", sharedResource, capturedResource)
       yield* host.register(
         "request",
         request({
@@ -3364,22 +3599,27 @@ describe("branch resources over process services", () => {
   })
 
   it.scopedLive(
-    "an edit to a later process service builds the branch Resource again",
+    "a branch Resource reads its branch and its own process services, and an edit to another extension keeps its build",
     () =>
       Effect.gen(function* () {
+        builds.length = 0
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTempDirectoryScoped("gent-branch-over-process-home-")
+        const cwd = yield* makeTempDirectoryScoped("gent-branch-over-process-cwd-")
         const extensionsDir = path.join(home, ".gent", "extensions")
         yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "override.log")
+        yield* fs.writeFileString(log, "")
         const overrideFile = path.join(extensionsDir, "override.ts")
-        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one"))
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-one", log))
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
         const { client, sessionId, branchId } = yield* createRpcHarness({
           agents: [testAgent],
           extensionInputs: [testTurnExtension, capturing],
           providerLayer,
           home,
+          cwd,
         })
         yield* client.session
           .watchRuntime({ sessionId, branchId })
@@ -3391,9 +3631,19 @@ describe("branch resources over process services", () => {
           capabilityId: "read-captured",
           input: "read",
         })
-        expect(yield* readCaptured).toBe("override-one")
-        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two"))
-        expect(yield* readCaptured).toBe("override-two")
+        const expected = `builtin@${sessionId}/${branchId}:${cwd}`
+        expect(yield* readCaptured).toBe(expected)
+        yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two", log))
+        expect(yield* readCaptured).toBe(expected)
+        expect(builds).toEqual([expected])
+        // The kept build moved to the newest profile, so the profile before
+        // retires and the edited extension's old process Resource closes.
+        yield* waitFor(
+          fs.readFileString(log),
+          (text) => text.includes("release:override-one"),
+          5_000,
+          "the old override released",
+        )
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
@@ -3945,7 +4195,7 @@ describe("agent-loop recovery race", () => {
           ),
         )
 
-        const baseStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+        const baseStorage = testSqliteStorage
         const wrappedQueueStorage = gatedQueueStorageLayer(
           reopenGate,
           reopenEntered,
@@ -4291,7 +4541,7 @@ const makeTestExtensions = (
   ])
 }
 
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
+const makeClusterRunnerLayer = (storageLayer: typeof testSqliteStorage) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -4304,7 +4554,7 @@ const makeRuntimeLayer = (
 ) => {
   const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools, requests))
   const eventStoreLayer = EventStore.Memory
-  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunServices.layer))
   const baseDeps = Layer.mergeAll(
@@ -5156,7 +5406,7 @@ describe("queued follow-ups drain", () => {
         // already holds the interjection at that instant says which of the two
         // writes went first, without failing either.
         const transcriptHeldAtDrop = yield* Ref.make(Option.none<boolean>())
-        const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+        const storageLayer = testSqliteStorage
         const queueStorageLayer = Layer.provide(
           Layer.effect(
             AgentLoopQueueStorage,
@@ -6354,7 +6604,7 @@ describe("turn scheduling", () => {
         { ...textStep("ok"), gated: true },
         textStep("ok"),
       ])
-      const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+      const baseStorageLayer = testSqliteStorage
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -6927,9 +7177,7 @@ describe("queued follow-ups", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             // One database outlives both processes.
-            const storage = yield* Layer.build(
-              testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-            )
+            const storage = yield* Layer.build(testSqliteStorage)
             const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
               actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
             yield* Effect.scoped(

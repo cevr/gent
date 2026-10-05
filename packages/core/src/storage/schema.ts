@@ -634,9 +634,10 @@ const toolCallBindingsMigration = Effect.gen(function* () {
 
 // The durable resource graph (tables resource_graph_state and
 // resource_graph_commands) was removed. Migration 010 stays as a recorded
-// no-op so existing databases keep a contiguous history; 012 drops the tables
-// where an earlier build created them. Ids 012-014 belong to the cell feature
-// migrations, so the drop takes 015.
+// no-op so existing databases keep a contiguous history; 015 drops the tables
+// where an earlier build created them. Ids 012-014 created the cell's tables
+// in this chain. The cell now migrates them through its own process Resource
+// and migration table, and a database that recorded 012-014 keeps those rows.
 const resourceGraphStateMigration = Effect.void
 
 const dropResourceGraphStateMigration = Effect.gen(function* () {
@@ -919,18 +920,7 @@ const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlCl
     ),
   )
 
-/**
- * Migrations a feature contributes for the tables it owns.
- *
- * Keys are `<id>_<name>`; ids order the whole chain, core's and the
- * features' alike, so a feature picks ids above core's last one. Core never
- * names a feature's tables -- it only leaves room in the sequence for them.
- */
-export type FeatureMigrations = Record<string, Effect.Effect<void, unknown, SqlClient.SqlClient>>
-
-const makeStorageMigratorLive = (
-  featureMigrations: FeatureMigrations,
-): Layer.Layer<never, StorageError, SqlClient.SqlClient> =>
+const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   SqliteMigrator.layer({
     loader: Migrator.fromRecord({
       "001_init": initialMigration,
@@ -955,7 +945,6 @@ const makeStorageMigratorLive = (
       "023_session_admission": sessionAdmissionMigration,
       "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
       "025_tool_image_references": toolImageReferencesMigration,
-      ...featureMigrations,
     }),
     table: "gent_storage_migrations",
   }).pipe(
@@ -973,7 +962,5 @@ const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient
     ),
   )
 
-export const makeStorageInitLive = (
-  featureMigrations: FeatureMigrations,
-): Layer.Layer<never, StorageError, SqlClient.SqlClient> =>
-  StorageIntegrityLive.pipe(Layer.provideMerge(makeStorageMigratorLive(featureMigrations)))
+export const StorageInitLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+  StorageIntegrityLive.pipe(Layer.provideMerge(StorageMigratorLive))
