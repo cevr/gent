@@ -243,13 +243,44 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
   return yield* spawnWithDir(tempDir)
 })
 
-/** Wait until the output, colors stripped, has contained `text` at some point. */
-export const ptyWaitFor = (ctx: TestContext, text: string, opts: { timeout: number }) =>
-  waitFor(
-    Effect.sync(() => Bun.stripANSI(ctx.output)),
-    (output) => output.includes(text),
-    opts.timeout,
-    `PTY output "${text}"`,
+/**
+ * Wait until `text` has been drawn: the output, colors stripped, contained it
+ * at some point, or the terminal holds it now, scrollback included.
+ *
+ * The stream alone misses text the TUI draws over the frame before it. A
+ * cell-diff renderer writes only the cells that change, so a turn line drawn
+ * over the live line reaches the pty as `2`, a cursor move and `retries`: the
+ * space between them was a space already. A terminal fed the same bytes reads
+ * `2 retries`. The stream check still sees text that was on screen only
+ * between two polls.
+ */
+export const ptyWaitFor = (
+  ctx: Pick<TestContext, "output" | "size">,
+  text: string,
+  opts: { timeout: number },
+) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => ({ emulator: newEmulator(ctx.size), fed: 0 })),
+    (terminal) =>
+      waitFor(
+        Effect.suspend(() => {
+          const output = ctx.output
+          if (Bun.stripANSI(output).includes(text)) return Effect.succeed(true)
+          const fresh = output.slice(terminal.fed)
+          terminal.fed = output.length
+          return drained(terminal.emulator, fresh).pipe(
+            Effect.map(() =>
+              readRows(terminal.emulator, 0, terminal.emulator.buffer.active.length).some((row) =>
+                row.includes(text),
+              ),
+            ),
+          )
+        }),
+        (drawn) => drawn,
+        opts.timeout,
+        `PTY output "${text}"`,
+      ),
+    (terminal) => ignoreSyncDefect(() => terminal.emulator.dispose()),
   ).pipe(Effect.asVoid)
 
 /**
