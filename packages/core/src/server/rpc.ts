@@ -28,6 +28,7 @@ import {
 import {
   AuthMetadata,
   AuthMethod,
+  CredentialOrder,
   CredentialSlot,
   DriverError,
   ProviderAuthError,
@@ -313,11 +314,7 @@ export type RenameAuthKeyInput = typeof RenameAuthKeyInput.Type
  */
 export const SetAuthOrderInput = Schema.Struct({
   provider: Schema.String,
-  order: Schema.Array(CredentialSlot).check(
-    Schema.makeFilter((slots) => new Set(slots).size === slots.length, {
-      message: "credential slots must be distinct",
-    }),
-  ),
+  order: CredentialOrder,
   sessionId: SessionId,
 })
 export type SetAuthOrderInput = typeof SetAuthOrderInput.Type
