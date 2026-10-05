@@ -1585,7 +1585,9 @@ const keepAsides = Effect.fn("Checkpoints.keepAsides")(function* (
   const old = yield* inStore(place, ["rev-parse", "--verify", `${revert.beforeRef}^{commit}`])
   const base = yield* treeOf(place, old)
   const was = yield* treeEntries(place, base, files)
-  const kept = files.filter((file) => entries.get(file) !== was.get(file))
+  // An aside that is gone by now (another process removed it) has no bytes
+  // to keep: it must not take its path out of `before`.
+  const kept = files.filter((file) => entries.has(file) && entries.get(file) !== was.get(file))
   if (kept.length > 0) {
     const tree = yield* overlaidTree(place, base, kept, entries)
     const raw = yield* inStore(place, ["cat-file", "commit", old])
