@@ -157,8 +157,8 @@ import {
 import { type AgentEvent, EventStore, type EventStoreService } from "../domain/event.js"
 import { LanguageModel, Model as AiModel } from "effect/ai"
 import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
-import { BunCrypto, BunHttpServer, BunServices } from "@effect/platform-bun"
-import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
+import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
+import { BunPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import type * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
@@ -2094,7 +2094,9 @@ export function storedCredentialModel(
   ])
   const seed = Record.map(input.stored, (key) => AuthApi.make({ type: "api", key }))
   let authLayer: Layer.Layer<Auth, never, FileSystem.FileSystem | Path.Path> = Auth.Test(seed)
-  if (Predicate.isNotUndefined(input.authDirectory)) authLayer = Auth.Live(input.authDirectory)
+  // The Bun host's lock file orders this store with a spawned gent's over the same directory.
+  if (Predicate.isNotUndefined(input.authDirectory))
+    authLayer = Auth.Live(input.authDirectory).pipe(Layer.provide(BunProviderLockLive))
   return Layer.effect(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
@@ -2182,7 +2184,7 @@ export const createWorkerEnv = (root: string): Record<string, string> => {
  */
 export const seedAuthKeys = (directory: string) =>
   Effect.gen(function* () {
-    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunServices.layer)))
+    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunPlatformLive)))
     const auth = Context.get(services, Auth)
     yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
     yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))

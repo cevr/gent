@@ -18,9 +18,24 @@ import { realpathSync } from "node:fs"
 import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory
 import * as path from "node:path"
-import { Effect, Layer, Match, Option, Predicate, Result, Schema } from "effect"
+import { Database } from "bun:sqlite"
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Result,
+  Schedule,
+  Schema,
+  Scope,
+} from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
+import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
 import {
   GentBuild,
@@ -270,12 +285,116 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   }),
 )
 
+// ── provider lock ───────────────────────────────────────────────────────────
+
+/** SQLite reports a lock another connection holds as `SQLITE_BUSY`. */
+const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
+
+/** Another connection holds the provider's lock file; try again shortly. */
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {}) {}
+
+/** A writer polls a busy lock this often, this many times (about 30 seconds). */
+const AUTH_LOCK_POLL = Duration.millis(20)
+const AUTH_LOCK_POLLS = 1500
+
+/**
+ * An exclusive SQLite transaction on one lock file per provider. The OS drops
+ * the lock when its process exits, so a crash never leaves a held lock (the
+ * same kind of lock the server kernel uses). Taking it never blocks the event
+ * loop: a busy file is polled.
+ */
+const fileProviderLock =
+  (lockDirectory: string, provider: string, pathService: Path.Path, fs: FileSystem.FileSystem) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | AuthError> => {
+    const file = pathService.join(lockDirectory, `${encodeURIComponent(provider)}.lock.db`)
+    const lockError = (cause: unknown) =>
+      new AuthError({ message: `Failed to take the auth lock for "${provider}"`, cause })
+    const open = Effect.try({
+      try: () => new Database(file, { create: true }),
+      catch: lockError,
+    })
+    const take = (db: Database) =>
+      Effect.try({
+        try: () => {
+          db.exec("PRAGMA busy_timeout = 0")
+          db.exec("BEGIN EXCLUSIVE")
+        },
+        catch: (cause) => {
+          if (isSqliteBusy(cause)) return new AuthLockBusy()
+          return lockError(cause)
+        },
+      })
+    const close = (db: Database) =>
+      Effect.sync(() => {
+        db.close()
+      })
+    // One open-and-take attempt is the uninterruptible acquire; the poll
+    // between attempts is not, so a cancel ends the wait at once. Only a
+    // held lock outlives an interrupt, and its release always runs.
+    const attempt = Effect.acquireRelease(
+      fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
+        Effect.mapError(lockError),
+        Effect.andThen(open),
+        Effect.flatMap((db) =>
+          take(db).pipe(
+            Effect.onError(() => close(db)),
+            Effect.as(db),
+          ),
+        ),
+      ),
+      close,
+    )
+    const held = attempt.pipe(
+      Effect.retry({
+        while: (error) => error._tag === "AuthLockBusy",
+        schedule: Schedule.spaced(AUTH_LOCK_POLL),
+        times: AUTH_LOCK_POLLS,
+      }),
+      Effect.catchTag("AuthLockBusy", () =>
+        Effect.fail(
+          new AuthError({ message: `Timed out waiting for the auth lock for "${provider}"` }),
+        ),
+      ),
+    )
+    // The held lock lives in a private scope, so `effect` never runs inside
+    // it: a scope of the caller's stays the caller's, whatever `effect` needs.
+    return Effect.acquireUseRelease(
+      Scope.make(),
+      (lockScope) => held.pipe(Scope.provide(lockScope), Effect.andThen(effect)),
+      (lockScope, exit) => Scope.close(lockScope, exit),
+    )
+  }
+
+/**
+ * `ProviderLock` on Bun: the lock file of each provider sits in `.locks`
+ * inside the store. No provider id starts with a dot, so the directory never
+ * reads as a credential, and it goes with the store. Every gent process on
+ * the machine that opens the store takes the same file.
+ */
+export const BunProviderLockLive: Layer.Layer<
+  ProviderLock,
+  never,
+  FileSystem.FileSystem | Path.Path
+> = Layer.effect(
+  ProviderLock,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const pathService = yield* Path.Path
+    return ProviderLock.of({
+      exclusive: (directory, provider) =>
+        fileProviderLock(pathService.join(directory, ".locks"), provider, pathService, fs),
+    })
+  }),
+)
+
+// ── platform stack ──────────────────────────────────────────────────────────
+
 /**
  * The complete Bun-runtime platform stack: `@effect/platform-bun`
  * (FileSystem, Path, ChildProcessSpawner, …) and the fetch `HttpClient`,
- * bundled with the gent-owned `BunGentPlatformLive`. Production wiring and
- * test harnesses both yield this single Layer so they can't drift on which
- * BunService stack they pull in.
+ * bundled with the gent-owned `BunGentPlatformLive` and the provider lock
+ * file. Production wiring and test harnesses both yield this single Layer so
+ * they can't drift on which BunService stack they pull in.
  *
  * Note: this is an output-context bundle (`Layer.merge`), not a dependency
  * wiring — each member either has no requirements or is given its own.
@@ -287,4 +406,5 @@ export const BunPlatformLive = Layer.mergeAll(
   // later over its own `Fetch`.
   Layer.fresh(FetchHttpClient.layer),
   BunGentPlatformLive,
+  BunProviderLockLive.pipe(Layer.provide(BunServices.layer)),
 )

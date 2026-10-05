@@ -54,6 +54,7 @@ import {
   ConfigService,
   modelCatalogFixture,
   BunGentPlatformLive,
+  BunProviderLockLive,
   LanguageModelLayers,
   testAgent,
   textStep,
@@ -3879,7 +3880,13 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
           yield* afterRename(to)
         }),
     }
-    const basePlatform = yield* Layer.build(Layer.mergeAll(BunServices.layer, BunGentPlatformLive))
+    const basePlatform = yield* Layer.build(
+      Layer.mergeAll(
+        BunServices.layer,
+        BunGentPlatformLive,
+        BunProviderLockLive.pipe(Layer.provide(BunServices.layer)),
+      ),
+    )
     const platform = Layer.succeedContext(Context.add(basePlatform, FileSystem.FileSystem, fs))
     const ready = yield* Deferred.make<ReturnType<typeof buildAnthropicModelDriverLive>>()
     const extension = defineExtension({
