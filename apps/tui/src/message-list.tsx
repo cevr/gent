@@ -1525,10 +1525,7 @@ function OutputHeadRows(props: { head: OutputHead; width: number }) {
       </For>
       <Show when={props.head.hidden > 0}>
         <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-          │{" "}
-          <span style={{ fg: theme.textMuted, dim: true }}>
-            {formatPreviewFooter(props.head.hidden)}
-          </span>
+          │ {formatPreviewFooter(props.head.hidden)}
         </text>
       </Show>
     </box>

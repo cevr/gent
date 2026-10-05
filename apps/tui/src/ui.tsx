@@ -1948,10 +1948,7 @@ export function AgentMessageRow(props: AgentMessageRowProps) {
           </For>
           <Show when={lines().length > preview().length}>
             <text style={{ fg: theme.textMuted }} wrapMode="none">
-              │{" "}
-              <span style={{ fg: theme.textMuted, dim: true }}>
-                {formatPreviewFooter(lines().length - preview().length)}
-              </span>
+              │ {formatPreviewFooter(lines().length - preview().length)}
             </text>
           </Show>
         </box>
