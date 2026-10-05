@@ -730,16 +730,22 @@ describe("Auth route", () => {
           listMethods: () => Effect.succeed({}),
         },
       })
-      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
-        client,
-        runtime: createMockRuntime(),
-        width: 120,
-      })
-      const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"), "the list")
-      expect(list).toContain("Anthropic [authOrder conflict: anthropic, claude-code]")
-      expect(list).toContain("openai [api]")
-      destroyRenderSetup(setup)
-    }).pipe(Effect.timeout("6 seconds")),
+      // A narrow row wraps its state under itself, apart from the name.
+      for (const width of [40, 60, 100]) {
+        const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          width,
+        })
+        const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"), "the list")
+        expect([width, list.includes("Anthropic [authOrder conflict:")]).toEqual([width, true])
+        expect([width, list.includes("claude-code")]).toEqual([width, true])
+        expect([width, list.includes("openai [api]")]).toEqual([width, true])
+        if (width === 100)
+          expect(list).toContain("Anthropic [authOrder conflict: anthropic, claude-code]")
+        destroyRenderSetup(setup)
+      }
+    }).pipe(Effect.timeout("10 seconds")),
   )
   // The session's profile decides which driver owns a sign-in, so a typed
   // key is saved in that profile, as a sign-out is.

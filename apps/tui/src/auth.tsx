@@ -1558,11 +1558,16 @@ export function Auth(props: AuthProps) {
               </text>
             }
           >
-            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>
+            {/* The gap is layout, not text: a narrow row wraps its state under
+                itself and keeps the gap a wrapped leading space would lose. */}
+            <text flexShrink={0} style={{ fg: rowForeground(isSelected(), theme.text) }}>
               {label(provider.provider)}
             </text>
-            <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
-              {" "}
+            <text
+              marginLeft={1}
+              flexShrink={1}
+              style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}
+            >
               {authLabel(provider)}
               {requiredLabel(provider)}
               {credentialCount(provider)}
@@ -1603,11 +1608,14 @@ export function Auth(props: AuthProps) {
               paddingLeft={1}
               flexDirection="row"
             >
-              <text style={{ fg: rowForeground(isSelected(), theme.text) }}>
+              <text flexShrink={1} style={{ fg: rowForeground(isSelected(), theme.text) }}>
                 {choice.method.label}
               </text>
-              <text style={{ fg: rowForeground(isSelected(), theme.textMuted) }}>
-                {" "}
+              <text
+                marginLeft={1}
+                flexShrink={0}
+                style={{ fg: rowForeground(isSelected(), theme.textMuted) }}
+              >
                 [{choice.method.type}]
               </text>
             </box>
