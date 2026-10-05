@@ -111,6 +111,7 @@ import {
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { useWorkspace } from "../src/workspace"
+import { useTheme } from "../src/theme"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -1379,7 +1380,7 @@ describe("App session view and fatal screen", () => {
       case "interaction renderer":
         return Option.some("plain breaks question")
       case "message queue label":
-        return Option.some("[steer 1] plain breaks queued")
+        return Option.some("↳ steer · plain breaks queued")
       default:
         return Option.none<string>()
     }
@@ -6270,6 +6271,199 @@ describe("TUI renderer surfaces", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
+    "waiting entries sit dim above the composer, apart from the transcript, until delivered or restored",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-queue")
+        const branchId = BranchId.make("branch-queue")
+        const queue = new QueueSnapshot({
+          steering: [
+            {
+              _tag: "Steering",
+              id: MessageId.make("steer-queue"),
+              content: "STEER-WAIT",
+              createdAt: 0,
+            },
+          ],
+          followUp: [
+            {
+              _tag: "FollowUp",
+              id: MessageId.make("follow-queue"),
+              content: "FOLLOW-WAIT",
+              createdAt: 1,
+            },
+          ],
+        })
+        const running = { _tag: "Running" satisfies "Running", startedAtMs: 0, queue }
+        const runtimes = yield* Queue.unbounded<typeof running>()
+        const events = yield* Queue.unbounded<EventEnvelope>()
+        const sent: string[] = []
+        const steers: string[] = []
+        const { setup } = yield* mountApp({
+          client: {
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId,
+                  branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  agent: AgentName.make("main"),
+                  runtime: running,
+                  metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                }),
+              watchRuntime: () => Stream.fromQueue(runtimes),
+              events: () => Stream.fromQueue(events),
+            },
+            queue: {
+              drain: () =>
+                Queue.offer(runtimes, { ...running, queue: emptyQueueSnapshot() }).pipe(
+                  Effect.as(queue),
+                ),
+            },
+            message: {
+              send: (input: { content: string }) =>
+                Effect.sync(() => {
+                  sent.push(input.content)
+                }),
+            },
+            steer: {
+              command: (input: { command: { _tag: string } }) =>
+                Effect.sync(() => {
+                  steers.push(input.command._tag)
+                }),
+            },
+          },
+          initialSession: sessionNamed(sessionId, branchId, "Queue"),
+        })
+        yield* Effect.promise(() => setup.mockInput.typeText("COMPOSER-DRAFT"))
+        const sizes: ReadonlyArray<readonly [number, number]> = [
+          [100, 30],
+          [60, 20],
+          [90, 25],
+        ]
+        for (const [width, height] of sizes) {
+          setup.resize(width, height)
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("↳ queued · FOLLOW-WAIT") && next.includes("COMPOSER-DRAFT"),
+            "pinned queue",
+          )
+          // Between the activity row and the composer, steers first.
+          const order = [
+            "Generating",
+            "↳ steer · STEER-WAIT",
+            "↳ queued · FOLLOW-WAIT",
+            "alt+up restore",
+            "COMPOSER-DRAFT",
+          ].map((text) => frame.indexOf(text))
+          expect(order.every((at) => at >= 0)).toBe(true)
+          expect(order).toEqual(order.toSorted((a, b) => a - b))
+          expect(frame.match(/STEER-WAIT/g)).toHaveLength(1)
+          expect(frame.match(/FOLLOW-WAIT/g)).toHaveLength(1)
+          // Not a user message: no rail on the entry's row.
+          const row = frame.split("\n").find((line) => line.includes("FOLLOW-WAIT")) ?? ""
+          expect(row).not.toContain("┃")
+        }
+        yield* Queue.offer(runtimes, {
+          ...running,
+          queue: new QueueSnapshot({ steering: [], followUp: queue.followUp }),
+        })
+        yield* Queue.offer(
+          events,
+          EventEnvelope.make({
+            id: EventId.make(1),
+            createdAt: 1,
+            event: AgentEvent.cases.MessageReceived.make({
+              message: StoredMessage.cases.interjection.make({
+                id: MessageId.make("steer-queue"),
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text: "STEER-WAIT" })],
+                createdAt: dateFromMillis(1),
+                metadata: { fromClient: true },
+              }),
+            }),
+          }),
+        )
+        // Delivered: it leaves the pinned rows and lands in the transcript as a user message.
+        const delivered = yield* waitForFrame(
+          setup,
+          (next) => !next.includes("↳ steer") && next.includes("STEER-WAIT"),
+          "delivered steer",
+        )
+        expect(delivered.match(/STEER-WAIT/g)).toHaveLength(1)
+        expect(delivered.indexOf("STEER-WAIT")).toBeLessThan(delivered.indexOf("Generating"))
+        const landed = delivered.split("\n").find((line) => line.includes("STEER-WAIT")) ?? ""
+        expect(landed).toContain("┃")
+        expect(delivered).toContain("↳ queued · FOLLOW-WAIT")
+        setup.mockInput.pressArrow("up", { meta: true })
+        const restored = yield* waitForFrame(
+          setup,
+          (next) => !next.includes("↳ queued") && next.includes("FOLLOW-WAIT"),
+          "restored queue",
+        )
+        expect(restored.match(/FOLLOW-WAIT/g)).toHaveLength(1)
+        expect(restored).toContain("COMPOSER-DRAFT")
+        expect(restored).not.toContain("alt+up restore")
+        expect(sent).toEqual([])
+        expect(steers).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a waiting entry is one dim truncated row at every width", () =>
+    Effect.gen(function* () {
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          colors = Option.some(useTheme().theme)
+          return (
+            <QueueWidget
+              steerMessages={[]}
+              queuedMessages={[
+                {
+                  _tag: "FollowUp",
+                  id: MessageId.make("long-queue"),
+                  content: "QUEUE-START " + "wide text ".repeat(20) + "QUEUE-END",
+                  createdAt: 0,
+                },
+              ]}
+              messageRenderers={new Map()}
+            />
+          )
+        },
+        { width: 60, height: 20 },
+      )
+      const theme = yield* Option.match(colors, {
+        onNone: () => Effect.die("no theme"),
+        onSome: Effect.succeed,
+      })
+      for (const width of [60, 32, 100]) {
+        setup.resize(width, 20)
+        yield* Effect.promise(() => setup.renderOnce())
+        const lines = renderFrame(setup)
+          .split("\n")
+          .filter((line) => line.trim().length > 0)
+        expect(lines).toHaveLength(2)
+        expect(lines[0]).toContain("↳ queued · QUEUE-START")
+        expect(lines[0]).toContain("…")
+        expect(lines[1]).toContain("alt+up restore")
+        expect(renderFrame(setup)).not.toContain("QUEUE-END")
+        // Dim, apart from a user message's text color.
+        const entry = setup
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .filter((span) => span.text.includes("QUEUE-START"))
+        expect(entry).toHaveLength(1)
+        expect(entry[0]?.fg.equals(theme.textMuted)).toBe(true)
+        expect(entry[0]?.fg.equals(theme.text)).toBe(false)
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
     "the activity count runs from the turn's start through its tool calls, and the next turn starts again",
     () =>
       Effect.gen(function* () {
@@ -6381,8 +6575,8 @@ describe("TUI renderer surfaces", () => {
         />
       ))
       const frame = renderFrame(setup)
-      expect(frame).toContain("[steer 1] switch to secondary")
-      expect(frame).toContain("[queued 1] line one +2 lines")
+      expect(frame).toContain("↳ steer · switch to secondary")
+      expect(frame).toContain("↳ queued · line one +2 lines")
       expect(frame).toContain("alt+up restore")
     }).pipe(Effect.timeout("10 seconds")),
   )

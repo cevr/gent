@@ -140,12 +140,18 @@ The activity row counts the running turn from the runtime's `startedAtMs`
 (`SessionControllerState.turnStartedAt` in `session.tsx`), the start the
 turn's `Worked for` total counts from: a new step or a tool call changes its
 word, not its count, and the next turn counts from its own start. A `!cmd`
-outside a turn counts from its own start.
+outside a turn counts from its own start. Under it, the waiting entries
+(`QueueWidget` in `app.tsx`, drawn from the controller's `queue`, their one
+owner) sit above the composer: one dim row each, `↳ steer · <first line>` or
+`↳ queued · <first line>` (or the type's `queueLabel`), cut to the width, then
+`alt+up restore`. They are not transcript rows: an entry leaves when it is
+delivered, and the transcript shows it where it lands.
 
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open
-the trays hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame`
-adds to), so the pane the reader opened gets the rows. The footer's blank
+the trays and the waiting entries hide (`TrayFrame` and `QueueWidget` read the
+`DockProvider` count each `PickerFrame` adds to), so the pane the reader
+opened gets the rows. The footer's blank
 rows (above the activity row, above the input, above the status row) and the
 composer's ghost line are dock spacers (`useDockSpacer`): they give way when a
 docked frame is squeezed, and come back only once the footer's free rows
@@ -187,7 +193,7 @@ passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
 not under it.
 
 The split region is a canvas: the footer's base (composer, status row, the
-activity row while it carries content) and the live tail, the transcript's
+activity row and the waiting entries while they carry content) and the live tail, the transcript's
 last rows. OpenTUI draws only the region, and a region that grows at the
 terminal's bottom pushes rows into scrollback that cannot come back, so
 growing UI never grows it: the suggestions and the docked panes cover the
@@ -335,7 +341,7 @@ A group is one run of tool calls across the steps of a turn, as in fx
 (`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
 calls do not end it; answer text, a user message, a session row, or a call
 that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
-does. A queued follow-up and a pending retry end nothing. The run draws at its
+does. A pending retry ends nothing. The run draws at its
 first tool-call segment (its head); the later steps skip the segments it took.
 The reasoning it took draws where it came at the full level only; a closing
 thought from a streamed answer keeps the head waiting for the stored answer. The
@@ -363,7 +369,7 @@ it is, from the metadata alone: a custom type whose
 the reader sent but whose text the model reads is ids), or else a user message
 with the server's client origin (`fromClient`: typed, or a steer that joined
 the running turn). A message another agent or an extension sent (a parent's
-`Session.send`, a wake, a delegate start), a queued follow-up, a hidden message
+`Session.send`, a wake, a delegate start), a hidden message
 and a row stored before the client origin existed are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
 it. The expanded transcript and overlays pin nothing, and the terminal owns

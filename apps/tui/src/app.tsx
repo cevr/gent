@@ -461,10 +461,12 @@ function summaryText(text: string): string {
 
 /**
  * The line a waiting message shows: its type's `queueLabel` (a background
- * answer as `↳ answer · <question>`), else the first line of its text.
+ * answer as `↳ answer · <question>`), else its kind and the first line of its
+ * text (`↳ queued · <text>`).
  */
 const queueEntryLine = (
   entry: QueueEntryInfo,
+  kind: "steer" | "queued",
   renderers: ReadonlyMap<string, MessageRendererEntry>,
 ): string => {
   const metadata = Option.fromUndefinedOr(entry.metadata)
@@ -473,7 +475,7 @@ const queueEntryLine = (
     Option.flatMap((type) => Option.fromUndefinedOr(renderers.get(type))),
     Option.flatMap((renderer) => Option.fromUndefinedOr(renderer.queueLabel)),
     Option.match({
-      onNone: () => summaryText(entry.content),
+      onNone: () => `↳ ${kind} · ${summaryText(entry.content)}`,
       onSome: (label) =>
         label({
           content: entry.content,
@@ -483,37 +485,38 @@ const queueEntryLine = (
   )
 }
 
+/**
+ * The waiting entries, pinned above the composer: one dim line each, marked
+ * `↳` with its kind, cut to the width, then the way to take them back. Not a
+ * transcript row: an entry leaves here when it is delivered, and the
+ * transcript shows it where it lands. A docked pane takes the rows, as it
+ * takes the trays'.
+ */
 export function QueueWidget(props: QueueWidgetProps) {
   const { theme } = useTheme()
-
-  const hasItems = () => props.queuedMessages.length > 0 || props.steerMessages.length > 0
-
+  const dimensions = useTerminalDimensions()
+  const paneOpen = useDockPaneOpen()
+  const spacer = useDockSpacer()
+  const lines = () => [
+    ...props.steerMessages.map((entry) => queueEntryLine(entry, "steer", props.messageRenderers)),
+    ...props.queuedMessages.map((entry) => queueEntryLine(entry, "queued", props.messageRenderers)),
+  ]
+  // The columns right of the indent, less the last column every row keeps free.
+  const width = () => Math.max(1, dimensions().width - 2 - 1)
   return (
-    <Show when={hasItems()}>
-      <box flexDirection="column" paddingLeft={2} marginBottom={1}>
-        <For each={props.steerMessages}>
-          {(message, index) => (
-            <text>
-              <span style={{ fg: theme.textMuted }}>┋ [steer {index() + 1}]</span>
-              <span style={{ fg: theme.text }}>
-                {" "}
-                {queueEntryLine(message, props.messageRenderers)}
-              </span>
+    <Show when={lines().length > 0 && !paneOpen()}>
+      <box flexDirection="column" flexShrink={0} paddingLeft={2} marginTop={spacer()}>
+        <For each={lines()}>
+          {(line) => (
+            <text wrapMode="none" style={{ fg: theme.textMuted }}>
+              {truncate(line, width())}
             </text>
           )}
         </For>
-        <For each={props.queuedMessages}>
-          {(message, index) => (
-            <text>
-              <span style={{ fg: theme.textMuted }}>┋ [queued {index() + 1}]</span>
-              <span style={{ fg: theme.text }}>
-                {" "}
-                {queueEntryLine(message, props.messageRenderers)}
-              </span>
-            </text>
-          )}
-        </For>
-        <text style={{ fg: theme.textMuted }}> {keyHintsLine([KeyHints.restoreQueue], 80)}</text>
+        <text wrapMode="none" style={{ fg: theme.textMuted }}>
+          {"  "}
+          {keyHintsLine([KeyHints.restoreQueue], width() - 2)}
+        </text>
       </box>
     </Show>
   )
@@ -822,13 +825,6 @@ export function Session(props: SessionProps) {
           </Show>
           <ConnectionWidget disclosure={controller.uiState().disclosure} />
           <ExtensionWidgets slot="below-messages" />
-          {/* QueueWidget stays hardwired because its data comes from session controller
-            state that is not exposed through the extension context. */}
-          <QueueWidget
-            queuedMessages={controller.queueState().followUp}
-            steerMessages={controller.queueState().steering}
-            messageRenderers={ext.messageRenderers()}
-          />
         </NativeTranscript>
 
         {/* The footer never outgrows the split-footer region: past it, the
@@ -856,6 +852,15 @@ export function Session(props: SessionProps) {
               </text>
             </ActivityRow>
           </Show>
+
+          {/* The waiting entries sit between the activity row and the
+            composer, the controller's queue their one owner. Hardwired: the
+            extension context does not expose the queue. */}
+          <QueueWidget
+            queuedMessages={controller.queueState().followUp}
+            steerMessages={controller.queueState().steering}
+            messageRenderers={ext.messageRenderers()}
+          />
 
           {/* One dock slot: every pane (the popup and the palette inside the
             composer, the panes after it) docks under the status row. */}

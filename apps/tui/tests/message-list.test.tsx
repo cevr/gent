@@ -390,7 +390,6 @@ const userMessage = (
   tag: "regular-message" | "interjection-message",
   id: string,
   content: string,
-  pendingMode: "queued" | "steer",
   images: ReadonlyArray<{ mediaType: string }> = [],
 ): ListMessage => {
   if (tag === "interjection-message") {
@@ -398,7 +397,6 @@ const userMessage = (
       _tag: tag,
       id,
       role: "user",
-      pendingMode,
       content,
       reasoning: "",
       images: [...images],
@@ -409,7 +407,6 @@ const userMessage = (
     _tag: tag,
     id,
     role: "user",
-    pendingMode,
     content,
     reasoning: "",
     images: [...images],
@@ -805,13 +802,13 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.scopedLive("renders user rails, images, and pending labels at normal width", () =>
+  it.scopedLive("renders user rails and images at normal width", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
-        userMessage("regular-message", "queued-user", "first line\nsecond line", "queued", [
+        userMessage("regular-message", "queued-user", "first line\nsecond line", [
           { mediaType: "image/png" },
         ]),
-        userMessage("interjection-message", "steer-user", "switch now", "steer"),
+        userMessage("interjection-message", "steer-user", "switch now"),
       ]
       const setup = yield* renderScoped(() => (
         <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
@@ -819,8 +816,6 @@ describe("transcript message rows", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("┃")
       expect(frame).toContain("[Image: png]")
-      expect(frame).toContain("[queued]")
-      expect(frame).toContain("[steer]")
       expect(frame).toContain("first line")
       expect(frame).toContain("second line")
       expect(frame).toContain("switch now")
@@ -853,7 +848,6 @@ describe("transcript message rows", () => {
               { length: 24 },
               (_, index) => `line ${index + 1}: wrapped user text with unicode café 日本語`,
             ).join("\n"),
-            "queued",
             [{ mediaType: "image/png" }],
           ),
           answer,
@@ -937,9 +931,7 @@ describe("transcript message rows", () => {
           "interjection-message",
           "sent-1",
           'Message from your parent "auth\n\nrefactor" (session 0199aabbccdd):\n\nUse the v2 token route.\n\nThen rerun the suite.',
-          "steer",
         ),
-        pendingMode: absent,
         metadata: {
           customType: "session-message",
           details: {
@@ -968,9 +960,7 @@ describe("transcript message rows", () => {
             "regular-message",
             "btw-1",
             forkQuestionText(SessionId.make("01a0ca0cb3e7"), "Which README task looks hardest?"),
-            "queued",
           ),
-          pendingMode: absent,
           metadata: { customType: BTW_QUESTION_TYPE },
         }
         const frame = yield* renderLoaded([asked])
@@ -987,8 +977,7 @@ describe("transcript message rows", () => {
     () =>
       Effect.gen(function* () {
         const task = (id: string, text: string, customType: string): ListMessage => ({
-          ...userMessage("regular-message", id, text, "queued"),
-          pendingMode: absent,
+          ...userMessage("regular-message", id, text),
           metadata: { customType },
         })
         const thread = task(
@@ -1026,9 +1015,7 @@ describe("transcript message rows", () => {
           "interjection-message",
           "sent-2",
           sessionMessageText({ from, message: "hello from the child" }),
-          "steer",
         ),
-        pendingMode: absent,
         metadata: {
           customType: "session-message",
           details: { from },
@@ -1055,9 +1042,7 @@ describe("transcript message rows", () => {
           "sent-3",
           // The header as it was written before the child status line existed.
           `Message from your child "${from.name}" (session ${from.sessionId}):\n\nold question`,
-          "steer",
         ),
-        pendingMode: absent,
         metadata: {
           customType: "session-message",
           details: { from },
@@ -1103,8 +1088,7 @@ describe("native history before the client extensions load", () => {
         })
         const savedText: string[] = []
         const goalMessage: ListMessage = {
-          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
-          pendingMode: absent,
+          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going."),
           metadata: { customType: "goal-context" },
         }
         const items: SessionItem[] = [
@@ -1114,7 +1098,6 @@ describe("native history before the client extensions load", () => {
               "regular-message",
               `filler-${index}`,
               `filler ${index}\nsecond line\nthird line`,
-              "queued",
             ),
           ),
         ]
@@ -1156,7 +1139,6 @@ describe("native history before the client extensions load", () => {
           "regular-message",
           `unsettled-${index}`,
           `unsettled ${index}\nsecond line\nthird line`,
-          "queued",
         ),
       )
       const setup = yield* renderScoped(
@@ -1193,13 +1175,7 @@ describe("rows that fold until full detail is on", () => {
   it.scopedLive("goal continuations collapse to one line until full detail is on", () =>
     Effect.gen(function* () {
       const goalMessage: ListMessage = {
-        ...userMessage(
-          "regular-message",
-          "goal-1",
-          "Continue working toward the active goal.",
-          "queued",
-        ),
-        pendingMode: absent,
+        ...userMessage("regular-message", "goal-1", "Continue working toward the active goal."),
         metadata: { customType: "goal-context" },
       }
       const collapsedFrame = yield* renderLoaded([goalMessage])
@@ -1218,9 +1194,7 @@ describe("rows that fold until full detail is on", () => {
           "regular-message",
           "wake-1",
           "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run bun test and report.",
-          "queued",
         ),
-        pendingMode: absent,
         metadata: {
           customType: "wake",
           details: { outcome: "fired", note: "Run bun test and report." },
@@ -2515,7 +2489,7 @@ describe("transcript block spacing", () => {
         const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
         let extensionsLoaded = () => false
         const history: SessionItem[] = [
-          userMessage("regular-message", "cells-prompt", "run three steps", "queued"),
+          userMessage("regular-message", "cells-prompt", "run three steps"),
           ...items,
         ]
         const setup = yield* renderScoped(
@@ -2966,8 +2940,7 @@ const assistant = (id: string, content: string): ListMessage => ({
 
 /** A prompt the reader typed: the server stamps its client origin. */
 const clientPrompt = (id: string, text: string): ListMessage => ({
-  ...userMessage("regular-message", id, text, "queued"),
-  pendingMode: absent,
+  ...userMessage("regular-message", id, text),
   metadata: { fromClient: true },
 })
 
@@ -5341,8 +5314,7 @@ describe("native transcript commit handover", () => {
 describe("sticky last prompt", () => {
   /** A user-role message an extension sent: a parent's message, a wake, a delegate start. */
   const extensionSent = (id: string, text: string): ListMessage => ({
-    ...userMessage("regular-message", id, text, "queued"),
-    pendingMode: absent,
+    ...userMessage("regular-message", id, text),
     metadata: { extensionId: "@gent/delegate" },
   })
   const reply = (id: string, lines: number): ListMessage => {
@@ -5430,32 +5402,27 @@ describe("sticky last prompt", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive(
-    "the pinned row follows the branch in view, and a queued follow-up is not posted",
-    () =>
-      Effect.gen(function* () {
-        const [items, setItems] = createSignal<SessionItem[]>([
-          clientPrompt("p1", "ASK-ONE"),
-          reply("r1", 20),
-          { ...reply("d1", 20), draft: true },
-          // Waiting in the queue: the reader has not seen it run.
-          userMessage("regular-message", "q1", "QUEUED-ASK", "queued"),
-        ])
-        const setup = yield* mountTranscript(items, { streaming: true })
-        const frame = yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
-        expect(frame).not.toContain("↑ QUEUED-ASK")
-        // Another branch: its own last prompt, derived from its own messages.
-        setItems([
-          clientPrompt("p2", "ASK-TWO"),
-          reply("r2", 20),
-          { ...reply("d2", 20), draft: true },
-        ])
-        yield* waitForFrame(
-          setup,
-          (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
-          "pinned on the other branch",
-        )
-      }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive("the pinned row follows the branch in view", () =>
+    Effect.gen(function* () {
+      const [items, setItems] = createSignal<SessionItem[]>([
+        clientPrompt("p1", "ASK-ONE"),
+        reply("r1", 20),
+        { ...reply("d1", 20), draft: true },
+      ])
+      const setup = yield* mountTranscript(items, { streaming: true })
+      yield* waitForFrame(setup, (next) => next.includes("↑ ASK-ONE"), "pinned")
+      // Another branch: its own last prompt, derived from its own messages.
+      setItems([
+        clientPrompt("p2", "ASK-TWO"),
+        reply("r2", 20),
+        { ...reply("d2", 20), draft: true },
+      ])
+      yield* waitForFrame(
+        setup,
+        (next) => next.includes("↑ ASK-TWO") && !next.includes("ASK-ONE"),
+        "pinned on the other branch",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(
@@ -5481,8 +5448,7 @@ describe("sticky last prompt", () => {
   it.scopedLive("a steer the reader typed that joined the running turn is the pinned prompt", () =>
     Effect.gen(function* () {
       const steer: ListMessage = {
-        ...userMessage("interjection-message", "s1", "STEER-NOW", "steer"),
-        pendingMode: absent,
+        ...userMessage("interjection-message", "s1", "STEER-NOW"),
         metadata: { fromClient: true },
       }
       const setup = yield* mountTranscript(
@@ -5508,9 +5474,7 @@ describe("sticky last prompt", () => {
             "regular-message",
             "btw-1",
             forkQuestionText(SessionId.make("01a0ca0cb3e7"), "WHY-THIS"),
-            "queued",
           ),
-          pendingMode: absent,
           metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
         }
         const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
@@ -5718,15 +5682,11 @@ describe("sticky last prompt", () => {
 describe("readerPrompt", () => {
   const user = (
     metadata: ListMessage["metadata"],
-    options: {
-      readonly tag?: "regular-message" | "interjection-message"
-      readonly queued?: true
-    } = {},
-  ): ListMessage => {
-    const base = userMessage(options.tag ?? "regular-message", "m", "TEXT", "queued")
-    if (options.queued === true) return { ...base, metadata }
-    return { ...base, pendingMode: absent, metadata }
-  }
+    options: { readonly tag?: "regular-message" | "interjection-message" } = {},
+  ): ListMessage => ({
+    ...userMessage(options.tag ?? "regular-message", "m", "TEXT"),
+    metadata,
+  })
   const noTypes = () => Option.none<(content: string) => string>()
   const btwTypes = (customType: string) =>
     Option.liftPredicate(
@@ -5750,8 +5710,7 @@ describe("readerPrompt", () => {
     expect(read(user(absent))).toBeUndefined()
   })
 
-  test("a queued follow-up is not a prompt until it runs, and a hidden message never is", () => {
-    expect(read(user({ fromClient: true }, { queued: true }))).toBeUndefined()
+  test("a hidden message is never a prompt", () => {
     expect(read(user({ fromClient: true, hidden: true }))).toBeUndefined()
   })
 
@@ -5978,14 +5937,13 @@ describe("tool group rows", () => {
 })
 
 describe("message rows", () => {
-  it.scopedLive("a steer row carries its label, and an answer its reasoning", () =>
+  it.scopedLive("a steer row draws its text, and an answer its reasoning", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         {
           _tag: "interjection-message",
           id: "user-1",
           role: "user",
-          pendingMode: "steer",
           content: "Stop and switch agent",
           reasoning: "",
           images: [],
@@ -6013,7 +5971,6 @@ describe("message rows", () => {
       ))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
-      expect(frame).toContain("[steer]")
       expect(frame).toContain("Stop and switch agent")
       expect(frame).toContain("Considering current todo state")
     }),
