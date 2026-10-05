@@ -339,6 +339,8 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   column 2 and hangs its text at column 4.
 - **Child completion** (`delegate.client.tsx`). Collapsed is one line at
   column 2, `◆ <child's session name> · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
+  the name the start gave, else its task's first clause (`Check the greeting
+files`, never `delegate: …`); the start row reads `Started <name> · <task>`;
   the work in the run header's words (from the details' `toolCounts`, so it
   counts every call), its time and its bill, and no state word. A child that
   ended badly draws `✕`, says how after its name (`· model stream failed`)

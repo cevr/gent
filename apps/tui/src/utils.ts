@@ -590,8 +590,12 @@ function summarizeAskAsync(args: Schema.JsonObject): string {
   })
 }
 
+/** `<name> · <task>`: the start's own name says who, the task what; a start with no name shows its task. */
 function summarizeDelegate(args: Schema.JsonObject): string {
-  return truncate(getStringArg(args, "todo"), 40)
+  const todo = truncate(getStringArg(args, "todo"), 40)
+  const name = getStringArg(args, "name").replace(/\s+/g, " ").trim()
+  if (name.length === 0) return todo
+  return `${name} · ${todo}`
 }
 
 type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string

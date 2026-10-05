@@ -64,17 +64,30 @@ import {
 const decodeDelegateInput = Schema.decodeUnknownOption(
   Schema.Struct({
     todo: Schema.optional(Schema.String),
+    name: Schema.optional(Schema.String),
   }),
 )
 
-/** The delegated task, cut to 61 columns with the ellipsis, as the header subtitle. */
+/**
+ * The delegated task, after the start's own name when it gave one
+ * (`greeting audit · check the greeting files`), cut to 61 columns with the
+ * ellipsis, as the header subtitle.
+ */
 export const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
-  const todo = decodeDelegateInput(input).pipe(
-    Option.flatMap((inp) => Option.fromNullishOr(inp.todo)),
-  )
+  const decoded = decodeDelegateInput(input)
+  const todo = decoded.pipe(Option.flatMap((inp) => Option.fromNullishOr(inp.todo)))
   if (Option.isNone(todo)) return Option.none()
+  const text = decoded.pipe(
+    Option.flatMap((inp) => Option.fromNullishOr(inp.name)),
+    Option.map((name) => name.replace(/\s+/g, " ").trim()),
+    Option.filter((name) => name.length > 0),
+    Option.match({
+      onNone: () => todo.value,
+      onSome: (name) => `${name} · ${todo.value}`,
+    }),
+  )
   // Cut by grapheme and column, so an emoji at the edge is never split in half.
-  return Option.some(truncate(todo.value, 61))
+  return Option.some(truncate(text, 61))
 }
 
 /** The handle `delegate.start` returns, read leniently from the saved output. */

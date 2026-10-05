@@ -645,6 +645,20 @@ describe("toolArgSummary", () => {
     expect(Bun.stringWidth(result)).toBe(40)
   })
 
+  // The child's name says who, the task what: `Started greeting audit · check the greeting files`.
+  test("delegate.start: a start's own name leads its task", () => {
+    expect(
+      toolArgSummary(
+        "delegate.start",
+        { todo: "check the greeting files", name: "greeting audit" },
+        PLACE,
+      ),
+    ).toBe("greeting audit · check the greeting files")
+    expect(toolArgSummary("delegate.start", { todo: "find the bug", name: " " }, PLACE)).toBe(
+      "find the bug",
+    )
+  })
+
   test("read_session: session id", () => {
     expect(toolArgSummary("read_session", { sessionId: "019debug1-session" }, PLACE)).toBe(
       "019debug1-session",
