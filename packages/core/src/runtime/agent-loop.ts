@@ -1610,8 +1610,14 @@ export const closeBranchGenerations = (retired: ReadonlyArray<BranchGeneration>)
 
 // ── behavior ────────────────────────────────────────────────────────────────
 
+/**
+ * What the loop's own fibers run with. `SessionProfileCache` is here for the
+ * turn's dispatch binding: it resolves the parent run's bound
+ * (`resolveParentBound`) at each turn, so the worker's turns need it.
+ */
 type AgentLoopRuntimeServices =
   | SessionStorage
+  | SessionProfileCache
   | RelationshipStorage
   | ToolCallBindingStorage
   | GentPlatform

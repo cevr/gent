@@ -893,6 +893,31 @@ export default defineExtension({
 })
 ```
 
+A compactor reads an earlier window's marker with `contextWindowOf(message)`
+from `@gent/core/extensions/api`. It is `Some` only for a marker the runtime
+wrote: the marker's custom type and details as `windowMarkerMessage` writes
+them. It gives the first message the window keeps (`keepFromMessageId`), on a
+handoff the range the notice summarizes (`summarized`), and the marker's text
+(`notice`). A notice copied into a user's or the model's message, or the type
+with other details, is `None`, so a forged handoff carries nothing into the
+next one. Do not name the marker's type by value.
+
+```ts
+import { contextWindowOf, type Message } from "@gent/core/extensions/api"
+import { Option, Predicate } from "effect"
+
+/** The notice of the newest handoff in a compactor's history. */
+export const lastHandoffNotice = (history: ReadonlyArray<Message>): Option.Option<string> =>
+  Option.firstSomeOf(
+    history.toReversed().map((message) =>
+      contextWindowOf(message).pipe(
+        Option.filter((window) => Predicate.isNotUndefined(window.summarized)),
+        Option.map((window) => window.notice),
+      ),
+    ),
+  )
+```
+
 ## Agents
 
 An agent is one schema, `AgentDefinition`, written two ways: an extension
@@ -952,7 +977,11 @@ registered agent replaces only the fields it names (`delegate` above keeps
 its tools and changes its model). `systemPromptAddendum` is the one field
 that adds: the entry's text comes after the agent's. Each field resolves
 project config, then user config, then the extension; a run's own overrides
-(the `overrides` of a `delegate.start` call) win over all three. A session
+(the `overrides` of a `delegate.start` call, or `runSpec.overrides` in a
+session's admission) win over all three, except `tools` and `paths`: a run's
+`tools` and `paths` only narrow the agent, never widen it. The resolved
+definition is the bound its author set; a config entry is the author's own
+edit, so it still replaces. A session
 runs as an agent by name: `main` by default, `gent -H --agent painter "..."`
 for a headless run, and `delegate` for every child. Each turn reads the config
 files as they are then, so an edit reaches the next turn.
@@ -983,7 +1012,10 @@ A config entry or a stored run written before `tools` still loads, with its
 old meaning: a `deniedTools` list alone takes those ids from the tools the
 agent already holds; an `allowedTools` list alone replaces them and keeps the
 inherited denials; both become the allowed ids and then the denied ones with
-`!`. `modelId` becomes `model`. A `tools` list always replaces. When gent
+`!`. `modelId` becomes `model`. A `tools` list in a config entry always
+replaces. A run's `tools` narrow: a tool must pass both the agent's patterns
+and the run's, so `["*"]` holds what the agent holds and no more, and an old
+stored run's lists narrow the same way. When gent
 writes a stored run or a `driver.list` reply, it also writes the old keys for
 an older gent: `modelId`, and the old lists when they can say what the
 patterns say, else `allowedTools: []`, so an older gent gives the agent no
@@ -994,7 +1026,8 @@ entry as you wrote it.
 A `delegate.start` call takes the new keys only (`model`, `tools`, `paths`,
 ...). A call with `modelId`, `allowedTools` or `deniedTools` fails, and the
 failure names the key to use; it never runs the child without the
-restriction it asked for.
+restriction it asked for. Its `tools` and `paths` narrow the `delegate`
+agent (see Paths), so a call cannot hand a child the delegation tools back.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give
@@ -1021,7 +1054,167 @@ it. No `paths`: the file tools reach every path.
 system without the check, so leave them out of the `tools` of an agent you
 confine.
 A tool of your own reads the session's agent with
-`ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way.
+`ctx.Session.getAgent()` (`ExtensionContext`), the agent bound to its run,
+and checks the same way. `getAgent` fails with `SessionAgentError` when the
+session's agent is gone from its roster or the session cannot be read: the
+run's bound is unknown, so the file tools refuse every path then, and a tool of
+your own should let the failure refuse the call too. Otherwise: a call must lie in every scope of
+`agent.pathScopes()`, each scope's entries resolved against its own `cwd`
+(`scopeReaches` from `@gent/core/extensions/api`, after `resolveLinks` on
+both sides). `agent.admitsTool(id)` answers for the run too.
+
+A run's `paths` only narrow its agent's. Each entry must lie inside an agent
+entry with at least its access: a `write` entry inside a `write` entry, a
+`read` entry inside any entry. An entry outside every agent entry, or one that
+asks for more access, refuses the whole session create with a
+`RunPathRefusedError` that names the entry; gent never drops an entry, since
+that would change what the run means. Entries resolve against the session cwd,
+and links resolve at the check, as the file tools resolve them at each call.
+An agent without `paths` takes any run `paths`. Each file tool call then must
+lie in the agent's entries and in the run's.
+
+A child never exceeds its parent run. Authority follows the run that creates
+a session, never the input: `ctx.Session.create` takes no parent, and the new
+session's parent is always the calling session, so a tool in a confined run
+cannot make a session outside its bound by naming a wider parent or none.
+`parentBranchId` names the caller's branch the child hangs under; a branch of
+another session is refused. A session created with a parent (a
+`delegate.start` child included, or a client's `session.create` with
+`parentSessionId`) holds a tool only when
+its parent run holds it too, and its file calls must lie in the parent run's
+paths too, whether it names `paths` or not. gent resolves the parent's bound
+again at each of the child's turns and file calls, so a parent agent its
+author narrows later narrows the child at once, and a link is judged where it
+points at the call. A child that names `paths` outside the parent run is
+refused at create, as above. When the parent's bound cannot be resolved (its
+agent is gone from the roster, its config does not load), the child fails
+closed with a `ParentBoundError` that names the parent session and agent: its
+create is refused, and its turns and file calls do not run. A handoff
+(`continueThread` on a client's create, as `/handoff` makes) runs under the
+bound of the session it continues: a handoff of a confined child stays
+confined, and one that names wider `paths` is refused. Deleting a spawned
+child deletes its handoffs too.
+
+A tool reaches only its own run's sessions: `ctx.Session.delete` and the
+`historyBranchId` of `ctx.Session.create` take a session in the caller's
+thread or one spawned below it. Any other fails with `SessionReachError`.
+
+The agent `getAgent` returns and the hooks receive is bound to its run:
+`admitsTool` and `pathScopes()` answer for the run, not for the definition. It
+is no definition to send or register: `AgentDefinition.make` refuses its
+`bound` key, and the definition codec refuses to encode it, so `driver.list`
+only ever sends definitions.
+
+The admission an extension passes to `ctx.Session.create` is
+`{ agent, runSpec: { overrides } }`; the overrides take the run keys of a
+`delegate.start` call (`model`, `tools`, `paths`, `reasoningEffort`,
+`contextLength`, `maxSteps`, `maxModelAttempts`, `systemPromptAddendum`). A
+tool that starts a confined child on one folder, then hands it its task:
+
+```ts
+import { AgentName, ExtensionContext, tool } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+export const PaintScene = tool({
+  id: "paint_scene",
+  description: "Start a painter on one scene folder",
+  params: Schema.Struct({ scene: Schema.String, brief: Schema.String }),
+  output: Schema.Struct({ sessionId: Schema.String }),
+  execute: Effect.fn("PaintScene.execute")(function* ({ scene, brief }) {
+    const ctx = yield* ExtensionContext
+    // The painter's own `paths` bound these; an entry outside them refuses the create.
+    const child = yield* ctx.Session.create({
+      parentBranchId: ctx.branchId,
+      admission: {
+        agent: AgentName.make("painter"),
+        runSpec: {
+          overrides: {
+            tools: ["read", "edit", "write"],
+            paths: [{ path: `apps/animations/src/films/${scene}`, access: "write" }],
+          },
+        },
+      },
+    })
+    yield* ctx.Session.send({
+      delivery: "turn",
+      sessionId: child.sessionId,
+      branchId: child.branchId,
+      content: brief,
+    })
+    return { sessionId: child.sessionId }
+  }),
+})
+```
+
+To map a file tool call back to a file, read the result's `path`: `write`
+returns `{ path, bytesWritten }` and `edit` returns `{ path, replacements }`,
+where `path` is `path.resolve(cwd, params.path)`, absolute, with `..` resolved
+lexically and links not followed. That shape is stable; the input's `path` is
+what the model wrote, relative or not.
+
+### Snapshot children
+
+`delegate.start` takes `isolation`. `shared` (the default) runs the child in
+your working tree. `snapshot` runs the child in its own copy of your git
+working tree: the `@gent/workspaces` extension makes the copy, and the child's
+session is created with the copy as its cwd (`Session.create({ cwd })`), so
+every tool of the child works there.
+
+- The copy holds your working tree as the child starts: your commits, your
+  uncommitted changes and your untracked files that git does not ignore.
+- On btrfs, when your repository is a rift workspace, `rift` makes the copy
+  (`rift rpc`, one whole-tree snapshot, dependencies and build included).
+  Everywhere else gent makes a detached `git worktree` under
+  `<data dir>/workspaces/worktrees/` and puts your uncommitted state in it.
+  gent never makes a filtered copy. The start result says why a copy is a
+  worktree, in `workspace.note`.
+- gent runs the `postcreate` steps of your `.rift.toml` in the copy, for both
+  kinds, with the `RIFT_*` variables. rift runs no hook of its own for these
+  copies, so no `precreate` runs in your repository. A `.rift.toml` that rift
+  would refuse runs no step, and the note says why: `version` must be the
+  TOML integer `1` (`1.0`, `1e0` and `"1"` are refused, as rift refuses
+  them). gent's own git commands run no hook of your repository, and write no
+  ref of it but `gent/<name>` and gent's own `refs/gent/base/<name>`.
+- When each child turn ends, the child's work goes back as one commit over
+  the copy as it started (after its hooks), on the branch `gent/<name>` of
+  your repository. The completion names the branch and its diffstat. Nothing
+  merges it: read it with `git show gent/<name>`, and merge, cherry-pick or
+  delete it yourself. gent moves the branch only from the commit it last
+  wrote. If you move the branch or check it out, gent leaves it, the
+  completion says so, and the work stays in the copy.
+- A session delete collects the copy's last work to the branch; the branch
+  stays. A worktree copy is then removed. When that collect fails, the work
+  cannot go on the branch, or someone moved `refs/gent/base/<name>`, the copy
+  stays. gent never removes a rift copy: rift cannot refuse, in one step, to
+  remove a copy that has rift copies of its own, so after the collect the
+  copy stays, and its record says `retained` and why. Remove it yourself with
+  `rift remove` once you know nothing was made from it; removal from gent
+  comes with the copy list. gent removes no copy by age. A repeated start of
+  the same call from the same session uses the copy the first one made; a
+  retained copy is never used again. A start whose session was never stored
+  removes its worktree copy; one whose session was stored (even when the
+  start was interrupted before it heard so) leaves the copy to that session.
+- gent touches a copy only when it can prove the copy is the one it made: the
+  marker in the copy's git directory names the start, the copy's real path,
+  the kind of copy and its rift id, and the copy lies where gent or rift puts
+  copies. Anything else (a copy of a copy, a moved record, a link where the
+  marker goes) is kept, and gent says why.
+- A start is refused outside a git repository, and when less than 2 GB is
+  free where the copy goes or `df` cannot say; start the child with
+  `isolation: "shared"` then.
+- A parent run with `paths` bounds its snapshot child by those paths as they
+  resolve in the parent's cwd, not in the copy: the copy lies outside them,
+  so the child's file tools refuse every path in its copy. gent does not move
+  the parent's paths into the copy, since core cannot tell a copy from any
+  other cwd a create names. Give such a child no `paths` parent, or use
+  `isolation: "shared"`.
+
+A copy is not a sandbox. The child's `bash`, the cell and every other tool can
+still reach your repository and every other path, as with `paths`. A snapshot
+keeps the child's ordinary edits out of your working tree; it does not keep a
+command out. The copy is a new directory, so a project trust you gave your
+directory does not reach it: the child does not load your project's
+extensions until you trust the copy's directory too.
 
 ## Model router
 
@@ -1116,16 +1309,60 @@ The framework validates all loaded extensions before creating the registry:
 Cross-scope: higher scope wins silently (project overrides user overrides
 builtin).
 
+## Testing
+
+A test of a project or user extension runs with `bun test` against a gent
+checkout. The checkout's root manifest names `@gent/core` and
+`@gent/extensions` as workspace dev dependencies, so `bun install` links both
+into its root `node_modules`. Link the extension's `node_modules` to that
+folder, so the test, the extension and gent share one `effect`, and run the
+tests under gent's test preload (a temporary home, no network but this
+machine). Give bun the absolute test path: it skips a folder whose name starts
+with `.` when the path is relative.
+
+```sh
+GENT=/path/to/gent # a checkout, after `bun install`
+ln -s "$GENT/node_modules" .gent/node_modules
+bun test --preload "$GENT/packages/tooling/src/test-preload.ts" --timeout=30000 "$PWD/.gent/tests"
+```
+
+An installed gent has no `node_modules`; the tests need a checkout.
+
+`createRpcHarness` from `@gent/core/test-utils` runs the full RPC path, and its
+`extensionInputs` loads the extension under test beside any shipped one.
+`@gent/extensions` exports the shipped set as `BuiltinExtensions`; take one by
+its id, the id `disabledExtensions` names:
+
+```ts lint=test
+import { BuiltinExtensions } from "@gent/extensions"
+
+/** The shipped file tools: `read`, `write`, `edit`, `grep`. */
+export const FsTools = BuiltinExtensions.filter(
+  (extension) => extension.manifest.id === "@gent/fs-tools",
+)
+```
+
+`examples/tests/painter.test.ts` is a complete test of this kind. It loads
+the shipped file tools beside `examples/extensions/painter.ts`, an extension
+that registers an agent confined by `paths`, runs a turn as that agent, and
+checks that its file calls reach its `paths` and nothing else. A project's
+`.gent/tests/painter.test.ts` is the same file with its imports unchanged.
+
+A test that needs a context-window marker exactly as the runtime writes it,
+beside forged copies its extension must ignore, builds one with
+`windowMarkerMessage` from `@gent/core/test-utils`.
+
 ## In-tree Examples
 
-| Extension                              | Demonstrates                                  |
-| -------------------------------------- | --------------------------------------------- |
-| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
-| `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
-| `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier      |
-| `packages/extensions/src/guard.ts`     | `toolCall` hook from config + a classifier    |
-| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
-| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
+| Extension                              | Demonstrates                                                      |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections                         |
+| `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource                     |
+| `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier                          |
+| `packages/extensions/src/guard.ts`     | `toolCall` hook from config + a classifier                        |
+| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook                      |
+| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                                               |
+| `examples/extensions/painter.ts`       | `agent` confined by `paths`, tested beside the shipped file tools |
 
 ## Surface Invariants
 

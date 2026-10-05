@@ -37,6 +37,7 @@ import {
   type ExtensionScope,
   extensionServiceError,
   ExtensionServiceError,
+  SessionReachError,
   type ExtensionSetupServices,
   type ExtensionExtensionsService,
   type ExtensionStateFacet,
@@ -97,7 +98,16 @@ import {
   ToolCallVerdict,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, DEFAULT_AGENT_NAME, resolveSessionAgent } from "../domain/agent.js"
+import {
+  type AgentDefinition,
+  bindSessionAgent,
+  DEFAULT_AGENT_NAME,
+  noRunBound,
+  ParentBoundError,
+  SessionAgentError,
+  resolveSessionAgent,
+  type RunBound,
+} from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
 import type {
   ApiClassContribution,
@@ -3347,6 +3357,139 @@ export class SessionProfileCache extends Context.Service<
     )
 }
 
+// ── session run agent ───────────────────────────────────────────────────────
+
+/** What resolution needs of a session: its cwd, its admission, and its parent edge. */
+type RunSession = Pick<Session, "id" | "threadId" | "parentSessionId" | "cwd" | "admission">
+
+/**
+ * The agent `session` runs as, bound by its run and by every parent run it
+ * was spawned under (`bindSessionAgent`), resolved now: the roster and
+ * config as they are, links left to the file tools at each call. Its own
+ * agent gone from the roster fails closed (`SessionAgentError`): the parent
+ * bound alone is no answer, so no caller reads it as open. Its own config
+ * reads leniently, as
+ * the turn's own `getFresh` already refuses to run on a file that does not
+ * load; a parent's reads strictly (`resolveParentBound`).
+ */
+const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
+  session: RunSession,
+  launchCwd: string,
+) {
+  const cwd = session.cwd ?? launchCwd
+  const parent = yield* resolveParentBound(session, launchCwd)
+  const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
+  const config = yield* (yield* ConfigService).get(cwd)
+  const overrides = Option.fromUndefinedOr(session.admission?.runSpec?.overrides)
+  const name = session.admission?.agent ?? DEFAULT_AGENT_NAME
+  const definition = resolveSessionAgent({
+    agents: profile.resolved.agents.values(),
+    configAgents: Option.fromUndefinedOr(config.agents),
+    name,
+    overrides,
+  })
+  if (Option.isNone(definition)) {
+    return yield* new SessionAgentError({
+      message: `Session ${session.id} runs as agent "${name}", which is not in the roster of ${cwd}: its bound is unknown, so it has no file access.`,
+      sessionId: session.id,
+      agent: name,
+    })
+  }
+  return bindSessionAgent(definition.value, { overrides, cwd, parent })
+})
+
+/**
+ * The bound a session's run inherits: the whole bound of the run that
+ * spawned its thread (`resolveSessionBound`), none for a root thread. A
+ * spawned session's is its parent's. A handoff (a parent in its own
+ * thread) runs under its predecessor's parent bound: the walk climbs the
+ * handoff edges to the session that started the thread. A predecessor that
+ * cannot be read, or a parent cycle, fails closed (`ParentBoundError`).
+ */
+export const resolveParentBound: (
+  session: Pick<Session, "id" | "threadId" | "parentSessionId">,
+  launchCwd: string,
+) => Effect.Effect<
+  RunBound,
+  ParentBoundError | StorageError,
+  SessionStorage | SessionProfileCache | ConfigService
+> = Effect.fn("SessionRunAgent.resolveParentBound")(function* (session, launchCwd) {
+  const storage = yield* SessionStorage
+  const seen = new Set<SessionId>([session.id])
+  let current = session
+  while (Predicate.isNotUndefined(current.parentSessionId)) {
+    const parentSessionId = current.parentSessionId
+    if (isSpawnedSession(current)) return yield* resolveSessionBound(parentSessionId, launchCwd)
+    if (seen.has(parentSessionId)) {
+      return yield* new ParentBoundError({
+        message: `Session ${current.id} continues ${parentSessionId}, which is already on its handoff chain, so the bound of its thread is unknown and it runs nothing.`,
+        parentSessionId,
+      })
+    }
+    seen.add(parentSessionId)
+    const predecessor = yield* storage.getSession(parentSessionId)
+    if (Predicate.isUndefined(predecessor)) {
+      return yield* new ParentBoundError({
+        message: `Session ${current.id} continues ${parentSessionId}, which cannot be read, so the bound of its thread is unknown and it runs nothing.`,
+        parentSessionId,
+      })
+    }
+    current = predecessor
+  }
+  return noRunBound
+})
+
+/**
+ * The whole bound of the run of session `sessionId`, as its children
+ * inherit it. Fails closed with `ParentBoundError`, naming the session and
+ * its agent, when the row cannot be read, its config does not load, or its
+ * agent is gone from its roster: a child never runs wider than a parent
+ * whose bound nobody can read.
+ */
+export const resolveSessionBound: (
+  sessionId: SessionId,
+  launchCwd: string,
+) => Effect.Effect<
+  RunBound,
+  ParentBoundError | StorageError,
+  SessionStorage | SessionProfileCache | ConfigService
+> = Effect.fn("SessionRunAgent.resolveSessionBound")(function* (sessionId, launchCwd) {
+  const parent = yield* (yield* SessionStorage).getSession(sessionId)
+  if (Predicate.isUndefined(parent)) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} cannot be read, so the bound of its run is unknown and its child runs nothing.`,
+      parentSessionId: sessionId,
+    })
+  }
+  const agent = parent.admission?.agent ?? DEFAULT_AGENT_NAME
+  const cwd = parent.cwd ?? launchCwd
+  const fresh = yield* (yield* ConfigService).getFresh(cwd)
+  if (fresh.failures.length > 0) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} runs as agent "${agent}", and its config does not load (${fresh.failures.map((failure) => failure.path).join(", ")}), so its child runs nothing until it is fixed.`,
+      parentSessionId: sessionId,
+      agent,
+    })
+  }
+  const grandparent = yield* resolveParentBound(parent, launchCwd)
+  const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
+  const overrides = Option.fromUndefinedOr(parent.admission?.runSpec?.overrides)
+  const definition = resolveSessionAgent({
+    agents: profile.resolved.agents.values(),
+    configAgents: Option.fromUndefinedOr(fresh.config.agents),
+    name: agent,
+    overrides,
+  })
+  if (Option.isNone(definition)) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} runs as agent "${agent}", which is gone from its roster, so its child runs nothing until the agent is back.`,
+      parentSessionId: sessionId,
+      agent,
+    })
+  }
+  return bindSessionAgent(definition.value, { overrides, cwd, parent: grandparent }).bound
+})
+
 // ── approval-service ────────────────────────────────────────────────────────
 
 /**
@@ -3656,6 +3799,52 @@ export const makeExtensionHostContextProvider = (
         ),
       ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
+    /**
+     * Refuses `sessionId` unless it is in the calling run's reach: the
+     * caller's thread and every session spawned below it (`getThreadTree`).
+     * Authority follows the calling run, never the id an extension names.
+     */
+    const requireReach = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      operation: string,
+      sessionId: SessionId,
+    ) =>
+      relationships((relationshipStorage) =>
+        relationshipStorage.getThreadTree(runInfo.sessionId),
+      ).pipe(
+        Effect.mapError(sessionError(operation)),
+        Effect.flatMap((tree) => {
+          if (tree.some((session) => session.id === sessionId)) return Effect.void
+          return Effect.fail(
+            new SessionReachError({
+              message: `Session ${sessionId} is outside this run's reach: its own thread and the sessions it spawned.`,
+              operation,
+              sessionId,
+            }),
+          )
+        }),
+      )
+
+    /** A `historyBranchId` must be a branch of a session in the caller's reach. */
+    const requireHistoryReach = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      historyBranchId: Option.Option<BranchId>,
+    ) =>
+      Option.match(historyBranchId, {
+        onNone: () => Effect.void,
+        onSome: (branchId) =>
+          branches((branchStorage) => branchStorage.getBranch(branchId)).pipe(
+            Effect.mapError(sessionError("create")),
+            Effect.flatMap((branch) =>
+              Option.match(Option.fromUndefinedOr(branch), {
+                // An unknown branch is refused by the create itself.
+                onNone: () => Effect.void,
+                onSome: (found) => requireReach(runInfo, "create", found.sessionId),
+              }),
+            ),
+          ),
+      })
+
     const fileLock = yield* facet(FileLockService, "FileLockService")
     const FileLock: ExtensionFileLockServiceApi = {
       withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
@@ -3801,54 +3990,72 @@ export const makeExtensionHostContextProvider = (
             Effect.mapError(sessionError("getDetail")),
             inWorkspace,
           ),
-        getAgent: (sessionId) =>
-          sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
+        getAgent: (sessionId) => {
+          const subject = sessionId ?? runInfo.sessionId
+          return sessions((storage) => storage.getSession(subject)).pipe(
             Effect.flatMap((session) => {
-              const cwd = session?.cwd ?? environment.cwd
-              const admission = session?.admission
+              // A session that cannot be read has no known agent: it fails closed.
+              if (Predicate.isUndefined(session)) {
+                return Effect.fail(
+                  new SessionAgentError({
+                    message: `Session ${subject} cannot be read: its agent and bound are unknown, so it has no file access.`,
+                    sessionId: subject,
+                  }),
+                )
+              }
               return profiles((cache) =>
                 configs((configService) =>
-                  Effect.gen(function* () {
-                    const profile = yield* cache.resolve(cwd)
-                    const config = yield* configService.get(cwd)
-                    return resolveSessionAgent({
-                      agents: profile.resolved.agents.values(),
-                      configAgents: Option.fromUndefinedOr(config.agents),
-                      name: admission?.agent ?? DEFAULT_AGENT_NAME,
-                      overrides: Option.fromUndefinedOr(admission?.runSpec?.overrides),
-                    })
-                  }).pipe(Effect.scoped),
+                  sessions((sessionStorage) =>
+                    resolveRunAgent(session, environment.cwd).pipe(
+                      Effect.provideService(SessionProfileCache, cache),
+                      Effect.provideService(ConfigService, configService),
+                      Effect.provideService(SessionStorage, sessionStorage),
+                    ),
+                  ),
                 ),
               )
             }),
-            Effect.mapError(sessionError("getAgent")),
+            Effect.mapError((error) => {
+              if (Schema.is(SessionAgentError)(error)) return error
+              return sessionError("getAgent")(error)
+            }),
             inWorkspace,
-          ),
+          )
+        },
         renameCurrent: (name, options) =>
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
         create: (params) =>
-          mutations((service) =>
-            service.createSession({
-              name: params.name,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
-              parentSessionId: params.parentSessionId,
-              parentBranchId: params.parentBranchId,
-              historyBranchId: params.historyBranchId,
-              admission: params.admission,
-              modelId: params.modelId,
-              reasoningLevel: params.reasoningLevel,
-              requestId: params.requestId,
-            }),
-          ).pipe(
-            Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
-            Effect.mapError(sessionError("create")),
+          requireHistoryReach(runInfo, Option.fromUndefinedOr(params.historyBranchId)).pipe(
+            Effect.andThen(
+              mutations((service) =>
+                service.createSession({
+                  name: params.name,
+                  cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
+                  // The calling session is the parent: its run bounds the new one.
+                  parentSessionId: runInfo.sessionId,
+                  parentBranchId: params.parentBranchId,
+                  historyBranchId: params.historyBranchId,
+                  admission: params.admission,
+                  modelId: params.modelId,
+                  reasoningLevel: params.reasoningLevel,
+                  requestId: params.requestId,
+                }),
+              ).pipe(
+                Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
+                Effect.mapError(sessionError("create")),
+              ),
+            ),
             inWorkspace,
           ),
         delete: (sessionId) =>
-          mutations((service) => service.deleteSession(sessionId)).pipe(
-            Effect.mapError(sessionError("delete")),
+          requireReach(runInfo, "delete", sessionId).pipe(
+            Effect.andThen(
+              mutations((service) => service.deleteSession(sessionId)).pipe(
+                Effect.mapError(sessionError("delete")),
+              ),
+            ),
             inWorkspace,
           ),
         send: (params) =>

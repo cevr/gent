@@ -55,9 +55,11 @@ import {
 export {
   AgentDefinition,
   AgentName,
+  type AgentPathEntry,
   ReasoningEffort,
   type RunSpec,
   RunOverrides,
+  scopeReaches,
 } from "../domain/agent.js"
 export {
   type GentExtension,
@@ -163,19 +165,24 @@ export {
   ExtensionContext,
   ExtensionServiceError,
   ExtensionStatus,
+  SessionReachError,
   type ExtensionContextService,
   type ExtensionModelsService,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // Runs a command to completion over the Effect `ChildProcessSpawner`.
 export {
+  pathWithin,
   ProcessError,
   resolveDataDir,
+  resolveLinks,
   runProcess,
   writeFileAtomic,
 } from "../runtime/gent-platform.js"
 export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
+// A context window's marker, as the runtime wrote it; a copy of its notice is no marker.
+export { contextWindowOf } from "../runtime/model-context.js"
 // A tool hands the model an image by reference: save its bytes, put the `ToolImage` in the output.
 export { saveToolImage, ToolImage, ToolImageError, toolImageFile } from "../runtime/tool-image.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.

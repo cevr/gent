@@ -21,6 +21,10 @@ import {
   type Model,
   type ModelId,
   type ReasoningEffort,
+  type ParentBoundError,
+  type SessionAgentError,
+  type RunPathRefusedError,
+  type SessionAgent,
   type SessionDepthLimitError,
 } from "./agent.js"
 import {
@@ -911,6 +915,21 @@ export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceEr
   },
 ) {}
 
+/**
+ * An extension asked the `Session` facet to act on a session outside the
+ * calling run's reach: its own thread and every session spawned below it
+ * (`getThreadTree`). Authority follows the calling run, so a tool in a child
+ * cannot delete its parent or a sibling, or copy their history.
+ */
+export class SessionReachError extends Schema.TaggedError<SessionReachError>()(
+  "SessionReachError",
+  {
+    message: Schema.String,
+    operation: Schema.String,
+    sessionId: SessionId,
+  },
+) {}
+
 export const extensionServiceError =
   (service: string, operation: string) =>
   (cause: unknown): ExtensionServiceError =>
@@ -1017,12 +1036,17 @@ export interface ExtensionSessionService {
   /**
    * The agent a session runs as, resolved as its turns resolve it: the
    * roster (extension agents and config `agents` entries) with the
-   * session's run overrides applied. The current session when none is named;
-   * none when the agent is gone from the roster.
+   * session's run overrides applied, bound by its run and every parent run
+   * it was spawned under: `admitsTool` and `pathScopes` answer for the run
+   * (`SessionAgent`). The current session when none is named. Fails with
+   * `SessionAgentError` when the session cannot be read or its agent is gone
+   * from the roster, and when a parent run's bound cannot be resolved
+   * (`ParentBoundError`, as `ExtensionServiceError`): an unknown agent has an
+   * unknown bound, so every caller fails closed and none reads it as open.
    */
   readonly getAgent: (
     sessionId?: SessionId,
-  ) => Effect.Effect<Option.Option<AgentDefinition>, ExtensionServiceError>
+  ) => Effect.Effect<SessionAgent, ExtensionServiceError | SessionAgentError>
   /**
    * Rename the current session. With `expectedName` it renames only while
    * the stored name is still that one, checked in the transaction that
@@ -1033,14 +1057,18 @@ export interface ExtensionSessionService {
     options?: { readonly expectedName?: string },
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
   /**
-   * A new session, under a parent when one is named. The parent chain is
-   * depth-limited. `historyBranchId` copies that branch's visible messages in
-   * before the first turn. A `requestId` makes the call durable-once.
+   * A new session spawned by the calling session: its parent is always the
+   * caller, so the run that makes it bounds it (authority follows the
+   * creating run, never the input). `parentBranchId` names the caller's
+   * branch it hangs under; a branch of another session is refused. The
+   * parent chain is depth-limited. `historyBranchId` copies that branch's
+   * visible messages in before the first turn; it must be a branch of a
+   * session in the caller's reach (`SessionReachError`). A `requestId` makes
+   * the call durable-once.
    */
   readonly create: (params: {
     readonly name?: string
     readonly cwd?: string
-    readonly parentSessionId?: SessionId
     readonly parentBranchId?: BranchId
     readonly historyBranchId?: BranchId
     /** What every turn of the new session runs as: agent and run overrides. */
@@ -1051,10 +1079,17 @@ export interface ExtensionSessionService {
     readonly requestId?: RequestId
   }) => Effect.Effect<
     { readonly sessionId: SessionId; readonly branchId: BranchId },
-    ExtensionServiceError
+    ExtensionServiceError | SessionReachError
   >
-  /** Delete a session and every descendant. Their loops are tombstoned, not awaited; deleting the caller's own session ends its turn. */
-  readonly delete: (sessionId: SessionId) => Effect.Effect<void, ExtensionServiceError>
+  /**
+   * Delete a session and every descendant. Their loops are tombstoned, not
+   * awaited; deleting the caller's own session ends its turn. Only a session
+   * in the caller's reach (its thread and what it spawned): any other fails
+   * with `SessionReachError`.
+   */
+  readonly delete: (
+    sessionId: SessionId,
+  ) => Effect.Effect<void, ExtensionServiceError | SessionReachError>
   /**
    * One user message into a branch; `delivery` picks how it lands. See
    * `SessionSendParams` for the three modes.
@@ -1681,6 +1716,8 @@ type SessionMutationError =
   | InvalidStateError
   | NotFoundError
   | SessionDepthLimitError
+  | RunPathRefusedError
+  | ParentBoundError
 
 export interface SessionMutationsService {
   readonly createSession: (

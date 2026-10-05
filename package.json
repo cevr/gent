@@ -29,6 +29,7 @@
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.47.2",
     "@gent/core": "workspace:*",
+    "@gent/extensions": "workspace:*",
     "@oxlint/plugins": "^1.86.0",
     "@types/bun": "^1.4.2",
     "@types/picomatch": "catalog:",

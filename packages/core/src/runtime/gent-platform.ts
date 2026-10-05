@@ -307,7 +307,12 @@ interface RunProcessOptions {
   /** Merge `env` over the inherited environment instead of replacing it. */
   readonly extendEnv?: boolean
   readonly timeout?: Duration.Duration
-  readonly stdin?: "pipe" | "ignore" | "inherit"
+  /** A stream is written to the child's stdin, which closes when the stream ends. */
+  readonly stdin?:
+    | "pipe"
+    | "ignore"
+    | "inherit"
+    | Stream.Stream<Uint8Array, PlatformError.PlatformError>
   readonly stdout?: "pipe" | "ignore" | "inherit"
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
@@ -424,6 +429,52 @@ export const runProcess = (
 const contentBytes = (content: string | Uint8Array): Uint8Array => {
   if (Predicate.isString(content)) return new TextEncoder().encode(content)
   return content
+}
+
+// ── path reach ──────────────────────────────────────────────────────────────
+
+/** A link chain longer than this is a loop; the kernel stops at the same count. */
+const MAX_LINK_HOPS = 40
+
+/**
+ * Where `target` (absolute) lands once links resolve: its realpath when it
+ * exists; a dangling link resolves through what it names; a path not made
+ * yet resolves through its nearest existing ancestor, so a write under a
+ * linked directory lands where the link points. The file tools' `paths`
+ * check and a session create's run `paths` check both compare these.
+ */
+export const resolveLinks: (
+  target: string,
+) => Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> = (target) =>
+  resolveLinksFrom(target, 0)
+
+const resolveLinksFrom: (
+  target: string,
+  hops: number,
+) => Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> = Effect.fn("resolveLinks")(
+  function* (target: string, hops: number) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const real = yield* fs.realPath(target).pipe(Effect.option)
+    if (Option.isSome(real)) return real.value
+    const link = yield* fs.readLink(target).pipe(Effect.option)
+    if (Option.isSome(link) && hops < MAX_LINK_HOPS) {
+      return yield* resolveLinksFrom(path.resolve(path.dirname(target), link.value), hops + 1)
+    }
+    const parent = path.dirname(target)
+    if (parent === target) return target
+    return path.join(yield* resolveLinksFrom(parent, hops), path.basename(target))
+  },
+)
+
+/**
+ * Whether `target` lies inside `base` (both absolute, compared as given):
+ * `..cache` is a name inside the base; only `..` itself or a `../` step
+ * leaves it.
+ */
+export const pathWithin = (path: Path.Path, base: string, target: string): boolean => {
+  const relative = path.relative(base, target)
+  return !(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
 }
 
 /**

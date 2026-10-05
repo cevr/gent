@@ -168,9 +168,13 @@ export interface SessionStorageService {
   ) => Effect.Effect<void, StorageError>
   /**
    * The sessions a delete of `id` removes: the session, everything it
-   * spawned, and a spawn's own handoffs. A handoff that continues the deleted
-   * session's thread is the conversation the user kept working in: it stays.
-   * Empty when the session does not exist. `deleteSession` removes this set.
+   * spawned, and a spawn's own handoffs. In a root thread (its first session
+   * has no parent, or is gone), a handoff that continues the deleted session
+   * is the conversation the user kept working in: it stays. In a spawned
+   * thread it goes with the session it continues, as side work its parent
+   * started; kept, it would lose its parent and so the bound of its parent
+   * run. Empty when the session does not exist. `deleteSession` removes this
+   * set.
    */
   readonly deletionSet: (id: SessionId) => Effect.Effect<ReadonlyArray<SessionId>, StorageError>
   /**
@@ -224,8 +228,13 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           const workspaceId = yield* CurrentWorkspaceId
           const rows = yield* sql<{ id: SessionId }>`
             WITH RECURSIVE
-              target(id, thread_id) AS (
-                SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
+              target(id, thread_id, spawned) AS (
+                SELECT s.id, s.thread_id, EXISTS (
+                  SELECT 1 FROM sessions start
+                  WHERE start.id = s.thread_id AND start.workspace_id = ${workspaceId}
+                    AND start.parent_session_id IS NOT NULL
+                )
+                FROM sessions s WHERE s.id = ${id} AND s.workspace_id = ${workspaceId}
               ),
               descendants(id) AS (
                 SELECT id FROM target
@@ -234,7 +243,10 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 FROM sessions
                 JOIN descendants ON sessions.parent_session_id = descendants.id
                 WHERE sessions.workspace_id = ${workspaceId}
-                  AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
+                  AND (
+                    sessions.thread_id IS NOT (SELECT thread_id FROM target)
+                    OR (SELECT spawned FROM target)
+                  )
               )
             SELECT id FROM descendants
           `
@@ -353,7 +365,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
           function* (id) {
             return yield* Effect.gen(function* () {
-              // A handoff that stays is detached from the parent it no longer has.
+              // A root thread's handoff that stays is detached from the parent it no longer has.
               const cascadedIds = yield* deletionSetOf(id)
               if (cascadedIds.length === 0) return []
               const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`

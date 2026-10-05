@@ -151,7 +151,7 @@ import {
   waitFor as waitForOption,
   waitForPhase,
 } from "../helpers/agent-loop"
-import { windowDetails } from "../../src/runtime/model-context"
+import { contextWindowOf } from "../../src/runtime/model-context"
 import { e2ePreset, rangeCompactorLayer, testAgent, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
 import {
@@ -2134,7 +2134,7 @@ describe("native model compaction integration", () => {
         expect(markers).toHaveLength(1)
         const marker = markers[0]
         if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
-        const details = Option.getOrThrow(windowDetails(marker))
+        const details = Option.getOrThrow(contextWindowOf(marker))
         expect(details.summarized).toMatchObject({
           firstMessageId: "native-old-1",
           lastMessageId: "native-old-12",
