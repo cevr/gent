@@ -106,11 +106,27 @@ const PeekTool = tool({
     }).pipe(Effect.orDie),
 })
 
+/** A removal in the session's work tree: a file (its directory stays), or a directory with all in it. */
+const DropTool = tool({
+  id: "drop",
+  description: "Remove a file",
+  params: PathParams,
+  output: Schema.String,
+  execute: ({ path: file }) =>
+    Effect.gen(function* () {
+      const ctx = yield* ExtensionContext
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      yield* fs.remove(path.resolve(ctx.cwd, file), { recursive: true })
+      return "removed"
+    }).pipe(Effect.orDie),
+})
+
 const FileToolsExtension = defineExtension({
   id: "checkpoint-test-files",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", PutTool, PeekTool)
+    yield* host.register("tool", PutTool, PeekTool, DropTool)
   }),
 })
 
@@ -757,6 +773,202 @@ describe("turn reverts", () => {
           expect(outcome).toEqual({ _tag: "Reverted", files: ["a.txt", "child.txt"] })
           expect(yield* contentOf(repo, "child.txt")).toBe("<absent>")
           expect(yield* contentOf(repo, "other.txt")).toBe("other")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "an overwrite keeps the user's bytes of a file over 2 MiB, which no capture holds, and undo returns them",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          yield* sh(repo, "printf 'v1\\n' > notes.txt")
+          const session = yield* checkpointSession(repo, home, [
+            put("notes.txt", "v2\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change notes", "done 1")
+          yield* sh(repo, "head -c 3145728 /dev/urandom > notes.txt")
+          const sum = yield* sh(repo, "sha256sum notes.txt")
+          const refused = yield* session.revert("revert-1", filesOf(1))
+          expect(refused).toMatchObject({ _tag: "Refused", conflicts: ["notes.txt"] })
+          const overwritten = yield* session.revert("revert-2", filesOf(1), true)
+          expect(overwritten).toEqual({ _tag: "Reverted", files: ["notes.txt"] })
+          expect(yield* contentOf(repo, "notes.txt")).toBe("v1")
+          const undone = yield* session.revert("undo-1", UNDO)
+          expect(undone).toEqual({ _tag: "Reverted", files: ["notes.txt"] })
+          expect(yield* sh(repo, "sha256sum notes.txt")).toBe(sum)
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a stopped revert whose files changed since refuses to finish or repeat and names them; finish with overwrite keeps the edit for undo",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* session.revert("revert-1", filesOf(1))
+          const store = (yield* storeOf(home))[0] ?? ""
+          const done = (yield* storeRefs(store)).find((name) => name.endsWith("/done")) ?? ""
+          yield* sh(store, `git --git-dir="${store}" update-ref -d '${done}'`)
+          // An edit after the stop: neither the revert's before nor its target.
+          yield* sh(repo, "printf 'edited\\n' > a.txt")
+          expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
+          const finish = yield* session.revert("finish-1", FINISH)
+          expect(finish).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("edited")
+          const retry = yield* session.revert("revert-1", filesOf(1))
+          expect(retry).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("edited")
+          const overwritten = yield* session.revert("finish-1", FINISH, true)
+          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("one")
+          expect((yield* session.list).unfinished).toBeUndefined()
+          const undone = yield* session.revert("undo-1", UNDO)
+          expect(undone).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("edited")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a link where the revert needs a directory refuses, names it and stays, with overwrite too",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const elsewhere = yield* makeTempDirectoryScoped("cp-elsewhere-")
+          yield* sh(repo, "mkdir d && printf 'dee\\n' > d/a.txt && git add -A && git commit -qm d")
+          const session = yield* checkpointSession(repo, home, [
+            toolCallStep("drop", { path: "d/a.txt" }),
+            textStep("done 1"),
+          ])
+          yield* session.turn("drop d/a", "done 1")
+          yield* sh(repo, `rmdir d && ln -s "${elsewhere}" d`)
+          for (const [id, overwrite] of [
+            ["revert-1", false],
+            ["revert-2", true],
+          ] as const) {
+            const outcome = yield* session.revert(id, filesOf(1), overwrite)
+            expect(outcome).toMatchObject({ _tag: "Refused", conflicts: ["d"] })
+          }
+          expect(yield* sh(repo, "test -L d && echo link || echo other")).toBe("link")
+          expect(yield* sh(elsewhere, "ls -A | wc -l")).toBe("0")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a directory a removal leaves holding someone else's file stays, with the file",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("new/deep/made.txt", "made\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("make a file", "done 1")
+          yield* sh(repo, "printf 'mine\\n' > new/mine.txt")
+          const outcome = yield* session.revert("revert-1", filesOf(1))
+          expect(outcome).toEqual({ _tag: "Reverted", files: ["new/deep/made.txt"] })
+          expect(yield* sh(repo, "test -e new/deep && echo there || echo gone")).toBe("gone")
+          expect(yield* contentOf(repo, "new/mine.txt")).toBe("mine")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a turn that put a file where a directory was reverts: the file goes and the directory returns, and undo puts the file back",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          yield* sh(repo, "mkdir d && printf 'dee\\n' > d/a.txt && git add -A && git commit -qm d")
+          const session = yield* checkpointSession(repo, home, [
+            toolCallStep("drop", { path: "d" }),
+            put("d", "now a file\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("flatten d", "done 1")
+          expect(yield* contentOf(repo, "d")).toBe("now a file")
+          const outcome = yield* session.revert("revert-1", filesOf(1))
+          expect(outcome).toEqual({ _tag: "Reverted", files: ["d", "d/a.txt"] })
+          expect(yield* contentOf(repo, "d/a.txt")).toBe("dee")
+          const undone = yield* session.revert("undo-1", UNDO)
+          expect(undone).toEqual({ _tag: "Reverted", files: ["d", "d/a.txt"] })
+          expect(yield* contentOf(repo, "d")).toBe("now a file")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a path the turn changed that others changed and changed back is a conflict",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+            put("a.txt", "two\n"),
+            textStep("other 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* sh(repo, "printf 'three\\n' > a.txt")
+          const other = yield* session.client.session.create({ cwd: repo })
+          yield* session.at(other).turn("other work", "other 1")
+          const outcome = yield* session.revert("revert-1", filesOf(1))
+          expect(outcome).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a removal the file system refuses fails the revert and leaves it unfinished; finish removes the file once allowed",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("locked/made.txt", "made\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("make a file", "done 1")
+          // The release lets the temp directory go, should the test stop early.
+          yield* Effect.acquireRelease(sh(repo, "chmod 555 locked"), () =>
+            sh(repo, "if [ -d locked ]; then chmod 755 locked; fi"),
+          )
+          const failed = yield* session.revert("revert-1", filesOf(1)).pipe(Effect.flip)
+          expect(String(failed.message)).toContain("locked/made.txt")
+          expect(yield* contentOf(repo, "locked/made.txt")).toBe("made")
+          expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
+          yield* sh(repo, "chmod 755 locked")
+          const finished = yield* session.revert("finish-1", FINISH)
+          expect(finished).toEqual({ _tag: "Reverted", files: ["locked/made.txt"] })
+          expect(yield* sh(repo, "test -e locked && echo there || echo gone")).toBe("gone")
         }),
       ),
     30_000,

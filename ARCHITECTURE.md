@@ -1505,16 +1505,32 @@ section, no notice. Core has no checkpoint concept.
   top that holds or is held by this one) refuses it too, by name, id and
   status. `conversation` also forks the branch with `Session.forkBranch` at
   the message before the turn (a first turn has none and refuses); the
-  answer names the new branch. The write is `before` (the capture of now),
-  `target` (the tree to write, built in a scratch index; on a conversation
-  revert it carries `Gent-Result-Branch`), the files (`checkout-index` for
-  each path the target holds, a removal and its emptied directories for each
-  it lacks), then `done`, under `refs/reverts/<session>/<branch>/<request>/`.
-  A repeat by `requestId` answers again from its refs, or finishes one a stop
-  cut short after its `target`. `Undo` reverts the newest revert of the
-  branch (or of the revert that made it): the paths it wrote, back to its
-  `before`; a path changed since it wrote is a conflict. `Finish` writes an
-  unfinished revert. `checkpoints.list` names the newest revert as `undo`
+  answer names the new branch. Each interval's paths count on their own (a
+  change and its reversal in two intervals are both seen). The write
+  refuses on doubt. Before any record, something in the way refuses, by
+  name, and `overwrite` does not pass it: an ancestor of a path to write that
+  is a link or a file (git would replace it), a directory where a file goes,
+  a special file; an entry the write itself removes first is not in the way.
+  The other-loop check runs again under the store lock, just before the
+  capture of now. The write is `before` (the capture of now, with each path
+  to write as its bytes on disk, hashed into the store with no filter,
+  whatever the capture excludes: undo returns all it overwrote), `target`
+  (the tree to write, built in a scratch index with no `--replace`; on a
+  conversation revert it carries `Gent-Result-Branch`), the files, then
+  `done`, under `refs/reverts/<session>/<branch>/<request>/`. The files: each
+  path must hold its `before` (to write) or its `target` (a stopped run wrote
+  it); any other content is a later edit, and the write refuses and names it.
+  A removal that fails fails the request; an emptied directory goes by
+  `rmdir`, which removes only an empty one; `checkout-index` writes each path
+  the target holds. Then each path must hold its target, or the request
+  fails and the revert stays unfinished. A repeat by `requestId` answers
+  again from its refs, or finishes one a stop cut short after its `target`;
+  one with a `before` alone wrote nothing, so its record goes and it runs
+  again. `Undo` reverts the newest revert of the branch (or of the revert
+  that made it): the paths it wrote, back to its `before`; a path changed
+  since its target is a conflict. `Finish` writes an unfinished revert; with
+  `overwrite`, from a request other than the revert's own, it writes the
+  target as a new revert, whose `before` keeps the later edits for undo. `checkpoints.list` names the newest revert as `undo`
   (with its file count) once done, or `unfinished` without its `done`. A
   refusal is an answer (`Refused { reason, conflicts }`), not an error.
 - Client: `/diff turn [n]` is a target of `@gent/git`'s `/diff` (see the TUI
