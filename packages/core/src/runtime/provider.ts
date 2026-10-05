@@ -2918,7 +2918,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     Option.isNone(authParam)
   ) {
     return yield* new ProviderAuthError({
-      message: `Credential "${request.credentialSlot}" unavailable for provider "${providerName}"; sign in again`,
+      message: `Credential "${request.credentialSlot}" of provider "${providerName}" holds no sign-in: it was removed in /auth or never signed in. Sign it in again in /auth, or move another credential into the order`,
       credentialFailure: "Unavailable",
     })
   }

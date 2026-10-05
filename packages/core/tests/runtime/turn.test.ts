@@ -2539,7 +2539,7 @@ describe("credential order", () => {
       })
       expect(alone.resolvedWith).toEqual([])
       expect(alone.errors.map((entry) => entry.error)).toEqual([
-        `Credential "work" unavailable for provider "${FALLBACK}"; sign in again`,
+        `Credential "work" of provider "${FALLBACK}" holds no sign-in: it was removed in /auth or never signed in. Sign it in again in /auth, or move another credential into the order`,
       ])
       // First in the order, it moves the turn to the stored default.
       const first = yield* credentialTurn({

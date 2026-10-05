@@ -2342,12 +2342,13 @@ describe("Auth credentials", () => {
         },
         // The order would name nothing: clearing it would let the default,
         // which can be a billed environment key, serve alone. The order
-        // stays, so nothing serves until a credential is moved into it.
+        // stays, so nothing serves until the user acts, and the notice says how.
         {
           name: "last",
           authOrder: [personal],
           after: ["delete personal"],
-          notice: "the default stays out of its order",
+          notice:
+            "nothing serves now: shift+↑ on default moves it into the order, or Enter on personal signs it in again",
         },
       ]) {
         const { client, writes } = credentialServer({ ...withCredentials, authOrder })

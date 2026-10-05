@@ -1092,12 +1092,12 @@ export function Auth(props: AuthProps) {
     // The default keeps its place: with nothing stored it reads the
     // environment. An order the removal would empty stays as it is: cleared,
     // it would let the default (which can be a billed environment key) serve
-    // alone, a credential the user left out. Nothing serves until one is
-    // moved in, and the notice says so.
+    // alone, a credential the user left out. Nothing serves until the user
+    // acts, and the notice says so and how.
     const orderWrite = Option.liftPredicate(keeps, () => inOrder && keeps.length > 0)
     let removed = `Removed ${entry.slot} from ${label(provider.provider)}`
     if (inOrder && keeps.length === 0)
-      removed = `${removed}; the default stays out of its order until you move it in`
+      removed = `${removed}; nothing serves now: shift+↑ on default moves it into the order, or Enter on ${entry.slot} signs it in again`
     cast(
       clientCtx.client.auth
         .deleteKey({ provider: provider.provider, slot: entry.slot, sessionId })
