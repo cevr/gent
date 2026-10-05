@@ -2802,6 +2802,60 @@ describe("mcp images", () => {
   )
 
   it.scopedLive(
+    "an MCP image a cell returns reaches the model after the cell's result",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const fixture = yield* makeFixture
+        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-mcp-cell-image-" })
+        const prompts: Array<Prompt.Prompt> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "const shot = await tools.mcp.fixture.png(); shot.images[0]",
+          }),
+          {
+            ...textStep("done"),
+            assertOptions: (options) => {
+              prompts.push(options.prompt)
+            },
+          },
+        ])
+        const result = yield* Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [
+              ...shippedWithoutMcp,
+              McpServers("@test/mcp-cell-png", {
+                fixture: fixture.stdio({ MCP_FIXTURE_PNG: DOT_PNG }),
+              }),
+            ],
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "look" })
+          return yield* cellResultAfterDone(client, branchId)
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
+          ),
+        )
+        yield* controls.assertDone
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const prompt = prompts[0]?.content ?? []
+        const index = prompt.findLastIndex((message) => message.role === "tool")
+        const next = prompt.slice(index + 1, index + 2)
+        expect(next.map((message) => message.role)).toEqual(["user"])
+        const parts = next.flatMap((message) => {
+          if (message.role !== "user") return []
+          return message.content
+        })
+        expect(parts.map((part) => part.type)).toEqual(["text", "file"])
+        expect(parts[0]).toMatchObject({ text: "Image from cell 1x1:" })
+        expect(parts[1]).toMatchObject({ data: `data:image/png;base64,${DOT_PNG}` })
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    25_000,
+  )
+
+  it.scopedLive(
     "an MCP image past the side limit is scaled, and the model reads its original size",
     () =>
       Effect.gen(function* () {

@@ -80,6 +80,14 @@ export const maximumCellReplyBytes = maximumCellFrameBytes - 4 * 1024
 export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
+/**
+ * The tool images one cell result carries to the model: the newest it shows.
+ * A request takes at most 5 images on Chat Completions and leaves out its
+ * oldest 5 at a time (`Model.imageLimit`, `toolImagesToDrop`), so one cell
+ * result never passes a request's bound alone and never makes a request drop
+ * images it just sent.
+ */
+export const maximumCellImages = 5
 
 /** A tool id segment that needs no brackets in a property path. */
 const identifierSegment = /^[A-Za-z_$][A-Za-z0-9_$]*$/
@@ -251,6 +259,14 @@ export const CellEvaluation = Schema.Struct({
   truncated: Schema.Boolean,
   /** Present on the first evaluation after a worker was restored from a snapshot. */
   restored: Schema.optional(CellRestoreReport),
+  /**
+   * The tool images the cell showed (returned or logged), oldest first, at
+   * most `maximumCellImages`. The worker sends each as the data fields of an
+   * object tagged `ToolImage`; the host keeps those that decode as a
+   * `ToolImage`, and the model receives each as an image after the result.
+   * Absent when the cell showed none, and on older results.
+   */
+  images: Schema.optional(Schema.Array(Schema.JsonObject)),
 })
 export type CellEvaluation = typeof CellEvaluation.Type
 
