@@ -839,11 +839,20 @@ export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
  * When each host label takes its short form on a narrow row: the debug mark
  * first, then the cwd, before the model, the idle phase word, and the
  * `auto → high` effort last (its short form saves two columns). A plain
- * effort and the right-anchored numbers have none. The values are an order,
- * not widths: an extension label ranks between two host labels with a
- * fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd, before the model).
+ * effort, the context gauge and the cost have none; in the right group the
+ * near-limit model-call count (`⧗ 3 left`) is the one that gives way. The
+ * values are an order, not widths: an extension label ranks between two host
+ * labels with a fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd,
+ * before the model).
  */
-export const STATUS_YIELD = { debug: 0, cwd: 1, model: 2, phase: 3, effort: 4 } as const
+export const STATUS_YIELD = {
+  debug: 0,
+  cwd: 1,
+  model: 2,
+  phase: 3,
+  effort: 4,
+  budget: 5,
+} as const
 
 /** A status label's short form, and when it gives way. */
 export interface StatusLabelShort {
