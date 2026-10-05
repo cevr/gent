@@ -3709,6 +3709,54 @@ describe("named Anthropic credential cache", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
+  it.scopedLive("a named refresh reply without a token leaves the credential unmarked", () =>
+    Effect.gen(function* () {
+      const driver = buildAnthropicModelDriverLive(
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+        Option.none(),
+        yield* driverServices(
+          AnthropicPlatform.of({
+            platform: "linux",
+            home: "/nonexistent/gent-named-garbled",
+            env: {},
+          }),
+        ),
+        "1h",
+      )
+      // The token endpoint answers 200 with no access token: a parse fault.
+      const fetch = fakeFetchLayer(makeFakeFetchState(), () => ({
+        status: 200,
+        body: encodeExternalJson({ token_type: "bearer" }),
+      }))
+      const slot = CredentialSlot.make("personal")
+      const model = storedCredentialModel({
+        modelDrivers: [driver],
+        stored: {},
+        oauth: [
+          {
+            provider: "anthropic",
+            slot,
+            credential: { access: "fake-expired", refresh: "fake-garbled", expires: 0 },
+          },
+        ],
+        modelId: "anthropic/claude-opus-4-6",
+        catalog: fixtureModelCatalog(),
+        credentialSlot: slot,
+      })
+      const result = yield* Effect.exit(Layer.build(model).pipe(Effect.provide(fetch)))
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isSuccess(result)) return
+      const defect = Cause.findDefect(result.cause)
+      // The reply proves nothing about the credential: the turn stays on it.
+      expect(
+        Result.isSuccess(defect) &&
+          Schema.is(ProviderAuthError)(defect.success) &&
+          defect.success.message.includes("import it again") &&
+          Option.isNone(Option.fromUndefinedOr(defect.success.credentialFailure)),
+      ).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive(
     "a warm named slot never serves an expired or missing slot, or invokes the primary CLI",
     () =>

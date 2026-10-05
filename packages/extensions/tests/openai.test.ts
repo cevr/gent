@@ -2735,6 +2735,38 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
       )
     }),
   )
+  it.live("only a refusal the token endpoint answered marks the sign-in rejected", () =>
+    Effect.gen(function* () {
+      const { driver } = yield* makeDriver()
+      // The held token is expired: resolving the model refreshes it first.
+      const refreshFailure = (tokenReply: { readonly status: number; readonly body: string }) =>
+        Effect.gen(function* () {
+          const fetchLayer = fakeFetchLayer(makeFakeFetchState(), (request) => {
+            if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
+            return tokenReply
+          })
+          const authInfo = oauthInfo({
+            access: "expired-access",
+            refresh: `refresh-${tokenReply.status}`,
+            expires: 0,
+          })
+          return yield* driver
+            .resolveModel("gpt-5.4", authInfo)
+            .pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.flip)
+        })
+      // A refusal proves the sign-in is gone: a turn may move to the next credential.
+      const refused = yield* refreshFailure({ status: 400, body: '{"error":"invalid_grant"}' })
+      expect(refused).toMatchObject({ _tag: "ProviderAuthError", credentialFailure: "Rejected" })
+      // An unreadable reply proves nothing: the turn stays on the sign-in.
+      const garbled = yield* refreshFailure({ status: 200, body: '{"unexpected":true}' })
+      expect(garbled).toMatchObject({ _tag: "ProviderAuthError" })
+      expect(garbled.message).toContain("response invalid")
+      expect(
+        Schema.is(ProviderAuthError)(garbled) &&
+          Option.isNone(Option.fromUndefinedOr(garbled.credentialFailure)),
+      ).toBe(true)
+    }),
+  )
   it.live("a sign-in revoked mid-turn tells the user to sign in again with /auth", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()
