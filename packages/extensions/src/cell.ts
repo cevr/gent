@@ -48,6 +48,7 @@ import {
   type ToolCapability,
   ToolImage,
   ToolResultFailure,
+  GentPlatform,
 } from "@gent/core/extensions/api"
 import {
   AgentLoopError,
@@ -61,7 +62,6 @@ import {
   CurrentToolCall,
   CurrentTurnStop,
   EventStoreError,
-  GentPlatform,
   getToolMetadata,
   innerOperationBindingIdentity,
   type InteractionOwnership,
@@ -173,7 +173,6 @@ const Row = Schema.Struct({
   record_json: Schema.String,
   request_id: Schema.NullOr(InteractionRequestId),
 })
-const DecisionRow = Schema.Struct({ decision_json: Schema.NullOr(Schema.String) })
 const LocatedRow = Schema.Struct({
   assistant_message_id: MessageId,
   cell_tool_call_id: ToolCallId,
@@ -410,15 +409,17 @@ const makeToolOperationStorage = Effect.gen(function* () {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) {
-    const rows = yield* sql<
-      typeof DecisionRow.Type
-    >`SELECT decision_json FROM interaction_requests WHERE request_id = ${requestId} AND session_id = ${key.cell.sessionId} AND branch_id = ${key.cell.branchId} AND status = 'pending'`
-    if (rows.length !== 1)
+    // Core owns the table: its reader runs on the same client, so it joins
+    // the caller's transaction.
+    const open = yield* interactions.listOpen(key.cell)
+    const pending = open.find(
+      (record) => record.requestId === requestId && record.status === "pending",
+    )
+    if (Predicate.isUndefined(pending))
       return yield* new StorageError({
         message: "Pending interaction does not belong to this operation branch",
       })
-    const row = yield* Schema.decodeUnknownEffect(DecisionRow)(rows[0])
-    return Option.fromNullishOr(row.decision_json)
+    return Option.fromUndefinedOr(pending.decisionJson)
   })
   const suspend = Effect.fn("CellToolOperationStorage.suspend")(function* (
     key: CellToolOperationKey,

@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http"
 import {
   collectTestContributions,
   ExtensionHealth,
@@ -759,6 +760,7 @@ const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
         BunServices.layer,
         BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
         GentPlatform.Test(),
+        FetchHttpClient.layer,
       ),
     ),
   )

@@ -8,7 +8,7 @@ import {
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
-import { Config, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Config, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
@@ -265,6 +265,13 @@ describe("a settled run", () => {
     const pane = "wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
+  // The turn line ends each finished turn as the last transcript row, so it
+  // is inside the pane tail every wait reads.
+  test("a finished turn's turn line settles on the second read", () => {
+    const pane =
+      "┃ fix the ledger\n\n  Done.\n\n  ✻ Worked for 42s · ↑12k ↓1.1k · $0.08\n\nidle · work (main) · GPT-6.1 Sol\n"
+    expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
+  })
   test("an idle root with a working background child is not settled", () => {
     // The tray's running row: the pulse (`◇◈◆◈`) at its head, no state word.
     for (const pulse of ["◇", "◈"]) {
@@ -277,9 +284,10 @@ describe("a settled run", () => {
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
+    const generating = { started: true, open: ["main"], stored: true }
     const pane =
-      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nwork (main) · GPT-5.6 Sol\n"
-    expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
+      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nidle · work (main) · GPT-5.6 Sol\n"
+    expect(settlesAt(repeated(pane, generating, 10), true)).toBe(-1)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
     const open = { started: true, open: ["child"], stored: true }
@@ -315,7 +323,7 @@ describe("a settled run", () => {
     const quiet = { started: false, open: [], stored: false }
     const reads = [
       ...repeated(idlePane, quiet, QUIET_READS - 1),
-      ["  ✻ Generating (1s)\n", quiet] as const,
+      [`${idlePane} ◇ delegate: audit  ctrl+t sessions\n`, quiet] as const,
       ...repeated(idlePane, quiet, QUIET_READS),
     ]
     expect(settlesAt(reads, false)).toBe(2 * QUIET_READS - 1)
@@ -711,6 +719,101 @@ describe("gamut CLI ownership", () => {
       10_000,
     )
   }
+})
+
+// A pane can reach five writers of the user config (the first `/model` pick,
+// driver overrides, the auth order, a renamed auth slot). The run gives its
+// pane a home of its own, so each writes a copy, never the owner's file.
+describe("gamut CLI pane home", () => {
+  it.scopedLive(
+    "up gives the pane a home whose user config is a copy, with the owner's other files linked",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const platform = yield* GentPlatform
+        const scratch = yield* makeTempDirectoryScoped("gent-gamut-home-")
+        const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+        const checkout = path.resolve(path.dirname(driver), "../..")
+        // A checkout of its own: the driver, the fixture and a stand-in binary.
+        const current = path.join(scratch, "checkout", "gent")
+        const copiedDriver = path.join(current, "testbeds", "gamut", "gamut.ts")
+        yield* fs.makeDirectory(path.join(current, "apps", "tui", "bin"), { recursive: true })
+        yield* fs.writeFileString(path.join(current, "apps", "tui", "bin", "gent"), "")
+        yield* fs.copy(path.join(checkout, "testbeds", "gamut"), path.dirname(copiedDriver))
+        yield* fs.symlink(path.join(checkout, "node_modules"), path.join(current, "node_modules"))
+        // The owner's home: a user config, an auth directory and another tool's files.
+        const owner = path.join(scratch, "owner")
+        const ownerConfig = path.join(owner, ".gent", "config.json")
+        yield* fs.makeDirectory(path.join(owner, ".gent", "auth"), { recursive: true })
+        yield* fs.makeDirectory(path.join(owner, ".claude", "skills"), { recursive: true })
+        yield* fs.writeFileString(ownerConfig, '{"model":"owner/model"}\n')
+        yield* fs.writeFileString(path.join(owner, ".gent", "data.db"), "owner database")
+        // Only the external boundaries are simulated: herdr, models.dev and the fixture install.
+        const calls = path.join(scratch, "calls")
+        const body = path.join(scratch, "catalog.json")
+        const catalogBody = yield* Schema.encodeEffect(
+          Schema.fromJsonString(
+            Schema.Record(
+              Schema.String,
+              Schema.Struct({ models: Schema.Record(Schema.String, Schema.Struct({})) }),
+            ),
+          ),
+        )({ openai: { models: { "gpt-6.1-sol": {} } } })
+        yield* fs.writeFileString(body, catalogBody)
+        // Shell scripts: a `#!/usr/bin/env bun` one would run the stand-in `bun`.
+        const tools = {
+          herdr: `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\ncase " $* " in *" split "*) printf '%s\\n' '{"result":{"pane":{"pane_id":"wT:p1"}}}' ;; esac\n`,
+          curl: `#!/bin/sh\ncat '${body}'\n`,
+          bun: "#!/bin/sh\nexit 0\n",
+        }
+        for (const [name, script] of Object.entries(tools)) {
+          yield* fs.writeFileString(path.join(scratch, name), script)
+          yield* fs.chmod(path.join(scratch, name), 0o755)
+        }
+        const result = yield* runProcess(
+          yield* platform.execPath,
+          [copiedDriver, "up", "sol", "--no-build"],
+          {
+            env: {
+              PATH: scratch + ":" + (yield* Config.String("PATH")),
+              TMPDIR: scratch,
+              HOME: owner,
+            },
+            extendEnv: true,
+          },
+        )
+        expect(result.stderr).toBe("")
+        expect(result.exitCode).toBe(0)
+        const state = decodeState(
+          yield* fs.readFileString(path.join(scratch, "gent-gamut-gent.json")),
+        )
+        const home = path.join(state.root, "home")
+        const split = (yield* fs.readFileString(calls))
+          .split("\n")
+          .filter((line) => line.startsWith("pane split "))
+        expect(split).toHaveLength(1)
+        expect(split[0]).toContain(` --env HOME=${home}`)
+        expect(split[0]).toContain(` --env GENT_DATA_DIR=${state.data}`)
+        // The user config is the run's own copy: a pane write leaves the owner's file as it was.
+        const paneConfig = path.join(home, ".gent", "config.json")
+        expect((yield* fs.stat(paneConfig)).type).toBe("File")
+        expect(yield* fs.readLink(paneConfig).pipe(Effect.option)).toEqual(Option.none())
+        expect(yield* fs.readFileString(paneConfig)).toBe('{"model":"owner/model"}\n')
+        yield* fs.writeFileString(paneConfig, '{"model":"picked/in-pane"}\n')
+        expect(yield* fs.readFileString(ownerConfig)).toBe('{"model":"owner/model"}\n')
+        // The login and the other tools' files are the owner's; the database is not.
+        expect(yield* fs.readLink(path.join(home, ".gent", "auth"))).toBe(
+          path.join(owner, ".gent", "auth"),
+        )
+        expect(yield* fs.readLink(path.join(home, ".claude"))).toBe(path.join(owner, ".claude"))
+        expect(yield* fs.exists(path.join(home, ".gent", "data.db"))).toBe(false)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+        Effect.timeout("20 seconds"),
+      ),
+    25_000,
+  )
 })
 
 describe("gamut CLI offline catalog", () => {

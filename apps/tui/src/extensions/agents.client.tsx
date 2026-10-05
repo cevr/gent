@@ -41,6 +41,7 @@ import {
   TrayFrame,
   truncate,
   truncatePath,
+  truncateRuns,
   usePickerGeometry,
   useSpinnerClock,
   useTerminalDimensions,
@@ -181,6 +182,36 @@ const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRo
 type TrayMark = "running" | "done" | "none"
 
 /**
+ * One tray row: its glyph, its text, and the text's leading name, which
+ * draws in the names' colour (Codex draws an agent's nickname in its
+ * accent); the rest of the text is muted.
+ */
+interface TrayLine {
+  readonly mark: TrayMark
+  readonly text: string
+  readonly name: string
+}
+
+/** A tray row's text cut to `width`, the name's share kept apart. */
+const trayLine = (mark: TrayMark, parts: RowParts, width: number): TrayLine => {
+  const runs = truncateRuns(
+    [
+      { text: parts.name, tone: "name" },
+      { text: parts.doing, tone: "muted" },
+    ],
+    width,
+  )
+  return {
+    mark,
+    text: runs.map((run) => run.text).join(""),
+    name: runs
+      .filter((run) => run.tone === "name")
+      .map((run) => run.text)
+      .join(""),
+  }
+}
+
+/**
  * The tray's rows, the glyph standing for the state: `<name> · <doing>` per
  * running child (the pulse), then `<name>` per finished thread (`◆`, oldest
  * first), up to the cap; the rest collapse into one `+N more` line.
@@ -194,18 +225,17 @@ export const trayLines = (
   width: number,
   done: ReadonlyArray<AgentRowEntry>,
   place: PathPlace,
-): ReadonlyArray<{ readonly mark: TrayMark; readonly text: string }> => {
+): ReadonlyArray<TrayLine> => {
   const working = inStartOrder(running).slice(0, TRAY_MAX_ROWS)
   const finished = done.slice(0, TRAY_MAX_ROWS - working.length)
-  const lines: Array<{ readonly mark: TrayMark; readonly text: string }> = [
-    ...working.map((row) => ({
-      mark: "running" as const,
-      text: truncate(rowLabel("", nameFor(row), doingFor(row, place), width), width),
-    })),
-    ...finished.map((row) => ({ mark: "done" as const, text: truncate(nameFor(row), width) })),
+  const lines: Array<TrayLine> = [
+    ...working.map((row) =>
+      trayLine("running", rowParts("", nameFor(row), doingFor(row, place), width), width),
+    ),
+    ...finished.map((row) => trayLine("done", { name: nameFor(row), doing: "" }, width)),
   ]
   const rest = running.length - working.length + done.length - finished.length
-  if (rest > 0) lines.push({ mark: "none", text: `+${rest} more` })
+  if (rest > 0) lines.push({ mark: "none", text: `+${rest} more`, name: "" })
   return lines
 }
 
@@ -240,7 +270,8 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
           {(line, index) => (
             <text wrapMode="none">
               <span style={{ fg: glyph(line.mark).color }}>{`${glyph(line.mark).text} `}</span>
-              <span style={{ fg: theme.textMuted }}>{line.text}</span>
+              <span style={{ fg: theme.info }}>{line.name}</span>
+              <span style={{ fg: theme.textMuted }}>{line.text.slice(line.name.length)}</span>
               <Show when={index() === 0}>
                 <span style={{ fg: theme.textMuted }}>
                   {`${" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}${TRAY_HINT}`}
@@ -772,23 +803,18 @@ const timeFor = (row: AgentRowEntry, now: number): string => {
   })
 }
 
-/**
- * `<head><name> · <doing>` in `width` columns. The activity keeps up to half
- * the row and the name is cut to what is left, so a long task never pushes
- * what the agent is doing off the row.
- */
-const rowLabel = (head: string, name: string, doing: string, width: number): string => {
-  const parts = rowParts(head, name, doing, width)
-  return `${head}${parts.name}${parts.doing}`
-}
-
 /** A row label's name and its ` · <doing>`, each cut to its share of the row. */
 interface RowParts {
   readonly name: string
   readonly doing: string
 }
 
-/** `rowLabel`'s name and ` · <doing>` apart, so the pane draws each in its own colour. */
+/**
+ * `<head><name> · <doing>` in `width` columns, the name and the activity
+ * apart so each draws in its own colour. The activity keeps up to half the
+ * row and the name is cut to what is left, so a long task never pushes what
+ * the agent is doing off the row.
+ */
 const rowParts = (head: string, name: string, doing: string, width: number): RowParts => {
   if (doing.length === 0) return { name, doing: "" }
   const shown = truncate(doing, Math.floor(width / 2))

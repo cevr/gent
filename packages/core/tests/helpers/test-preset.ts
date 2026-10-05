@@ -22,8 +22,13 @@ export const rangeCompactorLayer = Layer.succeed(
   ModelContextCompactor.of({
     compact: (request) =>
       Effect.gen(function* () {
+        // The model's failure travels as the cause, so a refused credential moves on.
         const failed = (error: { readonly message: string }) =>
-          new ModelCompactionError({ modelId: request.modelId, reason: error.message })
+          new ModelCompactionError({
+            modelId: request.modelId,
+            reason: error.message,
+            cause: error,
+          })
         const model = yield* request.summaryModel(1_000).pipe(Effect.mapError(failed))
         const text: Array<string> = []
         yield* Stream.runForEach(model.streamText({ prompt: "summarize" }), (part) =>

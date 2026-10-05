@@ -1671,25 +1671,23 @@ const makeDebugClient = () =>
     }),
   )
 
+/**
+ * Every value `stream` emits, collected in the background for the test's
+ * scope. It returns at once: no caller needs the subscription open first.
+ * `session.events` replays from its cursor (the start when none), and
+ * `watchRuntime` opens with the current state, so a value a later action
+ * makes reaches the collector however late it subscribes. Callers `waitFor`
+ * the values they assert.
+ */
 const startCollecting = <A, E>(
   stream: Stream.Stream<A, E>,
-): Effect.Effect<Ref.Ref<A[]>, E, Scope.Scope> =>
+): Effect.Effect<Ref.Ref<A[]>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const values = yield* Ref.make<A[]>([])
-    const ready = yield* Deferred.make<void>()
     yield* stream.pipe(
-      Stream.runForEach((value) =>
-        Effect.gen(function* () {
-          yield* Ref.update(values, (current) => [...current, value])
-          yield* Deferred.succeed(ready, void 0).pipe(Effect.ignore)
-        }),
-      ),
+      Stream.runForEach((value) => Ref.update(values, (current) => [...current, value])),
       Effect.forkScoped,
     )
-    // Resolve once the first value has been written into `values`. Cap at 50ms
-    // because events-after-cursor only emits when new events are appended --
-    // downstream waitFor() polls absorb any remaining race.
-    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
     return values
   })
 
@@ -1820,11 +1818,6 @@ describe("session event stream", () => {
             }),
           )
 
-          // Any events replayed in the initial window must respect the cursor.
-          const initial = yield* Ref.get(live)
-          const afterId = Option.getOrElse(Option.fromNullishOr(snapshot.lastEventId), () => 0)
-          expect(initial.every((envelope) => envelope.id > afterId)).toBe(true)
-
           yield* client.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
@@ -1838,6 +1831,10 @@ describe("session event stream", () => {
           )
 
           expect(received.some((envelope) => envelope.event._tag === "MessageReceived")).toBe(true)
+          // Nothing at or before the cursor came back, the branch made before it included.
+          const afterId = Option.getOrElse(Option.fromNullishOr(snapshot.lastEventId), () => 0)
+          expect(received.every((envelope) => envelope.id > afterId)).toBe(true)
+          expect(received.some((envelope) => envelope.event._tag === "BranchCreated")).toBe(false)
         }),
       ).pipe(Effect.timeout("13 seconds")),
     15_000,
@@ -1921,27 +1918,6 @@ const flattenRestoreText = (snapshot: {
   followUp: ReadonlyArray<{ content: string }>
 }) => [...snapshot.steering, ...snapshot.followUp].map((entry) => entry.content).join("\n")
 
-const collectRuntimeQueueWatch = <A, E>(
-  stream: Stream.Stream<A, E>,
-): Effect.Effect<Ref.Ref<A[]>, E, Scope.Scope> =>
-  Effect.gen(function* () {
-    const values = yield* Ref.make<A[]>([])
-    const ready = yield* Deferred.make<void>()
-    yield* stream.pipe(
-      Stream.runForEach((value) =>
-        Effect.gen(function* () {
-          yield* Ref.update(values, (current) => [...current, value])
-          yield* Deferred.succeed(ready, void 0).pipe(Effect.ignore)
-        }),
-      ),
-      Effect.forkScoped,
-    )
-    // watchRuntime emits the current snapshot on subscribe, so this typically
-    // resolves in <1ms. Cap at 50ms as a safety net.
-    yield* Deferred.await(ready).pipe(Effect.timeout("50 millis"), Effect.ignore)
-    return values
-  })
-
 describe("session queue and runtime watch", () => {
   it.live(
     "two follow-ups queued mid-turn keep their order through queue.get and queue.drain",
@@ -1951,7 +1927,7 @@ describe("session queue and runtime watch", () => {
           const { client, controls } = yield* makeSignalClient("done.")
           const created = yield* client.session.create({ cwd: testCwd })
 
-          const runtime = yield* collectRuntimeQueueWatch(
+          const runtime = yield* startCollecting(
             client.session.watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
@@ -2032,7 +2008,7 @@ describe("session queue and runtime watch", () => {
           const { client, controls } = yield* makeSignalClient("done.")
           const created = yield* client.session.create({ cwd: testCwd })
 
-          const runtime = yield* collectRuntimeQueueWatch(
+          const runtime = yield* startCollecting(
             client.session.watchRuntime({
               sessionId: created.sessionId,
               branchId: created.branchId,
@@ -2187,7 +2163,7 @@ describe("session transport contract", () => {
           completed.some(
             ({ event }) =>
               event._tag === "ErrorOccurred" &&
-              event.error.includes("Model-attempt budget exhausted"),
+              event.error.startsWith("Stopped at the model-call budget: 0 of 0 model calls used"),
           ),
         ).toBe(true)
       }).pipe(Effect.timeout("5 seconds")),

@@ -26,6 +26,7 @@ import {
   encodeToolOutput,
   isRuntimeUserMessage,
   messagePartsText,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   Session,
   type SessionAdmission,
 } from "../../src/domain/message"
@@ -62,6 +63,7 @@ import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  effectiveModelDriver,
   ModelId,
   Model,
   ProviderId,
@@ -104,6 +106,7 @@ import {
   EventStorage,
   MessageStorage,
   makeStorageTransaction,
+  SessionOperationStorage,
   SessionStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
@@ -178,7 +181,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { interjectionMessageId } from "../../src/domain/agent-loop"
+import { foldSessionMetrics, interjectionMessageId } from "../../src/domain/agent-loop"
 import * as AiError from "effect/ai/AiError"
 import { Database } from "bun:sqlite"
 import { Decision, DecisionModel, type LanguageModel } from "effect/ai"
@@ -377,13 +380,21 @@ describe("agent turn response collectors", () => {
 
 describe("session route driver", () => {
   const modelId = ModelId.make("anthropic/claude-sonnet-5")
-  const routeOf = (agent: AgentDefinition, driverOverrides?: Readonly<Record<string, DriverRef>>) =>
-    resolveSessionRoute({
+  /** The driver the route's model dispatches through, as the turn derives it. */
+  const routeOf = (
+    agent: AgentDefinition,
+    driverOverrides?: Readonly<Record<string, DriverRef>>,
+  ) => {
+    const route = resolveSessionRoute({
       agents: [agent],
       admission: Option.some({ agent: agent.name }),
       config: { driverOverrides },
       session: { modelId },
     })
+    return {
+      modelDriver: Option.map(route.modelId, (id) => effectiveModelDriver(route.driverRef, id)),
+    }
+  }
 
   test("the agent's own driver wins over a config override", () => {
     const agent = AgentDefinition.make({
@@ -1927,6 +1938,254 @@ describe("max turn steps", () => {
   )
 })
 
+// ── model-call budget ───────────────────────────────────────────────────────
+
+/**
+ * A run's model-call budget (`maxModelAttempts`) is counted by one durable
+ * reservation per model request (`reserveModelAttempt`). Each step's
+ * receipt reads that count, so a client sees what the turn used, its limit
+ * and what is left without a second counter. Near the limit the turn writes
+ * one notice the next request reads; a turn that spends the budget stops
+ * with an error that says so and how to go on.
+ */
+describe("model-call budget", () => {
+  const sessionId = SessionId.make("budget-session")
+  const branchId = BranchId.make("budget-branch")
+
+  const userMessage = (id: string, text: string) =>
+    Message.cases.regular.make({
+      id: MessageId.make(id),
+      sessionId,
+      branchId,
+      role: "user",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(1_767_225_600_000),
+    })
+
+  const echoTool = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+
+  const budget = (maxModelAttempts: number): SessionAdmission => ({
+    runSpec: { overrides: { maxModelAttempts } },
+  })
+
+  const ended = (events: ReadonlyArray<AgentEvent>) =>
+    events.filter((event): event is StreamEnded => event._tag === "StreamEnded")
+
+  /** The budget notices the branch stores. */
+  const storedNotices = Effect.gen(function* () {
+    const messageStorage = yield* MessageStorage
+    return (yield* messageStorage.listMessages(branchId)).filter(
+      (message) => message.metadata?.customType === MODEL_ATTEMPTS_MESSAGE_TYPE,
+    )
+  })
+
+  it.live("each step's receipt counts the turn's model calls against its limit", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "one" }),
+        toolCallStep("echo", { text: "two" }),
+        textStep("done"),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-count", "three steps"), budget(8))
+        const events = yield* Ref.get(eventsRef)
+        expect(ended(events).map((event) => event.modelAttempts)).toEqual([
+          { used: 1, limit: 8 },
+          { used: 2, limit: 8 },
+          { used: 3, limit: 8 },
+        ])
+        // While the turn runs the session's metrics carry its newest count;
+        // once it completes they carry none.
+        const second = events.indexOf(ended(events)[1]!)
+        const midTurn = foldSessionMetrics(events.slice(0, second + 1).map((event) => ({ event })))
+        expect(midTurn.turnModelAttempts).toEqual({ used: 2, limit: 8 })
+        const after = foldSessionMetrics(events.map((event) => ({ event })))
+        expect(after.turnModelAttempts).toBeUndefined()
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a turn with no budget counts nothing and writes no notice", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("done")])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-none", "no budget"))
+        const events = yield* Ref.get(eventsRef)
+        expect(ended(events).map((event) => "modelAttempts" in event)).toEqual([false])
+        expect(yield* storedNotices).toEqual([])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a turn resumed after spending calls counts them, not from zero", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("done")])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const message = userMessage("budget-resumed", "resumed")
+        // An earlier process reserved two calls for this turn and died.
+        yield* ensureStorageParents({ sessionId, branchId, admission: budget(8) })
+        const operations = yield* SessionOperationStorage
+        const address = { sessionId, branchId, messageId: message.id, max: 8 }
+        yield* operations.reserveModelAttempt(address)
+        yield* operations.reserveModelAttempt(address)
+        yield* runAgentLoop(message, budget(8))
+        const events = yield* Ref.get(eventsRef)
+        expect(ended(events).map((event) => event.modelAttempts)).toEqual([{ used: 3, limit: 8 }])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("near the limit one notice reaches the next request and spends no call", () =>
+    Effect.gen(function* () {
+      const noticeLine = "5 of its 6 model calls left"
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...toolCallStep("echo", { text: "one" }),
+          assertOptions: (options) => {
+            expect(promptText(options.prompt)).not.toContain("model calls left")
+          },
+        },
+        {
+          ...toolCallStep("echo", { text: "two" }),
+          assertOptions: (options) => {
+            expect(promptText(options.prompt)).toContain(noticeLine)
+          },
+        },
+        {
+          ...textStep("done"),
+          assertOptions: (options) => {
+            // Written once: the later step reads the same one line.
+            expect(promptText(options.prompt).split("model calls left")).toHaveLength(2)
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-near", "near the limit"), budget(6))
+        yield* controls.assertDone
+        const notices = yield* storedNotices
+        expect(notices.map((message) => message.metadata?.details)).toEqual([{ used: 1, limit: 6 }])
+        // The runtime wrote it inside the turn: recovery never answers it alone.
+        expect(notices.every(isRuntimeUserMessage)).toBe(true)
+        const events = yield* Ref.get(eventsRef)
+        expect(ended(events).map((event) => event.modelAttempts?.used)).toEqual([1, 2, 3])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  const lastCallLine = "last model call of this turn's budget of 3"
+
+  it.live(
+    "the last allowed call runs with tools off, the turn ends with its answer, and the next message has a fresh budget",
+    () =>
+      Effect.gen(function* () {
+        const toolsOn = (options: LanguageModel.ProviderOptions) => {
+          expect(options.toolChoice).not.toBe("none")
+          expect(promptText(options.prompt)).not.toContain(lastCallLine)
+        }
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("echo", { text: "one" }), assertOptions: toolsOn },
+          { ...toolCallStep("echo", { text: "two" }), assertOptions: toolsOn },
+          {
+            ...textStep("what the work established"),
+            assertOptions: (options) => {
+              expect(options.toolChoice).toBe("none")
+              expect(promptText(options.prompt)).toContain(lastCallLine)
+            },
+          },
+          textStep("the next turn answers"),
+        ])
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        yield* Effect.gen(function* () {
+          yield* runAgentLoop(userMessage("budget-last", "more work than calls"), budget(3))
+          const events = yield* Ref.get(eventsRef)
+          expect(events.filter((event) => event._tag === "ErrorOccurred")).toEqual([])
+          const last = ended(events).at(-1)
+          expect(last?.outcome).toBe("Answered")
+          expect(last?.modelAttempts).toEqual({ used: 3, limit: 3 })
+          const completed = events.filter(
+            (event): event is TurnCompleted => event._tag === "TurnCompleted",
+          )
+          expect(completed.map((event) => [event.streamFailed, event.unanswered === true])).toEqual(
+            [[false, false]],
+          )
+          // The near notice after the first call, then the last call's line;
+          // a budget this small is near from the start, but its first step
+          // reads only the task.
+          expect((yield* storedNotices).map((message) => message.metadata?.details)).toEqual([
+            { used: 1, limit: 3 },
+            { used: 2, limit: 3 },
+          ])
+
+          yield* Ref.set(eventsRef, [])
+          yield* runAgentLoop(userMessage("budget-next", "go on"), budget(3))
+          yield* controls.assertDone
+          const next = yield* Ref.get(eventsRef)
+          expect(ended(next).map((event) => [event.outcome, event.modelAttempts] as const)).toEqual(
+            [["Answered", { used: 1, limit: 3 }]],
+          )
+        }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+      }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a tool call on the last allowed call is refused, not run", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        toolCallStep("echo", { text: "past the budget" }),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-refused", "two calls at most"), budget(2))
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1)
+        const messageStorage = yield* MessageStorage
+        const refused = (yield* messageStorage.listMessages(branchId))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.isFailure)
+        expect(refused).toHaveLength(1)
+        const completed = events.filter(
+          (event): event is TurnCompleted => event._tag === "TurnCompleted",
+        )
+        expect(completed.map((event) => event.unanswered)).toEqual([true])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a budget of one answers on its only call, with tools off", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("the only answer"),
+          assertOptions: (options) => {
+            expect(options.toolChoice).toBe("none")
+            expect(promptText(options.prompt)).toContain(
+              "last model call of this turn's budget of 1",
+            )
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-one", "one call"), budget(1))
+        yield* controls.assertDone
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ErrorOccurred")).toEqual([])
+        expect(ended(events).map((event) => event.modelAttempts)).toEqual([{ used: 1, limit: 1 }])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
 // ── model driver and catalog ────────────────────────────────────────────────
 
 describe("model driver and catalog", () => {
@@ -2173,6 +2432,8 @@ describe("credential order", () => {
     readonly held?: Deferred.Deferred<void>
     /** Durable state, for a restart: the events go to its log, not to `events`. */
     readonly storage?: CredentialStorage
+    /** Messages of this many characters each stored before the turn: 4 or more overflow the window. */
+    readonly history?: ReadonlyArray<number>
   }
 
   /**
@@ -2291,7 +2552,7 @@ describe("credential order", () => {
       overrides: ModelRegistry.Live.pipe(
         Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
       ),
-    })
+    }).pipe(Layer.provideMerge(rangeCompactorLayer))
     const admission: SessionAdmission = {
       runSpec: {
         overrides: {
@@ -2345,6 +2606,22 @@ describe("credential order", () => {
             branchId: root.branchId,
             admission: root.admission,
           })
+          const storage = yield* MessageStorage
+          yield* Effect.forEach(
+            params.history ?? [],
+            (chars, index) =>
+              storage.createMessage(
+                Message.cases.regular.make({
+                  id: MessageId.make(`${params.name}-old-${index + 1}`),
+                  sessionId: root.sessionId,
+                  branchId: root.branchId,
+                  role: "assistant",
+                  parts: [Prompt.textPart({ text: "x".repeat(chars) })],
+                  createdAt: dateFromMillis(1_000 + index),
+                }),
+              ),
+            { discard: true },
+          )
           return yield* Effect.exit(
             Effect.forEach(
               params.prompts ?? ["hello"],
@@ -2426,6 +2703,32 @@ describe("credential order", () => {
       expect(labelsOf(stayed.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
+    }),
+  )
+
+  it.live("a handoff summary walks the order as a step does, with one notice", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "summary-moves",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        // About 150k tokens: over the 128k window, so the turn hands it off first.
+        history: Array.from({ length: 12 }, () => 50_000),
+        replies: { "sk-a": quotaSpent, "sk-b": answer("from b") },
+      })
+      // Default refuses the summary; personal makes it, and the step stays there.
+      expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
+      expect(run.projected.map((event) => event.compacted)).toEqual([true])
+      expect(run.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} is out of quota; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+      expect(labelsOf(run.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
     }),
   )
 
@@ -2621,7 +2924,11 @@ describe("credential order", () => {
         maxModelAttempts: 1,
       })
       expect(run.sent).toEqual(["sk-a"])
-      expect(run.errors.map((entry) => entry.error)).toContain("Model-attempt budget exhausted")
+      expect(
+        run.errors.some((entry) =>
+          entry.error.startsWith("Stopped at the model-call budget: 1 of 1 model calls used"),
+        ),
+      ).toBe(true)
     }),
   )
 
@@ -2766,6 +3073,33 @@ describe("credential order", () => {
       expect(moved.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
         [personal, apiPricing.input + apiPricing.output],
       ])
+    }),
+  )
+
+  it.live("an order edited mid-turn to only slots the turn left names the edit", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "reorder-passed",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        // Once B serves, the order names only A, which the turn already left.
+        reorder: { on: "sk-b", order: [DEFAULT_CREDENTIAL_SLOT] },
+        replies: {
+          "sk-a": quotaSpent,
+          "sk-b": () =>
+            Stream.fromIterable([
+              toolCallPart("echo", { text: "hi" }),
+              finishPart({ finishReason: "tool-calls" }),
+            ]),
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-b"])
+      expect(run.errors.map((entry) => entry.error).at(-1)).toBe(
+        `The authOrder of provider "${FALLBACK}" changed during this turn, and the turn already left every credential it names now (default). The next turn starts again at its first credential`,
+      )
     }),
   )
 

@@ -51,6 +51,17 @@ export type CredentialSlot = typeof CredentialSlot.Type
 export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
 
 /**
+ * A credential order: slots a turn walks first to last, each named once. An
+ * empty order is the RPC's way to clear one; a stored order adds a minimum
+ * length of one.
+ */
+export const CredentialOrder = Schema.Array(CredentialSlot).check(
+  Schema.makeFilter((slots) => new Set(slots).size === slots.length, {
+    message: "credential slots must be distinct",
+  }),
+)
+
+/**
  * The credential a model request used: the provider that owns the sign-in
  * and the slot. Labels only, never a secret or an account. `signedInAt` is
  * when the stored credential was signed in or replaced (a refresh keeps

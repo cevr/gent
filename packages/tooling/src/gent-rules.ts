@@ -12,6 +12,7 @@
  * - no-code-unit-padding: terminal columns use display width, with ASCII-only exemptions.
  * - no-code-unit-text-edit: TUI text is edited, cut and counted by grapheme.
  * - one-reply-writer: a late TUI reply writes through `repliesInView`, not a counter.
+ * - theme-token-colors: every TUI color is a theme token; no literal color, no SGR dim.
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -1471,6 +1472,139 @@ const plugin: Plugin = {
                 node: read,
               })
             }
+          },
+        }
+      },
+    },
+    /**
+     * Every color the TUI draws is a theme token: `useTheme().theme.<token>`
+     * (`apps/tui/src/theme.tsx`). The theme catalog holds each token to the
+     * contrast rule (text 4.5:1, borders 3:1, a 1.5:1 step from text to
+     * muted) and the system theme clamps to it at runtime; a color written
+     * at a call site skips both, and SGR dim lets the terminal halve a
+     * token's contrast after the check.
+     *
+     * What is reported, in `apps/tui/src/` outside `theme.tsx`:
+     *
+     * - a six- or eight-digit hex color string (`"#e5484d"`), anywhere;
+     * - a short hex (`"#fff"`) or a color name `parseColor` knows (`red`,
+     *   `gray`, `brightblue`, …) in a color slot -- a JSX attribute or an
+     *   object key named `fg`, `bg`, `color`, `selectionFg`, `selectionBg` or
+     *   `…Color` (`fg: "red"`, `borderColor="gray"`). A token's name in a slot
+     *   (a status label's `color: "warning"`) is a token, and
+     *   `"transparent"` draws nothing; both stay;
+     * - a color built in place: `RGBA.fromHex/fromInts/fromValues/fromArray`
+     *   or `parseColor` from `@opentui/core`;
+     * - dim: an object key or a JSX attribute named `dim`, or
+     *   `TextAttributes.DIM`. A quieter row reads `textMuted`.
+     *
+     * A string that never reaches the terminal (a marker a renderer reads
+     * back into tokens) keeps a line-local suppression with its reason.
+     */
+    "theme-token-colors": {
+      meta: { type: "problem", schema: [] },
+      create(context) {
+        const subject = ruleSubject(context)
+        if (!subject.startsWith("apps/tui/src/") || subject === "apps/tui/src/theme.tsx") return {}
+        // Six or eight digits anywhere; `#123` alone is as likely an issue
+        // number, so the short forms count only in a color slot.
+        const HEX_COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i
+        const COLOR_SLOT = /^(?:fg|bg|color|selectionFg|selectionBg|[a-zA-Z]*Color)$/
+        const COLOR_BUILDERS = new Set(["fromHex", "fromInts", "fromValues", "fromArray"])
+        const TOKEN_HINT = "read a theme token (`useTheme().theme`), which the contrast rule checks"
+        /** The text of a string literal or a template with no expressions. */
+        const stringValue = (node: AstNode | undefined): string | undefined => {
+          if (node?.type === "Literal") {
+            const value = fieldOf(node, "value")
+            return typeof value === "string" ? value : undefined
+          }
+          if (node?.type !== "TemplateLiteral") return undefined
+          if ((getNodeArrayField(node, "expressions") ?? []).length > 0) return undefined
+          const [quasi] = getNodeArrayField(node, "quasis") ?? []
+          const value = quasi === undefined ? undefined : fieldOf(quasi, "value")
+          return isRecord(value) && typeof value["cooked"] === "string"
+            ? value["cooked"]
+            : undefined
+        }
+        /** The expression a JSX attribute holds: `"x"` or the inside of `{…}`. */
+        const attributeValue = (node: AstNode): AstNode | undefined => {
+          const value = getNodeField(node, "value")
+          if (value?.type === "JSXExpressionContainer") return getNodeField(value, "expression")
+          return value
+        }
+        const attributeName = (node: AstNode): string | undefined => {
+          const name = getNodeField(node, "name")
+          return name?.type === "JSXIdentifier" ? getStringField(name, "name") : undefined
+        }
+        /** The names `parseColor` in `@opentui/core` resolves (`CSS_COLOR_NAMES`). */
+        const COLOR_NAMES = new Set(
+          [
+            "black white red green blue yellow cyan magenta silver gray grey maroon olive lime",
+            "aqua teal navy fuchsia purple orange brightblack brightred brightgreen brightblue",
+            "brightyellow brightcyan brightmagenta brightwhite",
+          ]
+            .join(" ")
+            .split(" "),
+        )
+        /** A literal color in a color slot: a short hex or a named color; a long hex reports as a literal. */
+        const slotColor = (value: AstNode | undefined): boolean => {
+          const text = stringValue(value)
+          if (text === undefined || HEX_COLOR.test(text)) return false
+          return text.startsWith("#") || COLOR_NAMES.has(text.toLowerCase())
+        }
+        const fromOpentui = (node: AstNode | undefined, name: string): boolean => {
+          const imported = importedSymbol(context, node)
+          return imported?.source === "@opentui/core" && imported.name === name
+        }
+        const DIM =
+          "SGR dim lets the terminal halve a token's contrast after the check; draw a quieter row with `theme.textMuted`"
+        return {
+          Literal(node) {
+            if (!isAstNode(node)) return
+            const text = stringValue(node)
+            if (text !== undefined && HEX_COLOR.test(text))
+              context.report({ node, message: `a hex color at a call site; ${TOKEN_HINT}` })
+          },
+          TemplateLiteral(node) {
+            if (!isAstNode(node)) return
+            const text = stringValue(node)
+            if (text !== undefined && HEX_COLOR.test(text))
+              context.report({ node, message: `a hex color at a call site; ${TOKEN_HINT}` })
+          },
+          Property(node) {
+            if (!isAstNode(node)) return
+            const key = staticPropertyName(node)
+            if (key === "dim") {
+              context.report({ node, message: DIM })
+              return
+            }
+            const value = getNodeField(node, "value")
+            if (key !== undefined && COLOR_SLOT.test(key) && slotColor(value))
+              context.report({ node, message: `a named color in \`${key}\`; ${TOKEN_HINT}` })
+          },
+          JSXAttribute(node) {
+            if (!isAstNode(node)) return
+            const name = attributeName(node)
+            if (name === "dim") {
+              context.report({ node, message: DIM })
+              return
+            }
+            if (name !== undefined && COLOR_SLOT.test(name) && slotColor(attributeValue(node)))
+              context.report({ node, message: `a named color in \`${name}\`; ${TOKEN_HINT}` })
+          },
+          MemberExpression(node) {
+            if (!isAstNode(node)) return
+            const object = getNodeField(node, "object")
+            const property = staticPropertyName(node)
+            if (fromOpentui(object, "TextAttributes") && property === "DIM")
+              context.report({ node, message: DIM })
+            if (fromOpentui(object, "RGBA") && COLOR_BUILDERS.has(property ?? ""))
+              context.report({ node, message: `builds a color at a call site; ${TOKEN_HINT}` })
+          },
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            if (fromOpentui(getNodeField(node, "callee"), "parseColor"))
+              context.report({ node, message: `builds a color at a call site; ${TOKEN_HINT}` })
           },
         }
       },

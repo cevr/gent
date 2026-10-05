@@ -586,10 +586,11 @@ export class ProcessLocalToolReplay extends Context.Service<
 // ── leaf host services ───────────────────────────────────────────────────────
 
 /**
- * The core services every root gives a tool body, which the branch-tools entry
- * exports: the event store, message and interaction storage, and the tool
- * runner that dispatches inner calls. Any extension that imports that entry
- * may yield them in a tool.
+ * The core services every root gives a tool body: message and interaction
+ * storage and the tool runner that dispatches inner calls, which the
+ * branch-tools entry exports for a tool to yield, and the event store that
+ * `ToolRunner.runBound` requires to record an inner call. No extension
+ * yields the event store by name; only tests import its Tag.
  */
 export type BranchToolHostServices = EventStore | MessageStorage | InteractionStorage | ToolRunner
 

@@ -1,16 +1,16 @@
 import {
   type ActivityCall,
-  type ActivityOutcome,
+  type ActivityTone,
+  activityHeaderRuns,
   activityRows,
   decodeToolOutputOption,
-  formatActivityHeader,
   formatActivityRow,
   formatCellRowLabel,
   formatCost,
   formatClock,
   formatDuration,
   collapsedOperations,
-  formatFailureRow,
+  failureRowRuns,
   formatPreviewFooter,
   formatRowCounts,
   formatUsageStats,
@@ -43,6 +43,7 @@ import { useClient } from "./client"
 import {
   AgentMessageRow,
   CollapsedRow,
+  ToneRuns,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
   FrameClicks,
@@ -109,7 +110,10 @@ import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
   lineCount,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
+  ModelAttempts,
+  modelAttemptsLeft,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -167,7 +171,9 @@ const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY):
 /**
  * What the model steps of one turn added up to, from each `StreamEnded`
  * (its outcome, usage and cost), and how many times a provider call was
- * retried (`ProviderRetrying`).
+ * retried (`ProviderRetrying`). `modelAttempts` is the newest step's budget
+ * receipt: a reading of the turn's own count, never summed. Absent for a
+ * turn with no budget.
  */
 const TurnSteps = Schema.Struct({
   count: Schema.Finite,
@@ -176,6 +182,7 @@ const TurnSteps = Schema.Struct({
   inputTokens: Schema.Finite,
   outputTokens: Schema.Finite,
   retries: Schema.Finite,
+  modelAttempts: Schema.optional(ModelAttempts),
 })
 type TurnSteps = Schema.Schema.Type<typeof TurnSteps>
 
@@ -194,6 +201,7 @@ export const addStep = (
     readonly outcome?: string
     readonly costUsd?: number
     readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+    readonly modelAttempts?: ModelAttempts
   },
 ): TurnSteps => ({
   ...steps,
@@ -202,6 +210,10 @@ export const addStep = (
   costUsd: steps.costUsd + (step.costUsd ?? 0),
   inputTokens: steps.inputTokens + (step.usage?.inputTokens ?? 0),
   outputTokens: steps.outputTokens + (step.usage?.outputTokens ?? 0),
+  ...Option.match(Option.fromUndefinedOr(step.modelAttempts ?? steps.modelAttempts), {
+    onNone: () => ({}),
+    onSome: (modelAttempts) => ({ modelAttempts }),
+  }),
 })
 
 /** A provider call of the turn failed and was tried again. */
@@ -267,12 +279,13 @@ const retryReason = (reason: string): string => {
 export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
 /**
- * The turn line, `Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04`: the
- * whole turn's time, then a retry count only when a provider call was
+ * The turn line, `Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k
+ * ↓2.1k · $0.04`: the whole turn's time, then the model calls it used of its
+ * budget only when it had one, a retry count only when a provider call was
  * retried, the tokens its steps read and wrote, and its cost. `steps` (the
  * preview level and up) adds the step count last. It counts no tools: the
  * run headers do. Where it is wider than `width` columns, the parts after
- * the time drop from the right; the time stays.
+ * the time drop from the right; the time stays, and the budget goes last.
  */
 export const formatTurnLine = (
   event: Extract<SessionEvent, { _tag: "turn-ended" }>,
@@ -280,6 +293,8 @@ export const formatTurnLine = (
 ): string => {
   const { steps } = event
   const parts: string[] = []
+  if (Predicate.isNotUndefined(steps.modelAttempts))
+    parts.push(`${steps.modelAttempts.used}/${steps.modelAttempts.limit} model calls`)
   if (steps.retries > 0) parts.push(plural(steps.retries, "retry", "retries"))
   const tokens = formatUsageStats({ input: steps.inputTokens, output: steps.outputTokens })
   if (tokens.length > 0) parts.push(tokens)
@@ -604,7 +619,49 @@ const runtimeRows = new Map<string, MessageRenderer>([
     (props) => <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />,
   ],
   [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow glyph="⇄" label="model changed" />],
+  [
+    MODEL_ATTEMPTS_MESSAGE_TYPE,
+    (props) => <BudgetNoticeRow attempts={decodeModelAttempts(props.details)} />,
+  ],
 ])
+
+const decodeModelAttempts = Schema.decodeUnknownOption(ModelAttempts)
+
+/**
+ * A model-call budget line, from its typed details (R6): the near notice,
+ * `⧗ 3 of 8 model calls left · the last runs without tools · a new message
+ * gets a fresh budget`, or the last call's, `⧗ last of 8 model calls · tools
+ * off · the turn answers with what it has`. Narrower than its parts, it drops
+ * them from the right; the count stays. A line whose details do not decode
+ * says only what it is.
+ */
+const budgetNoticeLabel = (attempts: Option.Option<ModelAttempts>, width: number): string =>
+  Option.match(attempts, {
+    onNone: () => "model-call budget near its limit",
+    onSome: (attempts) => {
+      const left = modelAttemptsLeft(attempts)
+      let parts = [
+        `${left} of ${attempts.limit} model calls left`,
+        "the last runs without tools",
+        "a new message gets a fresh budget",
+      ]
+      if (left <= 1)
+        parts = [
+          `last of ${attempts.limit} model calls`,
+          "tools off",
+          "the turn answers with what it has",
+        ]
+      let kept = parts.length
+      while (kept > 1 && textWidth(parts.slice(0, kept).join(" · ")) > width) kept -= 1
+      return parts.slice(0, kept).join(" · ")
+    },
+  })
+
+function BudgetNoticeRow(props: { readonly attempts: Option.Option<ModelAttempts> }) {
+  const dimensions = useTerminalDimensions()
+  const width = () => Math.max(1, dimensions().width - EVENT_TEXT_COLUMN - FREE_LAST_COLUMN)
+  return <CollapsedRow glyph="⧗" label={budgetNoticeLabel(props.attempts, width())} />
+}
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
 const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
@@ -1203,6 +1260,16 @@ function AssistantMessage(props: {
     if (last) return 0
     return 1
   }
+  // An answer and a tool run are two blocks, as Codex parts its history
+  // cells: one blank row between a text segment and the run after it, and
+  // between a run and the text after it.
+  const gapBefore = (index: number) => {
+    const previous = shownSegments()[index - 1]?.segment._tag
+    const current = shownSegments()[index]?.segment._tag
+    if (previous === "text" && current === "tool-call") return 1
+    if (previous === "tool-call" && current === "text") return 1
+    return 0
+  }
   // An open thought leads with its glyph, so it never reads as the answer
   // beside it (both sit at column 2, and fx's grays alone part them); its
   // text hangs at column 4.
@@ -1244,27 +1311,30 @@ function AssistantMessage(props: {
                   </text>
                 ),
                 "tool-call": (segment) => (
-                  <ToolCallGroup
-                    calls={Option.match(run, {
-                      onNone: () => [segment.toolCall],
-                      onSome: (value) => [...value.calls],
-                    })}
-                    reasoning={Option.match(run, {
-                      onNone: () => new Map<string, ReadonlyArray<string>>(),
-                      onSome: (value) => value.reasoning,
-                    })}
-                    closing={Option.match(run, {
-                      onNone: () => [],
-                      onSome: (value) => value.closing,
-                    })}
-                    renderReasoning={reasoningMarkdownBlock}
-                    runOpen={Option.exists(run, (value) => value.open)}
-                    disclosure={props.disclosure}
-                    fullDetail={props.fullDetail}
-                  />
+                  <box flexDirection="column" marginTop={gapBefore(index())}>
+                    <ToolCallGroup
+                      calls={Option.match(run, {
+                        onNone: () => [segment.toolCall],
+                        onSome: (value) => [...value.calls],
+                      })}
+                      reasoning={Option.match(run, {
+                        onNone: () => new Map<string, ReadonlyArray<string>>(),
+                        onSome: (value) => value.reasoning,
+                      })}
+                      closing={Option.match(run, {
+                        onNone: () => [],
+                        onSome: (value) => value.closing,
+                      })}
+                      renderReasoning={reasoningMarkdownBlock}
+                      runOpen={Option.exists(run, (value) => value.open)}
+                      disclosure={props.disclosure}
+                      fullDetail={props.fullDetail}
+                    />
+                  </box>
                 ),
                 text: (segment) => (
                   <markdown
+                    marginTop={gapBefore(index())}
                     syntaxStyle={props.syntaxStyle()}
                     streaming
                     internalBlockMode="top-level"
@@ -1327,7 +1397,7 @@ function ToolCallGroup(props: {
   // surface that draws the header or the rows (the live tail, a history
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
-  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
+  const header = createMemo(() => activityHeaderRuns(activity(), lineWidth()))
   // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   // Collapsed draws one line under the header for each failure, so a failure
@@ -1366,10 +1436,12 @@ function ToolCallGroup(props: {
       ),
     )
   }
-  // A cancel is the reader's own act, a warning; a failure is an error.
-  const endingColor = (outcome: ActivityOutcome) => {
-    if (outcome === "cancelled") return theme.warning
-    return theme.error
+  // Hue goes only where the reader must look: a failure is an error, a
+  // cancel (the reader's own act) or a cut a warning; the words stay muted.
+  const toneColor = (tone: ActivityTone) => {
+    if (tone === "failed") return theme.error
+    if (tone === "stopped") return theme.warning
+    return theme.textMuted
   }
   const connector = (index: number, count: number) => {
     if (index === count - 1) return "└"
@@ -1379,38 +1451,43 @@ function ToolCallGroup(props: {
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
         <Show when={!props.fullDetail}>
-          <text wrapMode="none" truncate style={{ fg: groupColor() }}>
-            {symbol()} {header()}
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            <span style={{ fg: groupColor() }}>{symbol()}</span>{" "}
+            <ToneRuns runs={header()} color={toneColor} />
           </text>
         </Show>
         <For each={failureRows()}>
           {(operation, index) => (
-            <text wrapMode="none" truncate style={{ fg: endingColor(operation.outcome) }}>
-              {connector(index(), failureRows().length)} {formatFailureRow(operation, lineWidth())}
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              {connector(index(), failureRows().length)}{" "}
+              <ToneRuns runs={failureRowRuns(operation, lineWidth())} color={toneColor} />
             </text>
           )}
         </For>
         <For each={toolRows()}>
           {(row, index) => {
             const text = () => formatActivityRow(row, lineWidth())
-            const color = () => {
-              if (row.outcome === "succeeded" || row.outcome === "running") return theme.textMuted
-              return endingColor(row.outcome)
-            }
             return (
               <box flexDirection="column">
-                <text wrapMode="none" truncate style={{ fg: color() }}>
+                <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
                   {connector(index(), toolRows().length)} {text().head}
                   <Show when={Option.getOrUndefined(text().diff)}>
                     {(diff) => (
                       <>
                         <span style={{ fg: theme.success }}> +{diff().added}</span>
-                        <span style={{ fg: color() }}> / </span>
+                        <span style={{ fg: theme.textMuted }}> / </span>
                         <span style={{ fg: theme.error }}>-{diff().removed}</span>
                       </>
                     )}
                   </Show>
-                  {text().tail}
+                  <Show when={Option.getOrUndefined(text().ending)}>
+                    {(ending) => (
+                      <>
+                        {" · "}
+                        <span style={{ fg: toneColor(ending().tone) }}>{ending().text}</span>
+                      </>
+                    )}
+                  </Show>
                 </text>
                 <Show when={Option.getOrUndefined(rowHead(row, index()))}>
                   {(head) => <OutputHeadRows head={head()} width={lineWidth() - 2} />}
@@ -1532,10 +1609,7 @@ function OutputHeadRows(props: { head: OutputHead; width: number }) {
       </For>
       <Show when={props.head.hidden > 0}>
         <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-          │{" "}
-          <span style={{ fg: theme.textMuted, dim: true }}>
-            {formatPreviewFooter(props.head.hidden)}
-          </span>
+          │ {formatPreviewFooter(props.head.hidden)}
         </text>
       </Show>
     </box>
@@ -1694,6 +1768,8 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.steps.inputTokens,
       item.steps.outputTokens,
       item.steps.retries,
+      item.steps.modelAttempts?.used,
+      item.steps.modelAttempts?.limit,
     ])
   if (item._tag === "error")
     return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])
@@ -2932,8 +3008,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       ),
     )
   })
+  // The reader's surface takes its colour from the terminal's palette, so a
+  // row reaches history only once that read has ended: born with its fill.
+  const { paletteSettled } = useTheme()
   createEffect(() => {
-    if (!ext.loaded() || !props.settled) return
+    if (!ext.loaded() || !props.settled || !paletteSettled()) return
     if (!nativeOutputReady() || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = fingerprints()

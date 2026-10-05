@@ -1403,11 +1403,12 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
     // @ts-expect-error -- ToolRunner is runtime engine plumbing
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
-    // @ts-expect-error -- host platform is internal authority; public extensions use ExtensionContext facets
-    type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
+    // The platform service is public, as every root provides it to every
+    // extension; the layers that build it are not.
+    type _GentPlatform = typeof PublicExtensionApi.GentPlatform
     // @ts-expect-error -- platform live layers are composition-root plumbing
     type _BadBunGentPlatformLive = typeof PublicExtensionApi.BunGentPlatformLive
-    // @ts-expect-error -- host signal errors pair with the internal platform service
+    // @ts-expect-error -- no extension reads a signal error by name: an export needs a consumer
     type _BadSignalError = typeof PublicExtensionApi.SignalError
     // @ts-expect-error -- durable message metadata schema is storage/runtime internals
     type _BadMessageMetadata = typeof PublicExtensionApi.MessageMetadata

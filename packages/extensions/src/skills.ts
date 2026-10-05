@@ -13,6 +13,7 @@ import {
   Schema,
 } from "effect"
 import { Hex } from "effect/encoding"
+import { parse as parseYaml } from "yaml"
 import {
   defineExtension,
   defineRequests,
@@ -350,11 +351,14 @@ const NO_HEADER: SkillHeader = {
 /** One prompt line: a folded or literal block scalar collapses to single spaces. */
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 
-/** Parse YAML frontmatter; malformed YAML or a non-mapping reads as no header. */
+/**
+ * Parse YAML frontmatter; malformed YAML or a non-mapping reads as no header.
+ * The `yaml` package, not `Bun.YAML`: this extension loads on a hosted root
+ * too. A warning is not logged; an error throws.
+ */
 const parseFrontmatter = (yaml: string): SkillHeader =>
   Option.match(
-    // oxlint-disable-next-line effect/noGlobals -- Pure YAML parse with no Effect platform service; the cell runtime is full Bun.
-    Result.try(() => Bun.YAML.parse(yaml)).pipe(
+    Result.try(() => parseYaml(yaml, { logLevel: "error" })).pipe(
       Result.getSuccess,
       Option.flatMap(decodeFrontmatter),
     ),

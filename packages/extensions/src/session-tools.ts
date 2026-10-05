@@ -260,6 +260,57 @@ export const sessionTitleOf = (text: string): Option.Option<string> => {
   return Option.none()
 }
 
+/** A child session's name from its prompt keeps at most this many units, as the TUI's head keeps a name. */
+const maximumDerivedChildNameChars = 32
+
+/** A child session's name given by its start keeps at most this many units. */
+const maximumGivenChildNameChars = 80
+
+/** Where a prompt's first clause ends: a bracket, a `;`, a sentence end, a spaced dash. */
+const CLAUSE_END = /\s*(?:[([;]|[.!?](?:\s|$)|\s[-–—]\s)/u
+
+/** `text` cut to whole words within `max` units; a first word longer than that is cut by code point. */
+const wholeWords = (text: string, max: number): string => {
+  if (text.length <= max) return text
+  let kept = ""
+  for (const word of text.split(" ")) {
+    let next = `${kept} ${word}`
+    if (kept.length === 0) next = word
+    if (next.length > max - 1) break
+    kept = next
+  }
+  if (kept.length === 0) kept = headChars(text, max - 1)
+  return `${kept.replace(/[\s,:]+$/u, "")}…`
+}
+
+/**
+ * The name of a child session (a delegate child or a thread), which the
+ * tray, the sessions pane and its result row head with: the start's own
+ * `name` on one line, else its prompt's first clause in whole words
+ * (`Check the greeting files`). None when neither has words; the caller
+ * names its own fallback.
+ */
+export const childSessionName = (start: {
+  readonly name: Option.Option<string>
+  readonly prompt: string
+}): Option.Option<string> => {
+  const given = start.name.pipe(
+    Option.map((value) => value.replace(/\s+/gu, " ").trim()),
+    Option.filter((value) => value.length > 0),
+  )
+  if (Option.isSome(given)) return Option.some(wholeWords(given.value, maximumGivenChildNameChars))
+  return Option.map(sessionTitleOf(start.prompt), (title) => {
+    const clause = Option.getOrElse(
+      Option.filter(
+        Option.fromUndefinedOr(title.split(CLAUSE_END)[0]?.trim()),
+        (value) => value.length > 0,
+      ),
+      () => title,
+    )
+    return wholeWords(clause, maximumDerivedChildNameChars)
+  })
+}
+
 /**
  * The sessions this process found no text to name from, so a session whose
  * first message has no text loads its history once per process, not at
@@ -277,9 +328,9 @@ const UntitledResource = defineResource({
 
 /**
  * A session that still has the default name takes the first plain words of
- * its first user message (`sessionTitleOf`) at a turn end, as a delegate
- * child takes its task. The
- * rename trims it to the title length. A name given before, by the create or
+ * its first user message (`sessionTitleOf`) at a turn end. Unlike a child
+ * session (`childSessionName`) it keeps the whole first line; the rename
+ * trims it to the title length. A name given before, by the create or
  * by `rename_session`, is left alone: the rename expects the default name,
  * and the write checks it, so a rename that lands after the read here wins.
  * A first message with no text leaves the default name.
@@ -822,9 +873,6 @@ const THREAD_PREVIEW_CHARS = 4_000
 /** The one line of latest reply each row of a whole listing shows. */
 const THREAD_LINE_CHARS = 200
 
-/** A thread's name, from the call or its task; the automatic rename's bound. */
-const THREAD_NAME_CHARS = 80
-
 const THREAD_TASK_PREFIX = "Thread started by session "
 
 /**
@@ -950,11 +998,12 @@ const ownThread = Effect.fn("SessionTools.ownThread")(function* (thread: string)
   return found
 })
 
-const threadName = (text: string): string =>
-  headChars(
-    Option.getOrElse(sessionTitleOf(text), () => "thread"),
-    THREAD_NAME_CHARS,
-  ).trim()
+/** A thread is a child session: its name follows `childSessionName`, else `thread`. */
+const threadName = (start: typeof ThreadStartParams.Type) =>
+  Option.getOrElse(
+    childSessionName({ name: Option.fromUndefinedOr(start.name), prompt: start.task }),
+    () => "thread",
+  )
 
 /**
  * The thread runs as the starter does: its agent and admission, and the
@@ -1020,7 +1069,7 @@ const ThreadStartTool = tool({
   promptSnippet: "Start a thread for unrelated work",
   params: ThreadStartParams,
   output: ThreadStartResult,
-  summary: (input) => input.name ?? threadName(input.task),
+  summary: (input) => threadName(input),
   execute: Effect.fn("ThreadStartTool.execute")(function* (params: typeof ThreadStartParams.Type) {
     const ctx = yield* ExtensionContext
     const task = params.task.trim()
@@ -1041,7 +1090,7 @@ const ThreadStartTool = tool({
           // The create comes first: the call's id makes it durable-once, so a
           // repeat of this call finds its own thread and does not count it.
           const created = yield* ctx.Session.create({
-            name: threadName(params.name ?? task),
+            name: threadName(params),
             parentBranchId: ctx.branchId,
             admission: threadAdmission(starter),
             ...Record.filter(

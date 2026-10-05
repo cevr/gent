@@ -1,0 +1,5 @@
+# A bare `bun test <file>` at the root gets the shared test defaults: a temp
+# home, no network, logs off. Package lanes name the same preload with
+# `--preload`; bun evaluates it once.
+[test]
+preload = ["./packages/tooling/src/test-preload.ts"]

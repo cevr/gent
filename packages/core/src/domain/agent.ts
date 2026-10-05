@@ -1162,6 +1162,30 @@ export const RunSpecSchema = Schema.Struct({
 })
 export type RunSpec = typeof RunSpecSchema.Type
 
+// Model-call budget
+
+/**
+ * A turn's model-call budget as one reading of its durable count: `used` is
+ * the model requests the turn reserved so far (`reserveModelAttempt`, every
+ * request, retry, context summary and credential move, across restarts) and
+ * `limit` its `maxModelAttempts`. A receipt, not a counter: the reservation
+ * row stays the one count, and a reading is taken from it.
+ */
+export const ModelAttempts = Schema.Struct({ used: Schema.Natural, limit: Schema.Natural })
+export type ModelAttempts = typeof ModelAttempts.Type
+
+/**
+ * At this many calls left the turn writes its one budget notice and a
+ * client draws the count as near: enough for a model to write what it has
+ * and answer, with room for a retry. A smaller budget is near from its start;
+ * its notice still waits for the turn's first call.
+ */
+export const MODEL_ATTEMPTS_NOTICE_LEFT = 5
+
+/** The calls a turn has left, never below none. */
+export const modelAttemptsLeft = (attempts: ModelAttempts): number =>
+  Math.max(0, attempts.limit - attempts.used)
+
 // Agent run depth
 
 /**

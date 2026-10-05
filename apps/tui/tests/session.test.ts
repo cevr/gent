@@ -15,6 +15,7 @@ import { TestClock } from "effect/testing"
 import {
   applyRuntime,
   beginAuthCheck,
+  buildBudgetLabels,
   buildContextLabels,
   buildModelLabels,
   canNavigateAtCursor,
@@ -855,6 +856,37 @@ describe("buildContextLabels", () => {
 
   test("skips context when contextLength undefined", () => {
     expect(contextLabels(50_000, absent, absent).length).toBe(0)
+  })
+})
+
+describe("buildBudgetLabels", () => {
+  const budget = (used: number, limit: number) =>
+    buildBudgetLabels({ attempts: Option.some({ used, limit }), theme })
+
+  test("a turn with no budget shows nothing", () => {
+    expect(buildBudgetLabels({ attempts: Option.none(), theme })).toEqual([])
+  })
+
+  test("far from the limit the count reads used of limit, muted", () => {
+    const [label] = budget(2, 32)
+    expect(label?.text).toBe("calls 2/32")
+    expect(label?.color).toBe(theme.textMuted)
+    expect(label?.short).toBeUndefined()
+  })
+
+  test("near the limit the shape changes to the calls left", () => {
+    const [near] = budget(27, 32)
+    expect(near?.text).toBe("⧗ 5 of 32 calls left")
+    expect(near?.color).toBe(theme.warning)
+    expect(near?.short?.text).toBe("⧗ 5 left")
+    // One more call far: the count, not the notice shape.
+    expect(budget(26, 32)[0]?.text).toBe("calls 26/32")
+  })
+
+  test("with no call left the count reads none left in the error color", () => {
+    const [spent] = budget(8, 8)
+    expect(spent?.text).toBe("⧗ 0 of 8 calls left")
+    expect(spent?.color).toBe(theme.error)
   })
 })
 

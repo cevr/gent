@@ -88,7 +88,7 @@ describe("E2E: Auth", () => {
         // picker it opens is anthropic's.
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
-        expect(ctx.output).toContain("· method")
+        yield* ptyWaitFor(ctx, "· method", { timeout: 5_000 })
         // The rows end in "+ Add credential", so the key entry is one down.
         ctx.pty.write(keys.down)
         // The selection moves in a repaint; Enter goes to the row it lands on.

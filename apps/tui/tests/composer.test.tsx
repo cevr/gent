@@ -34,6 +34,7 @@ import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
 import {
+  buildBudgetLabels,
   type StatusRowLabel,
   type ComposerEvent,
   ComposerInteractionState,
@@ -416,6 +417,64 @@ describe("the status row anchors its right-hand labels", () => {
             .find((line) => line.includes("ready")) ?? ""
         expect(row.trimEnd()).toBe("ready · Claude Sonnet 5 · +120 -31")
       }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+/**
+ * A running turn's model-call budget sits in the right group, before the
+ * context gauge: `calls 2/8`, and near the limit `⧗ 3 of 8 calls left`, a
+ * different shape (R0), shortened to `⧗ 3 left` only where the right group
+ * cannot hold it.
+ */
+describe("the status row carries a running turn's model-call budget", () => {
+  const theme = {
+    textMuted: muted,
+    warning: RGBA.fromHex("#ffaa00"),
+    error: RGBA.fromHex("#ff0000"),
+  }
+  const rowAt = (width: number, used: number) =>
+    Effect.gen(function* () {
+      const right = [
+        ...buildBudgetLabels({ attempts: Option.some({ used, limit: 8 }), theme }),
+        label("ctx 42%"),
+        label("$12.34"),
+      ]
+      const all = [...labels.slice(0, 3), ...right]
+      const setup = yield* renderScoped(
+        () => <StatusRow labels={all} rightLabels={right.length} />,
+        { width, height: 4 },
+      )
+      yield* Effect.promise(() => setup.flush())
+      return (
+        setup
+          .captureCharFrame()
+          .split("\n")
+          .find((line) => line.includes("$12.34")) ?? ""
+      ).trimEnd()
+    })
+
+  it.scopedLive("at 100 columns the near count stands beside the gauge and the total", () =>
+    Effect.gen(function* () {
+      const row = yield* rowAt(100, 5)
+      expect(row.startsWith("idle · some-very-long-project-name")).toBe(true)
+      expect(row.endsWith("   ⧗ 3 of 8 calls left · ctx 42% · $12.34")).toBe(true)
+      expect(row.length).toBe(100)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("at 60 columns a count far from the limit keeps its place", () =>
+    Effect.gen(function* () {
+      const row = yield* rowAt(60, 2)
+      expect(row.startsWith("idle · ")).toBe(true)
+      expect(row.endsWith("   calls 2/8 · ctx 42% · $12.34")).toBe(true)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("at 40 columns the left group gives way, and narrower the count shortens", () =>
+    Effect.gen(function* () {
+      expect((yield* rowAt(40, 5)).trim()).toBe("⧗ 3 of 8 calls left · ctx 42% · $12.34")
+      expect((yield* rowAt(30, 5)).trim()).toBe("⧗ 3 left · ctx 42% · $12.34")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 

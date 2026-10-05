@@ -13,6 +13,9 @@ import {
   type EffectiveModelDriver,
   isReasoningEffort,
   type Model,
+  type ModelAttempts,
+  modelAttemptsLeft,
+  MODEL_ATTEMPTS_NOTICE_LEFT,
   ModelId,
   type ModelId as ModelIdType,
   promptCacheTtlMsFor,
@@ -42,6 +45,7 @@ import {
   decodeToolOutput,
   encodeToolOutput,
   Message,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   messagePartsToolCallParts,
   isSpawnedSession,
   normalizeResponseParts,
@@ -313,6 +317,14 @@ const continuationMessageIdForTurn = (messageId: MessageId, step: number): Messa
  */
 const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
   MessageId.make(`${messageId}:final-step`)
+
+/** The one model-call budget notice of a turn: a recovered step finds it written. */
+const modelAttemptsNoticeIdForTurn = (messageId: MessageId): MessageId =>
+  MessageId.make(`${messageId}:model-attempts`)
+
+/** The instruction that opens the last call a turn's model-call budget allows. */
+const modelAttemptsLastCallIdForTurn = (messageId: MessageId): MessageId =>
+  MessageId.make(`${messageId}:model-attempts-last`)
 
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
@@ -615,6 +627,8 @@ const reportStreamFailure = (
     retryAt: Option.Option<number>
     /** The credential the step's last request went out with. */
     credential?: CredentialReceipt
+    /** The turn's model-call budget as the step ended; absent for a turn with none. */
+    modelAttempts?: ModelAttempts
   },
   streamError: ProviderError,
   message: string,
@@ -631,7 +645,7 @@ const reportStreamFailure = (
         model: params.modelId,
         outcome: "Failed",
         ...effortReceipt(Option.fromUndefinedOr(params.reasoningLevel)),
-        ...omitUndefined({ credential: params.credential }),
+        ...omitUndefined({ credential: params.credential, modelAttempts: params.modelAttempts }),
       }),
     )
     const failure = {
@@ -664,6 +678,8 @@ export const collectModelTurnResponse = (params: {
   reasoningLevel?: RunEffort
   /** The credential the step's request goes out with, read when the step ends. */
   readCredential?: Effect.Effect<Option.Option<CredentialReceipt>>
+  /** The turn's model-call budget, read when the step ends; none for a turn with no budget. */
+  readModelAttempts?: Effect.Effect<Option.Option<ModelAttempts>>
   activeStream: ActiveStreamHandle
 }) =>
   Effect.gen(function* () {
@@ -702,11 +718,15 @@ export const collectModelTurnResponse = (params: {
           // Nothing observable was produced yet: let the caller's retry policy try again.
           if (!hasObservableOutput) return yield* streamError
           const credential = yield* params.readCredential ?? Effect.succeedNone
+          const modelAttempts = yield* params.readModelAttempts ?? Effect.succeedNone
           yield* reportStreamFailure(
             {
               ...params,
               retryAt: Option.none(),
-              ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
+              ...omitUndefined({
+                credential: Option.getOrUndefined(credential),
+                modelAttempts: Option.getOrUndefined(modelAttempts),
+              }),
             },
             streamError,
             "stream error, persisting partial output",
@@ -742,6 +762,8 @@ export const collectFailedModelTurnResponse = (params: {
   retryAt: Option.Option<number>
   /** The credential the step's last request went out with. */
   credential?: CredentialReceipt
+  /** The turn's model-call budget as the step ended; absent for a turn with none. */
+  modelAttempts?: ModelAttempts
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
@@ -1433,7 +1455,7 @@ interface SessionRoute {
    * (`resolveSessionAgent`); none when no agent has the name. Routing only:
    * a turn binds it to its run (`bindSessionAgent`) before it holds a tool.
    * Its `driver` is its own: a config `driverOverrides` entry reaches
-   * `modelDriver` only.
+   * `driverRef` only.
    */
   readonly definition: Option.Option<AgentDefinition>
   /**
@@ -1444,9 +1466,11 @@ interface SessionRoute {
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The level without the session's own: what clearing it falls back to. */
   readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
-  /** The driver the model dispatches through, and the catalog id it reaches; none without a model. */
-  readonly modelDriver: Option.Option<EffectiveModelDriver>
-  /** The driver the agent names (its own, else config `driverOverrides`). */
+  /**
+   * The driver the agent names (its own, else config `driverOverrides`). A
+   * reader with a model derives the driver it dispatches through, and the
+   * catalog id it reaches, from both (`effectiveModelDriver`).
+   */
   readonly driverRef: Option.Option<DriverRef>
 }
 
@@ -1502,7 +1526,6 @@ export const resolveSessionRoute = (params: {
       () => defaultReasoningLevel,
     ),
     defaultReasoningLevel,
-    modelDriver: Option.map(modelId, (id) => effectiveModelDriver(driverRef, id)),
     driverRef,
   }
 }
@@ -1612,7 +1635,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   }
   // A turn admitted without `message.send` (an extension's send, a create's
   // first prompt) meets the same refusal here: no turn runs on a model nobody named.
-  if (Option.isNone(route.modelId) || Option.isNone(route.modelDriver)) {
+  if (Option.isNone(route.modelId)) {
     yield* eventStore
       .publish(
         ErrorOccurred.make({
@@ -1732,7 +1755,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelId: route.modelId.value,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    modelDriver: route.modelDriver.value,
+    modelDriver: effectiveModelDriver(route.driverRef, route.modelId.value),
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
@@ -1774,7 +1797,10 @@ const ROUTE_REASON_CHARS = 200
  * first slot of its sign-in's `authOrder` the turn has not left, with that
  * slot's sign-in stamp, so a new sign-in on the slot reads as another
  * credential. None where the model names no sign-in. Fails when the order
- * fails or the turn left every slot.
+ * fails or the turn left every slot. A move never leaves the last slot of
+ * the order it reads, so the turn has left every slot only when the order
+ * changed while it ran (or after the receipts a resume or a child's first
+ * turn starts from): the failure says so.
  */
 const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(function* (params: {
   readonly request: ResolveModelRequest
@@ -1789,7 +1815,7 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
   const slot = slots.find((candidate) => !left.has(candidate))
   if (Predicate.isUndefined(slot)) {
     return yield* new ProviderAuthError({
-      message: `Every credential of provider "${provider}" failed this turn`,
+      message: `The authOrder of provider "${provider}" changed during this turn, and the turn already left every credential it names now (${slots.join(", ")}). The next turn starts again at its first credential`,
     })
   }
   return Option.some(
@@ -2723,7 +2749,36 @@ type ModelTurnSource = {
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
+  /** The turn's model-call budget as it reads when run; none for a turn with no budget. */
+  readonly modelAttempts: Effect.Effect<Option.Option<ModelAttempts>>
 }
+
+/**
+ * The turn's model-call budget as its reservation row reads now
+ * (`modelAttemptsUsed`); none for a turn with no budget. A read that fails
+ * is none too: the reading is a receipt, and the reservation still holds the
+ * limit.
+ */
+const readModelAttempts = (params: {
+  readonly messageId: MessageId
+  readonly limit: Option.Option<number>
+}): Effect.Effect<Option.Option<ModelAttempts>, never, SessionOperationStorage> =>
+  Option.match(params.limit, {
+    onNone: () => Effect.succeedNone,
+    onSome: (limit) =>
+      Effect.gen(function* () {
+        const operations = yield* SessionOperationStorage
+        return yield* operations.modelAttemptsUsed({ messageId: params.messageId })
+      }).pipe(
+        Effect.map((used) => Option.some({ used, limit })),
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.model-attempts-read-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<ModelAttempts>()),
+          ),
+        ),
+      ),
+  })
 
 const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
@@ -2759,8 +2814,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
   const operations = yield* SessionOperationStorage
+  const attemptLimit = Option.fromUndefinedOr(resolved.agent.maxModelAttempts)
+  // The budget as the reservation row reads when the step ends: its receipt.
+  const modelAttempts = readModelAttempts({
+    messageId: params.messageId,
+    limit: attemptLimit,
+  }).pipe(Effect.provideService(SessionOperationStorage, operations))
   // None: the agent sets no ceiling. Some(false): the turn spent it.
-  const reserveAttempt = Option.match(Option.fromUndefinedOr(resolved.agent.maxModelAttempts), {
+  const reserveAttempt = Option.match(attemptLimit, {
     onNone: () => Effect.succeedNone,
     onSome: (max) =>
       operations
@@ -2789,7 +2850,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     const admission = yield* reserveAttempt
     if (Option.isSome(admission) && !admission.value) {
       return yield* new ProviderError({
-        message: "Model-attempt budget exhausted",
+        message: modelAttemptsSpent(Option.getOrElse(attemptLimit, () => 0)),
         model: resolved.modelId,
       })
     }
@@ -2954,6 +3015,69 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ),
     )
   const eventStore = yield* EventStore
+  /**
+   * Leave the credential the failed request used (`used`), when its failure
+   * (`cause`) proved it cannot serve and the order as it reads now names
+   * another slot the turn has not left: a refusal, an exhausted quota, a
+   * rate limit past its retries, or a failure the driver proved. Any other
+   * failure, a cancelled step, or the last slot stays where it is. The user
+   * reads a notice.
+   */
+  const moveCredential = (cause: unknown) =>
+    Effect.gen(function* () {
+      if (yield* wasInterrupted(params.activeStream)) return false
+      const refusal = credentialRefusal(cause)
+      if (Option.isNone(refusal)) return false
+      const failed = yield* Ref.get(used)
+      if (Option.isNone(failed)) return false
+      const { provider, slot } = failed.value
+      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
+        Effect.orElseSucceed(Option.none),
+      )
+      if (Option.isNone(order) || order.value.provider !== provider) return false
+      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
+      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
+      if (Predicate.isUndefined(next)) return false
+      yield* params.turnLedger.passCredential(provider, slot)
+      yield* Effect.logInfo("turn.credential-moved").pipe(
+        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
+      )
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
+          notice: true,
+        }),
+      )
+      return true
+    }).pipe(Effect.provideService(EventStore, eventStore))
+  /**
+   * Run `attempt`, and run it again each time its failure moves the turn to
+   * the next credential of its order (`moveCredential`). The step's request
+   * and the handoff summary both walk the order here, under one rule: a
+   * summary that a credential refuses is made on the next one, and the step
+   * after it starts there with no second notice. `causeOf` reads the model's
+   * failure out of the attempt's error, none when it carries none.
+   */
+  const walkCredentials = <A, E, R>(
+    attempt: Effect.Effect<A, E, R>,
+    causeOf: (error: E) => Option.Option<unknown>,
+  ): Effect.Effect<A, E, R> => {
+    const visit: Effect.Effect<A, E, R> = attempt.pipe(
+      Effect.catch((error) =>
+        Option.match(causeOf(error), {
+          onNone: () => Effect.fail(error),
+          onSome: (cause) =>
+            Effect.flatMap(moveCredential(cause), (moved) => {
+              if (moved) return Effect.suspend(() => visit)
+              return Effect.fail(error)
+            }),
+        }),
+      ),
+    )
+    return visit
+  }
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
@@ -2990,6 +3114,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
+    walkCredentials: (compact) =>
+      walkCredentials(compact, (error) => Option.fromUndefinedOr(error.cause)),
   }).pipe(
     // The compactor runs with the context a tool call on this branch gets:
     // the session's cwd and facets, and the agent whose window it compacts.
@@ -3143,43 +3269,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       return { ...collected, windowFull, contextOverflow }
     })
 
-  /**
-   * Leave the credential the failed request used (`used`), when a failure
-   * proved it cannot serve and the order as it reads now names another slot
-   * the turn has not left: a refusal, an exhausted quota, a rate limit past
-   * its retries, or a failure the driver proved. Any other failure, a
-   * cancelled step, or the last slot stays where it is. The user reads a notice.
-   */
-  const moveCredential = (streamError: ProviderError) =>
-    Effect.gen(function* () {
-      if (yield* wasInterrupted(params.activeStream)) return false
-      const refusal = credentialRefusal(streamError.cause)
-      if (Option.isNone(refusal)) return false
-      const failed = yield* Ref.get(used)
-      if (Option.isNone(failed)) return false
-      const { provider, slot } = failed.value
-      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
-        Effect.orElseSucceed(Option.none),
-      )
-      if (Option.isNone(order) || order.value.provider !== provider) return false
-      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
-      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
-      if (Predicate.isUndefined(next)) return false
-      yield* params.turnLedger.passCredential(provider, slot)
-      yield* Effect.logInfo("turn.credential-moved").pipe(
-        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
-      )
-      yield* publishEventOrDie(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
-          notice: true,
-        }),
-      )
-      return true
-    })
-
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
@@ -3197,6 +3286,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ),
     ),
     credential,
+    modelAttempts,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) => {
@@ -3229,40 +3319,37 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       // keeps a step that wrote something. When it proves the credential
       // cannot serve, the turn leaves that slot and runs the step again on
       // the next one of its order, under the same attempt budget.
-      const visit: Effect.Effect<
-        CollectedTurnResponse,
-        ProviderError | ProviderAuthError,
-        R | EventStore
-      > = attempt.pipe(
-        Effect.catchTag("ProviderError", (streamError) =>
-          Effect.flatMap(moveCredential(streamError), (moved) => {
-            if (moved) return Effect.suspend(() => visit)
-            return Effect.fail(streamError)
-          }),
-        ),
-      )
+      const visit = walkCredentials(attempt, (error) => {
+        if (error._tag !== "ProviderError") return Option.none()
+        return Option.some(error.cause)
+      })
       return visit.pipe(
         Effect.catchTag("ProviderError", (streamError) =>
-          Effect.flatMap(Effect.all([Clock.currentTimeMillis, credential]), ([nowMs, used]) =>
-            collectFailedModelTurnResponse({
-              ...omitUndefined({ credential: Option.getOrUndefined(used) }),
-              messageId: params.messageId,
-              step: params.step,
-              streamError,
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              modelId: resolved.modelId,
-              reasoningLevel: Option.getOrUndefined(reasoningLevel),
-              activeStream: params.activeStream,
-              // One recovery per refusal: a step that already handed off, or the
-              // last step of the budget, fails the turn as any failure does.
-              contextOverflow:
-                !params.overflowed &&
-                !params.finalStep &&
-                retryPolicy.contextOverflow(streamError.cause),
-              refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
-              retryAt: limitResetAt(retryPolicy, streamError, nowMs),
-            }),
+          Effect.flatMap(
+            Effect.all([Clock.currentTimeMillis, credential, modelAttempts]),
+            ([nowMs, used, attempts]) =>
+              collectFailedModelTurnResponse({
+                ...omitUndefined({
+                  credential: Option.getOrUndefined(used),
+                  modelAttempts: Option.getOrUndefined(attempts),
+                }),
+                messageId: params.messageId,
+                step: params.step,
+                streamError,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                modelId: resolved.modelId,
+                reasoningLevel: Option.getOrUndefined(reasoningLevel),
+                activeStream: params.activeStream,
+                // One recovery per refusal: a step that already handed off, or the
+                // last step of the budget, fails the turn as any failure does.
+                contextOverflow:
+                  !params.overflowed &&
+                  !params.finalStep &&
+                  retryPolicy.contextOverflow(streamError.cause),
+                refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
+                retryAt: limitResetAt(retryPolicy, streamError, nowMs),
+              }),
           ),
         ),
         Effect.flatMap(withStopReason),
@@ -3398,6 +3485,80 @@ const EMPTY_RESPONSE_INSTRUCTION =
  */
 const MAX_STEPS_INSTRUCTION =
   "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
+
+/**
+ * The one notice a turn with a model-call budget reads, at the first step
+ * boundary after a call with `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer
+ * left: what the calls count, what the last one does, and what to do with
+ * the rest. A notice, not a stop: the cap stays, and the model decides how
+ * to finish.
+ */
+const modelAttemptsNotice = (attempts: ModelAttempts): string =>
+  `This turn has ${modelAttemptsLeft(attempts)} of its ${attempts.limit} model calls left. Every model request uses one, a retry or a context summary too. The last call runs with tools disabled, so the turn answers with what it has. Finish with the calls left: answer now with what you have established, or save your progress where it can be read later and say what is unfinished. Do not start new work. A new message starts a new turn with a fresh budget.`
+
+/**
+ * The instruction that opens the last call a turn's model-call budget
+ * allows, worded as the step limit's (`MAX_STEPS_INSTRUCTION`): the step runs
+ * with tools off and writes the turn's answer.
+ */
+const modelAttemptsLastCall = (limit: number): string =>
+  `This is the last model call of this turn's budget of ${limit}, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the model-call budget stopped you, summarise what you established, and name what is still unfinished. A new message starts a new turn with a fresh budget.`
+
+/**
+ * Why a turn stopped at its model-call budget, and how to go on: the error
+ * row, a child's completion and a headless run all print it. A turn reaches
+ * it only when its last call cannot answer: a retry, a context summary or a
+ * credential move inside that call finds none left, or the budget is 0. The
+ * budget binds one turn, so a new message runs with a fresh one; nothing
+ * lifts the cap of the turn it stopped.
+ */
+const modelAttemptsSpent = (limit: number): string =>
+  `Stopped at the model-call budget: ${limit} of ${limit} model calls used this turn. Its work so far is kept. Send a message to continue with a fresh budget of ${limit}, or raise maxModelAttempts for the run.`
+
+/**
+ * The step at this boundary is the last call the budget allows: one is
+ * left. It runs as the step limit's last step does, tools off, so the turn
+ * answers with what it has rather than stop mid-work. A retry, a summary or
+ * a credential move inside it finds no call left, and the turn stops at the
+ * budget saying so.
+ */
+const isLastModelCall = (reading: Option.Option<ModelAttempts>): boolean =>
+  Option.exists(reading, (attempts) => modelAttemptsLeft(attempts) === 1)
+
+/**
+ * The budget line a step boundary writes, if any. The last call's line, but
+ * not on the step limit's last step, whose own line already says tools are
+ * off. Otherwise the one near notice, at the first boundary after a call with
+ * `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer left: a small budget is not
+ * near before the turn has worked, so its first step reads only the task.
+ * Each id comes from the turn, so a line is written once and a recovered
+ * step finds it.
+ */
+const modelAttemptsLine = (params: {
+  readonly messageId: MessageId
+  readonly reading: Option.Option<ModelAttempts>
+  readonly lastStep: boolean
+  readonly written: (id: MessageId) => boolean
+}): Option.Option<{
+  readonly id: MessageId
+  readonly text: string
+  readonly attempts: ModelAttempts
+}> =>
+  Option.flatMap(params.reading, (attempts) => {
+    const left = modelAttemptsLeft(attempts)
+    if (left === 1) {
+      if (params.lastStep) return Option.none()
+      return Option.some({
+        id: modelAttemptsLastCallIdForTurn(params.messageId),
+        text: modelAttemptsLastCall(attempts.limit),
+        attempts,
+      })
+    }
+    const noticeId = modelAttemptsNoticeIdForTurn(params.messageId)
+    const near = attempts.used > 0 && left > 1 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
+    if (!near || params.written(noticeId)) return Option.none()
+    return Option.some({ id: noticeId, text: modelAttemptsNotice(attempts), attempts })
+  })
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
   "Your previous step was cut off by the output limit or a full context window before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
@@ -4160,6 +4321,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           modelId: params.resolved.modelId,
           reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
           readCredential: source.credential,
+          readModelAttempts: source.modelAttempts,
           activeStream: params.activeStream,
         }),
       )
@@ -4190,6 +4352,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // driver override routes `provider/model` to `driver/model`.
         const pricedModel = params.resolved.modelDriver.contextModelId
         const credential = yield* source.credential
+        const modelAttempts = yield* source.modelAttempts
         const streamEndedCost = yield* computeStreamEndedCost({
           modelId: pricedModel,
           usage: Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
@@ -4212,7 +4375,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
             outcome: outcome._tag,
             ...effortReceipt(source.reasoningLevel),
-            ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
+            ...omitUndefined({
+              credential: Option.getOrUndefined(credential),
+              modelAttempts: Option.getOrUndefined(modelAttempts),
+            }),
           }),
         )
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
@@ -4319,7 +4485,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   interrupted: true,
                   outcome: "Interrupted",
                   ...effortReceipt(source.reasoningLevel),
-                  ...omitUndefined({ credential: Option.getOrUndefined(yield* source.credential) }),
+                  ...omitUndefined({
+                    credential: Option.getOrUndefined(yield* source.credential),
+                    modelAttempts: Option.getOrUndefined(yield* source.modelAttempts),
+                  }),
                 }),
               )
               yield* persistCutStep("Interrupted")
@@ -5156,8 +5325,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // tell the model its tools are gone and let it spend this step writing
       // the answer. Prior art: opencode-v2 does the same at its ceiling
       // (`runner/llm.ts:221`).
-      const finalStep = params.step === maxSteps
-      if (finalStep) {
+      const lastStep = params.step === maxSteps
+      // The turn's model-call budget as its reservation row reads at this
+      // boundary; none for a turn with no budget.
+      const reading = yield* readModelAttempts({
+        messageId: params.state.message.id,
+        limit: Option.fromUndefinedOr(resolved.agent.maxModelAttempts),
+      })
+      const finalStep = lastStep || isLastModelCall(reading)
+      if (lastStep) {
         yield* appendBoundaryLine(
           Message.cases.regular.make({
             id: finalStepMessageIdForTurn(params.state.message.id),
@@ -5171,6 +5347,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         yield* Effect.logWarning("turn.max-steps-final").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
+        )
+      }
+      const budgetLine = modelAttemptsLine({
+        messageId: params.state.message.id,
+        reading,
+        lastStep,
+        written: (id) => resolved.messages.some((existing) => existing.id === id),
+      })
+      if (Option.isSome(budgetLine)) {
+        const line = budgetLine.value
+        yield* appendBoundaryLine(
+          Message.cases.regular.make({
+            id: line.id,
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: line.text })],
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: line.attempts },
+          }),
         )
       }
       if (params.step === 1) {
@@ -5215,6 +5411,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       }
+      // The limit that made this the last step: the step limit's own, else the call budget's.
+      let refusal = {
+        error: "The tool did not run: the turn reached its step limit.",
+        reason: "StepLimit",
+      }
+      if (!lastStep) {
+        refusal = {
+          error: "The tool did not run: the turn reached its model-call budget.",
+          reason: "ModelCallBudget",
+        }
+      }
       const refuseToolsAtStepLimit = Effect.gen(function* () {
         const address = stepAddress(params.state.message.id, params.step)
         yield* recordToolOutcome({
@@ -5228,10 +5435,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               name: call.name,
               isFailure: true,
               providerExecuted: false,
-              result: {
-                error: "The tool did not run: the turn reached its step limit.",
-                reason: "StepLimit",
-              },
+              result: refusal,
             }),
           ),
         })
