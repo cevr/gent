@@ -1520,7 +1520,7 @@ export default defineClientExtension("@test/override-bash", {
 }).pipe(Effect.provide(BunServices.layer))
 describe("loadTuiExtensions", () => {
   it.scopedLive(
-    "with an active session and no user or project extensions, the builtin surfaces load",
+    "with an active session and no user or project extensions, the builtin surfaces load, /revert among them",
     () => {
       const activeSessionRuntime = makeClientExtensionRuntime({
         transport: {
@@ -1555,6 +1555,13 @@ describe("loadTuiExtensions", () => {
         const prefixes = new Set(resolved.autocompleteItems.map((entry) => entry.prefix))
         expect(prefixes.has("$")).toBe(true)
         expect(prefixes.has("@")).toBe(true)
+        // `/revert` resolves through the default registry and opens its pane.
+        const commands = commandsOf(resolved)
+        expect(commands.find((command) => command.slash === "revert")?.id).toBe(
+          "checkpoints.revert",
+        )
+        expect(resolved.widgets.map((widget) => widget.id)).toContain("checkpoints.revert")
+        expect(executeSlashCommand("revert", "", commands)).toBe(true)
         // The builtin status labels: the git branch and changes (20), the goal
         // (40), the cache timer (55, in the right group) and the cache waste
         // total (60).

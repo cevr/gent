@@ -1536,8 +1536,8 @@ section, no notice. Core has no checkpoint concept.
   (with its file count) once done, or `unfinished` without its `done`. A
   refusal is an answer (`Refused { reason, conflicts }`), not an error.
 - Client: `/diff turn [n]` is a target of `@gent/git`'s `/diff` (see the TUI
-  extensions). `/revert` (`apps/tui/src/extensions/checkpoints.client.tsx`)
-  is a docked pane over `checkpoints.list`: one row per turn, newest first,
+  extensions). `/revert` (`apps/tui/src/extensions/checkpoints.client.tsx`,
+  one of the `builtinClientModules`) is a docked pane over `checkpoints.list`: one row per turn, newest first,
   `#n · prompt · +a -d in k files · 12m` (a narrow row drops the age, then
   cuts the prompt); a turn with no checkpoint says why and cannot be chosen.
   An undo row, or a finish and an undo row for a revert a stop cut short,

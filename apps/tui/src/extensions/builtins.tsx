@@ -64,6 +64,7 @@ import {
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
 import builtinCache from "./cache.client"
+import builtinCheckpoints from "./checkpoints.client"
 import builtinDelegate from "./delegate.client"
 import builtinExtensionAdmin from "./extension-admin.client"
 import builtinGit from "./git.client"
@@ -891,6 +892,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,
   builtinCache,
+  builtinCheckpoints,
   builtinDelegate,
   builtinDriver,
   builtinExtensionAdmin,
