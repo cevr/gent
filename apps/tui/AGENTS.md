@@ -20,9 +20,13 @@
 `<box>` is the flexbox container. `<text>` holds text, with `<b>` and `<span style={{ fg }}>` inside. `<scrollbox>` scrolls; `stickyScroll stickyStart="bottom"` keeps it at the end. `<input>` takes keys only with its `focused` prop.
 
 ```tsx
-<box flexDirection="column" border>
+import type { RGBA } from "@opentui/core"
+// In a component: `const { theme } = useTheme()` (src/theme.tsx).
+declare const theme: { readonly primary: RGBA }
+
+;<box flexDirection="column" border>
   <text>
-    Plain, <b>bold</b> and <span style={{ fg: "#ff8800" }}>colored</span> text
+    Plain, <b>bold</b> and <span style={{ fg: theme.primary }}>colored</span> text
   </text>
   <scrollbox stickyScroll stickyStart="bottom">
     <text>A line that scrolls</text>
