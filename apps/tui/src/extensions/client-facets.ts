@@ -110,7 +110,8 @@ export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly b
 export interface ExtensionAgentDetail {
   /** What the loop is doing: its runtime state tag. */
   readonly status: SessionSnapshot["runtime"]["_tag"]
-  readonly model: string
+  /** None when nobody named the session a model. */
+  readonly model: Option.Option<string>
   readonly turns: number
   readonly costUsd: number
   readonly durationMs: number
@@ -178,9 +179,10 @@ export interface ClientTransport {
   /**
    * The model id the session in view runs its next step on: its own setting,
    * else what the server resolved, as the status row names it. Reactive: a
-   * model switch changes it before any request goes out.
+   * model switch changes it before any request goes out. None when nobody
+   * named the session a model.
    */
-  readonly selectedModel: () => string
+  readonly selectedModel: () => Option.Option<string>
   /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
@@ -361,7 +363,7 @@ const agentDetailAt = (
   ).pipe(
     Effect.map((snapshot) => ({
       status: snapshot.runtime._tag,
-      model: snapshot.resolvedModelId,
+      model: Option.fromUndefinedOr(snapshot.resolvedModelId),
       turns: snapshot.metrics.turns,
       costUsd: snapshot.metrics.costUsd,
       durationMs: snapshot.metrics.durationMs,

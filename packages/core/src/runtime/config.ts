@@ -20,6 +20,7 @@ import {
   mergeAgentPatches,
   type StoredAgentPatch,
   type DriverRef,
+  ModelId,
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
@@ -172,6 +173,13 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   providers: Schema.optional(Schema.Record(Schema.String, ProviderConfigEntry)),
   /** Provider ids that get no generic driver, whatever their key or config. */
   disabledProviders: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The user's model: what an agent that names no model runs
+   * (`resolveSessionRoute`). Gent ships no default model; the first `/model`
+   * pick writes this field when the user config has none. A project entry
+   * shadows the user's.
+   */
+  model: Schema.optional(ModelId),
 }) {}
 
 /** The provider settings of a config: what the generic providers read. */
@@ -198,6 +206,11 @@ const configUpdates = {
     const next = { ...existing }
     delete next[agent]
     return Option.some(new UserConfig({ ...current, driverOverrides: nonEmptyRecord(next) }))
+  },
+  /** `None` when the config already names the user's model: the first pick stands. */
+  setModelIfUnset: (current: UserConfig, model: ModelId): Option.Option<UserConfig> => {
+    if (Predicate.isNotUndefined(current.model)) return Option.none()
+    return Option.some(new UserConfig({ ...current, model }))
   },
 }
 
@@ -238,6 +251,7 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
       ...(user.disabledProviders ?? []),
       ...(project.disabledProviders ?? []),
     ]),
+    model: project.model ?? user.model,
   })
 
 /** A config file as JSON, with every key, known to `UserConfig` or not. */
@@ -347,6 +361,14 @@ interface ConfigServiceService {
   /** Remove a per-agent driver override. No-op when the agent has none. */
   readonly clearDriverOverride: (
     agent: AgentName,
+  ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
+  /**
+   * Write `model` as the user's model when the user config names none;
+   * no-op otherwise. The first `/model` pick names the user's model this
+   * way. Fails as `setDriverOverride` does.
+   */
+  readonly setModelIfUnset: (
+    model: ModelId,
   ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
 }
 
@@ -801,6 +823,15 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             }),
           )
         }),
+
+        setModelIfUnset: Effect.fn("ConfigService.setModelIfUnset")(function* (model) {
+          yield* mutateUserConfig((current) =>
+            Option.match(configUpdates.setModelIfUnset(current, model), {
+              onNone: () => ({ updated: current, save: false }),
+              onSome: (updated) => ({ updated, save: true }),
+            }),
+          )
+        }),
       }
 
       return service
@@ -843,6 +874,10 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           clearDriverOverride: (agent) =>
             Ref.update(userConfigRef, (current) =>
               Option.getOrElse(configUpdates.clearDriverOverride(current, agent), () => current),
+            ),
+          setModelIfUnset: (model) =>
+            Ref.update(userConfigRef, (current) =>
+              Option.getOrElse(configUpdates.setModelIfUnset(current, model), () => current),
             ),
         })
       }),

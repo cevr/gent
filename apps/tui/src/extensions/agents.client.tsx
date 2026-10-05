@@ -732,14 +732,14 @@ export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string
     onSome: (value) => {
       if (value.status === "Idle") {
         return [
-          shortModel(value.model),
+          ...Option.toArray(Option.map(value.model, shortModel)),
           formatTurns(value.turns),
           formatCost(value.costUsd),
           formatDuration(value.durationMs, "padded"),
         ].join("  ·  ")
       }
       return [
-        shortModel(value.model),
+        ...Option.toArray(Option.map(value.model, shortModel)),
         `turn ${value.turns + 1} running`,
         formatCost(value.costUsd),
       ].join("  ·  ")

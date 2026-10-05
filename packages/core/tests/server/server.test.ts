@@ -802,11 +802,12 @@ describe("session command persistence", () => {
           Logger.layer([captureLogger]),
         )
 
+        const created = yield* inWorkspace(client["session.create"]({}))
         const exit = yield* Effect.exit(
           inWorkspace(
             client["message.send"]({
-              sessionId: SessionId.make("send-runtime-failure"),
-              branchId: BranchId.make("send-runtime-failure-branch"),
+              sessionId: created.sessionId,
+              branchId: created.branchId,
               content: "fail loudly",
             }),
           ),
@@ -3682,14 +3683,17 @@ describe("server root composition", () => {
             Layer.provide(RpcHandlersLive, Layer.succeedContext(root)),
           )
           const clients = yield* serveBothTransports(handlers)
+          const inWorkspace = RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId })
+          // A send names a stored session: its admission reads the session's route.
+          const served = yield* clients["in-process"]["session.create"]({}).pipe(inWorkspace)
           const send = (transport: keyof typeof clients, content: string, requestId: string) => {
             const sendMessage = clients[transport]["message.send"]
             return sendMessage({
-              sessionId: SessionId.make("served-session"),
-              branchId: BranchId.make("served-branch"),
+              sessionId: served.sessionId,
+              branchId: served.branchId,
               content,
               requestId,
-            }).pipe(RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId }))
+            }).pipe(inWorkspace)
           }
 
           const original = yield* send(first, "original", "req-shared").pipe(Effect.forkScoped)

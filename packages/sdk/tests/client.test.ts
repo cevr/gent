@@ -15,6 +15,7 @@ import {
   makeTempDirectoryScoped,
   serveModelCatalogFixture,
   waitFor,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { SessionStorage } from "@gent/core/host"
 import { Gent } from "../src/client"
@@ -185,7 +186,12 @@ describe("Gent.server workspace isolation", () => {
           const clientA = (yield* Gent.client(server, { cwd: cwdA })).client
           const clientB = (yield* Gent.client(server, { cwd: cwdB })).client
 
-          const created = yield* clientA.session.create({ name: "Workspace A", cwd: cwdA })
+          // A scripted server reads no user model of its own: the session names one.
+          const created = yield* clientA.session.create({
+            name: "Workspace A",
+            cwd: cwdA,
+            modelId: TEST_MODEL_ID,
+          })
           yield* clientA.message.send({
             sessionId: created.sessionId,
             branchId: created.branchId,
@@ -276,7 +282,10 @@ describe("Gent.provider.mock tool scenario", () => {
             ),
           )
           const { client } = yield* Gent.client(server, { cwd })
-          const { sessionId, branchId } = yield* client.session.create({ cwd })
+          const { sessionId, branchId } = yield* client.session.create({
+            cwd,
+            modelId: TEST_MODEL_ID,
+          })
           yield* client.message.send({ sessionId, branchId, content: "debug tools please" })
 
           const messages = yield* waitFor(
@@ -339,7 +348,10 @@ describe("Gent.provider.mock tool scenario", () => {
             ),
           )
           const { client } = yield* Gent.client(server, { cwd })
-          const { sessionId, branchId } = yield* client.session.create({ cwd })
+          const { sessionId, branchId } = yield* client.session.create({
+            cwd,
+            modelId: TEST_MODEL_ID,
+          })
           yield* client.message.send({ sessionId, branchId, content: "hello offline" })
           const messages = yield* waitFor(
             client.message.list({ branchId }),

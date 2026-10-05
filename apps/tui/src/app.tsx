@@ -164,13 +164,17 @@ const createAndLoadSession = (input: {
   client: Pick<GentNamespacedClient, "session">
   cwd: string
   admission?: SessionAdmission
+  modelId?: ModelId
 }): Effect.Effect<DomainSession, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const requestId = yield* randomId
     const result = yield* input.client.session.create({
       cwd: input.cwd,
       requestId,
-      ...Record.filter({ admission: input.admission }, Predicate.isNotUndefined),
+      ...Record.filter(
+        { admission: input.admission, modelId: input.modelId },
+        Predicate.isNotUndefined,
+      ),
     })
     const session = yield* input.client.session.get({ sessionId: result.sessionId })
     const decodedSession = Option.fromNullishOr(session)
@@ -281,9 +285,11 @@ export const resolveHeadlessState = (input: {
   promptArg: Option.Option<string>
   /** The agent and run spec a new headless session runs as, for every turn. */
   admission?: SessionAdmission
+  /** The new headless session's own model (`--model`). */
+  modelId?: ModelId
 }): Effect.Effect<HeadlessState, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const { client, cwd, session, promptArg, admission } = input
+    const { client, cwd, session, promptArg, admission, modelId } = input
     if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
       return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
     }
@@ -291,7 +297,11 @@ export const resolveHeadlessState = (input: {
       return { session: yield* loadSession(client, session.value), prompt: promptArg.value }
     }
     return {
-      session: yield* createAndLoadSession({ client, cwd, admission }),
+      session: yield* createAndLoadSession({
+        client,
+        cwd,
+        ...Record.filter({ admission, modelId }, Predicate.isNotUndefined),
+      }),
       prompt: promptArg.value,
     }
   })
@@ -882,7 +892,7 @@ export function Session(props: SessionProps) {
             open={controller.uiState().overlay._tag === "model"}
             title="Model"
             rows={modelRows(client.models())}
-            current={Option.some(client.model())}
+            current={client.model()}
             // No models yet is not none: the session's catalog still loads.
             detail={Option.match(client.modelCatalog(), {
               onNone: () => Option.some("Loading the session's models…"),

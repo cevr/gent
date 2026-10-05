@@ -1104,13 +1104,6 @@ export const StoredAgentDefinition = Schema.Struct({
   }),
 )
 
-// Default model — used when an agent has no model set
-export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
-
-/** Resolve model for an agent definition */
-export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
-  agent.model ?? DEFAULT_MODEL_ID
-
 // ── driver routing ──────────────────────────────────────────────────────────
 
 /** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
@@ -1220,6 +1213,24 @@ export class SessionAgentError extends Schema.TaggedError<SessionAgentError>()(
     agent: Schema.optional(AgentName),
   },
 ) {}
+
+/**
+ * A turn has no model: the session names none, its agent names none, and
+ * the user named none (config `model`, which the first `/model` pick
+ * writes). Gent ships no default model, so a send is refused rather than
+ * run on a vendor's model.
+ */
+export class NoModelError extends Schema.TaggedError<NoModelError>()("NoModelError", {
+  message: Schema.String,
+  agent: AgentName,
+}) {}
+
+/** The refusal of a turn that has no model, for `agent`. */
+export const noModelError = (agent: AgentName) =>
+  new NoModelError({
+    message: `No model is set for agent "${agent}". Pick one with /model; a headless run takes --model, or \`model\` in ~/.gent/config.json`,
+    agent,
+  })
 
 /** A parent at the nesting cap asked for one more child. */
 export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(

@@ -27,6 +27,7 @@ export {
   staticToolBinding,
   storedEvents,
   testAgent,
+  TEST_MODEL_ID,
   testHostFacts,
   testLeafContext,
   testSqliteStorage,

@@ -67,7 +67,7 @@ const row = (id: string, live = true): AgentRowEntry => ({
 
 const detail = (turns: number): ExtensionAgentDetail => ({
   status: "Idle",
-  model: "anthropic/claude-sonnet-5",
+  model: Option.some("anthropic/claude-sonnet-5"),
   turns,
   costUsd: 0,
   durationMs: 0,
@@ -738,7 +738,7 @@ describe("Agents pane navigation", () => {
                   setDetail(
                     Option.some({
                       status: "Idle",
-                      model: "anthropic/claude-sonnet-5",
+                      model: Option.some("anthropic/claude-sonnet-5"),
                       turns: 7,
                       costUsd: 0.125,
                       durationMs: 93_000,
@@ -791,7 +791,7 @@ describe("Agents pane navigation", () => {
             detail: () =>
               Option.some({
                 status: "Running",
-                model: "anthropic/claude-sonnet-5",
+                model: Option.some("anthropic/claude-sonnet-5"),
                 turns: 1,
                 costUsd: 0,
                 durationMs: 0,
@@ -905,7 +905,7 @@ describe("Agents pane reopen", () => {
             asked.push(key.sessionId)
             return Effect.succeed({
               status: "Idle",
-              model: "anthropic/claude-sonnet-5",
+              model: Option.some("anthropic/claude-sonnet-5"),
               turns: turns(),
               costUsd: 0,
               durationMs: 0,
@@ -973,7 +973,7 @@ describe("Agents pane framing", () => {
                 detail: () =>
                   Option.some({
                     status: "Idle",
-                    model: "anthropic/claude-sonnet-5",
+                    model: Option.some("anthropic/claude-sonnet-5"),
                     turns: 7,
                     costUsd: 0.125,
                     durationMs: 93_000,
@@ -1358,7 +1358,7 @@ describe("agents pane counts and detail", () => {
         turns: number,
       ): ExtensionAgentDetail => ({
         status,
-        model: "anthropic/claude-sonnet-5",
+        model: Option.some("anthropic/claude-sonnet-5"),
         turns,
         costUsd: 0.028,
         durationMs: 0,

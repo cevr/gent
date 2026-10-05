@@ -977,7 +977,7 @@ const setupWithCatalog = (
         currentSession: () => session,
         sessionEventSubscribers: subscribers,
         modelCatalog: catalog,
-        selectedModel: selected,
+        selectedModel: () => Option.some(selected()),
       },
     )
     const deliver = (envelopes: ReadonlyArray<EventEnvelope>) => {
@@ -1360,7 +1360,7 @@ const labelAt = (
   now: number,
   opts: { readonly selected?: string; readonly compactsNext?: boolean } = {},
 ): string =>
-  Option.match(cacheClock(refresh, lifetime, opts.selected ?? SONNET, now), {
+  Option.match(cacheClock(refresh, lifetime, Option.some(opts.selected ?? SONNET), now), {
     onNone: () => "none",
     onSome: (clock) => {
       const item = cacheClockLabel(clock, {

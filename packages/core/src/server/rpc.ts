@@ -4,6 +4,7 @@ import {
   AgentName,
   Model,
   ModelId,
+  NoModelError,
   ParentBoundError,
   ReasoningEffort,
   RunPathRefusedError,
@@ -82,6 +83,7 @@ export const GentRpcError = Schema.Union([
   SessionDepthLimitError,
   RunPathRefusedError,
   ParentBoundError,
+  NoModelError,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type GentRpcError = typeof GentRpcError.Type
@@ -171,8 +173,8 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   agent: AgentName,
   /** What the next turn would use once session settings, config, and the
    * agent definition are folded together. Clients render these; they never
-   * re-derive the precedence. */
-  resolvedModelId: ModelId,
+   * re-derive the precedence. Absent when nobody named a model. */
+  resolvedModelId: Schema.optional(ModelId),
   resolvedReasoningLevel: Schema.optional(ReasoningEffort),
   /** The reasoning level without the session's own: what clearing it falls back to. */
   defaultReasoningLevel: Schema.optional(ReasoningEffort),

@@ -1154,18 +1154,15 @@ export const findUnadaptedSeams = (
  * rots on the vendor's schedule and silently excludes anyone whose only
  * credentials are for another provider.
  *
- * Where core needs a model, it asks the seam that already answers the
- * question -- `resolveAgentModel` for a registered agent -- and falls back to
- * `DEFAULT_MODEL_ID`, the single declared default.
+ * Core declares no default model either: a turn runs the model the session,
+ * its agent or the user names (`resolveSessionRoute`), and with none it is
+ * refused (`NoModelError`). Only the test utilities name one, for tests.
  *
  * @module
  */
 
-/**
- * The one file allowed to name a vendor model: it declares the default that
- * every other core site resolves through.
- */
-const DECLARATION_SITE = "packages/core/src/domain/agent.ts"
+/** Test code inside core: its test model is never a product default. */
+const CORE_TEST_UTILS_PREFIX = "packages/core/src/test-utils/"
 
 /**
  * A provider-qualified model id in a string literal, e.g. `"anthropic/claude-…"`.
@@ -1180,7 +1177,7 @@ const VENDOR_MODEL_PATTERN =
 /** Report vendor model SKUs pinned in core source. */
 export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
-  if (file === DECLARATION_SITE) return []
+  if (file.startsWith(CORE_TEST_UTILS_PREFIX)) return []
 
   const findings: Finding[] = []
   const lines = text.split("\n")
@@ -1190,7 +1187,7 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
     findings.push({
       file,
       line: index + 1,
-      message: `core pins the vendor model ${match.value[0]}; resolve the model through \`resolveAgentModel\` and \`DEFAULT_MODEL_ID\` instead`,
+      message: `core pins the vendor model ${match.value[0]}; a turn's model comes from the session, its agent or the user's config (\`resolveSessionRoute\`)`,
     })
   }
   return findings

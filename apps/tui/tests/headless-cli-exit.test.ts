@@ -1,7 +1,12 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect"
-import { createWorkerEnv, seedAuthKeys, serveModelCatalogFixture } from "@gent/core/test-utils"
+import {
+  createWorkerEnv,
+  seedAuthKeys,
+  serveModelCatalogFixture,
+  TEST_MODEL_ID,
+} from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })
@@ -203,11 +208,29 @@ describe("headless CLI", () => {
     "missing sign-ins are one line on stderr, by provider name",
     () =>
       Effect.gen(function* () {
+        const { exitCode, stdout, stderr } = yield* runGent(
+          ["-H", "--model", TEST_MODEL_ID, "Say hi in 3 words"],
+          { keyless: true },
+        )
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe("CliStartupError: missing required sign-ins: Anthropic\n")
+        expect(stdout).toBe("")
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  // Gent ships no default model: a run that names none is refused, with the way to name one.
+  it.scopedLive(
+    "a headless run with no model is one line on stderr that names --model",
+    () =>
+      Effect.gen(function* () {
         const { exitCode, stdout, stderr } = yield* runGent(["-H", "Say hi in 3 words"], {
           keyless: true,
         })
         expect(exitCode).toBe(1)
-        expect(stderr).toBe("CliStartupError: missing required sign-ins: Anthropic\n")
+        expect(stderr).toStartWith('NoModelError: No model is set for agent "main".')
+        expect(stderr).toContain("--model")
+        expect(stderr.split("\n").filter((line) => line !== "")).toHaveLength(1)
         expect(stdout).toBe("")
       }).pipe(Effect.provide(BunServices.layer)),
     20000,

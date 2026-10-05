@@ -36,8 +36,6 @@ import {
   ModelId,
   ReasoningEffort,
   SessionId,
-  DEFAULT_MODEL_ID,
-  resolveAgentModel,
   type Branch,
   ConnectionState,
   type ExtensionHealthSnapshot,
@@ -592,8 +590,11 @@ interface ClientAgentValue {
   /** None until a snapshot names the session's agent. */
   agent: () => Option.Option<AgentName>
   cost: () => number
-  /** The model the next turn would use: session setting, else the server-resolved default. */
-  model: () => string
+  /**
+   * The model the next turn would use: the session setting, else the
+   * server-resolved one. None when nobody named one: gent ships no default.
+   */
+  model: () => Option.Option<ModelId>
   /**
    * The level the next turn asks for: the session's, else its route's (a
    * virtual model), else the default one; None before any is known. On
@@ -1135,7 +1136,7 @@ export function ClientProvider(props: ClientProviderProps) {
       running,
       turnsStarted: Option.some(turnsStarted),
       error: heldErrorFor(snapshot, turnsStarted),
-      resolvedModelId: Option.some(snapshot.resolvedModelId),
+      resolvedModelId: Option.fromUndefinedOr(snapshot.resolvedModelId),
       defaultReasoningLevel: Option.fromUndefinedOr(snapshot.defaultReasoningLevel),
     })
     setRuntimeMetrics(snapshot.metrics)
@@ -1509,19 +1510,17 @@ export function ClientProvider(props: ClientProviderProps) {
     cost: () => runtimeMetrics().costUsd,
     model: () => {
       // The session setting applies before the snapshot refresh lands; the
-      // server-resolved id covers config and agent defaults. The agent
-      // definition only fills the gap before the first snapshot hydrates.
+      // server-resolved id covers the agent's and the user's model, and its
+      // absence means nobody named one. The default agent's definition only
+      // fills the gap before the first snapshot names the agent.
       const pinned = Option.fromUndefinedOr(session().modelId)
-      if (Option.isSome(pinned)) return pinned.value
-      if (Option.isSome(agentStore.resolvedModelId)) return agentStore.resolvedModelId.value
-      const { agentsByName } = catalog()
-      const agentDef = Option.flatMap(agentStore.agent, (agent) =>
-        Option.fromNullishOr(agentsByName[agent]),
+      if (Option.isSome(pinned)) return pinned
+      if (Option.isSome(agentStore.resolvedModelId) || Option.isSome(agentStore.agent))
+        return agentStore.resolvedModelId
+      return Option.flatMap(
+        Option.fromNullishOr(catalog().agentsByName[DEFAULT_AGENT_NAME]),
+        (agent) => Option.fromUndefinedOr(agent.model),
       )
-      const defaultAgentDef = Option.fromNullishOr(agentsByName[DEFAULT_AGENT_NAME])
-      const resolved = Option.orElse(agentDef, () => defaultAgentDef)
-      if (Option.isSome(resolved)) return resolveAgentModel(resolved.value)
-      return DEFAULT_MODEL_ID
     },
     // The turn's order (`applyTurnRoute`): the session's own level, else the
     // route's, else the agent or config default. On auto, the effort route's.
@@ -1557,10 +1556,11 @@ export function ClientProvider(props: ClientProviderProps) {
     isError: () => Option.isSome(agentStore.error),
     error: () => agentStore.error,
     sessionMetrics,
-    modelInfo: () => Option.fromNullishOr(catalog().modelsById[agentValue.model()]),
+    modelInfo: () =>
+      Option.flatMap(agentValue.model(), (id) => Option.fromNullishOr(catalog().modelsById[id])),
     routedModel: () =>
       Option.fromUndefinedOr(runtimeMetrics().routed).pipe(
-        Option.filter((routed) => routed.selected === agentValue.model()),
+        Option.filter((routed) => Option.contains(agentValue.model(), routed.selected)),
         Option.flatMap((routed) =>
           Option.map(Option.fromNullishOr(catalog().modelsById[routed.model]), (model) => ({
             model,

@@ -387,44 +387,47 @@ export const SEND_RETRY = {
   while: isConnectionLoss,
 }
 
+/** The word an error's message reads after: `Storage: disk full`. */
+const ERROR_PREFIX: Readonly<
+  Record<
+    Exclude<
+      UiError["_tag"],
+      "ProviderError" | "DriverError" | "ConfigLoadError" | "ConfigWriteError" | "NoModelError"
+    >,
+    string
+  >
+> = {
+  StorageError: "Storage",
+  SessionRuntimeError: "Runtime",
+  EventStoreError: "Events",
+  NotFoundError: "Not found",
+  InvalidStateError: "Invalid",
+  SessionDepthLimitError: "Depth",
+  RunPathRefusedError: "Paths",
+  ParentBoundError: "Parent",
+  ProviderAuthError: "Auth",
+  ExtensionProtocolError: "Extension protocol",
+  RpcClientError: "Connection",
+  "@gent/core/GentConnectionError": "Connection",
+  InteractionDecisionConflictError: "Interaction",
+  InteractionRequestMismatchError: "Interaction",
+  WorkspaceHeaderError: "Workspace",
+}
+
 export const formatError = (error: UiError): string => {
   switch (error._tag) {
-    case "StorageError":
-      return `Storage: ${error.message}`
-    case "SessionRuntimeError":
-      return `Runtime: ${error.message}`
     case "ProviderError":
       return `${error.model}: ${error.message}`
-    case "EventStoreError":
-      return `Events: ${error.message}`
-    case "NotFoundError":
-      return `Not found: ${error.message}`
-    case "InvalidStateError":
-      return `Invalid: ${error.message}`
-    case "SessionDepthLimitError":
-      return `Depth: ${error.message}`
-    case "RunPathRefusedError":
-      return `Paths: ${error.message}`
-    case "ParentBoundError":
-      return `Parent: ${error.message}`
-    case "ProviderAuthError":
-      return `Auth: ${error.message}`
     case "DriverError":
       return `Driver ${error.driver}: ${error.reason}`
-    case "ExtensionProtocolError":
-      return `Extension protocol: ${error.message}`
-    case "RpcClientError":
-      return `Connection: ${error.message}`
-    case "@gent/core/GentConnectionError":
-      return `Connection: ${error.message}`
     case "ConfigLoadError":
     case "ConfigWriteError":
       return `Config ${error.path}: ${error.message}`
-    case "InteractionDecisionConflictError":
-    case "InteractionRequestMismatchError":
-      return `Interaction: ${error.message}`
-    case "WorkspaceHeaderError":
-      return `Workspace: ${error.message}`
+    // The message names the fix (`/model`) itself.
+    case "NoModelError":
+      return error.message
+    default:
+      return `${ERROR_PREFIX[error._tag]}: ${error.message}`
   }
 }
 
