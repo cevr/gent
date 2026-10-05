@@ -2877,6 +2877,58 @@ describe("credential order", () => {
       expect(own.sent).toEqual(["sk-a", "sk-b"])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
+
+  it.live("a child takes its parent's place in the order on its first turn only", () =>
+    Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+      const bothAnswer = { "sk-a": answer("from a"), "sk-b": answer("from b") }
+      const runOn = (root: ReturnType<typeof credentialRoot>, text: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({
+              sessionId: root.sessionId,
+              branchId: root.branchId,
+              admission: root.admission,
+            })
+            yield* runAgentLoop(makeMessage(root.sessionId, root.branchId, text), root.admission)
+          }),
+        ).pipe(Effect.provide(root.layer))
+      const rootOf = (name: string, replies: Readonly<Record<string, Reply>>) =>
+        credentialRoot({ name, order, stored: twoKeys, storage, replies })
+      // The parent's first turn answers on the default; its child's first
+      // turn starts there too.
+      const parent = rootOf("parent-first", bothAnswer)
+      yield* runOn(parent, "first")
+      const child = rootOf("child-first", bothAnswer)
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: child.sessionId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+            admission: child.admission,
+          }),
+        )
+      }).pipe(Effect.provide(storage), Effect.orDie)
+      yield* runOn(child, "child first")
+      expect(child.sent).toEqual(["sk-a"])
+      // The parent's next turn moves past a refusing default. The child's
+      // later turn is its own: it starts at the top of the order, as the
+      // parent's own next turn would, not where that later parent turn ended.
+      const parentAgain = rootOf("parent-first", { "sk-a": refusal, "sk-b": answer("from b") })
+      yield* runOn(parentAgain, "second")
+      expect(parentAgain.sent).toEqual(["sk-a", "sk-b"])
+      const childAgain = rootOf("child-first", bothAnswer)
+      yield* runOn(childAgain, "child second")
+      expect(childAgain.sent).toEqual(["sk-a"])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
 })
 
 // ── native model compaction ─────────────────────────────────────────────────

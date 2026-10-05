@@ -3695,7 +3695,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
     /**
      * Where the parent's running turn stands in each credential order, for a
-     * spawned child: the receipts of the parent branch's newest turn. A
+     * spawned child's first turn: the receipts of the parent branch's newest turn. A
      * child runs inside that turn under the same sign-ins, so it starts each
      * order there and never pays again for a refusal the parent proved.
      * None for any other session.
@@ -5409,31 +5409,36 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return resumed.interaction.value
         }
         if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
-        // A spawned child's turn starts where its parent's turn stands; its
-        // own receipts, read next, win over the parent's.
-        const parentCredentials = yield* parentTurnCredentials.pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("turn.parent-credential-read-failed").pipe(
-              Effect.annotateLogs({ error: String(cause) }),
-              Effect.as([]),
-            ),
-          ),
-        )
-        for (const { receipt } of parentCredentials) {
-          yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
-        }
-        // The turn's place in each credential order lives in memory; after a
-        // restart the receipts of the steps it ran say where it stood, as
-        // `ModelRouted` says where its route stood.
-        const knownCredentials = yield* readKnownSteps.pipe(
-          Effect.map((known) => known.credentials),
+        const knownSteps = yield* readKnownSteps.pipe(
           Effect.catch((cause) =>
             Effect.logWarning("turn.credential-resume-read-failed").pipe(
               Effect.annotateLogs({ error: String(cause) }),
-              Effect.as(unknownSteps.credentials),
+              Effect.as(unknownSteps),
             ),
           ),
         )
+        // A spawned child's first turn starts where the parent turn that
+        // spawned it stands: it runs inside that turn, under the same
+        // sign-ins, and never pays again for a refusal the parent proved.
+        // Its later turns are its own and start at the top of each order,
+        // as the parent's next turn does; the parent log is read once.
+        if (Option.isNone(knownSteps.lastCall)) {
+          const parentCredentials = yield* parentTurnCredentials.pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("turn.parent-credential-read-failed").pipe(
+                Effect.annotateLogs({ error: String(cause) }),
+                Effect.as([]),
+              ),
+            ),
+          )
+          for (const { receipt } of parentCredentials) {
+            yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
+          }
+        }
+        // The turn's place in each credential order lives in memory; after a
+        // restart the receipts of the steps it ran say where it stood, as
+        // `ModelRouted` says where its route stood. They win over the parent's.
+        const knownCredentials = knownSteps.credentials
         for (const { messageId, receipt } of knownCredentials.values()) {
           if (messageId !== state.message.id) continue
           yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
