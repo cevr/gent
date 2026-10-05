@@ -1042,7 +1042,6 @@ const ThreadStartTool = tool({
           // repeat of this call finds its own thread and does not count it.
           const created = yield* ctx.Session.create({
             name: threadName(params.name ?? task),
-            parentSessionId: ctx.sessionId,
             parentBranchId: ctx.branchId,
             admission: threadAdmission(starter),
             ...Record.filter(

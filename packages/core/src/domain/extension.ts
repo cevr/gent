@@ -912,14 +912,17 @@ export interface ExtensionSessionService {
     options?: { readonly expectedName?: string },
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
   /**
-   * A new session, under a parent when one is named. The parent chain is
-   * depth-limited. `historyBranchId` copies that branch's visible messages in
-   * before the first turn. A `requestId` makes the call durable-once.
+   * A new session spawned by the calling session: its parent is always the
+   * caller, so the run that makes it bounds it (authority follows the
+   * creating run, never the input). `parentBranchId` names the caller's
+   * branch it hangs under; a branch of another session is refused. The
+   * parent chain is depth-limited. `historyBranchId` copies that branch's
+   * visible messages in before the first turn. A `requestId` makes the call
+   * durable-once.
    */
   readonly create: (params: {
     readonly name?: string
     readonly cwd?: string
-    readonly parentSessionId?: SessionId
     readonly parentBranchId?: BranchId
     readonly historyBranchId?: BranchId
     /** What every turn of the new session runs as: agent and run overrides. */

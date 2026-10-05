@@ -594,7 +594,6 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
       // admission, and the model and reasoning its `/model` choice set.
       const created = yield* ctx.Session.create({
         name: forkName(question),
-        parentSessionId: ctx.sessionId,
         parentBranchId: ctx.branchId,
         historyBranchId: ctx.branchId,
         ...Record.filter(

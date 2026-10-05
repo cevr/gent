@@ -5008,7 +5008,6 @@ describe("session threads", () => {
                   const ctx = yield* ExtensionContext
                   const child = yield* ctx.Session.create({
                     name,
-                    parentSessionId: ctx.sessionId,
                     parentBranchId: ctx.branchId,
                   })
                   return child.sessionId

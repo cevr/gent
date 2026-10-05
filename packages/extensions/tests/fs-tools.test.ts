@@ -9,6 +9,7 @@ import {
   Option,
   Order,
   Path,
+  Predicate,
   Ref,
   Schema,
   Stream,
@@ -38,7 +39,15 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { BunPlatformLive } from "@gent/core/host"
-import { AgentName, ref, runProcess } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineExtension,
+  ExtensionContext,
+  ExtensionHost,
+  ref,
+  runProcess,
+  tool,
+} from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { e2ePreset } from "./helpers/test-preset"
@@ -2196,6 +2205,7 @@ describe("agent paths", () => {
  */
 const SCOPED = AgentName.make("scoped")
 const OPEN = AgentName.make("open")
+const WIDE = AgentName.make("wide")
 
 /** A cwd with `a/b`, `a/c`, `b` and a project config naming `scoped` and `open`. */
 const narrowedCwd = Effect.gen(function* () {
@@ -2244,12 +2254,13 @@ const narrowedHarness = (
   dirs: { readonly home: string; readonly cwd: string },
   admission: NarrowAdmission,
   steps: Parameters<typeof LanguageModelLayers.sequence>[0],
+  extensions: ReadonlyArray<typeof FsToolsExtension> = [],
 ) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
     const harness = yield* createRpcHarness({
       agents: [],
-      extensionInputs: [AgentsExtension, FsToolsExtension],
+      extensionInputs: [AgentsExtension, FsToolsExtension, ...extensions],
       providerLayer,
       cwd: dirs.cwd,
       home: dirs.home,
@@ -2285,6 +2296,55 @@ const turnFailures = (
       .filter((part) => part.type === "tool-result")
       .map((part) => part.isFailure)
   })
+
+interface SessionTarget {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
+/**
+ * A tool that makes a session through `ctx.Session.create` and records each
+ * one it makes. A `foreign` call names the first branch of `foreign`, a
+ * branch of another session.
+ */
+const sessionMaker = (made: Array<SessionTarget>, foreign: ReadonlyArray<BranchId> = []) =>
+  defineExtension({
+    id: "session-maker",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.make",
+          description: "Make a session",
+          params: Schema.Struct({ foreign: Schema.optional(Schema.Boolean) }),
+          output: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const named = Option.fromUndefinedOr(foreign[0]).pipe(
+                Option.filter(() => params.foreign === true),
+              )
+              const created = yield* ctx.Session.create(
+                Option.match(named, {
+                  onNone: () => ({}),
+                  onSome: (branchId) => ({ parentBranchId: branchId }),
+                }),
+              )
+              made.push(created)
+              return created
+            }),
+        }),
+      )
+    }),
+  })
+
+/** Only the session a run calls from is a new session's parent: no create names another. */
+export const parentIsTheCaller = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  // @ts-expect-error -- `create` takes no parent; the calling session is the parent.
+  return yield* ctx.Session.create({ parentSessionId: ctx.sessionId })
+})
 
 /** A parent confined to `a` (or `paths`), and the harness that runs its children's turns. */
 const confinedParent = (
@@ -2545,6 +2605,75 @@ describe("run overrides narrow the agent", () => {
           .pipe(Effect.flip)
         expect(refused._tag).toBe("RunPathRefusedError")
         expect(refused.message).toContain('"b"')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a session a bounded child's tool makes is bounded by the child's parent run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        // The parent run holds every tool and writes only under `a`.
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE, runSpec: { overrides: { paths: [{ path: "a", access: "write" }] } } },
+          [
+            toolCallStep("session.make", {}),
+            textStep("done"),
+            multiToolCallStep(
+              { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+              { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            ),
+            textStep("done"),
+          ],
+          [sessionMaker(made)],
+        )
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: WIDE },
+        })
+        expect(yield* turnFailures(harness.client, child)).toEqual([false])
+        const grandchild = made[0]
+        expect(grandchild).toBeDefined()
+        if (Predicate.isUndefined(grandchild)) return
+        const stored = yield* harness.client.session.get({ sessionId: grandchild.sessionId })
+        expect(stored?.parentSessionId).toBe(child.sessionId)
+        expect(yield* turnFailures(harness.client, grandchild)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+        yield* harness.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a tool cannot hang a session under another session's branch",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        const foreign: Array<BranchId> = []
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE },
+          [toolCallStep("session.make", { foreign: true }), textStep("done")],
+          [sessionMaker(made, foreign)],
+        )
+        // The child's tool names a branch of its parent's session.
+        foreign.push(harness.branchId)
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: WIDE },
+        })
+        expect(yield* turnFailures(harness.client, child)).toEqual([true])
+        expect(made).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )

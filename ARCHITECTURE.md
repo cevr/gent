@@ -729,7 +729,8 @@ Shape:
   not root depth. A parent at the depth limit cannot spawn. This check is not a
   concurrency or token budget.
 - The `@gent/delegate` extension admits a child by creating a session through the
-  `Session` facade with `parentSessionId`/`parentBranchId`, then `send`ing the
+  `Session` facade (the calling session is the parent; it names
+  `parentBranchId`), then `send`ing the
   child's first message. `delegate.start` returns the handle at admission,
   keyed by the host tool call id so a replayed call finds its child, and never
   the answer: the model does not block on a child. The delegate reserves at
@@ -1208,8 +1209,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 - The `@gent/delegate` extension owns child runs. It is built only on the
   public extension API — no core runner, no privileged seam. Every child is a
-  session created through the addressed `Session` facade verbs (`create` with
-  `parentSessionId`/`parentBranchId`, `send`, `stop`, `events`, `delete`). The
+  session created through the addressed `Session` facade verbs (`create`,
+  whose parent is always the calling session, with `parentBranchId`; `send`,
+  `stop`, `events`, `delete`). The
   delegate keeps its own child registry as one JSON file per parent branch under
   `<data dir>/delegates/<branchId>.json`, so a `delegate.list` survives restarts
   without any `durable_operations` row.
@@ -1524,6 +1526,12 @@ a parent cwd whose config does not load, or a parent agent gone from its
 roster is a `ParentBoundError` naming the parent session and agent; a create
 of a child is refused with it, the child's turn ends with it as an
 `ErrorOccurred`, and `Session.getAgent` fails with it, so a file call fails.
+Authority follows the creating run, not the input: the `ExtensionContext`
+`Session.create` takes no `parentSessionId`, and the new session's parent is
+always the calling session (`runInfo.sessionId`), so a tool in a bounded run
+cannot make a root session or name a wider parent to leave its chain; a
+`parentBranchId` of another session is refused (`admitParent`). A client's
+`session.create` (the user) still names its parent.
 Session create (`admitRun` in `server.ts`, before the storage transaction)
 also refuses, early and by name, a run `paths` entry that an agent scope or
 a parent run scope does not reach with at least its access

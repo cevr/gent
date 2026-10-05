@@ -891,8 +891,14 @@ and links resolve at the check, as the file tools resolve them at each call.
 An agent without `paths` takes any run `paths`. Each file tool call then must
 lie in the agent's entries and in the run's.
 
-A child never exceeds its parent run. A session created with a
-`parentSessionId` (a `delegate.start` child included) holds a tool only when
+A child never exceeds its parent run. Authority follows the run that creates
+a session, never the input: `ctx.Session.create` takes no parent, and the new
+session's parent is always the calling session, so a tool in a confined run
+cannot make a session outside its bound by naming a wider parent or none.
+`parentBranchId` names the caller's branch the child hangs under; a branch of
+another session is refused. A session created with a parent (a
+`delegate.start` child included, or a client's `session.create` with
+`parentSessionId`) holds a tool only when
 its parent run holds it too, and its file calls must lie in the parent run's
 paths too, whether it names `paths` or not. gent resolves the parent's bound
 again at each of the child's turns and file calls, so a parent agent its
@@ -928,7 +934,6 @@ export const PaintScene = tool({
     const ctx = yield* ExtensionContext
     // The painter's own `paths` bound these; an entry outside them refuses the create.
     const child = yield* ctx.Session.create({
-      parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
       admission: {
         agent: AgentName.make("painter"),

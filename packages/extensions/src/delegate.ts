@@ -836,7 +836,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
         // The child is its agent for every turn it runs, not only this one.
         const child = yield* ctx.Session.create({
           name: childName(params.prompt),
-          parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           admission: {
             agent: DELEGATE_AGENT_NAME,

@@ -3816,7 +3816,8 @@ export const makeExtensionHostContextProvider = (
             service.createSession({
               name: params.name,
               cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
-              parentSessionId: params.parentSessionId,
+              // The calling session is the parent: its run bounds the new one.
+              parentSessionId: runInfo.sessionId,
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
               admission: params.admission,
