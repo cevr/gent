@@ -706,3 +706,136 @@ describe("gamut CLI ownership", () => {
     )
   }
 })
+
+describe("gamut CLI offline catalog", () => {
+  const validBody = Schema.encodeSync(
+    Schema.fromJsonString(
+      Schema.Record(
+        Schema.String,
+        Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
+      ),
+    ),
+  )(
+    Object.fromEntries(
+      Object.entries(catalog).map(([provider, ids]) => [
+        provider,
+        { models: Object.fromEntries(ids.map((id) => [id, {}])) },
+      ]),
+    ),
+  )
+  for (const scenario of [
+    {
+      name: "the configured chat snapshot resolves presets offline, including its WAL",
+      configured: true,
+      directory: "configured",
+      snapshot: "chat",
+      exit: 0,
+    },
+    {
+      name: "the OS-home chat snapshot resolves presets when no data directory is set",
+      configured: false,
+      directory: ".gent",
+      snapshot: "chat",
+      exit: 0,
+    },
+    {
+      name: "a missing database preserves the fetch failure",
+      configured: true,
+      directory: "configured",
+      snapshot: "missing",
+      exit: 1,
+    },
+    {
+      name: "a decision-only snapshot preserves the fetch failure",
+      configured: true,
+      directory: "configured",
+      snapshot: "decision",
+      exit: 1,
+    },
+    {
+      name: "an invalid chat snapshot preserves the fetch failure",
+      configured: true,
+      directory: "configured",
+      snapshot: "invalid",
+      exit: 1,
+    },
+  ]) {
+    it.scopedLive(
+      scenario.name,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const platform = yield* GentPlatform
+          const scratch = yield* makeTempDirectoryScoped("gent-gamut-catalog-test-")
+          const data = path.join(scratch, scenario.directory)
+          yield* fs.makeDirectory(data)
+          const file = path.join(data, "data.db")
+          if (scenario.snapshot !== "missing") {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql.unsafe("VACUUM INTO '" + file + "'")
+            const db = yield* Effect.acquireRelease(
+              Effect.sync(() => new Database(file)),
+              (opened) => Effect.sync(() => opened.close()),
+            )
+            yield* Effect.sync(() => {
+              db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0")
+              let body = validBody
+              if (scenario.snapshot === "invalid") body = '{"openai":{"models":[]}}'
+              let source = "api.json"
+              if (scenario.snapshot === "decision") source = "api.json?type=decision"
+              db.query(
+                "INSERT INTO model_catalog_snapshots (source, body, fetched_at, checked_at) VALUES (?, ?, 0, 0)",
+              ).run(source, body)
+            })
+          }
+          const originals: Array<{ readonly file: string; readonly body: Uint8Array }> = []
+          if (scenario.snapshot !== "missing") {
+            for (const original of [file, file + "-wal"]) {
+              originals.push({ file: original, body: yield* fs.readFile(original) })
+            }
+          }
+          const curl = path.join(scratch, "curl")
+          yield* fs.writeFileString(
+            curl,
+            "#!/bin/sh\nprintf '%s\\n' 'offline catalog probe' >&2\nexit 7\n",
+          )
+          yield* fs.chmod(curl, 0o755)
+          const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+          const env = Object.fromEntries([
+            ["PATH", scratch + ":" + (yield* Config.String("PATH"))],
+            ["HOME", scratch],
+            ["TMPDIR", scratch],
+            ["GENT_AUTH_DIRECTORY", path.join(scratch, "auth")],
+          ])
+          if (scenario.configured) env["GENT_DATA_DIR"] = data
+          const result = yield* runProcess(yield* platform.execPath, [driver, "list"], {
+            env,
+            extendEnv: false,
+          })
+          expect(result.exitCode).toBe(scenario.exit)
+          if (scenario.exit === 0) {
+            expect(result.stdout).toContain("openai/gpt-6-sol:medium")
+            expect(result.stdout).toContain("anthropic/claude-opus-5-5:high")
+            expect(result.stdout).toContain("using " + file)
+          } else {
+            expect(result.stderr).toContain("offline catalog probe")
+            expect(result.stdout).not.toContain("orchestrator")
+          }
+          for (const original of originals) {
+            expect(yield* fs.readFile(original.file)).toEqual(original.body)
+          }
+          if (scenario.snapshot === "missing") expect(yield* fs.exists(file)).toBe(false)
+          expect(
+            (yield* fs.readDirectory(scratch)).filter((name) =>
+              name.startsWith("gent-gamut-catalog-"),
+            ),
+          ).toEqual([])
+        }).pipe(
+          Effect.provide(Layer.mergeAll(testSqliteStorage, BunGentPlatformLive, BunServices.layer)),
+          Effect.timeout("10 seconds"),
+        ),
+      15_000,
+    )
+  }
+})
