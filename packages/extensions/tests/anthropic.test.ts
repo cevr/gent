@@ -3578,14 +3578,22 @@ describe("named Anthropic directory import", () => {
       })
       const methods = yield* client.auth.listMethods({ sessionId })
       expect(methods["anthropic"]?.[2]?.prompts?.[0]?.key).toBe("directory")
+      // A refresh rotates the token, so a copy that two programs refresh
+      // signs one of them out: the import asks for a directory no live
+      // Claude Code uses, and never writes it.
+      expect(methods["anthropic"]?.[2]?.prompts?.[0]?.label).toContain("only for gent")
+      const source = yield* fs.readFileString(path.join(directory, ".credentials.json"))
       const slot = CredentialSlot.make("personal")
-      yield* client.auth.authorize({
+      const imported = yield* client.auth.authorize({
         sessionId,
         provider: "anthropic",
         method: 2,
         slot,
         inputs: { directory },
       })
+      expect(imported?.instructions).toContain("gent refreshes it alone")
+      expect(imported?.instructions).toContain("do not run Claude Code on that directory again")
+      expect(yield* fs.readFileString(path.join(directory, ".credentials.json"))).toBe(source)
       const rows = yield* client.auth.listProviders({ sessionId })
       const row = rows.find((row) => row.provider === "anthropic")
       expect(

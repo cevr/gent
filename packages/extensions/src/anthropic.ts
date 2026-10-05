@@ -3064,7 +3064,16 @@ export const buildAnthropicModelDriver = (
           type: "oauth",
           label: "Claude Code directory import",
           credentialTarget: "named",
-          prompts: [{ key: "directory", label: "Absolute Claude Code directory" }],
+          // A refresh rotates the refresh token: a copy that Claude Code and
+          // gent both refresh signs one of them out. The import owns its
+          // copy alone and never writes the directory back, so the
+          // directory must be one only this import uses.
+          prompts: [
+            {
+              key: "directory",
+              label: "Absolute Claude Code directory, signed in only for gent",
+            },
+          ],
         }),
       ],
       authorize: (ctx) =>
@@ -3102,7 +3111,7 @@ export const buildAnthropicModelDriver = (
               url: "",
               method: "done" as const,
               instructions:
-                "Imported once into Gent. Later Claude Code rotation may require reimport.",
+                "Imported into gent: gent refreshes it alone from now on. To keep both signed in, do not run Claude Code on that directory again; a refresh there signs gent out, and gent's refresh signs it out.",
             })
           }
           if (ctx.methodIndex !== 0) return Option.none()
