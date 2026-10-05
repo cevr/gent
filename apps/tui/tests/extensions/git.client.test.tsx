@@ -1,6 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Effect, Fiber, FileSystem, Option, Result, Schedule } from "effect"
+import {
+  Clock,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Predicate,
+  Result,
+  Schedule,
+  Schema,
+} from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { BunServices } from "@effect/platform-bun"
 import { RendererControlState } from "@opentui/core"
@@ -9,6 +19,8 @@ import {
   BranchId,
   dateFromMillis,
   EventEnvelope,
+  GentRpcError,
+  type GentNamespacedClient,
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
@@ -629,6 +641,26 @@ describe("git review commands", () => {
     expect(reviewTarget("pr", "/r")).toEqual({ _tag: "PullRequest", cwd: "/r" })
   })
 
+  test("/diff turn names the newest turn, /diff turn 2 the second newest, and anything else stays paths", () => {
+    expect(reviewTarget("turn", "/r")).toEqual({ _tag: "Turn", cwd: "/r", n: 1 })
+    expect(reviewTarget(" turn  2 ", "/r")).toEqual({ _tag: "Turn", cwd: "/r", n: 2 })
+    expect(reviewTarget("turn 0", "/r")).toEqual({
+      _tag: "WorkTree",
+      cwd: "/r",
+      pathspecs: ["turn", "0"],
+    })
+    expect(reviewTarget("turn a.ts", "/r")).toEqual({
+      _tag: "WorkTree",
+      cwd: "/r",
+      pathspecs: ["turn", "a.ts"],
+    })
+    expect(reviewTarget("turn 2 3", "/r")).toEqual({
+      _tag: "WorkTree",
+      cwd: "/r",
+      pathspecs: ["turn", "2", "3"],
+    })
+  })
+
   test("hunk reviews the work tree against the checkout's base", () => {
     const all = { _tag: "WorkTree" as const, cwd: "/r", pathspecs: [] }
     const one = { ...all, pathspecs: ["a.ts"] }
@@ -701,12 +733,17 @@ const LONG_PR_JSON = PR_JSON.replace(
 
 const PATCH = "diff --git a/kept.txt b/kept.txt\n--- a/kept.txt\n+++ b/kept.txt\n"
 
-/** The app on `cwd`, with `tools` for `gh` and `hunk`. */
-const renderApp = (cwd: string, width: number, tools: TestTools) =>
+/** The app on `cwd`, with `tools` for `gh` and `hunk`, over `client`. */
+const renderApp = (
+  cwd: string,
+  width: number,
+  tools: TestTools,
+  client: GentNamespacedClient = createMockClient(),
+) =>
   Effect.gen(function* () {
     const services = yield* testPlatformServices(tools)
     return yield* renderScoped(() => <App />, {
-      client: createMockClient(),
+      client,
       runtime: createMockRuntime(),
       builtins: [gitExtension],
       services,
@@ -734,6 +771,74 @@ const slash = (setup: RenderSetup, command: string) =>
 
 const frameLine = (frame: string, text: string) =>
   frame.split("\n").find((line) => line.includes(text)) ?? ""
+
+/** A turn's change as `checkpoints.patch` answers it. */
+const TURN_PATCH = "diff --git a/turn.txt b/turn.txt\n--- a/turn.txt\n+++ b/turn.txt\n"
+
+/** A server whose `checkpoints.patch` answers `TURN_PATCH` for turn 2, and refuses any other. */
+const turnServer = (asked: Array<unknown>) =>
+  createMockClient({
+    extension: {
+      request: (request: { readonly capabilityId: string; readonly input: unknown }) =>
+        Effect.gen(function* () {
+          asked.push(request.input)
+          if (Predicate.hasProperty(request.input, "n") && request.input.n === 2)
+            return { n: 2, prompt: "add turn.txt", patch: TURN_PATCH }
+          const refusal = yield* Schema.decodeEffect(GentRpcError)({
+            _tag: "ExtensionProtocolError",
+            extensionId: "@gent/checkpoints",
+            tag: "checkpoints.patch",
+            message: "turn #1 has no checkpoint: no tool with a side effect ran in it",
+          }).pipe(Effect.orDie)
+          return yield* refusal
+        }),
+    },
+  })
+
+describe("git turn review", () => {
+  it.live(
+    "/diff turn 2 hands hunk the server's patch of that turn, and the pager without hunk",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* makeRepo("gent-git-turn-")
+        const hunk = yield* fakeHunk
+        const asked: Array<unknown> = []
+        const setup = yield* renderApp(repo, 100, { hunk: hunk.program }, turnServer(asked))
+        yield* slash(setup, "/diff turn 2")
+        const log = yield* waitForLog(hunk.log, (text) => text.includes(TURN_PATCH))
+        expect(log).toMatch(/\|patch .*gent-turn-.*\.patch\n/)
+        expect(asked).toContainEqual({ n: 2 })
+        yield* waitUntil(
+          () => setup.renderer.controlState !== RendererControlState.EXPLICIT_SUSPENDED,
+          "the terminal back",
+        )
+        const pager = yield* fakeProgram("pager", (dir) => [`cat > '${dir}/log'`])
+        yield* git(repo, "config", "core.pager", pager.program)
+        const paged = yield* renderApp(repo, 100, {}, turnServer(asked))
+        yield* slash(paged, "/diff turn 2")
+        yield* waitForLog(pager.log, (text) => text.includes(TURN_PATCH))
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.live(
+    "/diff turn on a turn the server cannot show says why on the status row and hands nothing the terminal",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* makeRepo("gent-git-turn-none-")
+        const hunk = yield* fakeHunk
+        const setup = yield* renderApp(repo, 100, { hunk: hunk.program }, turnServer([]))
+        yield* slash(setup, "/diff turn")
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("turn #1: turn #1 has no checkpoint"),
+          "the reason",
+        )
+        expect(yield* hunk.log).toBe("")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
 
 describe("git pane", () => {
   it.live(

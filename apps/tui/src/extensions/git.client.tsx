@@ -15,7 +15,8 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { createEffect, createMemo, createRoot, type JSX, on, Show } from "solid-js"
 import { lineCount } from "@gent/core/protocol"
-import { runProcess } from "@gent/core/extensions/api"
+import { ref, runProcess } from "@gent/core/extensions/api"
+import { CheckpointsRpc } from "@gent/extensions/client"
 import {
   clientCommandContribution,
   clientContributions,
@@ -46,8 +47,9 @@ import {
  * row: the branch with ahead/behind, and the files changed against `HEAD`
  * with their `+/-` line counts.
  *
- * Client-only: it reads git in the session's directory and sends nothing to
- * the model, stores nothing and asks the server nothing. Every git read
+ * It reads git in the session's directory and sends nothing to the model and
+ * stores nothing. It asks the server one thing: a turn's patch, for `/diff
+ * turn [n]`, from `@gent/checkpoints` (`checkpoints.patch`). Every git read
  * passes `READ_ONLY`, so a read never writes the index or takes `index.lock`
  * from the agent's own `git commit`, and every diff passes `--no-ext-diff
  * --no-textconv`, so repository config chooses no program to run.
@@ -699,20 +701,33 @@ const pullRequestKey = (checkout: Option.Option<Checkout>): string =>
 
 /**
  * What a review shows: the work tree against `HEAD` in `cwd` (all of it, or
- * the paths `pathspecs` names), or the pull request of the branch checked out
- * in `cwd`.
+ * the paths `pathspecs` names), the pull request of the branch checked out
+ * in `cwd`, or what turn `#n` of the branch in view changed (1 is the newest,
+ * as the `/revert` pane numbers it).
  */
 const ReviewTarget = Schema.TaggedUnion({
   WorkTree: { cwd: Schema.String, pathspecs: Schema.Array(Schema.String) },
   PullRequest: { cwd: Schema.String },
+  Turn: { cwd: Schema.String, n: Schema.Int },
 })
 type ReviewTarget = typeof ReviewTarget.Type
 type WorkTree = Extract<ReviewTarget, { readonly _tag: "WorkTree" }>
 
-/** `/diff` reviews the work tree, `/diff <paths>` those paths of it, `/diff pr` the branch's pull request. */
+/** A turn's number as `/diff turn` takes it: a whole number from 1. */
+const TURN_NUMBER = /^[1-9][0-9]*$/
+
+/**
+ * `/diff` reviews the work tree, `/diff <paths>` those paths of it, `/diff
+ * pr` the branch's pull request, and `/diff turn [n]` what turn `#n` changed
+ * (the newest with no number). `pr`, `turn` and `turn <n>` shadow paths of
+ * those names.
+ */
 export const reviewTarget = (args: string, cwd: string): ReviewTarget => {
   const words = args.split(/\s+/).filter((word) => word.length > 0)
   if (words.length === 1 && words[0] === "pr") return ReviewTarget.cases.PullRequest.make({ cwd })
+  const [first, number = "1", ...rest] = words
+  if (first === "turn" && rest.length === 0 && TURN_NUMBER.test(number))
+    return ReviewTarget.cases.Turn.make({ cwd, n: Number(number) })
   return ReviewTarget.cases.WorkTree.make({ cwd, pathspecs: words })
 }
 
@@ -1048,17 +1063,15 @@ export const pageWorkTree = (target: WorkTree, base: string) =>
   })
 
 /**
- * The pull request's patch for the reader's git pager: `gh pr diff` with
- * git's color choice. It asks the network, so it is read before the
- * terminal is handed over to `pagePatch`.
+ * A patch read with a color flag: `--color=never` for hunk, which colors it
+ * itself, or git's choice for the reader's git pager.
  */
-const pullRequestPatch = (cwd: string) =>
-  Effect.gen(function* () {
-    const viewer = yield* diffViewer(cwd)
-    const patch = yield* ghPr(cwd, ["diff", viewer.color])
-    const bytes = new TextEncoder().encode(Option.getOrElse(patch, () => ""))
-    return { pager: viewer.pager, patch: Stream.make(bytes) }
-  })
+type PatchRead = (
+  color: string,
+) => Effect.Effect<string, GhMissing | GhReadError | ReviewFailed, GitServices>
+
+/** Why `/diff turn n` showed nothing, as the status row says it. */
+const TURN_FAILED = (n: number, message: string) => `turn #${n}: ${message}`
 
 // ── pane ────────────────────────────────────────────────────────────────────
 
@@ -1134,6 +1147,7 @@ const reviewKey = (target: ReviewTarget): string =>
   ReviewTarget.match(target, {
     WorkTree: ({ pathspecs }) => `file:${pathspecs.join("\0")}`,
     PullRequest: () => "pull-request",
+    Turn: ({ n }) => `turn:${n}`,
   })
 
 interface GitPaneProps {
@@ -1381,26 +1395,25 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
           return note
         }),
       )
-    // The reader's `gh` sign-in reads the patch, so a private request shows:
-    // with hunk, from a file for `hunk patch`; without, into the git pager.
-    const pagedPullRequest = (cwd: string) =>
+    // A patch is read before the terminal is handed over (a pull request's
+    // asks the network): with hunk, from a file for `hunk patch`; without,
+    // into the git pager with git's color choice.
+    const pagedPatch = (cwd: string, read: PatchRead) =>
       Effect.gen(function* () {
-        const { pager, patch } = yield* pullRequestPatch(cwd)
-        yield* shell.handover(pagePatch(cwd, pager, patch))
+        const viewer = yield* diffViewer(cwd)
+        const bytes = new TextEncoder().encode(yield* read(viewer.color))
+        yield* shell.handover(pagePatch(cwd, viewer.pager, Stream.make(bytes)))
       })
-    const showPullRequest = (cwd: string): ReviewRun =>
+    const showPatch = (cwd: string, prefix: string, read: PatchRead): ReviewRun =>
       Effect.gen(function* () {
         if (hunkMissing) {
-          yield* pagedPullRequest(cwd)
+          yield* pagedPatch(cwd, read)
           return Option.none<string>()
         }
-        const patch = yield* ghPr(cwd, ["diff"])
+        const patch = yield* read("--color=never")
         const fs = yield* FileSystem.FileSystem
-        const file = yield* fs.makeTempFileScoped({ prefix: "gent-pr-", suffix: ".patch" })
-        yield* fs.writeFileString(
-          file,
-          Option.getOrElse(patch, () => ""),
-        )
+        const file = yield* fs.makeTempFileScoped({ prefix, suffix: ".patch" })
+        yield* fs.writeFileString(file, patch)
         const ran = yield* shell.handover(
           onTerminal(cwd, ["hunk", ["patch", file]]).pipe(
             Effect.as(true),
@@ -1409,9 +1422,26 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
         )
         if (ran) return Option.none<string>()
         const note = learnHunkMissing()
-        yield* pagedPullRequest(cwd)
+        yield* pagedPatch(cwd, read)
         return note
       }).pipe(Effect.scoped)
+    // The reader's `gh` sign-in reads the patch, so a private request shows.
+    const showPullRequest = (cwd: string): ReviewRun =>
+      showPatch(cwd, "gent-pr-", (color) =>
+        ghPr(cwd, ["diff", color]).pipe(Effect.map(Option.getOrElse(() => ""))),
+      )
+    // The server holds the turn's checkpoints, so `gent --connect` reviews
+    // a turn too; its reason (no checkpoint, no git, the extension off)
+    // goes to the status row.
+    const showTurn = (cwd: string, n: number): ReviewRun =>
+      showPatch(cwd, "gent-turn-", () =>
+        transport.request(ref(CheckpointsRpc.Patch), { n }).pipe(
+          Effect.map((turn) => turn.patch),
+          Effect.mapError(
+            (failure) => new ReviewFailed({ message: TURN_FAILED(n, failure.message) }),
+          ),
+        ),
+      )
     const review = (target: Effect.Effect<ReviewTarget, never, GitServices>) =>
       shell.cast(
         target.pipe(
@@ -1419,6 +1449,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
             ReviewTarget.match(value, {
               WorkTree: showWorkTree,
               PullRequest: ({ cwd }) => showPullRequest(cwd),
+              Turn: ({ cwd, n }) => showTurn(cwd, n),
             }),
           ),
           Effect.flatMap((note) => Effect.sync(() => Option.map(note, shell.notify))),
@@ -1460,7 +1491,7 @@ export default defineClientExtension(GIT_EXTENSION_ID, {
       clientCommandContribution({
         id: "git.diff",
         title: "Review changes",
-        description: "Review the work tree in hunk or the git pager: /diff [paths | pr]",
+        description: "Review the work tree in hunk or the git pager: /diff [paths | pr | turn [n]]",
         category: "Workflow",
         slash: "diff",
         onSelect: () => review(Effect.map(workspace.sessionCwd, (cwd) => reviewTarget("", cwd))),

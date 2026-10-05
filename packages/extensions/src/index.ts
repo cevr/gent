@@ -11,6 +11,7 @@ import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
 import { WorkspacesExtension } from "./workspaces.js"
+import { CheckpointsExtension } from "./checkpoints.js"
 import { AgentsExtension } from "./agents.js"
 import { AgentsViewExtension } from "./agents-view.js"
 import { AnthropicExtension } from "./anthropic.js"
@@ -71,6 +72,7 @@ export const BuiltinExtensions: ReadonlyArray<
   RouterExtension,
   GuardExtension,
   WorkspacesExtension,
+  CheckpointsExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
