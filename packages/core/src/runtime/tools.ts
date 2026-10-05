@@ -13,6 +13,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  SchemaAST,
   Sink,
   Stream,
 } from "effect"
@@ -660,6 +661,37 @@ export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<neve
 // ── model toolkit ───────────────────────────────────────────────────────────
 
 /**
+ * The parameters a tool with no arguments declares. Its schema encodes to an
+ * object with no keys (`Schema.Struct({})`), which Effect's JSON Schema reads
+ * as any value but `null`: the OpenAI codecs refuse that root, and the
+ * Anthropic codec declares `{}`. Every driver gets this object root instead,
+ * the form the codecs give an object with keys. The tool runner still decodes
+ * each call with the tool's own schema.
+ */
+const NO_ARGUMENTS = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
+}
+
+/**
+ * The parameters a request declares for `schema`: `NO_ARGUMENTS` when it
+ * encodes to an object with no keys and no index signature, else `schema`.
+ */
+const declaredParameters = (schema: Schema.Top) => {
+  const encoded = SchemaAST.toEncoded(schema.ast)
+  if (
+    SchemaAST.isObjects(encoded) &&
+    encoded.propertySignatures.length === 0 &&
+    encoded.indexSignatures.length === 0
+  ) {
+    return NO_ARGUMENTS
+  }
+  return schema
+}
+
+/**
  * The toolkit a model request declares: each tool under its wire name
  * (`wireToolName`), with the tool's description, schemas and annotations.
  * It is never run: the turn dispatches each call by the tool id
@@ -670,7 +702,7 @@ export function convertTools(tools: ReadonlyArray<ToolCapability>) {
     ...tools.map((tool) =>
       AiTool.dynamic(wireToolName(getToolId(tool)), {
         description: tool.description,
-        parameters: tool.parametersSchema,
+        parameters: declaredParameters(tool.parametersSchema),
         success: tool.successSchema,
         failure: tool.failureSchema,
       }).annotateMerge(tool.annotations),

@@ -12,11 +12,11 @@ import {
   Crypto,
   Effect,
   Fiber,
-  type FileSystem,
+  FileSystem,
   Layer,
   Match,
   Option,
-  type Path,
+  Path,
   Predicate,
   Schema,
   Stream,
@@ -32,6 +32,7 @@ import {
 } from "../src/anthropic.js"
 import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
 import { buildCloudflareModelDriver } from "../src/cloudflare.js"
+import { McpExtension } from "../src/mcp.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
   AgentDefinition,
@@ -699,5 +700,87 @@ describe("refused tool calls on the wire", () => {
         ),
       )
     }
+  }
+})
+
+// ── tools with no arguments ─────────────────────────────────────────────────
+
+/**
+ * A home whose MCP config holds one entry with no transport: the MCP
+ * extension registers `mcp.status` (parameters `Schema.Struct({})`) for it
+ * and starts no server.
+ */
+const misconfiguredMcpHome = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const home = yield* makeTempDirectoryScoped("wire-mcp-home-")
+  yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+  yield* fs.writeFileString(
+    path.join(home, ".gent", "mcp.json"),
+    encodeExternalJson({ mcpServers: { typo: { comand: "x" } } }),
+  )
+  return home
+})
+
+const decodeDeclarations = Schema.decodeUnknownOption(Schema.Array(Schema.Json))
+
+/** The declaration a request body sends for the tool `name`, as sent. */
+const declarationNamed = (body: Record<string, Schema.Json> = {}, name: string) =>
+  Option.getOrElse(decodeDeclarations(body["tools"]), () => [])
+    .map((entry) => encodeExternalJson(entry))
+    .find((entry) => entry.includes(`"name":"${name}"`))
+
+const MCP_STATUS_DESCRIPTION =
+  "Report each configured MCP server: transport, health, connection, tool count, and the server's own instructions"
+
+/** The object root a tool with no arguments declares: the codecs' form of an object with no keys. */
+const NO_ARGUMENTS = '{"type":"object","properties":{},"required":[],"additionalProperties":false}'
+
+/** The `mcp.status` declaration each driver sends. */
+const PINNED_NO_ARGUMENTS = new Map([
+  [
+    "anthropic",
+    `{"name":"mcp__status","input_schema":${NO_ARGUMENTS},"description":"${MCP_STATUS_DESCRIPTION}","strict":true}`,
+  ],
+  [
+    "openai",
+    `{"type":"function","name":"mcp__status","parameters":${NO_ARGUMENTS},"strict":true,"description":"${MCP_STATUS_DESCRIPTION}"}`,
+  ],
+  [
+    "chat-completions",
+    `{"type":"function","function":{"name":"mcp__status","description":"${MCP_STATUS_DESCRIPTION}","parameters":${NO_ARGUMENTS},"strict":false}}`,
+  ],
+])
+
+describe("tools with no arguments on the wire", () => {
+  for (const wire of drivers) {
+    it.live(
+      `${wire.provider}: a direct turn declares mcp.status with an object root and runs it`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const home = yield* misconfiguredMcpHome
+            const { bodies, events } = yield* runTurn(
+              wire,
+              [wire.toolCall("mcp__status"), wire.text("done")],
+              { extensions: [McpExtension], home },
+            )
+            expect(bodies).toHaveLength(2)
+            for (const body of bodies) {
+              expect(Option.fromUndefinedOr(declarationNamed(body, "mcp__status"))).toEqual(
+                Option.fromUndefinedOr(PINNED_NO_ARGUMENTS.get(wire.provider)),
+              )
+            }
+            expect(events.flatMap(toolRun)).toEqual([
+              "ToolCallStarted:mcp.status",
+              "ToolCallSucceeded:mcp.status",
+            ])
+            expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+            expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+              { streamFailed: false },
+            ])
+          }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+        ),
+    )
   }
 })
