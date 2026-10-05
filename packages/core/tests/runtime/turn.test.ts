@@ -63,6 +63,7 @@ import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  effectiveModelDriver,
   ModelId,
   Model,
   ProviderId,
@@ -379,13 +380,21 @@ describe("agent turn response collectors", () => {
 
 describe("session route driver", () => {
   const modelId = ModelId.make("anthropic/claude-sonnet-5")
-  const routeOf = (agent: AgentDefinition, driverOverrides?: Readonly<Record<string, DriverRef>>) =>
-    resolveSessionRoute({
+  /** The driver the route's model dispatches through, as the turn derives it. */
+  const routeOf = (
+    agent: AgentDefinition,
+    driverOverrides?: Readonly<Record<string, DriverRef>>,
+  ) => {
+    const route = resolveSessionRoute({
       agents: [agent],
       admission: Option.some({ agent: agent.name }),
       config: { driverOverrides },
       session: { modelId },
     })
+    return {
+      modelDriver: Option.map(route.modelId, (id) => effectiveModelDriver(route.driverRef, id)),
+    }
+  }
 
   test("the agent's own driver wins over a config override", () => {
     const agent = AgentDefinition.make({
@@ -2423,6 +2432,8 @@ describe("credential order", () => {
     readonly held?: Deferred.Deferred<void>
     /** Durable state, for a restart: the events go to its log, not to `events`. */
     readonly storage?: CredentialStorage
+    /** Messages of this many characters each stored before the turn: 4 or more overflow the window. */
+    readonly history?: ReadonlyArray<number>
   }
 
   /**
@@ -2541,7 +2552,7 @@ describe("credential order", () => {
       overrides: ModelRegistry.Live.pipe(
         Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
       ),
-    })
+    }).pipe(Layer.provideMerge(rangeCompactorLayer))
     const admission: SessionAdmission = {
       runSpec: {
         overrides: {
@@ -2595,6 +2606,22 @@ describe("credential order", () => {
             branchId: root.branchId,
             admission: root.admission,
           })
+          const storage = yield* MessageStorage
+          yield* Effect.forEach(
+            params.history ?? [],
+            (chars, index) =>
+              storage.createMessage(
+                Message.cases.regular.make({
+                  id: MessageId.make(`${params.name}-old-${index + 1}`),
+                  sessionId: root.sessionId,
+                  branchId: root.branchId,
+                  role: "assistant",
+                  parts: [Prompt.textPart({ text: "x".repeat(chars) })],
+                  createdAt: dateFromMillis(1_000 + index),
+                }),
+              ),
+            { discard: true },
+          )
           return yield* Effect.exit(
             Effect.forEach(
               params.prompts ?? ["hello"],
@@ -2676,6 +2703,32 @@ describe("credential order", () => {
       expect(labelsOf(stayed.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
+    }),
+  )
+
+  it.live("a handoff summary walks the order as a step does, with one notice", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "summary-moves",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        // About 150k tokens: over the 128k window, so the turn hands it off first.
+        history: Array.from({ length: 12 }, () => 50_000),
+        replies: { "sk-a": quotaSpent, "sk-b": answer("from b") },
+      })
+      // Default refuses the summary; personal makes it, and the step stays there.
+      expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
+      expect(run.projected.map((event) => event.compacted)).toEqual([true])
+      expect(run.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} is out of quota; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+      expect(labelsOf(run.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
     }),
   )
 
@@ -3020,6 +3073,33 @@ describe("credential order", () => {
       expect(moved.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
         [personal, apiPricing.input + apiPricing.output],
       ])
+    }),
+  )
+
+  it.live("an order edited mid-turn to only slots the turn left names the edit", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "reorder-passed",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        // Once B serves, the order names only A, which the turn already left.
+        reorder: { on: "sk-b", order: [DEFAULT_CREDENTIAL_SLOT] },
+        replies: {
+          "sk-a": quotaSpent,
+          "sk-b": () =>
+            Stream.fromIterable([
+              toolCallPart("echo", { text: "hi" }),
+              finishPart({ finishReason: "tool-calls" }),
+            ]),
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-b"])
+      expect(run.errors.map((entry) => entry.error).at(-1)).toBe(
+        `The authOrder of provider "${FALLBACK}" changed during this turn, and the turn already left every credential it names now (default). The next turn starts again at its first credential`,
+      )
     }),
   )
 

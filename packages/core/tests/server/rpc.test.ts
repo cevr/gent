@@ -1575,6 +1575,30 @@ describe("provider login", () => {
             }),
           )
           expect(Exit.isFailure(fixed)).toBe(true)
+          // A label the order names is taken even when no credential holds
+          // it: the order would name the moved credential twice. The rename
+          // is a typed refusal before anything moves.
+          const ghost = CredentialSlot.make("ghost")
+          yield* client.auth.setOrder({ sessionId, provider: "order-slots", order: [home_, ghost] })
+          const orderedFile = yield* fs.readFileString(userConfig)
+          const named = yield* Effect.exit(
+            client.auth.renameKey({ sessionId, provider: "order-slots", from: home_, to: ghost }),
+          )
+          expect(
+            Exit.match(named, {
+              onSuccess: () => "renamed",
+              onFailure: (cause) =>
+                Option.match(Cause.findErrorOption(cause), {
+                  onNone: () => "defect",
+                  onSome: (error) => `${error._tag}: ${error.message}`,
+                }),
+            }),
+          ).toBe(
+            `ProviderAuthError: "ghost" is in the authOrder of "order-slots": move it out of the order first, or pick another label`,
+          )
+          expect(Predicate.isUndefined(yield* auth.get("order-slots", ghost))).toBe(true)
+          expect((yield* auth.get("order-slots", home_))?.type).toBe("api")
+          expect(yield* fs.readFileString(userConfig)).toBe(orderedFile)
 
           yield* client.auth.setOrder({ sessionId, provider: "order-slots", order: [work, home_] })
           expect(yield* orderOf).toEqual([work, home_])
@@ -1602,7 +1626,26 @@ describe("provider login", () => {
           // A rename under the project's order never copies that order into
           // the user file, where it would enrol the label in every project.
           const team = CredentialSlot.make("team")
-          yield* client.auth.renameKey({ sessionId, provider: "order-slots", from: work, to: team })
+          yield* client.auth.renameKey({
+            sessionId,
+            provider: "order-slots",
+            from: home_,
+            to: team,
+          })
+          expect(yield* userFile).toBe(before)
+          // A label the winning project order names keeps its name: the
+          // project would walk a label no credential holds. The refusal names
+          // the entry, as an order write does, before anything moves.
+          const crew = CredentialSlot.make("crew")
+          const renamedAway = yield* Effect.exit(
+            client.auth.renameKey({ sessionId, provider: "order-slots", from: work, to: crew }),
+          )
+          expect(String(renamedAway)).toContain(
+            `The project config (.gent/config.json) has an entry for "order-slots", whose authOrder names "work": edit it there first`,
+          )
+          expect((yield* auth.get("order-slots", work))?.type).toBe("api")
+          expect(Predicate.isUndefined(yield* auth.get("order-slots", crew))).toBe(true)
+          expect(yield* orderOf).toEqual([work])
           expect(yield* userFile).toBe(before)
         }).pipe(Effect.timeout("8 seconds")),
       ).pipe(Effect.provide(BunServices.layer)),

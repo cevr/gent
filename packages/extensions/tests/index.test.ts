@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http"
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path } from "effect"
 import { getToolId, runProcess } from "@gent/core/extensions/api"
@@ -201,6 +202,7 @@ describe("builtin tool schemas", () => {
           BunServices.layer,
           BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
           GentPlatform.Test(),
+          FetchHttpClient.layer,
         ),
       ),
     ),

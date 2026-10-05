@@ -61,7 +61,7 @@ import {
   type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { sessionTitleOf } from "./session-tools.js"
+import { childSessionName } from "./session-tools.js"
 import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
 
 // Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
@@ -314,7 +314,11 @@ export const childFailureNames = (outcome: ChildOutcome): ReadonlyArray<string> 
   return names
 }
 
-/** How a child's turn ended, in the words the parent model and the completion row both show. */
+/**
+ * How a child's turn ended, in the words of the completion message the parent
+ * model reads. The completion row takes its words from `childFailureNames`;
+ * only a row saved without an outcome reads these back from the headline.
+ */
 const childOutcomeWords = (outcome: ChildOutcome): string => {
   const failures = childFailureNames(outcome)
   if (failures.length === 0) return "completed"
@@ -1301,7 +1305,7 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
 
 /**
  * A stop notice names the task by its first line, cut here by code point; the
- * registry keeps the whole prompt. A start's own name is cut here too.
+ * registry keeps the whole prompt.
  */
 const maximumNoticeTaskChars = 80
 
@@ -1314,48 +1318,16 @@ const noticeTask = (prompt: string) => {
   return `${headChars(line, maximumNoticeTaskChars - 1)}…`
 }
 
-/** A derived child name keeps at most this many units, as the TUI's head keeps a name. */
-const maximumChildNameChars = 32
-
-/** Where a task's first clause ends: a bracket, a `;`, a sentence end, a spaced dash. */
-const CLAUSE_END = /\s*(?:[([;]|[.!?](?:\s|$)|\s[-–—]\s)/u
-
-/** `text` cut to whole words within `max` units; a first word longer than that is cut by code point. */
-const wholeWords = (text: string, max: number): string => {
-  if (text.length <= max) return text
-  let kept = ""
-  for (const word of text.split(" ")) {
-    let next = `${kept} ${word}`
-    if (kept.length === 0) next = word
-    if (next.length > max - 1) break
-    kept = next
-  }
-  if (kept.length === 0) kept = headChars(text, max - 1)
-  return `${kept.replace(/[\s,:]+$/u, "")}…`
-}
-
 /**
- * A child's session name, which the tray, the sessions pane and its result
- * row head with: the start's own `name` on one line, else its task's first
- * clause in whole words (`Check the greeting files`). Never the agent's name:
- * every child runs as `delegate`, so it would tell no child from another.
+ * A child's session name (`childSessionName`). The agent's name only when
+ * neither the start's name nor its task has words: every child runs as
+ * `delegate`, so that name tells no child from another.
  */
-const childName = (params: Pick<AdmitParams, "name" | "prompt">): string => {
-  const given = Option.fromUndefinedOr(params.name).pipe(
-    Option.map((value) => value.replace(/\s+/gu, " ").trim()),
-    Option.filter((value) => value.length > 0),
+const childName = (params: Pick<AdmitParams, "name" | "prompt">): string =>
+  Option.getOrElse(
+    childSessionName({ name: Option.fromUndefinedOr(params.name), prompt: params.prompt }),
+    () => DELEGATE_AGENT_NAME,
   )
-  if (Option.isSome(given)) return wholeWords(given.value, maximumNoticeTaskChars)
-  const title = Option.getOrElse(sessionTitleOf(params.prompt), () => DELEGATE_AGENT_NAME)
-  const clause = Option.getOrElse(
-    Option.filter(
-      Option.fromUndefinedOr(title.split(CLAUSE_END)[0]?.trim()),
-      (value) => value.length > 0,
-    ),
-    () => title,
-  )
-  return wholeWords(clause, maximumChildNameChars)
-}
 
 /** One unread stop notice: a row, at the stop that wrote it. A later stop of the same row is a new notice. */
 const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`

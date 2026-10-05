@@ -1,3 +1,4 @@
+import { FetchHttpClient, type HttpClient } from "effect/http"
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
@@ -964,8 +965,12 @@ const anthropicModel = Effect.gen(function* () {
     yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
   const services = Context.add(
     yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-    >(),
+      | FileSystem.FileSystem
+      | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Crypto.Crypto
+      | HttpClient.HttpClient
+    >().pipe(Effect.provide(FetchHttpClient.layer)),
     AnthropicPlatform,
     AnthropicPlatform.of({ platform: "darwin", home: "/nonexistent/gent-test-home", env: {} }),
   )

@@ -22,6 +22,7 @@ import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  effectiveModelDriver,
   ModelId,
   resolveAgentRoster,
 } from "../../src/domain/agent"
@@ -1357,13 +1358,18 @@ describe("user configuration", () => {
 const primary = AgentDefinition.make({ name: AgentName.make("primary") })
 
 /** The driver id a session running `agent` dispatches through under the config. */
-const routedDriver = (agent: AgentDefinition, config: UserConfig) =>
-  resolveSessionRoute({
+const routedDriver = (agent: AgentDefinition, config: UserConfig) => {
+  const route = resolveSessionRoute({
     agents: [agent],
     admission: Option.some({ agent: agent.name }),
     config,
     session: { modelId: ModelId.make("anthropic/claude-sonnet-5") },
-  }).modelDriver.pipe(Option.flatMap((driver) => driver.driverId))
+  })
+  return Option.flatMap(
+    route.modelId,
+    (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
+  )
+}
 
 describe("configured driver override routing", () => {
   it.live("clearing the override routes through the provider on the next read", () =>

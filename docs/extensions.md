@@ -279,7 +279,12 @@ wakes has run, so the fire's hold can end right after its send.
 `ExtensionHost.host` is the only public host platform view at setup time. It
 exposes small, serializable facts such as OS info, executable path, and home
 directory.
-Extensions do not yield `GentPlatform` or reach into `@gent/core/runtime/*`.
+In setup, a tool or a request, an extension yields the platform services that
+every root provides: the Effect services, and `GentPlatform` from
+`@gent/core/extensions/api`. `GentPlatform` holds the host facts that Effect
+has no service for, the image codec, and the loopback listener that a sign-in
+redirect takes (`loopbackServer`). Extensions do not reach into
+`@gent/core/runtime/*`.
 A command runs through `runProcess` from `@gent/core/extensions/api`, which
 needs the Effect `ChildProcessSpawner` in the requirement union. When extensions need more
 host authority, the design answer is a new public authoring primitive or a
@@ -391,9 +396,10 @@ as a crash leaves it.
 The body may yield only the services every root gives a tool: `ExtensionContext`,
 the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
 `HttpClient`, and the `GentPlatform` that helpers such as `saveToolImage` read),
-the core services the branch-tools entry exports (`BranchToolHostServices`:
-`EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), and the
-services of its `resources`. A body that requires any other service does not
+the core services of `BranchToolHostServices` (`MessageStorage`,
+`InteractionStorage` and `ToolRunner`, which the branch-tools entry exports,
+and the `EventStore` that `ToolRunner.runBound` requires), and the services of
+its `resources`. A body that requires any other service does not
 compile. The bound is on the services
 the body requires (its `R`), not on the runtime context:
 `Effect.serviceOption` still reads a service the root holds. A tool that
@@ -861,7 +867,11 @@ extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
 chain: project, then user, then builtin. The first summary wins. A compactor
 that fails with `ModelCompactionError` passes the window to the next one, and
 the loop truncates the window, with a visible notice, only when no compactor
-is left. `compact` runs with the `ExtensionContext` a tool call of the same
+is left. The summary model (`request.summaryModel`) runs on the credential
+the turn's order chooses; a compactor that puts the model's failure in
+`ModelCompactionError.cause` lets the loop move the summary to the next
+credential of the order and ask the chain again, as a step's request moves.
+`compact` runs with the `ExtensionContext` a tool call of the same
 extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
 the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
 
@@ -1401,10 +1411,11 @@ beside forged copies its extension must ignore, builds one with
 - Extension-private authority is an imported service Tag from a resource layer
   that the tool or request names in `resources`, not a read/write or capability
   declaration.
-- Runtime services such as `GentPlatform`, `ToolRunner`, storage Tags and event
-  stores are not on `@gent/core/extensions/api`. The branch-tools entry exports
-  the core services a branch tool reads, and any extension that imports it may
-  yield them.
+- Runtime services such as `ToolRunner`, storage Tags and event stores are not
+  on `@gent/core/extensions/api`. The branch-tools entry exports the core
+  services a branch tool reads, and any extension that imports it may yield
+  them. `GentPlatform` is a platform service, on `@gent/core/extensions/api`
+  with the helpers that read it.
 - Tagged-union variant tags are PascalCase. Extension health reports
   `"Healthy"` or `"Degraded"`, and a degraded extension carries
   `"ActivationFailed"` or `"ModelCatalogFailed"` issues. An

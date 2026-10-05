@@ -260,7 +260,11 @@ const summarize = Effect.fn("ModelCompaction.summarize")(function* (params: {
     ).pipe(
       Effect.mapError((error) => {
         if (Schema.is(ModelCompactionError)(error)) return error
-        return failure(`SummaryGenerationFailed: ${failureMessage(error)}`)
+        return new ModelCompactionError({
+          modelId: params.modelId,
+          reason: `SummaryGenerationFailed: ${failureMessage(error)}`,
+          cause: error,
+        })
       }),
     ),
   )
@@ -408,6 +412,7 @@ export const compactModelContext = Effect.fn("ModelCompaction.compactModelContex
         new ModelCompactionError({
           modelId: params.modelId,
           reason: `SummaryGenerationFailed: ${failureMessage(error)}`,
+          cause: error,
         }),
     ),
   )

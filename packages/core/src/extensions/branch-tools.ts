@@ -28,8 +28,6 @@ export { type BranchToolHostServices } from "../runtime/tools.js"
 // Storage a tool reads.
 export { InteractionStorage } from "../storage/storage.js"
 export { MessageStorage } from "../storage/storage.js"
-export { EventStore } from "../domain/event.js"
-export { GentPlatform } from "../runtime/gent-platform.js"
 export { makeOwnedToolCallReader, type OwnedToolCallAddress } from "../storage/storage.js"
 export { StorageError } from "../domain/errors.js"
 export { EventStoreError } from "../domain/event.js"

@@ -63,9 +63,8 @@ import {
   toolImageFile,
   ToolResultFailure,
   writeFileAtomic,
+  GentPlatform,
 } from "@gent/core/extensions/api"
-// The host's loopback listener for a sign-in redirect (`GentPlatform.loopbackServer`).
-import { GentPlatform } from "@gent/core/extensions/branch-tools"
 
 // Test seam: `McpServers` (the extension over inline servers),
 // `HostEnvironment` (the environment a stdio server inherits) and

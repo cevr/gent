@@ -551,7 +551,7 @@ const credentialCache = (io: AnthropicCredentialIO) => {
   )
   return SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
     Effect.flatMap((cellRef) => makeAnthropicCredentialCache(cellRef, io)),
-    Effect.provide(Layer.merge(BunServices.layer, platformLayer)),
+    Effect.provide(Layer.mergeAll(BunServices.layer, platformLayer, FetchHttpClient.layer)),
   )
 }
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
@@ -1395,13 +1395,22 @@ const testPlatform = AnthropicPlatform.of({
   home: "/nonexistent/gent-test-home",
   env: {},
 })
-/** The driver's services as setup captures them: the running platform, its crypto, and the Claude Code facts. */
+/**
+ * The driver's services as setup captures them: the running platform, its
+ * crypto, the host's HTTP client and the Claude Code facts. The client is
+ * the fetch client over whatever fetch the test provides, as the host's is
+ * over the real one.
+ */
 const driverServices = (platform: typeof testPlatform) =>
-  Effect.map(
-    Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-    >(),
-    Context.add(AnthropicPlatform, platform),
+  Effect.context<
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Crypto.Crypto
+    | HttpClient.HttpClient
+  >().pipe(
+    Effect.map(Context.add(AnthropicPlatform, platform)),
+    Effect.provide(FetchHttpClient.layer),
   )
 type DriverArgs = Parameters<typeof buildAnthropicModelDriverLive>
 /** The driver over the test platform; its markers ask for `promptCacheTtl`, 1 hour unless a test sets the switch. */
@@ -3790,13 +3799,15 @@ describe("named Anthropic credential cache", () => {
       expect(Exit.isFailure(result)).toBe(true)
       if (Exit.isSuccess(result)) return
       const defect = Cause.findDefect(result.cause)
-      // The reply proves nothing about the credential: the turn stays on it.
-      expect(
-        Result.isSuccess(defect) &&
-          Schema.is(ProviderAuthError)(defect.success) &&
-          defect.success.message.includes("import it again") &&
-          Option.isNone(Option.fromUndefinedOr(defect.success.credentialFailure)),
-      ).toBe(true)
+      // The reply proves nothing about the credential: the turn stays on it,
+      // and the text names the reply, not a refusal the user must answer
+      // with a new import.
+      expect(Result.isSuccess(defect) && Schema.is(ProviderAuthError)(defect.success)).toBe(true)
+      if (Result.isFailure(defect) || !Schema.is(ProviderAuthError)(defect.success)) return
+      expect(defect.success.credentialFailure).toBeUndefined()
+      expect(defect.success.message).toBe(
+        "Imported Claude Code credential refresh failed: OAuth refresh response missing access_token",
+      )
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 

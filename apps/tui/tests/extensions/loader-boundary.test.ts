@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   DateTime,
@@ -1819,7 +1820,9 @@ describe("tool renderer reach", () => {
       expect(loaded.failures).toEqual([])
       expect(loaded.renderers.has("delegate.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(
+      Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer)),
+    ),
   )
 })
 

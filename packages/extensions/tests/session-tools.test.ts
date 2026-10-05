@@ -580,7 +580,7 @@ const threadRig = Effect.gen(function* () {
     Effect.flatMap(one(at, op("thread.start", { task })), decodeStarted)
   const stop = (at: SessionKey, thread: string) =>
     Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
-  return { client, cwd, starter, gate, act, op, list, listUntil, start, stop }
+  return { client, cwd, starter, gate, act, op, one, list, listUntil, start, stop }
 })
 
 const decodeStarted = Schema.decodeEffect(StartedOutput)
@@ -702,6 +702,33 @@ describe("threads", () => {
             sessions: 2,
             current: { sessionId: handoff.sessionId, branchId: handoff.branchId },
           })
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  // A thread is a child session, named as a delegate child is: the TUI heads
+  // with the name, so a long task gives a short label in whole words.
+  it.live(
+    "a thread is named by its task's first clause in whole words, or by its own name on one line",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          const nameOf = (input: Record<string, string>) =>
+            Effect.gen(function* () {
+              const output = yield* rig.one(rig.starter, rig.op("thread.start", input))
+              const started = yield* decodeStarted(output)
+              return (yield* rig.client.session.get({ sessionId: started.sessionId }))?.name
+            })
+          expect(
+            yield* nameOf({
+              task: `${THREAD_TASK} in every package (each release).\n\nThe rest of the task.`,
+            }),
+          ).toBe("THREAD-TASK: tidy the changelog…")
+          expect(yield* nameOf({ task: THREAD_TASK, name: "  changelog\ntidy " })).toBe(
+            "changelog tidy",
+          )
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
