@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema } from "effect"
+import { Array as Arr, Option, Predicate, Schema } from "effect"
 import picomatch from "picomatch"
 import {
   type ArrowFunctionExpression,
@@ -1540,6 +1540,170 @@ export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<
     }
     return findings
   })
+}
+
+// ── bunfig preloads exist, and the root one loads the test preload ─────────
+
+/** A bunfig: the root one, or a workspace's. Bun reads the one in its working directory. */
+const BUNFIG = /(?:^|\/)bunfig\.toml$/
+
+const ROOT_BUNFIG = "bunfig.toml"
+
+/** The root bunfig's `[test] preload` entry for the shared test preload. */
+const ROOT_TEST_PRELOAD = "./packages/tooling/src/test-preload.ts"
+
+const BunfigPreload = Schema.Union([Schema.String, Schema.Array(Schema.String)])
+
+/** The two preload lists a bunfig holds: one for `bun run`, one for `bun test`. */
+const BunfigSchema = Schema.Struct({
+  preload: Schema.optionalKey(BunfigPreload),
+  test: Schema.optionalKey(Schema.Struct({ preload: Schema.optionalKey(BunfigPreload) })),
+})
+
+/** A preload entry as a list: bun takes one path or several. */
+const preloadList = (preload: Option.Option<typeof BunfigPreload.Type>): ReadonlyArray<string> =>
+  Option.match(preload, { onNone: () => [], onSome: (paths) => Arr.ensure<string>(paths) })
+
+/**
+ * Guard: each path a bunfig preloads names a tracked file, and the root
+ * bunfig's `[test] preload` names the test preload. A package name (such as
+ * `@opentui/solid/preload`) resolves through the install, not the tree, and
+ * is not read. A moved preload fails each start that reads the bunfig; a
+ * root bunfig without the test preload lets a bare `bun test` at the root
+ * run with the real home.
+ */
+export const findBunfigPreloads = (
+  file: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (!BUNFIG.test(file)) return []
+  const decoded = Option.flatMap(
+    Option.liftThrowable(() => Bun.TOML.parse(text))(),
+    Schema.decodeUnknownOption(BunfigSchema),
+  )
+  if (Option.isNone(decoded)) {
+    return [{ file, line: 1, message: "not a readable bunfig: its preloads cannot be checked" }]
+  }
+  const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
+  const tracked = new Set(trackedFiles)
+  const testPreloads = preloadList(
+    Option.flatMap(Option.fromUndefinedOr(decoded.value.test), (test) =>
+      Option.fromUndefinedOr(test.preload),
+    ),
+  )
+  const preloads = [...preloadList(Option.fromUndefinedOr(decoded.value.preload)), ...testPreloads]
+  const findings: Array<Finding> = preloads
+    .values()
+    .filter((entry) => entry.startsWith("./") || entry.startsWith("../"))
+    .filter((entry) =>
+      Option.match(resolveRelative(directory, entry), {
+        onNone: () => true,
+        onSome: (resolved) => !tracked.has(resolved),
+      }),
+    )
+    .map((entry) => ({
+      file,
+      line: lineAt(text, text.indexOf(entry)),
+      message: `preloads \`${entry}\`, which names no staged or committed file -- point it at the file that exists`,
+    }))
+    .toArray()
+  if (file === ROOT_BUNFIG && !testPreloads.includes(ROOT_TEST_PRELOAD))
+    findings.push({
+      file,
+      line: 1,
+      message: `\`[test] preload\` does not name \`${ROOT_TEST_PRELOAD}\` -- a bare \`bun test\` at the root then logs, and writes into the real home`,
+    })
+  return findings
+}
+
+/** Guard: the root has a bunfig, so a bare `bun test` there loads the test preload. */
+export const findMissingRootBunfig = (
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (trackedFiles.includes(ROOT_BUNFIG)) return []
+  return [
+    {
+      file: "package.json",
+      line: 1,
+      message: `no root \`${ROOT_BUNFIG}\` -- a bare \`bun test\` at the root runs without the test preload, with the real home`,
+    },
+  ]
+}
+
+// ── workflow run lines name paths that exist ────────────────────────────────
+
+const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/
+
+/** The roots under which a word of a run line is a claim about the tree. */
+const WORKFLOW_PATH_ROOT = /^(?:packages|apps|testbeds|examples|docs|patches)\//
+
+const WorkflowSchema = Schema.Struct({
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      steps: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            run: Schema.optionalKey(Schema.String),
+            "working-directory": Schema.optionalKey(Schema.String),
+          }),
+        ),
+      ),
+    }),
+  ),
+})
+
+/**
+ * Guard: each path a workflow `run:` names under a tree root names a tracked
+ * file or directory, or lies in a build output (`buildOutputs`, from the
+ * turbo build task). A word is read against its step's working directory. A
+ * word with an expansion (`$`, `*`, `{`) is not one path and is not read.
+ * The release workflow runs only on a tag, so without this a moved path fails
+ * at release time.
+ */
+export const findWorkflowRunPaths = (
+  file: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+  buildOutputs: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (!WORKFLOW.test(file)) return []
+  const decoded = Option.flatMap(
+    Option.liftThrowable(() => Bun.YAML.parse(text))(),
+    Schema.decodeUnknownOption(WorkflowSchema),
+  )
+  if (Option.isNone(decoded)) {
+    return [{ file, line: 1, message: "not a readable workflow: its run paths cannot be checked" }]
+  }
+  const tracked = new Set(trackedFiles)
+  const prefixes = directoryPrefixesOf(trackedFiles)
+  const built = (path: string) =>
+    buildOutputs.some(
+      (output) => output === path || output.startsWith(`${path}/`) || path.startsWith(`${output}/`),
+    )
+  const lines = text.split("\n")
+  const steps = Object.values(decoded.value.jobs).flatMap((job) => job.steps ?? [])
+  return steps.flatMap((step) =>
+    (step.run ?? "")
+      .split(/[\s"'=;|&<>()]+/)
+      .filter((word) => word.length > 0 && !/[$*{]/.test(word))
+      .flatMap((word) =>
+        Option.toArray(
+          Option.map(resolveRelative(step["working-directory"] ?? "", word), (path) => ({
+            word,
+            path,
+          })),
+        ),
+      )
+      .filter(({ path }) => WORKFLOW_PATH_ROOT.test(path))
+      .filter(({ path }) => !existsInTree(path, tracked, prefixes) && !built(path))
+      .map(({ word, path }) => ({
+        file,
+        line: lines.findIndex((line) => line.includes(word)) + 1,
+        message: `run names \`${path}\`, which no staged or committed file matches and no build writes -- point it at the path that exists`,
+      })),
+  )
 }
 
 // ── lint config names nothing that is gone ──────────────────────────────────
