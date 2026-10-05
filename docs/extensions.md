@@ -73,7 +73,8 @@ You need at most 6 concepts to write a complete extension:
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
 `"modelDriver"`, `"apiClass"`, `"modelRouter"`. Hook kinds: `"systemPrompt"`,
-`"turnProjection"`, `"turnAfter"`, `"loopOpen"`, `"sessionDeleted"`.
+`"turnProjection"`, `"turnAfter"`, `"loopOpen"`, `"sessionDeleted"`,
+`"toolCall"`.
 
 Extensions import authoring primitives from one path:
 `@gent/core/extensions/api`.
@@ -618,9 +619,94 @@ Lifecycle extension points are typed hook kinds, not keyed middleware bags:
 `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen` (a branch's loop was
 built in this process, or the extension's branch Resources were built again
 after an edit or a disable and enable: re-arm timers, report lost work; a hook
-still running when those Resources retire is interrupted before they release), and `sessionDeleted`
-(remove what the extension keeps for a deleted session outside the database).
+still running when those Resources retire is interrupted before they release), `sessionDeleted`
+(remove what the extension keeps for a deleted session outside the database),
+and `toolCall` (a verdict on each tool call before it runs, below).
 Each `host.on` call is typed by the kind's input and output.
+
+### The `toolCall` hook
+
+A `toolCall` hook gives each tool call a verdict before the call runs:
+`ToolCallVerdict.cases.Allow`, `Ask({ reason })` or `Deny({ reason })`. It
+runs for each call the model makes and for each call the cell's code makes
+(that input names the cell call in `parentToolCallId`). The input also
+carries `sessionId`, `branchId`, the turn's opening `messageId`, `toolCallId`,
+`agentName`, `toolName`, `readonly` and the call's `input`.
+
+- Every extension's hook runs, at once; the strictest verdict wins: deny,
+  then ask, then allow. A hook that fails answers `Ask`.
+- `Ask` shows one approval dialog with the reason. A turn with no user (a
+  headless run without `--approve-all`) declines it.
+- A denied or declined call does not run. The model reads a failed tool
+  result that names the reason, and the turn goes on.
+- A call is judged once. A call that waits for its answer across a restart
+  keeps its verdict and is not judged again.
+- With no `toolCall` hook nothing runs before a call, and the requests keep
+  their bytes. A hook that asks a model adds that cost to every call it
+  judges, so keep it off unless the owner asks for it.
+
+```ts
+import { Effect } from "effect"
+import { defineExtension, ExtensionHost, ToolCallVerdict } from "@gent/core/extensions/api"
+
+export const ShellAsksExtension = defineExtension({
+  id: "shell-asks",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.on("toolCall", ({ toolName, readonly }) => {
+      if (readonly || toolName !== "bash")
+        return Effect.succeed(ToolCallVerdict.cases.Allow.make({}))
+      return Effect.succeed(ToolCallVerdict.cases.Ask.make({ reason: "every shell command asks" }))
+    })
+  }),
+})
+```
+
+### `@gent/guard`
+
+The shipped `@gent/guard` is a `toolCall` hook. It is off: it registers no
+hook until `~/.gent/config.json` (or a trusted project's
+`.gent/config.json`) holds a `guard` entry with a `policy` or `rules`.
+
+```json
+{
+  "guard": {
+    "policy": "Allow reading and building. Ask before installing packages or pushing. Deny deleting files outside the project.",
+    "rules": [
+      { "tool": "bash", "match": "git status", "effect": "allow" },
+      { "tool": "bash", "match": "git push *", "effect": "ask" },
+      { "tool": "bash", "match": "rm -rf *", "effect": "deny" }
+    ],
+    "model": "anthropic/claude-haiku-4-5"
+  }
+}
+```
+
+It judges a call in this order, and the first answer wins:
+
+1. `rules`. `tool` is a glob over the tool id, and `match` a glob over the
+   call's subject: a string input, or the one field of `command`, `code`,
+   `path`, `url` and `query` the input holds (an input with two of them has
+   no subject, and a `match` rule does not decide it). `*` is any run of
+   characters, `?` one, and a trailing ` *` is optional (`git push *` also
+   matches `git push`). The last rule that matches decides.
+2. A `readonly` tool runs.
+3. With a `policy`, a classifier (`ExtensionContext.Models.decide`) reads the
+   policy and the call and answers allow, ask or deny. `model` names it;
+   absent, the cheapest classifier with a credential. The instructions and
+   the policy are the same bytes for every call, and the call is the input.
+   A failure, no answer in 8 s, or an answer the classifier is not sure of
+   asks. With no policy, the call runs.
+
+A `guard` entry that does not decode asks about each call that is not
+read-only. Both files' entries apply: the policies join, the project's
+rules come after the user's, and the project's `model` wins. Set
+`disabledExtensions: ["@gent/guard"]` to turn it off.
+
+The guard is not a sandbox. The classifier reads a call's input as text: a
+cell's code is judged as written, and each tool call the code makes is judged
+again when it runs, but what the code does in its own Bun runtime is not
+seen. A rule matches text, not what a command does.
 
 ## Resource (long-lived state)
 
@@ -1020,6 +1106,7 @@ builtin).
 | `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
 | `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
 | `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier      |
+| `packages/extensions/src/guard.ts`     | `toolCall` hook from config + a classifier    |
 | `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
 | `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
 
