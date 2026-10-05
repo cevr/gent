@@ -1943,6 +1943,62 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.live("the turn line counts the turn's retries and sums its steps' tokens", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("retry-count-session")
+      const branchId = BranchId.make("retry-count-branch")
+      const retry = (id: number, attempt: number) =>
+        makeEnvelope(
+          id,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt,
+            maxAttempts: 3,
+            delayMs: 100,
+            error: "Rate limit exceeded",
+          }),
+        )
+      const stepEnded = (id: number, inputTokens: number, outputTokens: number) =>
+        makeEnvelope(
+          id,
+          AgentEvent.cases.StreamEnded.make({
+            sessionId,
+            branchId,
+            outcome: "Answered",
+            costUsd: 0.01,
+            usage: { inputTokens, outputTokens },
+          }),
+        )
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        retry(2, 1),
+        retry(3, 2),
+        stepEnded(4, 30_000, 1_500),
+        stepEnded(5, 8_000, 600),
+        makeEnvelope(
+          6,
+          AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 108_000 }),
+        ),
+      ]
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: envelopes,
+      })
+      yield* waitUntil(
+        () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "turn-ended"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const ended = feed.value.items().find((item) => item._tag === "turn-ended")
+        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended)).toBe(
+          "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.02",
+        )
+        dispose()
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   /** The retry row a feed shows once a cancel during the backoff ended the turn. */
   const retryRowAfterBackoffCancel = (lastEventId: Option.Option<number>) =>
     Effect.gen(function* () {

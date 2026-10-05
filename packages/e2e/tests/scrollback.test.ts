@@ -267,7 +267,7 @@ describe("E2E: Scrollback ownership", () => {
         ctx.pty.write(prompt.join("\n"))
         yield* settlePty(ctx, TYPED)
         ctx.pty.write(keys.enter)
-        yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
+        yield* ptyWaitFor(ctx, "2 retries", { timeout: 25_000 })
         const grid = yield* settleAndCapture(ctx, { quietMs: 1_500, timeoutMs: 25_000 })
         const rows = [...grid.history, ...grid.visible].map((row) => row.trimEnd())
         const first = rows.findIndex((row) => row === "┃ longg")
@@ -306,7 +306,7 @@ describe("E2E: Scrollback ownership", () => {
         ctx.pty.write(prompt.join("\n"))
         yield* settlePty(ctx, TYPED)
         ctx.pty.write(keys.enter)
-        yield* ptyWaitFor(ctx, "Retried 2/3", { timeout: 25_000 })
+        yield* ptyWaitFor(ctx, "2 retries", { timeout: 25_000 })
         yield* ptyWaitFor(ctx, "scripted language", { timeout: 25_000 })
         const promptBlock = ["", ...prompt.map((row) => `┃ ${row}`), ""]
         const answerBlock = [
@@ -364,7 +364,8 @@ describe("E2E: Scrollback ownership", () => {
             { timeout: 25_000, label: "the debug session at idle" },
           )
           const before = transcriptRows(yield* settleAndCapture(ctx, SETTLE))
-          expect(before.length).toBeGreaterThan(10)
+          // The seeded transcript, its lone thoughts hidden at the collapsed level.
+          expect(before.length).toBeGreaterThanOrEqual(10)
 
           ctx.pty.write("/model")
           yield* settlePty(ctx, TYPED)
@@ -392,7 +393,7 @@ describe("E2E: Scrollback ownership", () => {
             ctx.pty.write(keys.enter)
             yield* screenWaitFor(
               ctx,
-              (visible) => visible.some((row) => row.startsWith("● Worked for")),
+              (visible) => visible.some((row) => row.startsWith("  ✻ Worked for")),
               { timeout: 25_000, label: "the turn after the picker at its end" },
             )
           }

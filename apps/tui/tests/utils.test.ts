@@ -32,7 +32,6 @@ import {
   formatConnectionIssue,
   formatError,
   formatGenericToolText,
-  formatGroupDuration,
   formatPreviewFooter,
   formatRowCounts,
   formatTokens,
@@ -44,6 +43,7 @@ import {
   truncate,
   truncatePath,
   truncateStart,
+  toolRunFrame,
   workingIconFrame,
 } from "../src/utils"
 import { BunServices } from "@effect/platform-bun"
@@ -794,51 +794,83 @@ const cell = (
 ): ActivityCall => ({ toolName: "cell", status, operations, code: "" })
 
 describe("formatActivityHeader", () => {
-  test("counts the tools by kind, largest first, ties in the order they ran", () => {
+  test("kinds read as verb phrases, largest first, ties in the order they ran", () => {
     expect(
       formatActivityHeader([
         cell([op("bash", "pwd"), op("read", "a.ts"), op("edit", "x.ts")]),
         cell([op("read", "b.ts"), op("write", "y.ts"), op("read", "c.ts"), op("read", "d.ts")]),
       ]),
-    ).toBe("7 tools · 4 read · 2 edit · 1 command")
+    ).toBe("Read 4 files · ran 1 command · edited 1 file · wrote 1 file")
     expect(
       formatActivityHeader([
         cell([op("delegate.start", "compute"), op("delegate.start", "verify")]),
         cell([op("grep", "/x/ in ."), op("read_session", "s1"), op("mcp.query", "q")]),
       ]),
-    ).toBe("5 tools · 2 children · 1 search · 1 read · 1 mcp.query")
-    expect(formatActivityHeader([cell([op("bash", "a"), op("bash", "b")])])).toBe(
-      "2 tools · 2 commands",
-    )
+    ).toBe("Started 2 agents · searched 1 pattern · read 1 session · mcp.query 1×")
+    expect(formatActivityHeader([cell([op("bash", "a"), op("bash", "b")])])).toBe("Ran 2 commands")
     expect(formatActivityHeader([cell([op("ask_user_async", "cache"), op("bash", "a")])])).toBe(
-      "2 tools · 1 question · 1 command",
+      "Asked 1 question · ran 1 command",
     )
   })
 
-  test("a cell with no ops is one tool that names its source's verbs", () => {
-    expect(formatActivityHeader([cell([])])).toBe("1 tool")
-    expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
-      "1 tool · $ bun test",
+  test("every kind has its own words", () => {
+    expect(
+      formatActivityHeader([
+        cell([
+          op("grep", "a"),
+          op("glob", "b"),
+          op("websearch", "c"),
+          op("websearch", "d"),
+          op("webfetch", "e"),
+          op("thread.start", "f"),
+          op("ask_user", "g"),
+          op("handoff", "h"),
+          op("lint_fix", "i"),
+          op("lint_fix", "j"),
+        ]),
+      ]),
+    ).toBe(
+      "Searched 2 patterns · searched the web 2× · lint_fix 2× · fetched 1 page · started 1 thread · asked 1 question · proposed a handoff",
     )
+  })
+
+  test("a cell with no ops counts the calls its source spells out, never its code", () => {
+    expect(formatActivityHeader([cell([])])).toBe("Ran code")
+    expect(formatActivityHeader([{ ...cell([]), code: "await Bun.$`bun test`.text()" }])).toBe(
+      "Ran 1 command",
+    )
+    const reads = "await Promise.all(['a', 'b', 'c'].map((path) => tools.read({ path })))"
+    const three =
+      "await tools.read({path:'a'}); await tools.read({path:'b'}); await tools.read({path:'c'})"
+    expect(formatActivityHeader([{ ...cell([]), code: three }])).toBe("Read 3 files")
+    expect(formatActivityHeader([{ ...cell([], "running"), code: three }])).toBe("Reading 3 files")
+    expect(formatActivityHeader([{ ...cell([], "running"), code: reads }])).not.toContain("Promise")
+  })
+
+  test("a running op reads last in the running tense", () => {
+    expect(
+      formatActivityHeader([cell([op("read", "a"), op("read", "b"), op("bash", "t", "running")])]),
+    ).toBe("Read 2 files · running 1 command")
+    expect(formatActivityHeader([cell([op("bash", "t", "running")])])).toBe("Running 1 command")
   })
 
   test("a cell that failed with its op's own failure counts one failure", () => {
     // The op's failure went up uncaught: the cell's failure is its text.
     const thrown = { ...op("read", "gone.ts", "failed"), failure: "ENOENT: gone.ts" }
     expect(formatActivityHeader([{ ...cell([thrown], "error"), failure: "ENOENT: gone.ts" }])).toBe(
-      "1 tool · 1 read · 1 failed",
+      "Read 1 file · 1 failed",
     )
     expect(
       formatActivityHeader([
         { ...cell([op("bash", "a", "failed"), thrown], "error"), failure: "ENOENT: gone.ts" },
       ]),
-    ).toBe("2 tools · 1 command · 1 read · 2 failed")
+    ).toBe("Ran 1 command · read 1 file · 2 failed")
   })
 
   test("a cell whose failure cannot be shown to be its op's counts both", () => {
     // The cell's failure has no text of the op's and is no cancel: both count.
     expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
-      "1 tool · 1 command · 2 failed",
+      "Ran 1 command · 2 failed",
     )
   })
 
@@ -847,7 +879,7 @@ describe("formatActivityHeader", () => {
   test("a cancelled cell is one cancelled tool, never a failure", () => {
     const cut = { ...cell([op("read", "a.ts"), op("bash", "sleep 20", "cancelled")], "error") }
     expect(formatActivityHeader([{ ...cut, cancelled: true }])).toBe(
-      "2 tools · 1 read · 1 command · 1 cancelled",
+      "Read 1 file · ran 1 command · 1 cancelled",
     )
     expect(
       collapsedOperations([{ ...cut, cancelled: true }]).map((operation) =>
@@ -856,7 +888,7 @@ describe("formatActivityHeader", () => {
     ).toEqual(["Ran sleep 20 · cancelled"])
     // Cut between its ops: the cell itself is the one cancelled row.
     const between = { ...cell([op("read", "a.ts")], "error"), cancelled: true }
-    expect(formatActivityHeader([between])).toBe("1 tool · 1 read · 1 cancelled")
+    expect(formatActivityHeader([between])).toBe("Read 1 file · 1 cancelled")
     expect(collapsedOperations([between]).map((operation) => formatFailureRow(operation))).toEqual([
       "cell · cancelled",
     ])
@@ -865,16 +897,16 @@ describe("formatActivityHeader", () => {
       ...cell([{ ...op("read", "b.ts", "failed"), reason: "ENOENT" }], "error"),
       cancelled: true,
     }
-    expect(formatActivityHeader([failedFirst])).toBe("1 tool · 1 read · 1 failed · 1 cancelled")
+    expect(formatActivityHeader([failedFirst])).toBe("Read 1 file · 1 failed · 1 cancelled")
     expect(
       collapsedOperations([failedFirst]).map((operation) => formatFailureRow(operation)),
     ).toEqual(["Read b.ts · failed · ENOENT", "cell · cancelled"])
   })
 
-  test("a cell that failed while its ops succeeded is one failure and no extra tool", () => {
+  test("a cell that failed while its ops succeeded is one failure and no extra kind", () => {
     // After a restart the op row shows exit 0; the op stays a success.
     expect(formatActivityHeader([cell([op("bash", "pwd")], "error")])).toBe(
-      "1 tool · 1 command · 1 failed",
+      "Ran 1 command · 1 failed",
     )
     expect(
       formatActivityHeader([
@@ -882,21 +914,14 @@ describe("formatActivityHeader", () => {
         cell([op("read", "c.ts")], "error"),
         cell([], "error"),
       ]),
-    ).toBe("3 tools · 1 command · 1 read · 4 failed")
+    ).toBe("Ran 1 command · read 1 file · ran code · 4 failed")
   })
 
-  test("a finished group carries the sum of its call durations", () => {
+  // The run's time and its thoughts are detail: the turn line has the time.
+  test("a header sums no time", () => {
     expect(formatActivityHeader([{ ...cell([op("bash", "pwd")]), durationMs: 1_250 }])).toBe(
-      "1 tool · 1 command · 1.3s",
+      "Ran 1 command",
     )
-    expect(
-      formatActivityHeader([
-        { ...cell([]), durationMs: 800 },
-        { ...cell([]), durationMs: 700 },
-        cell([], "running"),
-      ]),
-    ).toBe("3 tools · 1.5s")
-    expect(formatGroupDuration([cell([], "running")])).toBe("")
   })
 
   test("a direct tool call counts as the one tool it is", () => {
@@ -906,39 +931,29 @@ describe("formatActivityHeader", () => {
         { toolName: "read", status: "error", operations: [], code: "" },
         cell([op("bash")]),
       ]),
-    ).toBe("3 tools · 2 read · 1 command · 1 failed")
+    ).toBe("Read 2 files · ran 1 command · 1 failed")
   })
 
-  test("a narrow header drops kinds from the right and keeps the count, failures and time", () => {
+  // The widths a header has at 100, 60 and 40 columns: the answer indent, the
+  // glyph and its space, and the column every transcript row keeps free.
+  test("a narrow header drops kinds from the right; the failures never drop", () => {
     const calls = [
-      {
-        ...cell([
-          op("read", "a"),
-          op("read", "b"),
-          op("read", "c"),
-          op("grep", "x"),
-          op("edit", "e"),
-          op("bash", "t", "failed"),
-        ]),
-        durationMs: 9_700,
-      },
+      cell([
+        op("read", "a"),
+        op("read", "b"),
+        op("read", "c"),
+        op("grep", "x"),
+        op("edit", "e"),
+        op("bash", "t", "failed"),
+      ]),
     ]
-    expect(formatActivityHeader(calls)).toBe(
-      "6 tools · 3 read · 1 search · 1 edit · 1 command · 1 failed · 9.7s",
-    )
-    expect(formatActivityHeader(calls, 50)).toBe("6 tools · 3 read · 1 search · 1 failed · 9.7s")
-    expect(formatActivityHeader(calls, 10)).toBe("6 tools · 1 failed · 9.7s")
-  })
-
-  test("thoughts count after the kinds, and a narrow header drops them first", () => {
-    const calls = [cell([op("read", "a"), op("bash", "t", "failed")])]
-    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 1)).toBe(
-      "2 tools · 1 read · 1 command · 1 thought · 1 failed",
-    )
-    expect(formatActivityHeader(calls, Number.POSITIVE_INFINITY, 6)).toBe(
-      "2 tools · 1 read · 1 command · 6 thoughts · 1 failed",
-    )
-    expect(formatActivityHeader(calls, 40, 6)).toBe("2 tools · 1 read · 1 command · 1 failed")
+    const whole = "Read 3 files · searched 1 pattern · edited 1 file · ran 1 command · 1 failed"
+    expect(formatActivityHeader(calls)).toBe(whole)
+    expect(formatActivityHeader(calls, 95)).toBe(whole)
+    expect(formatActivityHeader(calls, 55)).toBe("Read 3 files · searched 1 pattern · 1 failed")
+    expect(formatActivityHeader(calls, 35)).toBe("Read 3 files · 1 failed")
+    // The first kind stays: the row's own clip cuts a header narrower still.
+    expect(formatActivityHeader(calls, 10)).toBe("Read 3 files · 1 failed")
   })
 })
 
@@ -1015,7 +1030,7 @@ describe("activity rows", () => {
       "Called linear.get_issue GEN-12",
       "Called github.search · failed",
     ])
-    expect(formatActivityHeader(calls)).toBe("3 tools · 2 linear · 1 github · 1 failed")
+    expect(formatActivityHeader(calls)).toBe("Called linear 2× · called github 1× · 1 failed")
     expect(collapsedOperations(calls).map((operation) => formatFailureRow(operation))).toEqual([
       "Called github.search · failed",
     ])
@@ -1167,6 +1182,12 @@ describe("formatCellRowLabel", () => {
 describe("working icon and age", () => {
   test("the pulse turns every four ticks and repeats", () => {
     expect([0, 4, 8, 12, 16].map(workingIconFrame)).toEqual(["◇", "◈", "◆", "◈", "◇"])
+  })
+
+  // A running tool run blinks its own bullet, so it never shares the child
+  // agent's diamond pulse.
+  test("a running tool run blinks its bullet every half second", () => {
+    expect([0, 7, 8, 15, 16].map(toolRunFrame)).toEqual(["○", "○", "●", "●", "○"])
   })
 
   test("age shows one unit", () => {
@@ -1339,7 +1360,7 @@ describe("failure rows", () => {
       "Ran x · exit 2 · boom",
       "cell · failed · TypeError: y",
     ])
-    expect(formatActivityHeader(calls)).toBe("2 tools · 1 read · 1 command · 2 failed")
+    expect(formatActivityHeader(calls)).toBe("Read 1 file · ran 1 command · 2 failed")
   })
 
   // A cell can catch a failed op and go on: a later throw of its own is
@@ -1357,7 +1378,7 @@ describe("failure rows", () => {
       "Read missing.ts · failed · ENOENT",
       "cell · failed · Error: independent cell failure",
     ])
-    expect(formatActivityHeader(calls)).toBe("1 tool · 1 read · 2 failed")
+    expect(formatActivityHeader(calls)).toBe("Read 1 file · 2 failed")
   })
 
   test("a narrow row cuts the reason first, then drops it, then cuts the subject", () => {

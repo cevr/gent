@@ -831,19 +831,6 @@ export interface ActivityCall {
   readonly source?: ToolCall
 }
 
-/** The group's wall time: the sum of its finished calls, absent until one has a duration. */
-export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string => {
-  const finished = calls.flatMap((call) => {
-    if (Predicate.isUndefined(call.durationMs)) return []
-    return [call.durationMs]
-  })
-  if (finished.length === 0) return ""
-  return formatDuration(
-    finished.reduce((total, ms) => total + ms, 0),
-    "precise",
-  )
-}
-
 // ── Cell intent ──
 // A cell with no inner calls still did something; its source says what.
 
@@ -1009,6 +996,8 @@ const ownReason = (call: ActivityCall): string => {
 interface ActivityEntry {
   readonly operation: ActivityOperation
   readonly tool: boolean
+  /** The source of a cell with no ops: the header counts the calls it spells out. */
+  readonly code: string
 }
 
 /**
@@ -1066,9 +1055,9 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
         reason: ownReason(call),
         source: call.source,
       }
-      return [{ operation, tool: true }]
+      return [{ operation, tool: true, code: call.code }]
     }
-    const entries = call.operations.map((operation) => ({ operation, tool: true }))
+    const entries = call.operations.map((operation) => ({ operation, tool: true, code: "" }))
     if (call.status !== "error" || endingSaidByOps(call)) return entries
     const failure: ActivityOperation = {
       tool: call.toolName,
@@ -1077,20 +1066,22 @@ const activityEntries = (calls: ReadonlyArray<ActivityCall>): ReadonlyArray<Acti
       reason: ownReason(call),
       source: call.source,
     }
-    return [...entries, { operation: failure, tool: false }]
+    return [...entries, { operation: failure, tool: false, code: "" }]
   })
 
-/** The header word of each tool kind; a tool not named here counts under its own id. */
-const TOOL_KINDS: ReadonlyMap<string, readonly [string, string]> = new Map([
-  ["read", ["read", "read"]],
-  ["read_session", ["read", "read"]],
-  ["grep", ["search", "search"]],
-  ["glob", ["search", "search"]],
-  ["websearch", ["search", "search"]],
-  ["edit", ["edit", "edit"]],
-  ["write", ["edit", "edit"]],
+/** The unit a header counts each tool's ops in: `read 3 files`, `ran 2 commands`. */
+const TOOL_UNITS: ReadonlyMap<string, readonly [string, string]> = new Map([
+  ["read", ["file", "files"]],
+  ["read_session", ["session", "sessions"]],
+  ["grep", ["pattern", "patterns"]],
+  ["glob", ["pattern", "patterns"]],
+  ["webfetch", ["page", "pages"]],
+  ["edit", ["file", "files"]],
+  ["write", ["file", "files"]],
   ["bash", ["command", "commands"]],
-  ["delegate.start", ["child", "children"]],
+  ["delegate.start", ["agent", "agents"]],
+  ["thread.start", ["thread", "threads"]],
+  ["ask_user", ["question", "questions"]],
   ["ask_user_async", ["question", "questions"]],
 ])
 
@@ -1105,61 +1096,152 @@ const mcpTool = (
   return Option.some({ server: call.slice(0, dot), call })
 }
 
-/** The kind a header counts a tool as; an MCP tool counts as its server, as Codex names it. */
-const toolKind = (tool: string): readonly [string, string] =>
-  TOOL_KINDS.get(tool) ??
-  Option.match(mcpTool(tool), {
-    onNone: () => [tool, tool] as const,
-    onSome: ({ server }) => [server, server] as const,
-  })
+/**
+ * What a header counts a tool as: a verb phrase in the words its preview
+ * rows use (`Read`, `Ran`), past once its ops ended, running while one runs.
+ */
+interface ToolKind {
+  /** Tools of one key count as one kind: `grep` and `glob` both searched patterns. */
+  readonly key: string
+  /** `count` ops of the kind: `read 3 files`, `reading 3 files`, `searched the web 2×`. */
+  readonly phrase: (count: number, running: boolean) => string
+  /** The phrase opens with a verb, which a line's first part capitalizes; a bare tool id does not. */
+  readonly verb: boolean
+}
+
+const tense = (words: readonly [string, string], running: boolean): string => {
+  if (running) return words[1]
+  return words[0]
+}
+
+/** A tool's verb as a header phrase opens with it: `read`, `running`. */
+const verbOf = (tool: string, running: boolean): string =>
+  tense(toolVerbs(tool), running).toLowerCase()
+
+/** `proposed a handoff`: one handoff is one proposal, not a count. */
+const handoffPhrase = (count: number, running: boolean): string => {
+  const verb = tense(["proposed", "proposing"], running)
+  if (count === 1) return `${verb} a handoff`
+  return `${verb} ${count} handoffs`
+}
+
+/** A cell whose source spells out no call it can name: `ran code`, never the code. */
+const CODE_KIND: ToolKind = {
+  key: "code",
+  verb: true,
+  phrase: (count, running) => {
+    const verb = tense(["ran", "running"], running)
+    if (count === 1) return `${verb} code`
+    return `${verb} code ${count}×`
+  },
+}
 
 /**
- * Header for a group of calls: `7 tools · 4 read · 2 edit · 1 command ·
- * 1 failed · 4.2s`. Kinds go largest first, ties in the order they ran. A
- * cell with no ops names its source's verbs in place of a kind, and
- * `thoughts` counts the reasoning the run took after the kinds. Where the
- * header is wider than `width` columns, parts drop from the right first (the
- * thoughts, then the kinds): the tool count, the failures and the time stay.
+ * The kind a header counts a tool as. A tool with a unit counts its ops in
+ * it; the web search, an MCP server (as Codex names it) and a tool not named
+ * here count their calls (`called linear 2×`, `lint_fix 2×`).
+ */
+const toolKind = (tool: string): ToolKind => {
+  if (tool === "websearch")
+    return {
+      key: tool,
+      verb: true,
+      phrase: (count, running) => `${verbOf(tool, running)} the web ${count}×`,
+    }
+  if (tool === "handoff") return { key: tool, verb: true, phrase: handoffPhrase }
+  return Option.match(Option.fromUndefinedOr(TOOL_UNITS.get(tool)), {
+    onSome: ([one, many]): ToolKind => ({
+      key: `${verbOf(tool, false)} ${many}`,
+      verb: true,
+      phrase: (count, running) => `${verbOf(tool, running)} ${plural(count, one, many)}`,
+    }),
+    onNone: () =>
+      Option.match(mcpTool(tool), {
+        onSome: ({ server }): ToolKind => ({
+          key: `mcp.${server}`,
+          verb: true,
+          phrase: (count, running) => `${verbOf(tool, running)} ${server} ${count}×`,
+        }),
+        onNone: (): ToolKind => ({
+          key: tool,
+          verb: false,
+          phrase: (count) => `${tool} ${count}×`,
+        }),
+      }),
+  })
+}
+
+/** The kinds one tool entry counts as: a cell with no ops counts the calls its source spells out. */
+const entryKinds = (entry: ActivityEntry): ReadonlyArray<ToolKind> => {
+  if (entry.operation.tool !== "cell") return [toolKind(entry.operation.tool)]
+  const spelled = cellCalls(entry.code)
+  if (spelled.length === 0) return [CODE_KIND]
+  return spelled.map((call) => toolKind(call.tool))
+}
+
+/** A line's first part opens as a sentence does, when it opens with a verb. */
+const sentence = (kind: ToolKind, text: string): string => {
+  if (!kind.verb) return text
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
+}
+
+interface KindCount {
+  readonly kind: ToolKind
+  readonly count: number
+}
+
+const tally = (counts: Map<string, KindCount>, kind: ToolKind) => {
+  const earlier = Option.fromUndefinedOr(counts.get(kind.key))
+  counts.set(kind.key, {
+    kind,
+    count: Option.match(earlier, { onNone: () => 1, onSome: (value) => value.count + 1 }),
+  })
+}
+
+/**
+ * Header for a group of calls, in the words its rows use: `Read 3 files ·
+ * ran 2 commands · searched 1 pattern · edited 1 file · 1 failed`. Kinds go
+ * largest first, ties in the order they ran; the ops still running read
+ * last, in the running tense (`running 1 command`), and the failures and
+ * cancels end it. A header counts no thoughts and sums no time: the turn
+ * line holds the time. Where it is wider than `width` columns, kinds drop
+ * from the right; the first kind, the failures and the cancels stay.
  */
 export function formatActivityHeader(
   calls: ReadonlyArray<ActivityCall>,
   width = Number.POSITIVE_INFINITY,
-  thoughts = 0,
 ): string {
   if (calls.length === 0) return ""
   const entries = activityEntries(calls)
-  const tools = entries.filter((entry) => entry.tool)
-  const kinds = new Map<
-    string,
-    { readonly count: number; readonly words: readonly [string, string] }
-  >()
-  for (const { operation } of tools) {
-    if (operation.tool === "cell") continue
-    const words = toolKind(operation.tool)
-    const count = (kinds.get(words[0])?.count ?? 0) + 1
-    kinds.set(words[0], { count, words })
+  const ended = new Map<string, KindCount>()
+  const running = new Map<string, KindCount>()
+  for (const entry of entries) {
+    if (!entry.tool) continue
+    let counts = ended
+    if (entry.operation.outcome === "running") counts = running
+    for (const kind of entryKinds(entry)) tally(counts, kind)
   }
-  const verbs = calls
-    .filter((call) => call.operations.length === 0 && call.toolName === "cell")
-    .flatMap((call) => describeCellCode(call.code))
-  const counted = Array.from(kinds.values())
-    .toSorted((left, right) => right.count - left.count)
-    .map(({ count, words }) => `${count} ${countNoun(count, words[0], words[1])}`)
-  // The thoughts count is the last optional part, so a narrow header drops it first.
-  const optional = [...counted, ...verbs.slice(0, 4)]
-  if (thoughts > 0) optional.push(plural(thoughts, "thought"))
+  const phrases = [
+    ...Array.from(ended.values())
+      .toSorted((left, right) => right.count - left.count)
+      .map(({ kind, count }) => ({ kind, text: kind.phrase(count, false) })),
+    ...Array.from(running.values(), ({ kind, count }) => ({
+      kind,
+      text: kind.phrase(count, true),
+    })),
+  ].map(({ kind, text }, index) => {
+    if (index === 0) return sentence(kind, text)
+    return text
+  })
   const failed = entries.filter((entry) => isFailedOp(entry.operation)).length
   const cancelled = entries.filter((entry) => isCancelledOp(entry.operation)).length
   const tail: string[] = []
   if (failed > 0) tail.push(`${failed} failed`)
   if (cancelled > 0) tail.push(`${cancelled} cancelled`)
-  const duration = formatGroupDuration(calls)
-  if (duration.length > 0) tail.push(duration)
-  const head = plural(tools.length, "tool")
-  const join = (parts: ReadonlyArray<string>) => [head, ...parts, ...tail].join(" · ")
-  let kept = optional.length
-  while (kept > 0 && textWidth(join(optional.slice(0, kept))) > width) kept -= 1
-  return join(optional.slice(0, kept))
+  const join = (kept: number) => [...phrases.slice(0, kept), ...tail].join(" · ")
+  let kept = phrases.length
+  while (kept > 1 && textWidth(join(kept)) > width) kept -= 1
+  return join(kept)
 }
 
 /** Past and running tense of each tool's verb; a tool not named here shows its id. */
@@ -1174,6 +1256,7 @@ const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["write", ["Wrote", "Writing"]],
   ["bash", ["Ran", "Running"]],
   ["delegate.start", ["Started", "Starting"]],
+  ["thread.start", ["Started", "Starting"]],
   ["ask_user", ["Asked", "Asking"]],
   ["ask_user_async", ["Asked", "Asking"]],
 ])
@@ -1193,46 +1276,30 @@ const operationSubject = (operation: ActivityOperation): string =>
     onSome: ({ call }) => [call, operation.detail].filter((part) => part.length > 0).join(" "),
   })
 
-/** The unit a running phrase counts a tool's calls in: `Reading 3 files`. */
-const RUNNING_UNITS: ReadonlyMap<string, readonly [string, string]> = new Map([
-  ["read", ["file", "files"]],
-  ["read_session", ["session", "sessions"]],
-  ["grep", ["pattern", "patterns"]],
-  ["glob", ["pattern", "patterns"]],
-  ["websearch", ["search", "searches"]],
-  ["webfetch", ["page", "pages"]],
-  ["edit", ["file", "files"]],
-  ["write", ["file", "files"]],
-  ["bash", ["command", "commands"]],
-  ["delegate.start", ["agent", "agents"]],
-  ["ask_user", ["question", "questions"]],
-  ["ask_user_async", ["question", "questions"]],
-])
-
 /**
  * A cell with no op yet, in the running words of the calls its source spells
- * out, one phrase a tool in source order: `Reading 3 files · Running 2
- * commands`, or the call itself when it is the tool's one call and names its
- * argument (`Running mkdir -p out`). Never the code: a source with no call
- * it can name reads `Running code`.
+ * out, one phrase a kind in source order, as the header counts them:
+ * `Reading 3 files · Running 2 commands`, or the call itself when it is the
+ * kind's one call and names its argument (`Running mkdir -p out`). Never the
+ * code: a source with no call it can name reads `Running code`.
  */
 const runningCellPhrase = (code: string): string => {
-  const byTool = new Map<string, ReadonlyArray<CellCall>>()
+  const byKind = new Map<string, { readonly kind: ToolKind; readonly calls: CellCall[] }>()
   for (const call of cellCalls(code)) {
-    const earlier = Option.getOrElse(Option.fromUndefinedOr(byTool.get(call.tool)), () => [])
-    byTool.set(call.tool, [...earlier, call])
+    const kind = toolKind(call.tool)
+    const group = Option.getOrElse(Option.fromUndefinedOr(byKind.get(kind.key)), () => ({
+      kind,
+      calls: [],
+    }))
+    byKind.set(kind.key, { kind, calls: [...group.calls, call] })
   }
-  const phrases = Array.from(byTool, ([tool, calls]) => {
+  const phrases = Array.from(byKind.values(), ({ kind, calls }) => {
     const [only] = calls
     if (calls.length === 1 && Predicate.isNotUndefined(only) && only.detail.length > 0)
-      return formatRunningCall(tool, only.detail)
-    const [one, many] = Option.getOrElse(
-      Option.fromUndefinedOr(RUNNING_UNITS.get(tool)),
-      () => ["call", "calls"] as const,
-    )
-    return `${toolVerbs(tool)[1]} ${plural(calls.length, one, many)}`
+      return formatRunningCall(only.tool, only.detail)
+    return sentence(kind, kind.phrase(calls.length, true))
   })
-  if (phrases.length === 0) return "Running code"
+  if (phrases.length === 0) return sentence(CODE_KIND, CODE_KIND.phrase(1, true))
   return phrases.join(" · ")
 }
 
@@ -1477,14 +1544,21 @@ export function formatRowCounts(
   return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} ${noun}`
 }
 
-// ── Working icon ──
-// One pulse for everything still running: transcript groups, agent rows.
+// ── Working icons ──
+// A running child agent or thread pulses a diamond; a running tool run blinks
+// its bullet. One glyph, one meaning: the two never share a shape.
 
 const WORKING_ICON_FRAMES: ReadonlyArray<string> = ["◇", "◈", "◆", "◈"]
 
 /** The frame for a spinner tick (60ms); the pulse turns every 250ms. */
 export const workingIconFrame = (tick: number): string =>
   WORKING_ICON_FRAMES[Math.floor(tick / 4) % WORKING_ICON_FRAMES.length] ?? "◇"
+
+const TOOL_RUN_FRAMES: ReadonlyArray<string> = ["○", "●"]
+
+/** A running tool run's bullet for a spinner tick (60ms): hollow, then solid, every half second. */
+export const toolRunFrame = (tick: number): string =>
+  TOOL_RUN_FRAMES[Math.floor(tick / 8) % TOOL_RUN_FRAMES.length] ?? "○"
 
 /** Whole seconds under a minute, then minutes, hours, days: `45s`, `12m`, `3h`, `2d`. */
 export const formatAge = (ms: number): string => {
