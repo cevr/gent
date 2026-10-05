@@ -760,10 +760,19 @@ describe("user configuration", () => {
               },
               futureKey: { kept: true },
             })
+            // A project entry for an alias that names no order leaves the
+            // owner's order standing: the merge clears the user's alias
+            // entries anyway, so the write goes through.
+            yield* fs.makeDirectory(path.join(cwd, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(cwd, ConfigService.CONFIG_RELATIVE),
+              encodeJson({ providers: { alias: { name: "Project alias" } } }),
+            )
+            expect(yield* cfg.setAuthOrder("owner", [team], ["owner", "alias"], cwd)).toEqual([])
+            expect((yield* cfg.get()).providers?.["owner"]?.authOrder).toEqual([team])
             // A project entry for the owner wins over the user's order: the
             // write is refused, named, and the user file stays as it was.
             const before = yield* fs.readFileString(userConfigPath)
-            yield* fs.makeDirectory(path.join(cwd, ".gent"), { recursive: true })
             yield* fs.writeFileString(
               path.join(cwd, ConfigService.CONFIG_RELATIVE),
               encodeJson({ providers: { owner: { name: "Project owner" } } }),
