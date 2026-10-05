@@ -3888,29 +3888,55 @@ describe("App slash commands", () => {
       )
     }).pipe(Effect.timeout("4 seconds")),
   )
-  it.scopedLive("a pane that opens over a previewing prompt search gives the draft back", () =>
-    Effect.gen(function* () {
-      const { setup } = yield* mountApp({
-        builtins: builtinClientModules,
-        initialSession: sessionNamed("session-a", "branch-a", "Session A"),
-      })
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
-      yield* Effect.promise(() => setup.mockInput.typeText("older prompt"))
-      yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "typed prompt")
-      setup.mockInput.pressEnter()
-      yield* waitForFrame(setup, (frame) => !frame.includes("┃ older prompt"), "prompt sent")
-      yield* Effect.promise(() => setup.mockInput.typeText("mine"))
-      yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft")
-      setup.mockInput.pressKey("r", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => frame.includes("Prompt search"), "prompt search")
-      setup.mockInput.pressArrow("down")
-      setup.mockInput.pressArrow("up")
-      yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "the preview")
-      setup.mockInput.pressKey("t", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => !frame.includes("Prompt search"), "search replaced")
-      yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft back")
-    }).pipe(Effect.timeout("10 seconds")),
-  )
+  for (const { name, gateSetup } of [
+    {
+      name: "a pane that opens over a previewing prompt search gives the draft back",
+      gateSetup: false,
+    },
+    {
+      name: "a pane loaded after a previewing prompt search gives the draft back",
+      gateSetup: true,
+    },
+  ]) {
+    it.scopedLive(name, () =>
+      Effect.gen(function* () {
+        const setupRelease = yield* Deferred.make<void>()
+        const { setup, ext } = yield* mountApp({
+          builtins: builtinClientModules.map((extension) => {
+            if (!gateSetup) return extension
+            return {
+              ...extension,
+              setup: Deferred.await(setupRelease).pipe(Effect.andThen(extension.setup)),
+            }
+          }),
+          initialSession: sessionNamed("session-a", "branch-a", "Session A"),
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+        yield* Effect.promise(() => setup.mockInput.typeText("older prompt"))
+        yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "typed prompt")
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => !frame.includes("┃ older prompt"), "prompt sent")
+        yield* Effect.promise(() => setup.mockInput.typeText("mine"))
+        yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft")
+        setup.mockInput.pressKey("r", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => frame.includes("Prompt search"), "prompt search")
+        setup.mockInput.pressArrow("down")
+        setup.mockInput.pressArrow("up")
+        yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "the preview")
+        // Core prompt search can preview before client extensions finish setup.
+        // Ctrl+T belongs to an extension: its contribution must exist at dispatch.
+        const keybindReady = () => ext.commands().some((command) => command.keybind === "ctrl+t")
+        if (gateSetup) {
+          expect(keybindReady()).toBe(false)
+          yield* Deferred.complete(setupRelease, Effect.void)
+        }
+        yield* waitForFrame(setup, keybindReady, "the sessions keybind loaded")
+        setup.mockInput.pressKey("t", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => !frame.includes("Prompt search"), "search replaced")
+        yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft back")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   it.scopedLive(
     "a slash command typed before the session's server commands list waits for them",
     () =>
