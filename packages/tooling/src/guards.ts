@@ -135,8 +135,12 @@ interface ModuleSyntax {
   readonly exports: ReadonlyArray<ExportEntry>
   /** Imports, re-exports, and literal dynamic imports. */
   readonly reads: ReadonlyArray<ModuleRead>
-  /** Actual static value imports, including side-effect imports. */
-  readonly valueImports: ReadonlyArray<string>
+  /**
+   * The static statements that load a module when this one loads, and the
+   * line each opens on: value imports, side-effect imports and value
+   * re-exports. A type-only import or re-export is erased, so it loads nothing.
+   */
+  readonly valueImports: ReadonlyArray<{ readonly specifier: string; readonly line: number }>
   /** Module paths named by syntax, even without an export/member read. */
   readonly specifiers: ReadonlyArray<string>
   /** Lines of `export * from` and `export * as NS from`. */
@@ -251,6 +255,17 @@ const moduleSyntaxOf = (
     exports: exports.sort((a, b) => a.at - b.at).map(({ entry }) => entry),
     reads: [...reads, ...dynamicReads],
     valueImports: result.program.body.flatMap((statement) => {
+      const at = { line: lineOf(statement.start) }
+      if (statement.type === "ExportAllDeclaration") {
+        if (statement.exportKind === "type") return []
+        return [{ specifier: statement.source.value, ...at }]
+      }
+      if (statement.type === "ExportNamedDeclaration") {
+        const source = Option.fromNullishOr(statement.source)
+        if (Option.isNone(source) || statement.exportKind === "type") return []
+        if (statement.specifiers.every((entry) => entry.exportKind === "type")) return []
+        return [{ specifier: source.value.value, ...at }]
+      }
       if (statement.type !== "ImportDeclaration" || statement.importKind === "type") return []
       if (
         statement.specifiers.length > 0 &&
@@ -259,7 +274,7 @@ const moduleSyntaxOf = (
         )
       )
         return []
-      return [statement.source.value]
+      return [{ specifier: statement.source.value, ...at }]
     }),
     specifiers: [
       ...result.module.staticImports.map((statement) => statement.moduleRequest.value),
@@ -1223,6 +1238,77 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
   }))
 }
 
+// ── the portable import graph ───────────────────────────────────────────────
+
+/**
+ * Guard: core and the shipped extensions load on a host that is not Bun (a
+ * Worker or a Durable Object root), so no module of theirs loads a Bun or
+ * process-only module when it loads. The Bun host (its platform layers, its
+ * SQLite client, its provider lock, its loopback server) lives in
+ * `packages/core/src/runtime/gent-platform-bun.ts` behind `@gent/core/host-bun`;
+ * a portable module takes the host fact through a service the host provides.
+ * A type-only import loads nothing, and a dynamic import loads only when it
+ * runs. The test utilities are a Bun test host. The bundle check in
+ * `packages/tooling/tests/portable-graph.test.ts` follows the same graph
+ * through the dependencies, which a file scan cannot read.
+ */
+const PORTABLE_SOURCE = /^packages\/(?:core|extensions)\/src\//
+const BUN_HOST_SOURCE =
+  /^packages\/core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)$/
+
+/** A specifier only a Bun process (or a process that can spawn) can load. */
+const HOST_ONLY_SPECIFIER =
+  /^(?:bun(?::.*)?|@effect\/platform-bun(?:\/.*)?|@effect\/sql-sqlite-bun(?:\/.*)?|(?:node:)?child_process)$/
+
+export const findHostOnlyImports = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (!PORTABLE_SOURCE.test(file) || BUN_HOST_SOURCE.test(file)) return []
+  return sourceForms(file, text)
+    .module.valueImports.filter(({ specifier }) => HOST_ONLY_SPECIFIER.test(specifier))
+    .map(({ specifier, line }) => ({
+      file,
+      line,
+      message: `\`${specifier}\` loads only in a Bun process, and this module loads on a hosted root too; take the host fact through a service the host provides (\`GentPlatform\`, a layer), or move the code to the Bun host behind \`@gent/core/host-bun\``,
+    }))
+}
+
+/** One module of a bundle's metafile: what it imports, by the specifier it wrote and how. */
+interface BundleInput {
+  readonly imports: ReadonlyArray<{
+    readonly path: string
+    readonly kind: string
+    readonly original?: string
+  }>
+}
+
+/**
+ * The host-only imports a bundle reaches from `entries` over static edges.
+ * A dynamic import loads only when it runs, so the walk does not follow it.
+ * Each row is `<module> -> <specifier>`.
+ */
+export const hostOnlyEdges = (
+  inputs: Readonly<Record<string, BundleInput>>,
+  entries: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const seen = new Set<string>()
+  // The loop reads each module the walk appends.
+  const reached = [...entries]
+  const edges = new Set<string>()
+  for (const module of reached) {
+    if (seen.has(module)) continue
+    seen.add(module)
+    for (const read of inputs[module]?.imports ?? []) {
+      if (read.kind === "dynamic-import") continue
+      const specifier = read.original ?? read.path
+      if (HOST_ONLY_SPECIFIER.test(specifier) || HOST_ONLY_SPECIFIER.test(read.path)) {
+        edges.add(`${module} -> ${specifier}`)
+        continue
+      }
+      if (read.path in inputs) reached.push(read.path)
+    }
+  }
+  return [...edges].sort()
+}
+
 // ── names describe the product, not the process ─────────────────────────────
 
 /**
@@ -1281,7 +1367,11 @@ export const findE2eFixtureImportFindings = (
   text: string,
 ): ReadonlyArray<Finding> => {
   if (!E2E_TEST_FILE.test(file)) return []
-  if (sourceForms(file, text).module.valueImports.some((path) => FIXTURE_MODULE.test(path)))
+  if (
+    sourceForms(file, text).module.valueImports.some(({ specifier }) =>
+      FIXTURE_MODULE.test(specifier),
+    )
+  )
     return []
   return [
     {
