@@ -824,11 +824,36 @@ const registrationDomains: RegistrationDomainMap = {
 }
 
 type RegistrationDomain = keyof typeof registrationDomains
+
 type BucketOf<D extends RegistrationDomain> = RegistrationDomainMap[D]
 type ElementOf<A> = A extends ReadonlyArray<infer Item> ? Item : never
 type RegistrationValue<D extends RegistrationDomain> = ElementOf<
   NonNullable<ExtensionContributions[BucketOf<D>]>
 >
+
+/**
+ * Refusal for a domain an unchecked JavaScript caller passes (Bun loads a
+ * user `.ts` extension with no type check). The likely slips are a bucket
+ * name (`tools`), a case change, or `hooks`, so the message names the fix.
+ */
+const unknownDomainMessage = (domain: string): string => {
+  const lowered = String(domain).toLowerCase()
+  const domains = Object.entries(registrationDomains)
+  const list = `The domains are ${domains.map(([name]) => name).join(", ")}`
+  if (lowered === "hooks" || lowered === "hook") {
+    return `unknown register domain "${String(domain)}"; hooks register with \`host.on(kind, handler)\`. ${list}`
+  }
+  return Option.match(
+    Option.fromNullishOr(
+      domains.find((pair) => pair.some((word) => word.toLowerCase() === lowered)),
+    ),
+    {
+      onNone: () => `unknown register domain "${String(domain)}". ${list}`,
+      onSome: ([name]) =>
+        `unknown register domain "${String(domain)}"; did you mean "${name}"? ${list}`,
+    },
+  )
+}
 
 export interface ExtensionHostService {
   readonly cwd: string
@@ -894,8 +919,12 @@ export const makeCollectingExtensionHost = (
       homeDirectory: facts.host.homeDirectory,
     },
     register: (domain, ...values) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
+        if (!Object.hasOwn(registrationDomains, domain)) {
+          return Effect.die(unknownDomainMessage(domain))
+        }
         push(registrationDomains[domain], values)
+        return Effect.void
       }),
     on: (kind, handler) =>
       Effect.sync(() => {
@@ -1607,38 +1636,12 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
-const allowedContributionBuckets = new Set([
-  "resources",
-  "tools",
-  "requests",
-  "agents",
-  "hooks",
-  "modelDrivers",
-  "apiClasses",
-  "modelRouters",
-])
-
-const unknownBucketMessage = (key: string) =>
-  `unknown contribution bucket "${key}"; supported buckets are ${Array.from(
-    allowedContributionBuckets,
-  ).join(", ")}`
-
-const validateKnownBuckets = (contribs: ExtensionContributions): Option.Option<string> => {
-  for (const key of Object.keys(contribs)) {
-    if (!allowedContributionBuckets.has(key)) {
-      return Option.some(unknownBucketMessage(key))
-    }
-  }
-  return Option.none()
-}
-
 export const validateExtensionPackage = (
   manifest: ExtensionManifest,
   contribs: ExtensionContributions,
 ): Effect.Effect<void, ExtensionLoadError> =>
   Effect.gen(function* () {
     const checks = [
-      validateKnownBuckets,
       validateResources,
       validateCapabilities,
       validateLeafResources,
