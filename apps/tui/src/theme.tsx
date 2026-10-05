@@ -493,6 +493,18 @@ export const DEFAULT_THEMES = {
 
 interface ThemeContextValue {
   theme: Theme
+  /**
+   * The reader's message surface, `UserRow`'s fill: Codex's prompt fill
+   * (`user_message_bg_rgb`), white at 12% over a dark background and black
+   * at 4% over a light one. A transparent theme draws on the terminal's own
+   * background; while that is unknown the surface is transparent: no fill.
+   */
+  messageSurface: () => RGBA
+  /**
+   * The terminal's palette read has ended, answered or not. Native history
+   * waits for it, so a row reaches scrollback with the fill it keeps.
+   */
+  paletteSettled: () => boolean
   selected: () => string
   all: () => Record<string, ThemeJson>
   mode: () => "dark" | "light"
@@ -544,6 +556,10 @@ export function ThemeProvider(props: ThemeProviderProps) {
   // The terminal's palette, once read. The `system` theme is drawn from it
   // for the mode in force, so a mode switch redraws it.
   const [systemColors, setSystemColors] = createSignal(Option.none<TerminalColors>())
+  // The terminal's own background, once it answers: a transparent theme
+  // draws on it, so the message surface is derived from it.
+  const [terminalBackground, setTerminalBackground] = createSignal(Option.none<RGBA>())
+  const [paletteSettled, setPaletteSettled] = createSignal(false)
   const themes = createMemo((): Record<string, ThemeJson> =>
     Option.match(systemColors(), {
       onNone: () => DEFAULT_THEMES,
@@ -575,11 +591,25 @@ export function ThemeProvider(props: ThemeProviderProps) {
             // Keep the default when palette detection fails.
             onFailure: keepDefault,
             onSuccess: (colors) => {
+              setTerminalBackground(
+                Option.map(
+                  Option.filter(
+                    Option.fromNullishOr(colors.defaultBackground),
+                    (hex) => hex.length > 0,
+                  ),
+                  (hex) => RGBA.fromHex(hex),
+                ),
+              )
               // Keep the default when the terminal does not report its palette.
               if (Option.isNone(Option.fromNullishOr(colors.palette[0]))) return keepDefault()
               setSystemColors(Option.some(colors))
             },
           }),
+          Effect.andThen(
+            Effect.sync(() => {
+              setPaletteSettled(true)
+            }),
+          ),
         ),
       ),
     )
@@ -605,8 +635,27 @@ export function ThemeProvider(props: ThemeProviderProps) {
 
   const theme = lazyView(values)
 
+  const messageSurface = createMemo(() =>
+    Option.match(
+      Option.orElse(
+        Option.liftPredicate(values().background, (background) => background.a > 0),
+        terminalBackground,
+      ),
+      {
+        onNone: () => RGBA.fromInts(0, 0, 0, 0),
+        onSome: (background) => {
+          const brightness = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b
+          if (brightness > 0.5) return tint(background, RGBA.fromInts(0, 0, 0), 0.04)
+          return tint(background, RGBA.fromInts(255, 255, 255), 0.12)
+        },
+      },
+    ),
+  )
+
   const value: ThemeContextValue = {
     theme,
+    messageSurface,
+    paletteSettled,
     selected: () => store.active,
     all: themes,
     mode: () => store.mode,

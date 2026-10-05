@@ -76,6 +76,7 @@ export {
   SelectList,
   type SelectListRow,
   ToolFrame,
+  ToneRuns,
   TrayFrame,
   usePickerGeometry,
   UserRow,
@@ -87,6 +88,7 @@ export { textWidth } from "./bun-adapter"
 export {
   type ActivityCall,
   type ActivityOperation,
+  type ActivityTone,
   activityRows,
   placedSummary,
   fitWidth,
@@ -110,6 +112,8 @@ export {
   type ToolInput,
   truncate,
   truncatePath,
+  truncateRuns,
+  type TextRun,
   workingIconFrame,
 } from "./utils"
 

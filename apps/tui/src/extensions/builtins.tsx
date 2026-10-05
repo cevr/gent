@@ -762,14 +762,9 @@ const SENDER_NAME_MAX_COLUMNS = 32
 const shortName = (name: string): string =>
   truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
 
-/** Who wrote a sent message: the relation word, the cut name, and the short session id. */
-const senderHead = ({ from }: SessionMessageDetails): string => {
-  const name = Option.fromUndefinedOr(from.name).pipe(
-    Option.map((value) => ` ${shortName(value)}`),
-    Option.getOrElse(() => ""),
-  )
-  return `${from.relation}${name} · ${shortId(from.sessionId)}`
-}
+/** Who wrote a sent message, cut to fit beside the relation word and the short session id; empty for no name. */
+const senderName = ({ from }: SessionMessageDetails): string =>
+  Option.match(Option.fromUndefinedOr(from.name), { onNone: () => "", onSome: shortName })
 
 /**
  * Another session wrote these, so neither draws on the reader's rail: each is
@@ -797,7 +792,9 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
         >
           {(details) => (
             <AgentMessageRow
-              head={senderHead(details())}
+              head={details().from.relation}
+              name={senderName(details())}
+              id={shortId(details().from.sessionId)}
               body={sessionMessageBody(details().from, props.content)}
               images={props.images}
               disclosure={props.disclosure}

@@ -14,7 +14,13 @@ import {
   Scope,
   Stream,
 } from "effect"
-import type { CliRenderer, CliRendererExternalOutputEvent, TerminalColors } from "@opentui/core"
+import type {
+  CapturedLine,
+  CliRenderer,
+  CliRendererExternalOutputEvent,
+  RGBA,
+  TerminalColors,
+} from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -656,6 +662,41 @@ export const answerPalette = (renderer: CliRenderer, colors: TerminalColors) => 
   renderer.getPalette = () => Effect.runPromise(Effect.succeed(colors))
   renderer.clearPaletteCache = () => {}
 }
+
+/** A dark terminal's palette answer: Tomorrow Night's ground (`#1d1f21`), xterm.js's Tango colors. */
+export const darkTerminalColors: TerminalColors = {
+  palette: [
+    "#2e3436",
+    "#cc0000",
+    "#4e9a06",
+    "#c4a000",
+    "#3465a4",
+    "#75507b",
+    "#06989a",
+    "#d3d7cf",
+    "#555753",
+    "#ef2929",
+    "#8ae234",
+    "#fce94f",
+    "#729fcf",
+    "#ad7fa8",
+    "#34e2e2",
+    "#eeeeec",
+  ],
+  defaultForeground: "#c5c8c6",
+  defaultBackground: "#1d1f21",
+  cursorColor: "#c5c8c6",
+  mouseForeground: "#c5c8c6",
+  mouseBackground: "#1d1f21",
+  tekForeground: "#c5c8c6",
+  tekBackground: "#1d1f21",
+  highlightBackground: "#373b41",
+  highlightForeground: "#c5c8c6",
+}
+
+/** The background of each column of a captured line, as the terminal shows it. */
+export const columnBackgrounds = (line: CapturedLine): ReadonlyArray<RGBA> =>
+  line.spans.flatMap((span) => Array.from({ length: span.width }, () => span.bg))
 
 export const destroyRenderSetup = (setup: TestRenderSetup) => {
   setup.renderer.destroy()
