@@ -2330,6 +2330,45 @@ describe("Auth credentials", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("a removed credential leaves the order, but never leaves the default alone", () =>
+    Effect.gen(function* () {
+      for (const { name, authOrder, after, notice } of [
+        // The order loses the label, and the rest of it stands.
+        {
+          name: "rest",
+          authOrder: [personal, DEFAULT_CREDENTIAL_SLOT],
+          after: ["delete personal", "order default"],
+          notice: "Removed personal from",
+        },
+        // The order would name nothing: clearing it would let the default,
+        // which can be a billed environment key, serve alone. The order
+        // stays, so nothing serves until a credential is moved into it.
+        {
+          name: "last",
+          authOrder: [personal],
+          after: ["delete personal"],
+          notice: "the default stays out of its order",
+        },
+      ]) {
+        const { client, writes } = credentialServer({ ...withCredentials, authOrder })
+        const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          width: 160,
+        })
+        yield* waitForFrame(setup, (frame) => frame.includes("3 credentials"))
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, (frame) => frame.includes("1 personal"))
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete personal"))
+        setup.mockInput.pressKey("x", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => frame.includes(notice), `${name} notice`)
+        expect({ name, writes }).toEqual({ name, writes: after })
+        destroyRenderSetup(setup)
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("an added label signs in with its own methods and joins the order", () =>
     Effect.gen(function* () {
       const { client, writes } = credentialServer(single)

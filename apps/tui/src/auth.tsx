@@ -1088,11 +1088,16 @@ export function Auth(props: AuthProps) {
     setFocus(Option.none())
     const order = orderOf(provider)
     const keeps = order.filter((slot) => slot !== entry.slot)
-    // The default keeps its place: with nothing stored it reads the environment.
-    const orderWrite = Option.liftPredicate(
-      keeps,
-      () => entry.slot !== DEFAULT_CREDENTIAL_SLOT && keeps.length < order.length,
-    )
+    const inOrder = entry.slot !== DEFAULT_CREDENTIAL_SLOT && keeps.length < order.length
+    // The default keeps its place: with nothing stored it reads the
+    // environment. An order the removal would empty stays as it is: cleared,
+    // it would let the default (which can be a billed environment key) serve
+    // alone, a credential the user left out. Nothing serves until one is
+    // moved in, and the notice says so.
+    const orderWrite = Option.liftPredicate(keeps, () => inOrder && keeps.length > 0)
+    let removed = `Removed ${entry.slot} from ${label(provider.provider)}`
+    if (inOrder && keeps.length === 0)
+      removed = `${removed}; the default stays out of its order until you move it in`
     cast(
       clientCtx.client.auth
         .deleteKey({ provider: provider.provider, slot: entry.slot, sessionId })
@@ -1103,13 +1108,7 @@ export function Auth(props: AuthProps) {
               onSome: (next) => writeOrder(provider.provider, next),
             }),
           ),
-          Effect.tap(() =>
-            credentialChanged(
-              token,
-              provider.provider,
-              `Removed ${entry.slot} from ${label(provider.provider)}`,
-            ),
-          ),
+          Effect.tap(() => credentialChanged(token, provider.provider, removed)),
           Effect.catchEager(refused(token)),
         ),
     )
