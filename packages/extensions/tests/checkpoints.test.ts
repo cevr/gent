@@ -226,6 +226,10 @@ const storeRefs = (store: string) =>
     Effect.map((text) => text.split("\n").filter((line) => line.length > 0)),
   )
 
+/** The file `gent-gc` of a store: when git last collected its garbage. */
+const collectedAt = (store: string) =>
+  sh(store, "if [ -e gent-gc ]; then cat gent-gc; else echo none; fi")
+
 /**
  * Set `name` in the process environment to `next` (unset on none); the value
  * it held. The environment is the boundary under test: gent's git commands
@@ -979,7 +983,7 @@ describe("turn reverts", () => {
 
 describe("checkpoint retention", () => {
   it.live(
-    "a deleted session's checkpoints go",
+    "a deleted session's checkpoints go, and so does what only they kept",
     () =>
       Effect.gen(function* () {
         const repo = yield* repository
@@ -993,12 +997,14 @@ describe("checkpoint retention", () => {
         expect((yield* storeRefs(store)).length).toBe(2)
         yield* session.client.session.delete({ sessionId: session.sessionId })
         yield* waitFor(storeRefs(store), (refs) => refs.length === 0, 8000, "refs removed")
+        // What the refs kept goes at git's next collection, which runs now.
+        yield* waitFor(collectedAt(store), (at) => at !== "none", 8000, "garbage collected")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )
 
   it.live(
-    "checkpoints past 30 days go at the retention pass, and a store whose work tree is gone goes",
+    "checkpoints past 30 days go at the retention pass, garbage goes once a day, and a store whose work tree is gone goes",
     () =>
       Effect.gen(function* () {
         const repo = yield* repository
@@ -1013,6 +1019,13 @@ describe("checkpoint retention", () => {
         const now = yield* Clock.currentTimeMillis
         yield* pruneCheckpoints(dataDir, now)
         expect((yield* storeRefs(store)).length).toBe(2)
+        // A pass collects garbage when the last collection is a day old, aged refs or not.
+        expect(yield* collectedAt(store)).toBe(String(now))
+        yield* pruneCheckpoints(dataDir, now + 1000)
+        expect(yield* collectedAt(store)).toBe(String(now))
+        const later = now + Duration.toMillis(Duration.days(1))
+        yield* pruneCheckpoints(dataDir, later)
+        expect(yield* collectedAt(store)).toBe(String(later))
         yield* pruneCheckpoints(dataDir, now + Duration.toMillis(Duration.days(31)))
         expect(yield* storeRefs(store)).toEqual([])
         yield* sh(repo, `mv "${repo}" "${repo}-gone"`)

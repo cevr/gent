@@ -1549,9 +1549,11 @@ section, no notice. Core has no checkpoint concept.
 - Retention: a process fiber, started by the first `loopOpen` for a data
   directory, runs a pass a minute later and then daily: it removes a store
   whose work tree is gone, deletes refs whose `Gent-At` is over 30 days old,
-  and runs `gc --prune=1.day`, which keeps the objects of a capture that runs
-  at the same time, so the pass takes no lock. `sessionDeleted` deletes the
-  session's refs from its work tree's store.
+  and runs `gc` when it deleted a ref or the store's last collection (the
+  `gent-gc` file, epoch ms) is a day old. git's default prune grace (two
+  weeks) keeps the objects of a capture that runs at the same time, so a
+  collection takes no lock. `sessionDeleted` deletes the session's refs from
+  its work tree's store, then collects in the process scope.
 
 ### Interactions (Cold Pattern)
 

@@ -152,6 +152,8 @@ const MAX_TURNS = 50
 const RETENTION = Duration.days(30)
 const RETENTION_FIRST_PASS = Duration.minutes(1)
 const RETENTION_INTERVAL = Duration.days(1)
+/** A retention pass collects a store's garbage when the last collection is this old. */
+const GC_INTERVAL = Duration.days(1)
 
 // ── git ─────────────────────────────────────────────────────────────────────
 
@@ -1882,11 +1884,29 @@ export const CheckpointsRpc = defineRequests(CHECKPOINTS_EXTENSION_ID, {
 
 // ── retention ───────────────────────────────────────────────────────────────
 
+/** The file in a store that holds when git last collected its garbage, in epoch ms. */
+const GC_FILE = "gent-gc"
+
+/**
+ * git drops what no ref keeps. Its default grace (two weeks) keeps the new
+ * objects of a capture that runs at the same time, so a collection takes no
+ * lock. The store records when.
+ */
+const collectGarbage = Effect.fn("Checkpoints.collectGarbage")(function* (
+  place: Place,
+  nowMs: number,
+) {
+  const gc = yield* inStoreRun(place, ["gc", "--quiet"])
+  if (gc.exitCode !== 0) return yield* gitFailure(["gc"], gc)
+  yield* writeFileAtomic(`${place.store}/${GC_FILE}`, `${nowMs}\n`)
+})
+
 /**
  * One retention pass over a data directory: a store whose work tree is gone
  * goes; in every other store, each mark older than 30 days goes, then git
- * drops what no ref keeps. `--prune=1.day` keeps the objects of a capture
- * that runs at the same time, so the pass takes no lock.
+ * collects the garbage when the pass removed a mark or the last collection
+ * is a day old. A deleted session's refs go at once, so a collection must
+ * not wait for an aged mark.
  */
 export const pruneCheckpoints = Effect.fn("Checkpoints.prune")(function* (
   dataDir: string,
@@ -1910,13 +1930,19 @@ export const pruneCheckpoints = Effect.fn("Checkpoints.prune")(function* (
     const place = { top: named.value, store }
     const cutoff = nowMs - Duration.toMillis(RETENTION)
     const old = (yield* readTimeline(place)).filter((mark) => mark.at < cutoff)
-    if (old.length === 0) continue
     yield* deleteRefs(
       place,
       old.map((mark) => mark.ref),
     )
-    const gc = yield* inStoreRun(place, ["gc", "--quiet", "--prune=1.day"])
-    if (gc.exitCode !== 0) return yield* gitFailure(["gc"], gc)
+    const collected = yield* fs.readFileString(path.join(store, GC_FILE)).pipe(
+      Effect.map((text) => Number(text.trim())),
+      Effect.option,
+    )
+    const recent = Option.exists(
+      collected,
+      (at) => Number.isFinite(at) && nowMs - at < Duration.toMillis(GC_INTERVAL),
+    )
+    if (old.length > 0 || !recent) yield* collectGarbage(place, nowMs)
   }
 })
 
@@ -1954,6 +1980,17 @@ const forgetSession = Effect.fn("Checkpoints.forgetSession")(function* (sessionI
       marks.filter((mark) => mark.sessionId === sessionId).map((mark) => mark.ref),
     )
   }).pipe(underStoreLock(place.value))
+  // What only the session's refs kept goes at git's next collection: now,
+  // past the call, in the process scope.
+  const state = yield* Checkpoints
+  yield* collectGarbage(place.value, yield* Clock.currentTimeMillis).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("checkpoints.gc.failed").pipe(
+        Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+      ),
+    ),
+    Effect.forkIn(state.scope),
+  )
 })
 
 // ── extension ───────────────────────────────────────────────────────────────
