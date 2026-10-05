@@ -169,6 +169,7 @@ import {
   bindSessionAgent,
   DEFAULT_AGENT_NAME,
   isReasoningEffort,
+  noModelError,
   noRunBound,
   type PathScope,
   resolveAgentRoster,
@@ -1224,7 +1225,7 @@ const getSessionView = Effect.fn("SessionQueries.getSessionView")(function* (ses
   return Option.some(
     new SessionView({
       ...session,
-      resolvedModelId: route.modelId,
+      resolvedModelId: Option.getOrUndefined(route.modelId),
       resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
       defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     }),
@@ -1302,7 +1303,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     reasoningLevel: session.reasoningLevel,
     reasoningAuto: session.reasoningAuto,
     agent: route.name,
-    resolvedModelId: route.modelId,
+    resolvedModelId: Option.getOrUndefined(route.modelId),
     resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
     defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     runtime,
@@ -1684,11 +1685,21 @@ const RpcHandlers = GentRpcs.toLayer(
       "session.getSnapshot": (input: GetSessionSnapshotInput) =>
         rpc("session.getSnapshot", input, getSessionSnapshot(input)),
 
+      // The first model a user picks is the user's model: with none in the
+      // user config, the pick is also written there as `model`, which every
+      // agent that names none runs (`resolveSessionRoute`).
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
         rpc(
           "session.updateSettings",
           { sessionId: input.sessionId },
-          mutations.updateSettings(input),
+          Effect.gen(function* () {
+            const picked = Option.flatten(Option.fromUndefinedOr(input.modelId))
+            if (Option.isSome(picked)) {
+              yield* loadSession(input.sessionId)
+              yield* configService.setModelIfUnset(picked.value)
+            }
+            return yield* mutations.updateSettings(input)
+          }),
           { result: (result) => result },
         ),
 
@@ -1731,11 +1742,18 @@ const RpcHandlers = GentRpcs.toLayer(
           { requestId: input.requestId, result: (result) => ({ branchId: result.branchId }) },
         ),
 
+      // A send whose turn would have no model is refused at admission, with
+      // the hint a client shows; a turn admitted another way meets the same
+      // refusal in `resolveTurnContext`.
       "message.send": (input: SendMessageInput) =>
         rpc(
           "message.send",
           { sessionId: input.sessionId, branchId: input.branchId },
-          sendMessage(input),
+          Effect.gen(function* () {
+            const route = yield* readSessionRoute(yield* loadSession(input.sessionId))
+            if (Option.isNone(route.modelId)) return yield* noModelError(route.name)
+            return yield* sendMessage(input)
+          }),
           { requestId: input.requestId },
         ),
 

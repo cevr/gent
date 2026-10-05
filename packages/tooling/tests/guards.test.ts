@@ -267,9 +267,10 @@ describe("vendor model pin guard", () => {
     ).toEqual([1, 2, 3, 4, 5])
   })
 
-  test("the declaration site, other packages and non-vendor paths are not reported", () => {
+  test("core test utilities, other packages and non-vendor paths are not reported", () => {
     const pin = 'const model = "anthropic/claude-haiku-4-5"'
-    expect(findCoreVendorModelPins("packages/core/src/domain/agent.ts", pin)).toEqual([])
+    expect(findCoreVendorModelPins("packages/core/src/domain/agent.ts", pin).length).toBe(1)
+    expect(findCoreVendorModelPins("packages/core/src/test-utils/harness.ts", pin)).toEqual([])
     expect(findCoreVendorModelPins("packages/extensions/src/anthropic.ts", pin)).toEqual([])
     expect(
       findCoreVendorModelPins("packages/core/src/runtime/turn.ts", 'const path = "src/index.ts"'),

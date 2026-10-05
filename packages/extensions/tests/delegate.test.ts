@@ -50,6 +50,7 @@ import {
   ConfigService,
   UserConfig,
   systemTextOf,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import {
   BranchId,
@@ -108,9 +109,9 @@ const harnessWithHome = (
       ...Record.filter(
         {
           modelPricing: options.modelPricing,
-          configServiceLayer: Option.map(
-            Option.fromUndefinedOr(options.config),
-            ConfigService.Test,
+          // A test's config names the user's model unless it names its own.
+          configServiceLayer: Option.map(Option.fromUndefinedOr(options.config), (config) =>
+            ConfigService.Test(new UserConfig({ model: TEST_MODEL_ID, ...config })),
           ).pipe(Option.getOrUndefined),
           // `dialogs` presents approvals to the client instead of auto-approving them.
           approvalLayer: Option.getOrUndefined(

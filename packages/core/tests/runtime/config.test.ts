@@ -42,6 +42,7 @@ import {
   makeTempDirectoryScoped,
   type SequenceStep,
   systemTextOf,
+  TEST_MODEL_ID,
   waitFor,
 } from "../../src/test-utils/harness"
 import { textStep } from "../../src/runtime/provider"
@@ -668,6 +669,36 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // The first `/model` pick names the user's model: `model` in the user
+    // file, written once and never over the user's own.
+    it.scopedLive("the first model pick names the user's model and keeps every other key", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        const written = {
+          agents: { main: { deniedTools: ["bash"], modelId: "openai/gpt-5" } },
+          futureKey: { kept: true },
+        }
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(userConfigPath, encodeJson(written))
+          yield* cfg.setModelIfUnset(ModelId.make("anthropic/claude-opus-5-5"))
+          const named = { ...written, model: "anthropic/claude-opus-5-5" }
+          expect(yield* readRaw).toEqual(named)
+          expect((yield* cfg.get()).model).toBe(ModelId.make("anthropic/claude-opus-5-5"))
+          // The user's model stands: a later pick writes nothing.
+          yield* cfg.setModelIfUnset(ModelId.make("anthropic/claude-sonnet-5-5"))
+          expect(yield* readRaw).toEqual(named)
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive(
       "a driver write through a symlinked config writes the target and keeps the link",
       () =>
@@ -1246,7 +1277,7 @@ const routedDriver = (agent: AgentDefinition, config: UserConfig) =>
     admission: Option.some({ agent: agent.name }),
     config,
     session: { modelId: ModelId.make("anthropic/claude-sonnet-5") },
-  }).modelDriver.driverId
+  }).modelDriver.pipe(Option.flatMap((driver) => driver.driverId))
 
 describe("configured driver override routing", () => {
   it.live("clearing the override routes through the provider on the next read", () =>
@@ -1443,7 +1474,10 @@ describe("agents from config over RPC", () => {
       const painter = AgentName.make("painter")
       yield* runOneTurn({
         agents: [],
-        user: { agents: { [painter]: { allowedTools: ["film.look", "film.check", "read"] } } },
+        user: {
+          model: TEST_MODEL_ID,
+          agents: { [painter]: { allowedTools: ["film.look", "film.check", "read"] } },
+        },
         project: { agents: { [painter]: { deniedTools: ["film.check"] } } },
         agent: Option.some(painter),
         step: {
@@ -1502,7 +1536,7 @@ describe("agents from config over RPC", () => {
  */
 describe("a config file that does not load", () => {
   const main = AgentName.make("main")
-  const everyTool = AgentDefinition.make({ name: main, tools: ["*"] })
+  const everyTool = AgentDefinition.make({ name: main, tools: ["*"], model: TEST_MODEL_ID })
   const readOnly = { agents: { [main]: { tools: ["read"] } } }
   const misspelled = { agents: { [main]: { tools: ["read"], toolz: ["read"] } } }
 

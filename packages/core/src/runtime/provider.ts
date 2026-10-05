@@ -3151,7 +3151,7 @@ export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
 /**
  * The window `ModelRegistry.Scripted` gives a model the catalog does not
- * list: the 1M of the default model (Claude Sonnet 5), so a scripted turn
+ * list: 1M, the window of the current Claude models, so a scripted turn
  * with no catalog hands its window off where one with the catalog does.
  */
 const SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS = 1_000_000
@@ -4282,6 +4282,12 @@ const emptyLayer = makeLanguageModelLayer({
 
 export const ScriptedLanguageModel = {
   debug,
+  /**
+   * The model a headless run on a scripted server names when the caller
+   * names none: the scripted model answers every id, and gent ships no
+   * default model (`NoModelError`).
+   */
+  modelId: ModelId.make("scripted/debug"),
   get empty() {
     return emptyLayer
   },

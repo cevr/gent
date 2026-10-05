@@ -9,14 +9,9 @@ import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
   testAgent,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
-import {
-  AgentDefinition,
-  DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
-  Model,
-  ProviderId,
-} from "@gent/core/protocol"
+import { AgentDefinition, DEFAULT_AGENT_NAME, Model, ProviderId } from "@gent/core/protocol"
 import { defineExtension, ExtensionHost } from "@gent/core/extensions/api"
 import { Model as AiModel } from "effect/ai"
 import { Gent } from "@gent/sdk"
@@ -150,9 +145,9 @@ describe("session lifecycle", () => {
 describe("effort command", () => {
   // The model accepts three levels: a level past them is sent clamped.
   const effortModel = Model.make({
-    id: DEFAULT_MODEL_ID,
+    id: TEST_MODEL_ID,
     name: "Effort Model",
-    provider: ProviderId.make(DEFAULT_MODEL_ID.split("/")[0] ?? ""),
+    provider: ProviderId.make(TEST_MODEL_ID.split("/")[0] ?? ""),
     contextLength: 128_000,
     reasoning: true,
     efforts: ["low", "medium", "high"],

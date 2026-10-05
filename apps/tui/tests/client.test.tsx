@@ -435,14 +435,18 @@ describe("ClientProvider session metrics", () => {
       settingsChanged(1)
       settingsChanged(2)
       yield* Effect.promise(() => setup.renderOnce())
-      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+      expect(clientContext.model()).toEqual(
+        Option.some(ModelId.make("anthropic/newer-settings-model")),
+      )
 
       // The older read answers last, for settings the session no longer has.
       yield* Deferred.succeed(held, firstResolvedModel)
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
 
-      expect(clientContext.model()).toBe(ModelId.make("anthropic/newer-settings-model"))
+      expect(clientContext.model()).toEqual(
+        Option.some(ModelId.make("anthropic/newer-settings-model")),
+      )
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -568,7 +572,10 @@ describe("ClientProvider session metrics", () => {
           durationMs: 10,
         }),
       )
-      yield* waitUntil(() => clientContext.model() === configModel, "the next turn's model")
+      yield* waitUntil(
+        () => Option.contains(clientContext.model(), configModel),
+        "the next turn's model",
+      )
       expect(reads).toBe(readsAfterHydrate + 1)
       expect(snapshotReads).toBe(snapshotReadsAfterHydrate)
     }).pipe(Effect.timeout("4 seconds")),
@@ -1264,10 +1271,12 @@ describe("ClientProvider session lifecycle", () => {
       })
       yield* waitForFrame(
         setup,
-        () => client.model() === "anthropic/claude-haiku-4-5-20251001",
+        () => Option.contains(client.model(), ModelId.make("anthropic/claude-haiku-4-5-20251001")),
         "session state",
       )
-      expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(client.model()).toEqual(
+        Option.some(ModelId.make("anthropic/claude-haiku-4-5-20251001")),
+      )
       // The footer names the session's agent, which the snapshot carries.
       expect(client.agent()).toEqual(Option.some(AgentName.make("primary")))
     }),
@@ -1352,7 +1361,9 @@ describe("ClientProvider session lifecycle", () => {
         cwd: absent,
       })
       expect(client.agent()).toEqual(Option.none())
-      expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+      expect(client.model()).not.toEqual(
+        Option.some(ModelId.make("anthropic/claude-haiku-4-5-20251001")),
+      )
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
@@ -1434,11 +1445,14 @@ describe("ClientProvider session lifecycle", () => {
         })
         yield* waitForFrame(
           setup,
-          () => client.model() === "anthropic/claude-haiku-4-5-20251001",
+          () =>
+            Option.contains(client.model(), ModelId.make("anthropic/claude-haiku-4-5-20251001")),
           "session state",
         )
         client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")
-        expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
+        expect(client.model()).not.toEqual(
+          Option.some(ModelId.make("anthropic/claude-haiku-4-5-20251001")),
+        )
       }),
   )
 })

@@ -14,6 +14,7 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { BunPlatformLive } from "@gent/core/host"
 import { BuiltinExtensions } from "@gent/extensions"
@@ -771,6 +772,8 @@ describe("headless extension admin", () => {
         home,
         cwd,
         approvalLayer: ApprovalService.Live,
+        // The user config on disk names no model: the session names its own.
+        modelId: TEST_MODEL_ID,
         configServiceLayer: ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunPlatformLive),

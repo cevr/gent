@@ -580,11 +580,11 @@ export type CacheClock = typeof CacheClock.Type
 export const cacheClock = (
   refresh: Option.Option<CacheRefresh>,
   lifetimeMs: Option.Option<number>,
-  selectedModel: string,
+  selectedModel: Option.Option<string>,
   now: number,
 ): Option.Option<CacheClock> =>
   Option.map(Option.all([refresh, lifetimeMs]), ([last, ttlMs]): CacheClock => {
-    if (last.model !== selectedModel) return CacheClock.cases.Switched.make({})
+    if (!Option.contains(selectedModel, last.model)) return CacheClock.cases.Switched.make({})
     const elapsedMs = now - last.startedAt
     if (elapsedMs >= ttlMs) return CacheClock.cases.Expired.make({})
     // A retry still waiting to go out starts the lifetime later: it is all left.

@@ -61,7 +61,6 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
   Model,
   ModelId,
   ProviderId,
@@ -78,6 +77,7 @@ import {
   registerContributions,
   type SequenceStep,
   testTurnExtension,
+  TEST_MODEL_ID,
   waitFor,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
@@ -3618,12 +3618,106 @@ describe("sessionDeleted hook", () => {
   )
 })
 
+// ── no default model ────────────────────────────────────────────────────────
+
+describe("no default model", () => {
+  // Gent ships no model: an agent that names none runs the user's, and with
+  // no user's model a send is refused.
+  const modelless = AgentDefinition.make({ name: DEFAULT_AGENT_NAME, description: "No model" })
+  const worker = AgentDefinition.make({ name: AgentName.make("worker"), description: "No model" })
+  const picked = ModelId.make("anthropic/claude-opus-5-5")
+  const later = ModelId.make("anthropic/claude-sonnet-5-5")
+  // The user config names no model either.
+  const modellessPreset = {
+    ...e2ePreset,
+    agents: [modelless, worker],
+    configServiceLayer: ConfigService.Test(),
+  }
+
+  it.live("a send to a session nobody named a model for is refused with the /model hint", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...modellessPreset,
+          providerLayer,
+        })
+        const view = yield* client.session.get({ sessionId })
+        expect(view?.resolvedModelId).toBeUndefined()
+        const refused = yield* client.message
+          .send({ sessionId, branchId, content: "hello" })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("NoModelError")
+        expect(refused.message).toContain("/model")
+        // No turn ran: the scripted model was never asked.
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live("a turn admitted without a send ends with the same refusal, on no model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
+        const cwd = yield* makeTempDirectoryScoped("gent-no-model-")
+        const { client } = yield* createRpcHarness({ ...modellessPreset, cwd, providerLayer })
+        const created = yield* client.session.create({ cwd, initialPrompt: "hello" })
+        const error = yield* client.session
+          .events({ sessionId: created.sessionId, branchId: created.branchId })
+          .pipe(
+            Stream.filter(({ event }) => event._tag === "ErrorOccurred"),
+            Stream.runHead,
+          )
+        expect(Option.getOrThrow(error).event).toMatchObject({
+          error: expect.stringContaining("/model"),
+        })
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live("the first model pick is the user's model: new sessions and child agents run it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const cwd = yield* makeTempDirectoryScoped("gent-no-model-")
+        const { client, sessionId } = yield* createRpcHarness({
+          ...modellessPreset,
+          cwd,
+          providerLayer,
+        })
+        const resolvedIn = (created: Effect.Success<ReturnType<typeof client.session.create>>) =>
+          client.session
+            .get({ sessionId: created.sessionId })
+            .pipe(Effect.map((view) => view?.resolvedModelId))
+        yield* client.session.updateSettings({ sessionId, modelId: Option.some(picked) })
+        expect(yield* resolvedIn(yield* client.session.create({ cwd }))).toBe(picked)
+        expect(
+          yield* resolvedIn(
+            yield* client.session.create({ cwd, admission: { agent: worker.name } }),
+          ),
+        ).toBe(picked)
+        // A later pick is that session's own; the user's model stands.
+        const second = yield* client.session.create({ cwd })
+        yield* client.session.updateSettings({
+          sessionId: second.sessionId,
+          modelId: Option.some(later),
+        })
+        expect((yield* client.session.get({ sessionId: second.sessionId }))?.resolvedModelId).toBe(
+          later,
+        )
+        expect(yield* resolvedIn(yield* client.session.create({ cwd }))).toBe(picked)
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+})
+
 // ── effort receipt ──────────────────────────────────────────────────────────
 
 describe("effort receipt", () => {
   // A model that accepts three levels: a hint between or past them is clamped.
   const effortModel = Model.make({
-    id: DEFAULT_MODEL_ID,
+    id: TEST_MODEL_ID,
     name: "Effort model",
     provider: ProviderId.make("effort-driver"),
     contextLength: 128_000,

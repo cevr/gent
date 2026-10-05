@@ -39,6 +39,7 @@ import {
   testLeafContext,
   testToolContext,
   turnRequestText,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { main as builtinAgent } from "../src/agents.js"
 import { e2ePreset } from "./helpers/test-preset"
@@ -2278,6 +2279,8 @@ describe("wake across a disable", () => {
           extensionInputs: [...e2ePreset.extensionInputs, timersProbe],
           providerLayer,
           home,
+          // The user config on disk names no model: the session names its own.
+          modelId: TEST_MODEL_ID,
           // The user config on disk, read fresh by each resolve.
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd: home, home })),

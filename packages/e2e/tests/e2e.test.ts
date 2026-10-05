@@ -84,8 +84,8 @@ describe("E2E: Auth", () => {
         const ctx = yield* spawnNoAuth
         yield* ptyWaitFor(ctx, "Sign in", { timeout: 10_000 })
         // The boot gate opens on the first *required* provider, and the
-        // default agent's model is a Claude one, so the picker it opens is
-        // anthropic's.
+        // user's model (the fixture home's config) is a Claude one, so the
+        // picker it opens is anthropic's.
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         expect(ctx.output).toContain("· method")

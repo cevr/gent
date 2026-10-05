@@ -2,16 +2,20 @@ import {
   makeTempDirectoryScoped,
   seedAuthKeys,
   serveModelCatalogFixture,
+  TEST_MODEL_ID,
   waitFor,
 } from "@gent/core/test-utils"
+import { BunServices } from "@effect/platform-bun"
 import { Terminal } from "@xterm/headless"
 import {
   Array as Arr,
   Clock,
   Console,
+  Context,
   type Duration,
   Effect,
   FileSystem,
+  Layer,
   Option,
   Path,
   Schema,
@@ -147,8 +151,22 @@ const openPty = (
 // ── TUI under test ──
 
 /**
- * Start the TUI from this checkout, isolated in `tempDir`. The child reads the
- * fixture catalog from a loopback listener of the same scope, never models.dev.
+ * The home a spawned TUI reads, under `tempDir`: its user config names the
+ * test model, as a first `/model` pick does, since gent ships no default model.
+ */
+const seedHome = (tempDir: string) =>
+  Effect.gen(function* () {
+    const fs = Context.get(yield* Layer.build(BunServices.layer), FileSystem.FileSystem)
+    const home = `${tempDir}/home`
+    yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+    yield* fs.writeFileString(`${home}/.gent/config.json`, `{"model":"${TEST_MODEL_ID}"}\n`)
+    return home
+  }).pipe(Effect.orDie)
+
+/**
+ * Start the TUI from this checkout, isolated in `tempDir`, its home included.
+ * The child reads the fixture catalog from a loopback listener of the same
+ * scope, never models.dev.
  */
 const spawnWithDir = (
   tempDir: string,
@@ -156,26 +174,29 @@ const spawnWithDir = (
   extraEnv: Record<string, string> = {},
   size: PtySize = DEFAULT_PTY_SIZE,
 ): Effect.Effect<TestContext, never, Scope.Scope> =>
-  Effect.flatMap(serveModelCatalogFixture, (catalogOrigin) =>
-    openPty({
-      command: "bun",
-      args: [`${tuiDirectory}/src/main.tsx`, "--isolate", ...extraArgs],
-      cwd: tuiDirectory,
-      env: {
-        // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
-        ...Bun.env,
-        GENT_DATA_DIR: tempDir,
-        GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
-        GENT_MODEL_CATALOG_URL: catalogOrigin,
-        // The `@gent/git` client runs `gh` when it is on PATH: an empty
-        // config and no token keep it signed out, so it never reaches GitHub.
-        GH_CONFIG_DIR: `${tempDir}/gh`,
-        GH_TOKEN: "",
-        GITHUB_TOKEN: "",
-        ...extraEnv,
-      },
-      size,
-    }),
+  Effect.all([seedHome(tempDir), serveModelCatalogFixture]).pipe(
+    Effect.flatMap(([home, catalogOrigin]) =>
+      openPty({
+        command: "bun",
+        args: [`${tuiDirectory}/src/main.tsx`, "--isolate", ...extraArgs],
+        cwd: tuiDirectory,
+        env: {
+          // oxlint-disable-next-line effect/noGlobals -- the fixture hands the test's environment to the real TUI process
+          ...Bun.env,
+          HOME: home,
+          GENT_DATA_DIR: tempDir,
+          GENT_AUTH_DIRECTORY: `${tempDir}/auth`,
+          GENT_MODEL_CATALOG_URL: catalogOrigin,
+          // The `@gent/git` client runs `gh` when it is on PATH: an empty
+          // config and no token keep it signed out, so it never reaches GitHub.
+          GH_CONFIG_DIR: `${tempDir}/gh`,
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          ...extraEnv,
+        },
+        size,
+      }),
+    ),
   )
 
 export const DEFAULT_PTY_SIZE: PtySize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
@@ -209,8 +230,7 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
 
-  const fakeHome = `${tempDir}/home`
-  const skillDir = `${fakeHome}/.claude/skills/test-skill`
+  const skillDir = `${tempDir}/home/.claude/skills/test-skill`
   yield* fs.makeDirectory(skillDir, { recursive: true }).pipe(Effect.orDie)
   yield* fs
     .writeFileString(
@@ -220,7 +240,7 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
     .pipe(Effect.orDie)
 
   yield* seedAuthKeys(`${tempDir}/auth`).pipe(Effect.orDie)
-  return yield* spawnWithDir(tempDir, [], { HOME: fakeHome })
+  return yield* spawnWithDir(tempDir)
 })
 
 /** Wait until the output, colors stripped, has contained `text` at some point. */

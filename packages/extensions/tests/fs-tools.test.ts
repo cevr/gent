@@ -37,6 +37,7 @@ import {
   RuntimeEnvironment,
   toolCallStep,
   waitFor,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { BunPlatformLive } from "@gent/core/host"
 import {
@@ -2109,6 +2110,7 @@ describe("agent paths", () => {
         yield* fs.writeFileString(
           path.join(cwd, ".gent", "config.json"),
           encodeJson({
+            model: TEST_MODEL_ID,
             agents: {
               painter: {
                 tools: ["read", "write", "edit", "grep"],
@@ -2244,7 +2246,10 @@ const writeAgents = (cwd: string, agents: AgentEntries) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    yield* fs.writeFileString(path.join(cwd, ".gent", "config.json"), encodeJson({ agents }))
+    yield* fs.writeFileString(
+      path.join(cwd, ".gent", "config.json"),
+      encodeJson({ model: TEST_MODEL_ID, agents }),
+    )
   })
 
 type NarrowAdmission = Parameters<typeof createRpcHarness>[0]["admission"]
