@@ -1293,7 +1293,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
     gent also reads the `version` token as written in the root table: a TOML
     float or a string runs no step, and the start note says why. Every git
     command gent runs sets `core.hooksPath=/dev/null` and turns automatic
-    maintenance off, so gent's plumbing runs no hook in the origin. rift itself
+    maintenance off, so gent's plumbing runs no hook in the origin
+    (`packages/extensions/src/git-plumbing.ts`, the one runner of gent's
+    git commands, which fails with git's last line as `GitError`). rift itself
     still adds `/.rift` to the origin's `.git/info/exclude`.
   - Identity: the name is `child-<12 hex>` of a SHA-256 over the parent
     session, the parent branch, the start's request id and the resolved
