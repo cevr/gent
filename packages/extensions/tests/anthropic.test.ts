@@ -3799,13 +3799,15 @@ describe("named Anthropic credential cache", () => {
       expect(Exit.isFailure(result)).toBe(true)
       if (Exit.isSuccess(result)) return
       const defect = Cause.findDefect(result.cause)
-      // The reply proves nothing about the credential: the turn stays on it.
-      expect(
-        Result.isSuccess(defect) &&
-          Schema.is(ProviderAuthError)(defect.success) &&
-          defect.success.message.includes("import it again") &&
-          Option.isNone(Option.fromUndefinedOr(defect.success.credentialFailure)),
-      ).toBe(true)
+      // The reply proves nothing about the credential: the turn stays on it,
+      // and the text names the reply, not a refusal the user must answer
+      // with a new import.
+      expect(Result.isSuccess(defect) && Schema.is(ProviderAuthError)(defect.success)).toBe(true)
+      if (Result.isFailure(defect) || !Schema.is(ProviderAuthError)(defect.success)) return
+      expect(defect.success.credentialFailure).toBeUndefined()
+      expect(defect.success.message).toBe(
+        "Imported Claude Code credential refresh failed: OAuth refresh response missing access_token",
+      )
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 

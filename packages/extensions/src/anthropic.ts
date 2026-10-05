@@ -1206,14 +1206,24 @@ const buildNamedCredentialCache = (
           Effect.provideContext(services),
           Effect.catchTags({
             // Only a refusal the token endpoint answered proves the credential
-            // is gone; an unreadable reply keeps the turn on it.
-            ProviderAuthError: (refused) =>
-              Effect.fail(
+            // is gone and asks for a new import; an unreadable reply keeps the
+            // turn on it and names the reply.
+            ProviderAuthError: (failed) => {
+              if (failed.credentialFailure === "Rejected") {
+                return Effect.fail(
+                  new ProviderAuthError({
+                    message: "Imported Claude Code credential rejected; import it again",
+                    credentialFailure: "Rejected",
+                  }),
+                )
+              }
+              return Effect.fail(
                 new ProviderAuthError({
-                  message: "Imported Claude Code credential rejected; import it again",
-                  ...omitUndefined({ credentialFailure: refused.credentialFailure }),
+                  message: `Imported Claude Code credential refresh failed: ${failed.message}`,
+                  ...omitUndefined({ credentialFailure: failed.credentialFailure }),
                 }),
-              ),
+              )
+            },
             CredentialRefreshUnavailable: () =>
               Effect.fail(
                 new CredentialRefreshUnavailable({
