@@ -723,13 +723,43 @@ export const stringifyOutput = (value: unknown): string => {
   return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
 }
 
+/** The text a summary keeps, beside its paths. */
+const SUMMARY_CHARS = 100
+/** The path text a summary keeps whole: one `PATH_MAX`. */
+const SUMMARY_PATH_CHARS = 4096
+const SUMMARY_MARKER = "..."
+
 /**
- * One-line tool summary for transcripts and the tool row: the first line, cut
- * to 100 characters with an ASCII marker for plain terminals. A multi-line
- * author summary would break every surface that draws one row per call.
+ * One-line tool summary for transcripts and the tool row: the first line, its
+ * text cut to 100 characters with an ASCII marker for plain terminals. A
+ * multi-line author summary would break every surface that draws one row per
+ * call. An absolute path word (`/…`) stays whole and outside the 100: the
+ * surface that draws it spells it against its own place (the TUI's
+ * `displayPath`), so a long cwd must not cut the words after the path. Path
+ * words past one `PATH_MAX` in all count as text, so a summary stays bounded.
  */
-export const clipSummary = (text: string): string =>
-  clipChars(text.trim().split("\n")[0]?.trimEnd() ?? "", 100, "...")
+export const clipSummary = (text: string): string => {
+  const line = text.trim().split("\n")[0]?.trimEnd() ?? ""
+  let textLeft = SUMMARY_CHARS
+  let pathLeft = SUMMARY_PATH_CHARS
+  let kept = ""
+  for (const [index, word] of line.split(" ").entries()) {
+    let space = " "
+    if (index === 0) space = ""
+    if (word.length > 1 && word.startsWith("/") && word.length <= pathLeft) {
+      if (space.length > textLeft) return kept + SUMMARY_MARKER
+      textLeft -= space.length
+      pathLeft -= word.length
+      kept += space + word
+      continue
+    }
+    const piece = space + word
+    if (piece.length > textLeft) return kept + clipChars(piece, textLeft, SUMMARY_MARKER)
+    textLeft -= piece.length
+    kept += piece
+  }
+  return kept
+}
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 const summarizeOutput = (value: unknown): string => {

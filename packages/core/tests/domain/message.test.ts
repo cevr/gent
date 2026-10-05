@@ -159,7 +159,30 @@ describe("tool summary", () => {
     expect(clipSummary("\n  done\n")).toBe("done")
     expect(clipSummary("y".repeat(150))).toBe(`${"y".repeat(100)}...`)
   })
+
+  // The reader's surface spells a path against where it launched, so a long
+  // cwd must not use up the words after the path (`b.ts · 1 ...`).
+  test("an absolute path stays whole and outside the budget, so the words after it stay", () => {
+    const cwd = `/home/someone/${"deep/".repeat(20)}repo`
+    expect(clipSummary(`${cwd}/gent-debug-tools/b.ts · 1 line`)).toBe(
+      `${cwd}/gent-debug-tools/b.ts · 1 line`,
+    )
+    expect(clipSummary(`${countWords(20)} ${cwd}/a.ts · 3 lines`)).toBe(
+      `${countWords(20)} ${cwd}/a.ts · 3 lines`,
+    )
+    expect(clipSummary(`${cwd}/a.ts ${"y".repeat(150)}`)).toBe(`${cwd}/a.ts ${"y".repeat(99)}...`)
+  })
+
+  test("path words past their own bound count as text, so a summary stays bounded", () => {
+    const paths = Array.from({ length: 200 }, (_, index) => `/p/${"x".repeat(40)}/${index}`)
+    const summary = clipSummary(paths.join(" "))
+    expect(summary.endsWith("...")).toBe(true)
+    expect(summary.length).toBeLessThanOrEqual(4096 + 103)
+  })
 })
+
+/** `w0 w1 …`: plain words of a known width. */
+const countWords = (count: number) => Array.from({ length: count }, (_, i) => `w${i}`).join(" ")
 
 describe("line count", () => {
   test("a final newline ends the last line and does not start one", () => {
