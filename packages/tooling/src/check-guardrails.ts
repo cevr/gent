@@ -26,6 +26,9 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
+  findBunfigPreloads,
+  findMissingRootBunfig,
+  findWorkflowRunPaths,
   findUnparsedSources,
   findUnadaptedSeams,
   findUnconsumedExports,
@@ -281,6 +284,69 @@ const guideInputFindings = Effect.fn("Tooling.guideInputFindings")(function* (
   return [
     ...findUnhashedSteeringFiles(GUIDE_CHECK_TURBO, value.tasks.typecheck.inputs, indexFiles),
     ...otherInputs.flat(),
+  ]
+})
+
+const TurboBuildOutputsSchema = Schema.Struct({
+  tasks: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Record(
+        Schema.String,
+        Schema.Struct({ outputs: Schema.optionalKey(Schema.Array(Schema.String)) }),
+      ),
+    ),
+  ),
+})
+
+/**
+ * What the build writes, as repo paths: each workspace's turbo `build`
+ * outputs, its own `turbo.json`'s where it sets them, else the root's.
+ */
+const buildOutputPaths = Effect.fn("Tooling.buildOutputPaths")(function* (
+  texts: RepoTexts,
+  indexFiles: ReadonlyArray<string>,
+) {
+  /** The build outputs a turbo config sets: none when it sets no `build` outputs. */
+  const outputsIn = (file: string) =>
+    Effect.map(readRepoJsonc(texts, file, TurboBuildOutputsSchema), (read) =>
+      Option.fromUndefinedOr(read.value.tasks?.["build"]?.outputs),
+    )
+  const rootOutputs = Option.getOrElse(yield* outputsIn("turbo.json"), () => [])
+  const root = yield* readRepoJsonc(texts, ROOT_MANIFEST, PackageJsonSchema)
+  const directories = workspaceManifests(root.value.workspaces ?? [], indexFiles).map((manifest) =>
+    manifest.slice(0, -"/package.json".length),
+  )
+  const perWorkspace = yield* Effect.forEach(
+    directories,
+    Effect.fnUntraced(function* (directory: string) {
+      let own = Option.none<ReadonlyArray<string>>()
+      if (indexFiles.includes(`${directory}/turbo.json`))
+        own = yield* outputsIn(`${directory}/turbo.json`)
+      return Option.getOrElse(own, () => rootOutputs).map(
+        (output) => `${directory}/${output.replace(/\/\*\*$/, "")}`,
+      )
+    }),
+  )
+  return perWorkspace.flat()
+})
+
+/** The findings of the configs no source scan reads: the workflows and the bunfigs. */
+const runConfigFindings = Effect.fn("Tooling.runConfigFindings")(function* (
+  texts: RepoTexts,
+  indexFiles: ReadonlyArray<string>,
+) {
+  const outputs = yield* buildOutputPaths(texts, indexFiles)
+  return [
+    ...findMissingRootBunfig(indexFiles),
+    ...indexFiles.flatMap((file) =>
+      Option.match(readTrackedFile(texts, file), {
+        onNone: () => [],
+        onSome: ({ text }) => [
+          ...findBunfigPreloads(file, text, indexFiles),
+          ...findWorkflowRunPaths(file, text, indexFiles, outputs),
+        ],
+      }),
+    ),
   ]
 })
 
@@ -545,6 +611,7 @@ const program = Effect.gen(function* () {
     ...(yield* lintConfigFindings(texts, indexFiles, sourceTexts)),
     ...(yield* packageSurfaceFindings(texts, indexFiles)),
     ...(yield* guideInputFindings(texts, indexFiles)),
+    ...(yield* runConfigFindings(texts, indexFiles)),
   ]
 
   // Two finders may report one line with one message; say it once.

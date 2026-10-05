@@ -35,6 +35,9 @@ import {
   rmSync,
   realpathSync,
   mkdtempSync,
+  readdirSync,
+  symlinkSync,
+  copyFileSync,
 } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -526,6 +529,38 @@ const removeTree = async (path: string): Promise<void> => {
   if (trashed.exitCode !== 0) rmSync(path, { recursive: true, force: true })
 }
 
+/**
+ * The owner's `~/.gent` entries a pane never shares: the user config, which
+ * five writers in a pane can reach (the first `/model` pick, a driver
+ * override set or cleared, the auth order, a renamed auth slot), and the
+ * database files, which `GENT_DATA_DIR` moves to the run's own directory.
+ */
+const isUnsharedGentEntry = (name: string): boolean =>
+  name === "config.json" || name.startsWith("data.db")
+
+/**
+ * Build the pane's home at `paneHome` from the owner's `ownerHome`. Each
+ * top-level entry links to the owner's, so the login, the skills, the
+ * shell and git read as they do outside the run. `.gent` is the run's own
+ * directory: its entries link to the owner's too, except the user config,
+ * which is a copy the run's writers change, and the database files.
+ * A link is removed as a link, so `down` never reaches the owner's files.
+ */
+const buildPaneHome = (ownerHome: string, paneHome: string): void => {
+  mkdirSync(join(paneHome, ".gent"), { recursive: true })
+  for (const entry of readdirSync(ownerHome)) {
+    if (entry !== ".gent") symlinkSync(join(ownerHome, entry), join(paneHome, entry))
+  }
+  const ownerGent = join(ownerHome, ".gent")
+  if (!existsSync(ownerGent)) return
+  for (const entry of readdirSync(ownerGent)) {
+    if (!isUnsharedGentEntry(entry))
+      symlinkSync(join(ownerGent, entry), join(paneHome, ".gent", entry))
+  }
+  const config = join(ownerGent, "config.json")
+  if (existsSync(config)) copyFileSync(config, join(paneHome, ".gent", "config.json"))
+}
+
 const prepareAndLaunch = async (
   presetName: string,
   preset: Preset,
@@ -576,13 +611,15 @@ const prepareAndLaunch = async (
 
   const prompt = promptArg === undefined ? DEFAULT_PROMPT : await resolvePrompt(promptArg)
 
-  // GENT_DATA_DIR redirects `data.db`. Auth does NOT follow it: the auth store
-  // resolves from `${home}/.gent/auth` (server/server.ts), so the real
-  // provider credentials keep working while the database stays isolated.
+  // GENT_DATA_DIR redirects `data.db`, and HOME gives the pane a home of its
+  // own (`buildPaneHome`): the run writes a copy of the user config, while
+  // the login and the other tools' files stay the owner's.
   // Split down, not right: a right split of an already split pane leaves the
   // TUI about 55 columns wide and the status line drops its leading items.
+  const home = join(root, "home")
+  buildPaneHome(homedir(), home)
   const split =
-    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
+    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data} --env HOME=${home}`.text()
   const pane = paneIdFromSplit(split)
 
   const state: GamutState = {
@@ -869,22 +906,27 @@ const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
 const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
- * Whether the pane and the record are idle: every turn has ended and the pane
- * shows no busy row. The footer is only a hint: its first slot shows `idle`,
- * `ready`, a held error or an extension notice (`apps/tui/src/app.tsx`,
- * `phaseLabels`), and the error and notice texts are free text, so the footer
- * cannot say idle on its own. The prompt text is echoed in the transcript, so
- * matching on a word the reply should contain proves nothing either.
+ * Whether the pane shows a working child: a running child's tray row starts
+ * with its pulse (`◇◈◆◈`, `workingIconFrame` in `apps/tui/src/utils.ts`).
+ * `◆` is also a done thread's glyph, so only the other two frames read busy:
+ * idle needs several reads in a row, and the record's open turns cover a
+ * stored child too. The row covers a child that is admitted and not yet
+ * stored. The TUI's agents tests render the tray and check this predicate on
+ * the frame, so a change to the row turns them red.
  */
-const isIdle = (paneText: string, record: RunRecord): boolean => {
-  const lines = paneText.split("\n").map((line) => line.trim())
-  // The live line (`✻ Thinking`, `✻ Running …`) shows while a turn runs; a
-  // running child's tray row starts with its pulse (`◇◈◆◈`). `◆` is also a
-  // done thread's glyph, so only the other two frames read busy: idle needs
-  // several reads in a row, and the record's open turns cover a child too.
-  const busy = lines.some((line) => /^[◇◈] /.test(line) || /^✻ /.test(line))
-  return record.open.length === 0 && !busy
-}
+export const paneShowsWorkingChild = (paneText: string): boolean =>
+  paneText.split("\n").some((line) => /^[◇◈] /.test(line.trim()))
+
+/**
+ * Whether the run is idle: every turn has ended in the record and the pane
+ * shows no working child. The record holds the turn state; no pane row
+ * stands for it. The live line and the turn line share the `✻` glyph, so a
+ * pane check on it read a finished turn as busy. The footer cannot say idle
+ * either: its first slot shows `idle`, `ready`, a held error or an extension
+ * notice (`apps/tui/src/app.tsx`, `phaseLabels`), the last two free text.
+ */
+const isIdle = (paneText: string, record: RunRecord): boolean =>
+  record.open.length === 0 && !paneShowsWorkingChild(paneText)
 
 /** Where a wait stands: idle reads in a row with and without proof the send was handled. */
 interface WaitProgress {

@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema } from "effect"
+import { Array as Arr, Option, Predicate, Schema } from "effect"
 import picomatch from "picomatch"
 import {
   type ArrowFunctionExpression,
@@ -55,6 +55,8 @@ interface SourceForms {
   readonly comments: ReadonlyArray<CommentBody>
   /** Process-shaped identifiers and test titles, rather than product strings. */
   readonly names: ReadonlyArray<CommentBody>
+  /** Each value read of a member of the global `Bun` (`Bun.YAML`), not a type name such as `Bun.OnLoadResult`. */
+  readonly bunReads: ReadonlyArray<CommentBody>
   /** Comments blanked. */
   readonly code: string
   /**
@@ -152,6 +154,7 @@ interface ParsedText {
   readonly errors: ReadonlyArray<CommentBody>
   readonly comments: ReadonlyArray<CommentBody>
   readonly names: ReadonlyArray<CommentBody>
+  readonly bunReads: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
   readonly seams: SeamSyntax
@@ -307,6 +310,7 @@ const parsedText = (file: string, text: string): ParsedText => {
   const dynamicReads: Array<ModuleRead> = []
   const literalSpecifiers: Array<string> = []
   const names: Array<CommentBody> = []
+  const bunReads: Array<CommentBody> = []
   const isTestCallee = (node: Expression | Super): boolean => {
     if (node.type === "Identifier") return ["test", "it", "describe"].includes(node.name)
     if (node.type === "MemberExpression") return isTestCallee(node.object)
@@ -340,6 +344,12 @@ const parsedText = (file: string, text: string): ParsedText => {
       }
     },
     MemberExpression: (node) => {
+      if (node.object.type === "Identifier" && node.object.name === "Bun") {
+        let member = "[computed]"
+        if (node.property.type === "Identifier" && !node.computed) member = node.property.name
+        if (node.property.type === "Literal") member = String(node.property.value)
+        bunReads.push({ line: lineOf(node.start), body: `Bun.${member}` })
+      }
       if (node.computed || node.property.type !== "Identifier") return
       const name = node.property.name
       for (const specifier of Option.toArray(literalImportOf(node.object))) {
@@ -407,6 +417,7 @@ const parsedText = (file: string, text: string): ParsedText => {
     errors,
     comments,
     names,
+    bunReads,
     spans: spans
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
@@ -454,11 +465,12 @@ const sourceForms = (file: string, text: string): SourceForms => {
     return created
   })
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, names, spans, module, seams } = parsedText(file, text)
+    const { errors, comments, names, bunReads, spans, module, seams } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
       names,
+      bunReads,
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
@@ -1248,13 +1260,26 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
  * `packages/core/src/runtime/gent-platform-bun.ts` behind `@gent/core/host-bun`;
  * a portable module takes the host fact through a service the host provides.
  * A type-only import loads nothing, and a dynamic import loads only when it
- * runs. The test utilities are a Bun test host. The bundle check in
+ * runs. A read of the global `Bun` (`Bun.YAML.parse`) imports nothing and
+ * fails on a hosted root all the same, so it is reported too; a type name
+ * such as `Bun.OnLoadResult` reads nothing. The test utilities are a Bun test
+ * host, and the cell worker (`gent-cell`) is a Bun binary of its own that no
+ * extension imports. The bundle check in
  * `packages/tooling/tests/portable-graph.test.ts` follows the same graph
  * through the dependencies, which a file scan cannot read.
  */
 const PORTABLE_SOURCE = /^packages\/(?:core|extensions)\/src\//
 const BUN_HOST_SOURCE =
-  /^packages\/core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)$/
+  /^packages\/(?:core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)|extensions\/src\/cell-worker-boundary\.ts)$/
+
+/**
+ * The reads of the global `Bun` that portable source keeps, by file, each
+ * with its reason. The workspaces extension reads a `.rift.toml` only to run
+ * rift's hooks, which spawn processes a hosted root does not have; no TOML
+ * parser in the dependency tree runs on a hosted root. A hosted workspace
+ * provider (H3) takes the parse with the spawn.
+ */
+const BUN_READS_KEPT = [{ file: "packages/extensions/src/workspaces.ts", read: "Bun.TOML" }]
 
 /** A specifier only a Bun process (or a process that can spawn) can load. */
 const HOST_ONLY_SPECIFIER =
@@ -1262,13 +1287,24 @@ const HOST_ONLY_SPECIFIER =
 
 export const findHostOnlyImports = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!PORTABLE_SOURCE.test(file) || BUN_HOST_SOURCE.test(file)) return []
-  return sourceForms(file, text)
-    .module.valueImports.filter(({ specifier }) => HOST_ONLY_SPECIFIER.test(specifier))
+  const forms = sourceForms(file, text)
+  const imports = forms.module.valueImports
+    .values()
+    .filter(({ specifier }) => HOST_ONLY_SPECIFIER.test(specifier))
     .map(({ specifier, line }) => ({
       file,
       line,
       message: `\`${specifier}\` loads only in a Bun process, and this module loads on a hosted root too; take the host fact through a service the host provides (\`GentPlatform\`, a layer), or move the code to the Bun host behind \`@gent/core/host-bun\``,
     }))
+  const globals = forms.bunReads
+    .values()
+    .filter(({ body }) => !BUN_READS_KEPT.some((kept) => kept.file === file && kept.read === body))
+    .map(({ body, line }) => ({
+      file,
+      line,
+      message: `\`${body}\` reads the global \`Bun\`, which a hosted root does not have, and this module loads there too; use a portable package or an Effect platform service, or move the code to the Bun host behind \`@gent/core/host-bun\``,
+    }))
+  return [...imports, ...globals].toSorted((a, b) => a.line - b.line)
 }
 
 /** One module of a bundle's metafile: what it imports, by the specifier it wrote and how. */
@@ -1540,6 +1576,170 @@ export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<
     }
     return findings
   })
+}
+
+// ── bunfig preloads exist, and the root one loads the test preload ─────────
+
+/** A bunfig: the root one, or a workspace's. Bun reads the one in its working directory. */
+const BUNFIG = /(?:^|\/)bunfig\.toml$/
+
+const ROOT_BUNFIG = "bunfig.toml"
+
+/** The root bunfig's `[test] preload` entry for the shared test preload. */
+const ROOT_TEST_PRELOAD = "./packages/tooling/src/test-preload.ts"
+
+const BunfigPreload = Schema.Union([Schema.String, Schema.Array(Schema.String)])
+
+/** The two preload lists a bunfig holds: one for `bun run`, one for `bun test`. */
+const BunfigSchema = Schema.Struct({
+  preload: Schema.optionalKey(BunfigPreload),
+  test: Schema.optionalKey(Schema.Struct({ preload: Schema.optionalKey(BunfigPreload) })),
+})
+
+/** A preload entry as a list: bun takes one path or several. */
+const preloadList = (preload: Option.Option<typeof BunfigPreload.Type>): ReadonlyArray<string> =>
+  Option.match(preload, { onNone: () => [], onSome: (paths) => Arr.ensure<string>(paths) })
+
+/**
+ * Guard: each path a bunfig preloads names a tracked file, and the root
+ * bunfig's `[test] preload` names the test preload. A package name (such as
+ * `@opentui/solid/preload`) resolves through the install, not the tree, and
+ * is not read. A moved preload fails each start that reads the bunfig; a
+ * root bunfig without the test preload lets a bare `bun test` at the root
+ * run with the real home.
+ */
+export const findBunfigPreloads = (
+  file: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (!BUNFIG.test(file)) return []
+  const decoded = Option.flatMap(
+    Option.liftThrowable(() => Bun.TOML.parse(text))(),
+    Schema.decodeUnknownOption(BunfigSchema),
+  )
+  if (Option.isNone(decoded)) {
+    return [{ file, line: 1, message: "not a readable bunfig: its preloads cannot be checked" }]
+  }
+  const directory = file.slice(0, Math.max(file.lastIndexOf("/"), 0))
+  const tracked = new Set(trackedFiles)
+  const testPreloads = preloadList(
+    Option.flatMap(Option.fromUndefinedOr(decoded.value.test), (test) =>
+      Option.fromUndefinedOr(test.preload),
+    ),
+  )
+  const preloads = [...preloadList(Option.fromUndefinedOr(decoded.value.preload)), ...testPreloads]
+  const findings: Array<Finding> = preloads
+    .values()
+    .filter((entry) => entry.startsWith("./") || entry.startsWith("../"))
+    .filter((entry) =>
+      Option.match(resolveRelative(directory, entry), {
+        onNone: () => true,
+        onSome: (resolved) => !tracked.has(resolved),
+      }),
+    )
+    .map((entry) => ({
+      file,
+      line: lineAt(text, text.indexOf(entry)),
+      message: `preloads \`${entry}\`, which names no staged or committed file -- point it at the file that exists`,
+    }))
+    .toArray()
+  if (file === ROOT_BUNFIG && !testPreloads.includes(ROOT_TEST_PRELOAD))
+    findings.push({
+      file,
+      line: 1,
+      message: `\`[test] preload\` does not name \`${ROOT_TEST_PRELOAD}\` -- a bare \`bun test\` at the root then logs, and writes into the real home`,
+    })
+  return findings
+}
+
+/** Guard: the root has a bunfig, so a bare `bun test` there loads the test preload. */
+export const findMissingRootBunfig = (
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (trackedFiles.includes(ROOT_BUNFIG)) return []
+  return [
+    {
+      file: "package.json",
+      line: 1,
+      message: `no root \`${ROOT_BUNFIG}\` -- a bare \`bun test\` at the root runs without the test preload, with the real home`,
+    },
+  ]
+}
+
+// ── workflow run lines name paths that exist ────────────────────────────────
+
+const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/
+
+/** The roots under which a word of a run line is a claim about the tree. */
+const WORKFLOW_PATH_ROOT = /^(?:packages|apps|testbeds|examples|docs|patches)\//
+
+const WorkflowSchema = Schema.Struct({
+  jobs: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      steps: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            run: Schema.optionalKey(Schema.String),
+            "working-directory": Schema.optionalKey(Schema.String),
+          }),
+        ),
+      ),
+    }),
+  ),
+})
+
+/**
+ * Guard: each path a workflow `run:` names under a tree root names a tracked
+ * file or directory, or lies in a build output (`buildOutputs`, from the
+ * turbo build task). A word is read against its step's working directory. A
+ * word with an expansion (`$`, `*`, `{`) is not one path and is not read.
+ * The release workflow runs only on a tag, so without this a moved path fails
+ * at release time.
+ */
+export const findWorkflowRunPaths = (
+  file: string,
+  text: string,
+  trackedFiles: ReadonlyArray<string>,
+  buildOutputs: ReadonlyArray<string>,
+): ReadonlyArray<Finding> => {
+  if (!WORKFLOW.test(file)) return []
+  const decoded = Option.flatMap(
+    Option.liftThrowable(() => Bun.YAML.parse(text))(),
+    Schema.decodeUnknownOption(WorkflowSchema),
+  )
+  if (Option.isNone(decoded)) {
+    return [{ file, line: 1, message: "not a readable workflow: its run paths cannot be checked" }]
+  }
+  const tracked = new Set(trackedFiles)
+  const prefixes = directoryPrefixesOf(trackedFiles)
+  const built = (path: string) =>
+    buildOutputs.some(
+      (output) => output === path || output.startsWith(`${path}/`) || path.startsWith(`${output}/`),
+    )
+  const lines = text.split("\n")
+  const steps = Object.values(decoded.value.jobs).flatMap((job) => job.steps ?? [])
+  return steps.flatMap((step) =>
+    (step.run ?? "")
+      .split(/[\s"'=;|&<>()]+/)
+      .filter((word) => word.length > 0 && !/[$*{]/.test(word))
+      .flatMap((word) =>
+        Option.toArray(
+          Option.map(resolveRelative(step["working-directory"] ?? "", word), (path) => ({
+            word,
+            path,
+          })),
+        ),
+      )
+      .filter(({ path }) => WORKFLOW_PATH_ROOT.test(path))
+      .filter(({ path }) => !existsInTree(path, tracked, prefixes) && !built(path))
+      .map(({ word, path }) => ({
+        file,
+        line: lines.findIndex((line) => line.includes(word)) + 1,
+        message: `run names \`${path}\`, which no staged or committed file matches and no build writes -- point it at the path that exists`,
+      })),
+  )
 }
 
 // ── lint config names nothing that is gone ──────────────────────────────────
@@ -2536,7 +2736,8 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, the root
  * `NORTH_STAR.md` and `PRIOR_ART.md` the architecture loop reads, a package's
- * own `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
+ * own `AGENTS.md` or `CLAUDE.md`, a package `README.md` (`docs/architecture/ui.md`
+ * sends agents to the e2e one), `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
  * dependency patch notes in `patches/README.md`, and the skills gent ships to its own model under
  * `packages/extensions/src/skills/bundled/`. The path claims, the Markdown
@@ -2544,7 +2745,7 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ART)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ART)\.md|packages\/[^/]+\/README\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 

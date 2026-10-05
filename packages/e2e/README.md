@@ -1,14 +1,23 @@
 # @gent/e2e
 
-Subprocess tests: the TUI on a real pty (`tests/e2e.test.ts`, `tests/scrollback.test.ts`) and the server process lifecycle (`tests/server-lifecycle.test.ts`). Run them with `bun run test:e2e` from the root.
+Each file in `packages/e2e/tests/` is one area:
 
-`src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
+- `packages/e2e/tests/e2e.test.ts` and `packages/e2e/tests/scrollback.test.ts`: the TUI on a real pty.
+- `packages/e2e/tests/server-lifecycle.test.ts`: the server process lifecycle.
+- `packages/e2e/tests/drive.test.ts`: the drive-script runner below.
+- `packages/e2e/tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
+
+`bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only the fixture test, the one that spawns nothing.
+
+`packages/e2e/src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
 
 ## Drive scripts
 
-A live check can run as a script on the same fixture, without herdr:
+A live check can run as a script on the same fixture, without herdr. gent has no default model: a scratch home with no `model` starts the TUI on `no model · /model`, and a sent prompt is refused. Seed one in the scratch home before the run, as the pty fixture does:
 
 ```bash
+mkdir -p /tmp/scratch/home/.gent
+printf '{"model":"<provider>/<model>"}\n' > /tmp/scratch/home/.gent/config.json
 bun packages/e2e/src/drive.ts <script.json>
 ```
 
