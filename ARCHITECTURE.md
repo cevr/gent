@@ -3008,7 +3008,7 @@ tests/
 ├── extensions/    # api
 ├── helpers/       # agent-loop (the actor test root), test-preset
 ├── runtime/       # agent-loop, config, extension-host, model-context, provider, session, tools, turn, ...
-├── server/        # rpc, server, workspace-rpc
+├── server/        # interaction, rpc, server, workspace-rpc
 ├── storage/       # schema, storage
 └── test-utils/    # index (the harness entry and its scripted models)
 ```
