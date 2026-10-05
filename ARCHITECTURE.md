@@ -1521,7 +1521,13 @@ each turn and each file call (`resolveParentBound`, `resolveSessionBound`
 in `extension-host.ts`), not copied at admission: a parent agent narrowed
 later narrows its child at the child's next call, and a link retargeted
 since admission is judged where it points at the call. A handoff is no spawn
-and inherits no parent bound. Fail closed: a parent row that cannot be read,
+(no depth level), but it runs under its predecessor's parent bound:
+`resolveParentBound` climbs the handoff edges to the session that started
+the thread and takes that spawn's parent run bound (none for a root thread),
+and `admitRun` checks a handoff's named run `paths` against it, as for a
+spawn. The handoff keeps its predecessor's admission unless it names one. A
+predecessor that cannot be read, or a parent cycle, fails closed.
+Fail closed: a parent row that cannot be read,
 a parent cwd whose config does not load, or a parent agent gone from its
 roster is a `ParentBoundError` naming the parent session and agent; a create
 of a child is refused with it, the child's turn ends with it as an

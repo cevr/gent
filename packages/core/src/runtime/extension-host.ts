@@ -3264,9 +3264,12 @@ const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
 })
 
 /**
- * The bound a session's run inherits: none for a root session or a
- * handoff (`isSpawnedSession`); for a spawned session, its parent run's
- * whole bound (`resolveSessionBound`).
+ * The bound a session's run inherits: the whole bound of the run that
+ * spawned its thread (`resolveSessionBound`), none for a root thread. A
+ * spawned session's is its parent's. A handoff (a parent in its own
+ * thread) runs under its predecessor's parent bound: the walk climbs the
+ * handoff edges to the session that started the thread. A predecessor that
+ * cannot be read, or a parent cycle, fails closed (`ParentBoundError`).
  */
 export const resolveParentBound: (
   session: Pick<Session, "id" | "threadId" | "parentSessionId">,
@@ -3276,10 +3279,29 @@ export const resolveParentBound: (
   ParentBoundError | StorageError,
   SessionStorage | SessionProfileCache | ConfigService
 > = Effect.fn("SessionRunAgent.resolveParentBound")(function* (session, launchCwd) {
-  if (!isSpawnedSession(session) || Predicate.isUndefined(session.parentSessionId)) {
-    return noRunBound
+  const storage = yield* SessionStorage
+  const seen = new Set<SessionId>([session.id])
+  let current = session
+  while (Predicate.isNotUndefined(current.parentSessionId)) {
+    const parentSessionId = current.parentSessionId
+    if (isSpawnedSession(current)) return yield* resolveSessionBound(parentSessionId, launchCwd)
+    if (seen.has(parentSessionId)) {
+      return yield* new ParentBoundError({
+        message: `Session ${current.id} continues ${parentSessionId}, which is already on its handoff chain, so the bound of its thread is unknown and it runs nothing.`,
+        parentSessionId,
+      })
+    }
+    seen.add(parentSessionId)
+    const predecessor = yield* storage.getSession(parentSessionId)
+    if (Predicate.isUndefined(predecessor)) {
+      return yield* new ParentBoundError({
+        message: `Session ${current.id} continues ${parentSessionId}, which cannot be read, so the bound of its thread is unknown and it runs nothing.`,
+        parentSessionId,
+      })
+    }
+    current = predecessor
   }
-  return yield* resolveSessionBound(session.parentSessionId, launchCwd)
+  return noRunBound
 })
 
 /**

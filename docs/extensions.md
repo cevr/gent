@@ -907,7 +907,10 @@ points at the call. A child that names `paths` outside the parent run is
 refused at create, as above. When the parent's bound cannot be resolved (its
 agent is gone from the roster, its config does not load), the child fails
 closed with a `ParentBoundError` that names the parent session and agent: its
-create is refused, and its turns and file calls do not run.
+create is refused, and its turns and file calls do not run. A handoff
+(`continueThread` on a client's create, as `/handoff` makes) runs under the
+bound of the session it continues: a handoff of a confined child stays
+confined, and one that names wider `paths` is refused.
 
 The agent `getAgent` returns and the hooks receive is bound to its run:
 `admitsTool` and `pathScopes()` answer for the run, not for the definition. It

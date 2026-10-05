@@ -2679,6 +2679,57 @@ describe("run overrides narrow the agent", () => {
   )
 
   it.scopedLive(
+    "a handoff of a bounded child naming wider paths is refused by the parent run's paths",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [])
+        const child = yield* parent.childOf({ agent: OPEN })
+        const refused = yield* parent.client.session
+          .create({
+            cwd: dirs.cwd,
+            parentSessionId: child.sessionId,
+            parentBranchId: child.branchId,
+            continueThread: true,
+            admission: {
+              agent: OPEN,
+              runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } },
+            },
+          })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("RunPathRefusedError")
+        expect(refused.message).toContain('"b"')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a handoff of a bounded child writes only inside the child's parent paths",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+          { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        // A `/handoff`: the client continues the child's thread with its admission.
+        const handoff = yield* parent.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+          continueThread: true,
+        })
+        expect(yield* turnFailures(parent.client, handoff)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+        yield* parent.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
     "a parent whose agent left the roster bounds its child closed",
     () =>
       Effect.gen(function* () {

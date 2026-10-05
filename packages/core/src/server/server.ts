@@ -154,6 +154,7 @@ import {
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveExistingSessionBranch,
+  resolveParentBound,
   resolveSessionBound,
   resolveTurnProfile,
   RunOpener,
@@ -753,15 +754,33 @@ const makeSessionMutationsService: Effect.Effect<
    *   the agent the session will store must be one its own cwd's profile
    *   knows: the named agent, or for a handoff the parent's agent, which it
    *   inherits (a handoff can move to a project that has no such agent).
-   * - A spawned child is bounded by its parent run (`resolveSessionBound`):
-   *   a parent bound nobody can resolve refuses the child
-   *   (`ParentBoundError`). The bound is resolved again at each of the
-   *   child's turns and file calls; nothing of it is copied into the child.
+   * - A spawned child is bounded by its parent run (`resolveSessionBound`),
+   *   and a handoff by its predecessor's parent run (`inheritedBound`): a
+   *   bound nobody can resolve refuses the create (`ParentBoundError`).
+   *   The bound is resolved again at each of the child's turns and file
+   *   calls; nothing of it is copied into the child.
    * - A run's `paths` only narrow: each entry must lie in an entry of every
    *   scope of its agent and of its parent run, with at least its access.
    *   An entry outside refuses the whole run (`RunPathRefusedError`), early
    *   and by name; a dropped entry would change what the run means.
    */
+  /**
+   * The bound a create's run inherits: a spawn's parent run's whole bound,
+   * a handoff's predecessor's parent bound (`resolveParentBound`), none for a
+   * root. A handoff's missing predecessor is left to `admitParent`.
+   */
+  const inheritedBound = Effect.fn("SessionMutations.inheritedBound")(function* (
+    input: CreateSessionInput,
+  ) {
+    if (Predicate.isUndefined(input.parentSessionId)) return noRunBound
+    if (input.continueThread !== true) {
+      return yield* resolveSessionBound(input.parentSessionId, runtimeEnvironment.cwd)
+    }
+    const predecessor = yield* sessionStorage.getSession(input.parentSessionId)
+    if (Predicate.isUndefined(predecessor)) return noRunBound
+    return yield* resolveParentBound(predecessor, runtimeEnvironment.cwd)
+  })
+
   const admitRun = Effect.fn("SessionMutations.admitRun")(function* (input: CreateSessionInput) {
     const requested = requestedAdmission(input.admission)
     const inherited = Effect.gen(function* () {
@@ -776,18 +795,11 @@ const makeSessionMutationsService: Effect.Effect<
       onNone: () => inherited,
       onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
     })
-    const spawnedFrom = Option.fromUndefinedOr(input.parentSessionId).pipe(
-      Option.filter(() => input.continueThread !== true),
+    const parent = yield* inheritedBound(input).pipe(
+      Effect.provideService(SessionStorage, sessionStorage),
+      Effect.provideService(SessionProfileCache, profileCache),
+      Effect.provideService(ConfigService, configService),
     )
-    const parent = yield* Option.match(spawnedFrom, {
-      onNone: () => Effect.succeed(noRunBound),
-      onSome: (parentSessionId) =>
-        resolveSessionBound(parentSessionId, runtimeEnvironment.cwd).pipe(
-          Effect.provideService(SessionStorage, sessionStorage),
-          Effect.provideService(SessionProfileCache, profileCache),
-          Effect.provideService(ConfigService, configService),
-        ),
-    })
     const named = Option.fromUndefinedOr(requested?.runSpec?.overrides?.paths)
     if (Option.isNone(effective) && Option.isNone(named)) return
     const cwd = input.cwd ?? runtimeEnvironment.cwd
