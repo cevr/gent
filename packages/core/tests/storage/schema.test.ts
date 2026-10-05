@@ -125,7 +125,10 @@ describe("session admission", () => {
           overrides: { model: ModelId.make("openai/gpt-5"), tools: ["read", "bash", "!bash"] },
         },
       })
-    }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(kernelOnly)),
+    }).pipe(
+      Effect.provideService(CurrentWorkspaceId, WORKSPACE),
+      Effect.provide(testSqliteStorage),
+    ),
   )
 
   it.scopedLive(
