@@ -3,6 +3,7 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Path, Schedule, Schema } from "effect"
 import {
   createWorkerEnv,
+  GENT_START_BOUND_MS,
   seedAuthKeys,
   serveModelCatalogFixture,
   TEST_MODEL_ID,
@@ -44,6 +45,10 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
       GENT_MODEL_CATALOG_URL: yield* serveModelCatalogFixture,
     }
   })
+
+/** What a run may take past its start: the debug model's turn, its two rate-limit retries included. */
+const DEBUG_TURN_MS = 5_000
+
 /**
  * Run `gent --debug <args>` in a fresh home with stored keys and collect its
  * exit and output. `keyless` runs without `--debug` and without keys.
@@ -68,7 +73,7 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
     })
     const [exitCode, stdout, stderr] = yield* Effect.all(
       [
-        waitForExit(proc, 15000),
+        waitForExit(proc, GENT_START_BOUND_MS + DEBUG_TURN_MS),
         Effect.promise(() => new Response(proc.stdout).text()),
         Effect.promise(() => new Response(proc.stderr).text()),
       ],

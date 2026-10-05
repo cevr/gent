@@ -1,3 +1,4 @@
+import { GENT_START_BOUND_MS } from "@gent/core/test-utils"
 import { Duration, Effect, Filter, Option, Schema, type Scope, Stream } from "effect"
 import { fileURLToPath } from "node:url"
 
@@ -111,8 +112,8 @@ export const startServer = ({
   )
 
 /**
- * `startServer`, then its ready line, read for at most 10 seconds. A missed
- * bound fails, and the caller's scope still stops the server.
+ * `startServer`, then its ready line, read for at most `GENT_START_BOUND_MS`.
+ * A missed bound fails, and the caller's scope still stops the server.
  */
 export const spawnServer = ({
   dataDir,
@@ -123,7 +124,7 @@ export const spawnServer = ({
 }): Effect.Effect<{ url: string; proc: Bun.Subprocess }, ServerProcessFixtureError, Scope.Scope> =>
   Effect.gen(function* () {
     const proc = yield* startServer({ dataDir, port })
-    const url = yield* readReadyUrl(proc, "10 seconds")
+    const url = yield* readReadyUrl(proc, GENT_START_BOUND_MS)
     return { url: `${url}/rpc`, proc }
   })
 
