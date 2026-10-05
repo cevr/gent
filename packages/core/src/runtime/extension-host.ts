@@ -1,6 +1,7 @@
 import { chainCompactors, ModelContextCompactor } from "./model-context.js"
 import {
   Cause,
+  Clock,
   Context,
   Crypto,
   DateTime,
@@ -1464,25 +1465,30 @@ interface DiscoveredFile {
 }
 
 /**
- * The last good build of one extension entry. `stamps` holds each input's
- * stat (`fileVersion`), so a resolve with no file touched reads no file;
- * `content` hashes each input's bytes, so a save of the same bytes builds
- * nothing.
+ * What a loader knows of the inputs of one build: each input's stat
+ * (`statAll`'s `kept`), so a load with no file touched reads no file, and the
+ * hash of their bytes (`contentHash`), so a save of the same bytes builds
+ * nothing and a stamp too recent to trust is decided by the bytes.
  */
-interface ModuleGraph {
+interface InputsRecord {
   readonly stamps: ReadonlyMap<string, string>
   readonly content: string
+}
+
+/** The last good build of one extension entry, over the inputs it read. */
+interface ModuleGraph extends InputsRecord {
   readonly version: string
   readonly code: string
 }
 
 /**
  * The module graphs of the extension entries a loader built, by entry path:
- * the last good build of each, and the stats of the inputs a failed build
- * was known to read (the entry and the modules of its last good build),
- * taken before that build. The server's session profile cache owns one for
- * the process and the client loader one for its runtime, so a stat of each
- * input is all an unchanged extension costs a load.
+ * the last good build of each, and the inputs a failed build was known to
+ * read (the entry and the modules of its last good build), as they were
+ * before that build. The server's session profile cache owns one for the
+ * process and the client loader one for its runtime, so a stat of each input
+ * is all an unchanged extension costs a load once its last save is older
+ * than one tick of the file clock (`RACY_STAMP_MILLIS`).
  *
  * A failed build keeps the last good graph and the modules it knew: a
  * failure in a module the entry imports is fixed in that module, so its
@@ -1492,7 +1498,7 @@ interface ModuleGraph {
  */
 export interface ModuleGraphs {
   readonly good: Map<string, ModuleGraph>
-  readonly failed: Map<string, ReadonlyMap<string, string>>
+  readonly failed: Map<string, InputsRecord>
 }
 
 /** No entry built yet. */
@@ -1508,21 +1514,48 @@ interface ModuleBuilder<R> {
   readonly hash: (input: Uint8Array | string) => string
 }
 
-/** A file's stat stamp, or `missing` when it is gone. */
-const statStamp = (fs: FileSystem.FileSystem, file: string) =>
-  fs.stat(file).pipe(
-    Effect.map(fileVersion),
-    Effect.orElseSucceed(() => "missing"),
-  )
+/**
+ * How old a file's mtime must be before its stat stamp is trusted: the
+ * racy-git rule (git's `Documentation/technical/racy-git.adoc`), where an
+ * entry not older than the index that recorded it is compared by content.
+ *
+ * A file's clock ticks coarser than the millisecond of its stamp, and an
+ * in-place save sets the mtime before it copies the bytes. A stat in that
+ * tick can see the new stamp over the old bytes, and a save that ends in the
+ * same tick keeps that stamp. So a stamp whose mtime is within one tick of
+ * the stat is kept as `RACY_STAMP`, which no stat matches, and the bytes
+ * decide. The tick is the coarsest clock a user's extensions can sit on:
+ * the kernel's coarse clock on Linux before multigrain timestamps (4 ms at
+ * `HZ=250`, 10 ms at `HZ=100`), one second on HFS+ and two on FAT. Two
+ * seconds covers all of them; an mtime in the future (a skewed network
+ * clock) is always racy. A save costs a hash of its entry's inputs on each
+ * load within those two seconds, never a build.
+ */
+const RACY_STAMP_MILLIS = 2_000
+const RACY_STAMP = "racy"
 
-/** Each file's stat stamp. */
+/**
+ * Each file's stat stamp (`fileVersion`, or `missing` when it is gone):
+ * `seen` to compare with a kept stamp, `kept` to keep, with each stamp too
+ * recent to trust as `RACY_STAMP`.
+ */
 const statAll = Effect.fn("ExtensionLoader.statInputs")(function* (
   fs: FileSystem.FileSystem,
   files: Iterable<string>,
 ) {
-  const stamps = new Map<string, string>()
-  for (const input of files) stamps.set(input, yield* statStamp(fs, input))
-  return stamps
+  const now = yield* Clock.currentTimeMillis
+  const seen = new Map<string, string>()
+  const kept = new Map<string, string>()
+  for (const input of files) {
+    const info = yield* fs.stat(input).pipe(Effect.option)
+    const stamp = Option.match(info, { onNone: () => "missing", onSome: fileVersion })
+    const racy = Option.flatMap(info, (found) => found.mtime).pipe(
+      Option.filter((mtime) => mtime.getTime() > now - RACY_STAMP_MILLIS),
+    )
+    seen.set(input, stamp)
+    kept.set(input, Option.match(racy, { onNone: () => stamp, onSome: () => RACY_STAMP }))
+  }
+  return { seen, kept }
 })
 
 const sameStamps = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>) =>
@@ -1560,10 +1593,11 @@ const COHERENT_BUILD_TRIES = 3
  * Build an extension entry into one module, or reuse its last good build.
  * Each load stats the entry and the modules its last good build read: no
  * stat changed, the last build stands. A stat changed but no byte did (a save
- * of the same bytes, a `touch`, a broken edit undone), the last build stands
- * and the new stats are kept. Otherwise the entry builds again. The version
- * is the built module's hash, so two builds of the same code share one
- * version; a failed build's version is `!` and its error's hash.
+ * of the same bytes, a `touch`, a broken edit undone, a stamp too recent to
+ * trust), the last build stands and the new stats are kept, each one within
+ * a tick of the file clock as `RACY_STAMP`. Otherwise the entry builds again.
+ * The version is the built module's hash, so two builds of the same code
+ * share one version; a failed build's version is `!` and its error's hash.
  *
  * A build is kept only when it is coherent: it read the files whose stats
  * and bytes were taken before it, and neither changed while it ran. A save
@@ -1588,13 +1622,13 @@ export const buildExtensionModule = Effect.fn("ExtensionLoader.buildModule")(fun
   })
   let stamps = yield* statAll(fs, inputs)
   // An unchanged stat reads no input: only a changed one is hashed.
-  if (Option.isSome(known) && sameStamps(stamps, known.value.stamps)) {
+  if (Option.isSome(known) && sameStamps(stamps.seen, known.value.stamps)) {
     graphs.failed.delete(entry)
     return { version: known.value.version, build: Result.succeed(known.value.code) }
   }
   let content = yield* contentHash(fs, builder.hash, inputs)
   if (Option.isSome(known) && content === known.value.content) {
-    graphs.good.set(entry, { ...known.value, stamps })
+    graphs.good.set(entry, { ...known.value, stamps: stamps.kept })
     graphs.failed.delete(entry)
     return { version: known.value.version, build: Result.succeed(known.value.code) }
   }
@@ -1602,9 +1636,9 @@ export const buildExtensionModule = Effect.fn("ExtensionLoader.buildModule")(fun
     const built = yield* builder.bundle(entry).pipe(Effect.result)
     if (Result.isFailure(built)) {
       const error = `Failed to build ${entry}: ${built.failure.message}`
-      // The stats of every module the entry was known to read, so a fix to
-      // any of them is a change to look at.
-      graphs.failed.set(entry, stamps)
+      // The stats and bytes of every module the entry was known to read, so
+      // a fix to any of them is a change to look at.
+      graphs.failed.set(entry, { stamps: stamps.kept, content })
       return { version: `!${builder.hash(error)}`, build: Result.fail(error) }
     }
     const version = builder.hash(built.success.code)
@@ -1614,8 +1648,8 @@ export const buildExtensionModule = Effect.fn("ExtensionLoader.buildModule")(fun
     // save landed while it read them.
     const statsAfter = yield* statAll(fs, built.success.inputs)
     const after = yield* contentHash(fs, builder.hash, built.success.inputs)
-    if (sameInputs && sameStamps(statsAfter, stamps) && after === content) {
-      graphs.good.set(entry, { stamps, content, version, code: built.success.code })
+    if (sameInputs && sameStamps(statsAfter.seen, stamps.seen) && after === content) {
+      graphs.good.set(entry, { stamps: stamps.kept, content, version, code: built.success.code })
       graphs.failed.delete(entry)
       return { version, build: Result.succeed(built.success.code) }
     }
@@ -1633,18 +1667,27 @@ export const buildExtensionModule = Effect.fn("ExtensionLoader.buildModule")(fun
 /**
  * Whether the next build of an entry may differ from its last: a file its
  * last build read, or a failed build was known to read, has another stat, or
- * the entry has no build to compare. Reads stats only.
+ * the entry has no build to compare. A stamp kept as `RACY_STAMP` names no
+ * change by itself: when it is the only one that moved, the bytes decide, so
+ * a save looks changed once and not on every look until it ages. Reads stats
+ * only, but for those bytes.
  */
 export const extensionModuleChanged = Effect.fn("ExtensionLoader.moduleChanged")(function* (
   entry: string,
   graphs: ModuleGraphs,
+  hash: (input: Uint8Array | string) => string,
 ) {
   const fs = yield* FileSystem.FileSystem
   const known = Option.orElse(Option.fromNullishOr(graphs.failed.get(entry)), () =>
-    Option.map(Option.fromNullishOr(graphs.good.get(entry)), (graph) => graph.stamps),
+    Option.map(Option.fromNullishOr(graphs.good.get(entry)), (graph): InputsRecord => graph),
   )
   if (Option.isNone(known)) return true
-  return !sameStamps(yield* statAll(fs, known.value.keys()), known.value)
+  const { stamps, content } = known.value
+  const { seen } = yield* statAll(fs, stamps.keys())
+  const moved = [...stamps].filter(([input, stamp]) => seen.get(input) !== stamp)
+  if (moved.length === 0) return false
+  if (moved.some(([, stamp]) => stamp !== RACY_STAMP)) return true
+  return (yield* contentHash(fs, hash, [...stamps.keys()])) !== content
 })
 
 /**

@@ -479,9 +479,14 @@ export class ConfigWriteError extends Schema.TaggedError<ConfigWriteError>()("Co
 
 /**
  * A file's version as its stat tells it: mtime (ms), size and inode. The
- * inode tells an atomic replace (a rename) of the same size and millisecond
+ * inode tells an atomic replace (a rename) of the same size and clock tick
  * apart from the file it replaced. A same-size rewrite in place within one
- * millisecond keeps the version; `File.Info` has no ctime to tell it apart.
+ * tick of the file clock (milliseconds on Linux, up to two seconds on FAT)
+ * keeps the version, and a stat inside an in-place save can see the new
+ * version over the old bytes; `File.Info` has no ctime, and a ctime ticks
+ * with the same clock. So a stamp taken within one tick of its mtime is not
+ * proof of the bytes: the extension loader keeps it as racy and reads the
+ * bytes (`RACY_STAMP_MILLIS` in `extension-host.ts`).
  */
 export const fileVersion = (info: FileSystem.File.Info): string => {
   const mtime = Option.match(info.mtime, {
