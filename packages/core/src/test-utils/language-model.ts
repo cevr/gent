@@ -209,14 +209,31 @@ const toWaitForError = (error: unknown) => {
   return new WaitForError({ message: String(error) })
 }
 
-/** Poll an effect until predicate passes or timeout */
-export const waitFor = <A, R = never>(
+/**
+ * Poll an effect until its value passes `predicate`, or fail with
+ * `WaitForError` at the wall-clock deadline. A failed attempt is polled
+ * again; the last failure is named in the timeout. A refinement narrows the
+ * value returned (`Option.isSome` returns the `Some`).
+ */
+export function waitFor<A, B extends A, R = never>(
   effect: Effect.Effect<A, unknown, R>,
-  predicate: (value: A) => boolean,
+  refinement: Predicate.Refinement<A, B>,
+  timeoutMs?: number,
+  label?: string,
+): Effect.Effect<B, WaitForError, R>
+export function waitFor<A, R = never>(
+  effect: Effect.Effect<A, unknown, R>,
+  predicate: Predicate.Predicate<A>,
+  timeoutMs?: number,
+  label?: string,
+): Effect.Effect<A, WaitForError, R>
+export function waitFor<A, R = never>(
+  effect: Effect.Effect<A, unknown, R>,
+  predicate: Predicate.Predicate<A>,
   timeoutMs = 5_000,
   label = "condition",
-): Effect.Effect<A, WaitForError, R> =>
-  Effect.gen(function* () {
+): Effect.Effect<A, WaitForError, R> {
+  return Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
     const loop: Effect.Effect<A, WaitForError, R> = Effect.gen(function* () {
       const attempt = yield* effect.pipe(Effect.exit)
@@ -236,6 +253,7 @@ export const waitFor = <A, R = never>(
     })
     return yield* loop
   })
+}
 
 /** One run of `interruptAtEachStep`: what it interrupts and what must hold after. */
 export interface InterruptionTrial<A, E, R, E2, R2> {

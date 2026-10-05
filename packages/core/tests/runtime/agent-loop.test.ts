@@ -139,7 +139,6 @@ import {
   runAgentLoop,
   steerAgentLoop,
   submitAgentLoop,
-  waitFor as waitForOption,
   waitForPhase,
 } from "../helpers/agent-loop"
 import * as Prompt from "effect/ai/Prompt"
@@ -2050,11 +2049,10 @@ describe("admitted turn withdrawal", () => {
       yield* harness.worker.interrupt(first.message.id)
       expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
       const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
-      const ran = yield* waitForOption(
-        () =>
-          Ref.get(harness.interruptedTurns).pipe(
-            Effect.map(Option.liftPredicate((all) => all.length === 1)),
-          ),
+      const ran = yield* waitFor(
+        Ref.get(harness.interruptedTurns),
+        (all) => all.length === 1,
+        5_000,
         "the promoted follow-up ran",
       )
       expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
@@ -2416,13 +2414,7 @@ describe("a usage limit's reset time", () => {
       })
       yield* Effect.gen(function* () {
         const hooksFired = (count: number) =>
-          waitForOption(
-            () =>
-              Ref.get(inputs).pipe(
-                Effect.map((all) => Option.liftPredicate(all, () => all.length >= count)),
-              ),
-            `${count} turnAfter hooks`,
-          )
+          waitFor(Ref.get(inputs), (all) => all.length >= count, 5_000, `${count} turnAfter hooks`)
         // Turn A stops at the usage limit and names its reset.
         yield* submitAgentLoop(makeMessage(sessionId, branchId, "turn A"))
         const [first] = yield* hooksFired(1)
@@ -4750,11 +4742,10 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
         const caller = yield* Effect.forkChild(submitAgentLoop(interrupted))
         // A SubmitAndWait queues behind the reservation, with one failure as its baseline.
         const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(waited)))
-        const queue = yield* waitForOption(
-          () =>
-            agentLoop
-              .getQueue({ sessionId, branchId })
-              .pipe(Effect.map(Option.liftPredicate((q) => q.followUp.length === 1))),
+        const queue = yield* waitFor(
+          agentLoop.getQueue({ sessionId, branchId }),
+          (q) => q.followUp.length === 1,
+          5_000,
           "waited message queued",
         )
         expect(queue.followUp.map((entry) => entry.id)).toEqual([waited.id])
@@ -4823,10 +4814,7 @@ describe("a full follow-up queue", () => {
           ),
         )
         yield* Deferred.succeed(releaseFirst, void 0)
-        yield* waitForOption(
-          () => Ref.get(calls).pipe(Effect.map(Option.liftPredicate((n) => n === 11))),
-          "every admitted turn ran",
-        )
+        yield* waitFor(Ref.get(calls), (n) => n === 11, 5_000, "every admitted turn ran")
         yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
         // The running turn streamed once: recovery never restarted it.
         expect(yield* Ref.get(calls)).toBe(11)
@@ -4894,11 +4882,10 @@ describe("a loop closed while a submitted turn waits to start", () => {
         const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(waited)))
         // A Submit queues behind the reservation, which proves it stands.
         const submitted = yield* Effect.forkChild(Effect.exit(submitAgentLoop(behind)))
-        const queue = yield* waitForOption(
-          () =>
-            agentLoop
-              .getQueue({ sessionId, branchId })
-              .pipe(Effect.map(Option.liftPredicate((q) => q.followUp.length === 1))),
+        const queue = yield* waitFor(
+          agentLoop.getQueue({ sessionId, branchId }),
+          (q) => q.followUp.length === 1,
+          5_000,
           "behind message queued",
         )
         expect(queue.followUp.map((entry) => entry.id)).toEqual([behind.id])
@@ -6814,11 +6801,10 @@ describe("a failed turn", () => {
         const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
         yield* controls.waitForCall(0)
         const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
-        yield* waitForOption(
-          () =>
-            agentLoop
-              .getQueue({ sessionId, branchId })
-              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
+        yield* waitFor(
+          agentLoop.getQueue({ sessionId, branchId }),
+          (queue) => queue.followUp.length === 1,
+          5_000,
           "second message queued",
         )
         yield* controls.emitAll(0)
@@ -6902,19 +6888,17 @@ describe("a failed turn", () => {
         const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(first)))
         yield* controls.waitForCall(0)
         const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(second)))
-        yield* waitForOption(
-          () =>
-            agentLoop
-              .getQueue({ sessionId, branchId })
-              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
+        yield* waitFor(
+          agentLoop.getQueue({ sessionId, branchId }),
+          (queue) => queue.followUp.length === 1,
+          5_000,
           "second message queued",
         )
         const thirdFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(third)))
-        yield* waitForOption(
-          () =>
-            agentLoop
-              .getQueue({ sessionId, branchId })
-              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 2))),
+        yield* waitFor(
+          agentLoop.getQueue({ sessionId, branchId }),
+          (queue) => queue.followUp.length === 2,
+          5_000,
           "third message queued",
         )
         yield* controls.emitAll(0)
@@ -6985,20 +6969,14 @@ describe("queued follow-ups", () => {
       yield* Deferred.await(params.aStarted)
       yield* submitAgentLoop(x)
       yield* submitAgentLoop(y)
-      const settled = waitForOption(
-        () =>
-          Effect.gen(function* () {
-            const state = yield* agentLoop.getState({ sessionId, branchId })
-            const queue = yield* agentLoop.getQueue({ sessionId, branchId })
-            return Option.some(true).pipe(
-              Option.filter(
-                () =>
-                  state._tag === "Idle" &&
-                  queue.followUp.length === 0 &&
-                  queue.steering.length === 0,
-              ),
-            )
-          }),
+      const settled = waitFor(
+        Effect.all({
+          state: agentLoop.getState({ sessionId, branchId }),
+          queue: agentLoop.getQueue({ sessionId, branchId }),
+        }),
+        ({ state, queue }) =>
+          state._tag === "Idle" && queue.followUp.length === 0 && queue.steering.length === 0,
+        5_000,
         "loop idle with an empty queue",
       )
       return {
@@ -7220,20 +7198,21 @@ describe("queued follow-ups", () => {
               const messageStorage = yield* MessageStorage
               // The first command wakes the loop; recovery reads the stored queue.
               yield* agentLoop.getState({ sessionId, branchId })
-              const zRow = yield* waitForOption(
-                () =>
-                  messageStorage
-                    .getMessage(z.id)
-                    .pipe(
-                      Effect.map((row) =>
-                        Option.filter(Option.fromUndefinedOr(row), (stored) =>
-                          Predicate.isNotUndefined(stored.turnDurationMs),
-                        ),
+              const zRow = yield* waitFor(
+                messageStorage
+                  .getMessage(z.id)
+                  .pipe(
+                    Effect.map((row) =>
+                      Option.filter(Option.fromUndefinedOr(row), (stored) =>
+                        Predicate.isNotUndefined(stored.turnDurationMs),
                       ),
                     ),
+                  ),
+                Option.isSome,
+                5_000,
                 "the last queued follow-up answered after the restart",
               )
-              expect(messagePartsText(zRow.parts)).toBe("z")
+              expect(messagePartsText(zRow.value.parts)).toBe("z")
               yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
               // Each waiting follow-up ran its own turn, in submission order.
               expect(secondPromptTails).toEqual(["y", "z"])
@@ -7423,15 +7402,10 @@ describe("provider retry in a turn", () => {
       yield* Effect.gen(function* () {
         const message = makeMessage(sessionId, branchId, "wait for the rate limit")
         const turn = yield* Effect.forkChild(runAgentLoop(message))
-        yield* waitForOption(
-          () =>
-            Ref.get(eventsRef).pipe(
-              Effect.map((events) =>
-                Option.liftPredicate(events, (all) =>
-                  all.some((event) => event._tag === "ProviderRetrying"),
-                ),
-              ),
-            ),
+        yield* waitFor(
+          Ref.get(eventsRef),
+          (all) => all.some((event) => event._tag === "ProviderRetrying"),
+          5_000,
           "the retry wait began",
         )
         yield* steerAgentLoop({
