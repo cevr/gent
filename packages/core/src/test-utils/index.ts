@@ -40,6 +40,7 @@ export {
   interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  bunDriverHostServices,
   seedAuthKeys,
   storedCredentialModel,
   type SequenceStep,

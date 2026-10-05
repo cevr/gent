@@ -2,7 +2,8 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { Clock, Effect, FileSystem, Layer, Path } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
-import { BunPlatformLive, GentPlatform } from "@gent/core/host"
+import { GentPlatform } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 
 /** Run `file` under the source preload with its own cache home; its stdout, trimmed. */

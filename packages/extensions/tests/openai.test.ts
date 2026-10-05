@@ -2,7 +2,6 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
-  Crypto,
   Deferred,
   Effect,
   Exit,
@@ -75,13 +74,10 @@ import {
   freePort,
   turnNoticesText,
   waitFor,
+  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import { resolveShipped } from "./helpers/api-classes.js"
 import { SessionId } from "@gent/core/protocol"
-import { BunCrypto } from "@effect/platform-bun"
-
-/** The Crypto a host provides; the OpenAI driver captures it at setup. */
-const hostCrypto = Effect.service(Crypto.Crypto).pipe(Effect.provide(BunCrypto.layer))
 
 // ── credential cache ────────────────────────────────────────────────────────
 
@@ -210,7 +206,7 @@ const makeDriver = (
       cellRef,
       options.pending ?? new Map(),
       Option.none(),
-      yield* hostCrypto,
+      yield* bunDriverHostServices,
     )
     const catalog = fixtureModelCatalog()
     const driver = {

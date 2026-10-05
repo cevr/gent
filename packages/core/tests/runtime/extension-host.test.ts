@@ -57,7 +57,11 @@ import {
   waitFor,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import {
+  BunSqlite,
+  BunGentPlatformLive,
+  BunPlatformLive,
+} from "../../src/runtime/gent-platform-bun"
 import {
   defineExtension,
   defineRequests,
@@ -474,7 +478,7 @@ const makeCacheLayer = (params: {
     Layer.provide(
       Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
         // A later layer's service wins: the wrapped file system, when given.
         Option.match(Option.fromUndefinedOr(params.wrapFileSystem), {
           onNone: () => Layer.empty,
@@ -2367,13 +2371,13 @@ describe("resolveTurnProfile", () => {
           Layer.mergeAll(
             BunServices.layer,
             configServiceLive,
-            SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
       )
       const testLayer = Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
         emptyRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
@@ -2847,7 +2851,9 @@ const fsLayer = Layer.provideMerge(
 )
 
 /** The session database every Resource build reads, in memory. */
-const profileStorageLayer = SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive))
+const profileStorageLayer = SqliteStorage.WithSql(BunSqlite.memory).pipe(
+  Layer.provide(BunPlatformLive),
+)
 
 /**
  * The extensions a profile for `home` and `cwd` activates: the scan, load,

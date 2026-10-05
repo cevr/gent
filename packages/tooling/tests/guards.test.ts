@@ -3575,6 +3575,7 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
         "./extensions/api": "./src/extensions/api.ts",
         "./extensions/branch-tools": "./src/extensions/branch-tools.ts",
         "./host": "./src/host.ts",
+        "./host-bun": "./src/host-bun.ts",
         "./protocol": "./src/protocol.ts",
         "./test-utils": "./src/test-utils/index.ts",
       },

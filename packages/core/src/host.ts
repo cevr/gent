@@ -1,7 +1,8 @@
 /**
  * What a host needs to compose and run gent: the platform, the config
  * loader, storage, workspace headers, the server root, and the scripted
- * language model `Gent.provider.mock()` ships. Clients read `protocol`;
+ * language model `Gent.provider.mock()` ships. A Bun process adds
+ * `host-bun`; nothing here loads Bun. Clients read `protocol`;
  * extensions read `extensions/api`; tests read `test-utils`.
  */
 export {
@@ -10,7 +11,6 @@ export {
   type RuntimeModuleSource,
   writeFileAtomic,
 } from "./runtime/gent-platform.js"
-export { bindBunModules, BunPlatformLive } from "./runtime/gent-platform-bun.js"
 export {
   hasProjectScope,
   isProjectExtensionDirectoryTrusted,
@@ -36,5 +36,4 @@ export {
   createDependencies,
   makeInProcessClient,
   RpcHandlersLive,
-  StateLocation,
 } from "./server/server.js"

@@ -27,14 +27,19 @@ import {
   Match,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Result,
   Schedule,
   Schema,
   Scope,
 } from "effect"
+import { SqlClient } from "effect/sql"
 import { causeMessage } from "../domain/guards.js"
-import { BunServices } from "@effect/platform-bun"
+import { storageError, type StorageError } from "../domain/errors.js"
+import * as EffectPlatformBun from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { AuthError, ProviderLock } from "./provider.js"
 import { FetchHttpClient } from "effect/http"
 import {
@@ -282,8 +287,20 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
     hash: (algorithm, input) => new Bun.CryptoHasher(algorithm).update(input).digest("hex"),
 
     transcodeImage: transcodeBunImage,
+
+    loopbackServer: (port) => BunHttpServer.layerServer({ port, hostname: "127.0.0.1" }),
   }),
 )
+
+/**
+ * The modules the Bun host binds beside the shipped set
+ * (`BuiltinExtensionModules`): a user extension that imports
+ * `@effect/platform-bun` gets the instances this process runs. No shipped
+ * extension imports it: they reach the host through `GentPlatform`.
+ */
+export const BunHostModules: ReadonlyMap<string, RuntimeModuleSource> = new Map([
+  ["@effect/platform-bun", () => EffectPlatformBun],
+])
 
 // ── provider lock ───────────────────────────────────────────────────────────
 
@@ -386,6 +403,58 @@ export const BunProviderLockLive: Layer.Layer<
     })
   }),
 )
+
+// ── sqlite client ───────────────────────────────────────────────────────────
+
+/**
+ * The PRAGMAs of a connection gent opens itself. They configure the
+ * connection, not the schema, so they belong to the client layer that opens
+ * it: a hosted client's platform owns its durability and refuses them.
+ */
+const configureLocalConnection: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(`PRAGMA journal_mode = WAL`)
+      yield* sql.unsafe(`PRAGMA synchronous = NORMAL`)
+      yield* sql.unsafe(`PRAGMA busy_timeout = 5000`)
+      yield* sql.unsafe(`PRAGMA wal_autocheckpoint = 1000`)
+      yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
+    }).pipe(Effect.mapError(storageError("Storage pragma initialization failed"))),
+  )
+
+/** A Bun SQLite connection gent opens and configures: a file, or `:memory:`. */
+const localSqliteClient = (filename: string): Layer.Layer<SqlClient.SqlClient, StorageError> =>
+  configureLocalConnection.pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename }))))
+
+/**
+ * The SQLite clients the Bun host opens for a root's state
+ * (`SqliteStorage.WithSql`, `createDependencies`): one connection, its
+ * transactions opened with BEGIN IMMEDIATE, and the PRAGMAs above.
+ */
+export const BunSqlite = {
+  /** The database file at `dbPath`; its directory is made first. */
+  file: (
+    dbPath: string,
+  ): Layer.Layer<
+    SqlClient.SqlClient,
+    StorageError | PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  > =>
+    localSqliteClient(dbPath).pipe(
+      Layer.provideMerge(
+        Layer.effectDiscard(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem
+            const pathService = yield* Path.Path
+            yield* fs.makeDirectory(pathService.dirname(dbPath), { recursive: true })
+          }),
+        ),
+      ),
+    ),
+  /** A database that lives as long as the layer. */
+  memory: localSqliteClient(":memory:"),
+}
 
 // ── platform stack ──────────────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ import {
   Cause,
   Clock,
   Context,
+  type Crypto,
   DateTime,
   Deferred,
   Effect,
@@ -12,6 +13,7 @@ import {
   Layer,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Queue,
   Random,
@@ -130,12 +132,7 @@ import {
   queueFollowUpOn,
 } from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
-import {
-  createDependencies,
-  makeInProcessClient,
-  RpcHandlersLive,
-  StateLocation,
-} from "../server/server.js"
+import { createDependencies, makeInProcessClient, RpcHandlersLive } from "../server/server.js"
 import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
 import {
   Branch,
@@ -158,7 +155,12 @@ import { type AgentEvent, EventStore, type EventStoreService } from "../domain/e
 import { LanguageModel, Model as AiModel } from "effect/ai"
 import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
 import { BunCrypto, BunHttpServer } from "@effect/platform-bun"
-import { BunPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
+import {
+  BunGentPlatformLive,
+  BunPlatformLive,
+  BunProviderLockLive,
+  BunSqlite,
+} from "../runtime/gent-platform-bun.js"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import type * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
@@ -504,9 +506,9 @@ export const collectTestContributions = <E, R>(
  * In-memory SQLite storage with its platform closed: deterministic ids from
  * `GentPlatform.Test()` and the Bun `Crypto` the host would provide. Storage
  * tests yield it without wiring a platform layer; product callers use
- * `SqliteStorage.LiveWithSql` / `MemoryWithSql` under the host's platform.
+ * `SqliteStorage.WithSql` over the host's client under the host's platform.
  */
-export const testSqliteStorage = SqliteStorage.MemoryWithSql.pipe(
+export const testSqliteStorage = SqliteStorage.WithSql(BunSqlite.memory).pipe(
   Layer.provide(Layer.merge(GentPlatform.Test(), BunCrypto.layer)),
 )
 
@@ -1718,7 +1720,7 @@ type E2EExtensionSource =
 /**
  * Where a test root keeps its state: in-memory SQLite (neither), a SQLite file
  * for restart and recovery tests (`storagePath`), or a host's own SQLite client
- * (`hostedSql`, `StateLocation.Hosted`). One or neither.
+ * (`hostedSql`, as a Durable Object hands one). One or neither.
  */
 type E2EStateSource =
   | {
@@ -1907,12 +1909,17 @@ const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "sign
   return LanguageModelLayers.resolver(config.providerLayer)
 }
 
-const stateLocationOf = (config: E2EStateSource): StateLocation => {
-  if (!Predicate.isUndefined(config.hostedSql))
-    return StateLocation.cases.Hosted.make({ sql: config.hostedSql })
-  if (!Predicate.isUndefined(config.storagePath))
-    return StateLocation.cases.Disk.make({ dbPath: config.storagePath })
-  return StateLocation.cases.Memory.make({})
+/** The SQLite client a test root keeps its state in. */
+const sqlOf = (
+  config: E2EStateSource,
+): Layer.Layer<
+  SqlClient.SqlClient,
+  StorageError | PlatformError.PlatformError,
+  FileSystem.FileSystem | Path.Path
+> => {
+  if (!Predicate.isUndefined(config.hostedSql)) return config.hostedSql
+  if (!Predicate.isUndefined(config.storagePath)) return BunSqlite.file(config.storagePath)
+  return BunSqlite.memory
 }
 
 const e2eDependencies = (
@@ -1922,7 +1929,7 @@ const e2eDependencies = (
   const options = {
     ...directories,
     platform: "test",
-    state: stateLocationOf(config),
+    sql: sqlOf(config),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
@@ -2051,6 +2058,14 @@ export const createRpcClient = <E, R>(
   })
 
 // ── stored-credential model ─────────────────────────────────────────────────
+
+/**
+ * The host services a provider driver captures at setup, as the Bun host
+ * gives them: its `Crypto`, and its `GentPlatform` (the loopback listener a
+ * sign-in redirect opens).
+ */
+export const bunDriverHostServices: Effect.Effect<Context.Context<Crypto.Crypto | GentPlatform>> =
+  Effect.scoped(Layer.build(Layer.merge(BunCrypto.layer, BunGentPlatformLive)))
 
 /**
  * The language model a turn resolves for `modelId` through the production

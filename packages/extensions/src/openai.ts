@@ -33,7 +33,6 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/http"
-import { BunHttpServer } from "@effect/platform-bun"
 import {
   type ApiClassContribution,
   AuthMethod,
@@ -58,6 +57,8 @@ import {
   type ReasoningEffort,
   type RunEffort,
 } from "@gent/core/extensions/api"
+// The host's loopback listener for a sign-in redirect (`GentPlatform.loopbackServer`).
+import { GentPlatform } from "@gent/core/extensions/branch-tools"
 import {
   adapterEntry,
   catalogModels,
@@ -544,12 +545,15 @@ const startRedirectServer = (
   port: number,
   expectedState: string,
   deferred: Deferred.Deferred<PendingCallbackPayload, OAuthError>,
-): Effect.Effect<void, OAuthError, Scope.Scope> => {
+): Effect.Effect<void, OAuthError, Scope.Scope | GentPlatform> => {
   const HttpLive = HttpRouter.serve(buildCallbackRoutes(expectedState, deferred)).pipe(
     // Loopback only, as the MCP redirect listener: the browser on this machine
     // reaches `localhost`, and no other machine may hand the login a code.
-    // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- the OAuth redirect listener binds the fixed port OpenAI registers, for one sign-in; no entry provides an HTTP server, and a user extension may start its own listener
-    Layer.provide(BunHttpServer.layerServer({ port, hostname: "127.0.0.1" })),
+    Layer.provide(
+      Layer.unwrap(
+        Effect.map(Effect.service(GentPlatform), (platform) => platform.loopbackServer(port)),
+      ),
+    ),
   )
   return Layer.launch(HttpLive).pipe(
     Effect.catchCause((cause) =>
@@ -600,7 +604,7 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
 const authorizeOpenAI: Effect.Effect<
   OpenAIAuthorizationFlow,
   OAuthError,
-  Scope.Scope | Crypto.Crypto
+  Scope.Scope | Crypto.Crypto | GentPlatform
 > = Effect.gen(function* () {
   const pkce = yield* generatePKCE
   const crypto = yield* Crypto.Crypto
@@ -1905,14 +1909,15 @@ const explainedClientLayer = (
 
 /**
  * Build the model-driver contribution over a credential cache cell the
- * caller allocated once: every `resolveModel` call shares it. `crypto` is the host's Crypto,
- * captured at setup; the browser OAuth flow draws its PKCE and state from it.
+ * caller allocated once: every `resolveModel` call shares it. `hostServices` are the
+ * host's Crypto and `GentPlatform`, captured at setup; the browser OAuth flow
+ * draws its PKCE and state from the one and its redirect listener from the other.
  */
 export const buildOpenAIModelDriver = (
   credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
-  crypto: Crypto.Crypto,
+  hostServices: Context.Context<Crypto.Crypto | GentPlatform>,
 ): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
   const cellFor = credentialCells(credentialCellRef)
   // The keys whose organization OpenAI refused a reasoning summary.
@@ -2168,7 +2173,7 @@ export const buildOpenAIModelDriver = (
               const flow = yield* restore(
                 selected.value.pipe(
                   Scope.provide(scope),
-                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.provideContext(hostServices),
                   Effect.mapError(
                     (e) =>
                       new ProviderAuthError({
@@ -2239,13 +2244,15 @@ export const OpenAIExtension = defineExtension({
     const pendingCallbacks = new Map<string, PendingCallbackEntry>()
 
     const envApiKey = yield* readOptionalEnv("OPENAI_API_KEY")
-    // The host's Crypto, not one of the driver's own: a shipped provider is
+    // The host's Crypto and platform, not the driver's own: a shipped provider is
     // never more privileged than a user extension.
-    const crypto = yield* Crypto.Crypto
+    const hostServices = Context.make(Crypto.Crypto, yield* Crypto.Crypto).pipe(
+      Context.add(GentPlatform, yield* GentPlatform),
+    )
 
     yield* host.register(
       "modelDriver",
-      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, crypto),
+      buildOpenAIModelDriver(credentialCellRef, pendingCallbacks, envApiKey, hostServices),
     )
     // The two OpenAI wire protocols any provider's models may speak.
     yield* host.register("apiClass", RESPONSES_CLASS, CHAT_COMPLETIONS_CLASS)

@@ -16,7 +16,8 @@
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- a preload registers its Bun plugin itself; Effect has no plugin service
 import { plugin } from "bun"
 import { Clock, Config, Duration, Effect, FileSystem, ManagedRuntime, Option, Path } from "effect"
-import { BunPlatformLive, GentPlatform, writeFileAtomic } from "@gent/core/host"
+import { GentPlatform, writeFileAtomic } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 
 /** Raise it when this file changes what a cached result holds. */
 const CACHE_FORMAT = "1"

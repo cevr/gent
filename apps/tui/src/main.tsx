@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/cli"
-import { BunPlatformLive, ScriptedLanguageModel } from "@gent/core/host"
+import { ScriptedLanguageModel } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import {
   Config,
   Context,

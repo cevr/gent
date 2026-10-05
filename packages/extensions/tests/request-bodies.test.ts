@@ -22,7 +22,7 @@ import {
   type ReasoningEffort,
   type RunEffort,
 } from "@gent/core/extensions/api"
-import { modelCatalogFromBodies } from "@gent/core/test-utils"
+import { bunDriverHostServices, modelCatalogFromBodies } from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
   buildAnthropicModelDriver,
@@ -391,7 +391,12 @@ const routes = Effect.gen(function* () {
     {
       label: "openai",
       provider: "openai",
-      driver: buildOpenAIModelDriver(openAiCell, new Map(), Option.none(), crypto),
+      driver: buildOpenAIModelDriver(
+        openAiCell,
+        new Map(),
+        Option.none(),
+        yield* bunDriverHostServices,
+      ),
       auth: apiKey(),
     },
     {

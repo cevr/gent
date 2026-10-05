@@ -3218,6 +3218,7 @@ export const findUnusedSuppressionApprovals = (
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/core/src/protocol.ts`, `packages/core/src/host.ts`,
+ *   `packages/core/src/host-bun.ts`,
  *   `packages/core/src/test-utils/index.ts`, `packages/sdk/src/index.ts`,
  *   `packages/extensions/src/client.ts`) exposes names, mostly with
  *   `export { X } from "..."`, and a few it declares itself; each is
@@ -3286,6 +3287,14 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     testsCount: false,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/host"),
+  },
+  {
+    // The Bun host's additions to `host`, held to the same rule.
+    prefix: "packages/core/src/host-bun.ts",
+    outsideOf: ["packages/core/src/"],
+    testsCount: false,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/core/host-bun"),
   },
   {
     // The test entry point, listed before the harness directory it re-exports.
@@ -3920,6 +3929,7 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
       "./extensions/api",
       "./extensions/branch-tools",
       "./host",
+      "./host-bun",
       "./protocol",
       "./test-utils",
     ],

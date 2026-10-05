@@ -1,4 +1,5 @@
 import { test } from "bun:test"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import {
   Cause,
   Context,
@@ -2349,7 +2350,7 @@ describe("session transport contract", () => {
 describe("requestId idempotency", () => {
   const makePersistentSessionMutationsLayer = (dbPath: string) =>
     sessionMutationsTestLayer({
-      storage: SqliteStorage.LiveWithSql(dbPath).pipe(
+      storage: SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
       ),
@@ -2816,7 +2817,7 @@ describe("requestId idempotency", () => {
       const deliveredPromptRequestIds = new Set<string>()
 
       const makeLayer = (failPrompt: boolean) => {
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
+        const storageLayer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
           Layer.provide(BunServices.layer),
           Layer.provide(GentPlatform.Test()),
         )

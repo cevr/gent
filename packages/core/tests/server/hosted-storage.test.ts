@@ -6,7 +6,7 @@
  * rules a SQLite-backed Durable Object keeps. `@effect/sql-sqlite-do` turns it
  * into the `SqlClient` the root's storage runs on.
  *
- * The root takes that client as its state (`StateLocation.Hosted`), as a host
+ * The root takes that client as its state (`createDependencies({ sql })`), as a host
  * passes its own. Each rule a statement breaks is recorded with the statement,
  * so one run lists every wall the root meets.
  */
@@ -644,9 +644,9 @@ describe("Durable-Object-shaped storage", () => {
       const dir = yield* makeTempDirectoryScoped("gent-do-tree-")
       const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
       // Enforce: a statement over 100 bound parameters fails as on a Durable Object.
-      const storage = SqliteStorage.HostedWithSql(
-        hostedSqlOf(disk.activate("enforce").storage),
-      ).pipe(Layer.provide(Layer.mergeAll(GentPlatform.Test(), BunCrypto.layer)))
+      const storage = SqliteStorage.WithSql(hostedSqlOf(disk.activate("enforce").storage)).pipe(
+        Layer.provide(Layer.mergeAll(GentPlatform.Test(), BunCrypto.layer)),
+      )
       const at = dateFromMillis(1_767_225_600_000)
       yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage

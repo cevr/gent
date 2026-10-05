@@ -1,4 +1,5 @@
-import { createDependencies, StateLocation } from "@gent/core/host"
+import { createDependencies } from "@gent/core/host"
+import { BunSqlite } from "@gent/core/host-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   makeAnthropicCredentialCache,
@@ -3918,7 +3919,7 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
         home,
         platform: "linux",
         authDirectory,
-        state: StateLocation.cases.Memory.make({}),
+        sql: BunSqlite.memory,
         extensions: [extension],
         failOnExtensionFailure: true,
         overrides: {
