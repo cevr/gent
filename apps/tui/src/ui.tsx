@@ -1873,7 +1873,7 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
 
 /** A notice's glyph and its words: `↳` and `answered · Cache? → Redis`. */
 export interface CollapsedRowProps {
-  /** One column wide: R3's notice glyphs (`↳ ⇣ ⇄ ↻ ◷ ◉ ◌`). */
+  /** One column wide: R3's notice glyphs (`↳ ⇣ ⇄ ↻ ◷ ◉ ◌ ⧗`). */
   readonly glyph: string
   readonly label: string
 }

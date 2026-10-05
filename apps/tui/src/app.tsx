@@ -60,6 +60,7 @@ import {
 import { projectRoot } from "./workspace"
 import {
   type StatusRowLabel,
+  buildBudgetLabels,
   buildContextLabels,
   buildModelLabels,
   createSessionController,
@@ -829,14 +830,15 @@ export function Session(props: SessionProps) {
 
   /**
    * The labels anchored to the right edge: the right-anchored extension
-   * labels (the cache timer), the context gauge and the running total. Each
-   * is a number a reader checks at a glance without reading the row, so they
-   * hold their place and the left group truncates instead. An empty label
-   * takes no place in the count.
+   * labels (the cache timer), a running turn's model-call budget, the context
+   * gauge and the running total. Each is a number a reader checks at a glance
+   * without reading the row, so they hold their place and the left group
+   * truncates instead. An empty label takes no place in the count.
    */
   const rightAnchoredLabels = (): StatusRowLabel[] =>
     [
       ...extensionLabels("right"),
+      ...buildBudgetLabels({ attempts: client.turnModelAttempts(), theme }),
       ...buildContextLabels({
         metrics: client.sessionMetrics(),
         // A virtual model has no window: the gauge reads the routed model's.
