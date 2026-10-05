@@ -224,9 +224,11 @@ The flag does not go on the request, so the request is the same bytes.
 Without the flag, the early return decodes as upstream does. "a turn that
 advertises no tool" in the same test file covers it.
 
-Remove this patch when an Effect release decodes tool call parameters as
-opaque with tool call resolution off, and decodes a call to an undeclared
-name. Checked on 2026-10-04: 4.0.0, the latest release, does neither. It
+Remove this patch when an Effect release, with tool call resolution off,
+decodes tool call parameters as opaque and decodes a call to an undeclared
+name, in both `generateText` and `streamText`, and with a toolkit, an empty
+toolkit, and no toolkit. Checked on 2026-10-04: 4.0.0, the latest release,
+does neither. It
 patches `dist` only; the shipped `src` copy keeps the upstream text.
 
 ## `@effect/ai-openai@4.0.0`

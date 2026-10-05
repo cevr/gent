@@ -32,7 +32,7 @@ import {
 } from "../src/anthropic.js"
 import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js"
 import { buildCloudflareModelDriver } from "../src/cloudflare.js"
-import { McpExtension } from "../src/mcp.js"
+import { McpExtension, McpServers } from "../src/mcp.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
   AgentDefinition,
@@ -814,5 +814,186 @@ describe("tools with no arguments on the wire", () => {
           }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
         ),
     )
+  }
+})
+
+// ── tools that take any key ─────────────────────────────────────────────────
+
+/**
+ * A stdio MCP server whose tools take keys they do not name. `open` lists
+ * `{ type: "object", properties: {} }` and `search` a property without
+ * `additionalProperties: false`: gent imports both with an index signature.
+ * gent cannot read the `$ref` of `opaque`, so it takes any object
+ * (`AnyInput`). A call answers the arguments it got.
+ */
+const ANY_KEY_SERVER = String.raw`
+const tools = [
+  { name: "open", description: "Any object", inputSchema: { type: "object", properties: {} } },
+  { name: "search", description: "A query and any other key", inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } },
+  { name: "opaque", description: "A schema gent cannot read", inputSchema: { type: "object", properties: { x: { $ref: "#/$defs/missing" } } } },
+]
+let buffer = ""
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  let end
+  while ((end = buffer.indexOf("\n")) >= 0) {
+    const line = buffer.slice(0, end)
+    buffer = buffer.slice(end + 1)
+    if (line.trim() === "") continue
+    const request = JSON.parse(line)
+    if (request.id === undefined) continue
+    const result =
+      request.method === "initialize"
+        ? { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "any-key", version: "1" } }
+        : request.method === "tools/list"
+          ? { tools }
+          : { content: [{ type: "text", text: "got " + JSON.stringify(request.params.arguments ?? {}) }] }
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n")
+  }
+})
+`
+
+/** The MCP extension over `ANY_KEY_SERVER`, as the server `remote`. */
+const anyKeyMcp = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const directory = yield* makeTempDirectoryScoped("wire-mcp-server-")
+  const server = path.join(directory, "server.cjs")
+  yield* fs.writeFileString(server, ANY_KEY_SERVER)
+  return McpServers("@test/any-key", { remote: { command: process.execPath, args: [server] } })
+})
+
+/** A user tool whose parameters are a record: any name, each a number. */
+const tallyExtension = defineExtension({
+  id: "@test/tally",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: "tally",
+        description: "Count by name",
+        params: Schema.Record(Schema.String, Schema.Finite),
+        output: Schema.String,
+        execute: (input) => Effect.succeed(`tally ${encodeExternalJson(input)}`),
+      }),
+    )
+  }),
+})
+
+/** Each driver's declaration of a tool that takes any key: an open object, not strict. */
+const openDeclaration = new Map<
+  string,
+  (name: string, description: string, parameters: string) => string
+>([
+  [
+    "anthropic",
+    (name, description, parameters) =>
+      `{"name":"${name}","input_schema":${parameters},"description":"${description}","strict":false}`,
+  ],
+  [
+    "openai",
+    (name, description, parameters) =>
+      `{"type":"function","name":"${name}","parameters":${parameters},"strict":false,"description":"${description}"}`,
+  ],
+  [
+    "chat-completions",
+    (name, description, parameters) =>
+      `{"type":"function","function":{"name":"${name}","description":"${description}","parameters":${parameters},"strict":false}}`,
+  ],
+])
+
+const ANY_JSON = '{"type":"object","additionalProperties":{"description":"JSON value"}}'
+
+/** Each tool that takes any key: its wire name, description and declared parameters. */
+const ANY_KEY_TOOLS: ReadonlyArray<readonly [string, string, string]> = [
+  ["mcp__remote__open", "Any object", ANY_JSON],
+  [
+    "mcp__remote__search",
+    "A query and any other key",
+    '{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":{"description":"JSON value"}}',
+  ],
+  ["mcp__remote__opaque", "A schema gent cannot read", ANY_JSON],
+  [
+    "tally",
+    "Count by name",
+    '{"type":"object","additionalProperties":{"type":"number","description":"a finite number"}}',
+  ],
+]
+
+/** Each call the model makes, the tool id it runs, and the output it gets. */
+const ANY_KEY_CALLS: ReadonlyArray<{
+  readonly name: string
+  readonly input: Schema.Json
+  readonly toolId: string
+  readonly output: string
+}> = [
+  { name: "mcp__remote__open", input: {}, toolId: "mcp.remote.open", output: "got {}" },
+  {
+    name: "mcp__remote__open",
+    input: { any: 1 },
+    toolId: "mcp.remote.open",
+    output: 'got {"any":1}',
+  },
+  {
+    name: "mcp__remote__search",
+    input: { q: "milk", extra: true },
+    toolId: "mcp.remote.search",
+    output: 'got {"q":"milk","extra":true}',
+  },
+  {
+    name: "mcp__remote__opaque",
+    input: { x: "y" },
+    toolId: "mcp.remote.opaque",
+    output: 'got {"x":"y"}',
+  },
+  { name: "tally", input: { milk: 2 }, toolId: "tally", output: 'tally {"milk":2}' },
+]
+
+describe("tools that take any key on the wire", () => {
+  for (const wire of drivers) {
+    for (const call of ANY_KEY_CALLS) {
+      it.live(
+        `${wire.provider}: a turn declares each as an open object and runs ${call.name} with ${encodeExternalJson(call.input)}`,
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const mcp = yield* anyKeyMcp
+              const { bodies, events } = yield* runTurn(
+                wire,
+                [wire.toolCall(call.name, call.input), wire.text("done")],
+                { extensions: [mcp, tallyExtension] },
+              )
+              // Both requests reached HTTP: no codec refused a declaration.
+              expect(bodies).toHaveLength(2)
+              const declare = openDeclaration.get(wire.provider)
+              for (const body of bodies) {
+                for (const [name, description, parameters] of ANY_KEY_TOOLS) {
+                  expect(Option.fromUndefinedOr(declarationNamed(body, name))).toEqual(
+                    Option.map(Option.fromUndefinedOr(declare), (make) =>
+                      make(name, description, parameters),
+                    ),
+                  )
+                }
+              }
+              expect(events.flatMap(toolRun)).toEqual([
+                `ToolCallStarted:${call.toolId}`,
+                `ToolCallSucceeded:${call.toolId}`,
+              ])
+              const outputs = events.flatMap((event) =>
+                Match.value(event).pipe(
+                  Match.tags({ ToolCallSucceeded: (succeeded) => [succeeded.output ?? ""] }),
+                  Match.orElse(() => []),
+                ),
+              )
+              expect(outputs.join("")).toContain(call.output)
+              expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+              expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+                { streamFailed: false },
+              ])
+            }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+          ),
+      )
+    }
   }
 })
