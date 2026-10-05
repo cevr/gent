@@ -1367,11 +1367,15 @@ const treeEntries = Effect.fn("Checkpoints.treeEntries")(function* (
   return entries
 })
 
+/** The bytes of the file names one `hash-object` call takes as arguments. */
+const HASH_ARGUMENT_BYTES = 64 * 1024
+
 /**
  * Each of `paths` on disk now, as `<mode> <object>`, hashed byte for byte
  * (no filter, no line-end change), whatever the capture excludes; with
  * `keep`, the objects go into the store, so a tree can hold them. A
- * directory is no entry, as git sees it.
+ * directory is no entry, as git sees it. The names go to git as arguments
+ * after `--`: `--stdin-paths` would read a name in quotes as a C string.
  */
 const diskEntries = Effect.fn("Checkpoints.diskEntries")(function* (
   place: Place,
@@ -1395,20 +1399,27 @@ const diskEntries = Effect.fn("Checkpoints.diskEntries")(function* (
     }
     if (kind === "other") entries.set(file, SPECIAL)
     if (kind !== "file") continue
-    if (file.includes("\n"))
-      return yield* new CheckpointsError({
-        message: `git cannot take a path with a line break: ${file}`,
-      })
     // git keeps one executable bit: the owner's.
     let mode = "100644"
     if (((yield* fs.stat(at)).mode & 0o100) !== 0) mode = "100755"
     files.push({ file, mode })
   }
-  if (files.length === 0) return entries
-  const hashed = yield* inStore(place, ["hash-object", ...write, "--no-filters", "--stdin-paths"], {
-    stdin: files.map(({ file }) => `${file}\n`).join(""),
-  })
-  const objects = hashed.split("\n")
+  const batches: Array<Array<string>> = []
+  let size = HASH_ARGUMENT_BYTES
+  for (const { file } of files) {
+    const bytes = new TextEncoder().encode(file).length + 1
+    if (size + bytes > HASH_ARGUMENT_BYTES) {
+      batches.push([])
+      size = 0
+    }
+    batches.at(-1)?.push(file)
+    size += bytes
+  }
+  const objects: Array<string> = []
+  for (const batch of batches) {
+    const hashed = yield* inStore(place, ["hash-object", ...write, "--no-filters", "--", ...batch])
+    objects.push(...hashed.split("\n"))
+  }
   for (const [index, { file, mode }] of files.entries())
     entries.set(file, `${mode} ${objects[index] ?? ""}`)
   return entries

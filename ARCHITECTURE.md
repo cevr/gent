@@ -1472,7 +1472,10 @@ section, no notice. Core has no checkpoint concept.
   `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1`), and gent's own
   identity. `git init` takes an empty template directory and no
   `GIT_TEMPLATE_DIR`, so no template's hook, config or `info/attributes`
-  reaches the store. A store write holds `FileLock` on `<store>/index`. Captured: tracked and untracked files
+  reaches the store. Every path goes to git NUL-terminated (`-z`,
+  `--pathspec-file-nul`) or as an argument after `--`, and comes back
+  NUL-terminated: no channel reads a quoted name as a C string. A store write
+  holds `FileLock` on `<store>/index`. Captured: tracked and untracked files
   that git does not ignore, and files the user's repository tracks though an
   ignore rule names them; not captured: untracked files over 2 MiB (the commit
   counts them in `Gent-Skipped`) and the files of a nested repository (a

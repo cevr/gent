@@ -1083,6 +1083,67 @@ describe("turn reverts", () => {
       ),
     30_000,
   )
+  it.live(
+    "a file whose name a quoting channel would read as another file's keeps its own bytes for undo",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const fs = yield* FileSystem.FileSystem
+          yield* fs.writeFileString(`${repo}/a`, "neighbor\n")
+          const quoted = '"a"'
+          const session = yield* checkpointSession(repo, home, [
+            put(quoted, "made\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("make a quoted name", "done 1")
+          yield* fs.writeFileString(`${repo}/${quoted}`, "user\n")
+          const overwritten = yield* session.revert("revert-1", filesOf(1), true)
+          expect(overwritten).toEqual({ _tag: "Reverted", files: [quoted] })
+          expect(yield* fs.exists(`${repo}/${quoted}`)).toBe(false)
+          expect(yield* fs.readFileString(`${repo}/a`)).toBe("neighbor\n")
+          expect(yield* session.revert("undo-1", UNDO)).toEqual({
+            _tag: "Reverted",
+            files: [quoted],
+          })
+          expect(yield* fs.readFileString(`${repo}/${quoted}`)).toBe("user\n")
+          expect(yield* fs.readFileString(`${repo}/a`)).toBe("neighbor\n")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "names with a line break or a tab revert and undo byte for byte",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const fs = yield* FileSystem.FileSystem
+          const names = ["new\nline.txt", "tab\there.txt"]
+          const session = yield* checkpointSession(repo, home, [
+            multiToolCallStep(
+              ...names.map((name) => ({
+                toolName: "put",
+                input: { path: name, content: "made\n" },
+              })),
+            ),
+            textStep("done 1"),
+          ])
+          yield* session.turn("make odd names", "done 1")
+          for (const name of names) yield* fs.writeFileString(`${repo}/${name}`, `user ${name}`)
+          const overwritten = yield* session.revert("revert-1", filesOf(1), true)
+          expect(overwritten).toEqual({ _tag: "Reverted", files: names })
+          for (const name of names) expect(yield* fs.exists(`${repo}/${name}`)).toBe(false)
+          expect(yield* session.revert("undo-1", UNDO)).toEqual({ _tag: "Reverted", files: names })
+          for (const name of names)
+            expect(yield* fs.readFileString(`${repo}/${name}`)).toBe(`user ${name}`)
+        }),
+      ),
+    30_000,
+  )
 })
 
 // ── retention ───────────────────────────────────────────────────────────────
