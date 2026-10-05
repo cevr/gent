@@ -2151,120 +2151,195 @@ describe("credential order", () => {
     return authInfo.value.key
   }
 
-  /**
-   * One turn on `fallback/model` through the live resolver and the live
-   * model registry, with `stored` in the auth store and `order` as the
-   * sign-in's `authOrder`. The driver answers each request by its
-   * credential; it lists the model priced for an API key, free for a
-   * subscription sign-in.
-   */
-  const credentialTurn = (params: {
+  /** The state one in-memory database keeps; one shared value is one database across restarts. */
+  type CredentialStorage = Layer.Layer<Layer.Success<typeof testSqliteStorage>>
+
+  interface CredentialRootParams {
     readonly name: string
     readonly order?: ReadonlyArray<CredentialSlot>
     readonly stored: ReadonlyArray<readonly [CredentialSlot, AuthInfo]>
     readonly replies: Readonly<Record<string, Reply>>
     readonly maxModelAttempts?: number
-  }) =>
-    Effect.gen(function* () {
-      const sent: Array<string> = []
-      const resolvedWith: Array<string> = []
-      const calls = new Map<string, number>()
-      const driver: ModelDriverContribution = {
-        id: FALLBACK,
-        name: "Fallback driver",
-        // Same-credential retries end at once, so a rate limit moves on quickly.
-        retry: { ...DEFAULT_RETRY_POLICY, initialDelay: 1, maxDelay: 5, maxAttempts: 2 },
-        listModels: (_catalog, authInfo) => {
-          let pricing = apiPricing
-          if (authInfo?._tag === "Oauth") pricing = subscriptionPricing
-          return Effect.succeed([
-            Model.make({
-              id: fallbackModel,
-              name: "Fallback model",
-              provider: ProviderId.make(FALLBACK),
-              contextLength: 128_000,
-              pricing,
-            }),
-          ])
-        },
-        resolveModel: (_modelName, authInfo) =>
-          Effect.sync(() => {
-            const credential = credentialOf(Option.fromUndefinedOr(authInfo))
-            resolvedWith.push(credential)
-            const providerLayer = LanguageModelLayers.testStream(() =>
-              Effect.sync(() => {
-                sent.push(credential)
-                const call = calls.get(credential) ?? 0
-                calls.set(credential, call + 1)
-                const reply = params.replies[credential]
-                if (Predicate.isUndefined(reply)) return Stream.die(`no reply for ${credential}`)
-                return reply(call)
-              }),
-            )
-            return AiModel.make(FALLBACK, "model", providerLayer)
+    /** The driver's same-credential retries; default: they end at once. */
+    readonly retry?: Partial<typeof DEFAULT_RETRY_POLICY>
+    /** The sign-in's order becomes `order` once a request with credential `on` goes out. */
+    readonly reorder?: { readonly on: string; readonly order: ReadonlyArray<CredentialSlot> }
+    /** The `hold` tool signals here and never returns, as a process that dies in a tool. */
+    readonly held?: Deferred.Deferred<void>
+    /** Durable state, for a restart: the events go to its log, not to `events`. */
+    readonly storage?: CredentialStorage
+  }
+
+  /**
+   * A root that runs `fallback/model` through the live resolver and the live
+   * model registry, with `stored` in the auth store and `order` as the
+   * sign-in's `authOrder`. The driver answers each request by its
+   * credential; it lists the model priced for an API key, free for a
+   * subscription sign-in.
+   */
+  const credentialRoot = (params: CredentialRootParams) => {
+    const sent: Array<string> = []
+    const resolvedWith: Array<string> = []
+    const calls = new Map<string, number>()
+    let providerConfig: ProviderConfig = {}
+    const setOrder = (order: ReadonlyArray<CredentialSlot>) => {
+      providerConfig = { providers: { [FALLBACK]: { authOrder: order } } }
+    }
+    if (Predicate.isNotUndefined(params.order)) setOrder(params.order)
+    const driver: ModelDriverContribution = {
+      id: FALLBACK,
+      name: "Fallback driver",
+      // Same-credential retries end at once, so a rate limit moves on quickly.
+      retry: {
+        ...DEFAULT_RETRY_POLICY,
+        initialDelay: 1,
+        maxDelay: 5,
+        maxAttempts: 2,
+        ...params.retry,
+      },
+      listModels: (_catalog, authInfo) => {
+        let pricing = apiPricing
+        if (authInfo?._tag === "Oauth") pricing = subscriptionPricing
+        return Effect.succeed([
+          Model.make({
+            id: fallbackModel,
+            name: "Fallback model",
+            provider: ProviderId.make(FALLBACK),
+            contextLength: 128_000,
+            pricing,
           }),
-      }
-      const authLayer = Layer.effect(
-        Auth,
-        Effect.gen(function* () {
-          const auth = yield* Auth
-          for (const [slot, info] of params.stored) yield* auth.set(FALLBACK, info, slot)
-          return auth
-        }).pipe(Effect.orDie),
-      ).pipe(Layer.provide(Auth.Test()))
-      const catalogLayers = Layer.mergeAll(authLayer, fixtureModelCatalogSource)
-      const events = Ref.makeUnsafe<Array<AgentEvent>>([])
-      let providerConfig: ProviderConfig = {}
-      if (Predicate.isNotUndefined(params.order)) {
-        providerConfig = { providers: { [FALLBACK]: { authOrder: params.order } } }
-      }
-      const layer = actorTestRoot({
-        resolver: ModelResolver.Live.pipe(Layer.provide(catalogLayers)),
-        eventStore: recordingEventStore(events),
-        registry: ExtensionRegistry.fromResolved(
-          resolveExtensions([
-            {
-              manifest: { id: ExtensionId.make(FALLBACK) },
-              scope: "builtin",
-              sourcePath: "test",
-              contributions: { agents: testAgents, tools: [echoTool], modelDrivers: [driver] },
+        ])
+      },
+      resolveModel: (_modelName, authInfo) =>
+        Effect.sync(() => {
+          const credential = credentialOf(Option.fromUndefinedOr(authInfo))
+          resolvedWith.push(credential)
+          const providerLayer = LanguageModelLayers.testStream(() =>
+            Effect.sync(() => {
+              sent.push(credential)
+              if (params.reorder?.on === credential) setOrder(params.reorder.order)
+              const call = calls.get(credential) ?? 0
+              calls.set(credential, call + 1)
+              const reply = params.replies[credential]
+              if (Predicate.isUndefined(reply)) return Stream.die(`no reply for ${credential}`)
+              return reply(call)
+            }),
+          )
+          return AiModel.make(FALLBACK, "model", providerLayer)
+        }),
+    }
+    const holdTool = tool({
+      id: "hold",
+      description: "Holds the turn when the test asks",
+      params: Schema.Struct({}),
+      output: Schema.String,
+      execute: () =>
+        Option.match(Option.fromUndefinedOr(params.held), {
+          onNone: () => Effect.succeed("released"),
+          onSome: (held) => Deferred.succeed(held, void 0).pipe(Effect.andThen(Effect.never)),
+        }),
+    })
+    const authLayer = Layer.effect(
+      Auth,
+      Effect.gen(function* () {
+        const auth = yield* Auth
+        for (const [slot, info] of params.stored) yield* auth.set(FALLBACK, info, slot)
+        return auth
+      }).pipe(Effect.orDie),
+    ).pipe(Layer.provide(Auth.Test()))
+    const catalogLayers = Layer.mergeAll(authLayer, fixtureModelCatalogSource)
+    const events = Ref.makeUnsafe<Array<AgentEvent>>([])
+    const durable = Option.map(Option.fromUndefinedOr(params.storage), (storage) => ({
+      storage,
+      eventStore: Layer.provide(EventStoreLive, storage),
+    }))
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(catalogLayers)),
+      eventStore: Option.match(durable, {
+        onNone: () => recordingEventStore(events),
+        onSome: (state) => state.eventStore,
+      }),
+      // A restart re-runs a held tool for real, as a process that resumes does.
+      ...omitUndefined({
+        storage: Option.getOrUndefined(Option.map(durable, (state) => state.storage)),
+        toolRunner: Option.getOrUndefined(Option.map(durable, () => ToolRunner.Live)),
+      }),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make(FALLBACK) },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: {
+              agents: testAgents,
+              tools: [echoTool, holdTool],
+              modelDrivers: [driver],
             },
-          ]),
-          Effect.succeed(providerConfig),
-        ),
-        overrides: ModelRegistry.Live.pipe(
-          Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
-        ),
-      })
-      const sessionId = SessionId.make(`credential-${params.name}-session`)
-      const branchId = BranchId.make(`credential-${params.name}-branch`)
-      const admission: SessionAdmission = {
-        runSpec: {
-          overrides: {
-            model: fallbackModel,
-            ...omitUndefined({ maxModelAttempts: params.maxModelAttempts }),
           },
+        ]),
+        Effect.sync(() => providerConfig),
+      ),
+      overrides: ModelRegistry.Live.pipe(
+        Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
+      ),
+    })
+    const admission: SessionAdmission = {
+      runSpec: {
+        overrides: {
+          model: fallbackModel,
+          ...omitUndefined({ maxModelAttempts: params.maxModelAttempts }),
         },
-      }
+      },
+    }
+    return {
+      layer,
+      events,
+      sent,
+      resolvedWith,
+      admission,
+      sessionId: SessionId.make(`credential-${params.name}-session`),
+      branchId: BranchId.make(`credential-${params.name}-branch`),
+    }
+  }
+
+  /** What a run's events say about its steps, its notices and its retries. */
+  const credentialReport = (recorded: ReadonlyArray<AgentEvent>) => ({
+    ended: recorded.filter((event) => event._tag === "StreamEnded"),
+    errors: recorded.flatMap((event) => {
+      if (event._tag !== "ErrorOccurred") return []
+      return [{ error: event.error, notice: event.notice === true }]
+    }),
+    retries: recorded.filter((event) => event._tag === "ProviderRetrying").length,
+  })
+
+  /** One turn per prompt (default one), in order, on one root. */
+  const credentialTurn = (
+    params: CredentialRootParams & { readonly prompts?: ReadonlyArray<string> },
+  ) =>
+    Effect.gen(function* () {
+      const root = credentialRoot(params)
       const outcome = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* ensureStorageParents({ sessionId, branchId, admission })
+          yield* ensureStorageParents({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+            admission: root.admission,
+          })
           return yield* Effect.exit(
-            runAgentLoop(makeMessage(sessionId, branchId, "hello"), admission),
+            Effect.forEach(
+              params.prompts ?? ["hello"],
+              (text) =>
+                runAgentLoop(makeMessage(root.sessionId, root.branchId, text), root.admission),
+              { discard: true },
+            ),
           )
         }),
-      ).pipe(Effect.provide(layer))
-      const recorded = yield* Ref.get(events)
+      ).pipe(Effect.provide(root.layer))
       return {
         outcome,
-        sent,
-        resolvedWith,
-        ended: recorded.filter((event) => event._tag === "StreamEnded"),
-        errors: recorded.flatMap((event) => {
-          if (event._tag !== "ErrorOccurred") return []
-          return [{ error: event.error, notice: event.notice === true }]
-        }),
-        retries: recorded.filter((event) => event._tag === "ProviderRetrying").length,
+        sent: root.sent,
+        resolvedWith: root.resolvedWith,
+        ...credentialReport(yield* Ref.get(root.events)),
       }
     }).pipe(Effect.timeout("15 seconds"))
 
@@ -2360,6 +2435,13 @@ describe("credential order", () => {
     [
       "file",
       Response.makePart("file", { mediaType: "image/png", data: new Uint8Array([137, 80]) }),
+    ],
+    [
+      "approval-request",
+      Response.makePart("tool-approval-request", {
+        approvalId: "approval-1",
+        toolCallId: "call-1",
+      }),
     ],
   ] as const) {
     it.live(`${name} output keeps the turn on its credential when the stream then fails`, () =>
@@ -2500,6 +2582,183 @@ describe("credential order", () => {
         [DEFAULT_CREDENTIAL_SLOT, 0],
       ])
     }),
+  )
+
+  const twoKeys = [
+    [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+    [personal, apiKey("sk-b")],
+  ] as const
+
+  it.live("a new turn starts its credential order again", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "new-turn",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: twoKeys,
+        prompts: ["first", "second"],
+        replies: {
+          "sk-a": (call) => {
+            if (call === 0) return refusal()
+            return answer("from a")(call)
+          },
+          "sk-b": answer("from b"),
+        },
+      })
+      // The first turn leaves A; the second asks A first again, and A answers.
+      expect(run.sent).toEqual(["sk-a", "sk-b", "sk-a"])
+      expect(run.ended.map((event) => event.credential?.slot)).toEqual([
+        personal,
+        DEFAULT_CREDENTIAL_SLOT,
+      ])
+    }),
+  )
+
+  it.live("a cancel during a same-credential retry wait leaves the credential", () =>
+    Effect.gen(function* () {
+      const root = credentialRoot({
+        name: "cancel-backoff",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: twoKeys,
+        // The retry waits long enough for the cancel to land inside it.
+        retry: { initialDelay: 60_000, maxDelay: 120_000 },
+        replies: {
+          "sk-a": () => failWith(new AiError.RateLimitError({})),
+          "sk-b": answer("from b"),
+        },
+      })
+      const message = makeMessage(root.sessionId, root.branchId, "hello")
+      const seen = (tag: AgentEvent["_tag"]) =>
+        waitFor(
+          Ref.get(root.events),
+          (all) => all.some((event) => event._tag === tag),
+          5_000,
+          `a ${tag} event`,
+        )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* submitAgentLoop(message, root.admission)
+          yield* seen("ProviderRetrying")
+          yield* stopAgentLoopMessage({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+            messageId: message.id,
+            requestId: "cancel-backoff",
+          })
+          yield* seen("TurnCompleted")
+        }),
+      ).pipe(Effect.provide(root.layer))
+      const report = credentialReport(yield* Ref.get(root.events))
+      // No move: B is never resolved and no notice says the turn continues.
+      expect(root.sent).toEqual(["sk-a"])
+      expect(root.resolvedWith).toEqual(["sk-a"])
+      expect(report.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
+    }).pipe(Effect.timeout("15 seconds")),
+  )
+
+  it.live("a reorder while a request runs leaves its receipt, price and move on its slot", () =>
+    Effect.gen(function* () {
+      const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 }
+      const stored = [
+        [DEFAULT_CREDENTIAL_SLOT, oauthLogin],
+        [personal, apiKey("sk-b")],
+      ] as const
+      // The order turns around as the subscription's request goes out.
+      const reorder = { on: "oauth", order: [personal, DEFAULT_CREDENTIAL_SLOT] }
+      const answered = yield* credentialTurn({
+        name: "reorder-answered",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored,
+        reorder,
+        replies: { oauth: answer("free", usage), "sk-b": answer("paid", usage) },
+      })
+      // The subscription served the step: its receipt and its price.
+      expect(answered.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
+        [DEFAULT_CREDENTIAL_SLOT, 0],
+      ])
+      const moved = yield* credentialTurn({
+        name: "reorder-moved",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored,
+        reorder,
+        replies: { oauth: quotaSpent, "sk-b": answer("paid", usage) },
+      })
+      // The subscription failed: the turn leaves it, never the key it did not use.
+      expect(moved.sent).toEqual(["oauth", "sk-b"])
+      expect(moved.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} is out of quota; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+      expect(moved.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
+        [personal, apiPricing.input + apiPricing.output],
+      ])
+    }),
+  )
+
+  it.live("a turn resumed after a restart stays on the credential it moved to", () =>
+    Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+      const held = yield* Deferred.make<void>()
+      // First process: A refuses, B calls a tool that holds, and the process dies there.
+      const first = credentialRoot({
+        name: "resumed",
+        order,
+        stored: twoKeys,
+        held,
+        storage,
+        replies: {
+          "sk-a": refusal,
+          "sk-b": () =>
+            Stream.fromIterable([
+              toolCallPart("hold", {}),
+              finishPart({ finishReason: "tool-calls" }),
+            ]),
+        },
+      })
+      const { sessionId, branchId } = first
+      const durableEvents = Effect.gen(function* () {
+        const envelopes = yield* (yield* EventStorage).listEvents({ sessionId, branchId })
+        return envelopes.map((envelope) => envelope.event)
+      }).pipe(Effect.provide(storage), Effect.orDie)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* submitAgentLoop(makeMessage(sessionId, branchId, "hello"), first.admission)
+          yield* Deferred.await(held)
+        }),
+      ).pipe(Effect.provide(first.layer))
+      expect(first.sent).toEqual(["sk-a", "sk-b"])
+      const before = (yield* durableEvents).length
+      // Second process: the turn resumes after the tool, still on B.
+      const second = credentialRoot({
+        name: "resumed",
+        order,
+        stored: twoKeys,
+        storage,
+        replies: { "sk-a": refusal, "sk-b": answer("done") },
+      })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          yield* agentLoop.getState({ sessionId, branchId })
+          yield* waitFor(
+            durableEvents,
+            (all) => all.slice(before).some((event) => event._tag === "TurnCompleted"),
+            10_000,
+            "the resumed turn to end",
+          )
+        }),
+      ).pipe(Effect.provide(second.layer))
+      const resumed = credentialReport((yield* durableEvents).slice(before))
+      expect(second.sent).toEqual(["sk-b"])
+      expect(resumed.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
+      expect(resumed.ended.map((event) => event.credential)).toEqual([
+        { provider: fallbackProvider, slot: personal },
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
 

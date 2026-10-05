@@ -850,14 +850,35 @@ interface TurnLedger {
   /** The reset of the usage limit this turn's last step failed on. */
   readonly retryAt: Effect.Effect<Option.Option<number>>
   /**
-   * The credentials of `provider`'s order this turn left after a proved
-   * failure. A request goes out with the first slot of the order not in it,
-   * so a turn never comes back to a slot it left.
+   * The credentials of `provider`'s order (`slots`) this turn left. A request
+   * goes out with the first slot of the order not in it, so a turn never
+   * comes back to a slot it left. A resumed turn first leaves every slot the
+   * order puts before the one its steps last ran on (`resumeCredential`).
    */
-  readonly passedCredentials: (provider: string) => Effect.Effect<ReadonlySet<CredentialSlot>>
+  readonly passedCredentials: (
+    provider: string,
+    slots: ReadonlyArray<CredentialSlot>,
+  ) => Effect.Effect<ReadonlySet<CredentialSlot>>
   /** This turn leaves `slot` of `provider`'s order for the rest of the turn. */
   readonly passCredential: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
+  /**
+   * The turn's steps before a restart last ran on `slot` of `provider`, by
+   * their receipts: the turn goes on from that slot, not from the first.
+   */
+  readonly resumeCredential: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
 }
+
+/** Where one sign-in's order stands in a turn. */
+interface CredentialCursor {
+  readonly passed: ReadonlySet<CredentialSlot>
+  /** The slot a resumed turn ran on, until the next selection reads it. */
+  readonly resumedAt: Option.Option<CredentialSlot>
+}
+
+const cursorOf = (
+  cursors: ReadonlyMap<string, CredentialCursor>,
+  provider: string,
+): CredentialCursor => cursors.get(provider) ?? { passed: new Set(), resumedAt: Option.none() }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
 const positiveCount = (count: number) => Option.liftPredicate(count, (value) => value > 0)
@@ -884,7 +905,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
   const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
   const lastRetryAt = yield* Ref.make(Option.none<number>())
-  const passed = yield* Ref.make<ReadonlyMap<string, ReadonlySet<CredentialSlot>>>(new Map())
+  const cursors = yield* Ref.make<ReadonlyMap<string, CredentialCursor>>(new Map())
   return {
     beginTurn: (messageId) =>
       Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
@@ -896,7 +917,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           return Ref.set(shown, new Map()).pipe(
             Effect.andThen(Ref.set(joined, new Set())),
             Effect.andThen(Ref.set(lastRetryAt, Option.none())),
-            Effect.andThen(Ref.set(passed, new Map())),
+            Effect.andThen(Ref.set(cursors, new Map())),
           )
         }),
       ),
@@ -986,14 +1007,30 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     joined: Ref.get(joined),
     noteStepEnd: (retryAt) => Ref.set(lastRetryAt, retryAt),
     retryAt: Ref.get(lastRetryAt),
-    passedCredentials: (provider) =>
-      Effect.map(Ref.get(passed), (current) => current.get(provider) ?? new Set()),
-    passCredential: (provider, slot) =>
-      Ref.update(passed, (current) => {
-        const next = new Map(current)
-        next.set(provider, new Set([...(current.get(provider) ?? []), slot]))
-        return next
+    passedCredentials: (provider, slots) =>
+      Ref.modify(cursors, (current) => {
+        const cursor = cursorOf(current, provider)
+        if (Option.isNone(cursor.resumedAt)) return [cursor.passed, current]
+        // An order that no longer names the slot leaves nothing before it.
+        const before = slots.slice(0, Math.max(slots.indexOf(cursor.resumedAt.value), 0))
+        const passed: ReadonlySet<CredentialSlot> = new Set([...cursor.passed, ...before])
+        return [passed, new Map(current).set(provider, { passed, resumedAt: Option.none() })]
       }),
+    passCredential: (provider, slot) =>
+      Ref.update(cursors, (current) => {
+        const cursor = cursorOf(current, provider)
+        return new Map(current).set(provider, {
+          ...cursor,
+          passed: new Set([...cursor.passed, slot]),
+        })
+      }),
+    resumeCredential: (provider, slot) =>
+      Ref.update(cursors, (current) =>
+        new Map(current).set(provider, {
+          ...cursorOf(current, provider),
+          resumedAt: Option.some(slot),
+        }),
+      ),
   }
 })
 
@@ -2583,16 +2620,6 @@ const atTurnEffort = (
     },
   )
 
-/**
- * The credential a turn's next request goes out with: the first slot of its
- * sign-in's order the turn has not left, and the slot after it, if any.
- */
-interface SelectedCredential {
-  readonly provider: string
-  readonly slot: CredentialSlot
-  readonly next: Option.Option<CredentialSlot>
-}
-
 type ModelTurnSource = {
   /** The credential the step's request goes out with now; none for a model no credential serves. */
   readonly credential: Effect.Effect<Option.Option<CredentialReceipt>>
@@ -2799,31 +2826,25 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // A conflicting order fails here as it fails the request's resolution.
   const selectCredential = Effect.gen(function* () {
     const order = yield* requestCredentialOrder(modelRequest, extensionRegistry)
-    if (Option.isNone(order)) return Option.none<SelectedCredential>()
-    const left = yield* params.turnLedger.passedCredentials(order.value.provider)
-    const [slot, next] = order.value.slots.filter((candidate) => !left.has(candidate))
+    if (Option.isNone(order)) return Option.none<CredentialReceipt>()
+    const { provider, slots } = order.value
+    const left = yield* params.turnLedger.passedCredentials(provider, slots)
+    const slot = slots.find((candidate) => !left.has(candidate))
     if (Predicate.isUndefined(slot)) {
       return yield* new ProviderAuthError({
-        message: `Every credential of provider "${order.value.provider}" failed this turn`,
+        message: `Every credential of provider "${provider}" failed this turn`,
       })
     }
-    return Option.some<SelectedCredential>({
-      provider: order.value.provider,
-      slot,
-      next: Option.fromUndefinedOr(next),
-    })
+    return Option.some<CredentialReceipt>({ provider: ProviderId.make(provider), slot })
   })
-  const credential = selectCredential.pipe(
-    Effect.map(
-      Option.map((selected): CredentialReceipt => ({
-        provider: ProviderId.make(selected.provider),
-        slot: selected.slot,
-      })),
-    ),
-    Effect.orElseSucceed(() => Option.none<CredentialReceipt>()),
-  )
+  // The slot the last request went out with, set as it is chosen: the
+  // receipt, the price and a move name that slot, not the one the order
+  // would choose now. A config edit changes only the next choice.
+  const used = yield* Ref.make(Option.none<CredentialReceipt>())
+  const credential = Ref.get(used)
   const resolveSelectedModel = (request: ResolveModelRequest) =>
     selectCredential.pipe(
+      Effect.tap((selected) => Ref.set(used, selected)),
       Effect.flatMap((selected) =>
         resolveAdmittedModel({
           ...request,
@@ -3024,30 +3045,36 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     })
 
   /**
-   * Leave the credential a failure proved cannot serve, when its order names
-   * another: a refusal, an exhausted quota, a rate limit past its retries, or
-   * a failure the driver proved. Any other failure, a cancelled step, or the
-   * last slot of the order stays where it is. The user reads a notice.
+   * Leave the credential the failed request used (`used`), when a failure
+   * proved it cannot serve and the order as it reads now names another slot
+   * the turn has not left: a refusal, an exhausted quota, a rate limit past
+   * its retries, or a failure the driver proved. Any other failure, a
+   * cancelled step, or the last slot stays where it is. The user reads a notice.
    */
   const moveCredential = (streamError: ProviderError) =>
     Effect.gen(function* () {
       if (yield* wasInterrupted(params.activeStream)) return false
       const refusal = credentialRefusal(streamError.cause)
       if (Option.isNone(refusal)) return false
-      const selected = yield* selectCredential.pipe(
-        Effect.orElseSucceed(() => Option.none<SelectedCredential>()),
+      const failed = yield* Ref.get(used)
+      if (Option.isNone(failed)) return false
+      const { provider, slot } = failed.value
+      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
+        Effect.orElseSucceed(Option.none),
       )
-      if (Option.isNone(selected) || Option.isNone(selected.value.next)) return false
-      const { provider, slot, next } = selected.value
+      if (Option.isNone(order) || order.value.provider !== provider) return false
+      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
+      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
+      if (Predicate.isUndefined(next)) return false
       yield* params.turnLedger.passCredential(provider, slot)
       yield* Effect.logInfo("turn.credential-moved").pipe(
-        Effect.annotateLogs({ provider, slot, next: next.value, reason: refusal.value }),
+        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
       )
       yield* publishEventOrDie(
         ErrorOccurred.make({
           sessionId: params.sessionId,
           branchId: params.branchId,
-          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next.value}"`,
+          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
           notice: true,
         }),
       )
@@ -3074,11 +3101,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) => {
-      // A `ProviderAuthError` is a fail-closed credential-absence signal:
-      // never retried on the same credential. Let it escape so the RPC seam
-      // surfaces the typed auth failure; narrow the retry scope to transient
-      // `ProviderError` only. A credential failure inside the stream moves
-      // the turn down its order below.
+      // A credential failure, at resolve time or from the driver, arrives as
+      // a `ProviderError` whose cause is the `ProviderAuthError` (`stream`
+      // wraps every failure). It is never retried on the same credential:
+      // only a transient `ProviderError` is. A failure that proves the
+      // credential cannot serve (`credentialRefusal`, which reads a proved
+      // `credentialFailure`) moves the turn down its order below; any other
+      // ends the step as a failed one.
       const attempt = effect.pipe(
         retryProviderCall(retryPolicy, {
           // A cancel during a backoff ends the wait; the failure it leaves
@@ -3470,6 +3499,32 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     }
     const knownLastEffort = (envelope: EventEnvelope): Option.Option<StepEffort> =>
       Option.map(knownStepEffort(envelope), ([, receipt]) => receipt)
+    /** The credential a step's request went out with, and the turn it belongs to. */
+    interface StepCredential {
+      readonly messageId: MessageId
+      readonly receipt: CredentialReceipt
+    }
+    /** The newest step credential of each sign-in, with the ones `events` add. */
+    const withStepCredentials = (
+      known: ReadonlyMap<string, StepCredential>,
+      events: ReadonlyArray<EventEnvelope>,
+    ): ReadonlyMap<string, StepCredential> => {
+      const added = events.flatMap(({ event }) => {
+        if (event._tag !== "StreamEnded") return []
+        return Option.toArray(
+          Option.all([
+            Option.fromUndefinedOr(event.messageId),
+            Option.fromUndefinedOr(event.credential),
+          ]).pipe(
+            Option.map(
+              ([messageId, receipt]) => [receipt.provider, { messageId, receipt }] as const,
+            ),
+          ),
+        )
+      })
+      if (added.length === 0) return known
+      return new Map([...known, ...added])
+    }
     interface KnownSteps {
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
@@ -3480,6 +3535,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly lastEffort: Option.Option<StepEffort>
       readonly routed: Option.Option<ModelRouted>
       readonly effortRouted: Option.Option<ModelRouted>
+      readonly credentials: ReadonlyMap<string, StepCredential>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
@@ -3490,6 +3546,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       lastEffort: Option.none<StepEffort>(),
       routed: Option.none<ModelRouted>(),
       effortRouted: Option.none<ModelRouted>(),
+      credentials: new Map<string, StepCredential>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -3523,6 +3580,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastEffort: newest(events, knownLastEffort, known.lastEffort),
         routed: newest(events, knownRoute, known.routed),
         effortRouted: newest(events, knownEffortRoute, known.effortRouted),
+        credentials: withStepCredentials(known.credentials, events),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -5206,6 +5264,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return resumed.interaction.value
         }
         if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
+        // The turn's place in each credential order lives in memory; after a
+        // restart the receipts of the steps it ran say where it stood, as
+        // `ModelRouted` says where its route stood.
+        const knownCredentials = yield* readKnownSteps.pipe(
+          Effect.map((known) => known.credentials),
+          Effect.catch((cause) =>
+            Effect.logWarning("turn.credential-resume-read-failed").pipe(
+              Effect.annotateLogs({ error: String(cause) }),
+              Effect.as(unknownSteps.credentials),
+            ),
+          ),
+        )
+        for (const { messageId, receipt } of knownCredentials.values()) {
+          if (messageId !== state.message.id) continue
+          yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
+        }
 
         const ended = yield* runSteps(resumed.step)
         if (ended._tag === "Interaction") {
