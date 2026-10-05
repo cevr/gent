@@ -110,6 +110,7 @@ import {
   type ResolvedToolCapability,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
+  ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   ToolRunner,
 } from "../../src/runtime/tools"
@@ -6666,6 +6667,105 @@ describe("a tool call a restart cut short", () => {
         expect(results[0]).toMatchObject({ isFailure: false, result: "settled after the answer" })
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
+  )
+
+  it.scopedLive(
+    "answering a parked call never runs recover for a sibling that already finished, and the turn continues",
+    () =>
+      Effect.gen(function* () {
+        const recovers = yield* Ref.make(0)
+        const finished = tool({
+          id: "finished_work",
+          description: "Finishes at once",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => Effect.succeed("finished"),
+          // The call has a result: a recover that ran would end the turn.
+          recover: () =>
+            Ref.update(recovers, (n) => n + 1).pipe(
+              Effect.andThen(
+                Effect.fail(new ToolCallRecoveryError({ message: "no receipt to settle from" })),
+              ),
+            ),
+        })
+        const asking = tool({
+          id: "asking_work",
+          description: "Asks before it works",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: Effect.fn("asking_work")(function* () {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+            if (!decision.approved) return "declined"
+            return "worked"
+          }),
+        })
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/finished-sibling") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: { tools: [finished, asking] },
+        }
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "finished_work", input: {} },
+            { toolName: "asking_work", input: {} },
+          ),
+          {
+            ...textStep("read both results"),
+            assertOptions: (options) => {
+              const results = Prompt.make(options.prompt).content.flatMap((message) => {
+                if (message.role !== "tool") return []
+                return message.content.filter((part) => part.type === "tool-result")
+              })
+              const byName = new Map(results.map((part) => [part.name, part]))
+              expect(byName.get("finished_work")).toMatchObject({
+                isFailure: false,
+                result: "finished",
+              })
+              expect(byName.get("asking_work")).toMatchObject({
+                isFailure: false,
+                result: "worked",
+              })
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: [extension],
+          approvalLayer: ApprovalService.Live,
+        })
+        const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filterMap((envelope) => {
+            if (envelope.event._tag === "InteractionPresented")
+              return Result.succeed(envelope.event.requestId)
+            return Result.failVoid
+          }),
+          Stream.take(1),
+          Stream.runHead,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "finish one, ask on the other" })
+        const requestId = Option.getOrThrow(yield* Fiber.join(presented))
+        yield* client.interaction.respondInteraction({
+          sessionId,
+          branchId,
+          requestId,
+          approved: true,
+        })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            hasAssistantText(snapshot.messages, "read both results"),
+          5_000,
+          "the answered turn continued",
+        )
+        yield* controls.assertDone
+        expect(yield* Ref.get(recovers)).toBe(0)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })
 

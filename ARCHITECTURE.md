@@ -878,7 +878,8 @@ Shape:
   short while it ran; the model reads a failed result with reason
   `Interrupted` and the call does not run again. A tool that keeps durable
   receipts settles its own pending calls first: `tool({ recover })` runs once
-  per pending call of that tool, as a leaf of its extension under the turn
+  per pending call of that tool that has no result (stored, or kept by the
+  process beside a parked sibling), as a leaf of its extension under the turn
   profile, and answers `Settled` (the result its receipt gives), `Suspended`
   (the turn parks on that request), or `NotRecovered` (the rules above). Each
   tool answers only for its own calls, so tools of several extensions settle

@@ -4335,11 +4335,29 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const pendingToolCalls = position.pendingToolCalls
 
       yield* Effect.logInfo("turn.resume-tools")
+      // A call whose result is already known (stored, or kept by this
+      // process beside a parked sibling) will not run again: it needs no
+      // recovery and no binding. Only the calls still owed a result go on, so
+      // one missing binding cannot turn a stored success into a failure.
+      const known = yield* readKnownStepResults({
+        messageId: params.messageId,
+        step: pendingStep,
+        toolCalls: pendingToolCalls,
+        recoveredResults: [],
+      })
+      // The step's results are already stored: this is the step boundary.
+      if (Option.isNone(known)) {
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
+        return { step: pendingStep, interaction: Option.none() }
+      }
+      const owedCalls = pendingToolCalls.filter(
+        (toolCall) => !known.value.knownResults.has(toolCall.id),
+      )
       const recoveredResults: Array<Prompt.ToolResultPart> = []
-      const nativeToolCalls: Array<Prompt.ToolCallPart> = []
-      // A tool that keeps durable receipts can settle a call the crash left in
-      // flight: its own `recover` answers, as a leaf of its extension. Every
-      // other call is decided below by the parked mark.
+      const unsettledCalls: Array<Prompt.ToolCallPart> = []
+      // A tool that keeps durable receipts can settle a call the crash left
+      // with no result: its own `recover` answers, as a leaf of its extension.
+      // Every other owed call is decided below by the parked mark.
       const recoverers = new Map(
         staticToolEntries(turnRegistry(params.turnProfile)).flatMap((entry) => {
           const recover = getToolMetadata(entry.capability).recover
@@ -4349,7 +4367,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ]
         }),
       )
-      for (const toolCall of pendingToolCalls) {
+      for (const toolCall of owedCalls) {
         const call = {
           sessionId: scope.sessionId,
           branchId: scope.branchId,
@@ -4383,25 +4401,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           recoveredResults.push(outcome.result)
           continue
         }
-        nativeToolCalls.push(toolCall)
+        unsettledCalls.push(toolCall)
       }
-      // A call whose result is already known needs no binding: it will not
-      // run again. Only the calls still owed a result are captured, so one
-      // missing binding cannot turn a stored success into a failure.
-      const known = yield* readKnownStepResults({
-        messageId: params.messageId,
-        step: pendingStep,
-        toolCalls: pendingToolCalls,
-        recoveredResults,
-      })
-      // The step's results are already stored: this is the step boundary.
-      if (Option.isNone(known)) {
-        yield* deliverSteeringAtStepBoundary({ finalStep: false })
-        return { step: pendingStep, interaction: Option.none() }
-      }
-      const unsettledCalls = nativeToolCalls.filter(
-        (toolCall) => !known.value.knownResults.has(toolCall.id),
-      )
       // Only a call that parked on an interaction runs again: its last run
       // stopped at the ask. Any other unsettled call has no recorded result:
       // it was cut short while it ran, it finished beside a parked sibling
@@ -4462,7 +4463,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       )
       const hostToolBindings = yield* resolveReplayHostBindings({
         turnProfile: params.turnProfile,
-        nativeToolCalls: nativeToolCalls.filter((toolCall) => !cutShortIds.has(toolCall.id)),
+        nativeToolCalls: rerunCalls,
         toolBindings,
       })
       if (rerunCalls.length > 0) yield* clearParkedCalls(params.messageId)
