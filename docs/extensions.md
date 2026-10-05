@@ -798,7 +798,11 @@ registered agent replaces only the fields it names (`delegate` above keeps
 its tools and changes its model). `systemPromptAddendum` is the one field
 that adds: the entry's text comes after the agent's. Each field resolves
 project config, then user config, then the extension; a run's own overrides
-(the `overrides` of a `delegate.start` call) win over all three. A session
+(the `overrides` of a `delegate.start` call, or `runSpec.overrides` in a
+session's admission) win over all three, except `tools` and `paths`: a run's
+`tools` and `paths` only narrow the agent, never widen it. The resolved
+definition is the bound its author set; a config entry is the author's own
+edit, so it still replaces. A session
 runs as an agent by name: `main` by default, `gent -H --agent painter "..."`
 for a headless run, and `delegate` for every child. Each turn reads the config
 files as they are then, so an edit reaches the next turn.
@@ -829,7 +833,10 @@ A config entry or a stored run written before `tools` still loads, with its
 old meaning: a `deniedTools` list alone takes those ids from the tools the
 agent already holds; an `allowedTools` list alone replaces them and keeps the
 inherited denials; both become the allowed ids and then the denied ones with
-`!`. `modelId` becomes `model`. A `tools` list always replaces. When gent
+`!`. `modelId` becomes `model`. A `tools` list in a config entry always
+replaces. A run's `tools` narrow: a tool must pass both the agent's patterns
+and the run's, so `["*"]` holds what the agent holds and no more, and an old
+stored run's lists narrow the same way. When gent
 writes a stored run or a `driver.list` reply, it also writes the old keys for
 an older gent: `modelId`, and the old lists when they can say what the
 patterns say, else `allowedTools: []`, so an older gent gives the agent no
@@ -840,7 +847,8 @@ entry as you wrote it.
 A `delegate.start` call takes the new keys only (`model`, `tools`, `paths`,
 ...). A call with `modelId`, `allowedTools` or `deniedTools` fails, and the
 failure names the key to use; it never runs the child without the
-restriction it asked for.
+restriction it asked for. Its `tools` and `paths` narrow the `delegate`
+agent (see Paths), so a call cannot hand a child the delegation tools back.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give
@@ -867,7 +875,74 @@ it. No `paths`: the file tools reach every path.
 system without the check, so leave them out of the `tools` of an agent you
 confine.
 A tool of your own reads the session's agent with
-`ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way.
+`ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way: a call
+must lie in every scope of `agent.pathScopes()` (`scopeReaches` from
+`@gent/core/extensions/api`, after `resolveLinks` on both sides).
+
+A run's `paths` only narrow its agent's. Each entry must lie inside an agent
+entry with at least its access: a `write` entry inside a `write` entry, a
+`read` entry inside any entry. An entry outside every agent entry, or one that
+asks for more access, refuses the whole session create with a
+`RunPathRefusedError` that names the entry; gent never drops an entry, since
+that would change what the run means. Entries resolve against the session cwd,
+and links resolve at the check, as the file tools resolve them at each call.
+An agent without `paths` takes any run `paths`. Each file tool call then must
+lie in the agent's entries and in the run's.
+
+A child never exceeds its parent run. A session created with a
+`parentSessionId` (a `delegate.start` child included) must name entries inside
+every scope of the parent's run, or the create is refused the same way; a
+child that names no `paths` under a confined parent takes the parent's
+narrowest scope, stored as absolute paths. A run's `tools` do not carry to a
+child: the child holds what its own agent and its own run allow.
+
+The admission an extension passes to `ctx.Session.create` is
+`{ agent, runSpec: { overrides } }`; the overrides take the run keys of a
+`delegate.start` call (`model`, `tools`, `paths`, `reasoningEffort`,
+`contextLength`, `maxSteps`, `maxModelAttempts`, `systemPromptAddendum`). A
+tool that starts a confined child on one folder, then hands it its task:
+
+```ts
+import { AgentName, ExtensionContext, tool } from "@gent/core/extensions/api"
+import { Effect, Schema } from "effect"
+
+export const PaintScene = tool({
+  id: "paint_scene",
+  description: "Start a painter on one scene folder",
+  params: Schema.Struct({ scene: Schema.String, brief: Schema.String }),
+  output: Schema.Struct({ sessionId: Schema.String }),
+  execute: Effect.fn("PaintScene.execute")(function* ({ scene, brief }) {
+    const ctx = yield* ExtensionContext
+    // The painter's own `paths` bound these; an entry outside them refuses the create.
+    const child = yield* ctx.Session.create({
+      parentSessionId: ctx.sessionId,
+      parentBranchId: ctx.branchId,
+      admission: {
+        agent: AgentName.make("painter"),
+        runSpec: {
+          overrides: {
+            tools: ["read", "edit", "write"],
+            paths: [{ path: `apps/animations/src/films/${scene}`, access: "write" }],
+          },
+        },
+      },
+    })
+    yield* ctx.Session.send({
+      delivery: "turn",
+      sessionId: child.sessionId,
+      branchId: child.branchId,
+      content: brief,
+    })
+    return { sessionId: child.sessionId }
+  }),
+})
+```
+
+To map a file tool call back to a file, read the result's `path`: `write`
+returns `{ path, bytesWritten }` and `edit` returns `{ path, replacements }`,
+where `path` is `path.resolve(cwd, params.path)`, absolute, with `..` resolved
+lexically and links not followed. That shape is stable; the input's `path` is
+what the model wrote, relative or not.
 
 ## Model router
 
