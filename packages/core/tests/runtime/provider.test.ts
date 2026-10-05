@@ -111,6 +111,7 @@ import type * as AiToolkit from "effect/ai/Toolkit"
 import type { ToolkitInput } from "effect/ai/LanguageModel"
 import * as Prompt from "effect/ai/Prompt"
 import type * as AiResponse from "effect/ai/Response"
+import { omitUndefined } from "../../src/domain/guards"
 
 // ── provider retry ──────────────────────────────────────────────────────────
 
@@ -2829,6 +2830,8 @@ describe("classifier credential order", () => {
     readonly order: ReadonlyArray<CredentialSlot>
     readonly stored: ReadonlyArray<readonly [CredentialSlot, string]>
     readonly failures: Readonly<Record<string, AiError.AiError>>
+    /** The caller's deadline for the call (`models.decide` `timeoutMs`). */
+    readonly timeoutMs?: number
   }) =>
     Effect.gen(function* () {
       const asked: Array<string> = []
@@ -2900,6 +2903,7 @@ describe("classifier credential order", () => {
             }),
             input: "charged twice",
             model: "judge/jev-1",
+            ...omitUndefined({ timeoutMs: params.timeoutMs }),
           }),
         )
       }).pipe(
@@ -2976,6 +2980,24 @@ describe("classifier credential order", () => {
         })
         expect(later.asked).toEqual(["sk-a", "sk-b"])
       }),
+  )
+
+  it.live("a rate limit that clears after the caller's deadline moves the call at once", () =>
+    Effect.gen(function* () {
+      // The reset is within the driver's retry cap, but past what is left of
+      // the caller's deadline: a wait would end the call with no answer.
+      const { asked, decided } = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: { "sk-a": judgeRateLimited(Duration.seconds(2)) },
+        timeoutMs: 500,
+      })
+      expect(asked).toEqual(["sk-a", "sk-b"])
+      expect(Exit.isSuccess(decided)).toBe(true)
+    }),
   )
 
   it.live("any other classifier failure ends the call on its credential", () =>

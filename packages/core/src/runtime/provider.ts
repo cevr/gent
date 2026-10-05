@@ -3474,6 +3474,7 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
         onSome: (asked) => Math.min(Math.max(Math.round(asked), 1), DECIDE_DEADLINE_MS),
       })
       const named = params.model ?? "default classifier"
+      const endsAt = (yield* Clock.currentTimeMillis) + deadlineMs
       return yield* Effect.gen(function* () {
         const resolved = yield* classifiers.value
           .resolve(Option.fromUndefinedOr(params.model))
@@ -3488,7 +3489,9 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
           model.decide(params.definition, { input: params.input })
         // A rate limit the provider says clears within the driver's retry cap
         // gets one more try on the same credential first, as a turn's request
-        // gets its retries; one that resets later moves on at once.
+        // gets its retries. One that resets later, or after what is left of
+        // the caller's deadline, moves on at once: a wait would end the call
+        // with no answer where the next credential can give one.
         const ask = (model: DecisionModel.DecisionModel) =>
           askOnce(model).pipe(
             Effect.catchIf(
@@ -3496,17 +3499,13 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
               (error) =>
                 Effect.gen(function* () {
                   const now = yield* Clock.currentTimeMillis
-                  const at = resolved.retry.retryAt(error, now)
-                  if (Option.exists(at, (reset) => reset - now > resolved.retry.maxDelay))
+                  const waitMs = Option.match(resolved.retry.retryAt(error, now), {
+                    onNone: () => resolved.retry.initialDelay,
+                    onSome: (reset) => Math.max(0, reset - now),
+                  })
+                  if (waitMs > resolved.retry.maxDelay || now + waitMs >= endsAt)
                     return yield* error
-                  yield* Effect.sleep(
-                    Duration.millis(
-                      Option.match(at, {
-                        onNone: () => resolved.retry.initialDelay,
-                        onSome: (reset) => Math.max(0, reset - now),
-                      }),
-                    ),
-                  )
+                  yield* Effect.sleep(Duration.millis(waitMs))
                   return yield* askOnce(model)
                 }),
             ),
