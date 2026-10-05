@@ -18,6 +18,7 @@ import { GentPlatform, MessageStorage } from "@gent/core/host"
 import {
   type LoadedExtension,
   captureTurnTools,
+  collectTestContributions,
   createE2ELayer,
   provideToolDispatch,
   recordInteractionDecision,
@@ -54,7 +55,10 @@ import {
   RequestId,
   InteractionPendingError,
   ExtensionContext,
+  ExtensionHost,
   tool,
+  type ToolCallInput,
+  ToolCallVerdict,
   type ToolCapability,
   LoadedArtifactIdentity,
   ToolResultFailure,
@@ -969,6 +973,131 @@ var markCurrent = () => tools.mark("current"); "armed"`,
   )
 })
 
+// ── tool-call hook ─────────────────────────────────────────────────────────
+
+/**
+ * The approval cell with one more extension whose `toolCall` hook gives each
+ * `mark` call `markVerdict`, allows every other call, and keeps each input.
+ */
+const judgedApprovalCell = (markVerdict: ToolCallVerdict) =>
+  Effect.gen(function* () {
+    const cell = yield* approvalCell
+    const inputs: Array<ToolCallInput> = []
+    const allow = ToolCallVerdict.cases.Allow.make({})
+    const contributions = yield* collectTestContributions(
+      Effect.gen(function* () {
+        yield* (yield* ExtensionHost).on("toolCall", (input) =>
+          Effect.sync(() => {
+            inputs.push(input)
+            if (input.toolName === "mark") return markVerdict
+            return allow
+          }),
+        )
+      }),
+    )
+    const judging: LoadedExtension = {
+      manifest: { id: ExtensionId.make("cell-judge") },
+      scope: "builtin",
+      sourcePath: "cell-judge",
+      artifactIdentity: LoadedArtifactIdentity.make("cell-judge-source"),
+      contributions,
+    }
+    return { ...cell, inputs, extensions: [...cell.extensions, judging] }
+  })
+
+describe("cell and the toolCall hook", () => {
+  it.scopedLive(
+    "the hook judges the cell and each call its code makes: a denied call fails in the cell and does not run",
+    () =>
+      Effect.gen(function* () {
+        const cell = yield* judgedApprovalCell(
+          ToolCallVerdict.cases.Deny.make({ reason: "no marks in this test" }),
+        )
+        const inputs = cell.inputs
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "let outcome\ntry { await tools.mark('x'); outcome = 'ran' } catch (error) { outcome = 'caught ' + error.message }\noutcome",
+          }),
+          textStep("Cell finished"),
+        ])
+        const harness = yield* createRpcHarness({
+          extensions: cell.extensions,
+          providerLayer,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        const { client, sessionId, branchId } = harness
+        yield* client.message.send({ sessionId, branchId, content: "Mark from a cell" })
+        const [result] = yield* cellResultsAfterTurn(harness)
+        expect(result).toMatchObject({
+          isFailure: false,
+          result: {
+            display: expect.stringContaining("no marks in this test"),
+            operations: [{ tool: "mark", outcome: "failed" }],
+          },
+        })
+        expect(yield* Ref.get(cell.marks)).toEqual([])
+        expect(inputs.map((input) => input.toolName)).toEqual(["cell", "mark"])
+        const [outer, inner] = inputs
+        if (Predicate.isUndefined(outer) || Predicate.isUndefined(inner))
+          return yield* Effect.die("The hook judged fewer than two calls")
+        // The inner call names the cell as its parent and opens no turn of its own.
+        expect(inner.parentToolCallId).toEqual(Option.some(outer.toolCallId))
+        expect(inner.messageId).toBe(outer.messageId)
+        expect(inner.agentName).toBe(DEFAULT_AGENT_NAME)
+        expect(inner.input).toBe("x")
+        expect(Option.isNone(outer.parentToolCallId)).toBe(true)
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    18000,
+  )
+
+  it.scopedLive(
+    "a call the hook asks about waits in the cell for its dialog, and an approval runs it",
+    () =>
+      Effect.gen(function* () {
+        const cell = yield* judgedApprovalCell(
+          ToolCallVerdict.cases.Ask.make({ reason: "marks are watched" }),
+        )
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "await tools.mark('x'); 'marked'" }),
+          textStep("Cell finished"),
+        ])
+        const harness = yield* createRpcHarness({
+          extensions: cell.extensions,
+          providerLayer,
+          approvalLayer: ApprovalService.Live,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        const { client, sessionId, branchId } = harness
+        yield* client.message.send({ sessionId, branchId, content: "Mark from a cell" })
+        const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.map((envelope) => envelope.event),
+          Stream.filter((event) => event._tag === "InteractionPresented"),
+          Stream.take(1),
+          Stream.runCollect,
+        )
+        const request = Array.from(presented)[0]
+        if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
+        expect(request.text).toContain("marks are watched")
+        expect(yield* Ref.get(cell.marks)).toEqual([])
+        yield* client.interaction.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: request.requestId,
+          approved: true,
+        })
+        const [result] = yield* cellResultsAfterTurn(harness)
+        expect(result).toMatchObject({
+          isFailure: false,
+          result: { operations: [{ tool: "mark", outcome: "succeeded" }] },
+        })
+        expect(yield* Ref.get(cell.marks)).toEqual(["x"])
+        expect(cell.inputs.filter((input) => input.toolName === "mark")).toHaveLength(1)
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
+    18000,
+  )
+})
+
 // ── bound cell tool calls ───────────────────────────────────────────────────
 
 const extensionId = ExtensionId.make("cell-test")
@@ -1652,6 +1781,107 @@ describe("recorded host operations", () => {
               ).toEqual(["Completed", "Completed"])
               expect(yield* recoverCellExecution(hostParams)).toEqual(recovered)
               expect(yield* Ref.get(calls)).toBe(4)
+            }).pipe(Effect.provideContext(context))
+          }),
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+    25000,
+  )
+
+  it.scopedLive(
+    "an operation resumed after a restart applies the verdict its first run kept, with no new judgement",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        const storagePath = (yield* Path.Path).join(directory, "gent.db")
+        // A turn's call: the assistant message id names the turn that wrote it.
+        const judgedHost = {
+          ...cellToolHost,
+          assistantMessageId: MessageId.make("judged-host-turn:assistant:1"),
+        }
+        const verdict = yield* Ref.make<ToolCallVerdict>(ToolCallVerdict.cases.Allow.make({}))
+        const judged = yield* Ref.make(0)
+        const contributions = yield* collectTestContributions(
+          Effect.gen(function* () {
+            yield* (yield* ExtensionHost).on("toolCall", () =>
+              Ref.update(judged, (count) => count + 1).pipe(Effect.andThen(Ref.get(verdict))),
+            )
+          }),
+        )
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("judged-host") },
+          scope: "builtin",
+          sourcePath: "judged-host",
+          artifactIdentity: LoadedArtifactIdentity.make("judged-host-source"),
+          contributions: {
+            ...contributions,
+            tools: [
+              tool({
+                id: "approve",
+                description: "Approve saved input",
+                params: Schema.Struct({ valid: Schema.Boolean }),
+                output: Schema.Boolean,
+                execute: () =>
+                  Effect.gen(function* () {
+                    const ctx = yield* ExtensionContext
+                    return (yield* ctx.Interaction.approve({ text: "Allow saved input?" })).approved
+                  }),
+              }),
+            ],
+          },
+        }
+        const layer = createE2ELayer({
+          agents: [],
+          extensions: [extension],
+          providerLayer: LanguageModelLayers.debug(),
+          approvalLayer: ApprovalService.Live,
+          storagePath,
+        }).pipe(withCellStorage)
+        const hostParams = Effect.gen(function* () {
+          const turn = yield* captureTurnTools(judgedHost)
+          return {
+            cell: judgedHost,
+            profile: {
+              ...turn.profile,
+              turnHostCtx: { ...turn.profile.turnHostCtx, agentName: DEFAULT_AGENT_NAME },
+            },
+            toolBindings: turn.toolBindings,
+            ledger: yield* ModelContextLedger.make,
+          }
+        })
+        const pending = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(layer)
+            return yield* Effect.gen(function* () {
+              yield* plantCellCall(judgedHost, "1")
+              yield* (yield* CellStorage).executions.claim(judgedHost)
+              const host = yield* makeCellToolHost(yield* hostParams)
+              const asked = yield* askThenLoseWorker(
+                host,
+                requestToolHost("1", "approve"),
+                judgedHost,
+              )
+              yield* (yield* ApprovalService).storeResolution(judgedHost, asked.requestId, {
+                approved: true,
+              })
+              return asked
+            }).pipe(Effect.provideContext(context))
+          }),
+        )
+        // The hooks would deny it now; the kept verdict decides.
+        yield* Ref.set(verdict, ToolCallVerdict.cases.Deny.make({ reason: "changed its mind" }))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(layer)
+            yield* Effect.gen(function* () {
+              const result = yield* resumeCellToolOperation({
+                ...(yield* hostParams),
+                operationId: "1",
+                requestId: pending.requestId,
+              })
+              expect(result.isFailure).toBe(false)
+              expect(result.result).toBe(true)
+              expect(yield* Ref.get(judged)).toBe(1)
             }).pipe(Effect.provideContext(context))
           }),
         )

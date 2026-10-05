@@ -26,6 +26,7 @@ import { FsToolsExtension } from "./fs-tools.js"
 import { NetworkToolsExtension } from "./network-tools.js"
 import { McpExtension } from "./mcp.js"
 import { RouterExtension } from "./router.js"
+import { GuardExtension } from "./guard.js"
 import { SessionToolsExtension } from "./session-tools.js"
 import { ExtensionAdminExtension } from "./extension-admin.js"
 import { InteractionToolsExtension } from "./interaction-tools.js"
@@ -67,6 +68,7 @@ export const BuiltinExtensions: ReadonlyArray<
   NetworkToolsExtension,
   McpExtension,
   RouterExtension,
+  GuardExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,

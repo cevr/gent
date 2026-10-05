@@ -32,6 +32,7 @@ import {
   type ToolBindingIdentity,
   ToolCallBindingConflictError,
   type ToolCallBindingKey,
+  ToolCallVerdict,
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
@@ -1881,6 +1882,12 @@ export const PendingToolCall = Schema.Struct({
    * interrupted instead. Absent on rows written before the mark existed.
    */
   parked: Schema.optional(Schema.Boolean),
+  /**
+   * The verdict the `toolCall` hooks gave the parked call. Its next run
+   * applies it and is not judged again. Absent when no hook judged the call,
+   * and on rows written before the verdict existed.
+   */
+  verdict: Schema.optional(ToolCallVerdict),
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 

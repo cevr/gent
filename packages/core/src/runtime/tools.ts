@@ -18,7 +18,13 @@ import {
   Sink,
   Stream,
 } from "effect"
-import { encodeToolOutput, stringifyOutput, ToolResultFailure } from "../domain/message.js"
+import {
+  encodeToolOutput,
+  headTailChars,
+  stringifyOutput,
+  ToolResultFailure,
+  turnMessageIdOfAssistant,
+} from "../domain/message.js"
 import {
   type InteractionStorage,
   type MessageStorage,
@@ -35,7 +41,13 @@ import {
   ToolCallId,
   ToolId,
 } from "../domain/ids.js"
-import type { ExtensionHostContext, LoadedExtension, TurnProjection } from "../domain/extension.js"
+import {
+  type ExtensionHostContext,
+  ExtensionServiceError,
+  type LoadedExtension,
+  type ToolCallInput,
+  type TurnProjection,
+} from "../domain/extension.js"
 import * as Prompt from "effect/ai/Prompt"
 import {
   getToolId,
@@ -43,6 +55,7 @@ import {
   type PromptSection,
   ToolBindingIdentity,
   ToolBindingSource,
+  ToolCallVerdict,
   type ToolCapability,
   toolResultSummary,
   ToolSchemaRevision,
@@ -757,10 +770,14 @@ interface ToolRunnerService {
   readonly capture: (params: {
     readonly toolName: string
   }) => Effect.Effect<Option.Option<ResolvedToolCapability>, never, ExtensionRegistry>
-  /** Execute the exact entry captured by a resolved turn. */
+  /**
+   * Execute the exact entry captured by a resolved turn, after the
+   * `toolCall` hooks judge it (`ToolCallGate`).
+   */
   readonly runBound: (
     toolCall: ToolCall,
     entry: Option.Option<ResolvedToolCapability>,
+    gate?: ToolCallGate,
   ) => Effect.Effect<
     Prompt.ToolResultPart,
     InteractionPendingError,
@@ -949,10 +966,140 @@ interface ToolPlatform {
   readonly path: Path.Path
 }
 
+// ── tool-call-gate ──────────────────────────────────────────────────────────
+
+/**
+ * How one run of a call meets the `toolCall` hooks. The hooks judge a call
+ * once: a call that parked on an interaction runs again with the verdict its
+ * earlier run applied, which its caller kept (`onVerdict`) and passes back
+ * (`verdict`). A parked `Ask` then asks the same question again and takes
+ * the stored answer; an `Allow` runs without a second judgement.
+ */
+export interface ToolCallGate {
+  /** The verdict an earlier run of this call applied; the hooks do not judge it again. */
+  readonly verdict?: ToolCallVerdict
+  /** Told the verdict the hooks gave, before the call asks or runs. Not called with no hook. */
+  readonly onVerdict?: (verdict: ToolCallVerdict) => Effect.Effect<void>
+}
+
+/** The most of a call's input the approval text shows, head and tail. */
+const MAXIMUM_ASK_INPUT_CHARS = 2_000
+
+/**
+ * The question an `Ask` puts to the user. It is built from the call and the
+ * reason only, so a call that runs again asks the same question and takes the
+ * answer it already has.
+ */
+const askText = (toolCall: ToolCall, reason: string) =>
+  [
+    `Run ${toolCall.toolName}?`,
+    reason,
+    headTailChars(stringifyOutput(toolCall.input), MAXIMUM_ASK_INPUT_CHARS).text,
+  ].join("\n\n")
+
+/** What the hooks read about the call; none outside a turn's call. */
+const toolCallInput = (params: {
+  readonly toolCall: ToolCall
+  readonly capability: ToolCapability
+  readonly ctx: ToolCapabilityContext
+}) =>
+  Effect.gen(function* () {
+    const assistant = Option.fromUndefinedOr(yield* assistantMessageId)
+    const parent = Option.fromUndefinedOr(yield* parentToolCallId)
+    return Option.map(
+      Option.all({
+        messageId: Option.flatMap(assistant, turnMessageIdOfAssistant),
+        agentName: Option.fromUndefinedOr(params.ctx.agentName),
+      }),
+      ({ messageId, agentName }): ToolCallInput => ({
+        sessionId: params.ctx.sessionId,
+        branchId: params.ctx.branchId,
+        messageId,
+        toolCallId: params.toolCall.toolCallId,
+        parentToolCallId: parent,
+        agentName,
+        toolName: params.toolCall.toolName,
+        readonly: getToolMetadata(params.capability).readonly,
+        input: params.toolCall.input,
+      }),
+    )
+  })
+
+/**
+ * The verdict this run applies: the kept one, else the hooks' (and the caller
+ * is told it), else `Allow` with no hook.
+ */
+const judgeToolCall = (params: {
+  readonly toolCall: ToolCall
+  readonly capability: ToolCapability
+  readonly ctx: ToolCapabilityContext
+  readonly gate: ToolCallGate
+}) =>
+  Effect.gen(function* () {
+    const kept = Option.fromUndefinedOr(params.gate.verdict)
+    if (Option.isSome(kept)) return kept.value
+    const hooks = (yield* ExtensionRegistry).getResolved().extensionHooks
+    // A kept verdict whose hook a reload removed still applies above; with
+    // no verdict and no hook the call runs.
+    if (!hooks.judgesToolCalls) return ToolCallVerdict.cases.Allow.make({})
+    const input = yield* toolCallInput(params)
+    // Only a turn's call can be judged; a gate that cannot judge refuses.
+    const verdict = yield* Option.match(input, {
+      onNone: () =>
+        Effect.succeed(
+          ToolCallVerdict.cases.Deny.make({
+            reason: "the call belongs to no turn, so no check could judge it",
+          }),
+        ),
+      onSome: hooks.judgeToolCall,
+    })
+    const tell = Option.fromUndefinedOr(params.gate.onVerdict)
+    if (Option.isSome(tell)) yield* tell.value(verdict)
+    return verdict
+  })
+
+/**
+ * Judge the call and apply the verdict. None: the call runs. Some: why it
+ * does not, the failed result the model reads. An `Ask` asks inside the
+ * call's own run, so the answer belongs to this call and survives a restart
+ * as any approval does.
+ */
+const gateToolCall = Effect.fn("ToolRunner.gate")(function* (params: {
+  readonly toolCall: ToolCall
+  readonly capability: ToolCapability
+  readonly ctx: ToolCapabilityContext
+  readonly gate: ToolCallGate
+}) {
+  const verdict = yield* judgeToolCall(params)
+  const name = params.toolCall.toolName
+  if (verdict._tag === "Allow") return Option.none<string>()
+  if (verdict._tag === "Deny")
+    return Option.some(`The ${name} call was denied and did not run: ${verdict.reason}`)
+  const answer = yield* params.ctx.Interaction.approve({
+    text: askText(params.toolCall, verdict.reason),
+  }).pipe(
+    Effect.catchIf(Schema.is(ExtensionServiceError), (error) =>
+      Effect.succeed({
+        approved: false,
+        notes: `The approval could not be asked: ${error.message}`,
+      }),
+    ),
+  )
+  if (answer.approved) return Option.none<string>()
+  const notes = Option.match(Option.fromUndefinedOr(answer.notes), {
+    onNone: () => "",
+    onSome: (text) => ` ${text}`,
+  })
+  return Option.some(
+    `The ${name} call was not approved and did not run (${verdict.reason}).${notes}`,
+  )
+})
+
 const runTool = Effect.fn("ToolRunner.execute")(function* (
   toolCall: ToolCall,
   toolEntry: Option.Option<ResolvedToolCapability>,
   platform: ToolPlatform,
+  gate: ToolCallGate,
 ) {
   const hostCtx = yield* CurrentExtensionHostContext
   const ctx: ToolCapabilityContext = { ...hostCtx, toolCallId: toolCall.toolCallId }
@@ -993,6 +1140,39 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
     const toolCtx: ToolCapabilityContext = {
       ...ctx,
       extensionId: toolEntry.value.extensionId,
+    }
+    // The hooks judge the call before it runs; the judgement and its ask
+    // stop with the turn as the body does. With no hook and no kept verdict
+    // the call takes the same steps it took before the hook existed.
+    const judged =
+      Predicate.isNotUndefined(gate.verdict) ||
+      (yield* ExtensionRegistry).getResolved().extensionHooks.judgesToolCalls
+    if (judged) {
+      const gated = yield* gateToolCall({
+        toolCall,
+        capability: toolEntry.value.capability,
+        ctx,
+        gate,
+      }).pipe(stopWithTurn, Effect.result)
+      if (gated._tag === "Failure") {
+        const failure = gated.failure
+        if (Schema.is(InteractionPendingError)(failure)) return yield* failure
+        return yield* finish(
+          Prompt.toolResultPart({
+            id: toolCall.toolCallId,
+            name: toolCall.toolName,
+            isFailure: true,
+            providerExecuted: false,
+            result: failure.result,
+          }),
+        )
+      }
+      if (Option.isSome(gated.success)) {
+        yield* Effect.logInfo("tool.refused").pipe(
+          Effect.annotateLogs({ toolName: toolCall.toolName, toolCallId: toolCall.toolCallId }),
+        )
+        return yield* finish(errorResult(toolCall, gated.success.value))
+      }
     }
     const executeKnownTool = Effect.gen(function* () {
       const executionToolkit = yield* makeExecutionToolkit({
@@ -1096,7 +1276,7 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
             const activeRegistry = yield* ExtensionRegistry
             return captureToolEntry({ ...params, activeRegistry })
           }),
-        runBound: (toolCall, entry) => runTool(toolCall, entry, platform),
+        runBound: (toolCall, entry, gate) => runTool(toolCall, entry, platform, gate ?? {}),
       })
     }),
   )
@@ -1134,10 +1314,16 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   /** The turn's stop; a call still running then stops (`CurrentTurnStop`). */
   stop: TurnStop
   /**
-   * Records a call that parked on an interaction as soon as it parks, before
-   * its siblings finish. The call's exit waits for it.
+   * The verdicts the calls' earlier runs applied, by call id: a call that
+   * parked keeps its verdict (`ToolCallGate`).
    */
-  onParked: (toolCallId: ToolCallId) => Effect.Effect<void>
+  verdicts?: ReadonlyMap<string, ToolCallVerdict>
+  /**
+   * Records a call that parked on an interaction as soon as it parks, before
+   * its siblings finish, with the verdict its run applied when a hook judged
+   * it. The call's exit waits for it.
+   */
+  onParked: (toolCallId: ToolCallId, verdict: Option.Option<ToolCallVerdict>) => Effect.Effect<void>
 }) {
   const toolRunner = yield* ToolRunner
   const hostCtx = yield* CurrentExtensionHostContext
@@ -1173,10 +1359,26 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
             toolName: toolCall.name,
             input: toolCall.params,
           }
+          const kept = Option.fromUndefinedOr(params.verdicts?.get(toolCall.id))
+          const judged = yield* Ref.make(kept)
           return yield* toolRunner
-            .runBound(toolCallInput, Option.fromUndefinedOr(params.toolBindings.get(toolCall.name)))
+            .runBound(
+              toolCallInput,
+              Option.fromUndefinedOr(params.toolBindings.get(toolCall.name)),
+              {
+                ...Option.match(kept, {
+                  onNone: () => ({}),
+                  onSome: (verdict) => ({ verdict }),
+                }),
+                onVerdict: (verdict) => Ref.set(judged, Option.some(verdict)),
+              },
+            )
             .pipe(
-              Effect.tapError(() => params.onParked(toolCallInput.toolCallId)),
+              Effect.tapError(() =>
+                Ref.get(judged).pipe(
+                  Effect.flatMap((verdict) => params.onParked(toolCallInput.toolCallId, verdict)),
+                ),
+              ),
               Effect.mapError(
                 (e) =>
                   new ToolInteractionPending({

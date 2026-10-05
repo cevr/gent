@@ -1738,6 +1738,8 @@ const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.
       return host.on(slot.kind, slot.hook.handler)
     case "sessionDeleted":
       return host.on(slot.kind, slot.hook.handler)
+    case "toolCall":
+      return host.on(slot.kind, slot.hook.handler)
   }
 }
 

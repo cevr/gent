@@ -44,6 +44,7 @@ import {
   SessionId,
   tool,
   ToolCallId,
+  ToolCallVerdict,
   type ToolCapability,
   ToolResultFailure,
 } from "@gent/core/extensions/api"
@@ -78,6 +79,7 @@ import {
   ToolBindingIdentity,
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
+  type ToolCallGate,
   type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
@@ -147,6 +149,12 @@ const Operation = Schema.Struct({
   binding: ToolBindingIdentity,
   input: Schema.Json,
   state: CellToolOperationState,
+  /**
+   * The verdict the `toolCall` hooks gave the operation. An operation resumed
+   * after a restart applies it and is not judged again. Absent when no hook
+   * judged it, and on records written before the verdict existed.
+   */
+  verdict: Schema.optional(ToolCallVerdict),
 })
 type CellToolOperation = typeof Operation.Type
 const OperationJson = Schema.fromJsonString(Operation)
@@ -201,6 +209,11 @@ interface CellToolOperationStorageService {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) => Effect.Effect<CellToolOperation, StorageError>
+  /** Keep the verdict the hooks gave the operation; the first one stays. */
+  readonly judge: (
+    key: CellToolOperationKey,
+    verdict: ToolCallVerdict,
+  ) => Effect.Effect<void, StorageError>
   /** The call took its answer and runs on: it waits for nothing now. */
   readonly take: (
     key: CellToolOperationKey,
@@ -500,6 +513,18 @@ const makeToolOperationStorage = Effect.gen(function* () {
       yield* write(key, completed)
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
+  const judge = Effect.fn("CellToolOperationStorage.judge")(function* (
+    key: CellToolOperationKey,
+    verdict: ToolCallVerdict,
+  ) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      const operation = yield* read(key)
+      if (Predicate.isNotUndefined(operation.verdict)) return
+      yield* write(key, { ...operation, verdict })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
   return {
     admit,
     get,
@@ -507,6 +532,7 @@ const makeToolOperationStorage = Effect.gen(function* () {
     listForToolCall,
     suspend,
     resume,
+    judge,
     take,
     complete,
   } satisfies CellToolOperationStorageService
@@ -2114,6 +2140,8 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
   >
   readonly toolCallId: ToolCallId
   readonly binding: Option.Option<ResolvedToolCapability>
+  /** How the call meets the `toolCall` hooks: the verdict it keeps, or where to keep one. */
+  readonly gate?: ToolCallGate
 }) {
   const runner = yield* ToolRunner
   if (
@@ -2134,6 +2162,7 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
         input: params.request.input,
       },
       params.binding,
+      params.gate,
     )
     .pipe(
       // An inner call waits for its answer in place, so it never parks. A
@@ -2283,6 +2312,8 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           },
           toolCallId: admitted.toolCallId,
           binding: Option.some(binding),
+          // A resumed operation keeps the verdict its first run applied.
+          gate: omitUndefined({ verdict: admitted.verdict }),
         }).pipe(
           Effect.provideService(CurrentCellToolOperation, key),
           Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
@@ -2410,6 +2441,20 @@ export const makeCellToolHost = (
               request,
               toolCallId: admission.operation.toolCallId,
               binding: captured,
+              // The verdict is kept before the call asks or runs, so a
+              // restart resumes it without a second judgement.
+              gate: {
+                onVerdict: (verdict) =>
+                  storage
+                    .judge(key, verdict)
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning("cell.operation.verdict-not-kept").pipe(
+                          Effect.annotateLogs({ error: error.message }),
+                        ),
+                      ),
+                    ),
+              },
             }).pipe(
               Effect.provideService(CurrentCellToolOperation, key),
               Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
@@ -2877,11 +2922,21 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     return yield* new AgentLoopError({ message: "Cell execution requires a recorded turn call" })
   }
   const cell = call.value
+  // The cell's inner calls run as the turn's agent, as the cell itself does.
+  const agentName = Option.flatMap(yield* Effect.serviceOption(ExtensionContext), (ctx) =>
+    Option.fromUndefinedOr(ctx.agentName),
+  )
   const params = {
     cell,
     toolBindings: call.value.toolBindings,
     catalog: yield* buildCellCatalog(call.value.toolBindings),
-    profile: profile.value,
+    profile: {
+      ...profile.value,
+      turnHostCtx: {
+        ...profile.value.turnHostCtx,
+        ...omitUndefined({ agentName: Option.getOrUndefined(agentName) }),
+      },
+    },
     ledger: ledger.value,
   }
   yield* requireCellHostBranch(params)

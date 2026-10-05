@@ -789,6 +789,23 @@ export const tool = <
   return branded
 }
 
+// ── tool-call-verdict ───────────────────────────────────────────────────────
+
+/**
+ * What a `toolCall` hook answers for one call before it runs. `Allow` runs
+ * it. `Deny` does not run it: the model reads a failed result that names the
+ * reason, and the turn goes on. `Ask` asks the user once through the durable
+ * approval request: an approval runs the call, a decline (or a turn no user
+ * can answer) fails it as `Deny` does. Across hooks the strictest answer
+ * wins: `Deny`, then `Ask`. No hook is `Allow`.
+ */
+export const ToolCallVerdict = Schema.TaggedUnion({
+  Allow: {},
+  Deny: { reason: Schema.String },
+  Ask: { reason: Schema.String },
+})
+export type ToolCallVerdict = typeof ToolCallVerdict.Type
+
 // ── tool-wire-name ──────────────────────────────────────────────────────────
 
 /**
