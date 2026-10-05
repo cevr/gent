@@ -6,6 +6,8 @@ import {
   Effect,
   type Exit,
   Fiber,
+  type FileSystem,
+  type Path,
   Layer,
   Option,
   Predicate,
@@ -69,7 +71,7 @@ import {
  * is a defect. The resolver reads `catalog` (usually `fixtureModelCatalog()`)
  * and composes a driver's endpoint with `apiClasses`.
  */
-export const storedCredentialModel = (input: {
+interface StoredCredentialModelInput {
   readonly modelDrivers: ReadonlyArray<ModelDriverContribution>
   readonly apiClasses?: ReadonlyArray<ApiClassContribution>
   readonly stored: Readonly<Record<string, string>>
@@ -81,7 +83,17 @@ export const storedCredentialModel = (input: {
   readonly credentialSlot?: CredentialSlot
   readonly modelId: string
   readonly catalog: LoadedModelCatalog
-}): Layer.Layer<LanguageModel.LanguageModel> => {
+}
+
+export function storedCredentialModel(
+  input: StoredCredentialModelInput & { readonly authDirectory: string },
+): Layer.Layer<LanguageModel.LanguageModel, never, FileSystem.FileSystem | Path.Path>
+export function storedCredentialModel(
+  input: StoredCredentialModelInput & { readonly authDirectory?: never },
+): Layer.Layer<LanguageModel.LanguageModel>
+export function storedCredentialModel(
+  input: StoredCredentialModelInput & { readonly authDirectory?: string },
+): Layer.Layer<LanguageModel.LanguageModel, never, FileSystem.FileSystem | Path.Path> {
   const resolved = resolveExtensions([
     {
       manifest: { id: ExtensionId.make("@gent/test/stored-credential") },
@@ -91,6 +103,8 @@ export const storedCredentialModel = (input: {
     },
   ])
   const seed = Record.map(input.stored, (key) => AuthApi.make({ type: "api", key }))
+  let authLayer: Layer.Layer<Auth, never, FileSystem.FileSystem | Path.Path> = Auth.Test(seed)
+  if (Predicate.isNotUndefined(input.authDirectory)) authLayer = Auth.Live(input.authDirectory)
   return Layer.effect(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
@@ -116,7 +130,7 @@ export const storedCredentialModel = (input: {
     ),
   ).pipe(
     Layer.provide(ModelResolver.Live),
-    Layer.provide(Auth.Test(seed)),
+    Layer.provide(authLayer),
     Layer.provide(ModelCatalogSource.fixed(input.catalog)),
   )
 }

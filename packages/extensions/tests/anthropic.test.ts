@@ -1,3 +1,4 @@
+import { createDependencies, StateLocation } from "@gent/core/host"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   makeAnthropicCredentialCache,
@@ -49,6 +50,10 @@ import {
   captureProviderStopReason,
   storedCredentialModel,
   createRpcHarness,
+  createRpcClient,
+  ConfigService,
+  modelCatalogFixture,
+  BunGentPlatformLive,
   LanguageModelLayers,
   testAgent,
   textStep,
@@ -67,6 +72,8 @@ import {
 } from "../src/providers.js"
 import {
   type ExtensionHostService,
+  ExtensionHost,
+  defineExtension,
   ProviderAuthError,
   CredentialSlot,
   type ProviderHints,
@@ -3758,5 +3765,309 @@ describe("named Anthropic credential cache", () => {
         }
         expect(spawned).toBe(0)
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+// ── named import commit ─────────────────────────────────────────────────────
+
+/** Actual RPC profile and its exact registered builder/cells; only filesystem I/O is gated. */
+const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.none<string>()) =>
+  Effect.gen(function* () {
+    const disk = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* disk.makeTempDirectoryScoped()
+    const authDirectory = Option.getOrElse(sharedDirectory, () => path.join(home, "auth"))
+    const sourceA = path.join(home, "source-a")
+    const sourceB = path.join(home, "source-b")
+    const slot = CredentialSlot.make("personal")
+    const credentialFile = path.join(authDirectory, ".slots", "anthropic", slot)
+    const blocked = path.join(home, "rename-blocked")
+    yield* disk.makeDirectory(blocked)
+    for (const [directory, access] of [
+      [sourceA, "fake-a"],
+      [sourceB, "fake-b"],
+    ] as const) {
+      yield* disk.makeDirectory(directory)
+      yield* disk.writeFileString(
+        path.join(directory, ".credentials.json"),
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: access,
+            refreshToken: access + "-refresh",
+            expiresAt: (yield* Clock.currentTimeMillis) + 3600000,
+          },
+        }),
+      )
+    }
+    let beforeRead: (file: string) => Effect.Effect<void> = () => Effect.void
+    let afterRead: (file: string) => Effect.Effect<void> = () => Effect.void
+    let afterRename: (file: string) => Effect.Effect<void> = () => Effect.void
+    let rejectRename = false
+    const renames = yield* Ref.make(0)
+    const fs: FileSystem.FileSystem = {
+      ...disk,
+      readFileString: (file, encoding) =>
+        Effect.suspend(() => beforeRead(file)).pipe(
+          Effect.andThen(disk.readFileString(file, encoding)),
+          Effect.tap(() => afterRead(file)),
+        ),
+      rename: (from, to) =>
+        Effect.gen(function* () {
+          if (to === credentialFile) {
+            yield* Ref.update(renames, (count) => count + 1)
+            if (rejectRename) return yield* disk.rename(from, blocked)
+          }
+          yield* disk.rename(from, to)
+          yield* afterRename(to)
+        }),
+    }
+    const basePlatform = yield* Layer.build(Layer.mergeAll(BunServices.layer, BunGentPlatformLive))
+    const platform = Layer.succeedContext(Context.add(basePlatform, FileSystem.FileSystem, fs))
+    const ready = yield* Deferred.make<ReturnType<typeof buildAnthropicModelDriverLive>>()
+    const extension = defineExtension({
+      id: "@test/named-import-commit",
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        const services = Context.add(
+          yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.die("named import forbids CLI")),
+        ).pipe(Context.add(FileSystem.FileSystem, fs))
+        const driver = buildAnthropicModelDriverLive(
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+            EMPTY_CREDENTIAL_CELL,
+          ),
+          Option.none(),
+          services,
+          "1h",
+        )
+        yield* host.register("agent", testAgent)
+        yield* host.register("modelDriver", driver)
+        yield* Deferred.succeed(ready, driver)
+      }),
+    })
+    const catalog = yield* modelCatalogFixture
+    const { client } = yield* createRpcClient(
+      createDependencies({
+        cwd: home,
+        home,
+        platform: "linux",
+        authDirectory,
+        state: StateLocation.cases.Memory.make({}),
+        extensions: [extension],
+        failOnExtensionFailure: true,
+        overrides: {
+          configServiceLayer: ConfigService.Test(),
+          modelCatalogHttpLayer: catalog.layer,
+        },
+      }).pipe(Layer.provideMerge(Layer.merge(platform, catalog.layer))),
+    )
+    // This is the builder created by THIS host profile, never a second factory or wrapper.
+    const driver = yield* Deferred.await(ready)
+    const { sessionId } = yield* client.session.create({ cwd: home })
+    const importSlot = (directory: string, target: CredentialSlot) =>
+      client.auth.authorize({
+        sessionId,
+        provider: "anthropic",
+        method: 2,
+        slot: target,
+        inputs: { directory },
+      })
+    const importFrom = (directory: string) => importSlot(directory, slot)
+    const requestUses = (access: string) =>
+      Effect.gen(function* () {
+        const state = makeFakeFetchState()
+        const model = storedCredentialModel({
+          modelDrivers: [driver],
+          stored: {},
+          authDirectory,
+          modelId: "anthropic/claude-opus-4-6",
+          catalog: fixtureModelCatalog(),
+          credentialSlot: slot,
+        }).pipe(Layer.provide(platform))
+        yield* oneGenerate(model, state, () => anthropicHappyResponse())
+        return state.captured.at(-1)?.headers["authorization"] === "Bearer " + access
+      })
+    yield* importFrom(sourceA)
+    expect(yield* requestUses("fake-a")).toBe(true)
+    return {
+      client,
+      sessionId,
+      driver,
+      home,
+      slot,
+      authDirectory,
+      sourceA,
+      sourceB,
+      credentialFile,
+      disk,
+      renames,
+      importFrom,
+      importSlot,
+      requestUses,
+      gateRead: (gate: typeof beforeRead) => {
+        beforeRead = gate
+      },
+      gateReadComplete: (gate: typeof afterRead) => {
+        afterRead = gate
+      },
+      gateRename: (gate: typeof afterRename) => {
+        afterRename = gate
+      },
+      failRename: (fail: boolean) => {
+        rejectRename = fail
+      },
+    }
+  })
+
+describe("named import persistence and publication", () => {
+  it.scopedLive(
+    "named imports cancel before commit while actual provider or SQLite locks are held",
+    () =>
+      Effect.gen(function* () {
+        for (const separateHost of [false, true]) {
+          const rig = yield* namedImportCommitRig()
+          let owner = rig
+          if (separateHost) owner = yield* namedImportCommitRig(Option.some(rig.authDirectory))
+          const holdSlot = CredentialSlot.make("holding")
+          const holdingFile = rig.authDirectory + "/.slots/anthropic/holding"
+          const landed = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+          owner.gateRename((file) => {
+            if (file !== holdingFile) return Effect.void
+            return Deferred.completeWith(landed, Effect.void).pipe(
+              Effect.andThen(Deferred.await(release)),
+            )
+          })
+          const holding = yield* owner.importSlot(owner.sourceB, holdSlot).pipe(Effect.forkScoped)
+          yield* Deferred.await(landed)
+          const before = yield* rig.disk.readFileString(rig.credentialFile)
+          const count = yield* Ref.get(rig.renames)
+          const reading = yield* Deferred.make<void>()
+          rig.gateReadComplete((file) => {
+            if (file !== rig.sourceB + "/.credentials.json") return Effect.void
+            return Deferred.completeWith(reading, Effect.void)
+          })
+          const waiting = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+          yield* Deferred.await(reading)
+          yield* Effect.yieldNow
+          const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
+          yield* Deferred.completeWith(release, Effect.void)
+          yield* Fiber.join(holding)
+          owner.gateRename(() => Effect.void)
+          rig.gateReadComplete(() => Effect.void)
+          expect(Option.isSome(ended)).toBe(true)
+          expect(yield* Ref.get(rig.renames)).toBe(count)
+          expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+          expect(yield* rig.requestUses("fake-a")).toBe(true)
+          yield* rig.importFrom(rig.sourceB)
+          expect(yield* rig.requestUses("fake-b")).toBe(true)
+        }
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  it.scopedLive("an interrupted landed replacement never leaves the old warm account serving", () =>
+    Effect.gen(function* () {
+      const rig = yield* namedImportCommitRig()
+      const before = yield* rig.disk.readFileString(rig.credentialFile)
+      const landed = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+      rig.gateRename((file) => {
+        if (file !== rig.credentialFile) return Effect.void
+        return Deferred.completeWith(landed, Effect.void).pipe(
+          Effect.andThen(Deferred.await(release)),
+        )
+      })
+      const replacing = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+      yield* Deferred.await(landed)
+      expect((yield* rig.disk.readFileString(rig.credentialFile)) !== before).toBe(true)
+      const interrupting = yield* Fiber.interrupt(replacing).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* Deferred.completeWith(release, Effect.void)
+      yield* Fiber.join(interrupting)
+      rig.gateRename(() => Effect.void)
+      expect(yield* rig.requestUses("fake-b")).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("early source cancellation writes nothing and releases the named cell", () =>
+    Effect.gen(function* () {
+      const rig = yield* namedImportCommitRig()
+      const before = yield* rig.disk.readFileString(rig.credentialFile)
+      const count = yield* Ref.get(rig.renames)
+      const reading = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+      rig.gateRead((file) => {
+        if (file !== rig.sourceB + "/.credentials.json") return Effect.void
+        return Deferred.completeWith(reading, Effect.void).pipe(
+          Effect.andThen(Deferred.await(release)),
+        )
+      })
+      const replacing = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+      yield* Deferred.await(reading)
+      const ended = yield* Fiber.interrupt(replacing).pipe(Effect.timeoutOption("300 millis"))
+      yield* Deferred.completeWith(release, Effect.void)
+      rig.gateRead(() => Effect.void)
+      expect(Option.isSome(ended)).toBe(true)
+      expect(yield* Ref.get(rig.renames)).toBe(count)
+      expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+      expect(yield* rig.requestUses("fake-a")).toBe(true)
+      yield* rig.importFrom(rig.sourceB)
+      expect(yield* rig.requestUses("fake-b")).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("cancellation while the actual named cell is held performs no second write", () =>
+    Effect.gen(function* () {
+      const rig = yield* namedImportCommitRig()
+      const landed = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+      rig.gateRename((file) => {
+        if (file !== rig.credentialFile) return Effect.void
+        return Deferred.completeWith(landed, Effect.void).pipe(
+          Effect.andThen(Deferred.await(release)),
+        )
+      })
+      const holding = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+      yield* Deferred.await(landed)
+      const count = yield* Ref.get(rig.renames)
+      const sourceRead = yield* Deferred.make<void>()
+      rig.gateReadComplete((file) => {
+        if (file !== rig.sourceA + "/.credentials.json") return Effect.void
+        return Deferred.completeWith(sourceRead, Effect.void)
+      })
+      const waiting = yield* rig.importFrom(rig.sourceA).pipe(Effect.forkScoped)
+      yield* Deferred.await(sourceRead)
+      yield* Effect.yieldNow
+      const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
+      yield* Deferred.completeWith(release, Effect.void)
+      yield* Fiber.join(holding)
+      rig.gateRename(() => Effect.void)
+      rig.gateReadComplete(() => Effect.void)
+      expect(Option.isSome(ended)).toBe(true)
+      expect(yield* Ref.get(rig.renames)).toBe(count)
+      expect(yield* rig.requestUses("fake-b")).toBe(true)
+      yield* rig.importFrom(rig.sourceA)
+      expect(yield* rig.requestUses("fake-a")).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("failed real persistence leaves the old warm cell and stored entry intact", () =>
+    Effect.gen(function* () {
+      const rig = yield* namedImportCommitRig()
+      const before = yield* rig.disk.readFileString(rig.credentialFile)
+      rig.failRename(true)
+      const failed = yield* Effect.exit(rig.importFrom(rig.sourceB))
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+      expect(yield* rig.requestUses("fake-a")).toBe(true)
+      rig.failRename(false)
+      yield* rig.importFrom(rig.sourceB)
+      expect(yield* rig.requestUses("fake-b")).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 })

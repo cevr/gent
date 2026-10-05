@@ -818,6 +818,110 @@ describe("Auth", () => {
   })
 
   describe("Auth.Live", () => {
+    it.scopedLive("successful persistence publishes exactly once and failure never publishes", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const slot = CredentialSlot.make("personal")
+        const published = yield* Ref.make(0)
+        yield* auth.set(
+          "publish",
+          AuthApi.make({ type: "api", key: "fake-written" }),
+          slot,
+          Ref.update(published, (count) => count + 1),
+        )
+        expect(yield* Ref.get(published)).toBe(1)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("publish", slot)),
+            (stored) => stored.type === "api" && stored.key === "fake-written",
+          ),
+        ).toBe(true)
+        yield* fs.makeDirectory(dir + "/.slots/publish/blocked")
+        const failed = yield* Effect.exit(
+          auth.set(
+            "publish",
+            AuthApi.make({ type: "api", key: "fake-failed" }),
+            CredentialSlot.make("blocked"),
+            Ref.update(published, (count) => count + 1),
+          ),
+        )
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect(yield* Ref.get(published)).toBe(1)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "publication writes remain cancellable while provider or SQLite acquisition waits",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          for (const separateStore of [false, true]) {
+            const dir = yield* fs.makeTempDirectoryScoped()
+            const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+            let waiter = holder
+            if (separateStore) waiter = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+            const slot = CredentialSlot.make("personal")
+            yield* holder.set("publish", AuthApi.make({ type: "api", key: "fake-old" }), slot)
+            const inside = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            const holding = yield* holder
+              .update(
+                "publish",
+                () =>
+                  Effect.gen(function* () {
+                    yield* Deferred.completeWith(inside, Effect.void)
+                    yield* Deferred.await(release)
+                    return [true, Option.none<AuthInfo>()] as const
+                  }),
+                slot,
+              )
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(inside)
+            const published = yield* Ref.make(0)
+            const waiting = yield* waiter
+              .set(
+                "publish",
+                AuthApi.make({ type: "api", key: "fake-new" }),
+                slot,
+                Ref.update(published, (count) => count + 1),
+              )
+              .pipe(Effect.forkScoped)
+            yield* Effect.yieldNow
+            const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
+            yield* Deferred.completeWith(release, Effect.void)
+            yield* Fiber.join(holding)
+            expect(Option.isSome(ended)).toBe(true)
+            expect(yield* Ref.get(published)).toBe(0)
+            expect(
+              Option.exists(
+                Option.fromUndefinedOr(yield* holder.get("publish", slot)),
+                (stored) => stored.type === "api" && stored.key === "fake-old",
+              ),
+            ).toBe(true)
+          }
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive("dot-segment slot discovery returns only its credential labels", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const personal = CredentialSlot.make("personal")
+        yield* auth.set("unrelated", AuthApi.make({ type: "api", key: "fake-default" }))
+        const original = yield* fs.readFileString(dir + "/unrelated")
+        for (const provider of [".", ".."]) {
+          yield* auth.set(provider, AuthApi.make({ type: "api", key: "fake-named" }), personal)
+          expect(yield* auth.listSlots(provider)).toEqual([personal])
+        }
+        expect(yield* auth.listSlots("unrelated")).toEqual([CredentialSlot.make("default")])
+        expect((yield* auth.list).slice().sort()).toEqual([".", "..", "unrelated"])
+        expect((yield* fs.readFileString(dir + "/unrelated")) === original).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
     it.scopedLive("named provider addresses cannot escape the slots directory", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -3514,6 +3618,44 @@ describe("generic providers", () => {
       Effect.map((error) => error.message),
     )
 
+  it.scopedLive(
+    "present unsupported named OAuth cannot dispatch a generic API request with ambient authority",
+    () =>
+      Effect.gen(function* () {
+        const seenUnsupported: Array<ApiClassRequest> = []
+        return yield* Effect.gen(function* () {
+          const auth = yield* Auth
+          const resolver = yield* ModelResolver
+          const personal = CredentialSlot.make("personal")
+          const oauth = AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            access: "fake-access",
+            refresh: "fake-refresh",
+            expires: 1,
+          })
+          yield* auth.set("open", oauth, personal)
+          const blocked = yield* Effect.exit(
+            resolver.resolve({ modelId: "open/big", credentialSlot: personal }),
+          )
+          expect(Exit.isFailure(blocked)).toBe(true)
+          expect(seenUnsupported.length).toBe(0)
+          if (Exit.isFailure(blocked))
+            expect(
+              Option.exists(Cause.findErrorOption(blocked.cause), Schema.is(ProviderAuthError)),
+            ).toBe(true)
+          // Omitted/default authority keeps its existing environment behavior, even for old OAuth markers.
+          yield* auth.set("open", oauth)
+          yield* resolver.resolve({ modelId: "open/big" })
+          yield* resolver.resolve({
+            modelId: "open/big",
+            credentialSlot: CredentialSlot.make("default"),
+          })
+          yield* auth.set("open", AuthApi.make({ type: "api", key: "fake-personal-api" }), personal)
+          yield* resolver.resolve({ modelId: "open/big", credentialSlot: personal })
+          expect(seenUnsupported.length).toBe(3)
+        }).pipe(inProfile({ env: { OPEN_API_KEY: "fake-ambient" }, seen: seenUnsupported }))
+      }).pipe(Effect.timeout("5 seconds")),
+  )
   it.live(
     "a provider is active with a key variable set, a stored key or a config entry; the search finds the rest a class speaks",
     () =>

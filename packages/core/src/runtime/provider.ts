@@ -232,6 +232,8 @@ export interface AuthService {
     provider: string,
     info: AuthInfo,
     slot?: CredentialSlot,
+    /** Runs exactly once after successful persistence under the commit mask. */
+    onPersisted?: Effect.Effect<void, never, never>,
   ) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
   /**
@@ -322,7 +324,14 @@ export const serializeAuthStore = (
             exclusive(provider)(getOrDiscard(provider, slot)),
           ),
         ),
-    set: (provider, info, slot) => exclusive(provider)(store.set(provider, info, slot)),
+    set: (provider, info, slot, onPersisted) => {
+      let write = store.set(provider, info, slot)
+      if (Predicate.isNotUndefined(onPersisted)) {
+        write = write.pipe(Effect.andThen(onPersisted), Effect.uninterruptible)
+      }
+      // Acquisition retains caller interruptibility; only the committed write is masked.
+      return exclusive(provider)(write)
+    },
     remove: (provider, slot) => exclusive(provider)(store.remove(provider, slot)),
     update: (provider, f, slot) =>
       exclusive(provider)(
@@ -459,15 +468,19 @@ export class Auth extends Context.Service<Auth, AuthService>()(
           )
         const listSlots = (provider: string) =>
           Effect.gen(function* () {
-            const named = yield* namesIn(
-              pathService.join(slotsDirectory, encodeURIComponent(provider)),
-            )
+            const named = yield* namesIn(providerDirectory(provider))
             const slots = named
               .flatMap((name) => Option.toArray(Schema.decodeOption(CredentialSlot)(name)))
               .filter((slot) => slot !== DEFAULT_CREDENTIAL_SLOT)
-            const hasDefault = yield* fs
-              .exists(fileOf(provider))
-              .pipe(Effect.mapError(wrap("Failed to list auth info")))
+            const legacy = yield* fs.stat(fileOf(provider)).pipe(
+              Effect.asSome,
+              Effect.catchIf(
+                (error) => error.reason._tag === "NotFound",
+                () => Effect.succeedNone,
+              ),
+              Effect.mapError(wrap("Failed to list auth info")),
+            )
+            const hasDefault = Option.exists(legacy, (info) => info.type === "File")
             if (hasDefault) return [DEFAULT_CREDENTIAL_SLOT, ...slots.sort()]
             return slots.sort()
           })
@@ -919,8 +932,8 @@ const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {
 /** Build a PersistAuth callback for a provider — writes credentials to Auth. */
 const persistAuthTo =
   (authStore: AuthService, providerId: string, slot?: CredentialSlot): PersistAuth =>
-  (auth) =>
-    authStore.set(providerId, authValue(auth), slot).pipe(
+  (auth, onPersisted) =>
+    authStore.set(providerId, authValue(auth), slot, onPersisted).pipe(
       Effect.mapError(
         (e) =>
           new ProviderAuthError({
@@ -2300,6 +2313,16 @@ const genericDriver = Effect.fn("GenericProvider.driver")(function* (
     endpoint: (modelName, authInfo) =>
       Effect.gen(function* () {
         const auth = Option.fromUndefinedOr(authInfo)
+        if (
+          Option.isSome(auth) &&
+          auth.value._tag !== "Api" &&
+          Predicate.isNotUndefined(auth.value.slot) &&
+          auth.value.slot !== DEFAULT_CREDENTIAL_SLOT
+        ) {
+          return yield* new ProviderAuthError({
+            message: "Named credential unavailable for an API-only provider; sign in with /auth",
+          })
+        }
         const stored = Option.flatMap(auth, (each) => {
           if (each._tag !== "Api") return Option.none<string>()
           return Option.some(each.key)

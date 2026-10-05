@@ -2031,7 +2031,7 @@ export const buildOpenAIModelDriver = (
             OpenAICredentials,
             cellFor(ctx.slot),
             signedIn,
-            ctx.persist(result),
+            (onPersisted) => ctx.persist(result, onPersisted),
           )
         }).pipe(Effect.onExit((exit) => Deferred.done(entry.finished, settledLogin(exit))))
       }),

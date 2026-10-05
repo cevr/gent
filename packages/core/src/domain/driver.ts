@@ -250,6 +250,8 @@ export type PersistAuth = (
         readonly expires: number
         readonly accountId?: string
       },
+  /** Bounded owned-cell publication, no I/O or reentrant auth access. */
+  onPersisted?: Effect.Effect<void, never, never>,
 ) => Effect.Effect<void, ProviderAuthError>
 
 interface ProviderAuthorizeContext {

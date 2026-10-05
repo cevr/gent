@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Redacted,
   Schema,
   Stream,
@@ -163,15 +164,19 @@ export const replaceHeldCredential = <C, E>(
   credentials: Schema.Schema<C>,
   cellRef: CredentialCacheCellRef<C>,
   creds: C,
-  write: Effect.Effect<void, E>,
+  write: (onPersisted: Effect.Effect<void, never, never>) => Effect.Effect<void, E>,
 ): Effect.Effect<void, E> =>
-  SynchronizedRef.updateEffect(cellRef, () =>
-    Effect.gen(function* () {
-      yield* write
-      const at = yield* Clock.currentTimeMillis
-      return CredentialCacheCell(credentials).cases.Durable.make({ creds, at, invalidated: false })
-    }),
-  )
+  Effect.suspend(() =>
+    write(
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis
+        yield* Ref.set(
+          cellRef.backing,
+          CredentialCacheCell(credentials).cases.Durable.make({ creds, at, invalidated: false }),
+        )
+      }),
+    ),
+  ).pipe(cellRef.semaphore.withPermits(1))
 
 // ── Cache ──
 
@@ -1363,10 +1368,12 @@ export const apiKeyFrom = (
   authInfo: Option.Option<ProviderAuthInfo>,
   envApiKey: Option.Option<string>,
 ): Option.Option<string> =>
-  authInfo.pipe(
-    Option.flatMap((auth) => {
+  Option.match(authInfo, {
+    onNone: () => envApiKey,
+    onSome: (auth) => {
       if (auth._tag === "Api") return Option.some(auth.key)
-      return Option.none()
-    }),
-    Option.orElse(() => envApiKey),
-  )
+      if (Predicate.isNotUndefined(auth.slot) && auth.slot !== DEFAULT_CREDENTIAL_SLOT)
+        return Option.none()
+      return envApiKey
+    },
+  })

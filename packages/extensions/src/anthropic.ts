@@ -3087,16 +3087,16 @@ export const buildAnthropicModelDriver = (
               return yield* new ProviderAuthError({
                 message: "Claude Code import source expired; sign in there again",
               })
-            yield* replaceHeldCredential(
-              ClaudeCredentials,
-              cellFor(slot),
-              creds,
-              ctx.persist({
-                type: "oauth",
-                access: creds.accessToken,
-                refresh: creds.refreshToken,
-                expires: creds.expiresAt,
-              }),
+            yield* replaceHeldCredential(ClaudeCredentials, cellFor(slot), creds, (onPersisted) =>
+              ctx.persist(
+                {
+                  type: "oauth",
+                  access: creds.accessToken,
+                  refresh: creds.refreshToken,
+                  expires: creds.expiresAt,
+                },
+                onPersisted,
+              ),
             )
             return Option.some({
               url: "",
