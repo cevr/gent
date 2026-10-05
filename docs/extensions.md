@@ -876,7 +876,10 @@ system without the check, so leave them out of the `tools` of an agent you
 confine.
 A tool of your own reads the session's agent with
 `ctx.Session.getAgent()` (`ExtensionContext`), the agent bound to its run,
-and checks the same way: a call must lie in every scope of
+and checks the same way. `getAgent` fails with `SessionAgentError` when the
+session's agent is gone from its roster or the session cannot be read: the
+run's bound is unknown, so the file tools refuse every path then, and a tool of
+your own should let the failure refuse the call too. Otherwise: a call must lie in every scope of
 `agent.pathScopes()`, each scope's entries resolved against its own `cwd`
 (`scopeReaches` from `@gent/core/extensions/api`, after `resolveLinks` on
 both sides). `agent.admitsTool(id)` answers for the run too.

@@ -1207,6 +1207,20 @@ export class ParentBoundError extends Schema.TaggedError<ParentBoundError>()("Pa
   agent: Schema.optional(AgentName),
 }) {}
 
+/**
+ * The agent a session runs as cannot be resolved: the session cannot be
+ * read, or its agent is gone from its roster. Its run's bound is unknown,
+ * so it fails closed: a file call is refused, never read as unbounded.
+ */
+export class SessionAgentError extends Schema.TaggedError<SessionAgentError>()(
+  "SessionAgentError",
+  {
+    message: Schema.String,
+    sessionId: SessionId,
+    agent: Schema.optional(AgentName),
+  },
+) {}
+
 /** A parent at the nesting cap asked for one more child. */
 export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(
   "SessionDepthLimitError",

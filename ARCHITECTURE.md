@@ -1537,6 +1537,13 @@ a parent cwd whose config does not load, or a parent agent gone from its
 roster is a `ParentBoundError` naming the parent session and agent; a create
 of a child is refused with it, the child's turn ends with it as an
 `ErrorOccurred`, and `Session.getAgent` fails with it, so a file call fails.
+A session's own agent gone from its roster, or a session that cannot be read,
+fails the same way: `Session.getAgent` fails with `SessionAgentError` naming
+the session and agent, never returns a parent bound alone or no bound, so a
+file call in a response that was streaming when the agent left is refused.
+`getAgent` has no empty answer: no caller can read an unknown agent as
+unbounded. A create that names run `paths` for an agent the roster lacks
+(the default one included) is refused (`NotFoundError`).
 Authority follows the creating run, not the input: the `ExtensionContext`
 `Session.create` takes no `parentSessionId`, and the new session's parent is
 always the calling session (`runInfo.sessionId`), so a tool in a bounded run

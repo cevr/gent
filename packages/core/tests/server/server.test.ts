@@ -3108,6 +3108,29 @@ describe("message.send", () => {
     ),
   )
 
+  it.live("a create that names run paths with no agent in the roster to check them fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        // The roster lacks the default agent the create falls back to.
+        const reviewer = AgentDefinition.make({ name: AgentName.make("reviewer") })
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, agents: [reviewer], providerLayer }),
+        )
+        const before = yield* client.session.list()
+        const error = yield* client.session
+          .create({
+            cwd: process.cwd(),
+            admission: { runSpec: { overrides: { paths: [{ path: "a", access: "read" }] } } },
+          })
+          .pipe(Effect.flip)
+        expect(error._tag).toBe("NotFoundError")
+        expect(error.message).toBe("Unknown agent: main")
+        expect(yield* client.session.list()).toHaveLength(before.length)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("a create that names an unknown agent fails and stores nothing", () =>
     Effect.scoped(
       Effect.gen(function* () {

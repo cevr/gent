@@ -101,6 +101,7 @@ import {
   DEFAULT_AGENT_NAME,
   noRunBound,
   ParentBoundError,
+  SessionAgentError,
   resolveSessionAgent,
   type RunBound,
 } from "../domain/agent.js"
@@ -3239,8 +3240,10 @@ type RunSession = Pick<Session, "id" | "threadId" | "parentSessionId" | "cwd" | 
 /**
  * The agent `session` runs as, bound by its run and by every parent run it
  * was spawned under (`bindSessionAgent`), resolved now: the roster and
- * config as they are, links left to the file tools at each call. None when
- * its own agent is gone from the roster. Its own config reads leniently, as
+ * config as they are, links left to the file tools at each call. Its own
+ * agent gone from the roster fails closed (`SessionAgentError`): the parent
+ * bound alone is no answer, so no caller reads it as open. Its own config
+ * reads leniently, as
  * the turn's own `getFresh` already refuses to run on a file that does not
  * load; a parent's reads strictly (`resolveParentBound`).
  */
@@ -3253,15 +3256,21 @@ const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
   const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
   const config = yield* (yield* ConfigService).get(cwd)
   const overrides = Option.fromUndefinedOr(session.admission?.runSpec?.overrides)
-  return Option.map(
-    resolveSessionAgent({
-      agents: profile.resolved.agents.values(),
-      configAgents: Option.fromUndefinedOr(config.agents),
-      name: session.admission?.agent ?? DEFAULT_AGENT_NAME,
-      overrides,
-    }),
-    (definition) => bindSessionAgent(definition, { overrides, cwd, parent }),
-  )
+  const name = session.admission?.agent ?? DEFAULT_AGENT_NAME
+  const definition = resolveSessionAgent({
+    agents: profile.resolved.agents.values(),
+    configAgents: Option.fromUndefinedOr(config.agents),
+    name,
+    overrides,
+  })
+  if (Option.isNone(definition)) {
+    return yield* new SessionAgentError({
+      message: `Session ${session.id} runs as agent "${name}", which is not in the roster of ${cwd}: its bound is unknown, so it has no file access.`,
+      sessionId: session.id,
+      agent: name,
+    })
+  }
+  return bindSessionAgent(definition.value, { overrides, cwd, parent })
 })
 
 /**
@@ -3856,15 +3865,23 @@ export const makeExtensionHostContextProvider = (
             Effect.mapError(sessionError("getDetail")),
             inWorkspace,
           ),
-        getAgent: (sessionId) =>
-          sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
+        getAgent: (sessionId) => {
+          const subject = sessionId ?? runInfo.sessionId
+          return sessions((storage) => storage.getSession(subject)).pipe(
             Effect.flatMap((session) => {
-              // A session that cannot be read runs as the default agent, unbound by any parent.
-              const subject = session ?? { id: sessionId ?? runInfo.sessionId }
+              // A session that cannot be read has no known agent: it fails closed.
+              if (Predicate.isUndefined(session)) {
+                return Effect.fail(
+                  new SessionAgentError({
+                    message: `Session ${subject} cannot be read: its agent and bound are unknown, so it has no file access.`,
+                    sessionId: subject,
+                  }),
+                )
+              }
               return profiles((cache) =>
                 configs((configService) =>
                   sessions((sessionStorage) =>
-                    resolveRunAgent(subject, environment.cwd).pipe(
+                    resolveRunAgent(session, environment.cwd).pipe(
                       Effect.provideService(SessionProfileCache, cache),
                       Effect.provideService(ConfigService, configService),
                       Effect.provideService(SessionStorage, sessionStorage),
@@ -3873,9 +3890,13 @@ export const makeExtensionHostContextProvider = (
                 ),
               )
             }),
-            Effect.mapError(sessionError("getAgent")),
+            Effect.mapError((error) => {
+              if (Schema.is(SessionAgentError)(error)) return error
+              return sessionError("getAgent")(error)
+            }),
             inWorkspace,
-          ),
+          )
+        },
         renameCurrent: (name, options) =>
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),

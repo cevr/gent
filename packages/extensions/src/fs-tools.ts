@@ -711,7 +711,8 @@ class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeErro
  * run's path scopes has no entry that grants `access` and holds it. Links
  * resolve on both sides at each call (`resolveLinks`), so a link retargeted
  * since the run started is judged by where it points now. A run whose
- * parent bound cannot be resolved fails here (`Session.getAgent`).
+ * agent or parent bound cannot be resolved fails here (`Session.getAgent`):
+ * an unknown bound grants nothing.
  */
 const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
   target: string,
@@ -719,11 +720,7 @@ const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
 ) {
   const ctx = yield* ExtensionContext
   const path = yield* Path.Path
-  const agent = yield* ctx.Session.getAgent()
-  const scopes = Option.match(agent, {
-    onNone: () => [],
-    onSome: (run) => run.pathScopes(),
-  })
+  const scopes = (yield* ctx.Session.getAgent()).pathScopes()
   if (scopes.length === 0) return
   const real = { path: yield* resolveLinks(target), access }
   const within = (inner: string, outer: string) => pathWithin(path, outer, inner)

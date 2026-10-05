@@ -815,8 +815,9 @@ const makeSessionMutationsService: Effect.Effect<
       registry.getResolved().agents.values(),
       Option.fromUndefinedOr(config.agents),
     ).get(name)
+    // Named paths with no agent to check them against fail closed, as a
+    // named agent the roster lacks does.
     if (Predicate.isUndefined(agent)) {
-      if (Option.isNone(effective)) return
       return yield* new NotFoundError({ message: `Unknown agent: ${name}` })
     }
     if (Option.isNone(named)) return

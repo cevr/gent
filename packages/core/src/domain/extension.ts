@@ -21,6 +21,7 @@ import {
   type ModelId,
   type ReasoningEffort,
   type ParentBoundError,
+  type SessionAgentError,
   type RunPathRefusedError,
   type SessionAgent,
   type SessionDepthLimitError,
@@ -910,13 +911,15 @@ export interface ExtensionSessionService {
    * roster (extension agents and config `agents` entries) with the
    * session's run overrides applied, bound by its run and every parent run
    * it was spawned under: `admitsTool` and `pathScopes` answer for the run
-   * (`SessionAgent`). The current session when none is named; none when the
-   * agent is gone from the roster. Fails when a parent run's bound cannot
-   * be resolved (`ParentBoundError`), so a caller that checks fails closed.
+   * (`SessionAgent`). The current session when none is named. Fails with
+   * `SessionAgentError` when the session cannot be read or its agent is gone
+   * from the roster, and when a parent run's bound cannot be resolved
+   * (`ParentBoundError`, as `ExtensionServiceError`): an unknown agent has an
+   * unknown bound, so every caller fails closed and none reads it as open.
    */
   readonly getAgent: (
     sessionId?: SessionId,
-  ) => Effect.Effect<Option.Option<SessionAgent>, ExtensionServiceError>
+  ) => Effect.Effect<SessionAgent, ExtensionServiceError | SessionAgentError>
   /**
    * Rename the current session. With `expectedName` it renames only while
    * the stored name is still that one, checked in the transaction that
