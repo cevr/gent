@@ -75,7 +75,12 @@ import {
   toolCallPart,
   type LanguageModelStreamPart,
   Auth,
+  AuthApi,
+  AuthInfo,
+  ModelCatalogRecord,
+  ModelRegistry,
   ModelResolver,
+  reasoningDeltaPart,
   multiToolCallStep,
   textStep,
   toolCallStep,
@@ -155,14 +160,18 @@ import { contextWindowOf } from "../../src/runtime/model-context"
 import { e2ePreset, rangeCompactorLayer, testAgent, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
 import {
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
+  DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type ModelRouteInput,
   type ModelRouterContribution,
+  type ProviderAuthInfo,
   type ProviderHints,
   type VirtualModel,
   type VirtualModelChoice,
 } from "../../src/domain/driver"
-import { RuntimeEnvironment } from "../../src/runtime/config"
+import { type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -2079,6 +2088,422 @@ describe("model driver and catalog", () => {
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
+})
+
+// ── credential order ────────────────────────────────────────────────────────
+
+describe("credential order", () => {
+  const FALLBACK = "fallback"
+  const fallbackModel = ModelId.make("fallback/model")
+  const fallbackProvider = ProviderId.make(FALLBACK)
+  const personal = CredentialSlot.make("personal")
+  const work = CredentialSlot.make("work")
+  const apiKey = (key: string) => AuthApi.make({ type: "api", key })
+  const oauthLogin = AuthInfo.cases.Oauth.make({
+    type: "oauth",
+    access: "fake-access",
+    refresh: "fake-refresh",
+    expires: 4_102_444_800_000,
+  })
+  /** Dollars per million tokens an API key pays; a subscription sign-in lists no price. */
+  const apiPricing = { input: 3, output: 15 }
+  const subscriptionPricing = { input: 0, output: 0 }
+
+  /** What a request with one credential streams, by how many it sent before. */
+  type Reply = (call: number) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
+
+  const failWith = (reason: AiError.AiError["reason"]): Stream.Stream<never, AiError.AiError> =>
+    Stream.fail(AiError.make({ module: "Fallback", method: "streamText", reason }))
+  const httpRequest = {
+    method: "POST" as const,
+    url: "http://127.0.0.1/nonexistent/loop-probe-x",
+    urlParams: [],
+    headers: {},
+  }
+  /** The provider answered 401: the key is refused. */
+  const refusal = () =>
+    failWith(
+      new AiError.AuthenticationError({
+        kind: "InvalidKey",
+        http: { request: httpRequest, response: { status: 401, headers: {} } },
+      }),
+    )
+  const quotaSpent = () => failWith(new AiError.QuotaExhaustedError({}))
+  const answer =
+    (text: string, usage = { inputTokens: 10, outputTokens: 5 }): Reply =>
+    () =>
+      Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop", usage })])
+  /** Output first, then a failure that would move the turn if nothing had been written. */
+  const afterOutput =
+    (part: LanguageModelStreamPart): Reply =>
+    () =>
+      Stream.concat(Stream.make(part), quotaSpent())
+
+  const echoTool = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+
+  /** Which credential a request carried: the stored key, the OAuth sign-in, or none (the environment). */
+  const credentialOf = (authInfo: Option.Option<ProviderAuthInfo>): string => {
+    if (Option.isNone(authInfo)) return "env"
+    if (authInfo.value._tag === "Oauth") return "oauth"
+    return authInfo.value.key
+  }
+
+  /**
+   * One turn on `fallback/model` through the live resolver and the live
+   * model registry, with `stored` in the auth store and `order` as the
+   * sign-in's `authOrder`. The driver answers each request by its
+   * credential; it lists the model priced for an API key, free for a
+   * subscription sign-in.
+   */
+  const credentialTurn = (params: {
+    readonly name: string
+    readonly order?: ReadonlyArray<CredentialSlot>
+    readonly stored: ReadonlyArray<readonly [CredentialSlot, AuthInfo]>
+    readonly replies: Readonly<Record<string, Reply>>
+    readonly maxModelAttempts?: number
+  }) =>
+    Effect.gen(function* () {
+      const sent: Array<string> = []
+      const resolvedWith: Array<string> = []
+      const calls = new Map<string, number>()
+      const driver: ModelDriverContribution = {
+        id: FALLBACK,
+        name: "Fallback driver",
+        // Same-credential retries end at once, so a rate limit moves on quickly.
+        retry: { ...DEFAULT_RETRY_POLICY, initialDelay: 1, maxDelay: 5, maxAttempts: 2 },
+        listModels: (_catalog, authInfo) => {
+          let pricing = apiPricing
+          if (authInfo?._tag === "Oauth") pricing = subscriptionPricing
+          return Effect.succeed([
+            Model.make({
+              id: fallbackModel,
+              name: "Fallback model",
+              provider: ProviderId.make(FALLBACK),
+              contextLength: 128_000,
+              pricing,
+            }),
+          ])
+        },
+        resolveModel: (_modelName, authInfo) =>
+          Effect.sync(() => {
+            const credential = credentialOf(Option.fromUndefinedOr(authInfo))
+            resolvedWith.push(credential)
+            const providerLayer = LanguageModelLayers.testStream(() =>
+              Effect.sync(() => {
+                sent.push(credential)
+                const call = calls.get(credential) ?? 0
+                calls.set(credential, call + 1)
+                const reply = params.replies[credential]
+                if (Predicate.isUndefined(reply)) return Stream.die(`no reply for ${credential}`)
+                return reply(call)
+              }),
+            )
+            return AiModel.make(FALLBACK, "model", providerLayer)
+          }),
+      }
+      const authLayer = Layer.effect(
+        Auth,
+        Effect.gen(function* () {
+          const auth = yield* Auth
+          for (const [slot, info] of params.stored) yield* auth.set(FALLBACK, info, slot)
+          return auth
+        }).pipe(Effect.orDie),
+      ).pipe(Layer.provide(Auth.Test()))
+      const catalogLayers = Layer.mergeAll(authLayer, fixtureModelCatalogSource)
+      const events = Ref.makeUnsafe<Array<AgentEvent>>([])
+      let providerConfig: ProviderConfig = {}
+      if (Predicate.isNotUndefined(params.order)) {
+        providerConfig = { providers: { [FALLBACK]: { authOrder: params.order } } }
+      }
+      const layer = actorTestRoot({
+        resolver: ModelResolver.Live.pipe(Layer.provide(catalogLayers)),
+        eventStore: recordingEventStore(events),
+        registry: ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make(FALLBACK) },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { agents: testAgents, tools: [echoTool], modelDrivers: [driver] },
+            },
+          ]),
+          Effect.succeed(providerConfig),
+        ),
+        overrides: ModelRegistry.Live.pipe(
+          Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
+        ),
+      })
+      const sessionId = SessionId.make(`credential-${params.name}-session`)
+      const branchId = BranchId.make(`credential-${params.name}-branch`)
+      const admission: SessionAdmission = {
+        runSpec: {
+          overrides: {
+            model: fallbackModel,
+            ...omitUndefined({ maxModelAttempts: params.maxModelAttempts }),
+          },
+        },
+      }
+      const outcome = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* ensureStorageParents({ sessionId, branchId, admission })
+          return yield* Effect.exit(
+            runAgentLoop(makeMessage(sessionId, branchId, "hello"), admission),
+          )
+        }),
+      ).pipe(Effect.provide(layer))
+      const recorded = yield* Ref.get(events)
+      return {
+        outcome,
+        sent,
+        resolvedWith,
+        ended: recorded.filter((event) => event._tag === "StreamEnded"),
+        errors: recorded.flatMap((event) => {
+          if (event._tag !== "ErrorOccurred") return []
+          return [{ error: event.error, notice: event.notice === true }]
+        }),
+        retries: recorded.filter((event) => event._tag === "ProviderRetrying").length,
+      }
+    }).pipe(Effect.timeout("15 seconds"))
+
+  it.live("a refused credential hands the turn to the next one, which keeps it", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "refused",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: {
+          "sk-a": refusal,
+          "sk-b": (call) => {
+            if (call === 0) {
+              return Stream.fromIterable([
+                toolCallPart("echo", { text: "hi" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return answer("done")(call)
+          },
+        },
+      })
+      // A refuses once; B answers the step and the tool step after it.
+      expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
+      expect(run.ended.map((event) => event.credential)).toEqual([
+        { provider: fallbackProvider, slot: personal },
+        { provider: fallbackProvider, slot: personal },
+      ])
+      expect(run.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} was refused; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+    }),
+  )
+
+  it.live("an exhausted quota moves the turn on; one that answers stays", () =>
+    Effect.gen(function* () {
+      const moved = yield* credentialTurn({
+        name: "quota",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { "sk-a": quotaSpent, "sk-b": answer("from b") },
+      })
+      expect(moved.sent).toEqual(["sk-a", "sk-b"])
+      expect(moved.ended.map((event) => event.outcome)).toEqual(["Answered"])
+      const stayed = yield* credentialTurn({
+        name: "stays",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
+      })
+      expect(stayed.sent).toEqual(["sk-a"])
+      expect(stayed.ended.map((event) => event.credential)).toEqual([
+        { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
+      ])
+    }),
+  )
+
+  it.live("a rate limit moves the turn on only once its same-credential retries end", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "rate-limit",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: {
+          "sk-a": () => failWith(new AiError.RateLimitError({})),
+          "sk-b": answer("from b"),
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+      expect(run.retries).toBe(1)
+    }),
+  )
+
+  for (const [name, part] of [
+    ["text", textDeltaPart("partial")],
+    ["reasoning", reasoningDeltaPart("thinking")],
+    ["tool-call", toolCallPart("echo", { text: "hi" })],
+    [
+      "file",
+      Response.makePart("file", { mediaType: "image/png", data: new Uint8Array([137, 80]) }),
+    ],
+  ] as const) {
+    it.live(`${name} output keeps the turn on its credential when the stream then fails`, () =>
+      Effect.gen(function* () {
+        const run = yield* credentialTurn({
+          name: `after-${name}`,
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          stored: [
+            [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+            [personal, apiKey("sk-b")],
+          ],
+          replies: { "sk-a": afterOutput(part), "sk-b": answer("from b") },
+        })
+        // The turn keeps what arrived and goes on, every step on the same credential.
+        expect(run.sent.length).toBeGreaterThan(0)
+        expect(run.sent.every((credential) => credential === "sk-a")).toBe(true)
+        expect(run.ended.map((event) => event.outcome)).toContain("Failed")
+        expect(run.ended.map((event) => event.credential?.slot)).toEqual(
+          run.ended.map(() => DEFAULT_CREDENTIAL_SLOT),
+        )
+        expect(run.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
+      }),
+    )
+  }
+
+  for (const [name, reply] of [
+    [
+      "a network fault",
+      () => failWith(new AiError.NetworkError({ reason: "TransportError", request: httpRequest })),
+    ],
+    [
+      "an overload",
+      () => failWith(new AiError.InternalProviderError({ description: "overloaded" })),
+    ],
+    [
+      "a refused request",
+      () =>
+        failWith(
+          new AiError.InvalidRequestError({
+            http: { request: httpRequest, response: { status: 400, headers: {} } },
+          }),
+        ),
+    ],
+    [
+      "an authentication error no response proves",
+      () => failWith(new AiError.AuthenticationError({ kind: "InvalidKey" })),
+    ],
+    ["a defect", () => Stream.die("driver bug")],
+  ] as const satisfies ReadonlyArray<readonly [string, Reply]>) {
+    it.live(`${name} leaves the turn on its credential`, () =>
+      Effect.gen(function* () {
+        const run = yield* credentialTurn({
+          name: name.replaceAll(" ", "-"),
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          stored: [
+            [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+            [personal, apiKey("sk-b")],
+          ],
+          replies: { "sk-a": reply, "sk-b": answer("from b") },
+        })
+        expect(run.sent.includes("sk-b")).toBe(false)
+        expect(run.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
+      }),
+    )
+  }
+
+  it.live("a named credential with nothing stored never falls back to the environment", () =>
+    Effect.gen(function* () {
+      // Only the named slot is in the order: the turn fails without a request.
+      const alone = yield* credentialTurn({
+        name: "named-alone",
+        order: [work],
+        stored: [],
+        replies: { env: answer("from env") },
+      })
+      expect(alone.resolvedWith).toEqual([])
+      expect(alone.errors.map((entry) => entry.error)).toEqual([
+        `Credential "work" unavailable for provider "${FALLBACK}"; sign in again`,
+      ])
+      // First in the order, it moves the turn to the stored default.
+      const first = yield* credentialTurn({
+        name: "named-first",
+        order: [work, DEFAULT_CREDENTIAL_SLOT],
+        stored: [[DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")]],
+        replies: { "sk-a": answer("from a"), env: answer("from env") },
+      })
+      expect(first.resolvedWith).toEqual(["sk-a"])
+      expect(first.ended.map((event) => event.credential)).toEqual([
+        { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
+      ])
+    }),
+  )
+
+  it.live("each credential the turn tries spends one model attempt", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "attempt-budget",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { "sk-a": refusal, "sk-b": answer("from b") },
+        maxModelAttempts: 1,
+      })
+      expect(run.sent).toEqual(["sk-a"])
+      expect(run.errors.map((entry) => entry.error)).toContain("Model-attempt budget exhausted")
+    }),
+  )
+
+  it.live("a step is priced as its credential lists the model", () =>
+    Effect.gen(function* () {
+      const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 }
+      // The subscription sign-in is spent; the API key answers and pays.
+      const paid = yield* credentialTurn({
+        name: "priced-api",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, oauthLogin],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { oauth: quotaSpent, "sk-b": answer("paid", usage) },
+      })
+      expect(paid.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
+        [personal, apiPricing.input + apiPricing.output],
+      ])
+      // The subscription sign-in answers: the same model costs nothing.
+      const free = yield* credentialTurn({
+        name: "priced-subscription",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, oauthLogin],
+          [personal, apiKey("sk-b")],
+        ],
+        replies: { oauth: answer("free", usage), "sk-b": answer("paid", usage) },
+      })
+      expect(free.ended.map((event) => [event.credential?.slot, event.costUsd])).toEqual([
+        [DEFAULT_CREDENTIAL_SLOT, 0],
+      ])
+    }),
+  )
 })
 
 // ── native model compaction ─────────────────────────────────────────────────

@@ -24,6 +24,7 @@ import {
   AuthMethod,
   CredentialSlot,
   catalogModelEntry,
+  DEFAULT_CREDENTIAL_SLOT,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type ModelCatalogView,
@@ -51,6 +52,7 @@ import {
   listAuthMethods,
   limitResetAt,
   listCatalogProviders,
+  makeExtensionModels,
   retryProviderCall,
   listModelCatalog,
   type LoadedModelCatalog,
@@ -65,7 +67,7 @@ import {
   toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
-import { Model as AiModel, LanguageModel } from "effect/ai"
+import { Decision, DecisionModel, Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
@@ -2730,6 +2732,154 @@ describe("classifier availability", () => {
   )
 })
 
+// ── classifier credential order ─────────────────────────────────────────────
+
+describe("classifier credential order", () => {
+  const personal = CredentialSlot.make("personal")
+  const quotaSpent = AiError.make({
+    module: "Judge",
+    method: "decide",
+    reason: new AiError.QuotaExhaustedError({}),
+  })
+  const networkFault = AiError.make({
+    module: "Judge",
+    method: "decide",
+    reason: new AiError.NetworkError({
+      reason: "TransportError",
+      request: {
+        method: "POST",
+        url: "http://127.0.0.1/nonexistent/loop-probe-x",
+        urlParams: [],
+        headers: {},
+      },
+    }),
+  })
+
+  /**
+   * One `models.decide` call through the live resolver, with `stored` keys
+   * under the judge's sign-in and `order` as its `authOrder`. The judge
+   * answers by the key it was built with; `asked` lists each key it got.
+   */
+  const decideWith = (params: {
+    readonly order: ReadonlyArray<CredentialSlot>
+    readonly stored: ReadonlyArray<readonly [CredentialSlot, string]>
+    readonly failures: Readonly<Record<string, AiError.AiError>>
+  }) =>
+    Effect.gen(function* () {
+      const asked: Array<string> = []
+      const judge: ModelDriverContribution = {
+        id: "judge",
+        name: "Judge",
+        resolveModel: () => Effect.succeed(fakeResolution()),
+        listModels: () =>
+          Effect.succeed([Model.make({ ...catalogModel("judge/jev-1"), kind: "classifier" })]),
+        resolveDecisionModel: (_name, authInfo) => {
+          let key = "env"
+          if (authInfo?._tag === "Api") key = authInfo.key
+          return Effect.succeed(
+            Layer.effect(
+              DecisionModel.DecisionModel,
+              DecisionModel.make({
+                decide: () =>
+                  Effect.suspend(() => {
+                    asked.push(key)
+                    const failure = params.failures[key]
+                    if (Predicate.isNotUndefined(failure)) return Effect.fail(failure)
+                    return Effect.succeed({
+                      answers: {
+                        team: {
+                          _tag: "Classify" as const,
+                          label: "billing",
+                          probabilities: { billing: 1, technical: 0 },
+                          confidence: 0.9,
+                        },
+                      },
+                      usage: { inputTokens: 1, outputTokens: 1 },
+                    })
+                  }),
+              }),
+            ),
+          )
+        },
+      }
+      const registry = ExtensionRegistry.fromResolved(
+        resolveExtensions([makeExt("classifiers", [judge])]),
+        Effect.succeed({ providers: { judge: { authOrder: params.order } } }),
+      )
+      const decided = yield* Effect.gen(function* () {
+        const auth = yield* Auth
+        for (const [slot, key] of params.stored) {
+          yield* auth.set("judge", AuthApi.make({ type: "api", key }), slot)
+        }
+        const models = yield* makeExtensionModels
+        return yield* Effect.exit(
+          models.decide({
+            definition: Decision.make({
+              input: Schema.String,
+              decisions: {
+                team: Decision.classify({
+                  instructions: "Which team",
+                  criteria: { billing: "payments", technical: "bugs" },
+                }),
+              },
+            }),
+            input: "charged twice",
+            model: "judge/jev-1",
+          }),
+        )
+      }).pipe(
+        Effect.provide(
+          DecisionModelResolver.Live.pipe(
+            Layer.provideMerge(Layer.mergeAll(Auth.Test({}), registry, fixtureModelCatalogSource)),
+          ),
+        ),
+      )
+      return { asked, decided }
+    }).pipe(Effect.timeout("4 seconds"))
+
+  it.live("a spent classifier credential hands the call to the next one of its order", () =>
+    Effect.gen(function* () {
+      const { asked, decided } = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: { "sk-a": quotaSpent },
+      })
+      expect(asked).toEqual(["sk-a", "sk-b"])
+      expect(Exit.isSuccess(decided)).toBe(true)
+    }),
+  )
+
+  it.live("any other classifier failure ends the call on its credential", () =>
+    Effect.gen(function* () {
+      const { asked, decided } = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: { "sk-a": networkFault },
+      })
+      expect(asked).toEqual(["sk-a"])
+      expect(Exit.isFailure(decided)).toBe(true)
+    }),
+  )
+
+  it.live("a classifier order of named credentials serves with no default and no environment", () =>
+    Effect.gen(function* () {
+      const { asked, decided } = yield* decideWith({
+        order: [personal],
+        stored: [[personal, "sk-b"]],
+        failures: {},
+      })
+      expect(asked).toEqual(["sk-b"])
+      expect(Exit.isSuccess(decided)).toBe(true)
+    }),
+  )
+})
+
 // ── scripted debug model ────────────────────────────────────────────────────
 
 describe("Scripted debug model tool scenario", () => {
@@ -3688,6 +3838,9 @@ describe("generic providers", () => {
       ).toEqual(["default:false", "work:true"])
       const ordered = yield* listing({ config: { providers: { open: { authOrder: [work] } } } })
       expect(ordered.models).toEqual(["open/big"])
+      // A turn walks the order: the sign-in is ready on the slot it names.
+      expect(ordered.row?.hasKey).toBe(true)
+      expect(ordered.row?.source).toBe("stored")
     }).pipe(Effect.timeout("5 seconds")),
   )
   it.live(

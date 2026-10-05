@@ -25,6 +25,7 @@ import {
   ToolCallId,
 } from "./ids.js"
 import { ModelId, ReasoningEffort } from "./agent.js"
+import { CredentialReceipt } from "./driver.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,13 @@ export const AgentEvent = Schema.TaggedUnion({
      * one at an unknown level.
      */
     reasoningDefault: Schema.optional(Schema.Literal(true)),
+    /**
+     * The credential the step's last request went out with: the sign-in's
+     * provider and slot, after any move down its `authOrder`. Absent on rows
+     * written before the field and for a model no provider credential serves;
+     * such a step's credential is unknown.
+     */
+    credential: Schema.optional(CredentialReceipt),
   },
   TurnCompleted: {
     sessionId: SessionId,

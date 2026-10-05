@@ -17,6 +17,7 @@ import {
   ModelId,
   type ModelId as ModelIdType,
   promptCacheTtlMsFor,
+  ProviderId,
   type ReasoningEffort,
   resolveAgentModel,
 } from "../domain/agent.js"
@@ -108,8 +109,10 @@ import {
   type ModelRouteCurrent,
   type ModelRouteDecision,
   type ModelRouteInput,
+  type CredentialReceipt,
+  type CredentialSlot,
   type ModelRouterContribution,
-  type ProviderAuthError,
+  ProviderAuthError,
   type ProviderHints,
   ProviderStopReason,
   type RunEffort,
@@ -175,6 +178,8 @@ import {
   ModelResolver,
   type ResolveModelRequest,
   retryProviderCall,
+  requestCredentialOrder,
+  credentialRefusal,
   retryReason,
   servedEffortRouter,
   type ServedVirtualModel,
@@ -608,6 +613,8 @@ const reportStreamFailure = (
     modelId: ModelIdType
     reasoningLevel?: RunEffort
     retryAt: Option.Option<number>
+    /** The credential the step's last request went out with. */
+    credential?: CredentialReceipt
   },
   streamError: ProviderError,
   message: string,
@@ -624,6 +631,7 @@ const reportStreamFailure = (
         model: params.modelId,
         outcome: "Failed",
         ...effortReceipt(Option.fromUndefinedOr(params.reasoningLevel)),
+        ...omitUndefined({ credential: params.credential }),
       }),
     )
     const failure = {
@@ -654,6 +662,8 @@ export const collectModelTurnResponse = (params: {
   modelId: ModelIdType
   /** The effort the step's request sent; its end names it. */
   reasoningLevel?: RunEffort
+  /** The credential the step's request goes out with, read when the step ends. */
+  readCredential?: Effect.Effect<Option.Option<CredentialReceipt>>
   activeStream: ActiveStreamHandle
 }) =>
   Effect.gen(function* () {
@@ -691,8 +701,13 @@ export const collectModelTurnResponse = (params: {
           if (interrupted) return false
           // Nothing observable was produced yet: let the caller's retry policy try again.
           if (!hasObservableOutput) return yield* streamError
+          const credential = yield* params.readCredential ?? Effect.succeedNone
           yield* reportStreamFailure(
-            { ...params, retryAt: Option.none() },
+            {
+              ...params,
+              retryAt: Option.none(),
+              ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
+            },
             streamError,
             "stream error, persisting partial output",
           )
@@ -725,6 +740,8 @@ export const collectFailedModelTurnResponse = (params: {
   refusedAgain?: boolean
   /** When the usage limit the step failed on resets (`limitResetAt`). */
   retryAt: Option.Option<number>
+  /** The credential the step's last request went out with. */
+  credential?: CredentialReceipt
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
@@ -833,6 +850,14 @@ interface TurnLedger {
   readonly noteStepEnd: (retryAt: Option.Option<number>) => Effect.Effect<void>
   /** The reset of the usage limit this turn's last step failed on. */
   readonly retryAt: Effect.Effect<Option.Option<number>>
+  /**
+   * The credentials of `provider`'s order this turn left after a proved
+   * failure. A request goes out with the first slot of the order not in it,
+   * so a turn never comes back to a slot it left.
+   */
+  readonly passedCredentials: (provider: string) => Effect.Effect<ReadonlySet<CredentialSlot>>
+  /** This turn leaves `slot` of `provider`'s order for the rest of the turn. */
+  readonly passCredential: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
 }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
@@ -860,6 +885,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
   const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
   const lastRetryAt = yield* Ref.make(Option.none<number>())
+  const passed = yield* Ref.make<ReadonlyMap<string, ReadonlySet<CredentialSlot>>>(new Map())
   return {
     beginTurn: (messageId) =>
       Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
@@ -871,6 +897,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           return Ref.set(shown, new Map()).pipe(
             Effect.andThen(Ref.set(joined, new Set())),
             Effect.andThen(Ref.set(lastRetryAt, Option.none())),
+            Effect.andThen(Ref.set(passed, new Map())),
           )
         }),
       ),
@@ -960,6 +987,14 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     joined: Ref.get(joined),
     noteStepEnd: (retryAt) => Ref.set(lastRetryAt, retryAt),
     retryAt: Ref.get(lastRetryAt),
+    passedCredentials: (provider) =>
+      Effect.map(Ref.get(passed), (current) => current.get(provider) ?? new Set()),
+    passCredential: (provider, slot) =>
+      Ref.update(passed, (current) => {
+        const next = new Map(current)
+        next.set(provider, new Set([...(current.get(provider) ?? []), slot]))
+        return next
+      }),
   }
 })
 
@@ -2527,7 +2562,19 @@ const atTurnEffort = (
     },
   )
 
+/**
+ * The credential a turn's next request goes out with: the first slot of its
+ * sign-in's order the turn has not left, and the slot after it, if any.
+ */
+interface SelectedCredential {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  readonly next: Option.Option<CredentialSlot>
+}
+
 type ModelTurnSource = {
+  /** The credential the step's request goes out with now; none for a model no credential serves. */
+  readonly credential: Effect.Effect<Option.Option<CredentialReceipt>>
   /** The compaction summary written for this step, and its price when its model has one. */
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
@@ -2571,6 +2618,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   overflowed: boolean
   /** The branch's model context ledger (`AgentLoopTurnExecutionContext.ledger`). */
   ledger: ModelContextLedger["Service"]
+  /** What the turn spent so far, and the credentials it left. */
+  turnLedger: TurnLedger
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
@@ -2724,6 +2773,45 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     hints: { ...turnHints, cacheKey: params.sessionId },
     driverId: Option.getOrUndefined(driverId),
   }
+  // The turn walks its sign-in's `authOrder`, first to last, and never comes
+  // back to a slot it left: a slot that answers serves the rest of the turn.
+  // A conflicting order fails here as it fails the request's resolution.
+  const selectCredential = Effect.gen(function* () {
+    const order = yield* requestCredentialOrder(modelRequest, extensionRegistry)
+    if (Option.isNone(order)) return Option.none<SelectedCredential>()
+    const left = yield* params.turnLedger.passedCredentials(order.value.provider)
+    const [slot, next] = order.value.slots.filter((candidate) => !left.has(candidate))
+    if (Predicate.isUndefined(slot)) {
+      return yield* new ProviderAuthError({
+        message: `Every credential of provider "${order.value.provider}" failed this turn`,
+      })
+    }
+    return Option.some<SelectedCredential>({
+      provider: order.value.provider,
+      slot,
+      next: Option.fromUndefinedOr(next),
+    })
+  })
+  const credential = selectCredential.pipe(
+    Effect.map(
+      Option.map((selected): CredentialReceipt => ({
+        provider: ProviderId.make(selected.provider),
+        slot: selected.slot,
+      })),
+    ),
+    Effect.orElseSucceed(() => Option.none<CredentialReceipt>()),
+  )
+  const resolveSelectedModel = (request: ResolveModelRequest) =>
+    selectCredential.pipe(
+      Effect.flatMap((selected) =>
+        resolveAdmittedModel({
+          ...request,
+          ...omitUndefined({
+            credentialSlot: Option.getOrUndefined(Option.map(selected, (found) => found.slot)),
+          }),
+        }),
+      ),
+    )
   const eventStore = yield* EventStore
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.
@@ -2757,7 +2845,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     // and never inherits the turn's effort. Its prompt is unique, so it names
     // no cache key: nothing would read its cache entry back.
     summaryModel: (maxTokens) =>
-      resolveAdmittedModel({
+      resolveSelectedModel({
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
@@ -2781,10 +2869,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ),
       ),
     onSome: (value) =>
-      computeStreamEndedCost({
-        modelId: value.modelId,
-        usage: Option.fromUndefinedOr(value.usage),
-      }).pipe(Effect.map((costUsd) => Option.some({ costUsd }))),
+      Effect.flatMap(credential, (summaryCredential) =>
+        computeStreamEndedCost({
+          modelId: value.modelId,
+          usage: Option.fromUndefinedOr(value.usage),
+          credential: summaryCredential,
+        }),
+      ).pipe(Effect.map((costUsd) => Option.some({ costUsd }))),
   })
   const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
 
@@ -2848,7 +2939,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     hints: { ...modelRequest.hints, reasoningHistory },
   }
   const wireStream = Stream.unwrap(
-    resolveAdmittedModel(stepRequest).pipe(
+    resolveSelectedModel(stepRequest).pipe(
       Effect.map((model) => {
         if (resolved.tools.length > 0) {
           if (params.finalStep) {
@@ -2911,6 +3002,37 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       return { ...collected, windowFull, contextOverflow }
     })
 
+  /**
+   * Leave the credential a failure proved cannot serve, when its order names
+   * another: a refusal, an exhausted quota, a rate limit past its retries, or
+   * a failure the driver proved. Any other failure, a cancelled step, or the
+   * last slot of the order stays where it is. The user reads a notice.
+   */
+  const moveCredential = (streamError: ProviderError) =>
+    Effect.gen(function* () {
+      if (yield* wasInterrupted(params.activeStream)) return false
+      const refusal = credentialRefusal(streamError.cause)
+      if (Option.isNone(refusal)) return false
+      const selected = yield* selectCredential.pipe(
+        Effect.orElseSucceed(() => Option.none<SelectedCredential>()),
+      )
+      if (Option.isNone(selected) || Option.isNone(selected.value.next)) return false
+      const { provider, slot, next } = selected.value
+      yield* params.turnLedger.passCredential(provider, slot)
+      yield* Effect.logInfo("turn.credential-moved").pipe(
+        Effect.annotateLogs({ provider, slot, next: next.value, reason: refusal.value }),
+      )
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next.value}"`,
+          notice: true,
+        }),
+      )
+      return true
+    })
+
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
@@ -2927,33 +3049,54 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           }),
       ),
     ),
+    credential,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
-    ) =>
-      // `ProviderAuthError` is a fail-closed credential-absence signal —
-      // not retryable, not recoverable mid-turn. Let it escape so the RPC
-      // seam surfaces the typed auth failure; narrow the retry scope to
-      // transient `ProviderError` only.
-      effect.pipe(
+    ) => {
+      // A `ProviderAuthError` is a fail-closed credential-absence signal:
+      // never retried on the same credential. Let it escape so the RPC seam
+      // surfaces the typed auth failure; narrow the retry scope to transient
+      // `ProviderError` only. A credential failure inside the stream moves
+      // the turn down its order below.
+      const attempt = effect.pipe(
         retryProviderCall(retryPolicy, {
           // A cancel during a backoff ends the wait; the failure it leaves
           // reads as an interrupted step below.
           stop: Deferred.await(params.activeStream.interrupted),
-          onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
+          onRetry: ({ attempt: count, maxAttempts, delayMs, error }) =>
             publishEventOrDie(
               ProviderRetrying.make({
                 sessionId: params.sessionId,
                 branchId: params.branchId,
-                attempt,
+                attempt: count,
                 maxAttempts,
                 delayMs,
                 error: retryReason(error),
               }),
             ),
         }),
+      )
+      // A failure that reaches here came before any output: the collector
+      // keeps a step that wrote something. When it proves the credential
+      // cannot serve, the turn leaves that slot and runs the step again on
+      // the next one of its order, under the same attempt budget.
+      const visit: Effect.Effect<
+        CollectedTurnResponse,
+        ProviderError | ProviderAuthError,
+        R | EventStore
+      > = attempt.pipe(
         Effect.catchTag("ProviderError", (streamError) =>
-          Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+          Effect.flatMap(moveCredential(streamError), (moved) => {
+            if (moved) return Effect.suspend(() => visit)
+            return Effect.fail(streamError)
+          }),
+        ),
+      )
+      return visit.pipe(
+        Effect.catchTag("ProviderError", (streamError) =>
+          Effect.flatMap(Effect.all([Clock.currentTimeMillis, credential]), ([nowMs, used]) =>
             collectFailedModelTurnResponse({
+              ...omitUndefined({ credential: Option.getOrUndefined(used) }),
               messageId: params.messageId,
               step: params.step,
               streamError,
@@ -2992,7 +3135,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             envelope: { model: resolved.modelId },
           }),
         ),
-      ),
+      )
+    },
   } satisfies ModelTurnSource
 })
 
@@ -3000,19 +3144,24 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
 // when usage is absent or pricing is missing; the reducer treats that as a
 // zero contribution. Storing the computed cost on the event makes the
 // transcript authoritative: replaying the same events always sums to the
-// same cost, even if ModelRegistry pricing later refreshes.
+// same cost, even if ModelRegistry pricing later refreshes. The price is the
+// one the step's credential lists: a subscription sign-in and an API key of
+// one provider can price the same model differently.
 const computeStreamEndedCost: (params: {
   modelId: ModelId
   usage: Option.Option<Parameters<typeof calculateCost>[0]>
+  credential: Option.Option<CredentialReceipt>
 }) => Effect.Effect<Option.Option<number>, never, ModelRegistry | ExtensionRegistry> = Effect.fn(
   "TurnHelpers.computeStreamEndedCost",
 )(function* (params) {
   if (Option.isNone(params.usage)) return Option.none()
   const modelRegistry = yield* ModelRegistry
-  const pricing = yield* modelRegistry.get(params.modelId).pipe(
-    Effect.map(Option.flatMap((model) => Option.fromUndefinedOr(model.pricing))),
-    Effect.catchEager(() => Effect.succeedNone),
-  )
+  const pricing = yield* modelRegistry
+    .get(params.modelId, Option.getOrUndefined(params.credential))
+    .pipe(
+      Effect.map(Option.flatMap((model) => Option.fromUndefinedOr(model.pricing))),
+      Effect.catchEager(() => Effect.succeedNone),
+    )
   if (Option.isNone(pricing)) return Option.none()
   return Option.some(calculateCost(params.usage.value, pricing))
 })
@@ -3763,6 +3912,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
         ledger: scope.ledger,
+        turnLedger: scope.turnLedger,
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
@@ -3795,6 +3945,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           modelId: params.resolved.modelId,
           reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
+          readCredential: source.credential,
           activeStream: params.activeStream,
         }),
       )
@@ -3824,9 +3975,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // Priced by the catalog id, the same one the context window reads: a
         // driver override routes `provider/model` to `driver/model`.
         const pricedModel = params.resolved.modelDriver.contextModelId
+        const credential = yield* source.credential
         const streamEndedCost = yield* computeStreamEndedCost({
           modelId: pricedModel,
           usage: Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
+          credential,
         })
         yield* publishEventOrDie(
           StreamEnded.make({
@@ -3845,6 +3998,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
             outcome: outcome._tag,
             ...effortReceipt(source.reasoningLevel),
+            ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
           }),
         )
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
@@ -3951,6 +4105,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   interrupted: true,
                   outcome: "Interrupted",
                   ...effortReceipt(source.reasoningLevel),
+                  ...omitUndefined({ credential: Option.getOrUndefined(yield* source.credential) }),
                 }),
               )
               yield* persistCutStep("Interrupted")

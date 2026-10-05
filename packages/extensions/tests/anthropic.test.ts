@@ -3686,10 +3686,12 @@ describe("named Anthropic credential cache", () => {
         expect(Exit.isSuccess(result)).toBe(success)
         if (Exit.isFailure(result)) {
           const defect = Cause.findDefect(result.cause)
+          // The token endpoint refused it: a turn may move to the next credential.
           expect(
             Result.isSuccess(defect) &&
               Schema.is(ProviderAuthError)(defect.success) &&
-              defect.success.message.includes("import it again"),
+              defect.success.message.includes("import it again") &&
+              defect.success.credentialFailure === "Rejected",
           ).toBe(true)
         }
       }

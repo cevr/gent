@@ -15,8 +15,11 @@ import {
   SessionNameUpdated,
   SessionSettingsUpdated,
   StreamChunk,
+  StreamEnded,
   TurnCompleted,
 } from "../../src/domain/event"
+import { ProviderId } from "../../src/domain/agent"
+import { CredentialSlot } from "../../src/domain/driver"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
@@ -47,6 +50,21 @@ test("an error row from before reset times decodes, and a reset time survives th
   expect(historical.retryAt).toBeUndefined()
   const limited = ErrorOccurred.make({ ...historical, retryAt: 1_800_000_000_000 })
   expect(decode(encode(limited)).retryAt).toBe(1_800_000_000_000)
+})
+
+test("a step end from before credential receipts decodes, and a receipt survives the store", () => {
+  const decode = Schema.decodeUnknownSync(Schema.fromJsonString(StreamEnded))
+  const encode = Schema.encodeSync(Schema.fromJsonString(StreamEnded))
+  const historical = decode(
+    '{"_tag":"StreamEnded","sessionId":"session-1","branchId":"branch-1","model":"anthropic/claude-opus-5-5","outcome":"Answered"}',
+  )
+  expect(historical.credential).toBeUndefined()
+  const credential = {
+    provider: ProviderId.make("anthropic"),
+    slot: CredentialSlot.make("personal"),
+  }
+  const received = StreamEnded.make({ ...historical, credential })
+  expect(decode(encode(received)).credential).toEqual(credential)
 })
 
 describe("event session routing", () => {

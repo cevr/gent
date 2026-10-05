@@ -31,6 +31,7 @@ import {
   isRecord,
   isRecordArray,
   type JsonRecord,
+  omitUndefined,
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
@@ -909,6 +910,7 @@ const refreshViaOAuthClient = (
     if (response.status >= 400) {
       return yield* new ProviderAuthError({
         message: `Direct OAuth refresh failed: ${response.status} ${response.body}`,
+        credentialFailure: "Rejected",
       })
     }
     const now = yield* Clock.currentTimeMillis
@@ -1201,6 +1203,7 @@ const buildNamedCredentialCache = (
         if (Option.isNone(held) || held.value.refreshToken === "") {
           return yield* new ProviderAuthError({
             message: "Imported Claude Code credential unavailable; import it again",
+            credentialFailure: "Unavailable",
           })
         }
         const client = Context.getOption(services, HttpClient.HttpClient)
@@ -1212,10 +1215,13 @@ const buildNamedCredentialCache = (
             ),
         }).pipe(
           Effect.catchTags({
-            ProviderAuthError: () =>
+            // Only a refusal the token endpoint answered proves the credential
+            // is gone; an unreadable reply keeps the turn on it.
+            ProviderAuthError: (refused) =>
               Effect.fail(
                 new ProviderAuthError({
                   message: "Imported Claude Code credential rejected; import it again",
+                  ...omitUndefined({ credentialFailure: refused.credentialFailure }),
                 }),
               ),
             CredentialRefreshUnavailable: () =>
@@ -3054,6 +3060,7 @@ export const buildAnthropicModelDriver = (
         return yield* new ProviderAuthError({
           message:
             "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+          credentialFailure: "Unavailable",
         })
       }),
     auth: {

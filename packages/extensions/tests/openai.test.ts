@@ -28,7 +28,11 @@ import {
   makeOpenAICredentialCache,
   OAuthRedirectPort,
 } from "../src/openai.js"
-import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
+import {
+  type CredentialCacheCell,
+  credentialCells,
+  EMPTY_CREDENTIAL_CELL,
+} from "../src/providers.js"
 import {
   defineExtension,
   ExtensionHost,
@@ -3167,6 +3171,8 @@ describe("OpenAI sign-in requests", () => {
       const { driver } = yield* makeDriver()
       const error = yield* driver.resolveModel("gpt-3.5-turbo", makeOAuthInfo()).pipe(Effect.flip)
       expect(error.message).toMatch(/not available with ChatGPT OAuth/)
+      // The sign-in cannot serve this model: a turn may move to the next credential.
+      expect(error).toMatchObject({ credentialFailure: "UnsupportedModel" })
     }),
   )
 })
@@ -3595,6 +3601,32 @@ describe("OpenAI reset time", () => {
 })
 
 describe("named OpenAI credential cache", () => {
+  it.live("a warm credential of one slot never answers for another", () =>
+    Effect.gen(function* () {
+      const defaultCell =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const cellFor = credentialCells(defaultCell)
+      const expires = (yield* Clock.currentTimeMillis) + FAR_FUTURE
+      const io: OpenAICredentialIO = {
+        refresh: () => Effect.die(new Error("a fresh credential needs no refresh")),
+      }
+      const cacheFor = (slot: CredentialSlot, access: string) =>
+        makeOpenAICredentialCache(
+          cellFor(slot),
+          io,
+          updateOf(oauthInfo({ access, refresh: `${access}-refresh`, expires })),
+        )
+      // The turn ran on `work` first, so its cell is warm.
+      const work = yield* cacheFor(CredentialSlot.make("work"), "fake-work")
+      expect((yield* work.getFresh).access).toBe("fake-work")
+      // It moved to `personal`: that request carries the personal sign-in.
+      const personal = yield* cacheFor(CredentialSlot.make("personal"), "fake-personal")
+      expect((yield* personal.getFresh).access).toBe("fake-personal")
+      expect((yield* work.getFresh).access).toBe("fake-work")
+      expect((yield* SynchronizedRef.get(defaultCell))._tag).toBe("Empty")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("a warm named slot never serves an expired or missing slot", () =>
     Effect.gen(function* () {
       // The builder, its credential cells and reasoning state live across all resolutions.

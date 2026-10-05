@@ -241,6 +241,7 @@ export const makeCredentialCache = <C>(
 
     const signedOut = new ProviderAuthError({
       message: `The ${config.label} sign-in was removed. Sign in again with /auth.`,
+      credentialFailure: "Unavailable",
     })
 
     // A store write that died becomes a typed failure that names the write.

@@ -2775,9 +2775,9 @@ describe("driver resolution", () => {
       ])
       yield* listModelCatalog(resolved, fixtureModelCatalog(), (driverId) => {
         if (driverId === "auth-a") {
-          return Effect.succeedSome(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
+          return Effect.succeed([Option.some(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))])
         }
-        return Effect.succeedNone
+        return Effect.succeed([Option.none()])
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))

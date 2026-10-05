@@ -51,6 +51,13 @@ export type CredentialSlot = typeof CredentialSlot.Type
 export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
 
 /**
+ * The credential a model request used: the provider that owns the sign-in
+ * and the slot. Labels only, never a secret or an account.
+ */
+export const CredentialReceipt = Schema.Struct({ provider: ProviderId, slot: CredentialSlot })
+export type CredentialReceipt = typeof CredentialReceipt.Type
+
+/**
  * One provider-owned sign-in input. An API method asks after the key and
  * stores the answer beside it as
  * `metadata[key]`; an OAuth method receives it in `inputs`. When `env` names
@@ -107,11 +114,26 @@ export class DriverError extends Schema.TaggedError<DriverError>()("DriverError"
 
 // ── Shapes shared by every model driver ──
 
+/**
+ * Why one credential cannot serve, where a driver proved it: the slot holds
+ * none (`Unavailable`), the provider refused it or its refresh
+ * (`Rejected`), or its account does not include the model
+ * (`UnsupportedModel`). Only these move a turn to the next credential of its
+ * order; a read, parse or persist fault carries none.
+ */
+export const CredentialFailureReason = Schema.Literals([
+  "Unavailable",
+  "Rejected",
+  "UnsupportedModel",
+])
+export type CredentialFailureReason = typeof CredentialFailureReason.Type
+
 export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
   {
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    credentialFailure: Schema.optional(CredentialFailureReason),
   },
 ) {}
 
@@ -119,16 +141,36 @@ export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
  * AiError metadata that carries a credential failure through a provider SDK.
  * The SDK keeps a reason's metadata but drops its cause, and it adds its own
  * text to the message. A driver attaches the failure here; the loop shows the
- * user the failure's own message.
+ * user the failure's own message, and reads its reason when one was proved.
  */
 const CredentialFailureMetadata = Schema.Struct({
-  gent: Schema.Struct({ credentialFailure: Schema.String }),
+  gent: Schema.Struct({
+    credentialFailure: Schema.String,
+    reason: Schema.optional(CredentialFailureReason),
+  }),
 })
 
 /** The AiError reason metadata that carries `error` to the loop. */
 export const credentialFailureMetadata = (
   error: ProviderAuthError,
-): typeof CredentialFailureMetadata.Type => ({ gent: { credentialFailure: error.message } })
+): typeof CredentialFailureMetadata.Type => ({
+  gent: {
+    credentialFailure: error.message,
+    ...omitUndefined({ reason: error.credentialFailure }),
+  },
+})
+
+/** The proved reason a model error's credential failed, if a driver attached one. */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const credentialFailureReason = (error: unknown): Option.Option<CredentialFailureReason> => {
+  if (Schema.is(ProviderAuthError)(error)) return Option.fromUndefinedOr(error.credentialFailure)
+  if (!AiError.isAiError(error) || !Predicate.hasProperty(error.reason, "metadata")) {
+    return Option.none()
+  }
+  return Schema.decodeUnknownOption(CredentialFailureMetadata)(error.reason.metadata).pipe(
+    Option.flatMap((metadata) => Option.fromUndefinedOr(metadata.gent.reason)),
+  )
+}
 
 /** The credential failure message a model error carries, if a driver attached one. */
 // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.

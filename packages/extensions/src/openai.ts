@@ -195,6 +195,8 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
     "device-code-timeout",
   ]),
   message: Schema.String,
+  /** The token endpoint answered with a refusal: a 4xx other than a rate limit. */
+  refused: Schema.optional(Schema.Literal(true)),
 }) {}
 
 /**
@@ -396,7 +398,11 @@ const requestTokens = (
       })
     }
     if (response.status >= 400) {
-      return yield* new OAuthError({ reason, message: `${label} failed: ${response.status}` })
+      return yield* new OAuthError({
+        reason,
+        message: `${label} failed: ${response.status}`,
+        refused: true,
+      })
     }
     return yield* decodeTokenResponse(response.body).pipe(
       Effect.mapError(
@@ -920,10 +926,12 @@ const realIO: OpenAICredentialIO = {
             cause,
           })
         }
-        return new ProviderAuthError({
-          message: `ChatGPT sign-in expired: ${cause.message}. Sign in again with /auth.`,
-          cause,
-        })
+        const message = `ChatGPT sign-in expired: ${cause.message}. Sign in again with /auth.`
+        // Only a refusal the token endpoint answered proves the sign-in is gone.
+        if (cause.refused === true) {
+          return new ProviderAuthError({ message, cause, credentialFailure: "Rejected" })
+        }
+        return new ProviderAuthError({ message, cause })
       }),
     ),
 }
@@ -991,6 +999,7 @@ export const makeOpenAICredentialCache = (
         return Effect.fail(
           new ProviderAuthError({
             message: "ChatGPT OAuth credentials are unavailable. Sign in again with /auth.",
+            credentialFailure: "Unavailable",
           }),
         )
       }
@@ -2063,6 +2072,7 @@ export const buildOpenAIModelDriver = (
           if (!isOpenAIOAuthModel(modelName)) {
             return yield* new ProviderAuthError({
               message: `Model "${modelName}" not available with ChatGPT OAuth`,
+              credentialFailure: "UnsupportedModel",
             })
           }
           const creds = yield* makeOpenAICredentialCache(
@@ -2106,6 +2116,7 @@ export const buildOpenAIModelDriver = (
         return yield* new ProviderAuthError({
           message:
             "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
+          credentialFailure: "Unavailable",
         })
       }),
     // A model that takes `configuration_update` carries a change of level

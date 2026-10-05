@@ -6,6 +6,7 @@ import {
   Context,
   Duration,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -63,6 +64,9 @@ import {
   ReasoningOption,
   type PersistAuth,
   authMethodAppliesTo,
+  type CredentialFailureReason,
+  credentialFailureReason,
+  type CredentialReceipt,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
   ProviderAuthError,
@@ -727,6 +731,42 @@ const driverAuthInfo = (
   )
 
 /**
+ * The credentials `driverId` lists its models with, in its credential order:
+ * the default as a turn reads it (what is stored, else the driver's own
+ * variable), and each named slot that holds one. An order its config makes
+ * conflict lists with the default alone. `pinned` holds the owner it names to
+ * that one slot: the credential one request went out with.
+ */
+const catalogAuths = Effect.fn("CredentialOrder.catalogAuths")(function* (
+  auth: AuthService,
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  driverId: string,
+  pinned: Option.Option<CredentialReceipt>,
+) {
+  const owner = credentialOwner(drivers, driverId)
+  const slots = yield* Option.match(
+    Option.filter(pinned, (credential) => credential.provider === owner),
+    {
+      onSome: (credential): Effect.Effect<ReadonlyArray<CredentialSlot>> =>
+        Effect.succeed([credential.slot]),
+      onNone: () =>
+        credentialOrder(drivers, config, driverId).pipe(
+          Effect.map((order): ReadonlyArray<CredentialSlot> => order.slots),
+          Effect.orElseSucceed((): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT]),
+        ),
+    },
+  )
+  const auths: Array<Option.Option<ProviderAuthInfo>> = []
+  for (const slot of slots) {
+    const info = yield* driverAuthInfo(auth, drivers, driverId, slot)
+    if (Option.isSome(info) || slot === DEFAULT_CREDENTIAL_SLOT) auths.push(info)
+  }
+  if (auths.length === 0) return [Option.none<ProviderAuthInfo>()]
+  return auths
+})
+
+/**
  * Sign out of `provider`'s sign-in: remove every credential it reads, in the
  * profile of the `ExtensionRegistry` in context.
  */
@@ -857,7 +897,12 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
     Effect.gen(function* () {
       const driver = drivers.get(row.provider)
       if (Predicate.isUndefined(driver)) return row
-      const slots = new Set<CredentialSlot>([DEFAULT_CREDENTIAL_SLOT])
+      // A conflicting order is reported below; its row reads the default alone.
+      const order = yield* credentialOrder(drivers, config, row.provider).pipe(
+        Effect.map((found): ReadonlyArray<CredentialSlot> => found.slots),
+        Effect.orElseSucceed((): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT]),
+      )
+      const slots = new Set<CredentialSlot>([DEFAULT_CREDENTIAL_SLOT, ...order])
       for (const key of credentialKeys(drivers, row.provider)) {
         for (const slot of yield* auth.listSlots(key)) slots.add(slot)
       }
@@ -888,7 +933,29 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
           }
         }),
       )
-      return { ...row, credentials }
+      // A turn walks its order: the sign-in is ready when one credential of
+      // it is, and the row reads as the first one a turn would use.
+      const ordered = order.flatMap((slot) =>
+        credentials.filter((credential) => credential.slot === slot),
+      )
+      const serving = Option.orElse(
+        Option.fromUndefinedOr(ordered.find((credential) => credential.hasKey)),
+        () => Option.fromUndefinedOr(ordered[0]),
+      )
+      if (Option.isNone(serving)) return { ...row, credentials }
+      const { hasKey, source, authType, missing } = serving.value
+      return {
+        provider: row.provider,
+        required: row.required,
+        hasKey,
+        credentials,
+        ...omitUndefined({
+          name: row.name,
+          source: Option.getOrUndefined(Option.liftPredicate(source, (from) => from !== "none")),
+          authType,
+          missing,
+        }),
+      }
     }),
   )
   // Config entries that name different orders fail that sign-in only: its
@@ -2002,13 +2069,18 @@ const isDriverError = Schema.is(DriverError)
  * store that cannot be read is not one driver's failure: it fails the whole
  * list as a `ProviderAuthError`. A catalog that is missing or old is reported
  * under each driver that lists models.
+ *
+ * `resolveAuths` names the credentials each driver lists with, in its
+ * credential order: a model any of them serves is listed once, as the first
+ * credential that lists it sees it (its own subset and prices). With none,
+ * a driver lists with no credential.
  */
 export const listModelCatalog = Effect.fn("ModelCatalog.list")(function* (
   profile: DriverProfile,
   catalog: LoadedModelCatalog,
-  resolveAuth?: (
+  resolveAuths?: (
     driverId: string,
-  ) => Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError>,
+  ) => Effect.Effect<ReadonlyArray<Option.Option<ProviderAuthInfo>>, ProviderAuthError>,
 ) {
   const models: Array<Model> = []
   const failures: Array<ModelCatalogFailure> = []
@@ -2017,36 +2089,46 @@ export const listModelCatalog = Effect.fn("ModelCatalog.list")(function* (
     if (Option.isSome(catalog.failure)) {
       failures.push({ driverId: driver.id, error: catalog.failure.value })
     }
-    let auth = Option.none<ProviderAuthInfo>()
-    if (Predicate.isNotUndefined(resolveAuth)) auth = yield* resolveAuth(driver.id)
-    const listed = yield* Effect.suspend(() =>
-      driverModels(profile.apiClasses, driver, catalog, auth),
-    ).pipe(
-      Effect.flatMap((list) =>
-        Effect.fromOption(decodeModelList(list)).pipe(
-          Effect.mapError(
-            () =>
-              new DriverError({
-                driver: DriverFailureId.make(driver.id),
-                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-              }),
+    let auths: ReadonlyArray<Option.Option<ProviderAuthInfo>> = [Option.none()]
+    if (Predicate.isNotUndefined(resolveAuths)) auths = yield* resolveAuths(driver.id)
+    const seen = new Set<string>()
+    let failed = false
+    for (const auth of auths) {
+      const listed = yield* Effect.suspend(() =>
+        driverModels(profile.apiClasses, driver, catalog, auth),
+      ).pipe(
+        Effect.flatMap((list) =>
+          Effect.fromOption(decodeModelList(list)).pipe(
+            Effect.mapError(
+              () =>
+                new DriverError({
+                  driver: DriverFailureId.make(driver.id),
+                  reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+                }),
+            ),
           ),
         ),
-      ),
-      Effect.asSome,
-      Effect.catchCause((cause) => {
-        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
-        const squashed = Cause.squash(cause)
-        let error = causeMessage(squashed)
-        if (isDriverError(squashed)) error = squashed.reason
-        failures.push({ driverId: driver.id, error })
-        return Effect.logWarning("Model driver catalog failed; its models are skipped").pipe(
-          Effect.annotateLogs({ driver: driver.id, error }),
-          Effect.as(Option.none<ReadonlyArray<Model>>()),
-        )
-      }),
-    )
-    if (Option.isSome(listed)) models.push(...listed.value)
+        Effect.asSome,
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+          const squashed = Cause.squash(cause)
+          let error = causeMessage(squashed)
+          if (isDriverError(squashed)) error = squashed.reason
+          if (!failed) failures.push({ driverId: driver.id, error })
+          failed = true
+          return Effect.logWarning("Model driver catalog failed; its models are skipped").pipe(
+            Effect.annotateLogs({ driver: driver.id, error }),
+            Effect.as(Option.none<ReadonlyArray<Model>>()),
+          )
+        }),
+      )
+      if (Option.isNone(listed)) continue
+      for (const model of listed.value) {
+        if (seen.has(model.id)) continue
+        seen.add(model.id)
+        models.push(model)
+      }
+    }
   }
   return { models, failures }
 })
@@ -2389,6 +2471,7 @@ const genericDriver = Effect.fn("GenericProvider.driver")(function* (
         ) {
           return yield* new ProviderAuthError({
             message: "Named credential unavailable for an API-only provider; sign in with /auth",
+            credentialFailure: "Unavailable",
           })
         }
         const stored = Option.flatMap(auth, (each) => {
@@ -2408,6 +2491,7 @@ const genericDriver = Effect.fn("GenericProvider.driver")(function* (
             () =>
               new ProviderAuthError({
                 message: `${provider.name} credentials unavailable: ${keyHint}; sign in with /auth`,
+                credentialFailure: "Unavailable",
               }),
           ),
         )
@@ -2668,6 +2752,29 @@ export const driverCarriesEffort = (
     }),
   )
 
+/**
+ * The credential order a turn walks for `request`: that of the sign-in the
+ * request dispatches through (its `driverId`, else the provider segment), in
+ * the profile of `registry`. None for a model id with no provider segment,
+ * which no sign-in serves. Config entries that name conflicting orders fail
+ * it, as they fail the request's resolution.
+ */
+export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(function* (
+  request: ResolveModelRequest,
+  registry: ExtensionRegistryService,
+) {
+  const provider = Option.orElse(Option.fromUndefinedOr(request.driverId), () =>
+    Option.map(parseModelId(request.modelId), ([segment]) => segment),
+  )
+  if (Option.isNone(provider)) return Option.none<CredentialOrder>()
+  const order = yield* credentialOrder(
+    registry.getResolved().modelDrivers,
+    yield* registry.providerConfig,
+    provider.value,
+  )
+  return Option.some(order)
+})
+
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
   defect: unknown,
@@ -2752,6 +2859,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   ) {
     return yield* new ProviderAuthError({
       message: `Credential "${request.credentialSlot}" unavailable for provider "${providerName}"; sign in again`,
+      credentialFailure: "Unavailable",
     })
   }
 
@@ -2858,18 +2966,34 @@ class DecisionModelError extends Schema.TaggedError<DecisionModelError>()("Decis
   message: Schema.String,
 }) {}
 
-/** A classifier model ready to answer, and the catalog entry it resolved to. */
+/**
+ * One credential a classifier call may use: its slot, and the model the
+ * driver builds with it. The build fails with the driver's own error, so a
+ * call tells a proved credential failure from any other.
+ */
+interface ClassifierCandidate {
+  readonly slot: CredentialSlot
+  readonly model: Effect.Effect<DecisionModel.DecisionModel, ProviderAuthError, Scope.Scope>
+}
+
+/**
+ * A classifier model ready to answer, the catalog entry it resolved to, and
+ * the credentials of its sign-in's order after the one it was built with: a
+ * call whose credential fails with a proved credential failure tries them,
+ * first to last.
+ */
 interface ResolvedDecisionModel {
   readonly modelId: ModelId
   readonly entry: Model
   readonly model: DecisionModel.DecisionModel
+  readonly later: ReadonlyArray<ClassifierCandidate>
 }
 
 /** The classifier models of one profile: the drivers of its `ExtensionRegistry`. */
 interface ProfileClassifiers {
   /**
    * The named classifier model (`provider/model`), or with none a classifier
-   * whose driver has a stored or env credential: a `-latest` alias first,
+   * whose driver has a credential of its order: a `-latest` alias first,
    * else the first the profile's drivers list.
    */
   readonly resolve: (
@@ -2877,9 +3001,10 @@ interface ProfileClassifiers {
   ) => Effect.Effect<ResolvedDecisionModel, DecisionModelError, Scope.Scope>
   /**
    * Whether some driver that serves classifiers (it declares
-   * `resolveDecisionModel`) has a stored or env credential, so a call that
-   * names no model has one to resolve. It reads no catalog. An auth store
-   * that fails to read counts as none.
+   * `resolveDecisionModel`) has a credential of its order, stored or (for
+   * the default) from env, so a call that names no model has one to
+   * resolve. It reads no catalog. An auth store that fails to read counts as
+   * none.
    */
   readonly hasCredential: Effect.Effect<boolean>
   /** The classifier models whose driver has a credential, cheapest first; unpriced ones last. */
@@ -2900,17 +3025,18 @@ interface ClassifierEntry {
   readonly driver: ModelDriverContribution
 }
 
-/** The credential `driverId` reads, as a classifier call reports a failed read. */
-const classifierAuth = (auth: AuthService, allDrivers: ModelDrivers, driverId: string) =>
-  driverAuthInfo(auth, allDrivers, driverId).pipe(
-    Effect.mapError(
-      (cause) =>
-        new DecisionModelError({
-          reason: "ProviderFailed",
-          message: `Failed to read auth for provider "${driverId}": ${causeMessage(cause)}`,
-        }),
-    ),
-  )
+/** The drivers and the provider config of the profile a classifier call runs in. */
+interface ClassifierProfile {
+  readonly drivers: ModelDrivers
+  readonly config: ProviderConfig
+}
+
+/** A failed auth read, as a classifier call reports it. */
+const classifierAuthFailure = (driverId: string) => (cause: AuthError) =>
+  new DecisionModelError({
+    reason: "ProviderFailed",
+    message: `Failed to read auth for provider "${driverId}": ${causeMessage(cause)}`,
+  })
 
 /** The drivers that serve classifiers: each declares `resolveDecisionModel`. */
 const classifierDrivers = (allDrivers: ModelDrivers): ModelDrivers =>
@@ -2919,21 +3045,46 @@ const classifierDrivers = (allDrivers: ModelDrivers): ModelDrivers =>
   )
 
 /**
+ * The credential `driverId`'s order reaches first that can serve: a stored
+ * one, or the default the driver reads from its own variable. None when no
+ * slot of the order can.
+ */
+const classifierCredentialReady = Effect.fn("DecisionModelResolver.credentialReady")(function* (
+  auth: AuthService,
+  profile: ClassifierProfile,
+  driver: ModelDriverContribution,
+) {
+  const slots = yield* credentialOrder(profile.drivers, profile.config, driver.id).pipe(
+    Effect.map((order): ReadonlyArray<CredentialSlot> => order.slots),
+    Effect.orElseSucceed((): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT]),
+  )
+  for (const slot of slots) {
+    const stored = yield* driverAuthInfo(auth, profile.drivers, driver.id, slot)
+    if (Option.isSome(stored)) return true
+    if (slot === DEFAULT_CREDENTIAL_SLOT && (yield* driverEnvReady(driver))) return true
+  }
+  return false
+})
+
+/**
  * The classifier models the profile's classifier drivers list, and the
  * catalogs that failed; a failed one leaves its models out.
  */
 const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
   auth: AuthService,
   catalogSource: ModelCatalogSourceService,
-  allDrivers: ModelDrivers,
+  profile: ClassifierProfile,
 ) {
-  const drivers = classifierDrivers(allDrivers)
+  const drivers = classifierDrivers(profile.drivers)
   const source = yield* catalogSource.readWithDecisions
   // A classifier needs no API class: with none, core lists only the decision models.
-  const profile: DriverProfile = { modelDrivers: drivers, apiClasses: new Map() }
-  const catalog = yield* listModelCatalog(profile, source, (driverId) =>
-    classifierAuth(auth, allDrivers, driverId).pipe(
-      Effect.mapError((error) => new ProviderAuthError({ message: error.message })),
+  const listing: DriverProfile = { modelDrivers: drivers, apiClasses: new Map() }
+  const catalog = yield* listModelCatalog(listing, source, (driverId) =>
+    catalogAuths(auth, profile.drivers, profile.config, driverId, Option.none()).pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderAuthError({ message: classifierAuthFailure(driverId)(error).message }),
+      ),
     ),
   ).pipe(
     Effect.mapError(
@@ -2949,15 +3100,14 @@ const classifierCatalog = Effect.fn("DecisionModelResolver.catalog")(function* (
 })
 
 /**
- * Whether some driver that serves classifiers has a stored or env
- * credential. A driver declares `resolveDecisionModel` only when it can
- * serve a classifier, so no catalog is read. A failed read counts as none.
+ * Whether some driver that serves classifiers has a credential of its order.
+ * A driver declares `resolveDecisionModel` only when it can serve a
+ * classifier, so no catalog is read. A failed read counts as none.
  */
 const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
-  function* (auth: AuthService, allDrivers: ModelDrivers) {
-    for (const [driverId, driver] of classifierDrivers(allDrivers)) {
-      const stored = yield* classifierAuth(auth, allDrivers, driverId)
-      if (Option.isSome(stored) || (yield* driverEnvReady(driver))) return true
+  function* (auth: AuthService, profile: ClassifierProfile) {
+    for (const driver of classifierDrivers(profile.drivers).values()) {
+      if (yield* classifierCredentialReady(auth, profile, driver)) return true
     }
     return false
   },
@@ -2969,18 +3119,65 @@ const classifierAvailable = Effect.fn("DecisionModelResolver.hasCredential")(
   ),
 )
 
+/**
+ * The credentials a call to `driver`'s classifier tries, in its order: the
+ * default (what is stored, else the driver's own variable) and each named
+ * slot that holds one. A named slot with none is skipped, never served by
+ * the default or the environment.
+ */
+const classifierCandidates = Effect.fn("DecisionModelResolver.candidates")(function* (
+  auth: AuthService,
+  profile: ClassifierProfile,
+  driver: ModelDriverContribution,
+  modelId: ModelId,
+  modelName: string,
+  resolveFor: NonNullable<ModelDriverContribution["resolveDecisionModel"]>,
+) {
+  const order = yield* credentialOrder(profile.drivers, profile.config, driver.id).pipe(
+    Effect.mapError(
+      (error) => new DecisionModelError({ reason: "ProviderFailed", message: error.message }),
+    ),
+  )
+  const candidates: Array<ClassifierCandidate> = []
+  for (const slot of order.slots) {
+    const authInfo = yield* driverAuthInfo(auth, profile.drivers, driver.id, slot).pipe(
+      Effect.mapError(classifierAuthFailure(driver.id)),
+    )
+    if (Option.isNone(authInfo) && slot !== DEFAULT_CREDENTIAL_SLOT) continue
+    // Resolving, building and reading the driver's model all run driver
+    // code: a defect in any of them fails this call, never the cell's host.
+    const model = Effect.gen(function* () {
+      const scope = yield* Effect.scope
+      return yield* Effect.suspend(() =>
+        resolveFor(modelName, Option.getOrUndefined(authInfo)),
+      ).pipe(
+        Effect.flatMap((layer) => Layer.buildWithScope(layer, scope)),
+        Effect.map((built) => Context.get(built, DecisionModel.DecisionModel)),
+        Effect.catchDefect((defect) =>
+          Effect.fail(new ProviderAuthError({ message: causeMessage(defect) })),
+        ),
+      )
+    })
+    candidates.push({ slot, model })
+  }
+  if (Arr.isReadonlyArrayNonEmpty(candidates)) return candidates
+  return yield* new DecisionModelError({
+    reason: "NoProvider",
+    message: `${modelId}: no credential of its order is signed in; sign in with /auth`,
+  })
+})
+
 const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function* (
   auth: AuthService,
   catalogSource: ModelCatalogSourceService,
-  allDrivers: ModelDrivers,
+  profile: ClassifierProfile,
   requested: Option.Option<string>,
 ) {
-  const storedAuth = (driverId: string) => classifierAuth(auth, allDrivers, driverId)
   // A call that cannot resolve a classifier names each catalog that failed.
   const { drivers, catalog, classifiers, failures } = yield* classifierCatalog(
     auth,
     catalogSource,
-    allDrivers,
+    profile,
   )
   let failed = ""
   if (failures.length > 0)
@@ -3008,7 +3205,7 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       ),
     onNone: () =>
       Effect.gen(function* () {
-        const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
+        const usable = yield* credentialedClassifiers(auth, profile, classifiers)
         // A `-latest` alias tracks its provider's newest model, so it wins
         // over a pinned version wherever the driver order puts it.
         const chosenEntry = Option.orElse(
@@ -3036,41 +3233,50 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
       message: `Classifier model "${chosen.model.id}" has no provider/model id`,
     })
   }
-  const authInfo = yield* storedAuth(chosen.driver.id)
-  const scope = yield* Effect.scope
-  // Resolving, building and reading the driver's model all run driver code:
-  // a defect in any of them fails this call, never the cell's host.
-  const model = yield* Effect.suspend(() =>
-    resolveFor.value(modelName.value, Option.getOrUndefined(authInfo)),
-  ).pipe(
-    Effect.flatMap((layer) => Layer.buildWithScope(layer, scope)),
-    Effect.map((built) => Context.get(built, DecisionModel.DecisionModel)),
-    Effect.catchDefect((defect) =>
-      Effect.fail(new ProviderAuthError({ message: causeMessage(defect) })),
-    ),
-    Effect.mapError(
-      (error) =>
-        new DecisionModelError({
-          reason: "ProviderFailed",
-          message: `${chosen.model.id}: ${error.message}`,
-        }),
-    ),
+  const candidates = yield* classifierCandidates(
+    auth,
+    profile,
+    chosen.driver,
+    chosen.model.id,
+    modelName.value,
+    resolveFor.value,
   )
-  return { modelId: chosen.model.id, entry: chosen.model, model }
+  // The first credential of the order that builds the model serves the call;
+  // one a proved credential failure stops moves on to the next.
+  const [first, ...rest] = candidates
+  let current = first
+  let later: ReadonlyArray<ClassifierCandidate> = rest
+  for (;;) {
+    const built = yield* Effect.exit(current.model)
+    if (Exit.isSuccess(built)) {
+      return { modelId: chosen.model.id, entry: chosen.model, model: built.value, later }
+    }
+    const failure = Cause.findErrorOption(built.cause)
+    const [next, ...after] = later
+    if (Predicate.isUndefined(next) || Option.isNone(Option.flatMap(failure, credentialRefusal))) {
+      return yield* new DecisionModelError({
+        reason: "ProviderFailed",
+        message: `${chosen.model.id}: ${Option.match(failure, {
+          onNone: () => Cause.pretty(built.cause),
+          onSome: (error) => error.message,
+        })}`,
+      })
+    }
+    current = next
+    later = after
+  }
 })
 
-/** The classifier entries whose driver has a stored or env credential, in catalog order. */
+/** The classifier entries whose driver has a credential of its order, in catalog order. */
 const credentialedClassifiers = (
   auth: AuthService,
-  allDrivers: ModelDrivers,
+  profile: ClassifierProfile,
   classifiers: ReadonlyArray<ClassifierEntry>,
 ) =>
   Effect.filter(classifiers, (entry) =>
-    Effect.gen(function* () {
-      const stored = yield* classifierAuth(auth, allDrivers, entry.driver.id)
-      const fromEnv = yield* driverEnvReady(entry.driver)
-      return Option.isSome(stored) || fromEnv
-    }),
+    classifierCredentialReady(auth, profile, entry.driver).pipe(
+      Effect.mapError(classifierAuthFailure(entry.driver.id)),
+    ),
   )
 
 /** A classifier's price per million tokens, input and output together; none when unpriced. */
@@ -3090,10 +3296,10 @@ const byClassifierPrice: Order.Order<Model> = (left, right) => {
 const usableClassifiers = Effect.fn("DecisionModelResolver.usable")(function* (
   auth: AuthService,
   catalogSource: ModelCatalogSourceService,
-  allDrivers: ModelDrivers,
+  profile: ClassifierProfile,
 ) {
-  const { classifiers } = yield* classifierCatalog(auth, catalogSource, allDrivers)
-  const usable = yield* credentialedClassifiers(auth, allDrivers, classifiers)
+  const { classifiers } = yield* classifierCatalog(auth, catalogSource, profile)
+  const usable = yield* credentialedClassifiers(auth, profile, classifiers)
   return Arr.sort(
     usable.map((entry) => entry.model),
     byClassifierPrice,
@@ -3115,12 +3321,16 @@ export class DecisionModelResolver extends Context.Service<
       const auth = yield* Auth
       const catalogSource = yield* ModelCatalogSource
       return DecisionModelResolver.of({
-        profile: Effect.map(ExtensionRegistry, (registry) => {
-          const drivers = registry.getResolved().modelDrivers
+        profile: Effect.gen(function* () {
+          const registry = yield* ExtensionRegistry
+          const profile: ClassifierProfile = {
+            drivers: registry.getResolved().modelDrivers,
+            config: yield* registry.providerConfig,
+          }
           return {
-            resolve: (modelId) => resolveDecisionModel(auth, catalogSource, drivers, modelId),
-            hasCredential: classifierAvailable(auth, drivers),
-            usable: usableClassifiers(auth, catalogSource, drivers),
+            resolve: (modelId) => resolveDecisionModel(auth, catalogSource, profile, modelId),
+            hasCredential: classifierAvailable(auth, profile),
+            usable: usableClassifiers(auth, catalogSource, profile),
           }
         }),
       })
@@ -3175,13 +3385,32 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
           .pipe(
             Effect.mapError((error) => modelsError("decide", `models.decide: ${error.message}`)),
           )
-        const response = yield* resolved.model
-          .decide(params.definition, { input: params.input })
-          .pipe(
-            Effect.mapError((error) =>
-              modelsError("decide", `models.decide (${resolved.modelId}) failed: ${error.message}`),
-            ),
+        // The credentials of the classifier's order, first to last: a proved
+        // credential failure moves the call to the next one, any other
+        // failure (or the last credential's) ends it. A classifier streams
+        // nothing, so no output is lost by the move.
+        const ask = (model: DecisionModel.DecisionModel) =>
+          model.decide(params.definition, { input: params.input })
+        let outcome: Exit.Exit<
+          Effect.Success<ReturnType<typeof ask>>,
+          AiError.AiError | ProviderAuthError
+        > = yield* Effect.exit(ask(resolved.model))
+        for (const candidate of resolved.later) {
+          if (Exit.isSuccess(outcome)) break
+          const refusal = Option.flatMap(Cause.findErrorOption(outcome.cause), credentialRefusal)
+          if (Option.isNone(refusal)) break
+          yield* Effect.logInfo("classifier.credential-moved").pipe(
+            Effect.annotateLogs({
+              model: resolved.modelId,
+              next: candidate.slot,
+              reason: refusal.value,
+            }),
           )
+          outcome = yield* Effect.exit(Effect.flatMap(candidate.model, ask))
+        }
+        const response = yield* Effect.mapError(outcome, (error) =>
+          modelsError("decide", `models.decide (${resolved.modelId}) failed: ${error.message}`),
+        )
         const usage = omitUndefined({
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
@@ -3298,8 +3527,9 @@ export class ModelCatalogRecord extends Context.Service<
 
 /**
  * Every model the caller's profile can run, newest release first: each model
- * driver's list over the models.dev catalog core holds, read with the auth
- * stored for that driver, and each active generic provider's. The drivers
+ * driver's list over the models.dev catalog core holds, read with each
+ * credential of its order (`catalogAuths`), and each active generic
+ * provider's. The drivers
  * come from the `ExtensionRegistry` in
  * scope, so a turn reads its own profile's and a server read the requesting
  * session's; a catalog captured once at launch missed every project-scoped
@@ -3310,14 +3540,21 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
   return { models, failures }
 })
 
-/** `modelCatalog`, and the drivers and catalog it was listed from. */
-const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(function* () {
+/**
+ * `modelCatalog`, and the drivers and catalog it was listed from. `pinned`
+ * lists its owner with that one credential: the view one request had.
+ */
+const servedModelCatalog = Effect.fn("ModelRegistry.servedModelCatalog")(function* (
+  pinned: Option.Option<CredentialReceipt> = Option.none(),
+) {
   const authStore = yield* Auth
   const catalogRecord = yield* ModelCatalogRecord
-  const profile = (yield* ExtensionRegistry).getResolved()
+  const registry = yield* ExtensionRegistry
+  const profile = registry.getResolved()
+  const config = yield* registry.providerConfig
   const served = yield* servedProfile(authStore)
   const catalog = yield* listModelCatalog(served, served.catalog, (providerId) =>
-    driverAuthInfo(authStore, served.modelDrivers, providerId).pipe(
+    catalogAuths(authStore, served.modelDrivers, config, providerId, pinned).pipe(
       Effect.mapError(
         (e) =>
           new ProviderAuthError({
@@ -3497,10 +3734,17 @@ export const virtualDefaultModel = (model: VirtualModel): Option.Option<ModelId>
     ),
   )
 
-/** One model of the caller's profile catalog: the turn's context limit and pricing. */
+/**
+ * One model of the caller's profile catalog: the turn's context limit and
+ * pricing. With `credential`, its sign-in lists the model as that one
+ * credential sees it (an OAuth subset and its prices, or the API's), so a
+ * request is priced by the credential it went out with; without, as the
+ * first credential of its order that lists it.
+ */
 interface ModelRegistryService {
   readonly get: (
     modelId: string,
+    credential?: CredentialReceipt,
   ) => Effect.Effect<Option.Option<Model>, ProviderAuthError, ExtensionRegistry>
 }
 
@@ -3516,8 +3760,8 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         const catalogSource = yield* ModelCatalogSource
         return ModelRegistry.of({
           // An alias id reads the model it stands for, as its dispatch resolves it.
-          get: (modelId) =>
-            servedModelCatalog().pipe(
+          get: (modelId, credential) =>
+            servedModelCatalog(Option.fromUndefinedOr(credential)).pipe(
               Effect.provideService(Auth, authStore),
               Effect.provideService(ModelCatalogRecord, catalogRecord),
               Effect.provideService(ModelCatalogSource, catalogSource),
@@ -3546,9 +3790,9 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     Effect.gen(function* () {
       const catalog = yield* ModelRegistry
       return ModelRegistry.of({
-        get: (modelId) =>
+        get: (modelId, credential) =>
           Effect.map(
-            catalog.get(modelId),
+            catalog.get(modelId, credential),
             Option.orElse(() =>
               Option.some(madeUpModel(modelId, SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS, Option.none())),
             ),
@@ -3653,6 +3897,42 @@ const isRetryable = (
 export const retryReason = (error: ProviderError): string => {
   if (AiError.isAiError(error.cause)) return error.cause.reason.message
   return error.message
+}
+
+/** What a proved credential failure says, by its reason. */
+const CREDENTIAL_FAILURE_TEXT: Record<CredentialFailureReason, string> = {
+  Unavailable: "has no credential",
+  Rejected: "was refused",
+  UnsupportedModel: "does not serve this model",
+}
+
+/**
+ * Why a request's credential failed, when the failure is typed and proved:
+ * a credential failure a driver proved (`ProviderAuthError.credentialFailure`
+ * or its AiError metadata), an authentication refusal the provider answered
+ * over HTTP, an exhausted quota, or a rate limit. Only such a failure moves
+ * a turn to the next credential of its order; a rate limit gets there only
+ * once the same-credential retries gave up. None for anything else: a
+ * network fault, a defect, an overload, any other refusal, or an
+ * authentication error with no response behind it.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const credentialRefusal = (error: unknown): Option.Option<string> => {
+  const proved = credentialFailureReason(error)
+  if (Option.isSome(proved)) return Option.some(CREDENTIAL_FAILURE_TEXT[proved.value])
+  if (!AiError.isAiError(error)) return Option.none()
+  const reason = error.reason
+  if (reason._tag === "QuotaExhaustedError") return Option.some("is out of quota")
+  if (reason._tag === "RateLimitError") return Option.some("is rate limited")
+  if (
+    reason._tag === "AuthenticationError" &&
+    reason.kind !== "MissingKey" &&
+    reason.kind !== "Unknown" &&
+    Predicate.isNotUndefined(reason.http?.response)
+  ) {
+    return Option.some("was refused")
+  }
+  return Option.none()
 }
 
 /** Upper bound of the random spread added to a backoff delay, as a fraction of it. */
