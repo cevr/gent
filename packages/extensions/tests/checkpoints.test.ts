@@ -527,6 +527,94 @@ Gent-At: ${at}")`,
   )
 
   it.live(
+    "system attributes do not reach the store: every store command runs without them",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* repository
+        const home = yield* makeTempDirectoryScoped("cp-home-")
+        const bin = yield* makeTempDirectoryScoped("cp-bin-")
+        const fs = yield* FileSystem.FileSystem
+        const real = yield* sh(bin, "command -v git")
+        const path = yield* sh(bin, 'printf %s "$PATH"')
+        // `text` turns CRLF into LF on the way into a repository. git 2.43
+        // reads system attributes from `/etc/gitattributes` only; where a
+        // mount namespace is at hand the wrapper plants the file there.
+        yield* fs.writeFileString(`${bin}/attributes`, "*.txt text\n")
+        yield* fs.writeFileString(
+          `${bin}/git`,
+          [
+            "#!/bin/sh",
+            `printf '%s %s\\n' "\${GIT_ATTR_NOSYSTEM:-unset}" "$*" >> "${bin}/log"`,
+            "if bwrap --dev-bind / / --tmpfs /etc true 2>/dev/null; then",
+            `  exec bwrap --dev-bind / / --tmpfs /etc --ro-bind "${bin}/attributes" /etc/gitattributes "${real}" "$@"`,
+            "fi",
+            `exec "${real}" "$@"`,
+            "",
+          ].join("\n"),
+          { mode: 0o755 },
+        )
+        yield* scopedEnv("PATH", `${bin}:${path}`)
+        const session = yield* checkpointSession(repo, home, [
+          put("a.txt", "crlf\r\n"),
+          textStep("done 1"),
+        ])
+        yield* session.turn("change a", "done 1")
+        const store = (yield* storeOf(home))[0] ?? ""
+        // Read before the checks below run git through the wrapper too.
+        const log = yield* fs.readFileString(`${bin}/log`)
+        const storeCommands = log.split("\n").filter((line) => line.includes(`--git-dir=${store}`))
+        expect(storeCommands.length).toBeGreaterThan(0)
+        expect(storeCommands.filter((line) => !line.startsWith("1 "))).toEqual([])
+        const end = (yield* storeRefs(store)).find((name) => name.endsWith("/end")) ?? ""
+        expect(
+          yield* sh(
+            store,
+            `"${real}" --git-dir="${store}" cat-file blob '${end}:a.txt' | od -An -c`,
+          ),
+        ).toBe("c   r   l   f  \\r  \\n")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "a git template directory does not reach the store: its filter never runs",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* repository
+        const home = yield* makeTempDirectoryScoped("cp-home-")
+        const template = yield* makeTempDirectoryScoped("cp-template-")
+        const marker = `${template}/filter-ran`
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.makeDirectory(`${template}/info`)
+        yield* fs.writeFileString(`${template}/info/attributes`, "* filter=upper\n")
+        yield* fs.writeFileString(
+          `${template}/upper`,
+          `#!/bin/sh\ntouch "${marker}"\ntr a-z A-Z\n`,
+          {
+            mode: 0o755,
+          },
+        )
+        yield* fs.writeFileString(
+          `${template}/config`,
+          `[filter "upper"]\n\tclean = ${template}/upper\n`,
+        )
+        yield* scopedEnv("GIT_TEMPLATE_DIR", template)
+        const session = yield* checkpointSession(repo, home, [
+          put("a.txt", "lowercase\n"),
+          textStep("done 1"),
+        ])
+        yield* session.turn("change a", "done 1")
+        const store = (yield* storeOf(home))[0] ?? ""
+        const end = (yield* storeRefs(store)).find((name) => name.endsWith("/end")) ?? ""
+        expect(yield* sh(store, `git --git-dir="${store}" cat-file blob '${end}:a.txt'`)).toBe(
+          "lowercase",
+        )
+        expect(yield* sh(template, `test -e "${marker}" && echo ran || echo none`)).toBe("none")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
     "a read of the user's repository never runs its fsmonitor",
     () =>
       Effect.gen(function* () {

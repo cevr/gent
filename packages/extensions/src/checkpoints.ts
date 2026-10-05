@@ -211,8 +211,9 @@ const CLEAN_ENV = {
 }
 
 /**
- * The environment of a store command: no user or system git config, so no
- * filter, attribute, hook or alias of the user's runs and no setting of theirs
+ * The environment of a store command: no user or system git config, no
+ * system attributes file and no template directory, so no filter,
+ * attribute, hook or alias of the user's runs and no setting of theirs
  * changes a checkpoint's bytes.
  */
 const STORE_ENV = {
@@ -221,6 +222,8 @@ const STORE_ENV = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_PARAMETERS: unset,
   GIT_CONFIG_COUNT: unset,
+  GIT_ATTR_NOSYSTEM: "1",
+  GIT_TEMPLATE_DIR: unset,
 }
 
 /** A work tree and the store that keeps its checkpoints. */
@@ -383,7 +386,14 @@ const ensureStore = Effect.fn("Checkpoints.ensureStore")(function* (place: Place
   // The work tree's path first: the retention pass removes a store whose
   // work tree is gone, and skips one that names none yet.
   yield* writeFileAtomic(`${place.store}/worktree`, `${place.top}\n`)
-  yield* git(place.top, ["init", "--bare", "-q", place.store], { env: STORE_ENV })
+  // An empty template: nothing from a template directory (a hook, a config,
+  // `info/attributes`) reaches the store.
+  yield* Effect.gen(function* () {
+    const template = yield* fs.makeTempDirectoryScoped({ prefix: "gent-template-" })
+    yield* git(place.top, ["init", "--bare", "-q", `--template=${template}`, place.store], {
+      env: STORE_ENV,
+    })
+  }).pipe(Effect.scoped)
   yield* git(place.top, [`--git-dir=${place.store}`, "config", "index.version", "4"], {
     env: STORE_ENV,
   })
