@@ -220,7 +220,9 @@ tail that shrinks after history took its top rows (a tool run that folds).
 Blank rows inside an item (history holds its top rows) that stay for 300 ms
 replay the transcript (`watchGap`). A replay clears the screen and the saved
 lines and writes every row again, so its cost grows with the session: nothing
-a turn does as it runs may shrink the tail or flap the base. A thought waits
+a turn does as it runs may shrink the tail or flap the base. Every turn that
+ends gets its turn line, however short (`Worked for <1s`): it takes the rows
+the activity row gives back. A thought waits
 inside its open run (`projectToolRuns`), and a `Running` from the runtime
 stream for a turn whose `TurnCompleted` has landed starts nothing (the
 runtime stream and the event feed are two streams; `client.tsx`). Patched OpenTUI grows the region with line
@@ -234,9 +236,19 @@ final row is in history or on screen, once. Patched OpenTUI crops a box's
 border to the scissor of the boxes around it, with the box's own geometry and
 titles, so a cut prompt draws no rail above the tail. A commit shrinks the region by its rows
 first and then writes them, so they land where they were drawn; a write
-OpenTUI refuses, or rows drawn from an item that changed while they settled
-(`stillOffered`), give the rows back to the live view; an item that changes
-after history took its top rows replays the transcript. A region above the
+OpenTUI refuses, or rows drawn from an item that changed while they settled,
+give the rows back to the live view; an item that changes
+after history took its top rows replays the transcript. One pass's offers
+draw and settle side by side (`SURFACES_AT_ONCE`), then land together in one synchronous step
+(`writeOffers`), so one frame writes all their rows; a replay's reset
+(`historyResetPending`) lands with them, and patched OpenTUI writes its clear
+inside that frame (`patches/README.md`): the screen keeps its old frame until
+the new one is whole, never blank. The tail scrolls no further than the top
+row it drew (`drawn`) while final rows show from there (`topLimit`, a
+`maxHeight` on the box the scrollbox scrolls, so it holds before layout): new
+rows at the bottom wait a frame, or until history takes the rows above, and
+no frame shows a final row in neither history nor the region. The tail's
+height (`liveHeight`) is read from its layout every frame. A region above the
 bottom (a short session) shrinks to what it wants. A test that needs an item
 in history puts a long answer after it. Transcript rows keep the terminal's
 last column free (`FREE_LAST_COLUMN`): OpenTUI erases to the line's end after

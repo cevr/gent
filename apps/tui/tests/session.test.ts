@@ -2031,6 +2031,37 @@ describe("useSessionFeed", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  // The activity row shows while any turn runs, and the turn line takes its
+  // rows when the turn ends. A turn under half a second keeps its line too:
+  // with none, the footer's rows would leave the live tail short of the
+  // region, and history would be written again.
+  it.live("a turn under half a second still ends with its turn line", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("short-turn-session")
+      const branchId = BranchId.make("short-turn-branch")
+      const envelopes = [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 40 }),
+        ),
+      ]
+      const { feed, dispose } = openFeed({
+        snapshot: snapshotFor(sessionId, branchId),
+        events: envelopes,
+      })
+      yield* waitUntil(
+        () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "turn-ended"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const ended = feed.value.items().find((item) => item._tag === "turn-ended")
+        expect(ended?._tag === "turn-ended" && getSessionEventLabel(ended)).toBe("Worked for <1s")
+        dispose()
+      })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   /** The retry row a feed shows once a cancel during the backoff ended the turn. */
   const retryRowAfterBackoffCancel = (lastEventId: Option.Option<number>) =>
     Effect.gen(function* () {
