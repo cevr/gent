@@ -988,15 +988,59 @@ The framework validates all loaded extensions before creating the registry:
 Cross-scope: higher scope wins silently (project overrides user overrides
 builtin).
 
+## Testing
+
+A test of a project or user extension runs with `bun test` against a gent
+checkout. The checkout's root manifest names `@gent/core` and
+`@gent/extensions` as workspace dev dependencies, so `bun install` links both
+into its root `node_modules`. Link the extension's `node_modules` to that
+folder, so the test, the extension and gent share one `effect`, and run the
+tests under gent's test preload (a temporary home, no network but this
+machine). Give bun the absolute test path: it skips a folder whose name starts
+with `.` when the path is relative.
+
+```sh
+GENT=/path/to/gent # a checkout, after `bun install`
+ln -s "$GENT/node_modules" .gent/node_modules
+bun test --preload "$GENT/packages/tooling/src/test-preload.ts" --timeout=30000 "$PWD/.gent/tests"
+```
+
+An installed gent has no `node_modules`; the tests need a checkout.
+
+`createRpcHarness` from `@gent/core/test-utils` runs the full RPC path, and its
+`extensionInputs` loads the extension under test beside any shipped one.
+`@gent/extensions` exports the shipped set as `BuiltinExtensions`; take one by
+its id, the id `disabledExtensions` names:
+
+```ts lint=test
+import { BuiltinExtensions } from "@gent/extensions"
+
+/** The shipped file tools: `read`, `write`, `edit`, `grep`. */
+export const FsTools = BuiltinExtensions.filter(
+  (extension) => extension.manifest.id === "@gent/fs-tools",
+)
+```
+
+`examples/tests/painter.test.ts` is a complete test of this kind. It loads
+the shipped file tools beside `examples/extensions/painter.ts`, an extension
+that registers an agent confined by `paths`, runs a turn as that agent, and
+checks that its file calls reach its `paths` and nothing else. A project's
+`.gent/tests/painter.test.ts` is the same file with its imports unchanged.
+
+A test that needs a context-window marker exactly as the runtime writes it,
+beside forged copies its extension must ignore, builds one with
+`windowMarkerMessage` from `@gent/core/test-utils`.
+
 ## In-tree Examples
 
-| Extension                              | Demonstrates                                  |
-| -------------------------------------- | --------------------------------------------- |
-| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections     |
-| `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource |
-| `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier      |
-| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook  |
-| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                           |
+| Extension                              | Demonstrates                                                      |
+| -------------------------------------- | ----------------------------------------------------------------- |
+| `packages/extensions/src/agents.ts`    | `agent` + turn projection prompt sections                         |
+| `packages/extensions/src/mcp.ts`       | tools read at setup + a lazy process resource                     |
+| `packages/extensions/src/router.ts`    | `modelRouter` from config + a classifier                          |
+| `examples/extensions/session-notes.ts` | one-file tool + slash request + state + hook                      |
+| `examples/extensions/prompt-rules.ts`  | `systemPrompt` hook                                               |
+| `examples/extensions/painter.ts`       | `agent` confined by `paths`, tested beside the shipped file tools |
 
 ## Surface Invariants
 
