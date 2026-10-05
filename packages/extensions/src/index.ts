@@ -1,10 +1,10 @@
 import { type Crypto, type FileSystem, Option, type Path, Result, Schema } from "effect"
 import {
   type ExtensionHost,
+  type GentPlatform,
   type GentExtension,
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
-import type { GentPlatform } from "@gent/core/extensions/branch-tools"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import type { HttpClient } from "effect/http"
 import { CellExtension } from "./cell.js"

@@ -48,6 +48,7 @@ import {
   type ToolCapability,
   ToolImage,
   ToolResultFailure,
+  GentPlatform,
 } from "@gent/core/extensions/api"
 import {
   AgentLoopError,
@@ -61,7 +62,6 @@ import {
   CurrentToolCall,
   CurrentTurnStop,
   EventStoreError,
-  GentPlatform,
   getToolMetadata,
   innerOperationBindingIdentity,
   type InteractionOwnership,

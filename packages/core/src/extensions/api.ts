@@ -170,8 +170,12 @@ export {
   type ExtensionModelsService,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
-// Runs a command to completion over the Effect `ChildProcessSpawner`.
+// `runProcess` runs a command to completion over the Effect `ChildProcessSpawner`.
+// `GentPlatform` is the gent member of the platform services every root gives
+// an extension: the host facts Effect has no service for, the image codec,
+// and the loopback listener a sign-in redirect takes.
 export {
+  GentPlatform,
   pathWithin,
   ProcessError,
   resolveDataDir,

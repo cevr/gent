@@ -2783,6 +2783,10 @@ host-owned design. It should expose:
   platform facts such as OS info, executable path, and home directory;
 - `runProcess` / `ProcessError`: the one command helper over the Effect
   `ChildProcessSpawner`;
+- `GentPlatform`: the gent member of the platform services every root gives
+  an extension (host facts, the image codec, and `loopbackServer`, the
+  listener the OpenAI and MCP sign-in redirects take); the layers that build
+  it stay on the host entries;
 - `saveToolImage` / `ToolImage` / `ToolImageError`: a tool's image, scaled
   to fit the fixed limits, stored
   once by content (`<data dir>/blobs/<sha256>.<ext>`) and returned by
@@ -2805,7 +2809,7 @@ Everything else is builtin/internal:
   permission/context message internals);
 - storage, event publisher, event store, session mutation services, and
   interaction pending readers;
-- runtime/platform services (`GentPlatform`, `ToolRunner`);
+- runtime services (`ToolRunner`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/message domain internals that are not part of the serialized
