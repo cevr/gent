@@ -23,6 +23,13 @@ export {
 export { SkillsRpc } from "./skills.js"
 export { EXTENSION_ADMIN_EXTENSION_ID, ExtensionAdminRpc } from "./extension-admin.js"
 export { FilesRpc } from "./fs-tools.js"
+export {
+  CHECKPOINTS_EXTENSION_ID,
+  type CheckpointList as CheckpointListType,
+  CheckpointsRpc,
+  RevertAction,
+  type RevertOutcome as RevertOutcomeType,
+} from "./checkpoints.js"
 // The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.
 export { makeStartedMemo } from "./started-memo.js"
 export {

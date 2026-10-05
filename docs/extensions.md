@@ -240,6 +240,16 @@ no-op.
   the calling branch's own waiting `"steer"` messages back with it, so they
   never run as the next turn, and a later stop of one answers `false`.
 
+`ctx.Session.forkBranch({ atMessageId, branchId?, name?, requestId? })`
+makes a branch of the current session that holds the messages of `branchId`
+(the current branch when none is named) up to and with `atMessageId`, as the
+client's `/fork` does, and answers its `branchId`: the rewind of a
+conversation. The old branch keeps every message, and the session's active
+branch does not move; a client switches to the new branch itself. A
+`requestId` makes a repeat answer the branch the first call made. The
+shipped `@gent/checkpoints` uses it for a conversation revert: it forks at
+the message before the reverted turn.
+
 A branch's loop that nothing holds is passivated after about a minute idle,
 and the branch scope closes with it: a fiber forked into a branch resource
 stops. Work that must outlive an idle stretch, such as a pending timer, holds

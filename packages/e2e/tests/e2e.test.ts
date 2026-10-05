@@ -19,6 +19,8 @@ import {
 import { exitWithin } from "../src/server-process-fixture"
 
 const TEST_TIMEOUT = 30_000
+// PTY cleanup can wait 1 s for ctrl+c and 2 s after SIGKILL. Leave 5 s before Bun.
+const EFFECT_TIMEOUT = "25 seconds"
 
 const ESC_KEY_DECODE_MS = 650
 
@@ -38,7 +40,7 @@ describe("E2E: Basics", () => {
           timeout: 5_000,
           label: "the typed text",
         })
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 
@@ -57,7 +59,7 @@ describe("E2E: Basics", () => {
         yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
         ctx.pty.write(keys["ctrl+c"])
         expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 
@@ -69,7 +71,7 @@ describe("E2E: Basics", () => {
         yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
         ctx.pty.write(keys["ctrl+d"])
         expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 })
@@ -92,7 +94,7 @@ describe("E2E: Auth", () => {
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "API key ›", { timeout: 5_000 })
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 })
@@ -113,7 +115,7 @@ describe("E2E: Slash Commands", () => {
           timeout: 5_000,
           label: "no commands popup",
         })
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 })
@@ -140,7 +142,7 @@ describe("E2E: Shell Mode", () => {
         ctx.pty.write("echo second-$((2+1))")
         ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "second-3", { timeout: 5_000 })
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 })
@@ -161,7 +163,7 @@ describe("E2E: Session", () => {
         ctx.pty.write(keys.enter)
         yield* ptyWaitFor(ctx, "Generating", { timeout: 10_000 })
         ctx.pty.write(keys["ctrl+c"])
-      }),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,
   )
 })
@@ -190,7 +192,7 @@ describe("E2E: Skill Popup", () => {
           timeout: 5_000,
           label: "no skills popup",
         })
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
 })
@@ -233,7 +235,7 @@ describe("E2E: Terminal handover", () => {
             visible.some((line) => line.includes("ready")),
           { timeout: 10_000, label: "the screen back with the edit in the composer" },
         )
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
 
@@ -286,7 +288,7 @@ describe("E2E: Terminal handover", () => {
           { timeout: 5_000, label: "the composer takes keys after the handover" },
         )
         expect(yield* exitWithin(ctx.pty.exited, "1 second")).toEqual(Option.none())
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
 
@@ -318,7 +320,7 @@ describe("E2E: Terminal handover", () => {
             visible.some((line) => line.includes("ready")),
           { timeout: 10_000, label: "the screen back after hunk" },
         )
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
 })

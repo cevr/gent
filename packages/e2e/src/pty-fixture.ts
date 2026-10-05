@@ -500,8 +500,8 @@ type DriveStep = typeof DriveStep.Type
 /**
  * A live check as data: the program to run, the pty size, where captures go,
  * and the steps. `env` is laid over a minimal terminal environment (`PATH`,
- * `COLORTERM`, `LANG`; zigpty adds `TERM`), never over the caller's, so no credential
- * reaches the program unless the script names it. `cwd` and `out` resolve
+ * `COLORTERM`, `LANG`; zigpty adds `TERM`), shared by the pty and `sh` steps,
+ * never over the caller's, so no credential reaches either unless the script names it. `cwd` and `out` resolve
  * against the script's directory.
  */
 export const DriveScript = Schema.Struct({
@@ -531,6 +531,13 @@ export const runDriveScript = (
     yield* fs.makeDirectory(script.out, { recursive: true }).pipe(Effect.orDie)
     const started = yield* Clock.currentTimeMillis
     const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - started))
+    const env = {
+      // oxlint-disable-next-line effect/noGlobals -- drive processes use only the caller's PATH and declared env
+      PATH: Bun.env["PATH"] ?? "/usr/bin:/bin",
+      COLORTERM: "truecolor",
+      LANG: "C.UTF-8",
+      ...script.env,
+    }
 
     // The scope ends with the cleanup, which has waited for the exit already;
     // the code is read after it.
@@ -540,13 +547,7 @@ export const runDriveScript = (
           command: script.command[0],
           args: script.command.slice(1),
           cwd: script.cwd,
-          env: {
-            // oxlint-disable-next-line effect/noGlobals -- a drive script runs its program with only the caller's PATH
-            PATH: Bun.env["PATH"] ?? "/usr/bin:/bin",
-            COLORTERM: "truecolor",
-            LANG: "C.UTF-8",
-            ...script.env,
-          },
+          env,
           size: { cols: script.cols, rows: script.rows },
         })
         const save = (name: string, extension: string, text: string) =>
@@ -624,6 +625,7 @@ export const runDriveScript = (
                   // oxlint-disable-next-line effect/noGlobals -- a drive script's setup command runs as a plain shell process
                   Bun.spawn(["/bin/sh", "-c", step[1]], {
                     cwd: script.cwd,
+                    env,
                     stdio: ["ignore", "ignore", "inherit"],
                   }),
                 ),

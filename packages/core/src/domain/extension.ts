@@ -666,7 +666,11 @@ export interface ToolCallInput {
   readonly toolName: string
   /** The tool declares no side effect (`tool({ readonly: true })`). */
   readonly readonly: boolean
-  /** The parameters as the model (or the dispatching code) sent them, before decoding. */
+  /**
+   * The parameters the tool runs with: the input as the model (or the
+   * dispatching code) sent it, decoded by the tool's parameters, so a field
+   * the parameters drop is not here.
+   */
   readonly input: unknown
 }
 
@@ -1056,6 +1060,20 @@ export interface ExtensionSessionService {
     name: string,
     options?: { readonly expectedName?: string },
   ) => Effect.Effect<{ readonly renamed: boolean; readonly name?: string }, ExtensionServiceError>
+  /**
+   * A new branch of the current session that holds the messages of
+   * `branchId` (the current branch when none is named) up to and with
+   * `atMessageId`, as the client's `branch.fork` makes it: the rewind of a
+   * conversation. The old branch keeps every message, and the session's
+   * active branch does not move. A `requestId` makes the call durable-once:
+   * a repeat answers the branch the first call made.
+   */
+  readonly forkBranch: (params: {
+    readonly atMessageId: MessageId
+    readonly branchId?: BranchId
+    readonly name?: string
+    readonly requestId?: RequestId
+  }) => Effect.Effect<{ readonly branchId: BranchId }, ExtensionServiceError>
   /**
    * A new session spawned by the calling session: its parent is always the
    * caller, so the run that makes it bounds it (authority follows the

@@ -57,6 +57,14 @@ import {
   SessionId,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
+import {
+  commitTree,
+  type GitError,
+  type GitOptions,
+  git as plumbingGit,
+  gitOption,
+  parseShortStat,
+} from "./git-plumbing.js"
 
 // ── records ─────────────────────────────────────────────────────────────────
 
@@ -149,68 +157,19 @@ const RIFT_TIMEOUT = Duration.minutes(10)
 const HOOK_TIMEOUT = Duration.minutes(10)
 
 /** The ownership marker in a copy's git directory: the digest of the record's identity and place. */
-const MARKER_FILE = "gent-workspace"
+export const WORKSPACE_MARKER_FILE = "gent-workspace"
 
 /** Why gent keeps every rift copy. Manual removal of a rift copy comes with the copy list (W2). */
 const RIFT_RETAINED = "rift removal cannot refuse a copy with descendants atomically"
 
 // ── git ─────────────────────────────────────────────────────────────────────
 
-/**
- * Settings for every git command gent runs: no repository hook (a hook in the
- * origin must not run for gent's own plumbing) and no automatic maintenance.
- */
-const QUIET_GIT = [
-  "-c",
-  "core.hooksPath=/dev/null",
-  "-c",
-  "maintenance.auto=false",
-  "-c",
-  "gc.auto=0",
-]
-
-interface GitOptions {
-  /** Variables added to gent's own environment for this command. */
-  readonly env: Record<string, string>
-}
+/** The shared plumbing's failure, as a place reports it. */
+const workspaceError = (error: GitError) => new WorkspaceError({ message: error.message })
 
 /** One git command in `cwd`; a non-zero exit fails with git's own words. */
-const git = (cwd: string, args: ReadonlyArray<string>, options: GitOptions = { env: {} }) =>
-  runProcess("git", ["-C", cwd, ...QUIET_GIT, ...args], {
-    env: options.env,
-    extendEnv: true,
-    timeout: GIT_TIMEOUT,
-  }).pipe(
-    Effect.mapError((error) => new WorkspaceError({ message: error.message })),
-    Effect.flatMap((result) => {
-      if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
-      const reason = Option.fromUndefinedOr(result.stderr.trim().split("\n").at(-1)).pipe(
-        Option.filter((line) => line.length > 0),
-        Option.getOrElse(() => `exit ${result.exitCode}`),
-      )
-      return Effect.fail(
-        new WorkspaceError({ message: `git ${args.slice(0, 1).join("")} failed: ${reason}` }),
-      )
-    }),
-  )
-
-/** A git read that may find nothing: none on any failure. */
-const gitOption = (cwd: string, args: ReadonlyArray<string>) =>
-  git(cwd, args).pipe(
-    Effect.asSome,
-    Effect.catchTag("WorkspaceError", () => Effect.succeedNone),
-  )
-
-/**
- * A repository with no identity still gets its commit, named for gent; one
- * with an identity keeps it.
- */
-const identityArgs = Effect.fn("Workspaces.identityArgs")(function* (repo: string) {
-  const name = yield* gitOption(repo, ["config", "user.name"])
-  const email = yield* gitOption(repo, ["config", "user.email"])
-  if (Option.isSome(name) && Option.isSome(email)) return []
-  return ["-c", "user.name=gent", "-c", "user.email=gent@localhost"]
-})
+const git = (cwd: string, args: ReadonlyArray<string>, options: GitOptions = {}) =>
+  plumbingGit(cwd, args, options).pipe(Effect.mapError(workspaceError))
 
 /**
  * The tree of a working tree as it is now: tracked changes and untracked
@@ -236,35 +195,16 @@ const captureTree = Effect.fn("Workspaces.captureTree")(function* (repo: string)
   return yield* git(repo, ["write-tree"], { env })
 }, Effect.scoped)
 
-/** One commit of `tree` over `parent`, made in `repo`. */
-const commitTree = Effect.fn("Workspaces.commitTree")(function* (
-  repo: string,
-  tree: string,
-  parent: string,
-  message: string,
-) {
-  const identity = yield* identityArgs(repo)
-  return yield* git(repo, [...identity, "commit-tree", tree, "-p", parent, "-m", message])
-})
-
 /** A working tree as a commit: `HEAD` itself when nothing differs. */
 const captureBase = Effect.fn("Workspaces.captureBase")(function* (repo: string, name: string) {
   const head = yield* git(repo, ["rev-parse", "--verify", "HEAD^{commit}"])
   const tree = yield* captureTree(repo)
   const headTree = yield* git(repo, ["rev-parse", "HEAD^{tree}"])
   if (tree === headTree) return head
-  return yield* commitTree(repo, tree, head, `gent: the copy ${name} as it started`)
+  return yield* commitTree(repo, tree, head, `gent: the copy ${name} as it started`).pipe(
+    Effect.mapError(workspaceError),
+  )
 })
-
-/** `K files changed, N insertions(+), M deletions(-)`, as numbers. */
-const parseShortStat = (text: string) => {
-  const count = (pattern: RegExp) => Number(pattern.exec(text)?.[1] ?? 0)
-  return {
-    files: count(/(\d+) files? changed/),
-    insertions: count(/(\d+) insertions?\(\+\)/),
-    deletions: count(/(\d+) deletions?\(-\)/),
-  }
-}
 
 /** The worktree that has `ref` checked out, if one does. */
 const checkedOutAt = Effect.fn("Workspaces.checkedOutAt")(function* (origin: string, ref: string) {
@@ -814,7 +754,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
         return yield* kept("its rift id is not the record's")
       }
     }
-    const marker = yield* readRegularFile(path.join(gitDir.success, MARKER_FILE))
+    const marker = yield* readRegularFile(path.join(gitDir.success, WORKSPACE_MARKER_FILE))
     if (!Option.contains(marker, yield* markerDigest(record))) {
       return yield* kept("it holds no marker of this start")
     }
@@ -838,7 +778,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
         message: `gent keeps ${record.path} (${record.name}): ${gitDir.failure}`,
       })
     }
-    const marker = path.join(gitDir.success, MARKER_FILE)
+    const marker = path.join(gitDir.success, WORKSPACE_MARKER_FILE)
     const kind = yield* entryKind(marker)
     if (kind !== "absent" && kind !== "file") {
       return yield* new WorkspaceError({
@@ -848,7 +788,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     const digest = yield* markerDigest(record)
     const staged = path.join(
       gitDir.success,
-      `${MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
+      `${WORKSPACE_MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
     )
     yield* fs.writeFileString(staged, `${digest}\n`, { flag: "wx" }).pipe(
       Effect.andThen(fs.rename(staged, marker)),
@@ -1348,7 +1288,12 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     })
     let commit = Option.getOrElse(current, () => "")
     if (!reusable) {
-      commit = yield* commitTree(record.path, tree, base, `gent: work of child ${record.name}`)
+      commit = yield* commitTree(
+        record.path,
+        tree,
+        base,
+        `gent: work of child ${record.name}`,
+      ).pipe(Effect.mapError(workspaceError))
       record = { ...record, nextTip: commit }
       yield* publish(record)
       const expected = Option.getOrElse(current, () => "")
