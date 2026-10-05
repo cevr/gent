@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
 import {
+  CellEvaluation,
   cellOutputBoundary,
   CellRequest,
   CellResponse,
@@ -95,6 +96,15 @@ describe("cell process protocol", () => {
         ])
       }),
   )
+
+  test("a cell result stored before images decodes, and one with images keeps them", () => {
+    const decode = Schema.decodeUnknownSync(CellEvaluation)
+    const older = { display: "42", bindings: ["a"], bindingCount: 1, truncated: false }
+    expect(decode(older)).toEqual(older)
+    expect(decode(older).images).toBeUndefined()
+    const image = { _tag: "ToolImage", sha256: "a".repeat(64), mediaType: "image/png" }
+    expect(decode({ ...older, images: [image] }).images).toEqual([image])
+  })
 
   it.live("stray record separators in cell output stay text", () =>
     Effect.sync(() => {

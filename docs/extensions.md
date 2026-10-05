@@ -527,7 +527,10 @@ the session keeps every image. A blob stays while any stored message holds
 it, however old the session; a server start removes a blob no stored message
 references once nobody used it for a day. `toolImageFile(image)` gives the
 path of an image's file, for code that reads the bytes (an MCP result names
-it beside each image, so a cell reads it).
+it beside each image, so a cell reads it). A tool image a cell returns or
+logs (`const shot = await tools.screenshot({ path }); shot`) reaches the model
+the same way, after the cell's result, under `Image from cell ...`: at most
+the newest 5 per cell. An image the cell only binds or reads stays out.
 
 ### request — extension-to-extension RPC
 
@@ -710,7 +713,11 @@ It judges a call in this order, and the first answer wins:
    also matches `git push`). The last rule that matches a subject decides
    that subject, and the strictest answer wins: a deny or an ask on any
    subject decides the call, and an allow decides only when every subject is
-   allowed. A subject no rule matches leaves the call to the next step.
+   allowed. A subject no rule matches leaves the call to the next step. A
+   rule without `match` takes every call of its tools: `{ "tool":
+"mcp.computer-use.*", "effect": "ask" }` asks before each call of the
+   `computer-use` MCP server's tools (the MCP section of `ARCHITECTURE.md`
+   shows that server's `plugin` entry).
 2. A `readonly` tool runs.
 3. With a `policy`, a classifier (`ExtensionContext.Models.decide`) reads the
    policy and the call and answers allow, ask or deny. `model` names one of
@@ -748,7 +755,9 @@ cascades, and write an interaction request and its own row in one
 transaction. A process Resource that owns tables creates and migrates them in
 its layer, under a migration table of its own: the cell runs `effect/sql`'s
 `Migrator` over `cell_migrations` with `CREATE TABLE IF NOT EXISTS`
-migrations. A `branch` Resource also gets its `BranchAddress` (session id,
+migrations. A list in a query binds through `sqlInList(sql, values)` from
+`@gent/core/extensions/api` (one JSON parameter), not `sql.in`: a hosted
+SQLite refuses more than 100 bound parameters, and a guard reports `sql.in`. A `branch` Resource also gets its `BranchAddress` (session id,
 branch id, cwd, home) and the services of the `process` Resources of its own
 extension that it names in `resources`. A layer that reads any other service
 does not compile. Process Resources build in extension resolution order, so a

@@ -164,7 +164,9 @@ export const buildOwnedServer = (
       Layer.provide(RpcHandlersLive, coreServicesLive),
       scope,
     )
-    const httpRoutes = buildServerRoutes(coreServicesLive, {
+    // One handler build serves both transports: in-process clients call it
+    // (`ownedHandlers`), and the WebSocket route serves it.
+    const httpRoutes = buildServerRoutes(rpcHandlersContext, {
       identity: {
         serverId,
         pid,
@@ -176,7 +178,6 @@ export const buildOwnedServer = (
 
     const HttpServerLive = HttpRouter.serve(httpRoutes).pipe(
       Layer.provide(Layer.succeedContext(httpServerCtx)),
-      Layer.provide(coreServicesLive),
     )
 
     yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)

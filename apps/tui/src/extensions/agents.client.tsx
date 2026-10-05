@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { DateTime, Effect, Option, Order, Predicate, Schedule } from "effect"
-import { createEffect, createSignal, For, on, Show } from "solid-js"
+import { createEffect, createRoot, createSignal, For, on, Show } from "solid-js"
 import {
   type AgentRowEntry,
   AgentsViewRpc,
+  BTW_EXTENSION_ID,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
@@ -176,13 +177,6 @@ export function SubagentTray(props: { controller: AgentsController }) {
   // A done thread the shell is on is shown, so it leaves the tray at once.
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
-  // Switching sessions changes whose subtree the tray lists; refetch for it.
-  createEffect(
-    on(
-      () => props.controller.current().sessionId,
-      () => props.controller.refresh(""),
-    ),
-  )
   // Two columns of padding, the pulse and its space, and the hint on the first line.
   const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
   const lines = () => trayLines(running(), rowWidth(), finished())
@@ -279,6 +273,9 @@ interface Listing {
   readonly rows: ReadonlyArray<AgentRowEntry>
   readonly query: string
   readonly root: Option.Option<string>
+  readonly session: ActiveExtensionSession
+  readonly view: number
+  readonly activityRows: Option.Option<ReadonlyArray<AgentRowEntry>>
 }
 
 /** The slow clock a child's own turns are read on; they raise no event in this session. */
@@ -291,8 +288,10 @@ export const makeAgentsController = (
   fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
 ): Effect.Effect<AgentsController, never, ClientContext> =>
   Effect.gen(function* () {
-    const { transport, shell, lifecycle } = yield* ClientContext
+    const { transport, shell, lifecycle, activity } = yield* ClientContext
     const empty: ReadonlyArray<AgentRowEntry> = []
+    // Returning to a session does not make its earlier activity current again.
+    const [view, setView] = createSignal(0)
     // The filter the reader typed; a reload re-reads under it.
     let query = ""
     const open = () => shell.pane.isOpen(AGENTS_PANE)
@@ -397,19 +396,51 @@ export const makeAgentsController = (
     // pane leaves only the tray, which draws the current session's subtree,
     // so it reads that subtree alone: its cost follows the subtree, not the
     // number of stored sessions. The server reads a root as its whole thread.
-    const read = (): Effect.Effect<Listing, { readonly message: string }> => {
+    const read = (
+      session: ActiveExtensionSession,
+    ): Effect.Effect<Listing, { readonly message: string }> => {
       const asked = query
-      const root = Option.liftPredicate(transport.currentSession().sessionId, () => !open())
+      const askedView = view()
+      const root = Option.liftPredicate(session.sessionId, () => !open())
       // No `root` key for the whole workspace: an `undefined` value is no JSON
       // value, and an in-process request refuses it.
       const input: ListAgentsInput = Option.match(root, {
         onNone: () => ({ query: asked }),
         onSome: (sessionId) => ({ query: asked, root: sessionId }),
       })
-      return fetchRows(input).pipe(Effect.map((found) => ({ rows: found, query: asked, root })))
+      return fetchRows(input).pipe(
+        Effect.flatMap((rows) => {
+          // A complete listing serves both views. Only a filtered pane needs
+          // another read, on this same coalesced request and clock.
+          const complete = () => {
+            if (asked.trim() === "") return Effect.succeedSome(rows)
+            return fetchRows({ query: "", root: session.sessionId }).pipe(
+              Effect.asSome,
+              Effect.orElseSucceed(Option.none),
+            )
+          }
+          return complete().pipe(
+            Effect.map((activityRows) => ({
+              rows,
+              query: asked,
+              root,
+              session,
+              view: askedView,
+              activityRows,
+            })),
+          )
+        }),
+      )
     }
     const listing = yield* sessionQuery<Listing>({
-      initial: { rows: empty, query: "", root: Option.none() },
+      initial: {
+        rows: empty,
+        query: "",
+        root: Option.none(),
+        session: transport.currentSession(),
+        view: view(),
+        activityRows: Option.none(),
+      },
       follow: false,
       fetch: read,
       accepted: (reply) => {
@@ -418,6 +449,29 @@ export const makeAgentsController = (
       },
     })
     const rows = () => listing.value().rows
+    const descendants = (): Option.Option<ReadonlyArray<AgentRowEntry>> => {
+      const reply = listing.value()
+      if (
+        !sameKey(reply.session, transport.currentSession()) ||
+        reply.view !== view() ||
+        Option.isSome(listing.error())
+      )
+        return Option.none()
+      return Option.map(reply.activityRows, (complete) => subtreeRows(complete, reply.session))
+    }
+    lifecycle.addCleanup(
+      activity.include(() => {
+        const sessionId = transport.currentSession().sessionId
+        const children = descendants()
+        if (Option.isNone(children)) return { sessionId, state: "unknown" }
+        const live = children.value.filter((row) => row.section !== "inactive")
+        if (live.some((row) => row.status === "WaitingForInteraction"))
+          return { sessionId, state: "blocked" }
+        if (live.some((row) => row.status === "Running")) return { sessionId, state: "working" }
+        if (live.some((row) => row.status !== "Idle")) return { sessionId, state: "unknown" }
+        return { sessionId, state: "idle" }
+      }),
+    )
     // The shell's thread's subtree, as the latest listing shows it.
     const done = (): ReadonlyArray<AgentRowEntry> => {
       const inView = new Set(subtreeRows(rows(), transport.currentSession()).map(threadOf))
@@ -460,13 +514,31 @@ export const makeAgentsController = (
       listing.refresh()
     }
 
+    // Knowledge belongs to the controller, even when another extension
+    // replaces its tray. The same coalescer reads initial and changed views.
+    createRoot((dispose) => {
+      lifecycle.addCleanup(dispose)
+      createEffect(
+        on(transport.currentSession, () => {
+          setView((value) => value + 1)
+          tick()
+        }),
+      )
+    })
+
     // A delegate pulse in the current session means its subtree changed; so
-    // does a session-tools pulse, which `thread.start` sends.
+    // does a session-tools pulse, which `thread.start` sends. A BTW pulse
+    // discovers a new fork when complete empty/inactive knowledge stopped
+    // polling; once a child is live, its stream pulses leave the clock in charge.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
         if (
           pulse.extensionId === DELEGATE_EXTENSION_ID ||
-          pulse.extensionId === SESSION_TOOLS_EXTENSION_ID
+          pulse.extensionId === SESSION_TOOLS_EXTENSION_ID ||
+          (pulse.extensionId === BTW_EXTENSION_ID &&
+            Option.exists(descendants(), (children) =>
+              children.every((row) => row.section === "inactive"),
+            ))
         ) {
           tick()
         }
@@ -481,11 +553,12 @@ export const makeAgentsController = (
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
-          const watching = subtreeRows(rows(), transport.currentSession()).some(
-            (row) => row.section !== "inactive",
-          )
+          const watching = Option.match(descendants(), {
+            onNone: () => true,
+            onSome: (children) => children.some((row) => row.section !== "inactive"),
+          })
           if (open() || watching) tick()
-        }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
+        }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY)), Effect.delay(POLL_EVERY)),
       ),
     )
 

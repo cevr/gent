@@ -1652,3 +1652,77 @@ export const displayValue = (value: unknown, options: DisplayOptions): string =>
     Option.liftThrowable(() => formatValue(emptyContext(options), value, 0))(),
     () => unreadableDisplay,
   )
+
+// ── shown tool images ───────────────────────────────────────────────────────
+
+/** The longest text a shown image keeps in one field; a longer one is left out. */
+const imageFieldLength = 4096
+
+/** An own data property's value; none for an accessor or an absent key. */
+const ownDataValue = (target: object, key: string): Option.Option<unknown> => {
+  const descriptor = ownDescriptor(target, key)
+  if (Predicate.isUndefined(descriptor) || !hasOwn(descriptor, "value")) return Option.none()
+  return Option.some(descriptorField(descriptor, "value"))
+}
+
+/**
+ * The data fields of an object tagged `ToolImage`: each own data property
+ * that holds a short string, a finite number, a boolean or null. The worker
+ * loads no core module, so it does not know the image schema; the host
+ * decodes these fields as a `ToolImage` and keeps only what decodes.
+ */
+const imageFields = (image: object): Schema.JsonObject => {
+  const fields: Record<string, Schema.Json> = {}
+  for (const key of ownKeys(image).slice(0, displayListLength)) {
+    if (!Predicate.isString(key)) continue
+    const value = Option.getOrUndefined(ownDataValue(image, key))
+    const kept =
+      value === null ||
+      Predicate.isBoolean(value) ||
+      (Predicate.isNumber(value) && Number.isFinite(value)) ||
+      (Predicate.isString(value) && value.length <= imageFieldLength)
+    if (kept) fields[key] = value
+  }
+  return fields
+}
+
+/**
+ * The tool images among `values`, in the order the display shows them: each
+ * plain object whose own `_tag` is `ToolImage`, at a depth and position the
+ * display shows (`displayDepth`, `displayListLength`, `displayBudget`), in a
+ * plain object or an array. It reads only own data properties, so it runs no
+ * cell code; a Proxy, an accessor or a class instance hides what it holds.
+ */
+export const shownToolImages = (
+  values: ReadonlyArray<unknown>,
+): ReadonlyArray<Schema.JsonObject> => {
+  const found: Array<Schema.JsonObject> = []
+  const seen = new Set<object>()
+  let budget = displayBudget
+  const visit = (value: unknown, depth: number): void => {
+    if (!Predicate.isObjectKeyword(value) || isProxy(value) || seen.has(value)) return
+    if (depth > displayDepth || budget <= 0) return
+    budget--
+    seen.add(value)
+    if (isOrdinaryArray(value)) {
+      const length = Option.getOrElse(
+        Option.filter(ownDataValue(value, "length"), Predicate.isNumber),
+        () => 0,
+      )
+      for (let index = 0; index < Math.min(length, displayListLength); index++)
+        visit(Option.getOrUndefined(ownDataValue(value, String(index))), depth + 1)
+      return
+    }
+    if (!isPlainObject(value)) return
+    if (Option.contains(ownDataValue(value, "_tag"), "ToolImage")) {
+      found.push(imageFields(value))
+      return
+    }
+    for (const key of ownKeys(value).slice(0, displayListLength)) {
+      if (Predicate.isString(key)) visit(Option.getOrUndefined(ownDataValue(value, key)), depth + 1)
+    }
+  }
+  // A host error here is a read that failed: the value shows no image.
+  for (const value of values) Option.liftThrowable(() => visit(value, 0))()
+  return found
+}

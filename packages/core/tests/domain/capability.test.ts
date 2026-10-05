@@ -2,19 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { Context, DateTime, Effect, Schema } from "effect"
 import * as AiTool from "effect/ai/Tool"
 import {
+  compileSystemPrompt,
+  dateSection,
   defineRequests,
+  environmentSection,
   getToolId,
+  getToolMetadata,
+  isToolCapability,
   ref,
   request,
   tool,
   type ToolCapability,
-} from "@gent/core/extensions/api"
-import {
-  compileSystemPrompt,
-  dateSection,
-  environmentSection,
-  getToolMetadata,
-  isToolCapability,
 } from "../../src/domain/capability"
 import { ExtensionId, type RpcId, ToolId } from "../../src/domain/ids"
 import { buildTurnPromptSections } from "../../src/runtime/turn"

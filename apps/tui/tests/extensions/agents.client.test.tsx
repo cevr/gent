@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, Option } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Option, Predicate, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   type AgentRowEntry,
+  BTW_EXTENSION_ID,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
@@ -18,9 +19,18 @@ import {
   SubagentTray,
   trayLines,
 } from "../../src/extensions/agents.client"
-import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
+import {
+  ClientContext,
+  makeClientContextLayer,
+  type ExtensionAgentDetail,
+} from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame } from "../../src/ui"
-import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
+import {
+  createMockClient,
+  createMockRuntime,
+  renderFrame,
+  renderScoped,
+} from "../render-harness-boundary"
 import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
@@ -29,6 +39,7 @@ import {
   makeClientTestTransport,
   makePaneSlot,
   provideClientServices,
+  testClientContextDeps,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 
@@ -125,7 +136,7 @@ describe("Agents controller detail", () => {
 })
 
 describe("Agents controller reload", () => {
-  it.scopedLive("re-reads the filter the reader typed, not the whole listing", () =>
+  it.scopedLive("keeps the pane filter on reload and reads complete activity separately", () =>
     Effect.gen(function* () {
       const asked: Array<string> = []
 
@@ -151,7 +162,7 @@ describe("Agents controller reload", () => {
       controller.reload()
       yield* Effect.yieldNow
 
-      expect(asked).toEqual(["dep", "dep"])
+      expect(asked).toEqual(["", "dep", "", "dep", ""])
     }),
   )
 })
@@ -180,8 +191,7 @@ describe("Agents controller listing scope", () => {
           },
         )
 
-        // Only the tray shows: it draws one subtree, so it asks for that one.
-        controller.refresh("")
+        // Initial controller knowledge reads one subtree without the tray.
         yield* Effect.yieldNow
         pane.open("agents.pane")
         controller.refresh("")
@@ -295,7 +305,6 @@ describe("Agents pane refresh while open", () => {
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey },
       )
-      controller.refresh("")
       yield* waitUntil(() => controller.rows().length === 1, "first listing")
 
       // Only a stored child: several poll periods pass and nothing is listed.
@@ -516,12 +525,12 @@ describe("Agents pane refresh while open", () => {
         controller.refresh("dep")
         pulse(DELEGATE_EXTENSION_ID)
         pulse("@gent/other")
-        expect(asked).toEqual(["dep", "dep"])
+        expect(asked).toEqual(["", "dep", "", "dep", ""])
 
         // Closed, the pulse feeds the tray, which lists the whole subtree.
         pane.close("agents.pane")
         pulse(DELEGATE_EXTENSION_ID)
-        expect(asked).toEqual(["dep", "dep", ""])
+        expect(asked).toEqual(["", "dep", "", "dep", "", ""])
       }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -1985,8 +1994,8 @@ describe("Subagent tray", () => {
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
       expect(frame).toContain("ctrl+t sessions")
-      // Mounting on a session fetched that session's rows.
-      expect(refreshes).toEqual([""])
+      // The controller owns reads; mounting its tray does not duplicate them.
+      expect(refreshes).toEqual([])
 
       setOpen(true)
       yield* waitForFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden")
@@ -2089,7 +2098,6 @@ describe("Agents controller across a session switch", () => {
       )
 
       // Fetch for "first" goes out, then the shell switches to "second".
-      controller.refresh("")
       active = key("second")
 
       // The in-flight reply carries the previous session's rows.
@@ -2114,7 +2122,7 @@ describe("Agents controller across a session switch", () => {
         makeAgentsController(
           ({ query }) =>
             Option.match(Option.fromUndefinedOr(gates.get(query ?? "")), {
-              onNone: () => Effect.never,
+              onNone: () => Effect.succeed([]),
               onSome: (gate) => Deferred.await(gate),
             }),
           () => Effect.never,
@@ -2149,7 +2157,6 @@ describe("Agents controller across a session switch", () => {
         { currentSession: () => active },
       )
 
-      controller.refresh("")
       expect(controller.loading()).toBe(true)
       active = key("second")
 
@@ -2160,5 +2167,425 @@ describe("Agents controller across a session switch", () => {
       expect(controller.rows()).toEqual([])
       expect(controller.loading()).toBe(false)
     }).pipe(Effect.timeout("20 seconds")),
+  )
+})
+
+// ── descendant activity ─────────────────────────────────────────────────────
+
+describe("Descendant activity", () => {
+  const parent = key("activity-parent")
+  const working = (id: string, parentSessionId = parent.sessionId): AgentRowEntry => ({
+    ...row(id),
+    parentSessionId,
+    section: "running",
+    status: "Running",
+  })
+  const over = (
+    fetch: (
+      input: ListAgentsInput,
+    ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
+    here: () => typeof parent = () => parent,
+    pane = makePaneSlot(),
+    clock?: Clock.Clock,
+    transport = makeClientTestTransport({ currentSession: here }),
+  ) =>
+    Effect.gen(function* () {
+      const controllerClock = yield* Clock.Clock
+      const scope = yield* Scope.Scope
+      const cast = createMockRuntime().cast
+      const cleanups: Array<() => void> = []
+      const context = yield* Layer.buildWithScope(
+        makeClientContextLayer(
+          testClientContextDeps({
+            transport,
+            activity: () => ({ sessionId: here().sessionId, state: "idle" }),
+            shell: {
+              pane,
+              cast: (effect) => {
+                cast(Effect.forkIn(effect, scope))
+              },
+            },
+            lifecycle: { addCleanup: (cleanup) => cleanups.push(cleanup) },
+          }),
+        ),
+        scope,
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          for (const cleanup of cleanups) cleanup()
+        }),
+      )
+      return yield* Effect.gen(function* () {
+        const { activity } = yield* ClientContext
+        const controller = yield* makeAgentsController(fetch, () => Effect.succeed(detail(0))).pipe(
+          Effect.provideService(
+            Clock.Clock,
+            Option.getOrElse(Option.fromUndefinedOr(clock), () => controllerClock),
+          ),
+        )
+        return { controller, activity }
+      }).pipe(Effect.provideContext(context))
+    })
+  const settle = (controller: { readonly loading: () => boolean }) =>
+    waitUntil(() => !controller.loading(), "listing settled")
+
+  it.scopedLive(
+    "BTW activity discovers new work after an empty or inactive tree stopped polling",
+    () =>
+      Effect.gen(function* () {
+        for (const initial of [
+          [],
+          [{ ...row("stored", false), parentSessionId: parent.sessionId, section: "inactive" }],
+        ] satisfies ReadonlyArray<ReadonlyArray<AgentRowEntry>>) {
+          const clock = yield* TestClock.make()
+          const pane = makePaneSlot()
+          const pulses = new Set<
+            Parameters<ReturnType<typeof makeClientTestTransport>["onExtensionStateChanged"]>[0]
+          >()
+          let listed: ReadonlyArray<AgentRowEntry> = initial
+          const asked: Array<ListAgentsInput> = []
+          const { controller, activity } = yield* over(
+            (input) => {
+              asked.push(input)
+              return Effect.succeed(listed)
+            },
+            () => parent,
+            pane,
+            clock,
+            {
+              ...makeClientTestTransport({ currentSession: () => parent }),
+              onExtensionStateChanged: (cb) => {
+                pulses.add(cb)
+                return () => {
+                  pulses.delete(cb)
+                }
+              },
+            },
+          )
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("idle")
+          expect(pane.isOpen("agents.pane")).toBe(false)
+          yield* clock.adjust("6 seconds")
+          expect(asked).toEqual([{ query: "", root: parent.sessionId }])
+          listed = [working("btw-child"), working("unrelated", SessionId.make("elsewhere"))]
+          for (const cb of pulses) cb({ ...parent, extensionId: "@gent/unrelated" })
+          expect(asked).toHaveLength(1)
+          for (const cb of pulses) cb({ ...parent, extensionId: BTW_EXTENSION_ID })
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("working")
+          expect(asked).toEqual([
+            { query: "", root: parent.sessionId },
+            { query: "", root: parent.sessionId },
+          ])
+          // Stream pulses do not duplicate reads once the same child clock is active.
+          for (let pulse = 0; pulse < 5; pulse++) {
+            for (const cb of pulses) cb({ ...parent, extensionId: BTW_EXTENSION_ID })
+          }
+          expect(asked).toHaveLength(2)
+          listed = [...listed, { ...working("asking-child"), status: "WaitingForInteraction" }]
+          yield* clock.adjust("2 seconds")
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("blocked")
+          expect(asked).toHaveLength(3)
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "without a tray, setup and identity changes read activity without user action",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        const [here, setHere] = createSignal(parent)
+        const asked: Array<ListAgentsInput> = []
+        let listed: ReadonlyArray<AgentRowEntry> = [working("child")]
+        const { controller, activity } = yield* over(
+          (input) => {
+            asked.push(input)
+            return Effect.succeed(listed)
+          },
+          here,
+          makePaneSlot(),
+          clock,
+        )
+        yield* Effect.yieldNow
+        expect(asked).toEqual([{ query: "", root: parent.sessionId }])
+        expect(activity.snapshot().state).toBe("working")
+        listed = []
+        setHere({ ...parent, branchId: BranchId.make("changed-branch") })
+        yield* settle(controller)
+        expect(asked).toHaveLength(2)
+        expect(activity.snapshot().state).toBe("idle")
+        listed = [working("next-child", SessionId.make("changed-session"))]
+        setHere(key("changed-session"))
+        yield* settle(controller)
+        expect(asked).toHaveLength(3)
+        expect(activity.snapshot().state).toBe("working")
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "the existing clock repairs missing complete knowledge with no tray, then stops on an empty tree",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        const pane = makePaneSlot()
+        const asked: Array<ListAgentsInput> = []
+        let failComplete = false
+        const { controller, activity } = yield* over(
+          (input) => {
+            asked.push(input)
+            if (failComplete && Predicate.isNotUndefined(input.root))
+              return Effect.fail({ message: "complete read unavailable" })
+            return Effect.succeed([])
+          },
+          () => parent,
+          pane,
+          clock,
+        )
+        yield* Effect.yieldNow
+        expect(asked).toHaveLength(1)
+        expect(activity.snapshot().state).toBe("idle")
+        pane.open("agents.pane")
+        failComplete = true
+        controller.refresh("needle")
+        yield* settle(controller)
+        expect(asked).toHaveLength(3)
+        expect(activity.snapshot().state).toBe("unknown")
+        expect(controller.error()).toEqual(Option.none())
+        pane.close("agents.pane")
+        failComplete = false
+        yield* clock.adjust("2 seconds")
+        yield* settle(controller)
+        expect(asked).toHaveLength(4)
+        expect(asked[3]).toEqual({ query: "", root: parent.sessionId })
+        expect(activity.snapshot().state).toBe("idle")
+        yield* clock.adjust("6 seconds")
+        expect(asked).toHaveLength(4)
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("a waiting descendant needs attention even while another descendant works", () =>
+    Effect.gen(function* () {
+      const { activity } = yield* over(() =>
+        Effect.succeed([
+          working("worker"),
+          { ...working("asking"), status: "WaitingForInteraction" },
+        ]),
+      )
+      yield* Effect.yieldNow
+      expect(activity.snapshot().state).toBe("blocked")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("counts transitive children of older thread members, not unrelated loops", () =>
+    Effect.gen(function* () {
+      const root = {
+        ...row("new-parent"),
+        sessions: [parent.sessionId, SessionId.make("new-parent")],
+        status: "Idle",
+      }
+      const child = {
+        ...row("child-handoff"),
+        parentSessionId: parent.sessionId,
+        sessions: [SessionId.make("old-child"), SessionId.make("child-handoff")],
+        status: "Idle",
+        sideThread: true,
+      }
+      let rows = [
+        root,
+        child,
+        working("btw-grandchild", SessionId.make("old-child")),
+        working("unrelated", SessionId.make("elsewhere")),
+      ]
+      const { controller, activity } = yield* over(() => Effect.succeed(rows))
+      controller.refresh("")
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("working")
+      rows = [root, child, working("unrelated", SessionId.make("elsewhere"))]
+      controller.reload()
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("idle")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "missing live status is unknown, while inactive rows and a complete empty tree are idle",
+    () =>
+      Effect.gen(function* () {
+        let rows: ReadonlyArray<AgentRowEntry> = [
+          { ...row("missing"), parentSessionId: parent.sessionId },
+        ]
+        const { controller, activity } = yield* over(() => Effect.succeed(rows))
+        expect(activity.snapshot().state).toBe("unknown")
+        controller.refresh("")
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("unknown")
+        rows = [{ ...row("stored", false), parentSessionId: parent.sessionId, section: "inactive" }]
+        controller.reload()
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("idle")
+        rows = []
+        controller.reload()
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("idle")
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("a filtered pane cannot hide a worker; only filtered reads ask twice", () =>
+    Effect.gen(function* () {
+      const asked: Array<ListAgentsInput> = []
+      const pane = makePaneSlot()
+      const { controller, activity } = yield* over(
+        (input) => {
+          asked.push(input)
+          if (input.query === "hidden") return Effect.succeed([])
+          return Effect.succeed([working("hidden-worker")])
+        },
+        () => parent,
+        pane,
+      )
+      yield* settle(controller)
+      expect(asked).toEqual([{ query: "", root: parent.sessionId }])
+      pane.open("agents.pane")
+      controller.refresh("")
+      yield* settle(controller)
+      expect(asked).toEqual([{ query: "", root: parent.sessionId }, { query: "" }])
+      controller.refresh("hidden")
+      yield* settle(controller)
+      expect(controller.rows()).toEqual([])
+      expect(activity.snapshot().state).toBe("working")
+      expect(asked.slice(2)).toEqual([{ query: "hidden" }, { query: "", root: parent.sessionId }])
+      controller.reload()
+      yield* settle(controller)
+      expect(asked.slice(4)).toEqual([{ query: "hidden" }, { query: "", root: parent.sessionId }])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("failed pane and complete reads never turn missing children into idle", () =>
+    Effect.gen(function* () {
+      const pane = makePaneSlot()
+      let failComplete = false
+      let failPane = false
+      const { controller, activity } = yield* over(
+        (input) => {
+          if (failPane || (failComplete && Predicate.isNotUndefined(input.root)))
+            return Effect.fail({ message: "listing unavailable" })
+          if (input.query === "filter") return Effect.succeed([])
+          return Effect.succeed([working("child")])
+        },
+        () => parent,
+        pane,
+      )
+      pane.open("agents.pane")
+      controller.refresh("")
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("working")
+      failComplete = true
+      controller.refresh("filter")
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("unknown")
+      failComplete = false
+      controller.refresh("")
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("working")
+      failPane = true
+      controller.reload()
+      yield* settle(controller)
+      expect(activity.snapshot().state).toBe("unknown")
+      expect(controller.error()).toEqual(Option.some("listing unavailable"))
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "filtered activity reads coalesce pulses and use the controller's existing poll clock",
+    () =>
+      Effect.gen(function* () {
+        const pane = makePaneSlot()
+        const clock = yield* TestClock.make()
+        const complete = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+        const asked: Array<ListAgentsInput> = []
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            (input) => {
+              asked.push(input)
+              if (asked.length === 1 || Predicate.isUndefined(input.root)) return Effect.succeed([])
+              return Deferred.await(complete)
+            },
+            () => Effect.never,
+          ).pipe(Effect.provideService(Clock.Clock, clock)),
+          {
+            currentSession: () => parent,
+            shell: { pane },
+          },
+        )
+        pane.open("agents.pane")
+        controller.refresh("needle")
+        yield* waitUntil(() => asked.length === 3, "complete read in flight")
+        for (let pulse = 0; pulse < 5; pulse++) controller.reload()
+        yield* clock.adjust("2 seconds")
+        expect(asked).toHaveLength(3)
+        yield* Deferred.succeed(complete, [working("hidden-worker")])
+        yield* waitUntil(
+          () => asked.length === 5 && !controller.loading(),
+          "one queued pair settled",
+        )
+        expect(asked).toEqual([
+          { query: "", root: parent.sessionId },
+          { query: "needle" },
+          { query: "", root: parent.sessionId },
+          { query: "needle" },
+          { query: "", root: parent.sessionId },
+        ])
+        yield* clock.adjust("2 seconds")
+        yield* waitUntil(() => asked.length === 7 && !controller.loading(), "one poll pair settled")
+        expect(asked.slice(5)).toEqual([{ query: "needle" }, { query: "", root: parent.sessionId }])
+      }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "session and branch switches reject accepted data and replies still in flight",
+    () =>
+      Effect.gen(function* () {
+        const [here, setHere] = createSignal(parent)
+        let held = Option.none<Deferred.Deferred<ReadonlyArray<AgentRowEntry>>>()
+        let reads = 0
+        const { controller, activity } = yield* over(() => {
+          reads++
+          return Option.match(held, {
+            onNone: () => Effect.succeed([working("child")]),
+            onSome: Deferred.await,
+          })
+        }, here)
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("working")
+        const old = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+        held = Option.some(old)
+        controller.reload()
+        expect(controller.loading()).toBe(true)
+        const current = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+        held = Option.some(current)
+        setHere({ ...parent, branchId: BranchId.make("another-branch") })
+        expect(activity.snapshot().state).toBe("unknown")
+        yield* Deferred.succeed(old, [working("stale")])
+        yield* waitUntil(() => reads === 3, "replacement read starts automatically")
+        expect(activity.snapshot().state).toBe("unknown")
+        yield* Deferred.succeed(current, [working("child")])
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("working")
+        const accepted = here()
+        const returning = yield* Deferred.make<ReadonlyArray<AgentRowEntry>>()
+        held = Option.some(returning)
+        setHere(key("another-session"))
+        setHere(accepted)
+        expect(activity.snapshot().state).toBe("unknown")
+        held = Option.none()
+        yield* Deferred.succeed(returning, [])
+        yield* settle(controller)
+        expect(activity.snapshot().state).toBe("working")
+        setHere(key("another-session"))
+        yield* settle(controller)
+        expect(activity.snapshot()).toEqual({ sessionId: here().sessionId, state: "idle" })
+      }).pipe(Effect.timeout("5 seconds")),
   )
 })

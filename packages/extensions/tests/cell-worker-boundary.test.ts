@@ -8,7 +8,7 @@ import {
   Predicate,
   Queue,
   Ref,
-  type Schema,
+  Schema,
   Stream,
 } from "effect"
 import {
@@ -561,6 +561,19 @@ describe("cell worker", () => {
 
 // ── bun cell evaluator ──────────────────────────────────────────────────────
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** The data fields of a tool image whose digest repeats `digit`, as an MCP result names one. */
+const toolImageFields = (digit: string) => ({
+  _tag: "ToolImage",
+  sha256: digit.repeat(64),
+  mediaType: "image/png",
+  width: 1,
+  height: 1,
+  bytes: 70,
+  path: `/data/blobs/${digit}.png`,
+})
+
 /**
  * A test host: its tool calls, and optionally its details. Without them, a
  * listed tool's details name it and carry an empty schema.
@@ -965,6 +978,50 @@ describe("Bun cell evaluation", () => {
       expect((yield* kernel.evaluate("null")).display).toBe("null")
       expect((yield* kernel.evaluate("'undefined'")).display).toBe("undefined")
     }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.scopedLive(
+    "a result carries each tool image the cell returns or logs, once, and none it only binds or hides",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* makeKernel(
+          { call: () => Effect.succeed({ text: "a dot", images: [toolImageFields("a")] }) },
+          "shot",
+        )
+        const result = yield* kernel.evaluate(
+          [
+            "const shot = await tools.shot({})",
+            // Bound only: not shown.
+            `const bound = ${encodeJson(toolImageFields("b"))}`,
+            // Behind a getter or a Proxy: the display does not read it.
+            `const hidden = {}; Object.defineProperty(hidden, 'image', { get: () => (${encodeJson(toolImageFields("c"))}), enumerable: true })`,
+            `console.log('first', shot.images[0], hidden, new Proxy(${encodeJson(toolImageFields("d"))}, {}))`,
+            // Deeper than the display shows.
+            `console.log({ a: { b: { c: { d: { e: ${encodeJson(toolImageFields("e"))} } } } } })`,
+            "({ shot, again: shot.images[0] })",
+          ].join(";\n"),
+        )
+        expect(result.images).toEqual([toolImageFields("a")])
+      }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.scopedLive(
+    "a result carries at most the newest five images the cell shows, and names those left out",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+        const images = ["1", "2", "3", "4", "5", "6", "7"].map(toolImageFields)
+        const result = yield* kernel.evaluate(
+          `const images = ${encodeJson(images)}; for (const image of images) console.log(image); images[0]`,
+        )
+        // The first image, shown again last, is the newest.
+        expect(result.images).toEqual([...images.slice(3), toolImageFields("1")])
+        expect(result.display).toContain(
+          "[2 earlier images not sent to you: a cell result carries at most 5]",
+        )
+        const none = yield* kernel.evaluate("images.length")
+        expect(none.images).toBeUndefined()
+      }).pipe(Effect.timeout("2 seconds")),
   )
 
   it.scopedLive("a logged system error keeps its code, path and syscall on one line", () =>

@@ -58,6 +58,7 @@
     "@effect/platform-bun": "4.0.0",
     "@effect/platform-node": "4.0.0",
     "@effect/sql-sqlite-bun": "4.0.0",
+    "@effect/sql-sqlite-do": "4.0.0",
     "@effect/opentelemetry": "4.0.0",
     "effect-encore": "^0.33.0",
     "effect-wide-event": "0.6.0",

@@ -12,6 +12,7 @@ import {
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
   findProcessNames,
+  findSqlBoundLists,
   findEffectVersionDrift,
   findPreCommitHookFindings,
   findPackageSurfaceFindings,
@@ -303,6 +304,7 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
   findProcessNames,
+  findSqlBoundLists,
   findUnparsedSources,
 ]
 

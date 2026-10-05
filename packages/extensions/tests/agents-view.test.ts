@@ -347,6 +347,61 @@ describe("agents view projection", () => {
       }),
     ]
 
+    test("a handoff thread preserves a pending ask over working members in either age order", () => {
+      for (const statuses of [
+        ["WaitingForInteraction", "Running"],
+        ["Running", "WaitingForInteraction"],
+      ]) {
+        const members = statuses.map((status, index) => ({
+          ...live({ session: ["first", "second"][index] ?? "first", branch: "b", status }),
+          runningSince: Option.some(10 + index),
+        }))
+        const rows = projectAgentRows({ live: members, durable: chain(Option.none()) })
+        expect(rows).toHaveLength(1)
+        const folded = rows[0]
+        expect(folded?.status).toEqual(Option.some("WaitingForInteraction"))
+        expect(folded?.section).toBe("running")
+        expect(folded?.runningSince).toEqual(
+          Option.some(10 + statuses.indexOf("WaitingForInteraction")),
+        )
+        expect(folded?.sessionId).toBe(sid("third"))
+        expect(folded?.name).toEqual(Option.some("fix auth, part 3"))
+        expect(folded?.live).toBe(false)
+      }
+    })
+
+    test("unknown live members outrank idle, while inactive-only threads stay inactive", () => {
+      const rows = projectAgentRows({
+        live: [
+          { ...live({ session: "first", branch: "b" }), status: Option.none() },
+          live({ session: "second", branch: "b", status: "Idle" }),
+        ],
+        durable: chain(Option.none()),
+      })
+      expect(rows[0]?.status).toEqual(Option.none())
+      expect(rows[0]?.section).toBe("idle")
+      const inactive = projectAgentRows({ live: [], durable: chain(Option.none()) })
+      expect(inactive[0]?.status).toEqual(Option.none())
+      expect(inactive[0]?.section).toBe("inactive")
+    })
+
+    test("the newest member still wins within one attention class", () => {
+      const rows = projectAgentRows({
+        live: [
+          {
+            ...live({ session: "first", branch: "b", status: "WaitingForInteraction" }),
+            runningSince: Option.some(10),
+          },
+          {
+            ...live({ session: "second", branch: "b", status: "WaitingForInteraction" }),
+            runningSince: Option.some(20),
+          },
+        ],
+        durable: chain(Option.none()),
+      })
+      expect(rows[0]?.runningSince).toEqual(Option.some(20))
+    })
+
     test("a handoff chain is one row that opens its newest session and counts its sessions", () => {
       const rows = projectAgentRows({
         // The middle session still has a loop; the newest has none yet.

@@ -19,6 +19,7 @@ import {
 } from "effect"
 import {
   buildExtensionHealthSnapshot,
+  buildServerRoutes,
   getSessionSnapshot,
   SessionMutationsLive,
   RpcHandlersLive,
@@ -96,20 +97,28 @@ import {
   SessionStarted,
   EventStoreError,
 } from "../../src/domain/event"
-import { BunServices } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { HttpRouter, HttpServer } from "effect/http"
+import { Socket } from "effect/socket"
 import { SqlClient } from "effect/sql"
 import { Auth, ModelResolver, textStep } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { RpcClient, RpcTest } from "effect/rpc"
+import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
+/**
+ * The cwd every session here names: the harness's host cwd, which no
+ * checkout holds, so no `.gent/` directory reaches a session's profile.
+ */
+const testCwd = "/nonexistent/gent-test-cwd"
+
 /** The host environment `SessionMutations` builds its deleted-session host context from. */
 const testRuntimeEnvironment = RuntimeEnvironment.Live({
-  cwd: "/nonexistent/gent-test-cwd",
+  cwd: testCwd,
   home: "/nonexistent/gent-test-home",
 })
 
@@ -632,7 +641,7 @@ describe("session queries", () => {
           const userText = "snapshot request"
           const assistantText = "snapshot reply"
           const { client } = yield* makeClient(assistantText)
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const runtime = yield* collectRuntime(
             client.session.watchRuntime({
@@ -724,7 +733,7 @@ describe("session queries", () => {
         const result = yield* Effect.result(
           client.session.create({
             name: "Orphan",
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: SessionId.make("nonexistent"),
           }),
         )
@@ -743,12 +752,12 @@ describe("session queries", () => {
           const danglingBranch = yield* client.session
             .create({
               name: "Dangling branch parent",
-              cwd: process.cwd(),
+              cwd: testCwd,
               parentBranchId: BranchId.make("dangling-parent-branch"),
             })
             .pipe(Effect.flip)
           const danglingThread = yield* client.session
-            .create({ name: "Dangling thread", cwd: process.cwd(), continueThread: true })
+            .create({ name: "Dangling thread", cwd: testCwd, continueThread: true })
             .pipe(Effect.flip)
 
           expect(danglingBranch._tag).toBe("InvalidStateError")
@@ -1112,19 +1121,19 @@ describe("session.create nesting depth", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const root = yield* client.session.create({ cwd: process.cwd() })
+        const root = yield* client.session.create({ cwd: testCwd })
         // Root is depth 0; each spawned child nests one level deeper.
         let parent: { sessionId: SessionId; branchId: BranchId } = root
         for (let depth = 1; depth <= DEFAULT_MAX_AGENT_RUN_DEPTH; depth++) {
           parent = yield* client.session.create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
           })
         }
         const error = yield* client.session
           .create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
           })
@@ -1139,12 +1148,12 @@ describe("session.create nesting depth", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const root = yield* client.session.create({ cwd: process.cwd() })
+        const root = yield* client.session.create({ cwd: testCwd })
         // A handoff continues the parent's thread; it is not a spawn edge.
         let parent: { sessionId: SessionId; branchId: BranchId } = root
         for (let handoff = 1; handoff <= DEFAULT_MAX_AGENT_RUN_DEPTH + 1; handoff++) {
           parent = yield* client.session.create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
             continueThread: true,
@@ -1153,14 +1162,14 @@ describe("session.create nesting depth", () => {
         // The last handoff sits at spawn depth 0: it spawns up to the cap.
         for (let depth = 1; depth <= DEFAULT_MAX_AGENT_RUN_DEPTH; depth++) {
           parent = yield* client.session.create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
           })
         }
         const error = yield* client.session
           .create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: parent.sessionId,
             parentBranchId: parent.branchId,
           })
@@ -1168,14 +1177,14 @@ describe("session.create nesting depth", () => {
         expect(error._tag).toBe("SessionDepthLimitError")
         // A child at the cap hands off: the new session keeps its depth.
         const handedOff = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
           continueThread: true,
         })
         const past = yield* client.session
           .create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             parentSessionId: handedOff.sessionId,
             parentBranchId: handedOff.branchId,
           })
@@ -1189,9 +1198,9 @@ describe("session.create nesting depth", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const root = yield* client.session.create({ cwd: process.cwd() })
+        const root = yield* client.session.create({ cwd: testCwd })
         const child = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: root.sessionId,
           parentBranchId: root.branchId,
         })
@@ -1211,7 +1220,7 @@ describe("session.delete", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* makeClient()
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
           const closed = yield* collectSessionEvents(
             client.session.events({
               sessionId: created.sessionId,
@@ -1234,14 +1243,14 @@ describe("session.delete", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const parent = yield* client.session.create({ cwd: process.cwd() })
+        const parent = yield* client.session.create({ cwd: testCwd })
         const child = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
         const grandchild = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: child.sessionId,
           parentBranchId: child.branchId,
         })
@@ -1273,15 +1282,15 @@ describe("session.delete", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const parent = yield* client.session.create({ cwd: process.cwd() })
+        const parent = yield* client.session.create({ cwd: testCwd })
         const handoff = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
           continueThread: true,
         })
         const spawn = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           parentSessionId: parent.sessionId,
           parentBranchId: parent.branchId,
         })
@@ -1307,7 +1316,7 @@ describe("session.delete", () => {
         const { layer: providerLayer, controls } =
           yield* LanguageModelLayers.signal("delete me later")
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
         const runtimeClosed = yield* collectSessionEvents(
           client.session.watchRuntime({
             sessionId: created.sessionId,
@@ -1334,7 +1343,7 @@ describe("session.delete", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { client } = yield* makeClient()
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
 
         yield* client.session.delete({ sessionId: created.sessionId })
         yield* client.session.delete({ sessionId: created.sessionId })
@@ -1589,7 +1598,7 @@ describe("session.delete", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* makeClient()
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
           yield* client.session.delete({ sessionId: created.sessionId })
 
           const expectSessionNotFound = (exit: {
@@ -1702,7 +1711,7 @@ describe("session event stream", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* makeDebugClient()
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           yield* client.message.send({
             sessionId: created.sessionId,
@@ -1733,7 +1742,7 @@ describe("session event stream", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* makeDebugClient()
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const live = yield* startCollecting(
             client.session.events({ sessionId: created.sessionId }),
@@ -1793,7 +1802,7 @@ describe("session event stream", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client } = yield* makeDebugClient()
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           yield* client.branch.create({ sessionId: created.sessionId, name: "before-live" })
 
@@ -1844,7 +1853,7 @@ describe("session event stream", () => {
           const { layer: providerLayer, controls } =
             yield* LanguageModelLayers.signal("handoff payload.")
           const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const snapshot = yield* client.session.getSnapshot({
             sessionId: created.sessionId,
@@ -1939,7 +1948,7 @@ describe("session queue and runtime watch", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client, controls } = yield* makeSignalClient("done.")
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const runtime = yield* collectRuntimeQueueWatch(
             client.session.watchRuntime({
@@ -2020,7 +2029,7 @@ describe("session queue and runtime watch", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { client, controls } = yield* makeSignalClient("done.")
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const runtime = yield* collectRuntimeQueueWatch(
             client.session.watchRuntime({
@@ -2192,7 +2201,7 @@ describe("session transport contract", () => {
           const { client } = yield* makeDebugClient()
           const initialSessions = yield* client.session.list()
 
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
 
           const sessions = yield* client.session.list()
           const createdSession = sessions.find((session) => session.id === created.sessionId)
@@ -2232,7 +2241,7 @@ describe("session transport contract", () => {
           const userText = "hello from the transport contract"
           const assistantText = "transport contract reply"
           const { client } = yield* makeClient(assistantText)
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
           const target = { sessionId: created.sessionId, branchId: created.branchId }
           const said = (role: "user" | "assistant", text: string) => (message: Message) =>
             message.role === role && messagePartsText(message.parts) === text
@@ -2528,7 +2537,7 @@ describe("requestId idempotency", () => {
           textStep("two"),
         ])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const { sessionId, branchId } = yield* client.session.create({ cwd: process.cwd() })
+        const { sessionId, branchId } = yield* client.session.create({ cwd: testCwd })
         const send = (content: string, requestId: string) =>
           client.message.send({ sessionId, branchId, content, requestId })
 
@@ -3066,7 +3075,7 @@ describe("message.send", () => {
         ])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           admission: {
             runSpec: {
               overrides: {
@@ -3123,7 +3132,7 @@ describe("message.send", () => {
         const before = yield* client.session.list()
         const error = yield* client.session
           .create({
-            cwd: process.cwd(),
+            cwd: testCwd,
             admission: { runSpec: { overrides: { paths: [{ path: "a", access: "read" }] } } },
           })
           .pipe(Effect.flip)
@@ -3141,14 +3150,14 @@ describe("message.send", () => {
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const before = yield* client.session.list()
         const error = yield* client.session
-          .create({ cwd: process.cwd(), admission: { agent: AgentName.make("revieww") } })
+          .create({ cwd: testCwd, admission: { agent: AgentName.make("revieww") } })
           .pipe(Effect.flip)
         expect(error._tag).toBe("NotFoundError")
         expect(error.message).toBe("Unknown agent: revieww")
         expect(yield* client.session.list()).toHaveLength(before.length)
         // A known agent still admits.
         const created = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           admission: { agent: AgentName.make("main") },
         })
         const stored = yield* client.session.get({ sessionId: created.sessionId })
@@ -3162,7 +3171,7 @@ describe("message.send", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const created = yield* client.session.create({ cwd: process.cwd(), admission: {} })
+        const created = yield* client.session.create({ cwd: testCwd, admission: {} })
         const stored = yield* client.session.get({ sessionId: created.sessionId })
         expect(stored?.admission).toBeUndefined()
       }).pipe(Effect.timeout("4 seconds")),
@@ -3201,9 +3210,9 @@ describe("message.send", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
         )
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
         const specified = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           admission: { runSpec: { overrides: { model: ModelId.make("custom/model") } } },
         })
         const replied = (session: typeof created, text: string) =>
@@ -3254,7 +3263,7 @@ describe("message.send", () => {
         ])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({
-          cwd: process.cwd(),
+          cwd: testCwd,
           admission: { runSpec: { overrides: { model: ModelId.make("custom/model") } } },
         })
         const target = { sessionId: created.sessionId, branchId: created.branchId }
@@ -3292,7 +3301,7 @@ describe("message.send", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
         const sessionModel = ModelId.make("custom/session-model")
         yield* client.session.updateSettings({
           sessionId: created.sessionId,
@@ -3353,7 +3362,7 @@ describe("message.send", () => {
         const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
         )
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
         const replied = (text: string) =>
           waitFor(
             client.session.getSnapshot({
@@ -3460,7 +3469,7 @@ describe("message.send", () => {
             textStep("after the effort change"),
           ])
           const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-          const created = yield* client.session.create({ cwd: process.cwd() })
+          const created = yield* client.session.create({ cwd: testCwd })
           const snapshot = () =>
             client.session.getSnapshot({
               sessionId: created.sessionId,
@@ -3536,7 +3545,7 @@ describe("message.send", () => {
           textStep("should not run"),
         ])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({ cwd: testCwd })
 
         yield* client.session.delete({ sessionId: created.sessionId })
 
@@ -3555,6 +3564,45 @@ describe("message.send", () => {
   )
 })
 
+// ── served root ─────────────────────────────────────────────────────────────
+
+const servedIdentity = {
+  serverId: "served-root",
+  pid: 0,
+  hostname: "127.0.0.1",
+  dbPath: ":memory:",
+  buildFingerprint: "test",
+}
+
+type HandlerContext = Context.Context<Layer.Success<typeof RpcHandlersLive>>
+
+/**
+ * A root served as `Gent.server` serves it: an in-process client calls the
+ * built handlers, and a WebSocket client reaches the server routes on a
+ * local listener.
+ */
+const serveBothTransports = (handlers: HandlerContext) =>
+  Effect.gen(function* () {
+    const listener = yield* Layer.build(
+      HttpRouter.serve(buildServerRoutes(handlers, { identity: servedIdentity })).pipe(
+        Layer.provideMerge(BunHttpServer.layer({ port: 0, hostname: "127.0.0.1" })),
+      ),
+    )
+    const address = Context.get(listener, HttpServer.HttpServer).address
+    if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+    const socket = yield* Layer.build(
+      RpcClient.layerProtocolSocket().pipe(
+        Layer.provide(Socket.layerWebSocket(`ws://127.0.0.1:${address.port}/rpc`)),
+        Layer.provide(Socket.layerWebSocketConstructorGlobal),
+        Layer.provide(RpcSerialization.layerJson),
+      ),
+    )
+    return {
+      "in-process": yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(handlers)),
+      WebSocket: yield* RpcClient.make(GentRpcs).pipe(Effect.provide(socket)),
+    }
+  })
+
 describe("server root composition", () => {
   it.live("builds each layer a root passes in once, however many services read it", () =>
     Effect.scoped(
@@ -3572,7 +3620,7 @@ describe("server root composition", () => {
             ),
           )
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        yield* Layer.build(
+        const root = yield* Layer.build(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -3582,13 +3630,80 @@ describe("server root composition", () => {
             extraLayers: [counted("extra", Layer.empty)],
           }),
         )
+        // Each build of the RPC handlers reads the root once: the root's count
+        // under the handlers is their build count.
+        const handlerRoot = counted("handlers", Layer.succeedContext(root))
+        const handlers = yield* Layer.build(Layer.provide(RpcHandlersLive, handlerRoot))
+        const clients = yield* serveBothTransports(handlers)
+        for (const client of [clients["in-process"], clients.WebSocket]) {
+          yield* client["session.list"]().pipe(
+            RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId }),
+          )
+        }
         expect(yield* Ref.get(builds)).toEqual({
           auth: 1,
           config: 1,
           approval: 1,
           extra: 1,
+          handlers: 1,
         })
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  // `message.send` runs one dispatch for the calls with one `requestId` in
+  // flight together, whichever transport each call comes on.
+  const transportOrders = [
+    ["in-process", "WebSocket"],
+    ["WebSocket", "in-process"],
+  ] as const
+  for (const [first, second] of transportOrders) {
+    it.live(`a message.send ${first} and its duplicate ${second} run one dispatch`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dispatches = yield* Ref.make<ReadonlyArray<string>>([])
+          const firstDispatched = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const root = yield* Layer.build(
+            Layer.mergeAll(
+              createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+              sessionRuntimeLayer({
+                // The shared request stays in flight until the test releases it.
+                sendUserMessage: (input) =>
+                  Effect.gen(function* () {
+                    yield* Ref.update(dispatches, (all) => [...all, input.content])
+                    yield* Deferred.succeed(firstDispatched, void 0)
+                    if (input.requestId === "req-shared") yield* Deferred.await(release)
+                  }),
+              }),
+            ),
+          )
+          const handlers = yield* Layer.build(
+            Layer.provide(RpcHandlersLive, Layer.succeedContext(root)),
+          )
+          const clients = yield* serveBothTransports(handlers)
+          const send = (transport: keyof typeof clients, content: string, requestId: string) => {
+            const sendMessage = clients[transport]["message.send"]
+            return sendMessage({
+              sessionId: SessionId.make("served-session"),
+              branchId: BranchId.make("served-branch"),
+              content,
+              requestId,
+            }).pipe(RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId }))
+          }
+
+          const original = yield* send(first, "original", "req-shared").pipe(Effect.forkScoped)
+          yield* Deferred.await(firstDispatched)
+          const duplicate = yield* send(second, "duplicate", "req-shared").pipe(Effect.forkScoped)
+          // A call forked after the duplicate, on its transport, reaches the
+          // handlers after it: the duplicate is in flight once this one ends.
+          yield* Fiber.join(yield* send(second, "probe", "req-probe").pipe(Effect.forkScoped))
+          yield* Deferred.succeed(release, void 0)
+          yield* Fiber.join(original)
+          yield* Fiber.join(duplicate)
+          expect(yield* Ref.get(dispatches)).toEqual(["original", "probe"])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    )
+  }
 })

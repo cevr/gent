@@ -38,6 +38,7 @@ import {
   maximumCellBindings,
   maximumCellDisplayHeadLength,
   maximumCellDisplayLength,
+  maximumCellImages,
   maximumCellSourceLength,
   maximumPendingCellCalls,
   compareIds,
@@ -58,8 +59,34 @@ import {
   readDataProperty,
   readProperty,
   sameDescriptor,
+  shownToolImages,
   whenSettled,
 } from "./cell-value.js"
+
+/**
+ * The images a cell result carries: each image once, at the place it was last
+ * shown, and the newest `maximumCellImages` of them. The last shown is the
+ * state the cell ended on (a screenshot after its last step), and a request
+ * that passes its image bound leaves out its oldest images too. `shown` counts
+ * the distinct images, so the display can name the ones left out.
+ */
+const newestImages = (found: ReadonlyArray<Schema.JsonObject>) => {
+  const seen = new Set<string>()
+  const distinct: Array<Schema.JsonObject> = []
+  for (const image of found.toReversed()) {
+    // An image is named by its digest; an object with none is no image.
+    const key = image["sha256"]
+    if (!Predicate.isString(key) || seen.has(key)) continue
+    seen.add(key)
+    distinct.push(image)
+  }
+  return { shown: distinct.length, kept: distinct.slice(0, maximumCellImages).toReversed() }
+}
+
+const plural = (count: number, one: string, many: string): string => {
+  if (count === 1) return one
+  return many
+}
 
 /** Uncaught errors kept for the next cell; later ones between two cells are dropped. */
 const maximumStrayErrors = 20
@@ -665,8 +692,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     if (Result.getOrElse(errorValue(value), () => false)) return errorText(value)
     return displayValue(value, { promiseState })
   }
+  // The tool images the running cell showed, in order: what it logged, then its value.
+  let shownImages: Array<Schema.JsonObject> = []
   const write = (...values: ReadonlyArray<unknown>) => {
     append(values.map(display).join(" "))
+    shownImages.push(...shownToolImages(values))
   }
   // The cell console keeps every host console method; output methods write to the display.
   const hostConsole = globalThis.console
@@ -988,6 +1018,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
     output.reset()
+    shownImages = []
     for (const text of strays) append(text)
     strays = []
     if (source.length > maximumCellSourceLength) {
@@ -1055,16 +1086,27 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     // console output the cell wrote is then the whole display.
     if (Predicate.hasProperty(result, "value") && Predicate.isNotUndefined(result.value)) {
       yield* Effect.try({
-        try: () => append(display(result.value)),
+        try: () => {
+          append(display(result.value))
+          shownImages.push(...shownToolImages([result.value]))
+        },
         catch: (cause) => failure("execute", cause),
       })
     }
     for (const note of notes) append(note)
-    return CellEvaluation.make({
+    const images = newestImages(shownImages)
+    const left = images.shown - images.kept.length
+    if (left > 0)
+      append(
+        `[${left} earlier ${plural(left, "image", "images")} not sent to you: a cell result carries at most ${maximumCellImages}]`,
+      )
+    const evaluation = CellEvaluation.make({
       display: rendered(),
       ...reportBindings(),
       truncated: output.truncated(),
     })
+    if (images.kept.length === 0) return evaluation
+    return CellEvaluation.make({ ...evaluation, images: images.kept })
   })
 
   /** Replace the catalog the tools namespace reads. It is not part of the bindings. */

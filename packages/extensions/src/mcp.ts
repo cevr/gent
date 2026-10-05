@@ -104,13 +104,32 @@ const HttpServerConfig = Schema.Struct({
   ...Shared,
 })
 
+/**
+ * A server another tool's plugin ships: `server` names an entry of the
+ * `.mcp.json` in the plugin directory `plugin` or, when that directory holds
+ * none, in its newest version directory (see `pluginRoot`). The entry is read
+ * at each setup, so an update that installs a new version needs no edit.
+ */
+const PluginServerConfig = Schema.Struct({
+  plugin: Schema.String,
+  server: Schema.String,
+  ...Shared,
+})
+type PluginServerConfig = typeof PluginServerConfig.Type
+
+/** An entry that runs as written: over stdio or over HTTP. */
 const McpServerConfig = Schema.Union([StdioServerConfig, HttpServerConfig])
 type McpServerConfig = typeof McpServerConfig.Type
+
+/** An entry as `mcp.json` holds it: one that runs, or one a plugin ships. */
+const McpEntryConfig = Schema.Union([StdioServerConfig, HttpServerConfig, PluginServerConfig])
+type McpEntryConfig = typeof McpEntryConfig.Type
 
 /** Each entry decodes on its own, so one bad entry never drops the file's other servers. */
 const McpConfigFile = Schema.Struct({
   mcpServers: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 })
+const decodeEntryConfig = Schema.decodeUnknownResult(McpEntryConfig)
 const decodeServerConfig = Schema.decodeUnknownResult(McpServerConfig)
 
 /** The file an entry came from: the user's `~/.gent/mcp.json`, or a project's `.gent/mcp.json`. */
@@ -122,7 +141,7 @@ type McpConfigSource = typeof McpConfigSource.Type
  * the entry does not decode; such an entry is reported and never started.
  */
 interface McpConfigEntry {
-  readonly config: Result.Result<McpServerConfig, string>
+  readonly config: Result.Result<McpEntryConfig, string>
   readonly source: McpConfigSource
 }
 
@@ -133,7 +152,7 @@ interface McpServer {
   /** The catalog cache key and connection key: the digest of `serverIdentity`. */
   readonly key: string
   readonly config: McpServerConfig
-  /** The directory a stdio server runs in: its `cwd` resolved against the session's. */
+  /** The directory a stdio server runs in (`runnableServer`). */
   readonly cwd: string
 }
 
@@ -270,13 +289,22 @@ const allocateSegments = (
 
 const VARIABLE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
 
-/** `${NAME}` and `${NAME:-default}` from the environment; an unset one without a default is a failure. */
-const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string) {
+/**
+ * `${NAME}` and `${NAME:-default}` from `known` (a plugin entry's root), else
+ * the environment; an unset one without a default is a failure. One pass: a
+ * value is never expanded again.
+ */
+const expandVariables = Effect.fn("Mcp.expandVariables")(function* (
+  text: string,
+  known: ReadonlyMap<string, string>,
+) {
   const values = new Map<string, string>()
   for (const [match, name = "", fallback] of text.matchAll(VARIABLE)) {
-    const value = yield* Config.option(Config.String(name)).pipe(
-      Effect.orElseSucceed(() => Option.none<string>()),
-    )
+    const value = yield* Option.match(Option.fromUndefinedOr(known.get(name)), {
+      onSome: (given) => Effect.succeedSome(given),
+      onNone: () =>
+        Config.option(Config.String(name)).pipe(Effect.orElseSucceed(() => Option.none<string>())),
+    })
     const resolved = Option.orElse(value, () => Option.fromUndefinedOr(fallback))
     if (Option.isNone(resolved))
       return yield* Effect.fail(`environment variable ${name} is not set`)
@@ -286,32 +314,43 @@ const expandVariables = Effect.fn("Mcp.expandVariables")(function* (text: string
   return text.replaceAll(VARIABLE, (match) => values.get(match) ?? match)
 })
 
-const expandRecord = (record: Option.Option<Readonly<Record<string, string>>>) =>
+/** No variable but the environment's. */
+const NO_KNOWN_VARIABLES: ReadonlyMap<string, string> = new Map()
+
+const expandRecord = (
+  record: Option.Option<Readonly<Record<string, string>>>,
+  known: ReadonlyMap<string, string>,
+) =>
   Effect.forEach(Object.entries(Option.getOrElse(record, () => ({}))), ([key, value]) =>
-    Effect.map(expandVariables(value), (text): readonly [string, string] => [key, text]),
+    Effect.map(expandVariables(value, known), (text): readonly [string, string] => [key, text]),
   ).pipe(Effect.map((entries): Record<string, string> => Object.fromEntries(entries)))
 
-const expandConfig = (config: McpServerConfig): Effect.Effect<McpServerConfig, string> => {
+const expandConfig = (
+  config: McpServerConfig,
+  known: ReadonlyMap<string, string> = NO_KNOWN_VARIABLES,
+): Effect.Effect<McpServerConfig, string> => {
   if ("command" in config) {
     return Effect.gen(function* () {
-      return {
+      const expanded = {
         ...config,
-        command: yield* expandVariables(config.command),
-        args: yield* Effect.forEach(config.args ?? [], expandVariables),
-        env: yield* expandRecord(Option.fromUndefinedOr(config.env)),
+        command: yield* expandVariables(config.command, known),
+        args: yield* Effect.forEach(config.args ?? [], (arg) => expandVariables(arg, known)),
+        env: yield* expandRecord(Option.fromUndefinedOr(config.env), known),
       }
+      if (Predicate.isUndefined(config.cwd)) return expanded
+      return { ...expanded, cwd: yield* expandVariables(config.cwd, known) }
     })
   }
   return Effect.gen(function* () {
     return {
       ...config,
-      url: yield* expandVariables(config.url),
-      headers: yield* expandRecord(Option.fromUndefinedOr(config.headers)),
+      url: yield* expandVariables(config.url, known),
+      headers: yield* expandRecord(Option.fromUndefinedOr(config.headers), known),
     }
   })
 }
 
-type ConfigEntries = Readonly<Record<string, Result.Result<McpServerConfig, string>>>
+type ConfigEntries = Readonly<Record<string, Result.Result<McpEntryConfig, string>>>
 
 /** A schema error on one line: `Missing key at ["command"]; Missing key at ["url"]`. */
 const configReason = (error: Schema.SchemaError) =>
@@ -331,7 +370,7 @@ const readConfigFile = Effect.fn("Mcp.readConfigFile")(function* (file: string) 
       Object.fromEntries(
         Object.entries(decoded.mcpServers ?? {}).map(([name, raw]) => [
           name,
-          Result.mapError(decodeServerConfig(raw), configReason),
+          Result.mapError(decodeEntryConfig(raw), configReason),
         ]),
       ),
     ),
@@ -367,6 +406,199 @@ const readMcpConfig = Effect.fn("Mcp.readConfig")(function* (home: string, cwd: 
   return { ...user, ...project }
 })
 
+// ── plugin servers ──────────────────────────────────────────────────────────
+
+/** The file a Codex or Claude Code plugin declares its MCP servers in, at its root. */
+const PLUGIN_MCP_FILE = ".mcp.json"
+/** The version Codex installs a local plugin under; it wins over every numbered one. */
+const LOCAL_PLUGIN_VERSION = "local"
+/** A version directory name Codex accepts: ASCII letters, digits, `.`, `+`, `_` and `-`. */
+const PLUGIN_VERSION = /^[A-Za-z0-9._+-]+$/
+/** A semantic version, as Codex's `semver` crate parses one. */
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
+const DIGITS = /^\d+$/
+/** A command that names a file relative to its directory: `./x` or `../x`. */
+const RELATIVE_COMMAND = /^\.{1,2}\//
+
+/** Two runs of digits by value, however long. */
+const compareNumbers = (left: string, right: string) => {
+  const [a, b] = [left.replace(/^0+(?=\d)/, ""), right.replace(/^0+(?=\d)/, "")]
+  return a.length - b.length || compareIds(a, b)
+}
+
+/** Dot-separated identifiers in semver order: numbers by value and before words, a prefix first. */
+const compareIdentifiers = (left: string, right: string) => {
+  const [a, b] = [left.split("."), right.split(".")]
+  for (const [index, x] of a.slice(0, b.length).entries()) {
+    const y = b[index] ?? ""
+    let order = compareIds(x, y)
+    if (DIGITS.test(x) && DIGITS.test(y)) order = compareNumbers(x, y)
+    else if (DIGITS.test(x)) order = -1
+    else if (DIGITS.test(y)) order = 1
+    if (order !== 0) return order
+  }
+  return a.length - b.length
+}
+
+/**
+ * Codex's order of version directories (`compare_plugin_versions`): by
+ * semantic version when both names are one, else as text. A pre-release
+ * comes before its release.
+ */
+const comparePluginVersions = (left: string, right: string): number => {
+  const [a, b] = [SEMVER.exec(left), SEMVER.exec(right)]
+  if (Predicate.isNull(a) || Predicate.isNull(b)) return compareIds(left, right)
+  for (const part of [1, 2, 3]) {
+    const order = compareNumbers(a[part] ?? "0", b[part] ?? "0")
+    if (order !== 0) return order
+  }
+  const [preA, preB] = [a[4], b[4]]
+  if (Predicate.isUndefined(preA) !== Predicate.isUndefined(preB)) {
+    if (Predicate.isUndefined(preA)) return 1
+    return -1
+  }
+  const order = compareIdentifiers(preA ?? "", preB ?? "")
+  if (order !== 0) return order
+  return compareIdentifiers(a[5] ?? "", b[5] ?? "")
+}
+
+/**
+ * The directory whose `.mcp.json` a plugin entry reads: `directory` itself
+ * when it holds one (a Claude Code plugin, or one version), else the version
+ * directory Codex runs (`active_plugin_version`): `local` when present, else
+ * the newest by `comparePluginVersions`, among the subdirectories whose name
+ * Codex accepts.
+ */
+const pluginRoot = Effect.fn("Mcp.pluginRoot")(function* (directory: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  if (
+    yield* fs.exists(path.join(directory, PLUGIN_MCP_FILE)).pipe(Effect.orElseSucceed(() => false))
+  )
+    return directory
+  const names = yield* fs
+    .readDirectory(directory)
+    .pipe(Effect.mapError(() => `plugin: ${directory} cannot be read`))
+  const versions: Array<string> = []
+  for (const name of names) {
+    if (!PLUGIN_VERSION.test(name) || name === "." || name === "..") continue
+    const info = yield* Effect.option(fs.stat(path.join(directory, name)))
+    if (Option.exists(info, (stat) => stat.type === "Directory")) versions.push(name)
+  }
+  let version = Option.fromUndefinedOr(versions.toSorted(comparePluginVersions).at(-1))
+  if (versions.includes(LOCAL_PLUGIN_VERSION)) version = Option.some(LOCAL_PLUGIN_VERSION)
+  if (Option.isNone(version))
+    return yield* Effect.fail(
+      `plugin: ${directory} holds no ${PLUGIN_MCP_FILE} and no version directory`,
+    )
+  return path.join(directory, version.value)
+})
+
+/** A plugin's `.mcp.json`: an object of servers, under `mcpServers` or at the top. */
+const PluginMcpFile = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+
+/**
+ * The server a plugin entry names, read from its plugin's `.mcp.json` (Codex
+ * reads `mcpServers`, else the top-level object, as the map of servers), and
+ * the plugin root. `plugin` expands `${NAME}`, a leading `~` is the home
+ * directory, and a relative path resolves against the session's cwd. The
+ * entry's own `timeoutMs` wins.
+ */
+const pluginServer = Effect.fn("Mcp.pluginServer")(function* (
+  entry: PluginServerConfig,
+  home: string,
+  sessionCwd: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  let directory = yield* expandVariables(entry.plugin, NO_KNOWN_VARIABLES)
+  if (directory === "~" || directory.startsWith("~/")) directory = home + directory.slice(1)
+  const root = yield* pluginRoot(path.resolve(sessionCwd, directory))
+  const file = path.join(root, PLUGIN_MCP_FILE)
+  const text = yield* fs
+    .readFileString(file)
+    .pipe(Effect.mapError(() => `plugin: ${root} holds no ${PLUGIN_MCP_FILE}`))
+  const parsed = yield* Schema.decodeEffect(PluginMcpFile)(text).pipe(
+    Effect.mapError(() => `plugin: ${file} is not a JSON object`),
+  )
+  let servers = parsed
+  const wrapped = parsed["mcpServers"]
+  if (isRecord(wrapped)) servers = wrapped
+  if (!Object.hasOwn(servers, entry.server)) {
+    const names = Object.keys(servers)
+    let has = "it has none"
+    if (names.length > 0) has = `it has ${names.join(", ")}`
+    return yield* Effect.fail(`plugin: ${file} has no server "${entry.server}" (${has})`)
+  }
+  const declared = decodeServerConfig(servers[entry.server])
+  if (Result.isFailure(declared)) {
+    return yield* Effect.fail(
+      `plugin: ${file} server "${entry.server}": ${configReason(declared.failure)}`,
+    )
+  }
+  const config = Option.match(Option.fromUndefinedOr(entry.timeoutMs), {
+    onNone: () => declared.success,
+    onSome: (timeoutMs): McpServerConfig => ({ ...declared.success, timeoutMs }),
+  })
+  return { root, config }
+})
+
+/** Why an entry cannot run, and the transport it names. */
+interface EntryFailure {
+  readonly transport: McpServerStatus["transport"]
+  readonly reason: string
+}
+
+/**
+ * The entry as it runs, its strings expanded, and the directory a stdio
+ * server runs in: its `cwd` resolved against the session's. A plugin entry
+ * runs its plugin's server (`pluginServer`) as the plugin's own tool does:
+ * `${PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` name the plugin root, and its
+ * server's environment holds both; a `cwd` resolves against the root, which
+ * is the directory of a server that names none; and a command that starts
+ * with `./` or `../` resolves against that directory.
+ */
+const runnableServer = Effect.fn("Mcp.runnableServer")(function* (
+  entry: McpEntryConfig,
+  home: string,
+  sessionCwd: string,
+) {
+  const path = yield* Path.Path
+  if (!("plugin" in entry)) {
+    const config = yield* expandConfig(entry).pipe(
+      Effect.mapError((reason): EntryFailure => ({
+        transport: configuredTransport(entry),
+        reason,
+      })),
+    )
+    let cwd = sessionCwd
+    if ("command" in config && Predicate.isNotUndefined(config.cwd)) {
+      cwd = path.resolve(sessionCwd, config.cwd)
+    }
+    return { config, cwd }
+  }
+  const plugin = yield* pluginServer(entry, home, sessionCwd).pipe(
+    Effect.mapError((reason): EntryFailure => ({ transport: "auto", reason })),
+  )
+  const roots = new Map([
+    ["PLUGIN_ROOT", plugin.root],
+    ["CLAUDE_PLUGIN_ROOT", plugin.root],
+  ])
+  const config = yield* expandConfig(plugin.config, roots).pipe(
+    Effect.mapError((reason): EntryFailure => ({
+      transport: configuredTransport(plugin.config),
+      reason,
+    })),
+  )
+  if (!("command" in config)) return { config, cwd: sessionCwd }
+  const cwd = path.resolve(plugin.root, config.cwd ?? ".")
+  let command = config.command
+  if (RELATIVE_COMMAND.test(command)) command = path.resolve(cwd, command)
+  const env = { ...Object.fromEntries(roots), ...config.env }
+  return { config: { ...config, command, cwd, env }, cwd }
+})
+
 /** An enabled entry that cannot run, and why; `mcp.status` reports it. */
 interface MisconfiguredServer {
   readonly name: string
@@ -377,14 +609,14 @@ interface MisconfiguredServer {
 
 /**
  * The enabled entries as servers, and the ones that do not decode, whose
- * variables do not expand or whose key cannot be computed, which are
- * reported and never started.
+ * plugin server cannot be read, whose variables do not expand or whose key
+ * cannot be computed, which are reported and never started.
  */
 const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
   entries: Readonly<Record<string, McpConfigEntry>>,
+  home: string,
   sessionCwd: string,
 ) {
-  const path = yield* Path.Path
   const servers: Array<McpServer> = []
   const misconfigured: Array<MisconfiguredServer> = []
   const enabled = Object.entries(entries)
@@ -405,29 +637,28 @@ const resolveServers = Effect.fn("Mcp.resolveServers")(function* (
       continue
     }
     const { source } = entry
-    const config = entry.config.success
-    const transport = configuredTransport(config)
-    const expanded = yield* Effect.result(expandConfig(config))
-    if (Result.isFailure(expanded)) {
+    const runnable = yield* Effect.result(runnableServer(entry.config.success, home, sessionCwd))
+    if (Result.isFailure(runnable)) {
       yield* Effect.logWarning("mcp.server.config").pipe(
-        Effect.annotateLogs({ server: written, error: expanded.failure }),
+        Effect.annotateLogs({ server: written, error: runnable.failure.reason }),
       )
-      misconfigured.push({ name, transport, reason: expanded.failure })
+      misconfigured.push({ name, ...runnable.failure })
       continue
     }
-    let cwd = sessionCwd
-    if ("command" in expanded.success && Predicate.isNotUndefined(expanded.success.cwd)) {
-      cwd = path.resolve(sessionCwd, expanded.success.cwd)
-    }
-    const key = yield* Effect.result(serverKey({ written, config: expanded.success, source, cwd }))
+    const { config, cwd } = runnable.success
+    const key = yield* Effect.result(serverKey({ written, config, source, cwd }))
     if (Result.isFailure(key)) {
       yield* Effect.logWarning("mcp.server.key").pipe(
         Effect.annotateLogs({ server: written, error: key.failure.message }),
       )
-      misconfigured.push({ name, transport, reason: key.failure.message })
+      misconfigured.push({
+        name,
+        transport: configuredTransport(config),
+        reason: key.failure.message,
+      })
       continue
     }
-    servers.push({ name, key: key.success, config: expanded.success, cwd })
+    servers.push({ name, key: key.success, config, cwd })
   }
   return { servers, misconfigured }
 })
@@ -2922,7 +3153,7 @@ const registerServers = Effect.fn("Mcp.registerServers")(function* (
 ) {
   const environment = yield* HostEnvironment
   const host = yield* ExtensionHost
-  const { servers, misconfigured } = yield* resolveServers(entries, host.cwd)
+  const { servers, misconfigured } = yield* resolveServers(entries, host.home, host.cwd)
   // No server: `/mcp` still answers, and the model gets no status tool with nothing to report.
   if (servers.length === 0 && misconfigured.length === 0) {
     return yield* host.register("request", McpCommand)
@@ -3003,7 +3234,7 @@ export const McpExtension = defineExtension({
 })
 
 /** The MCP extension over inline servers instead of the config files; they key as user-file entries. */
-export const McpServers = (id: string, entries: Readonly<Record<string, McpServerConfig>>) =>
+export const McpServers = (id: string, entries: Readonly<Record<string, McpEntryConfig>>) =>
   defineExtension({
     id,
     setup: registerServers(

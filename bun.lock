@@ -86,6 +86,9 @@
         "effect-encore": "catalog:",
         "effect-wide-event": "catalog:",
       },
+      "devDependencies": {
+        "@effect/sql-sqlite-do": "catalog:",
+      },
       "peerDependencies": {
         "@effect/platform-bun": "catalog:",
         "@effect/sql-sqlite-bun": "catalog:",
@@ -180,6 +183,7 @@
     "@effect/platform-bun": "4.0.0",
     "@effect/platform-node": "4.0.0",
     "@effect/sql-sqlite-bun": "4.0.0",
+    "@effect/sql-sqlite-do": "4.0.0",
     "@ff-labs/fff-bun": "0.10.6",
     "@types/picomatch": "^4.0.3",
     "effect": "4.0.0",

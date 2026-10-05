@@ -98,6 +98,8 @@ updates this list in the same commit.
     encode carries at more than a quarter of the byte limit is left out of
     that encode, so only undecodable bytes fail
     (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    A cell result carries the images its code shows, through the same
+    projection (see the cell section). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
     `packages/core/src/runtime/model-context.ts`; `saveToolImage` in
     `packages/core/src/runtime/tool-image.ts`.
@@ -357,6 +359,14 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **A hosted root loses cluster request ids.** Effect's `SqlMessageStorage`
+  reads its 64-bit snowflake ids under `SqlClient.SafeIntegers`, which
+  `@effect/sql-sqlite-do` cannot honour: a Durable Object's SQL API returns
+  each integer as a JavaScript number. A reply then names its request by the
+  id's nearest double, so most keep-alives stay unprocessed and an awaited
+  persisted request does not return to its caller (the loop still runs it).
+  `hosted-storage.test.ts` states this behaviour. The fix is upstream (read
+  the ids as text); gent does not fork the message storage.
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
@@ -447,7 +457,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. The root's `StateLocation` names the client: `Disk` (a SQLite file) and `Memory` open a Bun SQLite connection and set its PRAGMAs in that client layer; `Hosted` takes a `Layer<SqlClient>` that the host opens and owns (a Durable Object's storage through `@effect/sql-sqlite-do`), and the root sets no PRAGMA on it. Storage init is portable DDL under the generic `Migrator` for all three. A SQL list binds as one JSON parameter through `sqlInList` (`storage.ts`, exported to extensions from `@gent/core/extensions/api`), never as one parameter per item through `sql.in` (a guard), because a hosted SQLite refuses more than 100 bound parameters. One runner owns a root's storage on every host (the SDK server holds the database's kernel lock), so the cluster's shard locks live in memory (`SingleRunner` with `runnerStorage: "memory"`) and a boot writes no lock row. `packages/core/tests/server/hosted-storage.test.ts` runs the root on Durable-Object-shaped storage. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope, builds the RPC handlers over it once, and hands the handler context to `buildServerRoutes` and to its in-process clients, so one request deduper and one login-lease map serve both transports; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -1987,6 +1997,32 @@ cost; a close stops it and records nothing. Cells queued before cancellation
 cannot evaluate, and a cell whose turn already stopped (`isStopped`) does not
 start.
 
+A cell shows a tool image to the model the way it shows text: an object
+tagged `ToolImage` (a `saveToolImage` result, an entry of an MCP result's
+`images`) in the value of its last expression or in a `console` output
+call's arguments goes to the model as an image after the cell's result. The
+worker finds each where the display reads (`shownToolImages` in
+`cell-value.ts`): a plain object or an array, own data properties only, at a
+depth and position the display shows, so the search runs no cell code. It
+sends each image's data fields on the `Evaluated` frame
+(`CellEvaluation.images`, additive and optional; a result stored before it
+decodes as it was). The host keeps those that decode as a `ToolImage`, with
+only the schema's fields, and stores them in the result, so the request
+projection sends them as it sends a native tool's image, and the blob store
+keeps their files; there is no second image path. An image the cell only
+binds, or an inner call returns that the cell does not show, stays out: an
+image is paid in every later request of the session (a 1280x800 screenshot
+is about 1,400 tokens at Anthropic's `w*h/750`), so only the code decides which images the model needs. A cell result
+carries at most 5 (`maximumCellImages`): each image once, the newest shown,
+as the last screenshot is the state the cell ended on, and the display names
+how many it left out. Five is the smallest per-request bound of a shipped
+API class (Chat Completions) and the step at which a request leaves out its
+oldest images, so one cell never makes a request drop the images it just
+sent. A failed cell carries none. Prime Agent and Codex's `exec` code mode
+take an explicit helper (`attach_image`, `image(...)`) because their display
+is text; opencode's code mode sends every image a nested call returns
+(`PRIOR_ARTS.md`).
+
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
@@ -2361,7 +2397,58 @@ when the server answers 400, 404, 405, 406, 415, 422 or 501 (never on 401 or
 403, which SSE would refuse too). Strings expand `${NAME}` and
 `${NAME:-default}`, and a value is taken literally; an entry whose variable is
 unset is skipped with a warning. A stdio `cwd` resolves against the session's
-cwd.
+cwd, after its variables expand.
+
+A `plugin` entry runs a server that another tool's plugin ships, such as
+Codex's computer use, and an update of the plugin needs no edit:
+
+```json
+{
+  "mcpServers": {
+    "computer-use": {
+      "plugin": "~/.codex/plugins/cache/openai-bundled/unified-computer-use",
+      "server": "cua_repl"
+    }
+  }
+}
+```
+
+Each setup reads the entry `server` from the `.mcp.json` in the `plugin`
+directory. When that directory has no `.mcp.json`, the entry reads the
+version directory that Codex runs (`active_plugin_version` in Codex's
+`core-plugin-common/src/installed.rs`): `local` when it is there, else the
+newest subdirectory by semantic version (by text when a name is not one).
+Only a name of ASCII letters, digits, `.`, `+`, `_` and `-` counts. The file's
+servers are its `mcpServers` object, else its top-level object, as Codex and
+Claude Code read them. `plugin` expands `${NAME}`, a leading `~` is the home
+directory, and a relative path resolves against the session's cwd. The named
+server is a `command` or `url` entry and runs as one, with the rules of the
+plugin's own tool: `${PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` expand to the
+plugin root (the directory of the `.mcp.json`), and a stdio server gets both
+in its environment; a stdio server runs in its `cwd` resolved against the
+root, else in the root; and a `command` that starts with `./` or `../`
+resolves against that directory. The `enabled` and `timeoutMs` of the `plugin`
+entry apply. The entry keys with its plugin root, so a new version lists
+again. A missing directory, no `.mcp.json`, a file that is not a JSON object,
+no server of that name, or a server entry that does not decode makes the
+entry `misconfigured` with the reason, and the other servers still run. gent
+reads a plugin only when an entry names it.
+
+Computer use can click and type in any app, so its tools must ask before they
+run. A `@gent/guard` rule (see `docs/extensions.md`) in `~/.gent/config.json`
+asks before each call of the server's tools, from the model or from the cell;
+rules come before the pass for read-only tools:
+
+```json
+{ "guard": { "rules": [{ "tool": "mcp.computer-use.*", "effect": "ask" }] } }
+```
+
+An MCP image reaches the model as an image on a native call, and through
+the cell when the cell shows it: `const shot = await
+tools.mcp["computer-use"].js(...); shot` (or `shot.images[0]`, or a
+`console.log` of it) sends the screenshot after the cell's result, as the
+cell section says. A cell that reads only the text of a result sends no
+image.
 
 A `url` entry without its own `Authorization` header signs in with OAuth, all
 inside the extension. `/mcp login <server>` runs the SDK's `auth()` with a
@@ -2454,7 +2541,7 @@ The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `logged-out` (the server refused an OAuth entry that has no
-stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, or names an unset variable),
+stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, names an unset variable, or names a plugin server that cannot be read),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
 (read from the cache, not yet connected). With no server configured, only
 `/mcp` is registered, and it says where to add one.
@@ -2709,7 +2796,7 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `apiClass`, `modelRouter`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `apiClass`, `modelRouter`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. Bun loads a user `.ts` extension with no type check, so `register` also checks the domain at run time: an unknown one, such as the bucket name in `register("tools", t)`, fails the load with a message that names it, the near miss, and the domains. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
@@ -2844,7 +2931,7 @@ Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends
 - Widgets are transport-only: subscribe to `transport.onSessionEvent` for event-backed invalidation or `transport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `transport.request` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins.tsx` for the canonical pattern.
 - `lifecycle` is the extension's own lifetime: the loader forks one scope per extension from the client runtime's scope and provides a `ClientContext` with that lifecycle around the setup. `lifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; they run in order when a reload replaces or removes the extension, or when the provider unmounts, so widget setups leave no detached roots behind. A cleanup registered after the lifetime ended runs at once.
 - `lifecycle.scoped` allocates Effect resources in the extension's lifetime; they are released after its cleanups ran. The main TUI scope awaits provider disposal before process exit.
-- `activity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. A surface with no activity to report reads `"unknown"`.
+- `activity.snapshot` exposes the focused UI session's working, blocked, idle, or unavailable state. A surface with no activity to report reads `"unknown"`. Any client extension may add a reactive snapshot with `activity.include(readSnapshot)` and register its returned cleanup with its own `lifecycle.addCleanup`. A known ask wins over work: focused blocked stays blocked, and matching-session blocked activity promotes idle, working or unknown focus to blocked. Without a known ask, working and unknown focus stay unchanged; idle derives working, then unknown. The agents controller contributes the current thread's transitive descendants, including children of handoff members, from its complete listings. Both the server thread fold and descendant reader retain waiting before working, then unknown live status before idle. The controller owns initial and identity-change reads without a tray, and its existing clock retries missing knowledge until a complete inactive or empty result stops polling. A filtered pane adds one unfiltered subtree read on the same coalesced request and 2-second clock; unfiltered listings serve both views. Missing live status, a failed read and a session or branch switch report unknown, never a stale idle.
 - `@gent/herdr` is a built-in client extension. It reports that UI activity through Herdr's local socket when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present. It sends ordered reports with the session ID and releases its authority on exit. The shared server and child agents do not own this reporter.
 - `useExtensionUI()` (`extensions/host.tsx`) is host-side, not extension API: the shell reads the resolved contributions, load failures and `clientRuntime` through it. A widget reads the active session from `transport.currentSession()` or `sessionQuery`.
 - Widgets are zero-prop components that self-source from context hooks.
@@ -2909,7 +2996,7 @@ suite's size.
 
 ### Test structure
 
-`packages/core/tests/` mirrors `packages/core/src/`. Implementation tests use relative imports into that source tree. They do not depend on the package entries:
+`packages/core/tests/` mirrors `packages/core/src/`. A test imports the modules it tests, and every other core module, by relative path into that source tree. A test that authors a fixture extension takes the authoring names (`defineExtension`, `tool`, `ExtensionHost`, …) from `@gent/core/extensions/api`, as any extension does; the entry resolves to the same source file (`packages/core/package.json`), so module identity is the same. `tests/extensions/api.test.ts` also reads the entry as the public surface it checks:
 
 ```text
 tests/

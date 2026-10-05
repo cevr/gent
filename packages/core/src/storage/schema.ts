@@ -12,7 +12,6 @@ import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
 import { BranchId, MessageId, SessionId, DefaultWorkspaceId } from "../domain/ids.js"
 import { Migrator, SqlClient } from "effect/sql"
-import { SqliteMigrator } from "@effect/sql-sqlite-bun"
 import { storageError, StorageError } from "../domain/errors.js"
 
 // ── stored rows ─────────────────────────────────────────────────────────────
@@ -247,15 +246,6 @@ export const groupMessageChunkRows = (rows: ReadonlyArray<MessageChunkRow>) => {
 }
 
 // ── schema ──────────────────────────────────────────────────────────────────
-
-const configureSqliteConnection = Effect.fn("Storage.configureSqliteConnection")(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`PRAGMA journal_mode = WAL`)
-  yield* sql.unsafe(`PRAGMA synchronous = NORMAL`)
-  yield* sql.unsafe(`PRAGMA busy_timeout = 5000`)
-  yield* sql.unsafe(`PRAGMA wal_autocheckpoint = 1000`)
-  yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
-})
 
 const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -906,13 +896,6 @@ const toolImageReferencesMigration = Effect.gen(function* () {
   )
 })
 
-const StoragePragmaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  Layer.effectDiscard(
-    configureSqliteConnection().pipe(
-      Effect.mapError(storageError("Storage pragma initialization failed")),
-    ),
-  )
-
 const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertMigrationStateCompatible().pipe(
@@ -920,40 +903,41 @@ const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlCl
     ),
   )
 
+// The generic migrator: init is portable DDL over any SQLite `SqlClient`. The
+// connection's PRAGMAs belong to the client layer that opens the connection
+// (`storage.ts`); a hosted client's platform owns them.
+const runMigrations = Migrator.make({})
+
 const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  SqliteMigrator.layer({
-    loader: Migrator.fromRecord({
-      "001_init": initialMigration,
-      "002_agent_loop_queue": agentLoopQueueMigration,
-      "003_session_workspace": sessionWorkspaceMigration,
-      "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
-      "005_interaction_decision": interactionDecisionMigration,
-      "006_durable_operations": durableOperationsMigration,
-      "007_durable_operation_integrity": durableOperationIntegrityMigration,
-      "008_agent_loop_queue_integrity": agentLoopQueueIntegrityMigration,
-      "009_tool_call_bindings": toolCallBindingsMigration,
-      "010_resource_graph_state": resourceGraphStateMigration,
-      "011_message_insertion_order": messageInsertionOrderMigration,
-      "015_drop_resource_graph_state": dropResourceGraphStateMigration,
-      "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
-      "017_session_model": sessionModelMigration,
-      "018_turn_records": turnRecordsMigration,
-      "019_session_thread": sessionThreadMigration,
-      "020_drop_message_search_index": dropMessageSearchIndexMigration,
-      "021_interaction_owner": interactionOwnerMigration,
-      "022_turn_record_admission": turnRecordAdmissionMigration,
-      "023_session_admission": sessionAdmissionMigration,
-      "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
-      "025_tool_image_references": toolImageReferencesMigration,
-    }),
-    table: "gent_storage_migrations",
-  }).pipe(
-    Layer.catch((error) =>
-      Layer.effectDiscard(Effect.fail(storageError("Storage migration failed")(error))),
-    ),
-    Layer.provideMerge(StorageCompatibilityLive),
-    Layer.provideMerge(StoragePragmaLive),
-  )
+  Layer.effectDiscard(
+    runMigrations({
+      loader: Migrator.fromRecord({
+        "001_init": initialMigration,
+        "002_agent_loop_queue": agentLoopQueueMigration,
+        "003_session_workspace": sessionWorkspaceMigration,
+        "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
+        "005_interaction_decision": interactionDecisionMigration,
+        "006_durable_operations": durableOperationsMigration,
+        "007_durable_operation_integrity": durableOperationIntegrityMigration,
+        "008_agent_loop_queue_integrity": agentLoopQueueIntegrityMigration,
+        "009_tool_call_bindings": toolCallBindingsMigration,
+        "010_resource_graph_state": resourceGraphStateMigration,
+        "011_message_insertion_order": messageInsertionOrderMigration,
+        "015_drop_resource_graph_state": dropResourceGraphStateMigration,
+        "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
+        "017_session_model": sessionModelMigration,
+        "018_turn_records": turnRecordsMigration,
+        "019_session_thread": sessionThreadMigration,
+        "020_drop_message_search_index": dropMessageSearchIndexMigration,
+        "021_interaction_owner": interactionOwnerMigration,
+        "022_turn_record_admission": turnRecordAdmissionMigration,
+        "023_session_admission": sessionAdmissionMigration,
+        "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
+        "025_tool_image_references": toolImageReferencesMigration,
+      }),
+      table: "gent_storage_migrations",
+    }).pipe(Effect.mapError(storageError("Storage migration failed"))),
+  ).pipe(Layer.provideMerge(StorageCompatibilityLive))
 
 const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(

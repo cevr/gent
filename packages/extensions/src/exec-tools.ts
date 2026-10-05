@@ -32,6 +32,7 @@ import {
   ExtensionHost,
   ExtensionId,
   runProcess,
+  sqlInList,
   headChars,
   headTailChars,
   lineCount,
@@ -523,7 +524,7 @@ export class BackgroundBashStorage extends Context.Service<
                 SET notice_read_at = ${readAt}
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
-                  AND tool_call_id IN ${sql.in(toolCallIds)}
+                  AND tool_call_id IN ${sqlInList(sql, toolCallIds)}
                   AND (status = 'interrupted' OR undelivered_at IS NOT NULL)
                   AND notice_read_at IS NULL
               `
@@ -536,7 +537,7 @@ export class BackgroundBashStorage extends Context.Service<
               const completedAt = (yield* DateTime.nowAsDate).getTime()
               let stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL`
               if (unstopped.length > 0) {
-                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${sql.in(unstopped)}`
+                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${sqlInList(sql, unstopped)}`
               }
               yield* sql`
                 UPDATE background_bash_jobs

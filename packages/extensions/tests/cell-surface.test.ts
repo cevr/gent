@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  ConfigProvider,
   Effect,
   Exit,
   Fiber,
@@ -48,6 +49,7 @@ import {
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import { FetchHttpClient } from "effect/http"
+import { Base64 } from "effect/encoding"
 import * as Prompt from "effect/ai/Prompt"
 import { type Decision, DecisionModel } from "effect/ai"
 import {
@@ -78,6 +80,8 @@ import {
   ModelId,
   ProviderId,
   type ProviderAuthInfo,
+  saveToolImage,
+  ToolImage,
 } from "@gent/core/extensions/api"
 import {
   InteractionStorage,
@@ -948,6 +952,99 @@ describe("shipped model surface", () => {
         ])
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
+  )
+
+  it.scopedLive(
+    "a tool image a cell returns reaches the model after the cell's result; one it only reads does not",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dataDir = yield* fs.makeTempDirectoryScoped({ prefix: "gent-cell-images-" })
+        // A 1x1 PNG.
+        const dot =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+        const camera = defineExtension({
+          id: "@test/camera",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "snap",
+                description: "Take a picture",
+                params: Schema.Struct({}),
+                output: Schema.Struct({ text: Schema.String, image: ToolImage }),
+                execute: () =>
+                  Effect.gen(function* () {
+                    const bytes = yield* Effect.fromResult(Base64.decode(dot))
+                    const image = yield* saveToolImage({ bytes, source: "snap.png" })
+                    return { text: "a dot", image }
+                  }).pipe(Effect.orDie),
+              }),
+            )
+          }),
+        })
+        const prompts: Array<Prompt.Prompt> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          // Shown: the cell's value holds the image. The object tagged
+          // ToolImage that does not decode as one is no image.
+          toolCallStep("cell", {
+            code: "console.log({ _tag: 'ToolImage', sha256: 'f'.repeat(64) }); const shot = await tools.snap({}); shot",
+          }),
+          // Read only: the cell shows the text.
+          toolCallStep("cell", { code: "(await tools.snap({})).text" }),
+          {
+            ...textStep("done"),
+            assertOptions: (options) => {
+              prompts.push(options.prompt)
+            },
+          },
+        ])
+        const results = yield* Effect.gen(function* () {
+          const harness = yield* createRpcHarness({
+            ...shippedPreset,
+            extensionInputs: [...shippedPreset.extensionInputs, camera],
+            providerLayer,
+          })
+          return yield* sendAndAwaitReply(harness, "look", "done")
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GENT_DATA_DIR: dataDir })),
+          ),
+        )
+        yield* controls.assertDone
+        expect(results.map((result) => result.isFailure)).toEqual([false, false])
+        // The stored result holds the image as the tool saved it, with no other field.
+        const shown = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ images: Schema.Tuple([ToolImage]) }),
+        )(results[0]?.result)
+        expect(Object.keys(shown.images[0]).toSorted()).toEqual(
+          ["_tag", "bytes", "height", "mediaType", "sha256", "source", "width"].toSorted(),
+        )
+        expect(shown.images[0]).toMatchObject({ source: "snap.png", width: 1, height: 1 })
+        expect(yield* fs.exists(`${dataDir}/blobs/${shown.images[0].sha256}.png`)).toBe(true)
+        expect(results[1]?.result).not.toHaveProperty("images")
+        // The request after both cells: an image message after the first
+        // cell's result only.
+        const prompt = prompts[0]?.content ?? []
+        const tools = prompt.flatMap((message, index) => {
+          if (message.role === "tool") return [index]
+          return []
+        })
+        expect(tools).toHaveLength(2)
+        const after = (index: number) => prompt.slice(index + 1, index + 2)
+        const imageMessage = after(tools[0] ?? -1)
+        expect(imageMessage.map((message) => message.role)).toEqual(["user"])
+        const parts = imageMessage.flatMap((message) => {
+          if (message.role !== "user") return []
+          return message.content
+        })
+        expect(parts.map((part) => part.type)).toEqual(["text", "file"])
+        expect(parts[0]).toMatchObject({ text: "Image from cell snap.png 1x1:" })
+        expect(parts[1]).toMatchObject({ data: `data:image/png;base64,${dot}` })
+        expect(after(tools[1] ?? -1).map((message) => message.role)).not.toContain("user")
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platform)),
+    25_000,
   )
 
   it.scopedLive(

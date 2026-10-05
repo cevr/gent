@@ -17,6 +17,9 @@
     "effect-encore": "catalog:",
     "effect-wide-event": "catalog:"
   },
+  "devDependencies": {
+    "@effect/sql-sqlite-do": "catalog:"
+  },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
