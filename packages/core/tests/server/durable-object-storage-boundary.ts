@@ -1,6 +1,6 @@
 /**
  * A Durable Object's SQLite storage, faked over `bun:sqlite` for the hosted
- * storage prototype.
+ * storage tests.
  *
  * It keeps the rules a SQLite-backed Durable Object keeps: no transaction SQL
  * (`BEGIN`, `COMMIT`, `SAVEPOINT`, ...), only the PRAGMAs Cloudflare

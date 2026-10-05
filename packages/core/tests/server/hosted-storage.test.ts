@@ -1,6 +1,6 @@
 /**
- * Prototype P0 of the durable-actor spike: a gent root on Durable-Object-shaped
- * storage.
+ * A gent root on Durable-Object-shaped storage: storage init, a turn that
+ * resumes after an eviction, and lists past the bound-parameter cap.
  *
  * A fake `DurableObjectStorage` (`durable-object-storage-boundary.ts`) keeps the
  * rules a SQLite-backed Durable Object keeps. `@effect/sql-sqlite-do` turns it
@@ -157,7 +157,7 @@ const countOf = (rows: ReadonlyArray<typeof CountRow.Type>) =>
   )
 
 /**
- * The H3 query, prototyped over the cluster's message table: the earliest
+ * The next-wake query over the cluster's message table: the earliest
  * unprocessed `deliver_at`, else now plus a heartbeat while any unprocessed
  * message exists, else none.
  */
