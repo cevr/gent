@@ -210,6 +210,17 @@ type ResourceServices<Resource> =
 export type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
   number extends Resources["length"] ? never : ResourceServices<Resources[number]>
 
+/**
+ * A type that grants services makes the declaration that grants them
+ * required: a `Resources` argument other than the empty default requires
+ * `resources`. So no typed input or explicit type argument of `tool`,
+ * `request` or `defineResource` grants a service without the value that
+ * provides it.
+ */
+export type RequiredDeclarations<Resources> = [Resources] extends [ReadonlyArray<never>]
+  ? unknown
+  : { readonly resources: Resources }
+
 /** What a Resource of scope `S` naming `Resources` may read when it builds. */
 type ResourceBuildServices<
   S extends ResourceScope,
@@ -221,7 +232,15 @@ type ResourceBuildServices<
 // ── Smart constructor ───────────────────────────────────────────────────────
 
 /** Spec type accepted by {@link defineResource}. */
-interface ResourceSpec<
+type ResourceSpec<
+  A,
+  S extends ResourceScope,
+  R,
+  E,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+> = ResourceSpecFields<A, S, R, E, Resources> & RequiredDeclarations<Resources>
+
+interface ResourceSpecFields<
   A,
   S extends ResourceScope,
   R,

@@ -1072,6 +1072,19 @@ describe("Capability factory-shape locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
+  test("explicit type arguments cannot grant a branch resource services without its declaration", () => {
+    // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
+    defineResource<WriteCapableService, "branch", ReadOnlyService, never, Readers>({
+      id: "host/explicit-branch",
+      scope: "branch",
+      layer: Layer.effect(
+        WriteCapableService,
+        Effect.map(ReadOnlyService, () => WriteCapableService.of({ write: Effect.void })),
+      ),
+    })
+    expect(true).toBe(true)
+  })
+
   test("tool({...}) body that needs a service it does not declare does not compile", () => {
     tool({
       id: "undeclared-resource",

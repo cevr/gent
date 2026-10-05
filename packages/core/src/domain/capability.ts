@@ -14,6 +14,7 @@ import type {
   AnyResourceContribution,
   DeclaredResourceServices,
   ExtensionContext,
+  RequiredDeclarations,
   TurnNotice,
 } from "./extension.js"
 import type { ExtensionPlatformServices } from "../runtime/gent-platform.js"
@@ -290,16 +291,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
 interface RequestFailure {
   readonly message: string
 }
-
-/**
- * A leaf type that grants services makes the declaration that grants them
- * required: a `Resources` argument other than the empty default requires
- * `resources`. So no typed input or explicit type argument grants a service
- * without the value that provides it.
- */
-type RequiredDeclarations<Resources> = [Resources] extends [ReadonlyArray<never>]
-  ? unknown
-  : { readonly resources: Resources }
 
 /** Author-facing input to `request({...})`. */
 export type RequestInput<

@@ -318,7 +318,8 @@ updates this list in the same commit.
     host's services every build gets (`ResourceHostServices`: the platform,
     `SqlClient`, `InteractionStorage`), and for a branch Resource its
     `BranchAddress` and the services of the process Resources it names in
-    `resources`. Package validation fails an extension that does not
+    `resources`; a type argument that grants a branch Resource services
+    makes its `resources` required, as for a leaf. Package validation fails an extension that does not
     register the resource definition a leaf or a branch Resource names; the
     check is by identity, so another definition under the same id fails too.
     A process Resource names none, and a branch Resource names only process
@@ -328,9 +329,9 @@ updates this list in the same commit.
     root takes no feature input. The cell is the shipped case
     (`CellStorageResource`, `CellKernelResource`), and a user extension has
     the same two declarations. Receipts:
-    `packages/core/src/domain/capability.ts` (`tool`, `request`,
-    `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
-    (`validateLeafResources`), `packages/extensions/src/cell.ts`,
+    `packages/core/src/domain/capability.ts` (`tool`, `request`),
+    `packages/core/src/domain/extension.ts` (`defineResource`,
+    `RequiredDeclarations`, `validateLeafResources`), `packages/extensions/src/cell.ts`,
     `packages/core/tests/extensions/api.test.ts`,
     `packages/core/tests/runtime/extension-host.test.ts`,
     `packages/extensions/tests/cell-receipts.test.ts` (cell tables).
