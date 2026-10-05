@@ -11,15 +11,18 @@ import {
 } from "effect"
 import picomatch from "picomatch"
 import {
-  type AgentDefinition,
+  type AgentPathEntry,
   defineExtension,
   defineRequests,
   ExtensionContext,
   ExtensionId,
   ExtensionHost,
   headChars,
+  pathWithin,
   request,
+  resolveLinks,
   runProcess,
+  scopeReaches,
   splitLines,
   tailChars,
   tool,
@@ -67,13 +70,6 @@ const tooManyFiles = (cwd: string) =>
     message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
     cwd,
   })
-
-/**
- * A relative path that climbs out of its base. `..cache` is a name inside the
- * base; only `..` itself or a `../` step leaves it.
- */
-const leavesBase = (path: Path.Path, relative: string): boolean =>
-  relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
 
 /** One `.gitignore` line. */
 interface IgnoreRule {
@@ -281,11 +277,8 @@ const walkFiles = (params: {
 
     const { cwd } = params
     let root = params.root
+    if (!pathWithin(path, root, cwd)) root = cwd
     let fromRoot = path.relative(root, cwd)
-    if (leavesBase(path, fromRoot)) {
-      root = cwd
-      fromRoot = ""
-    }
     let rules = yield* loadRules(root, "")
     let base = ""
     for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
@@ -696,13 +689,16 @@ const encodeFileText = (file: Omit<FileText, "lossy">): Uint8Array => {
 // ── agent paths ─────────────────────────────────────────────────────────────
 
 /**
- * An agent's `paths` confine these file tools: read and grep accept any
- * entry, write and edit only a write entry. An agent without `paths` reaches
- * every path. This is not a sandbox: bash, the cell and every other tool
- * reach the file system without the check.
+ * A session's path scopes confine these file tools (`pathScopes`: its
+ * agent's `paths`, its run's, and those of every parent run it was spawned
+ * under, each with the cwd its entries resolve against): read and grep
+ * accept any entry, write and edit only a write entry, and a call must lie
+ * in every scope. An agent without scopes reaches every path. This is not a
+ * sandbox: bash, the cell and every other tool reach the file system
+ * without the check.
  */
 
-type PathAccess = NonNullable<AgentDefinition["paths"]>[number]["access"]
+type PathAccess = AgentPathEntry["access"]
 
 class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeError", {
   message: Schema.String,
@@ -710,38 +706,13 @@ class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeErro
   access: Schema.Literals(["read", "write"]),
 }) {}
 
-/** A link chain longer than this is a loop; the kernel stops at the same count. */
-const MAX_LINK_HOPS = 40
-
 /**
- * Where `target` lands once links resolve: its realpath when it exists; a
- * dangling link resolves through what it names; a path not made yet resolves
- * through its nearest existing ancestor, so a write under a linked directory
- * lands where the link points.
- */
-const realTarget: (
-  target: string,
-  hops: number,
-) => Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> = Effect.fn(
-  "FsTools.realTarget",
-)(function* (target: string, hops: number) {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const real = yield* fs.realPath(target).pipe(Effect.option)
-  if (Option.isSome(real)) return real.value
-  const link = yield* fs.readLink(target).pipe(Effect.option)
-  if (Option.isSome(link) && hops < MAX_LINK_HOPS) {
-    return yield* realTarget(path.resolve(path.dirname(target), link.value), hops + 1)
-  }
-  const parent = path.dirname(target)
-  if (parent === target) return target
-  return path.join(yield* realTarget(parent, hops), path.basename(target))
-})
-
-/**
- * Refuses `target` (absolute, `..` already resolved) when the session's agent
- * names `paths` and no entry that grants `access` holds it. Links resolve on
- * both sides before the check.
+ * Refuses `target` (absolute, `..` already resolved) when one of the session
+ * run's path scopes has no entry that grants `access` and holds it. Links
+ * resolve on both sides at each call (`resolveLinks`), so a link retargeted
+ * since the run started is judged by where it points now. A run whose
+ * agent or parent bound cannot be resolved fails here (`Session.getAgent`):
+ * an unknown bound grants nothing.
  */
 const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
   target: string,
@@ -749,25 +720,29 @@ const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
 ) {
   const ctx = yield* ExtensionContext
   const path = yield* Path.Path
-  const agent = yield* ctx.Session.getAgent()
-  const entries = Option.flatMap(agent, (definition) => Option.fromUndefinedOr(definition.paths))
-  if (Option.isNone(entries)) return
-  const real = yield* realTarget(target, 0)
-  for (const entry of entries.value) {
-    if (access === "write" && entry.access !== "write") continue
-    const root = yield* realTarget(path.resolve(ctx.cwd, entry.path), 0)
-    if (!leavesBase(path, path.relative(root, real))) return
+  const scopes = (yield* ctx.Session.getAgent()).pathScopes()
+  if (scopes.length === 0) return
+  const real = { path: yield* resolveLinks(target), access }
+  const within = (inner: string, outer: string) => pathWithin(path, outer, inner)
+  for (const scope of scopes) {
+    const resolved = yield* Effect.forEach(scope.entries, (entry) =>
+      Effect.map(resolveLinks(path.resolve(scope.cwd, entry.path)), (root) => ({
+        path: root,
+        access: entry.access,
+      })),
+    )
+    if (scopeReaches(resolved, real, within)) continue
+    const named = (kind: PathAccess) =>
+      scope.entries
+        .filter((entry) => kind === "read" || entry.access === "write")
+        .map((entry) => entry.path)
+        .join(", ") || "none"
+    return yield* new PathScopeError({
+      message: `${target} is outside this agent's paths for ${access}. Readable: ${named("read")}. Writable: ${named("write")}. Paths are relative to ${scope.cwd}.`,
+      path: target,
+      access,
+    })
   }
-  const named = (kind: PathAccess) =>
-    entries.value
-      .filter((entry) => kind === "read" || entry.access === "write")
-      .map((entry) => entry.path)
-      .join(", ") || "none"
-  return yield* new PathScopeError({
-    message: `${target} is outside this agent's paths for ${access}. Readable: ${named("read")}. Writable: ${named("write")}. Paths are relative to ${ctx.cwd}.`,
-    path: target,
-    access,
-  })
 })
 
 // ── read ────────────────────────────────────────────────────────────────────
@@ -1871,9 +1846,8 @@ export const GrepTool = tool({
     let unreadable = 0
     if (baseStat.value.type !== "File") {
       // A target inside the session cwd reads the session's ignore rules from its root.
-      const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
-      if (!leavesBase(path, fromCwd)) root = ctx.cwd
+      if (pathWithin(path, ctx.cwd, basePath)) root = ctx.cwd
       const listing = yield* listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>

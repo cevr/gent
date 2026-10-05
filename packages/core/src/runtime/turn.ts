@@ -2,6 +2,8 @@ import {
   type AgentDefinition,
   AgentName,
   type AgentName as AgentNameType,
+  bindSessionAgent,
+  noRunBound,
   resolveSessionAgent,
   calculateCost,
   DEFAULT_AGENT_NAME,
@@ -92,6 +94,7 @@ import {
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   provideExtensionLeaf,
+  resolveParentBound,
   type ResourceBuildInputs,
   RunOpener,
 } from "./extension-host.js"
@@ -1353,9 +1356,11 @@ interface SessionRoute {
   readonly name: AgentNameType
   /**
    * That agent from the roster (extension agents and config `agents`
-   * entries) with the run's overrides applied (`resolveSessionAgent`); none
-   * when no agent has the name. Its `driver` is its own: a config
-   * `driverOverrides` entry reaches `modelDriver` only.
+   * entries) with the run's model, effort, limits and addendum applied
+   * (`resolveSessionAgent`); none when no agent has the name. Routing only:
+   * a turn binds it to its run (`bindSessionAgent`) before it holds a tool.
+   * Its `driver` is its own: a config `driverOverrides` entry reaches
+   * `modelDriver` only.
    */
   readonly definition: Option.Option<AgentDefinition>
   readonly modelId: ModelId
@@ -1525,7 +1530,34 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  const dispatchAgent = definition.value
+  // The run's bound: its own and every parent run's, so a child never runs
+  // wider than its parent. A parent bound nobody can resolve fails closed.
+  const parentBound = yield* Option.match(session, {
+    onNone: () => Effect.succeed(Result.succeed(noRunBound)),
+    onSome: (value) => Effect.result(resolveParentBound(value, hostCtx.cwd)),
+  })
+  if (Result.isFailure(parentBound)) {
+    const failure = parentBound.failure
+    if (failure._tag !== "ParentBoundError") return yield* failure
+    yield* eventStore
+      .publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: failure.message,
+        }),
+      )
+      .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- A parent bound that does not resolve ends the turn after the error event is published, as an unknown agent does.
+    return undefined
+  }
+  const dispatchAgent = bindSessionAgent(definition.value, {
+    overrides: Option.flatMap(admission, (value) =>
+      Option.fromUndefinedOr(value.runSpec?.overrides),
+    ),
+    cwd: hostCtx.cwd,
+    parent: parentBound.success,
+  })
   const interactive = params.interactive
 
   // Derive extension projections from explicit prompt/message slots.

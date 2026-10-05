@@ -727,7 +727,8 @@ Shape:
   not root depth. A parent at the depth limit cannot spawn. This check is not a
   concurrency or token budget.
 - The `@gent/delegate` extension admits a child by creating a session through the
-  `Session` facade with `parentSessionId`/`parentBranchId`, then `send`ing the
+  `Session` facade (the calling session is the parent; it names
+  `parentBranchId`), then `send`ing the
   child's first message. `delegate.start` returns the handle at admission,
   keyed by the host tool call id so a replayed call finds its child, and never
   the answer: the model does not block on a child. The delegate reserves at
@@ -1216,8 +1217,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 - The `@gent/delegate` extension owns child runs. It is built only on the
   public extension API — no core runner, no privileged seam. Every child is a
-  session created through the addressed `Session` facade verbs (`create` with
-  `parentSessionId`/`parentBranchId`, `send`, `stop`, `events`, `delete`). The
+  session created through the addressed `Session` facade verbs (`create`,
+  whose parent is always the calling session, with `parentBranchId`; `send`,
+  `stop`, `events`, `delete`). The
   delegate keeps its own child registry as one JSON file per parent branch under
   `<data dir>/delegates/<branchId>.json`, so a `delegate.list` survives restarts
   without any `durable_operations` row.
@@ -1235,7 +1237,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   child the registry still resolves, never a running one nobody delivers.
 - The delegate ships three ordinary tools: `delegate.start`,
   `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. A child's first message opens with `Task from your parent session <id>.` and says where its final reply goes, so the child does not take a bare instruction for an injection. `delegate.start` accepts RunSpec
-  overrides for model, reasoning, tool selection, and added instructions, and
+  overrides for model, reasoning, tool and path narrowing, and added instructions, and
   a `context` of `fresh` (the child sees only its todo) or `fork` (the child is
   created with `historyBranchId` = the caller's branch, so it starts from the
   caller's current context window). A history copy is settled first: a tool
@@ -1251,7 +1253,12 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Snapshot children: `delegate.start` takes `isolation` (`shared`, the
   default, or `snapshot`). `@gent/workspaces` (`packages/extensions/src/workspaces.ts`)
   owns the copies and uses only the public extension API, `runProcess` and
-  the platform services. Core has no workspace concept: the seam is
+  the platform services. A path-confined parent run bounds its snapshot
+  child by its scopes in the parent's cwd, so the child's file calls in its
+  copy are refused (decided in the narrow-only batch, Round 6, on least
+  authority): core has no copy relation, and moving a parent's relative
+  entries into whatever cwd a create names would let a confined run reach
+  any directory by naming it. Core has no workspace concept: the seam is
   `Session.create({ cwd })`, and the child's profile is the copy's.
   - The backend: `rift rpc` with `copyAll` (one snapshot, an exact copy) only
     when the origin is a rift workspace on btrfs. Everywhere else, and for any
@@ -1389,7 +1396,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
   a handoff (`continueThread`) keeps its parent's thread, is not admitted, and
   keeps its parent's depth.
-- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, paths, prompt addendum) win over both. The `delegate` agent holds `["*", "!delegate.start", "!delegate.cancel", "!delegate.list", "!thread.start"]`; a call that names `tools` gets those denials appended, so it cannot hand a child delegation back. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
+- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits neither its caller's agent nor its model, only its caller run's bound (its tools and paths never exceed its parent run's): its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, effort, prompt addendum) win over both, while its `tools` and `paths` only narrow the definition. The `delegate` agent holds `["*", "!delegate.start", "!delegate.cancel", "!delegate.list", "!thread.start"]`; a call's `tools` narrow those patterns, so it cannot hand a child delegation back. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from until the user merges it. The copy keeps a request the session is still working on, because a question is usually about it; so each question goes to the fork under a header (`forkQuestionText`, `customType: "btw-question"`) that names the session it forked from, says a request with no answer above is that session's work and not the fork's, and asks for changes only when the question does. Without it a fork opened mid-turn took the session's task as its own and did it again in the same working tree. The pane and the fork's transcript row show the question without the header (`forkQuestionBody`). The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource). Each state pulse the follower sends is a stored event on the branch and a re-read of the fork in the open pane, so a fork event that leaves the pane's view as it was pulses nothing, and streamed text pulses at once and then at most once per 250 ms, with the last change always pulsed; Enter on an empty ask line opens the fork as the shell's session, which is `switchSession`, because the fork already is one; `ctrl+o` keeps its one meaning, the transcript's detail level. The open fork per branch is process state; the fork itself is durable and listed with every other child session. `btw.merge` posts one message to the branch (`customType: "btw-merge"`) that names the fork session, its first own message and its last reply by id, with no reply text and no summary call: the branch's model reads the fork with `read_session` from that message when it needs it, so the merge appends a few lines and the cached prefix holds. It is a `steer` with `wake`: a running turn takes it at its next step with no turn of its own, and an idle branch starts the turn the user asked for (a queued follow-up always costs its own turn; a parked steer answers after the user's next message). Its request id is a digest of the fork and the reply, so a repeat posts nothing (`merged: false`) and a later reply merges again. A merge with no open fork, while the fork answers, or before its first reply is refused. The fork stays open and durable after a merge; `/btw` reopens it. In the TUI pane `ctrl+s` merges; its hint shows only once the fork has answered, and the key refuses with a notice before then. A merge closes the pane it was asked from: an answer that lands after the reader switched session, or closed and reopened the pane, leaves the pane in view alone. The fork's name is one line (`forkName` folds whitespace), since the pinned label reads it from the merge's first line. The branch draws the merge as one collapsed row, `↳ merged btw · <question> → <reply>`, queues it as `↳ btw merge · <question>`, and pins it as `merged <fork name>`.
 - Alarms and monitors (`@gent/wake`) live in `<data dir>/wakes/<branchId>.json` (`resolveDataDir(ctx.home)`: `GENT_DATA_DIR`, else `~/.gent`; `ctx.home` is the OS home); timers are branch-scoped. One branch lifecycle permit serializes durable publication, timer installation, re-arm and cancellation; waiting for it is interruptible, then the transfer completes. Cancellation releases the file lock before waiting for stopped timers. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop; a line the session refuses (a full follow-up queue, for one) is logged (`wake.fire.refused`) and stored as a `notice` entry instead, so the fire is not lost. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` turn notice, and `turnAfter` clears exactly the notices in `readNotices`, the ones an answered turn's steps showed (a lost process shows them again), so a failed, interrupted or unanswered turn keeps them, and a notice written after the last step read the file waits for the next turn; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back when the branch's loop opens (the `loopOpen` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once, and a past-due `notify` alarm leaves its notice without a turn). Opening the session is enough; no message is needed. The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The `wake.dismiss` request cancels one entry by id or dismisses one notice, for a client. Auto-resume is an alarm too, opt-in by the user's own `~/.gent/config.json` only (`{ "wake": { "autoResume": { "maxResumes": 3 } } }`; a project file cannot spend the user's money): a `turnAfter` with `retryAt` (a usage limit that resets within 24 h) stores an alarm with an optional `resume` key (`attempt`, `maxResumes`, `resetAt`, the stopped turn's `messageId`; an earlier binary reads a plain alarm), id `resume:<messageId>:<resetAt>` so a repeated turn end stores one, due 30 s after the reset. The attempt comes from the branch's events (`Session.events` up to the marker): the turns a usage limit stopped (a `streamFailed` receipt after an `ErrorOccurred` with `retryAt`) since the last answered receipt, the current one included; an interrupt, a turn that gave up or another failure neither counts nor starts the count again, so a user's own message that the limit stops is the next attempt, and only an answer resets it. Past `maxResumes` (default 3) the turn stores a `notice` instead. A spawned session stores none: its completion carries the error to its parent. A branch whose newest client message carries `metadata.unattended` (a headless run sends `message.send` with `unattended: true`) stores none either: nobody watches the turn a resume would start, and with no row a later fire or re-arm (the server stays up, or a later process opens the branch) has nothing to run. The branch keeps one resume, the latest turn's: every `turnAfter` drops a pending resume another turn armed, so a message the user sends takes its place. The fire queues its line with `ifLatest: <the stopped turn's opener>`, so the loop admits it and starts its turn in one step under its queue permit, or not at all: a message the user sent or a steer they parked since the stop, a queued follow-up, or a turn that runs takes the resume's place, and no send lands between a read and the queue. The row goes either way. The fire holds the alarms' lifecycle permit, as `wake.dismiss` does, so a dismiss during the fire finds no row and answers `dismissed: []`, and the TUI reports `auto-resume already fired`. A fire more than 10 minutes past due (gent was not running at the reset, or the machine slept) stores a `notice` and starts no turn; else it queues one user message, "The usage limit reset at <ISO>. Continue the task where it stopped.", with `details.resume`. A resume never re-runs the failed step: it appends one message, so the cached prefix holds. The TUI tray shows a pending resume first, before the 3-row cap, as `↻ resume at <clock> · in <countdown> · <attempt>/<max> · esc cancels`, and a resume notice as its note and the reset clock; the fired row reads `↻ resumed after the usage limit reset · attempt N`. Esc on an empty idle composer cancels the pending resume through the wake client's `stoppableContribution`, which sends `wake.dismiss`; any client extension can contribute a stoppable. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - The `bash` tool passes the command unchanged to Bash in both foreground and supervised background modes. Only its explicit `cwd` parameter resolves against the session directory; Bash owns `cd`, expansion, escaping, operators and exit status. The shared process scope still owns the entire process group.
@@ -1443,10 +1450,16 @@ session was spawned and no client opened it. A spawned session
 (`isSpawnedSession`) has a parent and starts its own thread: a delegate child
 or a `/btw` fork. A handoff has a parent too, but it joins the parent's
 thread, so it is the user's own conversation; spawn depth counts the same
-rule. Deleting a session deletes the same way (`deleteSession`): the session,
-what it spawned and each spawn's own handoffs go; a handoff that continues the
-deleted session's thread stays, detached from its parent, and its runtime is
-not stopped. Child sessions stored before `bded8dce` carry their parent's
+rule. Session lineage has two edges in one column pair: a spawn edge (a
+parent and a new thread) carries authority, and a handoff edge (a parent and
+the same thread) carries provenance and its predecessor's bound. Deleting a
+session deletes the same way (`deleteSession`, `deletionSet`): the session,
+what it spawned and each spawn's own handoffs go. In a root thread (its first
+session has no parent, or is gone), a handoff that continues the deleted
+session stays, detached from its parent, and its runtime is not stopped: it
+is the conversation the user kept. In a spawned thread it goes too: kept, it
+would lose its parent and so its parent run's bound, and become an unbounded
+root. Child sessions stored before `bded8dce` carry their parent's
 thread, so they read as handoffs: they ask, do not count toward spawn depth,
 and survive a parent delete (accepted in the pass-10 ledger). A top-level or handoff session's user watches every turn there, so its
 wake, monitor, delegate-completion and slash-command turns ask. In a spawned
@@ -1608,15 +1621,74 @@ resolves project entry > user entry > extension (`mergeAgentPatches` in
 `mergeConfigs`), and a run's `RunSpec.overrides` (`StoredRunOverrides`, a pick of the patch) wins
 over all (`resolveSessionAgent`), so a workspace pins its orchestrator model
 under `main` and its children's model under `delegate`, and a `delegate.start`
-call can still pick a different model and effort for one child. The turn,
+call can still pick a different model and effort for one child. A run's
+`tools` and `paths` do not replace: they narrow (least authority; the
+resolved definition is the bound its author set). The bound is a resolution
+result, never part of a definition: `resolveSessionAgent` gives the reshaped
+definition (routing reads it for the model and driver), and
+`bindSessionAgent` gives the `SessionAgent`, a subclass of
+`AgentDefinition` that carries a `RunBound` beside the fields: tool pattern
+lists a tool must pass, every one, and path scopes, each with the cwd its
+entries resolve against, a file tool call must lie in, every one. The lists
+are the definition's, the run's, then every parent run's: an ordered pattern
+list cannot write the intersection of two others, so they stay apart.
+`admitsTool` and `pathScopes()` answer for the run. The turn binds its
+dispatch agent (`resolveTurnContext`), and `Session.getAgent` returns the
+bound agent, so hooks, `compileToolPolicy` and the file tools all read the
+run. No author builds a `SessionAgent`: `AgentDefinition.make` refuses a
+`bound` key, and `StoredAgentDefinition` refuses to encode one, so
+`driver.list` sends only definitions, and a client that decodes one admits
+what the server admits. A child never exceeds its parent run. A spawned
+session's bound includes its parent run's whole bound, resolved again at
+each turn and each file call (`resolveParentBound`, `resolveSessionBound`
+in `extension-host.ts`), not copied at admission: a parent agent narrowed
+later narrows its child at the child's next call, and a link retargeted
+since admission is judged where it points at the call. A handoff is no spawn
+(no depth level), but it runs under its predecessor's parent bound:
+`resolveParentBound` climbs the handoff edges to the session that started
+the thread and takes that spawn's parent run bound (none for a root thread),
+and `admitRun` checks a handoff's named run `paths` against it, as for a
+spawn. The handoff keeps its predecessor's admission unless it names one. A
+predecessor that cannot be read, or a parent cycle, fails closed. Fail closed: a parent row that cannot be read,
+a parent cwd whose config does not load, or a parent agent gone from its
+roster is a `ParentBoundError` naming the parent session and agent; a create
+of a child is refused with it, the child's turn ends with it as an
+`ErrorOccurred`, and `Session.getAgent` fails with it, so a file call fails.
+A session's own agent gone from its roster, or a session that cannot be read,
+fails the same way: `Session.getAgent` fails with `SessionAgentError` naming
+the session and agent, never returns a parent bound alone or no bound, so a
+file call in a response that was streaming when the agent left is refused.
+`getAgent` has no empty answer: no caller can read an unknown agent as
+unbounded. A create that names run `paths` for an agent the roster lacks
+(the default one included) is refused (`NotFoundError`).
+Authority follows the creating run, not the input: the `ExtensionContext`
+`Session.create` takes no `parentSessionId`, and the new session's parent is
+always the calling session (`runInfo.sessionId`), so a tool in a bounded run
+cannot make a root session or name a wider parent to leave its chain; a
+`parentBranchId` of another session is refused (`admitParent`). A client's
+`session.create` (the user) still names its parent, and only a client sets
+`continueThread`, so only the user makes a handoff. An extension's reach is
+its run's: `Session.delete` and the `historyBranchId` of `Session.create`
+take only a session in the caller's thread or spawned below it
+(`getThreadTree`); any other is refused with `SessionReachError`, so a tool in
+a child cannot delete its parent or a sibling, or copy their history.
+Session create (`admitRun` in `server.ts`, before the storage transaction)
+also refuses, early and by name, a run `paths` entry that an agent scope or
+a parent run scope does not reach with at least its access
+(`RunPathRefusedError`; a dropped entry would change the run's meaning),
+with links resolved at the check (`resolveLinks`, `pathWithin` and
+`scopeReaches`, the predicates the file tools use). The stored form does not
+change: an old row's `tools`, `paths` or old tool lists narrow when they
+resolve. The turn,
 `driver.list`, agent admission and the `Session.getAgent` facet all read the
 roster the same way. `tools` is ordered patterns over tool ids: `*` matches
 any run of characters, dots included; `!` takes tools back; the last match
 decides; no match leaves a tool out; no list admits every tool. `paths`
 (`{ path, access }`, a bare string a write entry, relative to the session cwd)
 confines the shipped file tools: `fs-tools` reads the agent through
-`ctx.Session.getAgent()` and refuses a target outside its entries
-(`PathScopeError`) after links and `..` resolve; `read` and `grep` accept any
+`ctx.Session.getAgent()` and refuses a target outside the entries of any of
+its `pathScopes()` (`PathScopeError`) after links and `..` resolve, each
+scope's entries against that scope's cwd; `read` and `grep` accept any
 entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
 cell are not confined. One reader owns the encoded agent (`readStoredPatch`): it
 reads config entries (`AuthoredAgentPatch`), `sessions.admission_json`

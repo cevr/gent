@@ -1044,7 +1044,11 @@ const snapshotModel = () =>
   })
 
 /** The shipped extensions, with the workspaces extension on a rift that is not there. */
-const harnessIn = (origin: string, home: string) =>
+const harnessIn = (
+  origin: string,
+  home: string,
+  admission?: Parameters<typeof createRpcHarness>[0]["admission"],
+) =>
   createRpcHarness({
     ...e2ePreset,
     extensionInputs: [
@@ -1056,6 +1060,7 @@ const harnessIn = (origin: string, home: string) =>
     providerLayer: snapshotModel(),
     cwd: origin,
     home,
+    admission,
   })
 
 const completionOf = <
@@ -1082,6 +1087,8 @@ const WorkOfCompletion = Schema.Struct({
   sessionId: SessionId,
   workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }),
 })
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 type CreateParams = Parameters<ReturnType<typeof testToolContext>["Session"]["create"]>[0]
 
@@ -1149,6 +1156,55 @@ describe("a snapshot child", () => {
           (session) => session.parentSessionId === harness.sessionId,
         )
         expect(child?.cwd).toBe(planted.cwd)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "of a path-confined parent is refused file calls in its copy, which lies outside the parent's paths",
+    () =>
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        // The parent run may write anywhere in its own cwd, and nowhere else.
+        const harness = yield* harnessIn(origin, home, {
+          runSpec: { overrides: { paths: [{ path: ".", access: "write" }] } },
+        })
+        yield* harness.client.message.send({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+          content: "delegate it in a copy",
+        })
+        yield* waitFor(
+          harness.client.session.getSnapshot({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+          }),
+          (current) =>
+            Predicate.isNotUndefined(completionOf(current.messages)) &&
+            current.runtime._tag === "Idle",
+          15_000,
+          "the child's completion woke the parent",
+        )
+        const child = (yield* harness.client.session.list()).find(
+          (session) => session.parentSessionId === harness.sessionId,
+        )
+        expect(child?.cwd).not.toBe(origin)
+        const copy = child?.cwd ?? ""
+        // The parent's scopes resolve against the parent's cwd, not the copy.
+        expect(yield* exists(`${copy}/child.txt`)).toBe(false)
+        expect(yield* exists(`${origin}/child.txt`)).toBe(false)
+        const branches = yield* harness.client.branch.list({
+          sessionId: child?.id ?? harness.sessionId,
+        })
+        const messages = yield* harness.client.message.list({
+          branchId: branches[0]?.id ?? harness.branchId,
+        })
+        const results = messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result")
+        expect(results.map((part) => part.isFailure)).toEqual([true])
+        expect(encodeJson(results[0]?.result)).toContain("outside this agent's paths")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )
@@ -1264,7 +1320,8 @@ describe("a snapshot child", () => {
               const session = new Session({
                 id: sessionId,
                 cwd: params.cwd,
-                parentSessionId: params.parentSessionId,
+                // The calling session is always the parent (`Session.create` names none).
+                parentSessionId: parentA.sessionId,
                 parentBranchId: params.parentBranchId,
                 createdAt: now,
                 updatedAt: now,

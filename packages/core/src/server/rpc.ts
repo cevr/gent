@@ -4,7 +4,9 @@ import {
   AgentName,
   Model,
   ModelId,
+  ParentBoundError,
   ReasoningEffort,
+  RunPathRefusedError,
   SessionDepthLimitError,
   StoredAgentDefinition,
 } from "../domain/agent.js"
@@ -78,6 +80,8 @@ export const GentRpcError = Schema.Union([
   NotFoundError,
   InvalidStateError,
   SessionDepthLimitError,
+  RunPathRefusedError,
+  ParentBoundError,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type GentRpcError = typeof GentRpcError.Type

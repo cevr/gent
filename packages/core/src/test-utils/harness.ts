@@ -50,10 +50,12 @@ import {
 } from "../domain/ids.js"
 import {
   AgentDefinition,
+  bindSessionAgent,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
   Model,
   type ModelPricing,
+  noRunBound,
   parseModelId,
 } from "../domain/agent.js"
 import {
@@ -152,7 +154,15 @@ const die = (operation: string) =>
 const defaultSession = (): ExtensionSessionService => ({
   getSession: () => die("Session.getSession"),
   getDetail: () => die("Session.getDetail"),
-  getAgent: () => Effect.succeedNone,
+  // An unconfined `main`: a stub context bounds no file call.
+  getAgent: () =>
+    Effect.succeed(
+      bindSessionAgent(testAgent, {
+        overrides: Option.none(),
+        cwd: "/nonexistent/gent-test-cwd",
+        parent: noRunBound,
+      }),
+    ),
   renameCurrent: () => die("Session.renameCurrent"),
   create: () => die("Session.create"),
   delete: () => die("Session.delete"),

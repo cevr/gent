@@ -427,10 +427,50 @@ const AgentPath = Schema.Union([
   Schema.String.pipe(
     Schema.decodeTo(Schema.toType(AgentPathEntry), {
       decode: SchemaGetter.transform((path: string) => ({ path, access: "write" as const })),
-      encode: SchemaGetter.transform((entry: typeof AgentPathEntry.Type) => entry.path),
+      encode: SchemaGetter.transform((entry: AgentPathEntry) => entry.path),
     }),
   ),
 ])
+
+/** One `paths` entry as resolution reads it: the path as written and its access. */
+export type AgentPathEntry = typeof AgentPathEntry.Type
+
+/**
+ * Whether `scope` reaches `entry`: one of its entries holds the entry's path
+ * (`within(inner, outer)`) with at least the entry's access, `write` holding
+ * `read`. The caller resolves both sides first (absolute, links followed):
+ * the file tools before each call, a session create before it admits a run.
+ */
+export const scopeReaches = (
+  scope: ReadonlyArray<AgentPathEntry>,
+  entry: AgentPathEntry,
+  within: (inner: string, outer: string) => boolean,
+): boolean =>
+  scope.some(
+    (outer) =>
+      (entry.access === "read" || outer.access === "write") && within(entry.path, outer.path),
+  )
+
+/** One scope a session's file tool calls must lie in: `paths` entries and the cwd they resolve against. */
+export interface PathScope {
+  readonly cwd: string
+  readonly entries: ReadonlyArray<AgentPathEntry>
+}
+
+/**
+ * What a session's run may do, as resolution finds it (`bindSessionAgent`):
+ * tool pattern lists a tool must pass, every one, and path scopes a file
+ * tool call must lie in, every one. The agent's own `tools` and `paths`, the
+ * run's, and those of every parent run it was spawned under. Not a field of
+ * any definition: a run only narrows its agent, and a child its parent.
+ */
+export interface RunBound {
+  readonly tools: ReadonlyArray<ReadonlyArray<string>>
+  readonly paths: ReadonlyArray<PathScope>
+}
+
+/** The bound of a session with no parent run. */
+export const noRunBound: RunBound = { tools: [], paths: [] }
 
 // ── agent definition ────────────────────────────────────────────────────────
 
@@ -494,10 +534,11 @@ const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> =>
  * AgentDefinition.make(...))`, and JSON in a config file's `agents` key, an
  * `AgentPatch` by name that creates an agent or reshapes a registered one
  * (`resolveAgentRoster`). Per-run overrides are a part of the same patch, on
- * `RunSpec`. A config entry keeps the keys its author wrote
- * (`AuthoredAgentPatch`); stored rows and the wire also carry the old keys,
- * for an older gent (`StoredRunOverrides`, `StoredAgentDefinition`). A
- * `delegate.start` call sends the new keys only (`RunOverrides`).
+ * `RunSpec`; their `tools` and `paths` only narrow the agent (`SessionAgent`).
+ * A config entry keeps the keys its author wrote (`AuthoredAgentPatch`);
+ * stored rows and the wire also carry the old keys, for an older gent
+ * (`StoredRunOverrides`, `StoredAgentDefinition`). A `delegate.start` call
+ * sends the new keys only (`RunOverrides`).
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
   agentDefinitionFields,
@@ -547,7 +588,8 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
    * Whether a turn of this agent holds the tool `id` (`toolPatternsAdmit`
    * over `tools`). The patterns are authoritative: no extension adds a tool
    * they leave out (`compileToolPolicy`). An extension that selects or
-   * describes its own tool asks this first.
+   * describes its own tool asks this first. A session's agent is a
+   * `SessionAgent`, whose answer is its run's whole bound.
    */
   admitsTool(id: string): boolean {
     return toolPatternsAdmit(Option.fromUndefinedOr(this.tools), id)
@@ -555,10 +597,43 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
 }
 
 /**
+ * The agent one session runs as: its definition (config entries and the
+ * run's model, effort, limits and addendum applied) with the run's bound
+ * (`RunBound`). A turn, its hooks and `Session.getAgent` get this one, so
+ * `admitsTool` and `pathScopes` answer for the run, not the definition. It
+ * is a resolution result, never a definition: no author builds one, and the
+ * wire codec of a definition refuses it (`StoredAgentDefinition`). Spread
+ * into `AgentDefinition.make`, its `bound` key is refused.
+ */
+export class SessionAgent extends AgentDefinition {
+  readonly bound: RunBound
+
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off -- a run agent is built only by `bindSessionAgent`, from a definition that already parsed.
+  constructor(definition: AgentDefinition, bound: RunBound) {
+    super({ ...definition })
+    this.bound = bound
+  }
+
+  /** Every tool pattern list of the run admits `id`. */
+  override admitsTool(id: string): boolean {
+    return this.bound.tools.every((patterns) => toolPatternsAdmit(Option.some(patterns), id))
+  }
+
+  /**
+   * The scopes a file tool call must lie in, each with the cwd its entries
+   * resolve against. A call is in reach when every scope reaches it
+   * (`scopeReaches`); no scope, every path is.
+   */
+  pathScopes(): ReadonlyArray<PathScope> {
+    return this.bound.paths
+  }
+}
+
+/**
  * An agent's fields but `name`, each optional (every field but `name` is
  * optional already): what a config `agents` entry and a run's overrides
- * write. Applied to an agent it replaces each field it names
- * (`mergeAgentPatches`).
+ * write. A config entry replaces each field it names (`mergeAgentPatches`);
+ * a run's `tools` and `paths` narrow instead (`bindSessionAgent`).
  */
 const AgentPatch = Schema.Struct(Struct.omit(agentDefinitionFields, ["name"]))
 type AgentPatch = typeof AgentPatch.Type
@@ -855,7 +930,9 @@ export const RunOverrides = RunOverridesInput.pipe(
  * `first`, except `systemPromptAddendum`, which appends after a blank line,
  * since an addendum adds to the agent's own prompt, and an old tool edit,
  * which applies to the tools `first` leaves. User then project config
- * entries merge this way, and a run's overrides over both.
+ * entries merge this way: they are the author's own edits. A run's
+ * overrides merge this way too, but for `tools` and `paths`
+ * (`resolveSessionAgent`, `bindSessionAgent`).
  */
 export const mergeAgentPatches = (
   first: StoredAgentPatch,
@@ -903,13 +980,17 @@ const agentFromPatch = (name: AgentName, patch: StoredAgentPatch): AgentDefiniti
   return AgentDefinition.make({ ...fields, tools, name })
 }
 
-/** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
+/** `agent` reshaped by `patch` as `mergeAgentPatches` merges a config entry. */
 const applyAgentPatch = (agent: AgentDefinition, patch: StoredAgentPatch): AgentDefinition =>
   agentFromPatch(agent.name, mergeAgentPatches({ ...agent }, patch))
 
 /**
- * The agent a session runs as: `name` from the roster (`resolveAgentRoster`)
- * with the session's run overrides applied; none when no agent has the name.
+ * The definition a session's run reshapes: `name` from the roster
+ * (`resolveAgentRoster`) with the run overrides' model, effort, limits and
+ * addendum applied as a config entry applies them; none when no agent has
+ * the name. The run's `tools` and `paths` are not applied: they narrow, in
+ * `bindSessionAgent`. This answers routing (model, driver); authority is the
+ * bound agent's.
  */
 export const resolveSessionAgent = (params: {
   readonly agents: Iterable<AgentDefinition>
@@ -922,9 +1003,50 @@ export const resolveSessionAgent = (params: {
     (agent) =>
       Option.match(params.overrides, {
         onNone: () => agent,
-        onSome: (patch) => applyAgentPatch(agent, patch),
+        onSome: ({ tools: _tools, legacyTools: _legacy, paths: _paths, ...fields }) =>
+          applyAgentPatch(agent, fields),
       }),
   )
+
+/**
+ * `definition` as one session's run, in `cwd`, spawned under a run whose
+ * bound is `parent` (`noRunBound` for none). The definition is the bound
+ * its author set, and a run only narrows it (least authority): the run's
+ * `tools` patterns are one more list a tool must pass, so `["*"]` holds
+ * what the agent holds; its `paths` are one more scope; an old tool edit
+ * narrows as the patterns it gives every tool. A child never exceeds its
+ * parent: the parent's lists and scopes come after, each scope with its
+ * own cwd.
+ */
+export const bindSessionAgent = (
+  definition: AgentDefinition,
+  params: {
+    readonly overrides: Option.Option<StoredAgentPatch>
+    readonly cwd: string
+    readonly parent: RunBound
+  },
+): SessionAgent => {
+  const run = Option.getOrElse(params.overrides, (): StoredAgentPatch => ({}))
+  const runTools = Option.orElse(Option.fromUndefinedOr(run.tools), () =>
+    Option.map(Option.fromUndefinedOr(run.legacyTools), (edit) =>
+      applyLegacyToolEdit(Option.none(), edit),
+    ),
+  )
+  const scope = (entries: Option.Option<ReadonlyArray<AgentPathEntry>>) =>
+    Option.map(entries, (some): PathScope => ({ cwd: params.cwd, entries: some }))
+  return new SessionAgent(definition, {
+    tools: [
+      ...Option.toArray(Option.fromUndefinedOr(definition.tools)),
+      ...Option.toArray(runTools),
+      ...params.parent.tools,
+    ],
+    paths: [
+      ...Option.toArray(scope(Option.fromUndefinedOr(definition.paths))),
+      ...Option.toArray(scope(Option.fromUndefinedOr(run.paths))),
+      ...params.parent.paths,
+    ],
+  })
+}
 
 /**
  * The agents a session can run as: each extension agent with the config
@@ -965,10 +1087,20 @@ export const StoredAgentDefinition = Schema.Struct({
       ({ name, ...stored }: StoredPatchFields & { readonly name: AgentName }) =>
         agentFromPatch(name, readStoredPatch(stored)),
     ),
-    encode: SchemaGetter.transform((agent: AgentDefinition) => ({
-      ...writeStoredPatch({ ...agent }),
-      name: agent.name,
-    })),
+    // Only definitions go out. A run agent's bound would not survive the
+    // trip, and a client would read a wider agent, so it is refused.
+    encode: SchemaGetter.transformEffect((agent: AgentDefinition) => {
+      // A definition never holds `bound`: its constructors refuse the key.
+      if (Predicate.hasProperty(agent, "bound")) {
+        return Effect.fail(
+          new SchemaIssue.InvalidValue(
+            { message: `"${agent.name}" is a session's run agent, not a definition` },
+            agent,
+          ),
+        )
+      }
+      return Effect.succeed({ ...writeStoredPatch({ ...agent }), name: agent.name })
+    }),
   }),
 )
 
@@ -1048,6 +1180,46 @@ export type RunSpec = typeof RunSpecSchema.Type
  * `parentSessionId` and no `continueThread`).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
+
+/**
+ * A session create asked for a run `paths` entry its agent does not reach,
+ * or, for a child, one its parent run does not reach. The whole run is
+ * refused: a dropped entry would change what the run means.
+ */
+export class RunPathRefusedError extends Schema.TaggedError<RunPathRefusedError>()(
+  "RunPathRefusedError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    access: AgentPathAccess,
+  },
+) {}
+
+/**
+ * The bound of a spawned session's parent run cannot be resolved: the
+ * parent row cannot be read, its agent is gone from its roster, or its
+ * config does not load. A child is bounded by its parent run, so it fails
+ * closed: its create is refused, and its turns and file calls do not run.
+ */
+export class ParentBoundError extends Schema.TaggedError<ParentBoundError>()("ParentBoundError", {
+  message: Schema.String,
+  parentSessionId: SessionId,
+  agent: Schema.optional(AgentName),
+}) {}
+
+/**
+ * The agent a session runs as cannot be resolved: the session cannot be
+ * read, or its agent is gone from its roster. Its run's bound is unknown,
+ * so it fails closed: a file call is refused, never read as unbounded.
+ */
+export class SessionAgentError extends Schema.TaggedError<SessionAgentError>()(
+  "SessionAgentError",
+  {
+    message: Schema.String,
+    sessionId: SessionId,
+    agent: Schema.optional(AgentName),
+  },
+) {}
 
 /** A parent at the nesting cap asked for one more child. */
 export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(

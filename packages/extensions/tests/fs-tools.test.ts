@@ -9,6 +9,7 @@ import {
   Option,
   Order,
   Path,
+  Predicate,
   Ref,
   Schema,
   Stream,
@@ -38,7 +39,15 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { BunPlatformLive } from "@gent/core/host"
-import { AgentName, ref, runProcess } from "@gent/core/extensions/api"
+import {
+  AgentName,
+  defineExtension,
+  ExtensionContext,
+  ExtensionHost,
+  ref,
+  runProcess,
+  tool,
+} from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { e2ePreset } from "./helpers/test-preset"
@@ -2182,6 +2191,830 @@ describe("agent paths", () => {
         expect(yield* fs.readFileString(path.join(cwd, "outside.txt"))).toBe("untouched")
         expect(yield* fs.readFileString(path.join(cwd, "skill", "SKILL.md"))).toBe("rules")
         expect(yield* fs.exists(path.join(cwd, "outside-dir", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+})
+
+// ── run overrides narrow the agent ──────────────────────────────────────────
+
+/**
+ * A run's `tools` and `paths` only narrow what its agent's definition
+ * allows. `scoped` holds `read` and `write` and writes only under `a`; the
+ * model (or whoever creates the session) cannot widen it through overrides.
+ */
+const SCOPED = AgentName.make("scoped")
+const OPEN = AgentName.make("open")
+const WIDE = AgentName.make("wide")
+
+/** A cwd with `a/b`, `a/c`, `b` and a project config naming `scoped` and `open`. */
+const narrowedCwd = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const home = yield* makeTempDirectoryScoped("gent-narrow-home-")
+  const cwd = yield* makeTempDirectoryScoped("gent-narrow-cwd-")
+  for (const dir of ["a/b", "a/c", "b", ".gent"]) {
+    yield* fs.makeDirectory(path.join(cwd, dir), { recursive: true })
+  }
+  yield* fs.writeFileString(path.join(cwd, "a", "file.txt"), "inside")
+  yield* writeAgents(cwd, NARROWED_AGENTS)
+  return { home, cwd }
+})
+
+/** `scoped` reads and writes under `a`; `open` reads and writes anywhere; `wide` holds every tool. */
+const NARROWED_AGENTS = {
+  scoped: { tools: ["read", "write"], paths: [{ path: "a", access: "write" }] },
+  open: { tools: ["read", "write"] },
+  wide: {},
+} satisfies AgentEntries
+
+/** The agents a test writes: each one's `tools` and `paths`, as a config entry spells them. */
+type AgentEntries = Readonly<
+  Record<
+    string,
+    {
+      readonly tools?: ReadonlyArray<string>
+      readonly paths?: ReadonlyArray<{ readonly path: string; readonly access: string }>
+    }
+  >
+>
+
+/** Replaces the project config's agents: the next resolution reads them. */
+const writeAgents = (cwd: string, agents: AgentEntries) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs.writeFileString(path.join(cwd, ".gent", "config.json"), encodeJson({ agents }))
+  })
+
+type NarrowAdmission = Parameters<typeof createRpcHarness>[0]["admission"]
+
+/** One harness over the narrowed cwd, its main session admitted as `admission`. */
+const narrowedHarness = (
+  dirs: { readonly home: string; readonly cwd: string },
+  admission: NarrowAdmission,
+  steps: Parameters<typeof LanguageModelLayers.sequence>[0],
+  extensions: ReadonlyArray<typeof FsToolsExtension> = [],
+) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
+    const harness = yield* createRpcHarness({
+      agents: [],
+      extensionInputs: [AgentsExtension, FsToolsExtension, ...extensions],
+      providerLayer,
+      cwd: dirs.cwd,
+      home: dirs.home,
+      admission,
+      configServiceLayer: ConfigService.Live.pipe(
+        Layer.provide(RuntimeEnvironment.Live(dirs)),
+        Layer.provide(BunPlatformLive),
+      ),
+    })
+    return { ...harness, controls }
+  })
+
+/** Runs the turn a message opens on `target` and returns whether each tool call failed, in order. */
+const turnFailures = (
+  client: Effect.Success<ReturnType<typeof narrowedHarness>>["client"],
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) =>
+  Effect.gen(function* () {
+    yield* client.message.send({ ...target, content: "Work." })
+    const messages = yield* waitFor(
+      client.message.list({ branchId: target.branchId }),
+      (list) =>
+        list.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.parts.some((part) => part.type === "text" && part.text === "done"),
+        ),
+      6000,
+      "reply after the file calls",
+    )
+    return messages
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .map((part) => part.isFailure)
+  })
+
+interface SessionTarget {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
+
+/**
+ * A tool that makes a session through `ctx.Session.create` and records each
+ * one it makes. A `foreign` call names the first branch of `foreign`, a
+ * branch of another session.
+ */
+const sessionMaker = (made: Array<SessionTarget>, foreign: ReadonlyArray<BranchId> = []) =>
+  defineExtension({
+    id: "session-maker",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.make",
+          description: "Make a session",
+          params: Schema.Struct({ foreign: Schema.optional(Schema.Boolean) }),
+          output: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const named = Option.fromUndefinedOr(foreign[0]).pipe(
+                Option.filter(() => params.foreign === true),
+              )
+              const created = yield* ctx.Session.create(
+                Option.match(named, {
+                  onNone: () => ({}),
+                  onSome: (branchId) => ({ parentBranchId: branchId }),
+                }),
+              )
+              made.push(created)
+              return created
+            }),
+        }),
+      )
+    }),
+  })
+
+/**
+ * Tools that reach other sessions through the `Session` facet: `session.drop`
+ * deletes the session `targets` holds under the named key (any other key:
+ * the first session `made` holds), and `session.copy` makes a child with the
+ * history of that session's branch.
+ */
+const sessionReacher = (
+  targets: ReadonlyMap<string, SessionTarget>,
+  made: ReadonlyArray<SessionTarget> = [],
+) =>
+  defineExtension({
+    id: "session-reacher",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      const target = (key: string) =>
+        Option.match(Option.fromUndefinedOr(targets.get(key) ?? made[0]), {
+          onNone: () => Effect.die(`no target ${key}`),
+          onSome: Effect.succeed,
+        })
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.drop",
+          description: "Delete a session",
+          params: Schema.Struct({ target: Schema.String }),
+          output: Schema.String,
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.delete((yield* target(params.target)).sessionId)
+              return "deleted"
+            }),
+        }),
+      )
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.copy",
+          description: "Make a child with another branch's history",
+          params: Schema.Struct({ target: Schema.String }),
+          output: Schema.String,
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const created = yield* ctx.Session.create({
+                historyBranchId: (yield* target(params.target)).branchId,
+              })
+              return created.sessionId
+            }),
+        }),
+      )
+    }),
+  })
+
+/** A tool that writes `agents` as the project config of `cwd`, as its author can. */
+const agentDropper = (cwd: string, agents: AgentEntries) =>
+  defineExtension({
+    id: "agent-dropper",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "agents.drop",
+          description: "Remove an agent from the project config",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => writeAgents(cwd, agents).pipe(Effect.as("dropped")),
+        }),
+      )
+    }),
+  })
+
+/** The tool results on `branchId` once `count` of them are there: the turn may end after them. */
+const toolResultsOf = (
+  client: Effect.Success<ReturnType<typeof narrowedHarness>>["client"],
+  branchId: BranchId,
+  count: number,
+) =>
+  waitFor(
+    client.message.list({ branchId }),
+    (list) =>
+      list.flatMap((message) => message.parts).filter((part) => part.type === "tool-result")
+        .length >= count,
+    6000,
+    "the tool results",
+  ).pipe(
+    Effect.map((list) =>
+      list.flatMap((message) => message.parts).filter((part) => part.type === "tool-result"),
+    ),
+  )
+
+/** Only the session a run calls from is a new session's parent: no create names another. */
+export const parentIsTheCaller = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  // @ts-expect-error -- `create` takes no parent; the calling session is the parent.
+  return yield* ctx.Session.create({ parentSessionId: ctx.sessionId })
+})
+
+/** A parent confined to `a` (or `paths`), and the harness that runs its children's turns. */
+const confinedParent = (
+  dirs: { readonly home: string; readonly cwd: string },
+  calls: ReadonlyArray<{ readonly toolName: string; readonly input: unknown }>,
+  overrides: { readonly tools?: ReadonlyArray<string> } = {},
+) =>
+  Effect.gen(function* () {
+    const harness = yield* narrowedHarness(dirs, { agent: SCOPED, runSpec: { overrides } }, [
+      multiToolCallStep(...calls),
+      textStep("done"),
+    ])
+    const childOf = (admission: NonNullable<NarrowAdmission>) =>
+      harness.client.session.create({
+        cwd: dirs.cwd,
+        parentSessionId: harness.sessionId,
+        parentBranchId: harness.branchId,
+        admission,
+      })
+    return { ...harness, childOf }
+  })
+
+/** Runs one turn that makes `calls` and returns whether each call failed, in order. */
+const callFailures = (
+  dirs: { readonly home: string; readonly cwd: string },
+  admission: NarrowAdmission,
+  calls: ReadonlyArray<{ readonly toolName: string; readonly input: unknown }>,
+) =>
+  Effect.gen(function* () {
+    const { client, sessionId, branchId, controls } = yield* narrowedHarness(dirs, admission, [
+      multiToolCallStep(...calls),
+      textStep("done"),
+    ])
+    yield* client.message.send({ sessionId, branchId, content: "Work." })
+    const messages = yield* waitFor(
+      client.message.list({ branchId }),
+      (list) =>
+        list.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.parts.some((part) => part.type === "text" && part.text === "done"),
+        ),
+      6000,
+      "reply after the file calls",
+    )
+    yield* controls.assertDone
+    return messages
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .map((part) => part.isFailure)
+  })
+
+describe("run overrides narrow the agent", () => {
+  it.scopedLive(
+    "a run's tools [*] holds only the tools its agent holds",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { tools: ["*"] } } },
+          [
+            { toolName: "read", input: { path: "a/file.txt" } },
+            { toolName: "write", input: { path: "a/new.txt", content: "x" } },
+            { toolName: "grep", input: { pattern: "inside", path: "a" } },
+          ],
+        )
+        expect(failures).toEqual([false, false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run's paths inside its agent's entry confine it further",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          {
+            agent: SCOPED,
+            runSpec: { overrides: { paths: [{ path: "a/b", access: "write" }] } },
+          },
+          [
+            { toolName: "write", input: { path: "a/b/x.txt", content: "x" } },
+            { toolName: "write", input: { path: "a/c/x.txt", content: "x" } },
+            { toolName: "read", input: { path: "a/file.txt" } },
+          ],
+        )
+        expect(failures).toEqual([false, true, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "c", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run's read entry inside its agent's write entry reads and does not write",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: "a", access: "read" }] } } },
+          [
+            { toolName: "read", input: { path: "a/file.txt" } },
+            { toolName: "write", input: { path: "a/new.txt", content: "x" } },
+          ],
+        )
+        expect(failures).toEqual([false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run whose paths leave its agent's entries is refused and the refusal names the entry",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const outside = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } } },
+          [],
+        ).pipe(Effect.flip)
+        expect(outside._tag).toBe("RunPathRefusedError")
+        expect(outside.message).toContain('"b"')
+        // A write entry under the agent's read-only reach asks for more access.
+        const wider = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: ".", access: "read" }] } } },
+          [],
+        ).pipe(Effect.flip)
+        expect(wider._tag).toBe("RunPathRefusedError")
+        expect(wider.message).toContain('"."')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "an agent without paths takes any run paths",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: OPEN, runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } } },
+          [
+            { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+          ],
+        )
+        expect(failures).toEqual([false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child that names no paths writes only where its parent run may",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+          { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        expect(yield* turnFailures(parent.client, child)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+        yield* parent.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a parent agent narrowed after its child starts narrows the child at its next call",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "read", input: { path: "a/file.txt" } },
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        // The author takes write access away from the parent's agent.
+        yield* writeAgents(dirs.cwd, {
+          ...NARROWED_AGENTS,
+          scoped: { tools: ["read", "write"], paths: [{ path: "a", access: "read" }] },
+        })
+        expect(yield* turnFailures(parent.client, child)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a link retargeted out of the parent's paths after a child starts is refused to the child",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const outside = path.join(dirs.cwd, "outside")
+        yield* fs.makeDirectory(outside)
+        yield* fs.writeFileString(path.join(outside, "secret.txt"), "secret")
+        yield* fs.writeFileString(path.join(dirs.cwd, "a", "b", "secret.txt"), "inside")
+        const link = path.join(dirs.cwd, "a", "link")
+        yield* fs.symlink(path.join(dirs.cwd, "a", "b"), link)
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "read", input: { path: "a/link/secret.txt" } },
+        ])
+        const child = yield* parent.childOf({
+          agent: OPEN,
+          runSpec: { overrides: { paths: [{ path: "a/link", access: "read" }] } },
+        })
+        yield* fs.remove(link)
+        yield* fs.symlink(outside, link)
+        expect(yield* turnFailures(parent.client, child)).toEqual([true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child holds only the tools its parent run holds",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(
+          dirs,
+          [
+            { toolName: "read", input: { path: "a/file.txt" } },
+            { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+            { toolName: "grep", input: { pattern: "inside", path: "a" } },
+          ],
+          { tools: ["read", "grep"] },
+        )
+        const child = yield* parent.childOf({ agent: AgentName.make("wide") })
+        expect(yield* turnFailures(parent.client, child)).toEqual([false, true, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child that names paths outside its parent run is refused and the refusal names the entry",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [])
+        const refused = yield* parent
+          .childOf({
+            agent: OPEN,
+            runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } },
+          })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("RunPathRefusedError")
+        expect(refused.message).toContain('"b"')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a session a bounded child's tool makes is bounded by the child's parent run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        // The parent run holds every tool and writes only under `a`.
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE, runSpec: { overrides: { paths: [{ path: "a", access: "write" }] } } },
+          [
+            toolCallStep("session.make", {}),
+            textStep("done"),
+            multiToolCallStep(
+              { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+              { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            ),
+            textStep("done"),
+          ],
+          [sessionMaker(made)],
+        )
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: WIDE },
+        })
+        expect(yield* turnFailures(harness.client, child)).toEqual([false])
+        const grandchild = made[0]
+        expect(grandchild).toBeDefined()
+        if (Predicate.isUndefined(grandchild)) return
+        const stored = yield* harness.client.session.get({ sessionId: grandchild.sessionId })
+        expect(stored?.parentSessionId).toBe(child.sessionId)
+        expect(yield* turnFailures(harness.client, grandchild)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+        yield* harness.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a tool cannot hang a session under another session's branch",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        const foreign: Array<BranchId> = []
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE },
+          [toolCallStep("session.make", { foreign: true }), textStep("done")],
+          [sessionMaker(made, foreign)],
+        )
+        // The child's tool names a branch of its parent's session.
+        foreign.push(harness.branchId)
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: WIDE },
+        })
+        expect(yield* turnFailures(harness.client, child)).toEqual([true])
+        expect(made).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a handoff of a bounded child naming wider paths is refused by the parent run's paths",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [])
+        const child = yield* parent.childOf({ agent: OPEN })
+        const refused = yield* parent.client.session
+          .create({
+            cwd: dirs.cwd,
+            parentSessionId: child.sessionId,
+            parentBranchId: child.branchId,
+            continueThread: true,
+            admission: {
+              agent: OPEN,
+              runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } },
+            },
+          })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("RunPathRefusedError")
+        expect(refused.message).toContain('"b"')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a handoff of a bounded child writes only inside the child's parent paths",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+          { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        // A `/handoff`: the client continues the child's thread with its admission.
+        const handoff = yield* parent.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: child.sessionId,
+          parentBranchId: child.branchId,
+          continueThread: true,
+        })
+        expect(yield* turnFailures(parent.client, handoff)).toEqual([false, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+        yield* parent.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a tool in a child reaches only its own thread and what it spawned",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        const targets = new Map<string, SessionTarget>()
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE },
+          [
+            multiToolCallStep(
+              { toolName: "session.drop", input: { target: "parent" } },
+              { toolName: "session.drop", input: { target: "sibling" } },
+              { toolName: "session.copy", input: { target: "parent" } },
+              { toolName: "session.make", input: {} },
+            ),
+            toolCallStep("session.drop", { target: "made" }),
+            textStep("done"),
+          ],
+          [sessionMaker(made), sessionReacher(targets, made)],
+        )
+        const spawn = () =>
+          harness.client.session.create({
+            cwd: dirs.cwd,
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+            admission: { agent: WIDE },
+          })
+        const child = yield* spawn()
+        const sibling = yield* spawn()
+        targets.set("parent", harness)
+        targets.set("sibling", sibling)
+        // The second step drops the session the first step's tool made.
+        expect(yield* turnFailures(harness.client, child)).toEqual([true, true, true, false, false])
+        const grandchild = made[0]
+        expect(yield* harness.client.session.get({ sessionId: harness.sessionId })).not.toBeNull()
+        expect(yield* harness.client.session.get({ sessionId: sibling.sessionId })).not.toBeNull()
+        expect(made).toHaveLength(1)
+        if (Predicate.isNotUndefined(grandchild)) {
+          expect(yield* harness.client.session.get({ sessionId: grandchild.sessionId })).toBeNull()
+        }
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child whose own agent leaves the roster during a response gets no file access",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        yield* fs.writeFileString(path.join(dirs.cwd, "b", "secret.txt"), "outside")
+        const harness = yield* narrowedHarness(dirs, { agent: SCOPED }, [
+          {
+            ...multiToolCallStep(
+              { toolName: "read", input: { path: "b/secret.txt" } },
+              { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            ),
+            gated: true,
+          },
+        ])
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: OPEN },
+        })
+        yield* harness.client.message.send({ ...child, content: "Work." })
+        // The turn checked its agent before the step; the author removes it while the response streams.
+        yield* harness.controls.waitForCall(0)
+        const { open: _removed, ...rest } = NARROWED_AGENTS
+        yield* writeAgents(dirs.cwd, rest)
+        yield* harness.controls.emitAll(0)
+        const results = yield* toolResultsOf(harness.client, child.branchId, 2)
+        expect(results.map((part) => part.isFailure)).toEqual([true, true])
+        expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
+        expect(encodeJson(results[0]?.result)).toContain('agent \\"open\\"')
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child that removes its own agent in the response that reads and writes outside its parent run is refused",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        yield* fs.writeFileString(path.join(dirs.cwd, "b", "secret.txt"), "outside")
+        // The parent run holds the drop tool too, so its child may call it.
+        const { wide: _removed, ...rest } = NARROWED_AGENTS
+        const scoped = { ...NARROWED_AGENTS.scoped, tools: ["read", "write", "agents.drop"] }
+        yield* writeAgents(dirs.cwd, { ...NARROWED_AGENTS, scoped })
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED },
+          [
+            multiToolCallStep(
+              { toolName: "agents.drop", input: {} },
+              { toolName: "read", input: { path: "b/secret.txt" } },
+              { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            ),
+          ],
+          [agentDropper(dirs.cwd, { ...rest, scoped })],
+        )
+        const child = yield* harness.client.session.create({
+          cwd: dirs.cwd,
+          parentSessionId: harness.sessionId,
+          parentBranchId: harness.branchId,
+          admission: { agent: WIDE },
+        })
+        yield* harness.client.message.send({ ...child, content: "Work." })
+        const results = yield* toolResultsOf(harness.client, child.branchId, 3)
+        expect(results.map((part) => part.isFailure)).toEqual([false, true, true])
+        expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
+        expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a top-level session whose agent left the roster gets no file access and is told why",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        yield* fs.writeFileString(path.join(dirs.cwd, "b", "secret.txt"), "outside")
+        const harness = yield* narrowedHarness(dirs, { agent: SCOPED }, [
+          {
+            ...multiToolCallStep(
+              { toolName: "read", input: { path: "b/secret.txt" } },
+              { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+            ),
+            gated: true,
+          },
+        ])
+        yield* harness.client.message.send({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+          content: "Work.",
+        })
+        yield* harness.controls.waitForCall(0)
+        const { scoped: _removed, ...rest } = NARROWED_AGENTS
+        yield* writeAgents(dirs.cwd, rest)
+        yield* harness.controls.emitAll(0)
+        const results = yield* toolResultsOf(harness.client, harness.branchId, 2)
+        expect(results.map((part) => part.isFailure)).toEqual([true, true])
+        expect(encodeJson(results.map((part) => part.result))).not.toContain("outside")
+        for (const part of results) {
+          expect(encodeJson(part.result)).toContain('agent \\"scoped\\"')
+          expect(encodeJson(part.result)).toContain("no file access")
+        }
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a parent whose agent left the roster bounds its child closed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        const { scoped: _removed, ...rest } = NARROWED_AGENTS
+        yield* writeAgents(dirs.cwd, rest)
+        // A new child is refused, and the refusal names the parent and its agent.
+        const refused = yield* parent.childOf({ agent: OPEN }).pipe(Effect.flip)
+        expect(refused._tag).toBe("ParentBoundError")
+        expect(refused.message).toContain(parent.sessionId)
+        expect(refused.message).toContain('"scoped"')
+        // The child that runs already does not run past the bound it lost.
+        const failed = yield* parent.client.session.events(child).pipe(
+          Stream.filter(({ event }) => event._tag === "ErrorOccurred"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* parent.client.message.send({ ...child, content: "Work." })
+        const errors = yield* Fiber.join(failed)
+        const reported: Array<string> = []
+        for (const { event } of errors) {
+          if (event._tag === "ErrorOccurred") reported.push(event.error)
+        }
+        expect(reported.join("\n")).toContain('"scoped"')
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "x.txt"))).toBe(false)
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
