@@ -58,7 +58,7 @@ import {
   type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
-  type QueueSnapshot,
+  type SessionSnapshot,
   type ToolInteraction,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
@@ -1136,6 +1136,11 @@ interface SessionControllerState {
   readonly validatedAgent: Option.Option<string>
   readonly authCheckVersion: number
   readonly queue: QueueState
+  /**
+   * When the running turn began: the runtime's `startedAtMs`, the start the
+   * turn's "Worked for" total counts from. None while the session is idle.
+   */
+  readonly turnStartedAt: Option.Option<number>
   readonly elapsed: number
 }
 
@@ -1150,6 +1155,7 @@ export const initialSessionControllerState = (): SessionControllerState => ({
   validatedAgent: Option.none(),
   authCheckVersion: 0,
   queue: emptyQueueState(),
+  turnStartedAt: Option.none(),
   elapsed: 0,
 })
 
@@ -1205,6 +1211,16 @@ export const setQueue = (
 
 export const clearQueue = (state: SessionControllerState): SessionControllerState =>
   setQueue(state, emptyQueueState())
+
+/** The runtime the server reports: its waiting entries and the running turn's start. */
+export const applyRuntime = (
+  state: SessionControllerState,
+  runtime: SessionSnapshot["runtime"],
+): SessionControllerState => {
+  let turnStartedAt = Option.none<number>()
+  if (runtime._tag !== "Idle") turnStartedAt = Option.some(runtime.startedAtMs)
+  return { ...setQueue(state, runtime.queue), turnStartedAt }
+}
 
 const setControllerElapsed = (
   state: SessionControllerState,
@@ -1829,7 +1845,8 @@ interface SessionFeedCallbacks {
   onInteraction: (interaction: InteractionPresented) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
-  onQueueSnapshot: (queue: QueueSnapshot) => void
+  /** The runtime the server reports, from the snapshot and each watch update. */
+  onRuntime: (runtime: SessionSnapshot["runtime"]) => void
 }
 
 type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
@@ -2621,7 +2638,7 @@ export function useSessionFeed(
 
               yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
-                callbacks.onQueueSnapshot(snapshot.runtime.queue)
+                callbacks.onRuntime(snapshot.runtime)
                 applySnapshotMessages(snapshot.messages)
               })
 
@@ -2680,7 +2697,7 @@ export function useSessionFeed(
                             branchId: branch,
                             runtime: next,
                           })
-                          callbacks.onQueueSnapshot(next.queue)
+                          callbacks.onRuntime(next)
                         }),
                       ),
                     ),
@@ -3101,8 +3118,6 @@ export function createSessionController(props: {
     ...ComposerInteractionState.initial(),
     ...Option.getOrElse(drafts.get(draftBranchId), ComposerInteractionState.initial),
   })
-  let activityStartTime = currentMillis()
-
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
       setInteractionState((current) =>
@@ -3214,7 +3229,7 @@ export function createSessionController(props: {
       onBranchSwitch: (sessionId, branchId) => {
         client.switchSession(sessionId, branchId, currentSessionName())
       },
-      onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
+      onRuntime: (runtime) => updateControllerState((state) => applyRuntime(state, runtime)),
     },
     // The startup prompt is a submission: it takes its place in send order,
     // and a refused one comes back to the draft of its branch with its reason.
@@ -3310,6 +3325,8 @@ export function createSessionController(props: {
   interface RunningShell {
     readonly command: string
     readonly stop: Deferred.Deferred<void>
+    /** When it began, on the runtime's clock: outside a turn the timer counts from it. */
+    readonly startedAt: number
   }
   const [runningShells, setRunningShells] = createSignal<ReadonlyArray<RunningShell>>([])
   const runShell = <A, E, R>(
@@ -3317,7 +3334,11 @@ export function createSessionController(props: {
     run: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | ShellStopped, R> =>
     Effect.gen(function* () {
-      const running: RunningShell = { command, stop: yield* Deferred.make<void>() }
+      const running: RunningShell = {
+        command,
+        stop: yield* Deferred.make<void>(),
+        startedAt: yield* Clock.currentTimeMillis,
+      }
       const stopped = Deferred.await(running.stop).pipe(
         Effect.andThen(Effect.fail(new ShellStopped({ command }))),
       )
@@ -3346,19 +3367,35 @@ export function createSessionController(props: {
     return { phase: "thinking" }
   }
 
+  // The activity row counts from when its work began: a running turn from the
+  // runtime's `startedAtMs`, the start its "Worked for" total counts from, so
+  // a new step or a tool call inside the turn changes the phase word and keeps
+  // the count; a `!cmd` outside a turn from its own start. No start (idle, or
+  // a turn whose runtime has not arrived yet) shows no count.
+  const timerStart = createMemo(
+    (): Option.Option<number> => {
+      if (client.isStreaming()) return controllerState().turnStartedAt
+      return Option.map(Option.fromUndefinedOr(runningShells().at(-1)), (shell) => shell.startedAt)
+    },
+    Option.none(),
+    { equals: Equal.equals },
+  )
+
   createEffect(() => {
-    const nextActivity = activity()
-    activityStartTime = currentMillis()
+    const start = timerStart()
     updateControllerState((state) => setControllerElapsed(state, 0))
-
-    if (nextActivity.phase === "idle") return
-
+    if (Option.isNone(start)) return
     const fiber = client.runtime.fork(
-      Effect.sync(() => {
-        updateControllerState((state) =>
-          setControllerElapsed(state, currentMillis() - activityStartTime),
-        )
-      }).pipe(Effect.repeat(Schedule.spaced("1 second"))),
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          Effect.sync(() =>
+            updateControllerState((state) =>
+              setControllerElapsed(state, Math.max(0, now - start.value)),
+            ),
+          ),
+        ),
+        Effect.repeat(Schedule.spaced("1 second")),
+      ),
     )
     onCleanup(() => {
       client.runtime.cast(Fiber.interrupt(fiber))

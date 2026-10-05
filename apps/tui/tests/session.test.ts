@@ -13,6 +13,7 @@ import {
 } from "effect"
 import { TestClock } from "effect/testing"
 import {
+  applyRuntime,
   beginAuthCheck,
   buildContextLabels,
   buildModelLabels,
@@ -645,6 +646,27 @@ describe("session controller state", () => {
       Option.some("switch agents\nthen continue\nand summarize"),
     )
     expect(queuedDraftText(cleared.queue)).toEqual(Option.none())
+  })
+
+  test("the turn's start is the runtime's, kept through the turn and cleared when idle", () => {
+    const queue = { steering: [], followUp: [queueEntry("FollowUp", "m1", "next")] }
+    const running = applyRuntime(initialSessionControllerState(), {
+      _tag: "Running",
+      startedAtMs: 1_000,
+      queue,
+    })
+    expect(running.turnStartedAt).toEqual(Option.some(1_000))
+    expect(running.queue).toEqual(queue)
+    // An ask inside the turn is the same turn: the start stays.
+    const waiting = applyRuntime(running, {
+      _tag: "WaitingForInteraction",
+      startedAtMs: 1_000,
+      queue,
+    })
+    expect(waiting.turnStartedAt).toEqual(Option.some(1_000))
+    const idle = applyRuntime(waiting, { _tag: "Idle", queue: { steering: [], followUp: [] } })
+    expect(idle.turnStartedAt).toEqual(Option.none())
+    expect(queuedDraftText(idle.queue)).toEqual(Option.none())
   })
 })
 
@@ -1420,7 +1442,7 @@ const openFeed = (mount: FeedMount) => {
           onInteraction: () => {},
           onInteractionDismissed: () => {},
           onBranchSwitch: () => {},
-          onQueueSnapshot: () => {},
+          onRuntime: () => {},
           ...mount.callbacks,
         },
         noStartupPrompt,
@@ -1516,7 +1538,7 @@ describe("useSessionFeed", () => {
           {
             onInteraction: () => {},
             onInteractionDismissed: () => {},
-            onQueueSnapshot: () => {},
+            onRuntime: () => {},
             onBranchSwitch: (nextSession, nextBranch) => {
               switches.push([nextSession, nextBranch])
               runtime.cast(Deferred.succeed(switched, void 0))

@@ -136,6 +136,12 @@ extensions): lowercase keys, one `·` separator, Enter `select` on a row and
 narrow row drops the move hint first, then hints from the right, and keeps the
 way out. An ask's footer uses the same line.
 
+The activity row counts the running turn from the runtime's `startedAtMs`
+(`SessionControllerState.turnStartedAt` in `session.tsx`), the start the
+turn's `Worked for` total counts from: a new step or a tool call changes its
+word, not its count, and the next turn counts from its own start. A `!cmd`
+outside a turn counts from its own start.
+
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open
 the trays hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame`
