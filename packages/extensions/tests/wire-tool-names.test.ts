@@ -34,9 +34,11 @@ import { buildOpenAIModelDriver, type OpenAICredentials } from "../src/openai.js
 import { buildCloudflareModelDriver } from "../src/cloudflare.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
+  AgentDefinition,
   defineExtension,
   type DriverError,
   ExtensionHost,
+  type GentExtension,
   type ProviderAuthError,
   ProviderAuthInfo,
   tool,
@@ -511,11 +513,27 @@ const decodeJsonBody = Schema.decodeUnknownSync(
 /** The request body's fields as JSON. */
 const jsonBody = (request: CapturedRequest) => decodeJsonBody(request.body ?? "{}")
 
+/** A request body's `tools` and `tool_choice`, as sent. */
+const declarationsOf = (body: Record<string, Schema.Json> = {}) =>
+  encodeExternalJson({ tools: body["tools"], tool_choice: body["tool_choice"] })
+
+/** What one turn runs with, beside the driver and `testTurnExtension`. */
+interface TurnSetup {
+  /** The agent; `testAgent` when absent. */
+  readonly agent?: AgentDefinition
+  /** The extensions that register tools; `declarationsExtension` when absent. */
+  readonly extensions?: ReadonlyArray<GentExtension>
+  /** The home directory; a new temporary one when absent. */
+  readonly home?: string
+  /** Receives each input the `todo` tool runs with. */
+  readonly ran?: Array<typeof Todo.Type>
+}
+
 /** One turn through `wire`'s driver: the replies answer each request in order. */
 const runTurn = (
   wire: (typeof drivers)[number],
   replies: ReadonlyArray<FakeReply>,
-  ran: Array<typeof Todo.Type>,
+  setup: TurnSetup = {},
 ) =>
   Effect.gen(function* () {
     const model = yield* wire.model
@@ -525,11 +543,19 @@ const runTurn = (
       fakeFetchLayer(state, (_request, call) => replies[call] ?? wire.text("unexpected")),
     )
     const cwd = yield* makeTempDirectoryScoped("wire-tools-cwd-")
+    const home = yield* Option.match(Option.fromUndefinedOr(setup.home), {
+      onNone: () => makeTempDirectoryScoped("wire-tools-home-"),
+      onSome: Effect.succeed,
+    })
     const { client, sessionId, branchId } = yield* createRpcHarness({
-      agents: [testAgent],
-      extensionInputs: [testTurnExtension, declarationsExtension(ran)],
+      agents: [setup.agent ?? testAgent],
+      extensionInputs: [
+        testTurnExtension,
+        ...(setup.extensions ?? [declarationsExtension(setup.ran ?? [])]),
+      ],
       providerLayer,
       cwd,
+      home,
     })
     const turn = yield* client.session.events({ sessionId, branchId }).pipe(
       Stream.map((envelope) => envelope.event),
@@ -567,14 +593,44 @@ describe("tool declarations on the wire", () => {
     it.live(`${wire.provider}: a turn sends the pinned tool declarations`, () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { bodies } = yield* runTurn(wire, [wire.text("done")], [])
-          const first = bodies[0] ?? {}
-          const declarations = encodeExternalJson({
-            tools: first["tools"],
-            tool_choice: first["tool_choice"],
-          })
-          expect(Option.some(declarations)).toEqual(
+          const { bodies } = yield* runTurn(wire, [wire.text("done")])
+          expect(Option.some(declarationsOf(bodies[0]))).toEqual(
             Option.fromUndefinedOr(PINNED_DECLARATIONS.get(wire.provider)),
+          )
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    )
+  }
+})
+
+/** The agent whose first step is its last: that step runs with `toolChoice: "none"`. */
+const oneStepAgent = AgentDefinition.make({
+  name: testAgent.name,
+  description: testAgent.description,
+  maxSteps: 1,
+})
+
+/**
+ * The `tools` and `tool_choice` each driver sends on a turn's last step for
+ * the tools above. The OpenAI SDKs send the pinned declarations byte for
+ * byte with `"none"`; the Anthropic SDK sends no tools.
+ */
+const withChoiceNone = (provider: string) =>
+  PINNED_DECLARATIONS.get(provider)?.replace('"tool_choice":"auto"', '"tool_choice":"none"')
+const PINNED_FINAL_STEP = new Map([
+  ["anthropic", "{}"],
+  ["openai", withChoiceNone("openai")],
+  ["chat-completions", withChoiceNone("chat-completions")],
+])
+
+describe("final step declarations on the wire", () => {
+  for (const wire of drivers) {
+    it.live(`${wire.provider}: a turn's last step sends the pinned declarations`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bodies } = yield* runTurn(wire, [wire.text("done")], { agent: oneStepAgent })
+          expect(Option.some(declarationsOf(bodies[0]))).toEqual(
+            Option.fromUndefinedOr(PINNED_FINAL_STEP.get(wire.provider)),
           )
         }).pipe(Effect.timeout("20 seconds")),
       ),
@@ -619,7 +675,7 @@ describe("refused tool calls on the wire", () => {
             const { bodies, events } = yield* runTurn(
               wire,
               [wire.toolCall(refused.name, refused.input), wire.text("done")],
-              ran,
+              { ran },
             )
             // The failed result went back to the model in the next request.
             expect(bodies).toHaveLength(2)
