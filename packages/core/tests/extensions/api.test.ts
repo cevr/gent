@@ -526,26 +526,6 @@ describe("defineExtension", () => {
       }
     }))
 
-  test("unknown runtime-loaded contribution buckets fail activation", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        validateExtensionPackage(
-          { id: ExtensionId.make("unknown-bucket") },
-          // oxlint-disable-next-line effect/noAs -- This invalid bucket is a runtime package-shape rejection fixture.
-          {
-            actors: [],
-          } as never,
-        ),
-      )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        const rendered = Cause.pretty(exit.cause)
-        expect(rendered).toContain("ExtensionLoadError")
-        expect(rendered).toContain("unknown contribution bucket")
-        expect(rendered).toContain("actors")
-      }
-    }))
-
   test("runtime-loaded resources require a non-empty id", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(

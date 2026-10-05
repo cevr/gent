@@ -4650,6 +4650,44 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
       }
     }).pipe(Effect.provide(fsLayer)),
   )
+
+  it.live("a register call with an unknown domain names it and the near miss", () =>
+    Effect.gen(function* () {
+      const echo = tool({
+        id: "echo",
+        description: "Echo the text back",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.String,
+        execute: ({ text }) => Effect.succeed(text),
+      })
+      // Bun loads a user `.ts` extension with no type check, so the bucket
+      // name `tools` reaches `register` where the domain `tool` belongs.
+      const extension = defineExtension({
+        id: "@gent/test-plural-domain",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          // oxlint-disable-next-line effect/noAs -- An unchecked JavaScript caller is the rejection fixture.
+          yield* host.register("tools" as "tool", echo)
+        }),
+      })
+      const exit = yield* Effect.exit(
+        setupExtension(
+          { extension, scope: "user", sourcePath: "/tmp/test-plural-domain.ts" },
+          "/tmp/project",
+          "/tmp/home",
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const rendered = Cause.pretty(exit.cause)
+        expect(rendered).toContain("ExtensionLoadError")
+        expect(rendered).toContain(
+          'unknown register domain "tools"; did you mean "tool"? The domains are tool, request, agent, resource, modelDriver, apiClass, modelRouter',
+        )
+        expect(rendered).not.toContain('"undefined"')
+      }
+    }).pipe(Effect.provide(fsLayer)),
+  )
 })
 
 // ── prompt slots ─────────────────────────────────────────────────────────────
