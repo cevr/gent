@@ -134,9 +134,18 @@ export const RevertInput = Schema.Struct({
 })
 type RevertInput = typeof RevertInput.Type
 
-/** The paths a revert wrote, and the branch a conversation revert made; or why it wrote nothing. */
+/**
+ * The paths a revert wrote, and the branch a conversation revert made; or why
+ * it wrote nothing. `kept` names the paths whose bytes changed after the
+ * revert recorded them: the revert wrote them too, and undo returns those
+ * bytes.
+ */
 export const RevertOutcome = Schema.TaggedUnion({
-  Reverted: { files: Schema.Array(Schema.String), branchId: Schema.optional(BranchId) },
+  Reverted: {
+    files: Schema.Array(Schema.String),
+    branchId: Schema.optional(BranchId),
+    kept: Schema.optional(Schema.Array(Schema.String)),
+  },
   Refused: { reason: Schema.String, conflicts: Schema.Array(Schema.String) },
 })
 export type RevertOutcome = typeof RevertOutcome.Type
@@ -1517,92 +1526,239 @@ const removeEmptyDirectories = Effect.fn("Checkpoints.removeEmptyDirectories")(f
   }
 })
 
+/** A revert as its write needs it. */
+interface Recorded {
+  /** The revert's own request: it names the revert's asides. */
+  readonly requestId: string
+  readonly beforeRef: string
+  /** The tree the revert writes. */
+  readonly target: string
+  readonly paths: ReadonlyArray<string>
+}
+
 /**
- * Write `paths` of `tree` into the work tree: each file the tree lacks
- * removed (then each directory that removal empties), each it holds from the
- * store. A removal that fails, or a parent that is no longer a directory of
- * the work tree, fails the write.
+ * Where a path moves aside: its own directory (a rename there is atomic and
+ * stays on one file system), under a name fixed by the revert and the path,
+ * so a later run finds what a stop left.
  */
-const writeWorkTree = Effect.fn("Checkpoints.writeWorkTree")(function* (
-  place: Place,
-  tree: string,
-  paths: ReadonlyArray<string>,
-) {
-  const fs = yield* FileSystem.FileSystem
+const asideOf = Effect.fn("Checkpoints.asideOf")(function* (requestId: string, file: string) {
   const path = yield* Path.Path
-  const held = yield* treePaths(place, tree)
-  for (const file of paths.filter((entry) => !held.has(entry))) {
-    const at = path.join(place.top, file)
-    const fail = (why: string) => unfinishedError(`the revert could not remove ${file}: ${why}`)
-    const kind = yield* entryKind(at).pipe(Effect.mapError((error) => fail(error.message)))
-    if (kind === "absent") continue
-    if (kind === "directory") return yield* fail("it is a directory")
-    const directory = path.dirname(at)
-    const real = yield* fs.realPath(directory).pipe(Effect.mapError((error) => fail(error.message)))
-    if (real !== directory) return yield* fail("its directory is no longer one of the work tree")
-    yield* fs.remove(at).pipe(Effect.mapError((error) => fail(error.message)))
-    yield* removeEmptyDirectories(place, path.dirname(file))
-  }
-  const present = paths.filter((entry) => held.has(entry))
-  if (present.length === 0) return
-  const blocked = yield* obstructions(place, present, new Set())
-  if (blocked.length > 0)
-    return yield* unfinishedError(
-      `something now stands where the revert writes: ${blocked.join(", ")}`,
-    )
-  yield* Effect.gen(function* () {
-    const env = yield* scratchIndex(place)
-    yield* inStore(place, ["read-tree", tree], { env })
-    const written = yield* inStoreRun(place, ["checkout-index", "-f", "-z", "--stdin"], {
-      env,
-      stdin: present.map((file) => `${file}\0`).join(""),
-    })
-    if (written.exitCode !== 0) return yield* gitFailure(["checkout-index"], written)
-  }).pipe(Effect.scoped)
+  const name = `.gent-aside-${(yield* sha256(requestId)).slice(0, 16)}-${(yield* sha256(file)).slice(0, 16)}`
+  return path.join(path.dirname(file), name)
 })
 
 /**
- * Write a recorded revert's target over the work tree, on no doubt: nothing
- * stands in the way, and each path holds its `before` (it is to write) or its
- * target (a stopped run wrote it). Any other content is someone's later edit,
- * which no record holds: the write refuses and names it. After the write,
- * each path must hold its target. The refusal, or none.
+ * Where git writes a revert's target entries before each goes to its path:
+ * a directory at the top, named by the revert. It holds copies of store
+ * content only, so a run removes what a stop left there.
+ */
+const stageOf = Effect.fn("Checkpoints.stageOf")(function* (place: Place, requestId: string) {
+  const path = yield* Path.Path
+  const name = `.gent-write-${(yield* sha256(requestId)).slice(0, 16)}`
+  return { name, at: path.join(place.top, name) }
+})
+
+/**
+ * Keep the bytes of moved-aside entries, then remove the asides. Each aside
+ * whose entry differs from what the revert's `before` holds for its path
+ * goes into `before`: the ref moves, old value checked, to a commit of the
+ * amended tree with the same message, so a stop leaves the old record or
+ * the new one. Only then does an aside go. The paths it kept.
+ */
+const keepAsides = Effect.fn("Checkpoints.keepAsides")(function* (
+  place: Place,
+  revert: Recorded,
+  asides: ReadonlyMap<string, string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  if (asides.size === 0) return []
+  const files = [...asides.keys()]
+  const moved = yield* diskEntries(place, [...asides.values()], true)
+  const entries = new Map(
+    files.flatMap((file) =>
+      Option.toArray(Option.fromUndefinedOr(moved.get(asides.get(file) ?? ""))).map(
+        (entry) => [file, entry] as const,
+      ),
+    ),
+  )
+  const old = yield* inStore(place, ["rev-parse", "--verify", `${revert.beforeRef}^{commit}`])
+  const base = yield* treeOf(place, old)
+  const was = yield* treeEntries(place, base, files)
+  const kept = files.filter((file) => entries.get(file) !== was.get(file))
+  if (kept.length > 0) {
+    const tree = yield* overlaidTree(place, base, kept, entries)
+    const raw = yield* inStore(place, ["cat-file", "commit", old])
+    const message = raw.slice(raw.indexOf("\n\n") + 2)
+    const commit = yield* inStore(place, ["commit-tree", tree, "-p", old, "-m", message])
+    yield* inStore(place, ["update-ref", revert.beforeRef, commit, old])
+  }
+  for (const [file, aside] of asides)
+    yield* fs
+      .remove(path.join(place.top, aside))
+      .pipe(
+        Effect.mapError((error) =>
+          unfinishedError(`the revert could not remove the aside of ${file}: ${error.message}`),
+        ),
+      )
+  return kept
+})
+
+/**
+ * Swap each of `pending` to its `goal` entry. The order keeps every byte
+ * the revert takes away in the store before it goes:
+ *
+ * 1. each file or link at a path moves aside (a rename in its directory, so
+ *    the bytes the revert takes are the bytes it holds);
+ * 2. `keepAsides` hashes what moved into the store, moves `before` to hold
+ *    bytes it lacks, and only then removes the asides;
+ * 3. each directory a removal empties goes (`rmdir`: only an empty one);
+ * 4. git writes each goal entry from the store into the stage; each goes to
+ *    its path by link (or symlink), which never replaces an entry: a writer
+ *    that put something at the path since step 1 keeps it, and the write
+ *    fails. (A rename would replace it.)
+ *
+ * A stop in 1 or 2 leaves each aside or, after the ref moved, its bytes in
+ * `before`; a stop in 4 leaves the stage, which holds store copies only.
+ * Finish and undo take both up first (`takeUpAsides`). A writer that holds
+ * a file open and writes after step 1 writes to the aside, out of reach.
+ * The paths kept for undo.
+ */
+const swap = Effect.fn("Checkpoints.swap")(function* (
+  place: Place,
+  revert: Recorded,
+  pending: ReadonlyArray<string>,
+  goal: ReadonlyMap<string, string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const fail = (file: string, why: string) =>
+    unfinishedError(`the revert could not write ${file}: ${why}`)
+  const kinds = workTreeKinds(place)
+  const asides = new Map<string, string>()
+  for (const file of pending) {
+    const kind = yield* kinds.seen(file)
+    if (kind !== "file" && kind !== "link") continue
+    const aside = yield* asideOf(revert.requestId, file)
+    const directory = path.dirname(path.join(place.top, file))
+    const real = yield* fs
+      .realPath(directory)
+      .pipe(Effect.mapError((error) => fail(file, error.message)))
+    if (real !== directory)
+      return yield* fail(file, "its directory is no longer one of the work tree")
+    yield* fs
+      .rename(path.join(place.top, file), path.join(place.top, aside))
+      .pipe(Effect.mapError((error) => fail(file, error.message)))
+    asides.set(file, aside)
+  }
+  const kept = yield* keepAsides(place, revert, asides)
+  for (const file of pending.filter((entry) => !goal.has(entry)))
+    yield* removeEmptyDirectories(place, path.dirname(file))
+  const writes = pending.filter((entry) => goal.has(entry))
+  if (writes.length === 0) return kept
+  const stage = yield* stageOf(place, revert.requestId)
+  yield* Effect.gen(function* () {
+    const env = yield* scratchIndex(place)
+    yield* inStore(place, ["read-tree", revert.target], { env })
+    yield* Effect.addFinalizer(() =>
+      fs.remove(stage.at, { recursive: true, force: true }).pipe(Effect.ignore),
+    )
+    const staged = yield* inStoreRun(
+      place,
+      ["checkout-index", `--prefix=${stage.name}/`, "-z", "--stdin"],
+      { env, stdin: writes.map((file) => `${file}\0`).join("") },
+    )
+    if (staged.exitCode !== 0) return yield* gitFailure(["checkout-index"], staged)
+    for (const file of writes) {
+      const at = path.join(place.top, file)
+      const directory = path.dirname(at)
+      const from = path.join(stage.at, file)
+      const real = yield* fs.makeDirectory(directory, { recursive: true }).pipe(
+        Effect.andThen(fs.realPath(directory)),
+        Effect.mapError((error) => fail(file, error.message)),
+      )
+      if (real !== directory)
+        return yield* fail(file, "its directory is no longer one of the work tree")
+      const link = yield* fs.readLink(from).pipe(Effect.option)
+      const put = Option.match(link, {
+        onNone: () => fs.link(from, at),
+        onSome: (text) => fs.symlink(text, at),
+      })
+      yield* put.pipe(Effect.mapError((error) => fail(file, error.message)))
+    }
+  }).pipe(Effect.scoped)
+  return kept
+})
+
+/**
+ * Recovery after a stop: the asides a stopped run of `revert` left, by their
+ * fixed names, go into its `before` (`keepAsides`), and its stage goes. The
+ * paths it kept.
+ */
+const takeUpAsides = Effect.fn("Checkpoints.takeUpAsides")(function* (
+  place: Place,
+  revert: Recorded,
+) {
+  const kinds = workTreeKinds(place)
+  const left = new Map<string, string>()
+  for (const file of revert.paths) {
+    const aside = yield* asideOf(revert.requestId, file)
+    const kind = yield* kinds.seen(aside)
+    if (kind === "file" || kind === "link") left.set(file, aside)
+  }
+  const fs = yield* FileSystem.FileSystem
+  const stage = yield* stageOf(place, revert.requestId)
+  yield* fs.remove(stage.at, { recursive: true, force: true }).pipe(Effect.ignore)
+  return yield* keepAsides(place, revert, left)
+})
+
+/**
+ * Write a recorded revert's target over the work tree. First, asides a stop
+ * left go into `before` (`keepAsides`). Then each path must hold its
+ * `before` (to write), its target (written), or nothing while `before`
+ * holds its bytes (a stop moved it aside); any other content is an edit
+ * since the revert recorded the path. Without `overwrite` the write refuses
+ * and names those paths; with it they are written too, and `swap` keeps
+ * their bytes for undo. Only the paths not at their target are examined for
+ * what stands in the way. After the write, each path must hold its target.
  */
 const writeTarget = Effect.fn("Checkpoints.writeTarget")(function* (
   place: Place,
-  write: {
-    readonly before: string
-    readonly target: string
-    readonly paths: ReadonlyArray<string>
-    /** Why the refusal of a later edit refuses, in the user's words. */
-    readonly changed: (count: number) => string
-  },
+  revert: Recorded,
+  /** Why a refusal over later edits refuses, in the user's words; none writes over them. */
+  refuseEdits: Option.Option<(count: number) => string>,
 ) {
-  const goal = yield* treeEntries(place, write.target, write.paths)
-  const blocked = yield* obstructions(
-    place,
-    write.paths,
-    new Set(write.paths.filter((file) => !goal.has(file))),
-  )
-  if (blocked.length > 0) return Option.some(refused(OBSTRUCTED, blocked))
-  const now = yield* diskEntries(place, write.paths, false)
-  const was = yield* treeEntries(place, write.before, write.paths)
+  const recovered = yield* takeUpAsides(place, revert)
+  const goal = yield* treeEntries(place, revert.target, revert.paths)
+  const before = yield* treeOf(place, yield* inStore(place, ["rev-parse", revert.beforeRef]))
+  const was = yield* treeEntries(place, before, revert.paths)
+  const now = yield* diskEntries(place, revert.paths, false)
   const holds = (entries: ReadonlyMap<string, string>, file: string) =>
     now.get(file) === entries.get(file)
-  const changed = write.paths.filter((file) => !holds(was, file) && !holds(goal, file))
-  if (changed.length > 0) return Option.some(refused(write.changed(changed.length), changed))
-  yield* writeWorkTree(
-    place,
-    write.target,
-    write.paths.filter((file) => !holds(goal, file)),
+  const changed = revert.paths.filter(
+    (file) => !holds(was, file) && !holds(goal, file) && (now.has(file) || !was.has(file)),
   )
-  const after = yield* diskEntries(place, write.paths, false)
-  const unwritten = write.paths.filter((file) => after.get(file) !== goal.get(file))
+  const refusal = (outcome: RevertOutcome) => ({ refusal: Option.some(outcome), kept: [] })
+  const refuse = Option.filter(refuseEdits, () => changed.length > 0)
+  if (Option.isSome(refuse)) return refusal(refused(refuse.value(changed.length), changed))
+  const pending = revert.paths.filter((file) => !holds(goal, file))
+  const blocked = yield* obstructions(
+    place,
+    pending,
+    new Set(pending.filter((file) => !goal.has(file))),
+  )
+  if (blocked.length > 0) return refusal(refused(OBSTRUCTED, blocked))
+  const kept = yield* swap(place, revert, pending, goal)
+  const after = yield* diskEntries(place, revert.paths, false)
+  const unwritten = revert.paths.filter((file) => after.get(file) !== goal.get(file))
   if (unwritten.length > 0)
     return yield* unfinishedError(
       `the work tree does not hold what the revert wrote: ${unwritten.join(", ")}`,
     )
-  return Option.none<RevertOutcome>()
+  return {
+    refusal: Option.none<RevertOutcome>(),
+    kept: [...new Set([...recovered, ...kept])].sort(),
+  }
 })
 
 const revertTrailers = (requestId: string, kind: "before" | "target" | "done") =>
@@ -1620,10 +1776,18 @@ const revertTrailers = (requestId: string, kind: "before" | "target" | "done") =
 const refused = (reason: string, conflicts: ReadonlyArray<string> = []): RevertOutcome =>
   RevertOutcome.cases.Refused.make({ reason, conflicts: [...conflicts] })
 
-const reverted = (files: ReadonlyArray<string>, branch: Option.Option<BranchId>): RevertOutcome =>
+const reverted = (
+  files: ReadonlyArray<string>,
+  branch: Option.Option<BranchId>,
+  kept: ReadonlyArray<string> = [],
+): RevertOutcome =>
   RevertOutcome.cases.Reverted.make({
     files: [...files],
     ...Option.match(branch, { onNone: () => ({}), onSome: (branchId) => ({ branchId }) }),
+    ...Option.match(
+      Option.liftPredicate(kept, (paths) => paths.length > 0),
+      { onNone: () => ({}), onSome: (paths) => ({ kept: [...paths] }) },
+    ),
   })
 
 /**
@@ -1649,16 +1813,18 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
   const ctx = yield* ExtensionContext
   const paths = params.plan.paths
   const sourceEntries = yield* treeEntries(place, params.source, paths)
+  const now = yield* diskEntries(place, paths, true)
+  const pending = paths.filter((file) => now.get(file) !== sourceEntries.get(file))
   const blocked = yield* obstructions(
     place,
-    paths,
-    new Set(paths.filter((file) => !sourceEntries.has(file))),
+    pending,
+    new Set(pending.filter((file) => !sourceEntries.has(file))),
   )
   if (blocked.length > 0) return refused(OBSTRUCTED, blocked)
-  const now = yield* diskEntries(place, paths, true)
   const beforeTree = yield* overlaidTree(place, yield* treeOf(place, params.current), paths, now)
+  const beforeRef = yield* revertRef(params.requestId, "before")
   const before = yield* markCommit(place, {
-    ref: yield* revertRef(params.requestId, "before"),
+    ref: beforeRef,
     tree: beforeTree,
     parent: Option.none(),
     trailers: yield* revertTrailers(params.requestId, "before"),
@@ -1682,58 +1848,54 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
       ...Option.toArray(made).map((branchId) => ["Gent-Result-Branch", branchId] as const),
     ],
   })
-  const refusal = yield* writeTarget(place, {
-    before: beforeTree,
-    target: tree,
-    paths,
-    changed: (count) =>
-      `${count} of the files to revert changed while the revert ran; finish it with overwrite to write them (undo returns them)`,
-  })
-  if (Option.isSome(refusal)) return refusal.value
+  // The plan decided these paths: bytes a writer puts there from now on are
+  // written over too, and kept for undo.
+  const written = yield* writeTarget(
+    place,
+    { requestId: params.requestId, beforeRef, target: tree, paths },
+    Option.none(),
+  )
+  if (Option.isSome(written.refusal)) return written.refusal.value
   yield* markCommit(place, {
     ref: yield* revertRef(params.requestId, "done"),
     tree,
     parent: Option.some(target),
     trailers: yield* revertTrailers(params.requestId, "done"),
   })
-  return reverted(
-    paths.filter((file) => now.get(file) !== sourceEntries.get(file)),
-    made,
-  )
+  return reverted(pending, made, written.kept)
 })
 
 /**
  * Finish a recorded revert: write its target and mark it done, once; a done
  * revert only answers again (the work tree may have moved on since). A path
- * someone changed after the stop refuses the finish; a finish with overwrite
- * that another request asks for writes the target as a new revert, whose
- * `before` keeps that change for undo.
+ * someone changed after the stop refuses the finish; with overwrite it is
+ * written too, and the revert's `before` keeps its bytes for undo.
  */
 const finishRevert = Effect.fn("Checkpoints.finishRevert")(function* (
   place: Place,
   revert: Revert,
   input: RevertInput,
 ) {
-  const files = yield* revertFiles(place, revert)
-  if (Option.isSome(revert.done)) return reverted(files, revert.resultBranch)
+  if (Option.isSome(revert.done))
+    return reverted(yield* revertFiles(place, revert), revert.resultBranch)
   const target = Option.getOrThrow(revert.target)
-  const before = yield* treeOf(place, Option.getOrThrow(revert.before).commit)
   const tree = yield* treeOf(place, target.commit)
-  const changed = (count: number) =>
-    `${count} of the files to write changed since this revert stopped; finish with overwrite to write them (undo returns them)`
-  if (input.overwrite === true && input.requestId !== revert.requestId) {
-    const current = yield* currentCommit(place)
-    return yield* applyPlan(place, {
-      requestId: input.requestId,
-      current: current.commit,
-      source: target.commit,
-      plan: { paths: files, conflicts: [] },
-      fork: Option.none(),
-      made: revert.resultBranch,
-    })
+  const recorded: Recorded = {
+    requestId: revert.requestId,
+    beforeRef: Option.getOrThrow(revert.before).ref,
+    target: tree,
+    paths: yield* revertFiles(place, revert),
   }
-  const refusal = yield* writeTarget(place, { before, target: tree, paths: files, changed })
-  if (Option.isSome(refusal)) return refusal.value
+  const written = yield* writeTarget(
+    place,
+    recorded,
+    Option.liftPredicate(
+      (count: number) =>
+        `${count} of the files to write changed since this revert stopped; finish with overwrite to write them (undo returns them)`,
+      () => input.overwrite !== true,
+    ),
+  )
+  if (Option.isSome(written.refusal)) return written.refusal.value
   // The `done` names the revert's own refs, whichever request finishes it.
   yield* markCommit(place, {
     ref: target.ref.replace(/\/target$/, "/done"),
@@ -1746,7 +1908,7 @@ const finishRevert = Effect.fn("Checkpoints.finishRevert")(function* (
       ["Gent-Request", revert.requestId],
     ],
   })
-  return reverted(files, revert.resultBranch)
+  return reverted(recorded.paths, revert.resultBranch, written.kept)
 })
 
 /** Back to before turn `#n`. */
@@ -1807,8 +1969,23 @@ const revertRevert = Effect.fn("Checkpoints.revertRevert")(function* (
   const ctx = yield* ExtensionContext
   const undone = newestRevert(marks, ctx.sessionId, ctx.branchId)
   if (Option.isNone(undone)) return refused("there is no revert to undo")
+  const recorded = Option.getOrThrow(undone.value.before)
+  // A stop may have left asides; their bytes go into `before`, which the
+  // undo writes back.
+  if (Option.isNone(undone.value.done))
+    yield* takeUpAsides(place, {
+      requestId: undone.value.requestId,
+      beforeRef: recorded.ref,
+      target: yield* treeOf(place, Option.getOrThrow(undone.value.target).commit),
+      paths: yield* revertFiles(place, undone.value),
+    })
+  const before = { ...recorded, commit: yield* inStore(place, ["rev-parse", recorded.ref]) }
   const current = yield* currentCommit(place)
-  const plan = yield* undoPlan(place, undone.value, current.commit)
+  const plan = yield* undoPlan(
+    place,
+    { ...undone.value, before: Option.some(before) },
+    current.commit,
+  )
   if (plan.conflicts.length > 0 && input.overwrite !== true)
     return refused(
       `${plan.conflicts.length} of the files the revert wrote changed since; undo with overwrite to write them`,
@@ -1817,7 +1994,7 @@ const revertRevert = Effect.fn("Checkpoints.revertRevert")(function* (
   return yield* applyPlan(place, {
     requestId: input.requestId,
     current: current.commit,
-    source: Option.getOrThrow(undone.value.before).commit,
+    source: before.commit,
     plan,
     fork: Option.none(),
     made: Option.none(),

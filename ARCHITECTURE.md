@@ -1524,20 +1524,36 @@ section, no notice. Core has no checkpoint concept.
   whatever the capture excludes: undo returns all it overwrote), `target`
   (the tree to write, built in a scratch index with no `--replace`; on a
   conversation revert it carries `Gent-Result-Branch`), the files, then
-  `done`, under `refs/reverts/<session>/<branch>/<request>/`. The files: each
-  path must hold its `before` (to write) or its `target` (a stopped run wrote
-  it); any other content is a later edit, and the write refuses and names it.
-  A removal that fails fails the request; an emptied directory goes by
-  `rmdir`, which removes only an empty one; `checkout-index` writes each path
-  the target holds. Then each path must hold its target, or the request
-  fails and the revert stays unfinished. A repeat by `requestId` answers
+  `done`, under `refs/reverts/<session>/<branch>/<request>/`. The files: on
+  a finish, each path must hold its `before` (to write), its `target` (a
+  stopped run wrote it), or nothing while `before` holds it (a stop moved it
+  aside); any other content is a later edit, and the finish refuses and names
+  it. Only the paths not at their target are examined for what stands in the
+  way. Each of those holding a file or a link moves aside first, by rename
+  in its own directory to `.gent-aside-<16 hex of sha256(request)>-<16 hex of
+sha256(path)>`; what moved is hashed into the store, and an aside whose
+  bytes `before` lacks moves the `before` ref (old value checked) to a commit
+  of the amended tree with the same message, parent the old `before`; only
+  then does the aside go. So the bytes the revert takes are the bytes it
+  keeps, an edit made after the last check included: the answer names such a
+  path in `kept`, and undo returns it. An emptied directory goes by `rmdir`,
+  which removes only an empty one. `checkout-index --prefix` writes each path
+  the target holds into `.gent-write-<16 hex of sha256(request)>/` at the
+  top, and each goes to its path by `link` (a link by `symlink`), which never
+  replaces an entry. Then each path must hold its target, or the request
+  fails and the revert stays unfinished. Recovery: a stop leaves each aside
+  or its bytes in `before`, and maybe the write directory (store copies
+  only); a finish or an undo of the unfinished revert first takes each aside
+  into `before` by its fixed name and removes the write directory. A writer
+  that keeps a file open and writes after the rename writes to the aside, out
+  of reach. A repeat by `requestId` answers
   again from its refs, or finishes one a stop cut short after its `target`;
   one with a `before` alone wrote nothing, so its record goes and it runs
   again. `Undo` reverts the newest revert of the branch (or of the revert
   that made it): the paths it wrote, back to its `before`; a path changed
   since its target is a conflict. `Finish` writes an unfinished revert; with
-  `overwrite`, from a request other than the revert's own, it writes the
-  target as a new revert, whose `before` keeps the later edits for undo. `checkpoints.list` names the newest revert as `undo`
+  `overwrite` it writes over later edits too, and its `before` keeps them for
+  undo. `checkpoints.list` names the newest revert as `undo`
   (with its file count) once done, or `unfinished` without its `done`. A
   refusal is an answer (`Refused { reason, conflicts }`), not an error.
 - Client: `/diff turn [n]` is a target of `@gent/git`'s `/diff` (see the TUI

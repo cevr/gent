@@ -181,7 +181,7 @@ describe("revert pane", () => {
   )
 
   it.scopedLive(
-    "f reverts files only; a refusal names the paths, and o writes them with the same request",
+    "f reverts files only; a refusal names the paths, o writes them with the same request, and the note names what it kept",
     () =>
       Effect.gen(function* () {
         const { setup, log } = yield* openPane(120, list, [
@@ -190,7 +190,7 @@ describe("revert pane", () => {
             reason: "others also changed 1 of the files to revert",
             conflicts: ["a.txt"],
           },
-          { _tag: "Reverted", files: ["a.txt"] },
+          { _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] },
         ])
         setup.mockInput.pressKey("f")
         yield* waitForFrame(
@@ -214,7 +214,10 @@ describe("revert pane", () => {
         expect(requestIdOf(written)).toEqual(requestIdOf(refused))
         expect(Option.isSome(requestIdOf(refused))).toBe(true)
         expect(log.switched).toEqual([])
-        expect(log.notes).toEqual(["reverted 1 file to before turn #1 · /revert to undo"])
+        // A path that changed while the revert ran is named: undo returns it.
+        expect(log.notes).toEqual([
+          "reverted 1 file to before turn #1 · /revert to undo · a.txt changed during the revert; kept for undo",
+        ])
       }).pipe(Effect.timeout("10 seconds")),
   )
 

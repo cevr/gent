@@ -942,7 +942,7 @@ describe("turn reverts", () => {
           expect(retry).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("edited")
           const overwritten = yield* session.revert("finish-1", FINISH, true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("one")
           expect((yield* session.list).unfinished).toBeUndefined()
           const undone = yield* session.revert("undo-1", UNDO)
@@ -1143,6 +1143,98 @@ describe("turn reverts", () => {
         }),
       ),
     30_000,
+  )
+
+  it.live(
+    "a stop that left a file moved aside: finish keeps the moved bytes for undo, names the path, and writes the target",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const fs = yield* FileSystem.FileSystem
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* session.revert("revert-1", filesOf(1))
+          const store = (yield* storeOf(home))[0] ?? ""
+          const done = (yield* storeRefs(store)).find((name) => name.endsWith("/done")) ?? ""
+          yield* sh(store, `git --git-dir="${store}" update-ref -d '${done}'`)
+          // The stop came right after the move aside, and a writer had put
+          // other bytes there just before it.
+          const aside = yield* sh(
+            repo,
+            "printf '%s' 'revert-1' | sha256sum | cut -c1-16; printf '%s' 'a.txt' | sha256sum | cut -c1-16",
+          ).pipe(Effect.map((text) => `.gent-aside-${text.split("\n").join("-")}`))
+          yield* fs.remove(`${repo}/a.txt`)
+          yield* fs.writeFileString(`${repo}/${aside}`, "late\n")
+          expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
+          const finished = yield* session.revert("finish-1", FINISH)
+          expect(finished).toEqual({ _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] })
+          expect(yield* fs.readFileString(`${repo}/a.txt`)).toBe("one\n")
+          expect(yield* fs.exists(`${repo}/${aside}`)).toBe(false)
+          expect(yield* session.revert("undo-1", UNDO)).toEqual({
+            _tag: "Reverted",
+            files: ["a.txt"],
+          })
+          expect(yield* fs.readFileString(`${repo}/a.txt`)).toBe("late\n")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a revert between a file and a directory, stopped after its first step or at its target, finishes with no overwrite",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          // Each replacement: the tree before the turn, the turn's change, and the
+          // check of the revert's target. Its first step (the removals)
+          // leaves nothing at `d` in both.
+          const replacements = [
+            {
+              name: "directory back from a file",
+              setup: "mkdir d && printf 'dee\\n' > d/a.txt",
+              steps: [toolCallStep("drop", { path: "d" }), put("d", "file\n")],
+              target: "cat d/a.txt",
+              expected: "dee",
+            },
+            {
+              name: "file back from a directory",
+              setup: "printf 'file\\n' > d",
+              steps: [toolCallStep("drop", { path: "d" }), put("d/a.txt", "dee\n")],
+              target: "cat d",
+              expected: "file",
+            },
+          ]
+          for (const replacement of replacements)
+            for (const stop of ["first step", "target"]) {
+              const repo = yield* repository
+              const home = yield* makeTempDirectoryScoped("cp-home-")
+              yield* sh(repo, `${replacement.setup} && git add -A && git commit -qm replacement`)
+              const session = yield* checkpointSession(repo, home, [
+                ...replacement.steps,
+                textStep("done 1"),
+              ])
+              yield* session.turn(replacement.name, "done 1")
+              yield* session.revert("revert-1", filesOf(1))
+              const store = (yield* storeOf(home))[0] ?? ""
+              const done = (yield* storeRefs(store)).find((name) => name.endsWith("/done")) ?? ""
+              yield* sh(store, `git --git-dir="${store}" update-ref -d '${done}'`)
+              if (stop === "first step") yield* sh(repo, "rm -rf d")
+              const finished = yield* session.revert("finish-1", FINISH)
+              expect([replacement.name, stop, finished]).toEqual([
+                replacement.name,
+                stop,
+                { _tag: "Reverted", files: ["d", "d/a.txt"] },
+              ])
+              expect(yield* sh(repo, replacement.target)).toBe(replacement.expected)
+            }
+        }),
+      ),
+    60_000,
   )
 })
 

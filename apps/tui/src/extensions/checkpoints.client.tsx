@@ -201,7 +201,11 @@ const makeRevertController = Effect.gen(function* () {
       setRefused(Option.none())
       setError(Option.none())
       shell.pane.close(REVERT_PANE)
-      shell.notify(entry.done(outcome.files.length))
+      // A path that changed while the revert ran was written too; undo returns it.
+      const kept = (outcome.kept ?? []).map(
+        (file) => ` · ${file} changed during the revert; kept for undo`,
+      )
+      shell.notify(`${entry.done(outcome.files.length)}${kept.join("")}`)
       // A conversation revert made a branch: the shell moves to it.
       const made = Option.fromUndefinedOr(outcome.branchId)
       if (Option.isNone(made)) return
