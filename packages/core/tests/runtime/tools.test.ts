@@ -18,6 +18,8 @@ import {
   ExtensionHost,
   getToolId,
   tool,
+  type ToolCallInput,
+  ToolCallVerdict,
   type ToolCapability,
 } from "@gent/core/extensions/api"
 import {
@@ -45,7 +47,12 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { test } from "bun:test"
-import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  waitFor,
+} from "../../src/test-utils/language-model"
+import { omitUndefined } from "../../src/domain/guards"
 import { multiToolCallStep, textStep, toolCallStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -1183,5 +1190,386 @@ describe("extension model surface over RPC", () => {
       Effect.timeout("4 seconds"),
       Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
     ),
+  )
+})
+
+// ── tool-call hook ──────────────────────────────────────────────────────────
+
+const encodePrompt = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/** One `toolCall` hook in an extension of its own. */
+const toolCallHookExtension = (
+  id: string,
+  judge: (input: ToolCallInput) => Effect.Effect<ToolCallVerdict>,
+) =>
+  defineExtension({
+    id,
+    setup: Effect.gen(function* () {
+      yield* (yield* ExtensionHost).on("toolCall", judge)
+    }),
+  })
+
+/**
+ * A server whose `main` agent holds `note` (records its text) and
+ * `asked_note` (asks the user, then records), with the live approval
+ * service and the given hooks. `run` sends one message, answers each
+ * dialog with `approved`, and returns the turn's events and tool results.
+ */
+const gatedServer = Effect.fn("test.gatedServer")(function* (params: {
+  readonly hooks: ReadonlyArray<ReturnType<typeof toolCallHookExtension>>
+  readonly steps: Parameters<typeof LanguageModelLayers.sequence>[0]
+  readonly cwd?: string
+}) {
+  const ran: Array<string> = []
+  const extension = defineExtension({
+    id: "test/gated-tools",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("agent", AgentDefinition.make({ name: AgentName.make("main") }))
+      yield* host.register(
+        "tool",
+        tool({
+          id: "note",
+          description: "Record a note",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.String,
+          execute: ({ text }) => Effect.sync(() => ran.push(text)).pipe(Effect.as(`noted ${text}`)),
+        }),
+        tool({
+          id: "asked_note",
+          description: "Ask, then record a note",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.String,
+          execute: ({ text }) =>
+            Effect.gen(function* () {
+              const answer = yield* (yield* ExtensionContext).Interaction.approve({
+                text: `Record ${text}?`,
+              })
+              if (!answer.approved) return "not recorded"
+              ran.push(text)
+              return `noted ${text}`
+            }),
+        }),
+      )
+    }),
+  })
+  const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(params.steps)
+  const harness = yield* createRpcHarness({
+    agents: [],
+    extensionInputs: [extension, ...params.hooks],
+    providerLayer,
+    approvalLayer: ApprovalService.Live,
+    ...omitUndefined({ cwd: params.cwd }),
+  })
+  const run = (content: string, approved: boolean) =>
+    Effect.gen(function* () {
+      const { client, sessionId, branchId } = harness
+      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map((envelope) => envelope.event),
+        Stream.tap((event) => {
+          if (event._tag !== "InteractionPresented") return Effect.void
+          return client.interaction.respondInteraction({
+            sessionId,
+            branchId,
+            requestId: event.requestId,
+            approved,
+          })
+        }),
+        Stream.takeUntil(Predicate.isTagged("TurnCompleted")),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content })
+      const events = Array.from(yield* Fiber.join(turn))
+      const messages = yield* client.message.list({ branchId })
+      const results = messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool-result")
+      const answered = messages.some(
+        (message) => message.role === "assistant" && messagePartsText(message.parts) === "finished",
+      )
+      return { events, results, answered }
+    })
+  return { ...harness, ran, controls, run }
+})
+
+const presentedTexts = (events: ReadonlyArray<AgentEvent>) =>
+  events.flatMap((event) => {
+    if (event._tag !== "InteractionPresented") return []
+    return [event.text]
+  })
+
+const gatePlatform = Layer.merge(BunServices.layer, BunGentPlatformLive)
+
+describe("toolCall hook", () => {
+  it.scopedLive(
+    "a hook that denies stops the call: the model reads the reason, the body never runs, and the turn goes on",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* gatedServer({
+          hooks: [
+            toolCallHookExtension("test/deny", () =>
+              Effect.succeed(ToolCallVerdict.cases.Deny.make({ reason: "no notes today" })),
+            ),
+          ],
+          steps: [toolCallStep("note", { text: "milk" }), textStep("finished")],
+        })
+        const { results, answered } = yield* server.run("Note milk.", true)
+        expect(results.map((part) => [part.name, part.isFailure])).toEqual([["note", true]])
+        expect(errorFromResult(results[0]!)).toContain("no notes today")
+        expect(server.ran).toEqual([])
+        expect(answered).toBe(true)
+        yield* server.controls.assertDone
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+    8_000,
+  )
+
+  it.scopedLive(
+    "a hook that asks shows one dialog: an approval runs the call, a decline fails it with the reason",
+    () =>
+      Effect.gen(function* () {
+        for (const approved of [true, false]) {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const server = yield* gatedServer({
+                hooks: [
+                  toolCallHookExtension("test/ask", () =>
+                    Effect.succeed(ToolCallVerdict.cases.Ask.make({ reason: "notes are private" })),
+                  ),
+                ],
+                steps: [toolCallStep("note", { text: "milk" }), textStep("finished")],
+              })
+              const { events, results, answered } = yield* server.run("Note milk.", approved)
+              const texts = presentedTexts(events)
+              expect(texts).toHaveLength(1)
+              expect(texts[0]).toContain("note")
+              expect(texts[0]).toContain("notes are private")
+              expect(texts[0]).toContain("milk")
+              expect(answered).toBe(true)
+              if (approved) {
+                expect(results.map((part) => [part.name, part.isFailure])).toEqual([
+                  ["note", false],
+                ])
+                expect(server.ran).toEqual(["milk"])
+              } else {
+                expect(results.map((part) => [part.name, part.isFailure])).toEqual([["note", true]])
+                expect(errorFromResult(results[0]!)).toContain("notes are private")
+                expect(server.ran).toEqual([])
+              }
+              yield* server.controls.assertDone
+            }),
+          )
+        }
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(gatePlatform)),
+    12_000,
+  )
+
+  it.scopedLive("the strictest verdict wins: a deny beside an allow denies", () =>
+    Effect.gen(function* () {
+      const server = yield* gatedServer({
+        hooks: [
+          toolCallHookExtension("test/allow", () =>
+            Effect.succeed(ToolCallVerdict.cases.Allow.make({})),
+          ),
+          toolCallHookExtension("test/deny", () =>
+            Effect.succeed(ToolCallVerdict.cases.Deny.make({ reason: "denied beside an allow" })),
+          ),
+        ],
+        steps: [toolCallStep("note", { text: "milk" }), textStep("finished")],
+      })
+      const { events, results } = yield* server.run("Note milk.", true)
+      expect(presentedTexts(events)).toEqual([])
+      expect(results.map((part) => [part.name, part.isFailure])).toEqual([["note", true]])
+      expect(errorFromResult(results[0]!)).toContain("denied beside an allow")
+      expect(server.ran).toEqual([])
+      yield* server.controls.assertDone
+    }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
+
+  it.scopedLive("a hook that fails asks: the gate fails closed", () =>
+    Effect.gen(function* () {
+      const server = yield* gatedServer({
+        hooks: [toolCallHookExtension("test/broken", () => Effect.die("the judge broke"))],
+        steps: [toolCallStep("note", { text: "milk" }), textStep("finished")],
+      })
+      const { events, results } = yield* server.run("Note milk.", false)
+      const texts = presentedTexts(events)
+      expect(texts).toHaveLength(1)
+      expect(texts[0]).toContain("test/broken")
+      expect(results.map((part) => [part.name, part.isFailure])).toEqual([["note", true]])
+      expect(server.ran).toEqual([])
+      yield* server.controls.assertDone
+    }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
+
+  it.scopedLive(
+    "a hook that allows leaves the call and the next request as they are with no hook",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<string> = []
+        const judged: Array<string> = []
+        const steps = () => [
+          toolCallStep("note", { text: "milk" }),
+          {
+            ...textStep("finished"),
+            assertOptions: (options: { readonly prompt: Prompt.Prompt }) => {
+              // Each scripted call gets a fresh id; the bytes around it must match.
+              requests.push(
+                encodePrompt(options.prompt.content).replaceAll(/step-tc-\d+/g, "step-tc"),
+              )
+            },
+          },
+        ]
+        const hooks = [
+          [],
+          [
+            toolCallHookExtension("test/allow", (input) =>
+              Effect.sync(() => judged.push(input.toolName)).pipe(
+                Effect.as(ToolCallVerdict.cases.Allow.make({})),
+              ),
+            ),
+          ],
+        ]
+        const cwd = yield* makeTempDirectoryScoped("gent-tool-call-hook-")
+        for (const hookSet of hooks) {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const server = yield* gatedServer({ hooks: hookSet, steps: steps(), cwd })
+              const { events, results } = yield* server.run("Note milk.", true)
+              expect(presentedTexts(events)).toEqual([])
+              expect(results.map((part) => [part.name, part.isFailure])).toEqual([["note", false]])
+              expect(server.ran).toEqual(["milk"])
+              yield* server.controls.assertDone
+            }),
+          )
+        }
+        expect(judged).toEqual(["note"])
+        expect(requests).toHaveLength(2)
+        expect(requests[1]).toBe(requests[0])
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(gatePlatform)),
+    12_000,
+  )
+
+  it.scopedLive(
+    "the hook reads the turn's opening message, the call id, the agent, and the input",
+    () =>
+      Effect.gen(function* () {
+        const inputs: Array<ToolCallInput> = []
+        const server = yield* gatedServer({
+          hooks: [
+            toolCallHookExtension("test/record", (input) =>
+              Effect.sync(() => inputs.push(input)).pipe(
+                Effect.as(ToolCallVerdict.cases.Allow.make({})),
+              ),
+            ),
+          ],
+          steps: [toolCallStep("note", { text: "milk" }), textStep("finished")],
+        })
+        const { events, results } = yield* server.run("Note milk.", true)
+        const completed = events.flatMap((event) => {
+          if (event._tag !== "TurnCompleted") return []
+          return [event]
+        })[0]
+        expect(inputs).toHaveLength(1)
+        expect(inputs[0]).toMatchObject({
+          sessionId: server.sessionId,
+          branchId: server.branchId,
+          messageId: completed?.messageId,
+          toolCallId: results[0]?.id,
+          agentName: "main",
+          toolName: "note",
+          readonly: false,
+          input: { text: "milk" },
+        })
+        expect(Option.isNone(inputs[0]!.parentToolCallId)).toBe(true)
+        yield* server.controls.assertDone
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
+
+  it.scopedLive(
+    "a call that parks keeps its verdict: its next run is not judged again",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { verdict: ToolCallVerdict.cases.Allow.make({}), tool: "asked_note", dialogs: 1 },
+          {
+            verdict: ToolCallVerdict.cases.Ask.make({ reason: "notes are private" }),
+            tool: "note",
+            dialogs: 1,
+          },
+        ]
+        for (const entry of cases) {
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              let judged = 0
+              const server = yield* gatedServer({
+                hooks: [
+                  toolCallHookExtension("test/count", () =>
+                    Effect.sync(() => {
+                      judged += 1
+                    }).pipe(Effect.as(entry.verdict)),
+                  ),
+                ],
+                steps: [toolCallStep(entry.tool, { text: "milk" }), textStep("finished")],
+              })
+              const { events, results } = yield* server.run("Note milk.", true)
+              expect(presentedTexts(events)).toHaveLength(entry.dialogs)
+              expect(results.map((part) => [part.name, part.isFailure])).toEqual([
+                [entry.tool, false],
+              ])
+              expect(server.ran).toEqual(["milk"])
+              expect(judged).toBe(1)
+              yield* server.controls.assertDone
+            }),
+          )
+        }
+      }).pipe(Effect.timeout("10 seconds"), Effect.provide(gatePlatform)),
+    12_000,
+  )
+
+  it.scopedLive(
+    "the hook reads the input the tool will run with: a field its schema drops never reaches the hook",
+    () =>
+      Effect.gen(function* () {
+        const inputs: Array<ToolCallInput["input"]> = []
+        const server = yield* gatedServer({
+          hooks: [
+            toolCallHookExtension("test/record", (input) =>
+              Effect.sync(() => inputs.push(input.input)).pipe(
+                Effect.as(ToolCallVerdict.cases.Allow.make({})),
+              ),
+            ),
+          ],
+          steps: [
+            toolCallStep("note", { text: "milk", extra: "rm -rf build" }),
+            textStep("finished"),
+          ],
+        })
+        const { results } = yield* server.run("Note milk.", true)
+        expect(results.map((part) => part.isFailure)).toEqual([false])
+        expect(inputs).toEqual([{ text: "milk" }])
+        expect(server.ran).toEqual(["milk"])
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
+
+  it.scopedLive("a call whose input does not decode fails as before, and no hook judges it", () =>
+    Effect.gen(function* () {
+      let judged = 0
+      const server = yield* gatedServer({
+        hooks: [
+          toolCallHookExtension("test/count", () =>
+            Effect.sync(() => {
+              judged += 1
+            }).pipe(Effect.as(ToolCallVerdict.cases.Allow.make({}))),
+          ),
+        ],
+        steps: [toolCallStep("note", { count: 3 }), textStep("finished")],
+      })
+      const { results, answered } = yield* server.run("Note.", true)
+      expect(results.map((part) => part.isFailure)).toEqual([true])
+      expect(errorFromResult(results[0]!)).toContain("input failed")
+      expect(judged).toBe(0)
+      expect(answered).toBe(true)
+    }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
   )
 })

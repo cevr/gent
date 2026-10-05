@@ -32,6 +32,8 @@ import {
   type ToolBindingIdentity,
   ToolCallBindingConflictError,
   type ToolCallBindingKey,
+  ToolCallGateState,
+  ToolCallVerdict,
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
@@ -1893,6 +1895,18 @@ export const PendingToolCall = Schema.Struct({
    * interrupted instead. Absent on rows written before the mark existed.
    */
   parked: Schema.optional(Schema.Boolean),
+  /**
+   * The verdict the `toolCall` hooks gave the parked call. Its next run
+   * applies it and is not judged again. Absent when no hook judged the call,
+   * and on rows written before the verdict existed.
+   */
+  verdict: Schema.optional(ToolCallVerdict),
+  /**
+   * Whether the call passed its gate: `passed` once the user approved its
+   * `Ask`, so the next run does not ask that question again. Absent reads as
+   * `pending` (a row written before the state existed asks again).
+   */
+  gate: Schema.optional(ToolCallGateState),
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 

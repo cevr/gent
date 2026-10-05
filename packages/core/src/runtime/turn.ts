@@ -31,6 +31,7 @@ import {
   getToolMetadata,
   type PromptSection,
   systemPromptBlocks,
+  type KeptToolCallVerdict,
   type ToolCapability,
   toWirePrompt,
   wireToolName,
@@ -3488,11 +3489,21 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const markParkedCalls = Effect.fn("AgentLoop.markParkedCalls")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
       readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      readonly parked: ReadonlySet<string>
+      /** Each parked call, with the verdict its run applied when a hook judged it and its gate's state. */
+      readonly parked: ReadonlyMap<string, Option.Option<KeptToolCallVerdict>>
     }) {
       const pendingToolCalls: ReadonlyArray<PendingToolCall> = params.toolCalls.map((toolCall) => {
-        if (!params.parked.has(toolCall.id)) return { id: toolCall.id, name: toolCall.name }
-        return { id: toolCall.id, name: toolCall.name, parked: true }
+        const mark = params.parked.get(toolCall.id)
+        if (Predicate.isUndefined(mark)) return { id: toolCall.id, name: toolCall.name }
+        return {
+          id: toolCall.id,
+          name: toolCall.name,
+          parked: true,
+          ...Option.match(mark, {
+            onNone: () => ({}),
+            onSome: ({ verdict, gate }) => ({ verdict, gate }),
+          }),
+        }
       })
       yield* writeTurnRecord(params.messageId, () => ({ pendingToolCalls }), { onFailure: "die" })
     })
@@ -3609,6 +3620,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         toolBindings: ResolvedTurnContext["toolBindings"]
         hostToolBindings: ResolvedTurnContext["toolBindings"]
         recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
+        /** The verdicts the parked calls' earlier runs applied (`ToolCallGate`). */
+        verdicts?: ReadonlyMap<string, KeptToolCallVerdict>
       }) {
         if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
@@ -3627,10 +3640,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // Every call that parks is marked when it parks, one write at a time,
         // each restating every mark so far. Only a parked call runs again
         // when the turn resumes; a call cut short without a mark does not.
-        const parked = yield* Ref.make<ReadonlySet<string>>(new Set())
+        const parked = yield* Ref.make<ReadonlyMap<string, Option.Option<KeptToolCallVerdict>>>(
+          new Map(),
+        )
         const markLock = yield* Semaphore.make(1)
-        const onParked = (toolCallId: ToolCallId) =>
-          Ref.updateAndGet(parked, (current) => new Set([...current, toolCallId])).pipe(
+        const onParked = (toolCallId: ToolCallId, verdict: Option.Option<KeptToolCallVerdict>) =>
+          Ref.updateAndGet(parked, (current) => new Map([...current, [toolCallId, verdict]])).pipe(
             Effect.flatMap((marked) =>
               markParkedCalls({
                 messageId: params.messageId,
@@ -3649,6 +3664,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           currentTurnAgent: params.currentTurnAgent,
           toolBindings: params.toolBindings,
+          ...omitUndefined({ verdicts: params.verdicts }),
           onParked,
         }).pipe(
           Effect.tapError((error) =>
@@ -4209,6 +4225,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         pendingToolCalls: settled,
         // No call of a step the record does not name may run again.
         parkedCallIds: new Set<string>(),
+        parkedVerdicts: new Map<string, KeptToolCallVerdict>(),
       }
       const record = yield* readTurnRecord(messageId)
       if (record.pendingToolCalls.length > 0) {
@@ -4225,6 +4242,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             pendingToolCalls: toolCallsFromMessage(assistant),
             parkedCallIds: new Set(
               record.pendingToolCalls.filter((call) => call.parked === true).map((call) => call.id),
+            ),
+            parkedVerdicts: new Map(
+              record.pendingToolCalls.flatMap((call) => {
+                if (call.parked !== true || Predicate.isUndefined(call.verdict)) return []
+                // A row from before the gate state asks again.
+                const kept: KeptToolCallVerdict = {
+                  verdict: call.verdict,
+                  gate: call.gate ?? "pending",
+                }
+                return [[call.id, kept] as const]
+              }),
             ),
           }
         }
@@ -4286,6 +4314,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         pendingAssistant,
         pendingToolCalls,
         parkedCallIds: noPendingStep.parkedCallIds,
+        parkedVerdicts: noPendingStep.parkedVerdicts,
       }
     })
 
@@ -4392,7 +4421,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           onSome: ({ extensionId, recover }) =>
             recover(call).pipe(
               provideExtensionLeaf({ extensionId, toolCallId: ToolCallId.make(toolCall.id) }),
-              runAgentLoopTurnProfile(params.turnProfile),
+              // The calls a recovery runs again (a cell's inner calls) know
+              // the turn's agent, as the calls the turn runs do.
+              runAgentLoopTurnProfile({
+                ...params.turnProfile,
+                turnHostCtx: {
+                  ...params.turnProfile.turnHostCtx,
+                  agentName: params.currentTurnAgent,
+                },
+              }),
               asAgentLoopError("Tool call recovery failed"),
             ),
           onNone: () =>
@@ -4488,6 +4525,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         currentTurnAgent: params.currentTurnAgent,
         toolBindings,
         recoveredResults,
+        verdicts: position.parkedVerdicts,
       })
       if (Option.isNone(interactionSignal)) {
         yield* clearProcessLocalReplayBindings(pendingAssistant.value.id)

@@ -35,6 +35,7 @@ import {
   isWireToolId,
   type PromptSection,
   type RequestCapability,
+  type ToolCallVerdict,
   type ToolCapability,
 } from "./capability.js"
 import type {
@@ -603,11 +604,11 @@ export interface TurnUsage {
 // ── Lifecycle hooks ─────────────────────────────────────────────────────────
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams, once when a branch's loop opens in this process (`loopOpen`),
-// and once when a session is deleted (`sessionDeleted`). Registered with
-// `host.on(kind, handler)` inside `setup`.
+// turn seams, before each tool call runs (`toolCall`), once when a branch's
+// loop opens in this process (`loopOpen`), and once when a session is deleted
+// (`sessionDeleted`). Registered with `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
-// still fire.
+// still fire. A failed `toolCall` hook answers `Ask`: the call fails closed.
 
 export type ExtensionHook<Input, Output, E = never, R = never> = {
   readonly handler: (input: Input) => Effect.Effect<Output, E, R>
@@ -618,6 +619,15 @@ interface ExtensionHookSignatures {
   readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
   readonly turnProjection: { readonly input: TurnProjectionInput; readonly output: TurnProjection }
   readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
+  /**
+   * A tool call is about to run: one the model made, or one a dispatching
+   * tool (the cell) runs inside its own call. Every hook judges the call; the
+   * strictest answer wins (`Deny`, then `Ask`, then `Allow`), and a hook that
+   * fails answers `Ask`. With no hook the call runs at once, as before: no
+   * hook costs nothing. A call that parked on an interaction keeps the verdict
+   * a hook gave it: its next run is not judged again.
+   */
+  readonly toolCall: { readonly input: ToolCallInput; readonly output: ToolCallVerdict }
   /**
    * The branch's loop was built in this process: at the first operation after
    * a restart, or after the loop closed. It runs once per build, after the
@@ -639,6 +649,25 @@ interface ExtensionHookSignatures {
    * then interrupts it and logs a warning.
    */
   readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
+}
+
+/** One tool call before it runs, as a `toolCall` hook reads it. */
+export interface ToolCallInput {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  /** The user message that opened the turn; `TurnAfterInput.messageId` carries the same id. */
+  readonly messageId: MessageId
+  readonly toolCallId: ToolCallId
+  /** The call that dispatched this one (the cell), when it runs inside one. */
+  readonly parentToolCallId: Option.Option<ToolCallId>
+  /** The agent the turn runs as; `ctx.Session.getAgent()` reads its definition. */
+  readonly agentName: AgentName
+  /** The tool's id. */
+  readonly toolName: string
+  /** The tool declares no side effect (`tool({ readonly: true })`). */
+  readonly readonly: boolean
+  /** The parameters as the model (or the dispatching code) sent them, before decoding. */
+  readonly input: unknown
 }
 
 /** One session a delete removed. */

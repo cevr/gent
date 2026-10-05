@@ -331,6 +331,22 @@ class CurrentInteractionCall extends Context.Service<
 >()("@gent/core/src/domain/interaction/CurrentInteractionCall") {}
 
 /**
+ * An ask this run of the call does not make again, because an earlier run
+ * had its answer (a passed `toolCall` gate): it keeps its place in the run's
+ * count, so each later ask of the run has the owner it had before.
+ */
+export const skipAnsweredAsk: Effect.Effect<void> = Effect.serviceOption(
+  CurrentInteractionCall,
+).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.void,
+      onSome: (call) => Ref.update(call.asked, (asked) => asked + 1),
+    }),
+  ),
+)
+
+/**
  * Where the request in a branch's slot is. The slot mirrors the storage row,
  * and storage holds at most one pending row per branch:
  * - `admitting`: its row is being stored. No call parks on it or answers it.

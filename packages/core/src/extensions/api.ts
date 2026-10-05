@@ -64,6 +64,7 @@ export {
 export {
   type GentExtension,
   LoadedArtifactIdentity,
+  type ToolCallInput,
   type TurnAfterInput,
   type TurnUsage,
 } from "../domain/extension.js"
@@ -153,6 +154,7 @@ export {
   getToolId,
   getToolPrompt,
   tool,
+  ToolCallVerdict,
   type ToolInput,
   type ToolCapability,
 } from "../domain/capability.js"

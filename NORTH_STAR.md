@@ -27,7 +27,7 @@ Propose nothing against these.
 - No persisted-format change unless it is additive and optional.
 - Docked panes, not modal overlays.
 - A shipped extension is never more privileged than a user extension.
-- Bash and monitor run each command as given, with no classifier or ask in front.
+- Core runs bash and monitor commands as given, with no classifier or ask in front. An extension the owner enables may put one there (`@gent/guard`, off by default).
 - Personal library, no shims.
 - Child sessions cache 5 minutes, and they keep their own effort.
 - The handoff leans on discovery (message ids, read tools).

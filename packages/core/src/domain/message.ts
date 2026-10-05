@@ -665,6 +665,12 @@ export const BranchTreeNode: Schema.Codec<BranchTreeNode, BranchTreeNodeEncoded>
 export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:assistant:${step}`)
 
+/** The user message that opened the turn whose step wrote `assistantMessageId`; none for another id. */
+export const turnMessageIdOfAssistant = (assistantMessageId: MessageId): Option.Option<MessageId> =>
+  Option.map(Option.fromNullishOr(/^(.+):assistant:\d+$/s.exec(assistantMessageId)?.[1]), (id) =>
+    MessageId.make(id),
+  )
+
 /** The tool-result message one step of a turn writes. */
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
