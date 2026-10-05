@@ -19,7 +19,10 @@ import {
   toolArgSummary,
   parseBashOutput,
   plural,
+  reasoningMarkdown,
+  reasoningSummaries,
   repliesInView,
+  summaryHeading,
   toolRunFrame,
   truncate,
 } from "./utils"
@@ -120,44 +123,15 @@ import { insert, RendererContext, useRenderer } from "@opentui/solid"
 // ── reasoning text ──────────────────────────────────────────────────────────
 
 /**
- * Reasoning summaries, prepared for the markdown renderer.
- *
- * A model emits reasoning as a run of summaries, each its own bold markdown
- * heading, and `messagePartsReasoning` joins the parts with an empty string:
- *
- *     **Verifying final test output****Refactoring LedgerStore.list…**
- *
- * The run is split back into summaries and joined with a blank line, the
- * paragraph break markdown needs to draw each summary as its own line.
- */
-
-/** A bold span that ends where the next one begins, with no separator between. */
-const collidingSummaries = /\*\*(?=\*\*)/g
-
-export const reasoningMarkdown = (reasoning: string): string => {
-  if (reasoning.length === 0) return ""
-  return reasoning
-    .replace(collidingSummaries, "**\n\n")
-    .split("\n\n")
-    .map((summary) => summary.trim())
-    .filter((summary) => summary.length > 0)
-    .join("\n\n")
-}
-
-/**
  * Reasoning at the collapsed and preview levels, in one line:
- * `∴ Thought · <first summary's heading> · N summaries`. Where the line is
- * wider than `width` columns, the count drops first, then the heading is cut.
+ * `∴ Thought · <first summary's heading> · N summaries`, or the summary's
+ * first line when the model gave it no heading. Where the line is wider than
+ * `width` columns, the count drops first, then the heading is cut.
  */
 const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY): string => {
-  const summaries = reasoningMarkdown(reasoning)
-    .split("\n\n")
-    .filter((summary) => summary.length > 0)
-  const first = (summaries[0] ?? "").split("\n")[0] ?? ""
-  const heading = first
-    .replace(/^#+\s*/, "")
-    .replace(/^\*\*(.*)\*\*$/, "$1")
-    .trim()
+  const summaries = reasoningSummaries(reasoning)
+  const first = summaries[0] ?? ""
+  const heading = Option.getOrElse(summaryHeading(first), () => (first.split("\n")[0] ?? "").trim())
   let line = "∴ Thought"
   if (heading.length > 0) line = `${line} · ${heading}`
   const count = ` · ${plural(summaries.length, "summary", "summaries")}`

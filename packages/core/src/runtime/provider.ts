@@ -4520,6 +4520,10 @@ export const multiToolCallStep = (
  * `debug handoff` calls `handoff`; on a yes the new session continues the
  * thread, so the Sessions pane shows one row with two sessions.
  *
+ * `debug think` opens each step's reasoning with a bold heading, as a model's
+ * summaries do, runs one bash step, then thinks four seconds before it
+ * answers, so the live line names the first step's heading while it waits.
+ *
  * `debug usage limit` (not a scenario) fails the step with a rate limit that
  * resets in five hours, or when the message says (`debug usage limit 2m`;
  * `debugUsageLimit`), so a scripted run shows the error row that names the
@@ -4541,6 +4545,8 @@ interface ScenarioStep {
   readonly reasoning: string
   /** The ops of a tool step, run together; none on the answer step. */
   readonly ops: ReadonlyArray<ScenarioOp>
+  /** How long the step thinks before its first part, as a slow model does; none by default. */
+  readonly thinkMs?: number
 }
 
 interface Scenario {
@@ -4666,6 +4672,15 @@ const HANDOFF_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+// Reasoning as a model's summaries arrive: a bold heading, then prose.
+const THINK_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "**Investigating rendering code**\n\nCompare the two chrome paths first.",
+    ops: [{ tool: "bash", input: { command: "echo two chrome paths" } }],
+  },
+  { reasoning: "**Summarizing the findings**\n\nBoth paths draw once.", ops: [], thinkMs: 4_000 },
+]
+
 const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
   {
     phrase: "debug tools",
@@ -4692,6 +4707,11 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     phrase: "debug handoff",
     steps: HANDOFF_STEPS,
     answer: "Handed off.",
+  },
+  {
+    phrase: "debug think",
+    steps: THINK_STEPS,
+    answer: "Both chrome paths draw once.",
   },
 ]
 
@@ -4781,11 +4801,17 @@ const scenarioStream = (
       ToolCallId.make(`debug-${run}-${index}-${call}`),
     )
     const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
+    const thinkMs = scenario.steps[index]?.thinkMs ?? 0
     return Option.match(step, {
       // Past the last step the turn is over; answer as the plain debug reply does.
       onNone: () => makeReplyStream(latestUserText, buildReply(latestUserText), delayMs),
       onSome: (scripted) =>
-        paced(Stream.fromIterable(withCacheUsage(scripted, index, inputTokens).parts), delayMs),
+        Stream.fromEffect(Effect.sleep(Duration.millis(thinkMs))).pipe(
+          Stream.drain,
+          Stream.concat(
+            paced(Stream.fromIterable(withCacheUsage(scripted, index, inputTokens).parts), delayMs),
+          ),
+        ),
     })
   })
 

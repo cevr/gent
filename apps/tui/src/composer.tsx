@@ -40,6 +40,7 @@ import {
 } from "./utils"
 import {
   keyHint,
+  keyHintColors,
   KeyHints,
   PickerFrame,
   PickerHost,
@@ -369,6 +370,29 @@ const fitForms = (labels: readonly StatusRowLabel[], budget: number): StatusRowL
   return forms
 }
 
+/** A label as the row draws it: a hint label's key bright (`keyHintColors`), the rest in its color. */
+function StatusLabelText(props: { readonly label: StatusRowLabel }) {
+  const { theme } = useTheme()
+  // A label cut shorter than its key draws in its own color.
+  const key = () =>
+    Option.filter(Option.fromUndefinedOr(props.label.key), (key) =>
+      props.label.text.startsWith(key),
+    )
+  return (
+    <Show
+      when={Option.getOrUndefined(key())}
+      fallback={<span style={{ fg: props.label.color }}>{props.label.text}</span>}
+    >
+      {(shown) => (
+        <>
+          <span style={{ fg: keyHintColors(theme).key }}>{shown()}</span>
+          <span style={{ fg: props.label.color }}>{props.label.text.slice(shown().length)}</span>
+        </>
+      )}
+    </Show>
+  )
+}
+
 /**
  * The status row: the phase word, the cwd, the model and the extension
  * labels, with the context gauge and the cost anchored right. A group too
@@ -411,7 +435,7 @@ export function StatusRow(props: StatusRowProps) {
               <Show when={index() > 0}>
                 <span style={{ fg: theme.textMuted }}> · </span>
               </Show>
-              <span style={{ fg: label.color }}>{label.text}</span>
+              <StatusLabelText label={label} />
             </>
           )}
         </For>
@@ -424,7 +448,7 @@ export function StatusRow(props: StatusRowProps) {
               <Show when={index() > 0}>
                 <span style={{ fg: theme.textMuted }}> · </span>
               </Show>
-              <span style={{ fg: label.color }}>{label.text}</span>
+              <StatusLabelText label={label} />
             </>
           )}
         </For>

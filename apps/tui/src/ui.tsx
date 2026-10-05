@@ -557,16 +557,24 @@ export const keyHint = (key: string, verb: string, short?: string): KeyHint => {
 
 export const KEY_HINT_SEPARATOR = " · "
 
+/** One hint as the reader reads it, `esc close`: the status row lays a label out by it. */
+export const keyHintText = (hint: KeyHint): string => `${hint.key} ${hint.verb}`
+
+/** The columns `hints` take, drawn as one row: `enter select · esc close`. */
+export const keyHintsWidth = (hints: ReadonlyArray<KeyHint>): number =>
+  textWidth(hints.map(keyHintText).join(KEY_HINT_SEPARATOR))
+
 /**
- * The hint row at `width`: the hints joined by one separator. Too wide, it
- * first drops the move hint (the arrows need no telling), then takes the
- * short verbs from the right, then drops hints from the right. The last
- * hint, the way out, stays.
+ * The hints a row of `width` columns keeps, in the forms it draws them. Too
+ * wide, it first drops the move hint (the arrows need no telling), then takes
+ * the short verbs from the right, then drops hints from the right. The last
+ * hint, the way out, stays. {@link KeyHintsText} draws them.
  */
-export const keyHintsLine = (hints: ReadonlyArray<KeyHint>, width: number): string => {
-  const join = (shown: ReadonlyArray<KeyHint>) =>
-    shown.map((hint) => `${hint.key} ${hint.verb}`).join(KEY_HINT_SEPARATOR)
-  const fits = (shown: ReadonlyArray<KeyHint>) => textWidth(join(shown)) <= width
+export const keyHintsRuns = (
+  hints: ReadonlyArray<KeyHint>,
+  width: number,
+): ReadonlyArray<KeyHint> => {
+  const fits = (shown: ReadonlyArray<KeyHint>) => keyHintsWidth(shown) <= width
   let shown = [...hints]
   const move = shown.findIndex((hint) => hint.key === KeyHints.move.key)
   if (!fits(shown) && move >= 0 && move < shown.length - 1) {
@@ -580,7 +588,39 @@ export const keyHintsLine = (hints: ReadonlyArray<KeyHint>, width: number): stri
   while (shown.length > 1 && !fits(shown)) {
     shown = shown.filter((_, index) => index !== shown.length - 2)
   }
-  return join(shown)
+  return shown
+}
+
+/**
+ * The colors of a key hint, as Codex's status line draws it: the key bright,
+ * so `esc` reads at a glance in a row of gray, and what it does muted, with
+ * the separators. Every hint row, the status row's included, reads them here.
+ */
+export const keyHintColors = (theme: ReturnType<typeof useTheme>["theme"]) => ({
+  key: theme.text,
+  verb: theme.textMuted,
+})
+
+/**
+ * The hints as runs inside a `<text>`: each key bright, its verb and the
+ * separators muted. Fit them to the row first with {@link keyHintsRuns}.
+ */
+export function KeyHintsText(props: { readonly hints: ReadonlyArray<KeyHint> }) {
+  const { theme } = useTheme()
+  const colors = () => keyHintColors(theme)
+  return (
+    <For each={props.hints}>
+      {(hint, index) => (
+        <>
+          <Show when={index() > 0}>
+            <span style={{ fg: colors().verb }}>{KEY_HINT_SEPARATOR}</span>
+          </Show>
+          <span style={{ fg: colors().key }}>{hint.key}</span>
+          <span style={{ fg: colors().verb }}> {hint.verb}</span>
+        </>
+      )}
+    </For>
+  )
 }
 
 /** Two rules and one body row: below this the rules give way. */
@@ -760,7 +800,7 @@ export function PickerFrame(
       </box>
       <Show when={!squeezed() && !bare()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-          {keyHintsLine(props.keys, sectionWidth())}
+          <KeyHintsText hints={keyHintsRuns(props.keys, sectionWidth())} />
         </text>
       </Show>
     </box>

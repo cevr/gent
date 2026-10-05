@@ -3191,6 +3191,29 @@ describe("Scripted debug model tool scenario", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  // A model's reasoning summaries open with a bold heading; the TUI's live line names it.
+  it.effect("debug think opens its reasoning with a heading, then thinks before it answers", () =>
+    Effect.gen(function* () {
+      const first = yield* step(0, ["bash"], "debug think")
+      expect(first[0]).toEqual(
+        expect.objectContaining({
+          type: "reasoning-delta",
+          delta: expect.stringMatching(/^\*\*Investigating rendering code\*\*\n\n/),
+        }),
+      )
+      expect(callsOf(first).map((call) => call.name)).toEqual(["bash"])
+      const answer = yield* Effect.forkChild(step(1, ["bash"], "debug think"))
+      yield* TestClock.adjust("3999 millis")
+      expect(answer.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 millis")
+      const parts = yield* Fiber.join(answer)
+      expect(callsOf(parts)).toEqual([])
+      expect(parts.find((part) => part.type === "text-delta")).toEqual(
+        expect.objectContaining({ delta: expect.stringContaining("draw once") }),
+      )
+    }),
+  )
+
   it.live("a turn narrowed to cell runs each step's ops as cell code", () =>
     Effect.gen(function* () {
       const reads = callsOf(yield* step(1, ["cell"]))

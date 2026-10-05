@@ -16,7 +16,8 @@ import {
   caretWindow,
   eraseKey,
   keyHint,
-  keyHintsLine,
+  keyHintsRuns,
+  KeyHintsText,
   KeyHints,
   useInPickerFrame,
   usePickerBody,
@@ -289,7 +290,7 @@ export function OptionList(props: OptionListProps): JSX.Element {
     if (optionsScrollable() && documentScrollable()) {
       keys.push(keyHint("shift+pgup/pgdn", "scroll question"))
     }
-    return keyHintsLine([...keys, KeyHints.cancel], dimensions().width - 2)
+    return keyHintsRuns([...keys, KeyHints.cancel], dimensions().width - 2)
   }
 
   return (
@@ -412,7 +413,9 @@ export function OptionList(props: OptionListProps): JSX.Element {
           </text>
 
           <Show when={!framed}>
-            <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>{footer()}</text>
+            <text style={{ fg: theme.textMuted, marginTop: sectionSpacing() }}>
+              <KeyHintsText hints={footer()} />
+            </text>
           </Show>
         </box>
       </box>
