@@ -6,6 +6,7 @@ import {
   Exit,
   Fiber,
   FileSystem,
+  type JsonSchema,
   Layer,
   Match,
   Option,
@@ -13,6 +14,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  SchemaAST,
   Sink,
   Stream,
 } from "effect"
@@ -577,6 +579,127 @@ export type BranchToolHostServices = EventStore | MessageStorage | InteractionSt
 // ── model toolkit ───────────────────────────────────────────────────────────
 
 /**
+ * The parameters a tool with no arguments declares. Its schema encodes to an
+ * object with no keys (`Schema.Struct({})`), which Effect's JSON Schema reads
+ * as any value but `null`: the OpenAI codecs refuse that root, and the
+ * Anthropic codec declares `{}`. Every driver gets this object root instead,
+ * the form the codecs give an object with keys. The tool runner still decodes
+ * each call with the tool's own schema.
+ */
+const NO_ARGUMENTS = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
+}
+
+/**
+ * True when an encoded object takes keys it does not name: it holds an index
+ * signature (a record, a struct with rest, an MCP input schema without
+ * `additionalProperties: false`). The codecs encode such an object as an array
+ * of `[key, value]` pairs, which no driver takes as a tool's root: the OpenAI
+ * codecs refuse it, and the Anthropic codec declares an array. The one index
+ * signature the codecs keep as an object is Effect's `Tool.EmptyParams`
+ * (string keys with `never` values, no property): it takes no key.
+ */
+const takesAnyKey = (encoded: SchemaAST.Objects) => {
+  const emptyParams =
+    encoded.propertySignatures.length === 0 &&
+    encoded.indexSignatures.length === 1 &&
+    encoded.indexSignatures.every(
+      (signature) => signature.parameter === SchemaAST.string && SchemaAST.isNever(signature.type),
+    )
+  return encoded.indexSignatures.length > 0 && !emptyParams
+}
+
+/** The one `allOf` member Effect writes for an index signature beside properties. */
+const RestMember = Schema.Tuple([
+  Schema.Struct({ type: Schema.Literal("object"), additionalProperties: Schema.Unknown }),
+])
+const decodeRestMember = Schema.decodeUnknownOption(RestMember, { onExcessProperty: "error" })
+
+/**
+ * `root` with the index signature Effect puts in `allOf` beside the properties
+ * as its own `additionalProperties`. The two forms take the same objects; some
+ * providers refuse a composition keyword at a tool's root. Any other `allOf`
+ * stays.
+ */
+const withRestAsAdditional = (root: JsonSchema.JsonSchema): JsonSchema.JsonSchema => {
+  const { allOf, ...rest } = root
+  return decodeRestMember(allOf).pipe(
+    Option.filter(() => !Predicate.hasProperty(rest, "additionalProperties")),
+    Option.match({
+      onNone: () => root,
+      onSome: ([member]) => ({ ...rest, additionalProperties: member.additionalProperties }),
+    }),
+  )
+}
+
+/**
+ * The JSON Schema of an object root that takes any key: the plain JSON Schema
+ * of the schema, with the options the codecs use (a nested struct refuses
+ * excess keys, so it stays closed), a top-level reference resolved so the
+ * root is the object itself, and the rest as `additionalProperties`.
+ */
+const openObjectParameters = (schema: Schema.Top): JsonSchema.JsonSchema => {
+  const document = Schema.toJsonSchemaDocument(schema, {
+    generateDescriptions: true,
+    onExcessProperty: "error",
+  })
+  const root = Option.liftPredicate(document.schema["$ref"], Predicate.isString).pipe(
+    Option.flatMap((reference) =>
+      Option.fromUndefinedOr(document.definitions[reference.replace(/^#\/\$defs\//, "")]),
+    ),
+    Option.getOrElse(() => document.schema),
+    withRestAsAdditional,
+  )
+  return Option.liftPredicate(
+    document.definitions,
+    (definitions) => Object.keys(definitions).length > 0,
+  ).pipe(
+    Option.match({
+      onNone: () => root,
+      onSome: (definitions) => ({ ...root, $defs: definitions }),
+    }),
+  )
+}
+
+/**
+ * What a request declares for a tool's parameters, and the strict mode it
+ * sets (none: the tool's own annotation, else the driver's default).
+ */
+interface Declaration {
+  readonly parameters: Schema.Top | JsonSchema.JsonSchema
+  readonly strict: Option.Option<boolean>
+}
+
+/**
+ * What a request declares for `schema`. Each declaration is an object root on
+ * every driver:
+ *
+ * - An object with no keys and no index signature: `NO_ARGUMENTS`.
+ * - An object that takes keys it does not name (`takesAnyKey`): its own JSON
+ *   Schema, an open object, and not strict. Strict mode (Anthropic, OpenAI
+ *   Responses) needs `additionalProperties: false` on each object, so it
+ *   cannot hold an open object; a closed root would tell the model that the
+ *   tool takes no other key.
+ * - Any other schema: the schema, which each driver's codec declares.
+ *
+ * The tool runner still decodes each call with the tool's own schema.
+ */
+const declaredParameters = (schema: Schema.Top): Declaration => {
+  const encoded = SchemaAST.toEncoded(schema.ast)
+  if (!SchemaAST.isObjects(encoded)) return { parameters: schema, strict: Option.none() }
+  if (encoded.propertySignatures.length === 0 && encoded.indexSignatures.length === 0) {
+    return { parameters: NO_ARGUMENTS, strict: Option.none() }
+  }
+  if (takesAnyKey(encoded)) {
+    return { parameters: openObjectParameters(schema), strict: Option.some(false) }
+  }
+  return { parameters: schema, strict: Option.none() }
+}
+
+/**
  * The toolkit a model request declares: each tool under its wire name
  * (`wireToolName`), with the tool's description, schemas and annotations.
  * It is never run: the turn dispatches each call by the tool id
@@ -584,14 +707,19 @@ export type BranchToolHostServices = EventStore | MessageStorage | InteractionSt
  */
 export function convertTools(tools: ReadonlyArray<ToolCapability>) {
   return AiToolkit.make(
-    ...tools.map((tool) =>
-      AiTool.dynamic(wireToolName(getToolId(tool)), {
+    ...tools.map((tool) => {
+      const declaration = declaredParameters(tool.parametersSchema)
+      const declared = AiTool.dynamic(wireToolName(getToolId(tool)), {
         description: tool.description,
-        parameters: tool.parametersSchema,
+        parameters: declaration.parameters,
         success: tool.successSchema,
         failure: tool.failureSchema,
-      }).annotateMerge(tool.annotations),
-    ),
+      }).annotateMerge(tool.annotations)
+      return Option.match(declaration.strict, {
+        onNone: () => declared,
+        onSome: (strict) => declared.annotate(AiTool.Strict, strict),
+      })
+    }),
   )
 }
 
@@ -1127,9 +1255,9 @@ const collectProjectionPromptSections = (
  * Compile the active tool set and prompt sections for a turn.
  *
  * Pipeline:
- * 1. The agent's lists: an agent with `allowedTools` gets exactly those
- *    tools, less its `deniedTools` (`AgentDefinition.admitsTool`); no
- *    extension adds a tool to the set
+ * 1. The agent's `tools` patterns: the agent gets exactly the tools they
+ *    admit (`AgentDefinition.admitsTool`); no extension adds a tool to the
+ *    set
  * 2. Drop interactive tools in a non-interactive turn
  * 3. The last `modelSet` picks the model-facing subset
  * 4. Collect extension-contributed prompt sections
@@ -1140,7 +1268,7 @@ export const compileToolPolicy = (
   turn: { readonly interactive?: boolean },
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  // 1. The agent's lists
+  // 1. The agent's tool patterns
   let tools = allTools.filter((tool) => agent.admitsTool(String(getToolId(tool))))
 
   // 2. Filter interactive tools in a turn no user watches (`turnCanAsk`)

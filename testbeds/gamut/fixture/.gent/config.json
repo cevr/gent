@@ -1,11 +1,11 @@
 {
   "agents": {
     "main": {
-      "modelId": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.1-sol",
       "reasoningEffort": "high"
     },
     "delegate": {
-      "modelId": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.1-sol",
       "reasoningEffort": "high"
     }
   }

@@ -7,15 +7,23 @@ import {
   Layer,
   Logger,
   Option,
+  Order,
   PlatformError,
   Path,
   Predicate,
   Ref,
   References,
   Schema,
+  Stream,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { AgentDefinition, AgentName, DriverRef, ModelId } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DriverRef,
+  ModelId,
+  resolveAgentRoster,
+} from "../../src/domain/agent"
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
@@ -25,6 +33,19 @@ import {
   UserConfig,
 } from "../../src/runtime/config"
 import { resolveSessionRoute } from "../../src/runtime/turn"
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
+import type { ProviderOptions } from "effect/ai/LanguageModel"
+import { createRpcHarness } from "../../src/test-utils/harness"
+import {
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  type SequenceStep,
+  systemTextOf,
+  waitFor,
+} from "../../src/test-utils/language-model"
+import { textStep } from "../../src/runtime/provider"
+import { messagePartsText } from "../../src/domain/message"
+import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 // ── user configuration ──────────────────────────────────────────────────────
 
@@ -33,6 +54,7 @@ import { resolveSessionRoute } from "../../src/runtime/turn"
  */
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("user configuration", () => {
   describe("in-memory reads and writes", () => {
@@ -533,14 +555,14 @@ describe("user configuration", () => {
             encodeJson({
               trustedProjects: ["/x"],
               futureField: { nested: [1, 2] },
-              agents: { main: { reasoningEffort: "high", futureOverride: true } },
+              agents: { main: { reasoningEffort: "high" } },
             }),
           )
           yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
           expect(yield* readRaw).toEqual({
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
-            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            agents: { main: { reasoningEffort: "high" } },
             driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
           })
           // Clearing the last override removes the key it owns, and only that.
@@ -548,8 +570,44 @@ describe("user configuration", () => {
           expect(yield* readRaw).toEqual({
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
-            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            agents: { main: { reasoningEffort: "high" } },
           })
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // A config file is the user's: a write leaves each agent entry as the
+    // user wrote it, with no key the stored-row codec adds for older readers.
+    it.scopedLive("a driver write leaves each agent entry as the user wrote it", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const agents = {
+          painter: {
+            model: "anthropic/claude-sonnet-4-6",
+            tools: ["film.*", "!film.check", "read"],
+            paths: ["films", { path: "skills", access: "read" }],
+          },
+          reviewer: { tools: ["read", "grep"] },
+          main: { deniedTools: ["bash"], modelId: "openai/gpt-5" },
+        }
+        const agentsText = (text: string) =>
+          Schema.decodeEffect(Schema.fromJsonString(Schema.Struct({ agents: Schema.Unknown })))(
+            text,
+          ).pipe(Effect.map((config) => encodeJson(config.agents)))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(userConfigPath, encodeJson({ agents }))
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          const written = yield* fs.readFileString(userConfigPath)
+          expect(yield* agentsText(written)).toBe(encodeJson(agents))
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* agentsText(yield* fs.readFileString(userConfigPath))).toBe(
+            encodeJson(agents),
+          )
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -861,7 +919,7 @@ describe("user configuration", () => {
   })
 
   describe("agents", () => {
-    it.scopedLive("project agent overrides shadow user overrides key by key", () =>
+    it.scopedLive("a project agent entry replaces only the fields it names", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
@@ -877,13 +935,13 @@ describe("user configuration", () => {
           })
         yield* write(home, {
           [AgentName.make("main")]: {
-            modelId: ModelId.make("anthropic/claude-sonnet-5"),
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             reasoningEffort: "low",
           },
           [AgentName.make("helper")]: { reasoningEffort: "minimal" },
         })
         yield* write(project, {
-          [AgentName.make("main")]: { modelId: ModelId.make("openai/gpt-5.6-sol") },
+          [AgentName.make("main")]: { model: ModelId.make("openai/gpt-5.6-sol") },
         })
         const live = ConfigService.Live.pipe(
           Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
@@ -892,13 +950,66 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(project)
-          // The project entry replaces the user entry for `main` as a whole.
+          // The project entry names the model; the user entry's effort stays.
           expect(result.agents?.[AgentName.make("main")]).toEqual({
-            modelId: ModelId.make("openai/gpt-5.6-sol"),
+            model: ModelId.make("openai/gpt-5.6-sol"),
+            reasoningEffort: "low",
           })
           expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // A config file written before `tools` names `modelId` and the two tool
+    // lists. It still decodes, as `model` and tool patterns: a field the
+    // schema rejects would fail the whole file.
+    it.live("a config entry with the old tool lists reads as tool patterns", () =>
+      Effect.gen(function* () {
+        const config = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+          encodeJson({
+            agents: {
+              main: { modelId: "openai/gpt-5", deniedTools: ["bash"] },
+              painter: { allowedTools: ["film.look", "read"] },
+            },
+          }),
+        )
+        const roster = resolveAgentRoster([], Option.fromUndefinedOr(config.agents))
+        const held = (name: string) =>
+          ["film.look", "read", "bash"].filter((id) =>
+            roster.get(AgentName.make(name))?.admitsTool(id),
+          )
+        expect(roster.get(AgentName.make("main"))?.model).toBe(ModelId.make("openai/gpt-5"))
+        expect(held("main")).toEqual(["film.look", "read"])
+        expect(held("painter")).toEqual(["film.look", "read"])
+      }),
+    )
+
+    // A config file is the user's, not a row an older gent reads: an entry
+    // encodes with the keys it decoded from, never the ones a stored row adds.
+    it.live("a config agent entry encodes back with the keys it was written with", () =>
+      Effect.gen(function* () {
+        const ConfigJson = Schema.fromJsonString(UserConfig)
+        const agents = {
+          painter: { model: "anthropic/claude-sonnet-4-6", tools: ["film.*", "!film.check"] },
+          main: { deniedTools: ["bash"] },
+          helper: { allowedTools: ["read"] },
+        }
+        const config = yield* Schema.decodeEffect(ConfigJson)(encodeJson({ agents }))
+        const encoded = yield* Schema.encodeEffect(ConfigJson)(config)
+        expect(parseJson(encoded)).toEqual({ agents })
+      }),
+    )
+
+    // A misspelled field would be dropped, and the entry would make an agent
+    // with every tool; the file fails to load instead.
+    it.live("a config agent entry with an unknown key fails, naming the agent and the key", () =>
+      Effect.gen(function* () {
+        const error = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
+          encodeJson({ agents: { painter: { toolz: ["read"] } } }),
+        ).pipe(Effect.flip)
+        expect(String(error)).toContain('["agents"]["painter"]["toolz"]')
+        expect(String(error)).toContain("is not an agent field")
+      }),
     )
 
     it.scopedLive("a hand edit reaches the next read without a restart", () =>
@@ -1084,5 +1195,355 @@ describe("configured driver override routing", () => {
       yield* cfg.clearDriverOverride(AgentName.make("primary"))
       expect(routedDriver(primary, yield* cfg.get())).toEqual(Option.some("anthropic"))
     }).pipe(Effect.provide(ConfigService.Test())),
+  )
+})
+
+// ── agents from config ──────────────────────────────────────────────────────
+
+/**
+ * An agent written as JSON in a config file, over the full RPC path: the
+ * session names it at creation, its turn runs on its model, prompt and tools.
+ * The extension registers the tools and, where named, the agent the config
+ * reshapes.
+ */
+const filmTools = (agents: ReadonlyArray<AgentDefinition>) =>
+  defineExtension({
+    id: "test/film-tools",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      if (agents.length > 0) yield* host.register("agent", ...agents)
+      for (const name of ["film.look", "film.check", "read", "bash"]) {
+        yield* host.register(
+          "tool",
+          tool({
+            id: name,
+            description: `Run ${name}`,
+            params: Schema.Struct({ value: Schema.String }),
+            output: Schema.String,
+            execute: ({ value }) => Effect.succeed(`${name}:${value}`),
+          }),
+        )
+      }
+    }),
+  })
+
+/** A config file as it is written: plain JSON, the old and new shapes alike. */
+type ConfigFile = typeof UserConfig.Encoded
+
+const writeConfig = (root: string, config: ConfigFile) => writeConfigJson(root, config)
+
+/** A config file as JSON: a written shape, or a hand edit that misspells `tools`. */
+type ConfigJson =
+  | ConfigFile
+  | {
+      readonly agents: Readonly<
+        Record<
+          string,
+          { readonly tools: ReadonlyArray<string>; readonly toolz: ReadonlyArray<string> }
+        >
+      >
+    }
+
+/** A config file as JSON, a key no schema names included. */
+const writeConfigJson = (root: string, config: ConfigJson) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+    yield* fs.writeFileString(path.join(root, ".gent", "config.json"), encodeJson(config))
+  })
+
+/** The wire names a request advertises, sorted: each dot is `__` there. */
+const advertised = (options: ProviderOptions) =>
+  options.tools.map((entry) => entry.name).toSorted(Order.String)
+
+const runOneTurn = (params: {
+  readonly agents: ReadonlyArray<AgentDefinition>
+  readonly user: ConfigFile
+  readonly project: ConfigFile
+  readonly agent: Option.Option<AgentName>
+  readonly step: SequenceStep
+}) =>
+  Effect.gen(function* () {
+    const home = yield* makeTempDirectoryScoped("gent-agent-config-home-")
+    const cwd = yield* makeTempDirectoryScoped("gent-agent-config-cwd-")
+    yield* writeConfig(home, params.user)
+    yield* writeConfig(cwd, params.project)
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([params.step])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      agents: [],
+      extensionInputs: [filmTools(params.agents)],
+      providerLayer,
+      cwd,
+      home,
+      configServiceLayer: ConfigService.Live.pipe(
+        Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+        Layer.provide(BunPlatformLive),
+      ),
+      ...Option.match(params.agent, {
+        onNone: () => ({}),
+        onSome: (agent) => ({ admission: { agent } }),
+      }),
+    })
+    yield* client.message.send({ sessionId, branchId, content: "Paint the scene." })
+    yield* waitFor(
+      client.message.list({ branchId }),
+      (messages) =>
+        messages.some(
+          (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
+        ),
+      3000,
+      "reply",
+    )
+    yield* controls.assertDone
+    return { client, sessionId }
+  })
+
+/** The ```json block under `## Agents` in the extension guide, read as a config file. */
+const guideAgentsConfig = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const guide = yield* fs.readFileString(
+    yield* path.fromFileUrl(new URL("../../../../docs/extensions.md", import.meta.url)),
+  )
+  const section = guide.slice(guide.indexOf("## Agents\n"))
+  const block = section.slice(section.indexOf("```json\n") + "```json\n".length)
+  return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.toEncoded(UserConfig)))(
+    block.slice(0, block.indexOf("```")),
+  )
+})
+
+describe("agents from config over RPC", () => {
+  it.scopedLive("a project config entry with a new name creates an agent a session runs as", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("scene-painter")
+      const { client, sessionId } = yield* runOneTurn({
+        agents: [],
+        user: {},
+        project: {
+          agents: {
+            [painter]: {
+              description: "Paints one scene",
+              model: "test/painter-model",
+              systemPromptAddendum: "PAINTER-BRIEF",
+              tools: ["film.*", "!film.check", "read"],
+            },
+          },
+        },
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertRequest: (request) => expect(request.model).toBe("test/painter-model"),
+          assertOptions: (options) => {
+            expect(advertised(options)).toEqual(["film__look", "read"])
+            expect(systemTextOf(options.prompt)).toContain("PAINTER-BRIEF")
+          },
+        },
+      })
+      // The roster a client reads lists the agent with its fields.
+      const listed = (yield* client.driver.list({ sessionId })).agents.find(
+        (agent) => agent.name === painter,
+      )
+      expect(listed?.description).toBe("Paints one scene")
+      expect(listed?.tools).toEqual(["film.*", "!film.check", "read"])
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("the JSON agent in the extension guide runs as written", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("painter")
+      const { client, sessionId } = yield* runOneTurn({
+        agents: [],
+        user: {},
+        project: yield* guideAgentsConfig,
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertRequest: (request) => expect(request.model).toBe("anthropic/claude-sonnet-4-6"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
+        },
+      })
+      const listed = (yield* client.driver.list({ sessionId })).agents.find(
+        (agent) => agent.name === painter,
+      )
+      expect(listed?.paths).toEqual([
+        { path: "apps/animations/src/films", access: "write" },
+        { path: ".claude/skills/film", access: "read" },
+      ])
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("an old project deny list takes tools away from the user's allow list", () =>
+    Effect.gen(function* () {
+      const painter = AgentName.make("painter")
+      yield* runOneTurn({
+        agents: [],
+        user: { agents: { [painter]: { allowedTools: ["film.look", "film.check", "read"] } } },
+        project: { agents: { [painter]: { deniedTools: ["film.check"] } } },
+        agent: Option.some(painter),
+        step: {
+          ...textStep("done"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["film__look", "read"]),
+        },
+      })
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive(
+    "project config beats user config, and both beat the extension, field by field",
+    () =>
+      Effect.gen(function* () {
+        const main = AgentName.make("main")
+        yield* runOneTurn({
+          agents: [
+            AgentDefinition.make({
+              name: main,
+              model: ModelId.make("test/extension-model"),
+              reasoningEffort: "high",
+              tools: ["*"],
+              systemPromptAddendum: "EXTENSION-BRIEF",
+            }),
+          ],
+          user: {
+            agents: {
+              [main]: { model: "test/user-model", tools: ["read", "film.look"] },
+            },
+          },
+          project: { agents: { [main]: { model: "test/project-model" } } },
+          agent: Option.none(),
+          step: {
+            ...textStep("done"),
+            assertRequest: (request) => {
+              expect(request.model).toBe("test/project-model")
+              expect(request.reasoning).toBe("high")
+            },
+            assertOptions: (options) => {
+              expect(advertised(options)).toEqual(["film__look", "read"])
+              expect(systemTextOf(options.prompt)).toContain("EXTENSION-BRIEF")
+            },
+          },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+})
+
+// ── a config file that does not load ────────────────────────────────────────
+
+/**
+ * A config file for the session's cwd that does not load stops its turns: a
+ * file that fails sets none of its fields, so a `tools` restriction in it
+ * would fall away and the agent would run with every tool. The root runs as
+ * the SDK runs it, where a failed load does not stop the server.
+ */
+describe("a config file that does not load", () => {
+  const main = AgentName.make("main")
+  const everyTool = AgentDefinition.make({ name: main, tools: ["*"] })
+  const readOnly = { agents: { [main]: { tools: ["read"] } } }
+  const misspelled = { agents: { [main]: { tools: ["read"], toolz: ["read"] } } }
+
+  /** The config roots, the RPC client, and the scripted model. */
+  const startRoot = (params: { readonly user: ConfigJson; readonly project: ConfigJson }) =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("gent-broken-config-home-")
+      const cwd = yield* makeTempDirectoryScoped("gent-broken-config-cwd-")
+      yield* writeConfigJson(home, params.user)
+      yield* writeConfigJson(cwd, params.project)
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("done"),
+          assertOptions: (options) => expect(advertised(options)).toEqual(["read"]),
+        },
+      ])
+      const harness = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [filmTools([everyTool])],
+        providerLayer,
+        cwd,
+        home,
+        allowFailedExtensions: true,
+        configServiceLayer: ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunPlatformLive),
+        ),
+      })
+      return { ...harness, controls, home, cwd }
+    })
+
+  type Root = Effect.Success<ReturnType<typeof startRoot>>
+
+  /** The branch's events so far: the stream replays them, then synchronizes. */
+  const branchEvents = (root: Root) =>
+    root.client.session.events({ sessionId: root.sessionId, branchId: root.branchId }).pipe(
+      Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+      Stream.map(({ event }) => event),
+      Stream.runCollect,
+      Effect.map((all) => Array.from(all)),
+    )
+
+  /** Sends a message and waits for its turn to end; returns the turn's errors. */
+  const refusedTurn = (root: Root) =>
+    Effect.gen(function* () {
+      yield* root.client.message.send({
+        sessionId: root.sessionId,
+        branchId: root.branchId,
+        content: "Paint the scene.",
+      })
+      const events = yield* waitFor(
+        branchEvents(root),
+        (all) => all.some((event) => event._tag === "TurnCompleted"),
+        3000,
+        "the turn ended",
+      )
+      return events.filter((event) => event._tag === "ErrorOccurred").map((event) => event.error)
+    })
+
+  /** Fixes the file, then a turn runs with only the tools the file names. */
+  const fixedTurnRuns = (root: Root, configRoot: string) =>
+    Effect.gen(function* () {
+      yield* writeConfigJson(configRoot, readOnly)
+      yield* root.client.message.send({
+        sessionId: root.sessionId,
+        branchId: root.branchId,
+        content: "Paint it again.",
+      })
+      yield* waitFor(
+        root.client.message.list({ branchId: root.branchId }),
+        (messages) =>
+          messages.some(
+            (message) => message.role === "assistant" && messagePartsText(message.parts) === "done",
+          ),
+        3000,
+        "reply",
+      )
+      yield* root.controls.assertDone
+    })
+
+  it.scopedLive("a project file with a misspelled key stops the turn until it is fixed", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const root = yield* startRoot({ user: {}, project: misspelled })
+      const errors = yield* refusedTurn(root)
+      expect(yield* root.controls.callCount).toBe(0)
+      const file = path.join(root.cwd, ".gent", "config.json")
+      expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
+      yield* fixedTurnRuns(root, root.cwd)
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("a user file that breaks after it loaded stops the turn until it is fixed", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      // The last user file that loaded holds bash; the broken one takes it away.
+      const root = yield* startRoot({
+        user: { agents: { [main]: { tools: ["read", "bash"] } } },
+        project: {},
+      })
+      yield* writeConfigJson(root.home, misspelled)
+      const errors = yield* refusedTurn(root)
+      expect(yield* root.controls.callCount).toBe(0)
+      const file = path.join(root.home, ".gent", "config.json")
+      expect(errors.some((error) => error.includes(file) && error.includes("toolz"))).toBe(true)
+      yield* fixedTurnRuns(root, root.home)
+    }).pipe(Effect.timeout("8 seconds"), Effect.provide(BunPlatformLive)),
   )
 })

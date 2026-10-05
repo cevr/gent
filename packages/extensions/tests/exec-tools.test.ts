@@ -364,6 +364,7 @@ const stubCtx = testToolContext({
   Session: {
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
+    getAgent: dieStub("getAgent"),
     renameCurrent: dieStub("renameCurrent"),
     listBranches: Effect.die("listBranches not wired in test"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),

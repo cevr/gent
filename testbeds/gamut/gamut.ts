@@ -223,7 +223,10 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
 
 /** `.gent/config.json` for a preset: the orchestrator as agent `main`, the worker as agent `delegate`. */
 export const presetConfigJson = (preset: Preset): string =>
-  `${JSON.stringify({ agents: { main: preset.orchestrator, delegate: preset.worker } }, null, 2)}\n`
+  `${JSON.stringify({ agents: { main: agentEntry(preset.orchestrator), delegate: agentEntry(preset.worker) } }, null, 2)}\n`
+
+/** A slot as a config `agents` entry: its model and effort. */
+const agentEntry = (slot: Slot) => ({ model: slot.modelId, reasoningEffort: slot.reasoningEffort })
 
 const ROSTER_START = "<!-- roster -->"
 const ROSTER_END = "<!-- /roster -->"
@@ -233,8 +236,8 @@ export const rosterBlock = (preset: Preset): string =>
   [
     ROSTER_START,
     `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`.`,
-    `- Reviewer (second opinion on a diff): \`overrides.modelId\` = \`${preset.reviewer.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.reviewer.reasoningEffort}\``,
-    "- Repetitive mechanical changes following an established pattern only: `overrides.modelId` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
+    `- Reviewer (second opinion on a diff): \`overrides.model\` = \`${preset.reviewer.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.reviewer.reasoningEffort}\``,
+    "- Repetitive mechanical changes following an established pattern only: `overrides.model` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
     ROSTER_END,
   ].join("\n")
 

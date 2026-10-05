@@ -107,15 +107,15 @@ describe("gamut model families", () => {
 describe("gamut preset config", () => {
   test("the sol preset assigns ordinary work and review to Sol at high effort", () => {
     const ordinary = resolvePreset(PRESETS["sol"]!, catalog)
-    const role = Schema.Struct({ modelId: Schema.String, reasoningEffort: Schema.String })
+    const role = Schema.Struct({ model: Schema.String, reasoningEffort: Schema.String })
     const config = Schema.decodeSync(
       Schema.fromJsonString(
         Schema.Struct({ agents: Schema.Struct({ main: role, delegate: role }) }),
       ),
     )(presetConfigJson(ordinary))
-    expect(config.agents.main).toEqual({ modelId: "openai/gpt-6.1-sol", reasoningEffort: "high" })
+    expect(config.agents.main).toEqual({ model: "openai/gpt-6.1-sol", reasoningEffort: "high" })
     expect(config.agents.delegate).toEqual(config.agents.main)
-    expect(ordinary.reviewer).toEqual(config.agents.main)
+    expect(ordinary.reviewer).toEqual({ modelId: "openai/gpt-6.1-sol", reasoningEffort: "high" })
   })
   // The exact bytes matter: this is the file gent reads from the work dir.
   test("pins the orchestrator as agent main and the worker as agent delegate", () => {
@@ -123,11 +123,11 @@ describe("gamut preset config", () => {
       `{
   "agents": {
     "main": {
-      "modelId": "anthropic/claude-opus-5-5",
+      "model": "anthropic/claude-opus-5-5",
       "reasoningEffort": "low"
     },
     "delegate": {
-      "modelId": "openai/gpt-6-luna",
+      "model": "openai/gpt-6-luna",
       "reasoningEffort": "max"
     }
   }
@@ -142,8 +142,9 @@ describe("gamut roster block", () => {
     const block = rosterBlock(preset)
     expect(block).toContain("paired in `.gent/config.json` as `openai/gpt-6-luna` at `max`")
     expect(block).toContain("Repetitive mechanical changes following an established pattern only")
-    expect(block).toContain("`overrides.modelId` = `openai/gpt-6-luna`")
-    expect(block).toContain("`overrides.modelId` = `anthropic/claude-opus-5-5`")
+    expect(block).toContain("`overrides.model` = `openai/gpt-6-luna`")
+    expect(block).toContain("`overrides.model` = `anthropic/claude-opus-5-5`")
+    expect(block).not.toContain("modelId")
     expect(block).toContain("`overrides.reasoningEffort` = `high`")
   })
 

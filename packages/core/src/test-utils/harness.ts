@@ -152,6 +152,7 @@ const die = (operation: string) =>
 const defaultSession = (): ExtensionSessionService => ({
   getSession: () => die("Session.getSession"),
   getDetail: () => die("Session.getDetail"),
+  getAgent: () => Effect.succeedNone,
   renameCurrent: () => die("Session.renameCurrent"),
   create: () => die("Session.create"),
   delete: () => die("Session.delete"),

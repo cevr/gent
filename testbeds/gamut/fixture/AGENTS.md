@@ -29,8 +29,8 @@ A child runs as the `delegate` agent. The roster below says which role needs
 <!-- roster -->
 
 - Worker (fix or feature): the `delegate` agent, paired in `.gent/config.json` as `openai/gpt-6.1-sol` at `high`.
-- Reviewer (second opinion on a diff): `overrides.modelId` = `openai/gpt-6.1-sol`, `overrides.reasoningEffort` = `high`
-- Repetitive mechanical changes following an established pattern only: `overrides.modelId` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.
+- Reviewer (second opinion on a diff): `overrides.model` = `openai/gpt-6.1-sol`, `overrides.reasoningEffort` = `high`
+- Repetitive mechanical changes following an established pattern only: `overrides.model` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.
 
 <!-- /roster -->
 

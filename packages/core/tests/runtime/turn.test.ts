@@ -1976,7 +1976,7 @@ describe("model driver and catalog", () => {
       Effect.gen(function* () {
         for (const modelId of ["catalog-driver/plain", "catalog-driver/unlisted"]) {
           const admission: SessionAdmission = {
-            runSpec: { overrides: { modelId: ModelId.make(modelId), reasoningEffort: "high" } },
+            runSpec: { overrides: { model: ModelId.make(modelId), reasoningEffort: "high" } },
           }
           const name = modelId.split("/")[1]
           const session = SessionId.make(`${sessionId}-${name}`)
@@ -2063,7 +2063,7 @@ describe("model driver and catalog", () => {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        const admission: SessionAdmission = { runSpec: { overrides: { modelId } } }
+        const admission: SessionAdmission = { runSpec: { overrides: { model: modelId } } }
         yield* ensureStorageParents({ sessionId, branchId, admission })
         yield* runAgentLoop(makeMessage(sessionId, branchId, "hello"), admission)
         const ended = (yield* Ref.get(events)).filter((event) => event._tag === "StreamEnded")
@@ -2206,7 +2206,7 @@ describe("native model compaction integration", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const admission: SessionAdmission = {
-          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
+          runSpec: { overrides: { model: modelId, reasoningEffort: "high" } },
         }
         yield* ensureStorageParents({ sessionId, branchId, admission })
         const storage = yield* MessageStorage
@@ -2445,7 +2445,7 @@ describe("native model context projection", () => {
             BranchId.make("model-context-driver-branch"),
             "request provider budget",
           ),
-          { runSpec: { overrides: { modelId } } },
+          { runSpec: { overrides: { model: modelId } } },
         )
         // The catalog cap is under 32k, so the request asks for all of it.
         expect(observedMaxTokens).toEqual(Option.some(16_000))
@@ -2455,7 +2455,7 @@ describe("native model context projection", () => {
             BranchId.make("model-context-driver-branch"),
             "continue with the same cache key",
           ),
-          { runSpec: { overrides: { modelId } } },
+          { runSpec: { overrides: { model: modelId } } },
         )
         expect(observedCacheKeys).toEqual([
           Option.some("model-context-driver-session"),
@@ -4866,7 +4866,7 @@ describe("turn record", () => {
         const branchId = BranchId.make("admission-recovery-branch")
         const addendum = "CHILD-ADDENDUM-SURVIVES-RESTART"
         const runSpec = {
-          overrides: { deniedTools: ["resume_probe"], systemPromptAddendum: addendum },
+          overrides: { tools: ["*", "!resume_probe"], systemPromptAddendum: addendum },
         }
         type SeenRequest = { readonly tools: ReadonlyArray<string>; readonly prompt: string }
         const seenRequest = (options: LanguageModel.ProviderOptions): SeenRequest => ({

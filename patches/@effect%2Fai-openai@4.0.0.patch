@@ -1,0 +1,23 @@
+diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
+index 47be3fdb069395af1b4fad8ad8a326bed68aee2c..9321ec336843ea1b43882ad3d51e4bd3bb9c9272 100644
+--- a/dist/OpenAiLanguageModel.js
++++ b/dist/OpenAiLanguageModel.js
+@@ -2553,15 +2553,10 @@ const toServiceTier = value => {
+ const getUsageTokenDetail = (details, key) => Predicate.hasProperty(details, key) && typeof details[key] === "number" ? details[key] : undefined;
+ const transformToolCallParams = /*#__PURE__*/Effect.fnUntraced(function* (tools, toolName, toolParams) {
+   const tool = tools.find(tool => tool.name === toolName);
++  // A call to a tool the request did not declare goes on as the model wrote
++  // it: the caller answers it.
+   if (Predicate.isUndefined(tool)) {
+-    return yield* AiError.make({
+-      module: "OpenAiLanguageModel",
+-      method: "makeResponse",
+-      reason: new AiError.ToolNotFoundError({
+-        toolName,
+-        availableTools: tools.map(tool => tool.name)
+-      })
+-    });
++    return toolParams;
+   }
+   if (Tool.isDynamic(tool) && tool.jsonSchema !== undefined) {
+     return toolParams;

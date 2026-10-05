@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
@@ -753,7 +753,7 @@ describe("compileToolPolicy", () => {
   })
 
   test("model selection cannot restore unknown, denied, or non-interactive tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("primary"), deniedTools: ["bash"] })
+    const agent = AgentDefinition.make({ name: AgentName.make("primary"), tools: ["*", "!bash"] })
     const result = compileToolPolicy(
       [...allTools, makeInteractiveTool("question")],
       agent,
@@ -777,7 +777,7 @@ describe("compileToolPolicy", () => {
   test("a cell name has no special allowance without an extension policy", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("primary"),
-      allowedTools: ["cell", "read"],
+      tools: ["cell", "read"],
     })
     const tools = [makeTool("cell"), ...allTools]
     const direct = compileToolPolicy(tools, agent, {}, [])
@@ -787,8 +787,8 @@ describe("compileToolPolicy", () => {
     expect(names(selected.tools)).toEqual(["cell", "read"])
   })
 
-  test("an agent with allowedTools gets exactly those tools whatever an extension selects", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("painter"), allowedTools: ["read"] })
+  test("an agent with tools gets exactly the tools they admit whatever an extension selects", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("painter"), tools: ["read"] })
     const { tools, modelTools } = compileToolPolicy([makeTool("cell"), ...allTools], agent, {}, [
       { toolPolicy: { modelSet: ["cell", "bash", "read"] } },
     ])
@@ -796,37 +796,54 @@ describe("compileToolPolicy", () => {
     expect(names(modelTools)).toEqual(["read"])
   })
 
-  test("an agent admits a tool its allow list names and its deny list leaves out", () => {
-    const open = AgentDefinition.make({ name: AgentName.make("open"), deniedTools: ["bash"] })
+  test("the last pattern that matches a tool decides, and no match leaves the tool out", () => {
+    const open = AgentDefinition.make({ name: AgentName.make("open"), tools: ["*", "!bash"] })
     expect(open.admitsTool("cell")).toBe(true)
+    expect(open.admitsTool("delegate.start")).toBe(true)
     expect(open.admitsTool("bash")).toBe(false)
-    const closed = AgentDefinition.make({
-      name: AgentName.make("closed"),
-      allowedTools: ["read", "bash"],
-      deniedTools: ["bash"],
+    const painter = AgentDefinition.make({
+      name: AgentName.make("painter"),
+      tools: ["film.*", "!film.check", "read", "mcp.fixture.*"],
     })
-    expect(closed.admitsTool("read")).toBe(true)
-    expect(closed.admitsTool("bash")).toBe(false)
-    expect(closed.admitsTool("cell")).toBe(false)
+    expect(painter.admitsTool("film.look")).toBe(true)
+    expect(painter.admitsTool("film.check")).toBe(false)
+    expect(painter.admitsTool("read")).toBe(true)
+    expect(painter.admitsTool("mcp.fixture.png")).toBe(true)
+    expect(painter.admitsTool("mcp.other.png")).toBe(false)
+    expect(painter.admitsTool("films")).toBe(false)
+    expect(painter.admitsTool("bash")).toBe(false)
+    // A later pattern takes back what an earlier one denied.
+    const back = AgentDefinition.make({
+      name: AgentName.make("back"),
+      tools: ["*", "!film.*", "film.look"],
+    })
+    expect(back.admitsTool("film.look")).toBe(true)
+    expect(back.admitsTool("film.check")).toBe(false)
+    expect(back.admitsTool("read")).toBe(true)
+    // A pattern matches the whole id; other characters match themselves.
+    const exact = AgentDefinition.make({ name: AgentName.make("exact"), tools: ["read"] })
+    expect(exact.admitsTool("read")).toBe(true)
+    expect(exact.admitsTool("reader")).toBe(false)
+    expect(exact.admitsTool("thread")).toBe(false)
   })
 
-  test("no allow-list → all tools", () => {
+  test("an agent with no tools field gets every tool", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
-  test("allowedTools restricts to exact set", () => {
+  test("tools that name ids restrict the agent to exactly those ids", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("primary"),
-      allowedTools: ["bash", "read"],
+      tools: ["bash", "read"],
     })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(names(tools)).toEqual(["bash", "read"])
   })
 
-  test("allowedTools: [] means no tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("primary"), allowedTools: [] })
+  test("an empty tools list gives the agent no tools", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("primary"), tools: [] })
     const { tools } = compileToolPolicy(allTools, agent, {}, [])
     expect(tools).toEqual([])
   })
@@ -877,7 +894,7 @@ describe("extension model surface over RPC", () => {
             const host = yield* ExtensionHost
             yield* host.register(
               "agent",
-              AgentDefinition.make({ name: AgentName.make("main"), deniedTools: ["blocked"] }),
+              AgentDefinition.make({ name: AgentName.make("main"), tools: ["*", "!blocked"] }),
             )
             for (const name of ["bridge", "cell", "blocked"]) {
               yield* host.register(
@@ -962,7 +979,7 @@ describe("extension model surface over RPC", () => {
           const host = yield* ExtensionHost
           yield* host.register(
             "agent",
-            AgentDefinition.make({ name: AgentName.make("main"), deniedTools: ["blocked"] }),
+            AgentDefinition.make({ name: AgentName.make("main"), tools: ["*", "!blocked"] }),
           )
           for (const name of ["bridge", "hidden", "blocked"]) {
             yield* host.register(
@@ -1015,6 +1032,152 @@ describe("extension model surface over RPC", () => {
         { name: "hidden", isFailure: true, result: { error: "Unknown tool: hidden" } },
         { name: "blocked", isFailure: true, result: { error: "Unknown tool: blocked" } },
       ])
+      yield* controls.assertDone
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+    ),
+  )
+
+  // A model calls a tool with input its parameters refuse (a wrong type, a
+  // missing key), or names a tool no extension registers. The tool runner is
+  // the one place that checks a call: each call fails as a tool result that
+  // names the fault, the tool body does not run, and the turn goes on to the
+  // next step. The stream does not fail and the step is not retried.
+  it.scopedLive("a call the tool runner refuses fails as its result and the turn goes on", () =>
+    Effect.gen(function* () {
+      const ran: Array<unknown> = []
+      const extension = defineExtension({
+        id: "test/refused-call",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "agent",
+            AgentDefinition.make({ name: AgentName.make("main"), tools: ["*"] }),
+          )
+          yield* host.register(
+            "tool",
+            tool({
+              id: "todo",
+              description: "Add a todo",
+              params: Schema.Struct({ todo: Schema.String, done: Schema.Boolean }),
+              output: Schema.String,
+              execute: (input) => Effect.sync(() => ran.push(input)).pipe(Effect.as("added")),
+            }),
+          )
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        multiToolCallStep(
+          { toolName: "todo", input: { todo: 42, done: false } },
+          { toolName: "todo", input: { todo: "milk" } },
+          { toolName: "nowhere", input: { todo: "milk" } },
+        ),
+        textStep("finished"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [extension],
+        providerLayer,
+      })
+      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+        Stream.map((envelope) => envelope.event),
+        Stream.takeUntil(Predicate.isTagged("TurnCompleted")),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* client.message.send({ sessionId, branchId, content: "Add milk." })
+      const events = Array.from(yield* Fiber.join(turn))
+      const messages = yield* client.message.list({ branchId })
+      const results = messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool-result")
+      expect(results.map((part) => [part.name, part.isFailure])).toEqual([
+        ["todo", true],
+        ["todo", true],
+        ["nowhere", true],
+      ])
+      const errors = results.map((part) => Schema.decodeUnknownSync(ErrorResult)(part.result).error)
+      expect(errors[0]).toContain("Tool 'todo' input failed")
+      expect(errors[0]).toContain("todo")
+      expect(errors[1]).toContain("Tool 'todo' input failed")
+      expect(errors[1]).toContain("done")
+      expect(errors[2]).toBe("Unknown tool: nowhere")
+      expect(ran).toEqual([])
+      expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+      expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+        { streamFailed: false },
+      ])
+      expect(
+        messages.some(
+          (message) =>
+            message.role === "assistant" && messagePartsText(message.parts) === "finished",
+        ),
+      ).toBe(true)
+      yield* controls.assertDone
+    }).pipe(
+      Effect.timeout("4 seconds"),
+      Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+    ),
+  )
+
+  // The film painter's shape: an extension's tools by prefix, one taken back,
+  // and one shipped tool by id. A tool no pattern matches is not advertised.
+  it.scopedLive("an agent's tool patterns decide the tools its turn advertises", () =>
+    Effect.gen(function* () {
+      const extension = defineExtension({
+        id: "test/tool-patterns",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "agent",
+            AgentDefinition.make({
+              name: AgentName.make("main"),
+              tools: ["film.*", "!film.check", "read"],
+            }),
+          )
+          for (const name of ["film.look", "film.check", "read", "bash"]) {
+            yield* host.register(
+              "tool",
+              tool({
+                id: name,
+                description: `Run ${name}`,
+                params: Schema.Struct({ value: Schema.String }),
+                output: Schema.String,
+                execute: ({ value }) => Effect.succeed(`${name}:${value}`),
+              }),
+            )
+          }
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("looked"),
+          assertOptions: (options) => {
+            // The request carries wire names: each dot is `__`.
+            expect(options.tools.map((entry) => entry.name).toSorted(Order.String)).toEqual([
+              "film__look",
+              "read",
+            ])
+          },
+        },
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        agents: [],
+        extensionInputs: [extension],
+        providerLayer,
+      })
+      yield* client.message.send({ sessionId, branchId, content: "Look at the scene." })
+      yield* waitFor(
+        client.message.list({ branchId }),
+        (messages) =>
+          messages.some(
+            (message) =>
+              message.role === "assistant" && messagePartsText(message.parts) === "looked",
+          ),
+        3000,
+        "reply",
+      )
       yield* controls.assertDone
     }).pipe(
       Effect.timeout("4 seconds"),

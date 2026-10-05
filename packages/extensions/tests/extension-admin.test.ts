@@ -386,21 +386,34 @@ describe("extension admin verbs", () => {
       const fs = yield* FileSystem.FileSystem
       // JSON, but `providers` is a record: the runtime rejects this file.
       const before = '{"providers":[]}\n'
+      // A turn does not start on a config file that does not load, so the
+      // file breaks while the turn's model step streams the call.
       const server = yield* adminServer({
-        userConfig: before,
-        allowFailedExtensions: true,
+        userConfig: "{}\n",
         steps: [
-          toolCallStep("extensions.disable", { id: "@test/probe", scope: "user" }),
-          textStep("refused"),
+          {
+            ...toolCallStep("extensions.disable", { id: "@test/probe", scope: "user" }),
+            gated: true,
+          },
         ],
       })
-      const events = yield* server.run("turn it off", true)
+      const turn = yield* Effect.forkScoped(server.run("turn it off", true))
+      yield* server.controls.waitForCall(0)
+      yield* fs.writeFileString(server.userConfig, before)
+      yield* server.controls.emitAll(0)
+      const events = yield* Fiber.join(turn)
       yield* server.controls.assertDone
       expect(events.some((event) => event._tag === "InteractionPresented")).toBe(false)
       const failed = events.find((event) => event._tag === "ToolCallFailed")
       if (failed?._tag !== "ToolCallFailed") return expect.unreachable()
       expect([failed.summary, failed.output].join(" ")).toContain("does not decode")
       expect(yield* fs.readFileString(server.userConfig)).toBe(before)
+      // The next step meets the broken file and ends the turn.
+      expect(
+        events.some(
+          (event) => event._tag === "ErrorOccurred" && event.error.includes(server.userConfig),
+        ),
+      ).toBe(true)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
   )
 

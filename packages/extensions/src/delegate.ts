@@ -42,6 +42,7 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
+  RunOverrides,
   headChars,
   headTailChars,
   isRuntimeUserMessage,
@@ -50,7 +51,6 @@ import {
   MessageId,
   RequestId,
   type RunSpec,
-  RunSpecSchema,
   SessionId,
   ToolCallId,
   tool,
@@ -73,11 +73,11 @@ import { makeBranchStateStore } from "./branch-state-store.js"
  * reason a child never starts a thread: it does bounded work for its
  * parent, not unrelated work of its own.
  */
-const CHILD_DENIED_TOOLS: ReadonlyArray<string> = [
-  "delegate.start",
-  "delegate.cancel",
-  "delegate.list",
-  "thread.start",
+const CHILD_TOOL_DENIALS: ReadonlyArray<string> = [
+  "!delegate.start",
+  "!delegate.cancel",
+  "!delegate.list",
+  "!thread.start",
 ]
 
 export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
@@ -94,7 +94,7 @@ const delegateAgent = AgentDefinition.make({
   name: DELEGATE_AGENT_NAME,
   description:
     "The default subagent: runs one delegated task and cannot delegate further. When blocked in its task turn, it ends the turn with its question; in a later turn, it asks its parent with session.send.",
-  deniedTools: CHILD_DENIED_TOOLS,
+  tools: ["*", ...CHILD_TOOL_DENIALS],
 })
 
 // ── registry ────────────────────────────────────────────────────────────────
@@ -1162,11 +1162,16 @@ const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: Reques
   return entry
 })
 
-/** A call's `deniedTools` replaces the definition's, so the delegation tools are denied again here. */
-const childOverrides = (overrides: (typeof StartParams.Type)["overrides"]) => ({
-  ...overrides,
-  deniedTools: [...CHILD_DENIED_TOOLS, ...(overrides?.deniedTools ?? [])],
-})
+/**
+ * A call's `tools` replace the definition's, so the delegation tools are
+ * taken back after them. A call that names no tools keeps the definition's,
+ * as `agents.delegate` in config reshapes it.
+ */
+const childOverrides = (overrides: typeof RunOverrides.Type): typeof RunOverrides.Type =>
+  Option.match(Option.fromUndefinedOr(overrides.tools), {
+    onNone: () => overrides,
+    onSome: (tools) => ({ ...overrides, tools: [...tools, ...CHILD_TOOL_DENIALS] }),
+  })
 
 const StartParams = Schema.Struct({
   todo: Schema.String.annotate({
@@ -1179,7 +1184,9 @@ const StartParams = Schema.Struct({
         "`fresh` (default): the child sees only the todo. `fork`: the child also sees every message you see now, and can continue your work as it stands.",
     }),
   ),
-  overrides: RunSpecSchema.fields.overrides,
+  // The new keys only: an old key (`modelId`, `allowedTools`, `deniedTools`)
+  // fails the call and names the key that replaced it.
+  overrides: Schema.optionalKey(RunOverrides),
 })
 
 export const StartChild = tool({
@@ -1195,7 +1202,7 @@ export const StartChild = tool({
     "A finished child's armed wakes and monitors keep reporting to you. To stop them, ask the child with session.send to cancel its wakes.",
     "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and read_session reads a finished child's transcript.",
     "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions.",
-    "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
+    "Use overrides.model for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
   ],
   params: StartParams,
   output: ChildAgentHandle,
@@ -1215,7 +1222,10 @@ export const StartChild = tool({
       ),
       requestId: RequestId.make(ctx.toolCallId),
       toolCallId: ctx.toolCallId,
-      runSpec: { overrides: childOverrides(params.overrides) },
+      runSpec: Option.match(Option.fromUndefinedOr(params.overrides), {
+        onNone: () => ({}),
+        onSome: (overrides) => ({ overrides: childOverrides(overrides) }),
+      }),
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
   }),

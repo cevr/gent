@@ -952,6 +952,8 @@ Shape:
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
+- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call. The drivers pass each call on as the model wrote it and the reply decodes its parameters as opaque (`patches/README.md`: `effect@4.0.0` and the three driver SDKs), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), and a call to a name no extension registers as `Unknown tool: <id>`. The model reads the result on the next step; the stream does not fail and the step is not retried. A turn that advertises no tool sends no toolkit and no `tools` or `tool_choice`, and a call in its reply fails as `Unknown tool: <id>` too (`a turn that advertises no tool`). The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes, and `final step declarations on the wire` the last step's).
+- `convertTools` (`runtime/tools.ts`) declares a tool whose parameters encode to an object with no keys (`Schema.Struct({})`, as `mcp.status`) with the object root `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, for every driver and for every extension's tool. Effect's JSON Schema reads such a schema as any value but `null`: the OpenAI codecs refuse it, so each request that advertised the tool failed, and the Anthropic codec declared `{}`. A tool whose parameters encode to an object that takes keys it does not name (an index signature: a `Schema.Record`, a struct with rest, an MCP input schema without `additionalProperties: false`, or the MCP `AnyInput` fallback) declares its own JSON Schema as an open object (`additionalProperties` holds the value schema) with `strict: false`, for every driver and every extension's tool. The codecs encode such an object as an array of `[key, value]` pairs: the OpenAI codecs refused it, so each request that advertised the tool failed before it was sent, and the Anthropic codec declared an array root. Strict mode needs `additionalProperties: false` on each object, so a strict declaration would tell the model that the tool takes no other key. Effect's `Tool.EmptyParams` form (string keys with `never` values) stays on the codec. Each other tool's declaration is the codec's, as before (`tools that take any key on the wire`). The tool runner decodes a call with the tool's own schema.
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
   receipt commits with turn duration. This flag reports a failed turn only (a
@@ -1280,7 +1282,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
   a handoff (`continueThread`) keeps its parent's thread, is not admitted, and
   keeps its parent's depth.
-- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
+- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, paths, prompt addendum) win over both. The `delegate` agent holds `["*", "!delegate.start", "!delegate.cancel", "!delegate.list", "!thread.start"]`; a call that names `tools` gets those denials appended, so it cannot hand a child delegation back. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from until the user merges it. The copy keeps a request the session is still working on, because a question is usually about it; so each question goes to the fork under a header (`forkQuestionText`, `customType: "btw-question"`) that names the session it forked from, says a request with no answer above is that session's work and not the fork's, and asks for changes only when the question does. Without it a fork opened mid-turn took the session's task as its own and did it again in the same working tree. The pane and the fork's transcript row show the question without the header (`forkQuestionBody`). The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource). Each state pulse the follower sends is a stored event on the branch and a re-read of the fork in the open pane, so a fork event that leaves the pane's view as it was pulses nothing, and streamed text pulses at once and then at most once per 250 ms, with the last change always pulsed; Enter on an empty ask line opens the fork as the shell's session, which is `switchSession`, because the fork already is one; `ctrl+o` keeps its one meaning, the transcript's detail level. The open fork per branch is process state; the fork itself is durable and listed with every other child session. `btw.merge` posts one message to the branch (`customType: "btw-merge"`) that names the fork session, its first own message and its last reply by id, with no reply text and no summary call: the branch's model reads the fork with `read_session` from that message when it needs it, so the merge appends a few lines and the cached prefix holds. It is a `steer` with `wake`: a running turn takes it at its next step with no turn of its own, and an idle branch starts the turn the user asked for (a queued follow-up always costs its own turn; a parked steer answers after the user's next message). Its request id is a digest of the fork and the reply, so a repeat posts nothing (`merged: false`) and a later reply merges again. A merge with no open fork, while the fork answers, or before its first reply is refused. The fork stays open and durable after a merge; `/btw` reopens it. In the TUI pane `ctrl+s` merges; its hint shows only once the fork has answered, and the key refuses with a notice before then. A merge closes the pane it was asked from: an answer that lands after the reader switched session, or closed and reopened the pane, leaves the pane in view alone. The fork's name is one line (`forkName` folds whitespace), since the pinned label reads it from the merge's first line. The branch draws the merge as one collapsed row, `↳ merged btw · <question> → <reply>`, queues it as `↳ btw merge · <question>`, and pins it as `merged <fork name>`.
 - Alarms and monitors (`@gent/wake`) live in `<data dir>/wakes/<branchId>.json` (`resolveDataDir(ctx.home)`: `GENT_DATA_DIR`, else `~/.gent`; `ctx.home` is the OS home); timers are branch-scoped. One branch lifecycle permit serializes durable publication, timer installation, re-arm and cancellation; waiting for it is interruptible, then the transfer completes. Cancellation releases the file lock before waiting for stopped timers. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop; a line the session refuses (a full follow-up queue, for one) is logged (`wake.fire.refused`) and stored as a `notice` entry instead, so the fire is not lost. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` turn notice, and `turnAfter` clears exactly the notices in `readNotices`, the ones an answered turn's steps showed (a lost process shows them again), so a failed, interrupted or unanswered turn keeps them, and a notice written after the last step read the file waits for the next turn; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back when the branch's loop opens (the `loopOpen` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once, and a past-due `notify` alarm leaves its notice without a turn). Opening the session is enough; no message is needed. The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The `wake.dismiss` request cancels one entry by id or dismisses one notice, for a client. Auto-resume is an alarm too, opt-in by the user's own `~/.gent/config.json` only (`{ "wake": { "autoResume": { "maxResumes": 3 } } }`; a project file cannot spend the user's money): a `turnAfter` with `retryAt` (a usage limit that resets within 24 h) stores an alarm with an optional `resume` key (`attempt`, `maxResumes`, `resetAt`, the stopped turn's `messageId`; an earlier binary reads a plain alarm), id `resume:<messageId>:<resetAt>` so a repeated turn end stores one, due 30 s after the reset. The attempt comes from the branch's events (`Session.events` up to the marker): the turns a usage limit stopped (a `streamFailed` receipt after an `ErrorOccurred` with `retryAt`) since the last answered receipt, the current one included; an interrupt, a turn that gave up or another failure neither counts nor starts the count again, so a user's own message that the limit stops is the next attempt, and only an answer resets it. Past `maxResumes` (default 3) the turn stores a `notice` instead. A spawned session stores none: its completion carries the error to its parent. A branch whose newest client message carries `metadata.unattended` (a headless run sends `message.send` with `unattended: true`) stores none either: nobody watches the turn a resume would start, and with no row a later fire or re-arm (the server stays up, or a later process opens the branch) has nothing to run. The branch keeps one resume, the latest turn's: every `turnAfter` drops a pending resume another turn armed, so a message the user sends takes its place. The fire queues its line with `ifLatest: <the stopped turn's opener>`, so the loop admits it and starts its turn in one step under its queue permit, or not at all: a message the user sent or a steer they parked since the stop, a queued follow-up, or a turn that runs takes the resume's place, and no send lands between a read and the queue. The row goes either way. The fire holds the alarms' lifecycle permit, as `wake.dismiss` does, so a dismiss during the fire finds no row and answers `dismissed: []`, and the TUI reports `auto-resume already fired`. A fire more than 10 minutes past due (gent was not running at the reset, or the machine slept) stores a `notice` and starts no turn; else it queues one user message, "The usage limit reset at <ISO>. Continue the task where it stopped.", with `details.resume`. A resume never re-runs the failed step: it appends one message, so the cached prefix holds. The TUI tray shows a pending resume first, before the 3-row cap, as `↻ resume at <clock> · in <countdown> · <attempt>/<max> · esc cancels`, and a resume notice as its note and the reset clock; the fired row reads `↻ resumed after the usage limit reset · attempt N`. Esc on an empty idle composer cancels the pending resume through the wake client's `stoppableContribution`, which sends `wake.dismiss`; any client extension can contribute a stoppable. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - The `bash` tool passes the command unchanged to Bash in both foreground and supervised background modes. Only its explicit `cwd` parameter resolves against the session directory; Bash owns `cd`, expansion, escaping, operators and exit status. The shared process scope still owns the entire process group.
@@ -1463,12 +1465,12 @@ Core runtime should not reach for ambient process state unless the app shell is 
 
 The Bun cell implementation in `packages/extensions/src/cell.ts` is the shipped model
 execution surface. Its extension section registers the `@gent/cell` tool and selects it
-through the ordinary `turnProjection` hook. The agent's lists are authoritative
-(`AgentDefinition.admitsTool`, read by `compileToolPolicy`): an agent with
-`allowedTools` gets exactly those tools, and no extension adds one, so the cell
-is the surface only for an agent that admits it (no allow list, or one that
-names `cell`, and no deny of it); any other agent keeps its own tools as the
-model surface. `ToolPolicyFragment.modelSet` narrows
+through the ordinary `turnProjection` hook. The agent's `tools` patterns are
+authoritative (`AgentDefinition.admitsTool`, the one predicate, read by
+`compileToolPolicy` and every extension that selects its own tool): the agent
+gets exactly the tools they admit, and no extension adds one, so the cell is
+the surface only for an agent that admits it; any other agent keeps its own
+tools as the model surface. `ToolPolicyFragment.modelSet` narrows
 the final admitted host tools for model calls. The last explicit set wins; an
 empty set advertises no tools. It cannot restore unknown, denied, or filtered
 interactive tools. Without a set, the model receives the admitted tools directly.
@@ -1476,12 +1478,61 @@ The cell extension also renders its catalog through `systemPrompt`, whose
 `hostTools` input contains the admitted host bindings' capabilities. `getToolPrompt`
 exposes catalog text without the private execution metadata. Projection hooks see
 the dispatched agent (config `agents[name]` and run overrides applied) with its
-own `driver`; a config `driverOverrides` entry routes the model call only. `.gent/config.json` `agents`
-reshapes an agent per name (`modelId`, `reasoningEffort`, `contextLength`, tool lists, prompt
-addendum); project entries shadow user entries and a run's `RunSpec.overrides`
-shadows both, so a workspace pins its orchestrator model under `main` and its
-children's model under `delegate`, and a `delegate.start` call can still pick a
-different model and effort for one child. Each turn reads the config files as
+own `driver`; a config `driverOverrides` entry routes the model call only.
+
+Agents are one schema, `AgentDefinition` (`domain/agent.ts`), written two ways:
+an extension registers one (`host.register("agent", ...)`), and the config
+`agents` key writes one in JSON as an agent patch, the definition's fields
+without `name`, all optional (`Struct.omit` of the class fields, not a copy).
+A config entry decodes through `AuthoredAgentPatch`, which refuses a key the
+schema does not name and names the agent and the key. A turn reads the config
+through `ConfigService.getFresh` and does not run while the user or project
+file for its cwd does not load (`resolveTurnContext` publishes an
+`ErrorOccurred` naming each file and ends the turn, as for an unknown agent):
+the stand-in for a failed file (the last user file that loaded, an empty
+project file) could drop a `tools` restriction. Config never widens an agent.
+Health, providers and the route a client reads keep the lenient read.
+`AgentDefinition`'s every authoring constructor (`new`, `make`, `makeEffect`,
+`makeOption`) refuses a key the schema does not name (`refusedAgentKeys`).
+The roster (`resolveAgentRoster`) is the extension agents with each config
+entry of their name applied, plus a new agent for each entry that names none.
+A patch replaces the fields it names; `systemPromptAddendum` appends. A field
+resolves project entry > user entry > extension (`mergeAgentPatches` in
+`mergeConfigs`), and a run's `RunSpec.overrides` (`StoredRunOverrides`, a pick of the patch) wins
+over all (`resolveSessionAgent`), so a workspace pins its orchestrator model
+under `main` and its children's model under `delegate`, and a `delegate.start`
+call can still pick a different model and effort for one child. The turn,
+`driver.list`, agent admission and the `Session.getAgent` facet all read the
+roster the same way. `tools` is ordered patterns over tool ids: `*` matches
+any run of characters, dots included; `!` takes tools back; the last match
+decides; no match leaves a tool out; no list admits every tool. `paths`
+(`{ path, access }`, a bare string a write entry, relative to the session cwd)
+confines the shipped file tools: `fs-tools` reads the agent through
+`ctx.Session.getAgent()` and refuses a target outside its entries
+(`PathScopeError`) after links and `..` resolve; `read` and `grep` accept any
+entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
+cell are not confined. One reader owns the encoded agent (`readStoredPatch`): it
+reads config entries (`AuthoredAgentPatch`), `sessions.admission_json`
+(`StoredRunOverrides`) and `driver.list` (`StoredAgentDefinition`), with the
+keys before `tools` (`allowedTools`, `deniedTools`, `modelId`), and prefers
+the new ones. A `deniedTools` list alone keeps an internal
+`legacyTools` edit that the merge resolves against the inherited tools (they
+minus those ids); an `allowedTools` list alone replaces and keeps the
+inherited denials; both replace. An explicit `tools` replaces. A stored row
+and a wire reply get the new keys and also the old ones
+(`writeStoredPatch`), so the previous gent, SDK and TUI read them the same
+way: `model` also as `modelId`, patterns the old lists
+can express as those lists, and any other patterns as `allowedTools: []`, so
+an old reader holds no tool rather than every tool. `paths` has no old form:
+an old reader drops it. A config entry writes back the keys its author used
+(`writeAuthoredPatch`), and a config write keeps an unchanged field's raw
+JSON, so a config file never gains keys for an older gent. A `delegate.start`
+call writes `RunOverrides`, the new keys only: the model-facing schema names
+nothing else, and an old or unknown key fails the call with a message that
+names the key to use. Stored and wire readers stay tolerant of unknown keys;
+authoring is strict: a config entry, `AgentDefinition.make` and
+`new AgentDefinition` refuse a key the schema does not name, so TypeScript
+that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as
 they are then, so an edit reaches the next turn without a restart. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
@@ -1615,8 +1666,9 @@ calls such a tool, or any other tool its profile registers but the turn did not
 advertise (a denied one), reads a failed result (`Unknown tool: <id>`) and the
 turn goes on: the reply decodes against every registered tool, while the
 request's `toolChoice` (`oneOf`, the advertised names) keeps its declarations
-as they were (`runtime/turn.ts`). A name no extension registers still fails the
-step's stream, as Effect AI cannot decode it. Tool discovery
+as they were (`runtime/turn.ts`). A name no extension registers reads the same
+failed result: the drivers pass a call to an undeclared name on, and the reply
+decodes it with opaque parameters (`patches/README.md`). Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
 Cancellation saves a failed outer receipt without replaying source. An active

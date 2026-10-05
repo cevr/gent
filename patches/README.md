@@ -116,10 +116,14 @@ Messages drivers (`anthropic.ts`, and `opencode.ts` for its Messages models)
 read it through `isHostContextUpdate` there to keep the cache marker off
 these blocks.
 
-Remove this patch when the SDK keeps a later system message in place.
-Rechecked on 2026-10-01: 4.0.0 still replaces `system`, so the patch was
-regenerated for that release. It patches `dist` only; the shipped `src` copy
-keeps the upstream text.
+The patch also passes a call to a tool the request did not declare on, as
+`@effect/ai-openai@4.0.0` below does.
+
+Remove the system part when the SDK keeps a later system message in place,
+and the undeclared-name part with `effect@4.0.0`'s. Rechecked on
+2026-10-01: 4.0.0 still replaces `system`, so the patch was regenerated for
+that release. It patches `dist` only; the shipped `src` copy keeps the
+upstream text.
 
 ## `@effect/ai-openai-compat@4.0.0`
 
@@ -143,7 +147,11 @@ OpenCode driver
 the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.
 
-Remove this patch when the SDK sends the reasoning back itself. Rechecked on
+The patch also passes a call to a tool the request did not declare on, as
+`@effect/ai-openai@4.0.0` below does.
+
+Remove the reasoning part when the SDK sends the reasoning back itself, and
+the undeclared-name part with `effect@4.0.0`'s. Rechecked on
 2026-10-01: 4.0.0 still drops reasoning without an item id, so the patch was
 regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
 `src` copy keeps the upstream text.
@@ -168,3 +176,66 @@ fails with `EPIPE`; a reader who quits the pager early meets the same race.
 Remove this patch when an `@effect/platform-node-shared` release keeps a
 listener on the child's stdin. Checked on 2026-10-04: 4.0.0, the latest
 release, has none.
+
+## `effect@4.0.0`
+
+`LanguageModel.streamText` and `generateText` with
+`disableToolCallResolution: true` decode each tool call's parameters against
+the tool's encoded parameter schema (`makeToolkitWithEncodedParameters`). A
+model call whose input the schema refuses (a wrong type, a missing key)
+fails the whole reply with `InvalidOutputError`. gent resolves tool calls
+itself (`runtime/turn.ts`), so that failure is a failed model step: the
+loop retries it as a transient provider error, a paid request that the
+model will likely answer the same way, and the model never reads why its
+call failed. With tool call resolution on, the SDK already decodes the
+parameters as opaque (`makeToolkitWithOpaqueParameters`) and lets the
+Toolkit refuse an invalid call as that call's result.
+
+A call to a name the toolkit does not hold (a tool no extension registers)
+fails the reply the same way: the response schema has a tool call part for
+each toolkit tool only. Before that, each driver SDK fails the reply with
+`ToolNotFoundError` for a name the request did not declare
+(`transformToolCallParams`), which is also every tool the turn did not
+advertise: the request declares the advertised tools only (`oneOf`).
+
+The patch decodes the parameters as opaque on both paths, and on the
+disabled path decodes a call to a name the toolkit does not hold as a call
+to that name with opaque parameters (`withCalledTools`). The driver patches
+(`@effect/ai-anthropic`, `@effect/ai-openai`, `@effect/ai-openai-compat`)
+pass a call to an undeclared name on as the model wrote it. The tool runner
+(`runtime/tools.ts`) is then the one place that checks a call: it answers an
+invalid call with a failed result (`Tool '<id>' input failed`, or `Unknown
+tool: <id>`) that the model reads on its next step. The request is not
+changed: the tool declarations come from the toolkit the turn passes, as
+before. A provider-executed tool call is no longer checked on the disabled
+path; gent declares none. "refused tool calls on the wire" in
+`packages/extensions/tests/wire-tool-names.test.ts` (each shipped driver)
+and "a call the tool runner refuses …" in
+`packages/core/tests/runtime/tools.test.ts` cover it; "tool declarations on
+the wire" in the first file pins each driver's declaration bytes.
+
+A request with no toolkit, or an empty one, takes an early return that
+decodes the reply against `Toolkit.empty`, so any tool call in it fails the
+reply. A turn that advertises no tool sends no toolkit. The patch makes that
+early return decode a called name with opaque parameters too
+(`emptyToolkitFor`, `decodeEmptyToolkitParts`), but only with
+`disableToolCallResolution: true`, which the turn now passes on that path.
+The flag does not go on the request, so the request is the same bytes.
+Without the flag, the early return decodes as upstream does. "a turn that
+advertises no tool" in the same test file covers it.
+
+Remove this patch when an Effect release, with tool call resolution off,
+decodes tool call parameters as opaque and decodes a call to an undeclared
+name, in both `generateText` and `streamText`, and with a toolkit, an empty
+toolkit, and no toolkit. Checked on 2026-10-04: 4.0.0, the latest release,
+does neither. It
+patches `dist` only; the shipped `src` copy keeps the upstream text.
+
+## `@effect/ai-openai@4.0.0`
+
+`transformToolCallParams` fails the reply with `ToolNotFoundError` when a
+call names a tool the request did not declare. The patch passes that call on
+with its parameters as the model wrote them; the tool runner answers it
+(`effect@4.0.0` above). Remove this patch with that one's undeclared-name
+part. Checked on 2026-10-04: 4.0.0, the latest release, fails the reply. It
+patches `dist` only; the shipped `src` copy keeps the upstream text.

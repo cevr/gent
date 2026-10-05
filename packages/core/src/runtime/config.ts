@@ -13,7 +13,9 @@ import {
 } from "effect"
 import {
   AgentName,
-  AgentRunOverridesSchema,
+  AuthoredAgentPatch,
+  mergeAgentPatches,
+  type StoredAgentPatch,
   type DriverRef,
   DriverOverridesFromConfig,
   isRetiredDriverRef,
@@ -142,11 +144,21 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    */
   driverOverrides: Schema.optional(DriverOverridesFromConfig),
   /**
-   * Per-agent definition overrides: model, reasoning effort, tool lists and
-   * a prompt addendum. Project config shadows user config key-by-key; a
-   * run's own `RunSpec.overrides` shadows both.
+   * Agents by name, each an `AgentDefinition` without its `name` (an
+   * `AgentPatch`). A name no extension registers creates an agent; one that
+   * names a registered agent replaces the fields it sets. A project entry
+   * replaces the fields it names over the user entry, and a run's own
+   * `RunSpec.overrides` over both (`resolveAgentRoster`). An entry written
+   * before `tools` keeps its meaning: `modelId` is `model`, both tool lists
+   * are `tools`, and one list alone edits the tools the entry lands on (a
+   * deny list takes ids away from them). A key the entry does not name fails
+   * the file, naming the agent and the key (`AuthoredAgentPatch`), and a
+   * turn in a cwd whose file does not load does not run (`getFresh`), so a
+   * typo never drops the entry's restrictions. A config write leaves each
+   * entry as the user wrote it: no key is added for an older gent, as a
+   * stored row gets.
    */
-  agents: Schema.optional(Schema.Record(AgentName, AgentRunOverridesSchema)),
+  agents: Schema.optional(Schema.Record(AgentName, AuthoredAgentPatch)),
   /**
    * models.dev providers to enable, patch or add, by provider id. A key that
    * names a catalog provider enables it and patches its entry; a new key adds
@@ -185,11 +197,26 @@ const configUpdates = {
   },
 }
 
+/** User then project `agents` entries: a project entry replaces only the fields it names. */
+const mergeAgentEntries = (
+  user: Readonly<Record<AgentName, StoredAgentPatch>>,
+  project: Readonly<Record<AgentName, StoredAgentPatch>>,
+): Readonly<Record<AgentName, StoredAgentPatch>> => {
+  const merged: Record<AgentName, StoredAgentPatch> = { ...user }
+  for (const [key, patch] of Object.entries(project)) {
+    const name = AgentName.make(key)
+    merged[name] = mergeAgentPatches(merged[name] ?? {}, patch)
+  }
+  return merged
+}
+
 /**
  * Merge user + project configs. Per-field semantics:
  *   - disabledExtensions: concatenated (user first — historical order).
  *   - disabledProviders: concatenated, user first.
- *   - driverOverrides, agents, providers: object spread; project entries shadow user
+ *   - agents: by name, a project entry replaces the fields it names in the
+ *     user entry (`mergeAgentPatches`).
+ *   - driverOverrides, providers: object spread; project entries shadow user
  *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
  *     map directly to `record[name] = ref` / `delete record[name]`.
@@ -201,7 +228,7 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
       ...(project.disabledExtensions ?? []),
     ]),
     driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
-    agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
+    agents: nonEmptyRecord(mergeAgentEntries(user.agents ?? {}, project.agents ?? {})),
     providers: nonEmptyRecord({ ...user.providers, ...project.providers }),
     disabledProviders: nonEmpty([
       ...(user.disabledProviders ?? []),
@@ -240,7 +267,8 @@ const mergeEntries = (raw: RawConfig, before: RawConfig, after: RawConfig): RawC
 /**
  * The record-of-struct fields a config write changes. Only `driverOverrides`
  * has a writer; a field no write changes never reaches the merge, because
- * `mergeChangedFields` skips an unchanged field. A new writer for another
+ * `mergeChangedFields` skips an unchanged field, so a write keeps each
+ * `agents` entry as the user wrote it. A new writer for another
  * record-of-struct field (`agents`) adds it here.
  */
 const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides"])
@@ -296,7 +324,10 @@ interface ConfigServiceService {
   /**
    * `get` with the files that did not load. A file that does not decode
    * never stops the read: it is reported in `failures` and read as the last
-   * user config that loaded (user) or as empty (project).
+   * user config that loaded (user) or as empty (project). Either reading can
+   * be wider than the file the user wrote, so a turn reads `getFresh` and
+   * does not run while `failures` is not empty (`resolveTurnContext`);
+   * health, providers and the route a client reads use the lenient config.
    */
   readonly getFresh: (cwd: string) => Effect.Effect<FreshConfig>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
@@ -487,9 +518,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       )
 
       // Seed the last-decoded user config. A user file that will not decode
-      // reads as empty, so a broken file cannot stop a turn. Writes never
-      // start from this snapshot: each one reads the user file again and
-      // refuses when it does not decode.
+      // reads as empty for the lenient readers; a turn does not run until it
+      // is fixed (`getFresh`). Writes never start from this snapshot: each
+      // one reads the user file again and refuses when it does not decode.
       const loadUserConfig = readUserConfig.pipe(
         Effect.flatMap((read) =>
           Result.match(read, {
@@ -560,7 +591,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
       // The user and project files as they are now, merged. A user file that
       // does not decode reads as the last one that did; a project file that
-      // does not decode sets nothing.
+      // does not decode sets nothing. Both are in `failures`, and a turn
+      // refuses to run on either: the stand-in can grant more than the file.
       const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
         const failures: Array<ConfigLoadError> = []
         const userRead = yield* readUserConfig

@@ -11,6 +11,7 @@ import {
 } from "effect"
 import picomatch from "picomatch"
 import {
+  type AgentDefinition,
   defineExtension,
   defineRequests,
   ExtensionContext,
@@ -692,6 +693,83 @@ const encodeFileText = (file: Omit<FileText, "lossy">): Uint8Array => {
   }
 }
 
+// ── agent paths ─────────────────────────────────────────────────────────────
+
+/**
+ * An agent's `paths` confine these file tools: read and grep accept any
+ * entry, write and edit only a write entry. An agent without `paths` reaches
+ * every path. This is not a sandbox: bash, the cell and every other tool
+ * reach the file system without the check.
+ */
+
+type PathAccess = NonNullable<AgentDefinition["paths"]>[number]["access"]
+
+class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeError", {
+  message: Schema.String,
+  path: Schema.String,
+  access: Schema.Literals(["read", "write"]),
+}) {}
+
+/** A link chain longer than this is a loop; the kernel stops at the same count. */
+const MAX_LINK_HOPS = 40
+
+/**
+ * Where `target` lands once links resolve: its realpath when it exists; a
+ * dangling link resolves through what it names; a path not made yet resolves
+ * through its nearest existing ancestor, so a write under a linked directory
+ * lands where the link points.
+ */
+const realTarget: (
+  target: string,
+  hops: number,
+) => Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> = Effect.fn(
+  "FsTools.realTarget",
+)(function* (target: string, hops: number) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const real = yield* fs.realPath(target).pipe(Effect.option)
+  if (Option.isSome(real)) return real.value
+  const link = yield* fs.readLink(target).pipe(Effect.option)
+  if (Option.isSome(link) && hops < MAX_LINK_HOPS) {
+    return yield* realTarget(path.resolve(path.dirname(target), link.value), hops + 1)
+  }
+  const parent = path.dirname(target)
+  if (parent === target) return target
+  return path.join(yield* realTarget(parent, hops), path.basename(target))
+})
+
+/**
+ * Refuses `target` (absolute, `..` already resolved) when the session's agent
+ * names `paths` and no entry that grants `access` holds it. Links resolve on
+ * both sides before the check.
+ */
+const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
+  target: string,
+  access: PathAccess,
+) {
+  const ctx = yield* ExtensionContext
+  const path = yield* Path.Path
+  const agent = yield* ctx.Session.getAgent()
+  const entries = Option.flatMap(agent, (definition) => Option.fromUndefinedOr(definition.paths))
+  if (Option.isNone(entries)) return
+  const real = yield* realTarget(target, 0)
+  for (const entry of entries.value) {
+    if (access === "write" && entry.access !== "write") continue
+    const root = yield* realTarget(path.resolve(ctx.cwd, entry.path), 0)
+    if (!leavesBase(path, path.relative(root, real))) return
+  }
+  const named = (kind: PathAccess) =>
+    entries.value
+      .filter((entry) => kind === "read" || entry.access === "write")
+      .map((entry) => entry.path)
+      .join(", ") || "none"
+  return yield* new PathScopeError({
+    message: `${target} is outside this agent's paths for ${access}. Readable: ${named("read")}. Writable: ${named("write")}. Paths are relative to ${ctx.cwd}.`,
+    path: target,
+    access,
+  })
+})
+
 // ── read ────────────────────────────────────────────────────────────────────
 
 // Read Tool Error
@@ -936,6 +1014,7 @@ export const ReadTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
+    yield* requirePathAccess(filePath, "read")
 
     // Check if path is a directory
     const stat = yield* fs.stat(filePath).pipe(
@@ -1048,6 +1127,7 @@ export const WriteTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
+    yield* requirePathAccess(filePath, "write")
     if (!params.content.isWellFormed()) {
       return yield* new WriteError({ message: loneSurrogateMessage("write"), path: filePath })
     }
@@ -1430,6 +1510,7 @@ export const EditTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
+    yield* requirePathAccess(filePath, "write")
 
     // Redaction check
     const redaction = detectRedaction(params.oldString, params.newString)
@@ -1759,6 +1840,10 @@ export const GrepTool = tool({
     if (Option.isSome(target)) {
       basePath = path.resolve(ctx.cwd, target.value)
     }
+    // The root check covers every file grep reads: the listing skips each
+    // symbolic link, and each git-listed path under a linked directory.
+    // A link that changes between the check and the read is not refused.
+    yield* requirePathAccess(basePath, "read")
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
     let flags = ""

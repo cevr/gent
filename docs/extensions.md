@@ -790,7 +790,12 @@ export default defineExtension({
 })
 ```
 
-## Agent
+## Agents
+
+An agent is one schema, `AgentDefinition`, written two ways: an extension
+registers one in TypeScript, and the `agents` key of a config file writes one
+in JSON. Both take the same fields; a config entry leaves out `name`, since its
+key is the name.
 
 ```ts
 import {
@@ -802,27 +807,118 @@ import {
 } from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
-const helper = AgentDefinition.make({
-  name: AgentName.make("helper"),
-  description: "Helper for specific tasks",
+const painter = AgentDefinition.make({
+  name: AgentName.make("painter"),
+  description: "Paints one scene: reads its cues, edits the scene file, looks",
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
-  allowedTools: ["read", "write"],
+  tools: ["film.*", "!film.check", "read", "edit", "write"],
+  paths: [
+    { path: "apps/animations/src/films", access: "write" },
+    { path: ".claude/skills/film", access: "read" },
+  ],
 })
 
 export default defineExtension({
-  id: "helper-ext",
+  id: "painter-ext",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("agent", helper)
+    yield* host.register("agent", painter)
   }),
 })
 ```
 
-`allowedTools` is authoritative: the agent gets exactly the tools it names,
-less its `deniedTools`, and no extension adds one. The cell is the model
-surface only for an agent that admits `cell`; the helper above calls `read`
-and `write` directly. An extension that selects or describes its own tool in a
-`turnProjection` hook asks `agent.admitsTool(id)` first.
+The same agent in `.gent/config.json` (project) or `~/.gent/config.json`
+(user), with no extension at all:
+
+```json
+{
+  "agents": {
+    "painter": {
+      "description": "Paints one scene: reads its cues, edits the scene file, looks",
+      "model": "anthropic/claude-sonnet-4-6",
+      "tools": ["film.*", "!film.check", "read", "edit", "write"],
+      "paths": ["apps/animations/src/films", { "path": ".claude/skills/film", "access": "read" }]
+    },
+    "delegate": { "model": "anthropic/claude-sonnet-4-6" }
+  }
+}
+```
+
+A config entry with a new name creates an agent; one with the name of a
+registered agent replaces only the fields it names (`delegate` above keeps
+its tools and changes its model). `systemPromptAddendum` is the one field
+that adds: the entry's text comes after the agent's. Each field resolves
+project config, then user config, then the extension; a run's own overrides
+(the `overrides` of a `delegate.start` call) win over all three. A session
+runs as an agent by name: `main` by default, `gent -H --agent painter "..."`
+for a headless run, and `delegate` for every child. Each turn reads the config
+files as they are then, so an edit reaches the next turn.
+
+### Tool patterns
+
+`tools` is an ordered list of patterns over tool ids:
+
+- A pattern matches the whole id. `*` matches any run of characters, dots
+  included: `film.*` matches `film.look`, `mcp.github.*` matches every tool
+  of the `github` MCP server, and `*` alone matches every tool. Every other
+  character matches itself.
+- `!` at the start takes the tools it matches back out.
+- The last pattern that matches a tool decides. A tool that no pattern
+  matches is left out.
+- No `tools`: the agent holds every tool. `[]`: it holds none.
+
+`["*", "!bash"]` is every tool but `bash`; `["film.*", "!film.check"]` is the
+film tools but `film.check`. The patterns decide only which tools a turn
+holds: a held tool still asks for approval where it asks. They are
+authoritative: no extension adds a tool they leave out. The cell is the model
+surface only for an agent that holds `cell`; the painter above calls its
+tools directly. An extension that selects or describes its own tool in a
+`turnProjection` hook asks `agent.admitsTool(id)` first, the one predicate
+over the patterns.
+
+A config entry or a stored run written before `tools` still loads, with its
+old meaning: a `deniedTools` list alone takes those ids from the tools the
+agent already holds; an `allowedTools` list alone replaces them and keeps the
+inherited denials; both become the allowed ids and then the denied ones with
+`!`. `modelId` becomes `model`. A `tools` list always replaces. When gent
+writes a stored run or a `driver.list` reply, it also writes the old keys for
+an older gent: `modelId`, and the old lists when they can say what the
+patterns say, else `allowedTools: []`, so an older gent gives the agent no
+tool rather than every tool. `paths` has no old form. A config file is yours:
+a write by gent (a driver change, an extension toggle) leaves each agent
+entry as you wrote it.
+
+A `delegate.start` call takes the new keys only (`model`, `tools`, `paths`,
+...). A call with `modelId`, `allowedTools` or `deniedTools` fails, and the
+failure names the key to use; it never runs the child without the
+restriction it asked for.
+
+A config entry with a key the schema does not name fails to load, and the
+error names the agent and the key: a misspelled `toolz` would otherwise give
+an agent every tool. While a user or project config file for the session's
+directory does not load, its turns do not run: each one ends with an error
+that names the file and the reason, and the turn after the fix runs.
+TypeScript source has no old reading either: `AgentDefinition.make`,
+`new AgentDefinition`, `makeEffect` and `makeOption` refuse a key the schema
+does not name, so an extension that still passes `allowedTools` fails to load
+and the failure names the key.
+
+### Paths
+
+`paths` confines the shipped file tools to files and folders, relative to the session
+cwd. An entry is `{ "path": ..., "access": "read" | "write" }`; a bare string
+is a `write` entry. `read` and `grep` accept any entry; `write` and `edit`
+accept only a `write` entry. A call outside every entry it accepts fails with
+a `PathScopeError` that names the entries, and the model reads it. Links and
+`..` resolve before the check, so a link under an entry that points out of it
+is outside. `grep` checks its search root and does not follow a link under
+it. No `paths`: the file tools reach every path.
+
+`paths` is not a sandbox. `bash`, the cell and every other tool reach the file
+system without the check, so leave them out of the `tools` of an agent you
+confine.
+A tool of your own reads the session's agent with
+`ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way.
 
 ## Model router
 

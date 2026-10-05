@@ -1,8 +1,8 @@
 import {
-  AgentDefinition,
+  type AgentDefinition,
   AgentName,
   type AgentName as AgentNameType,
-  type AgentRunOverrides,
+  resolveSessionAgent,
   calculateCost,
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
@@ -1342,49 +1342,6 @@ const requestNotices = (resolved: ResolvedTurnContext): ReadonlyArray<TurnNotice
   ...resolved.notices.map(({ notice }) => notice),
 ]
 
-const mergeSystemPromptAddendum = (
-  base: Option.Option<string>,
-  addendum: Option.Option<string>,
-): Option.Option<string> =>
-  Option.match(addendum, {
-    onNone: () => base,
-    onSome: (value) =>
-      Option.match(base, {
-        onNone: () => Option.some(value),
-        onSome: (baseValue) => Option.some(`${baseValue}\n\n${value}`),
-      }),
-  })
-
-/** Config `agents[name]` and `RunSpec.overrides` reshape a definition the same way. */
-const applyAgentOverrides = (
-  agent: AgentDefinition,
-  overrides: Option.Option<AgentRunOverrides>,
-): AgentDefinition => {
-  const systemPromptAddendum = Option.match(overrides, {
-    onNone: () => Option.fromUndefinedOr(agent.systemPromptAddendum),
-    onSome: (value) =>
-      mergeSystemPromptAddendum(
-        Option.fromUndefinedOr(agent.systemPromptAddendum),
-        Option.fromUndefinedOr(value.systemPromptAddendum),
-      ),
-  })
-
-  const value = Option.getOrUndefined(overrides)
-  return AgentDefinition.make({
-    ...agent,
-    ...omitUndefined({
-      model: value?.modelId,
-      allowedTools: value?.allowedTools,
-      deniedTools: value?.deniedTools,
-      reasoningEffort: value?.reasoningEffort,
-      contextLength: value?.contextLength,
-      maxSteps: value?.maxSteps,
-      maxModelAttempts: value?.maxModelAttempts,
-      systemPromptAddendum: Option.getOrUndefined(systemPromptAddendum),
-    }),
-  })
-}
-
 interface SessionSettingsSource {
   readonly modelId?: ModelId
   readonly reasoningLevel?: ReasoningEffort
@@ -1395,8 +1352,9 @@ interface SessionRoute {
   /** The agent the session names; the default one when it names none. */
   readonly name: AgentNameType
   /**
-   * That agent with config `agents[name]` and the run's overrides applied;
-   * none when no loaded agent has the name. Its `driver` is its own: a config
+   * That agent from the roster (extension agents and config `agents`
+   * entries) with the run's overrides applied (`resolveSessionAgent`); none
+   * when no agent has the name. Its `driver` is its own: a config
    * `driverOverrides` entry reaches `modelDriver` only.
    */
   readonly definition: Option.Option<AgentDefinition>
@@ -1431,18 +1389,14 @@ export const resolveSessionRoute = (params: {
     Option.flatMap(params.admission, (admission) => Option.fromUndefinedOr(admission.agent)),
     () => DEFAULT_AGENT_NAME,
   )
-  const definition = Option.fromUndefinedOr(
-    params.agents.find((entry) => entry.name === name),
-  ).pipe(
-    Option.map((agent) =>
-      applyAgentOverrides(
-        applyAgentOverrides(agent, Option.fromUndefinedOr(params.config.agents?.[name])),
-        Option.flatMap(params.admission, (admission) =>
-          Option.fromUndefinedOr(admission.runSpec?.overrides),
-        ),
-      ),
+  const definition = resolveSessionAgent({
+    agents: params.agents,
+    configAgents: Option.fromUndefinedOr(params.config.agents),
+    name,
+    overrides: Option.flatMap(params.admission, (admission) =>
+      Option.fromUndefinedOr(admission.runSpec?.overrides),
     ),
-  )
+  })
   const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
     Option.match(definition, {
       onNone: () => DEFAULT_MODEL_ID,
@@ -1525,12 +1479,36 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   // `ConfigService` is required, so a root that omits it fails at wiring.
   const configService = yield* ConfigService
   // Overrides come from the session's cwd, so a multi-cwd server reads each
-  // project's own config. `get(undefined)` reads the launch-cwd config.
-  const sessionConfig = yield* configService.get(hostCtx.cwd)
+  // project's own config. A turn whose user or project config file does not
+  // load does not run: the file's fields would read as unset (project) or as
+  // the last file that loaded (user), so a `tools` restriction in it could
+  // fall away and the agent would run with more than its author gave it.
+  // Config never widens what an agent may do. The error names each file;
+  // the next turn after the fix runs. Other readers (health, providers, the
+  // route a client reads) stay lenient: only a turn spends authority.
+  const fresh = yield* configService.getFresh(hostCtx.cwd)
+  if (fresh.failures.length > 0) {
+    yield* eventStore
+      .publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: fresh.failures
+            .map(
+              (failure) =>
+                `${failure.path} did not load; turns in ${hostCtx.cwd} do not run until it is fixed: ${failure.message}`,
+            )
+            .join("\n"),
+        }),
+      )
+      .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- A config that does not load ends the turn after the error event is published, as an unknown agent does.
+    return undefined
+  }
   const route = resolveSessionRoute({
     agents: [...resolvedExtensions.agents.values()],
     admission,
-    config: sessionConfig,
+    config: fresh.config,
     session: Option.getOrElse(session, (): SessionSettingsSource => ({})),
   })
   const { name: currentAgent, definition } = route
@@ -2858,7 +2836,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             disableToolCallResolution: true,
           })
         }
-        return model.streamText({ prompt })
+        // No tool goes on the request, but the reply can still call one: the
+        // tool runner answers it (`Unknown tool: <id>`), as for any step.
+        return model.streamText({ prompt, disableToolCallResolution: true })
       }),
     ),
   )
@@ -4157,10 +4137,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         if (dispatching.length === 0) return params.toolBindings
         const resolved = yield* resolveForState(params.turnProfile)
-        // The turn's agent no longer exists: the resolve already published an
-        // error that names it. A removed agent grants nothing, so its
-        // dispatching calls lose their bindings and settle as failed; the next
-        // step meets the same missing agent and ends the turn unanswered.
+        // The turn's agent no longer exists, or its config does not load: the
+        // resolve already published an error that names it. Neither grants
+        // anything, so the dispatching calls lose their bindings and settle as
+        // failed; the next step meets the same refusal and ends the turn
+        // unanswered.
         if (Predicate.isUndefined(resolved)) {
           for (const call of dispatching) params.toolBindings.delete(call.name)
           return params.toolBindings
