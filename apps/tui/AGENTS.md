@@ -45,13 +45,29 @@ Who owns the mouse decides who copies a selection. In the split footer (the sess
 
 ## Theme System
 
-Ported from opencode. Key patterns:
+Ported from opencode: its schema and token names, cut to the tokens gent draws. Key patterns:
 
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
 - System theme generated from terminal colors; fallback to the `fx` theme
 - JSON themes in `src/themes/*.json` with `defs` + dark/light variants
-- `resolveTheme(themeJson, mode)` resolves refs to RGBA values
-- The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle. A ported theme may omit `selectedListItemText`/`backgroundMenu`; `resolveTheme` supplies both.
+- `resolveTheme(themeJson, mode, terminalBackground)` resolves refs to RGBA values. A ported theme may omit `selectedListItemText` (the background) and `backgroundPanel`; a key gent does not draw is ignored, so an opencode theme file resolves as it is.
+- The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle.
+- Every color a component draws is a token from `useTheme()` (an extension names one through `NamedThemeColor`): no hex, color name or `dim` at a call site.
+
+| Token                           | Role                                                                                                                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `text`                          | primary text: the agent's answer, the reader's text, tool bodies                                                                                                                                             |
+| `textMuted`                     | secondary text: everything gent draws around the answer (run rows, notices, queue rows, status row, hints)                                                                                                   |
+| `primary`                       | the reader's mark and the active control: the rail, the selection fill, focus bars                                                                                                                           |
+| `info`                          | names and links: agent names, status labels                                                                                                                                                                  |
+| `success` / `warning` / `error` | it worked / it needs the reader / it failed                                                                                                                                                                  |
+| `selectedListItemText`          | text on a `primary` fill                                                                                                                                                                                     |
+| `background`                    | the canvas; `transparent` is the terminal's own                                                                                                                                                              |
+| `backgroundPanel`               | the reader's message surface. Left out or `transparent`, it is derived from the background (Codex's prompt fill: white at 12% on dark, black at 4% on light), and with no known background it is transparent |
+| `border`                        | frames and elision dots                                                                                                                                                                                      |
+| `diff*`, `markdown*`, `syntax*` | the diff renderer and `buildSyntaxStyle`                                                                                                                                                                     |
+
+Contrast rule (WCAG 2.1, `theme.test.tsx` holds every bundled theme to it in both modes; a transparent background is read against black, `#1d1f21`, `#282c34`, white, `#f5f5f5` and `#fdf6e3`): every text token 4.5:1 on its background, `border` 3:1, `selectedListItemText` 4.5:1 on `primary`, `text` 4.5:1 on `backgroundPanel`, and `text` 1.5:1 from `textMuted`. The `system` theme and the derived panel are clamped at runtime by `readableOn` (Codex's bounded search); a bundled theme's values are fixed in its JSON.
 
 ## Command Palette
 

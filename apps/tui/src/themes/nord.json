@@ -3,7 +3,7 @@
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",
-    "nord2": "#434C5E",
+    "nord2": "#777d8a",
     "nord3": "#4C566A",
     "nord4": "#D8DEE9",
     "nord5": "#E5E9F0",
@@ -11,12 +11,21 @@
     "nord7": "#8FBCBB",
     "nord8": "#88C0D0",
     "nord9": "#81A1C1",
-    "nord10": "#5E81AC",
-    "nord11": "#BF616A",
-    "nord12": "#D08770",
+    "nord10": "#506e93",
     "nord13": "#EBCB8B",
     "nord14": "#A3BE8C",
-    "nord15": "#B48EAD"
+    "nord8OnLight": "#51727c",
+    "nord11OnDark": "#cf888f",
+    "nord11OnLight": "#a6545c",
+    "nord12OnDark": "#d18a73",
+    "nord12OnLight": "#946050",
+    "nord14OnLight": "#617153",
+    "nord1OnLight": "#484f5e",
+    "nord9OnLight": "#596f85",
+    "nord7OnLight": "#567271",
+    "nord13OnLight": "#7b6b49",
+    "nord15OnDark": "#b590af",
+    "nord15OnLight": "#7f647a"
   },
   "theme": {
     "primary": {
@@ -24,16 +33,16 @@
       "light": "nord10"
     },
     "error": {
-      "dark": "nord11",
-      "light": "nord11"
+      "dark": "nord11OnDark",
+      "light": "nord11OnLight"
     },
     "warning": {
-      "dark": "nord12",
-      "light": "nord12"
+      "dark": "nord12OnDark",
+      "light": "nord12OnLight"
     },
     "success": {
       "dark": "nord14",
-      "light": "nord14"
+      "light": "nord14OnLight"
     },
     "info": {
       "dark": "nord8",
@@ -44,32 +53,28 @@
       "light": "nord0"
     },
     "textMuted": {
-      "dark": "#8B95A7",
-      "light": "nord1"
+      "dark": "#929cad",
+      "light": "nord1OnLight"
     },
     "background": {
       "dark": "nord0",
       "light": "nord6"
     },
-    "backgroundElement": {
-      "dark": "nord2",
-      "light": "nord4"
+    "backgroundPanel": {
+      "dark": "nord1",
+      "light": "nord5"
     },
     "border": {
       "dark": "nord2",
       "light": "nord3"
     },
-    "borderSubtle": {
-      "dark": "nord2",
-      "light": "nord3"
-    },
     "diffAdded": {
       "dark": "nord14",
-      "light": "nord14"
+      "light": "nord14OnLight"
     },
     "diffRemoved": {
-      "dark": "nord11",
-      "light": "nord11"
+      "dark": "nord11OnDark",
+      "light": "nord11OnLight"
     },
     "diffAddedBg": {
       "dark": "#3B4252",
@@ -97,63 +102,63 @@
     },
     "markdownLink": {
       "dark": "nord9",
-      "light": "nord9"
+      "light": "nord9OnLight"
     },
     "markdownLinkText": {
       "dark": "nord7",
-      "light": "nord7"
+      "light": "nord7OnLight"
     },
     "markdownCode": {
       "dark": "nord14",
-      "light": "nord14"
+      "light": "nord14OnLight"
     },
     "markdownBlockQuote": {
-      "dark": "#8B95A7",
+      "dark": "#929cad",
       "light": "nord3"
     },
     "markdownEmph": {
-      "dark": "nord12",
-      "light": "nord12"
+      "dark": "nord12OnDark",
+      "light": "nord12OnLight"
     },
     "markdownStrong": {
       "dark": "nord13",
-      "light": "nord13"
+      "light": "nord13OnLight"
     },
     "markdownListItem": {
       "dark": "nord8",
       "light": "nord10"
     },
     "syntaxComment": {
-      "dark": "#8B95A7",
+      "dark": "#929cad",
       "light": "nord3"
     },
     "syntaxKeyword": {
       "dark": "nord9",
-      "light": "nord9"
+      "light": "nord9OnLight"
     },
     "syntaxFunction": {
       "dark": "nord8",
-      "light": "nord8"
+      "light": "nord8OnLight"
     },
     "syntaxVariable": {
       "dark": "nord7",
-      "light": "nord7"
+      "light": "nord7OnLight"
     },
     "syntaxString": {
       "dark": "nord14",
-      "light": "nord14"
+      "light": "nord14OnLight"
     },
     "syntaxNumber": {
-      "dark": "nord15",
-      "light": "nord15"
+      "dark": "nord15OnDark",
+      "light": "nord15OnLight"
     },
     "syntaxType": {
       "dark": "nord7",
-      "light": "nord7"
+      "light": "nord7OnLight"
     },
     "syntaxOperator": {
       "dark": "nord9",
-      "light": "nord9"
+      "light": "nord9OnLight"
     },
     "syntaxPunctuation": {
       "dark": "nord4",

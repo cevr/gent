@@ -3,8 +3,6 @@
   "defs": {
     "darkStep1": "#1a1b26",
     "darkStep2": "#1e2030",
-    "darkStep3": "#222436",
-    "darkStep6": "#545c7e",
     "darkStep7": "#737aa2",
     "darkStep9": "#82aaff",
     "darkStep11": "#828bb8",
@@ -17,18 +15,17 @@
     "darkPurple": "#c099ff",
     "lightStep1": "#e1e2e7",
     "lightStep2": "#d5d6db",
-    "lightStep3": "#c8c9ce",
-    "lightStep6": "#9699a8",
     "lightStep7": "#737a8c",
-    "lightStep9": "#2e7de9",
-    "lightStep11": "#8990a3",
+    "lightStep9": "#2564b9",
+    "lightStep11": "#606572",
     "lightStep12": "#3760bf",
-    "lightRed": "#f52a65",
-    "lightOrange": "#b15c00",
-    "lightYellow": "#8c6c3e",
-    "lightGreen": "#587539",
-    "lightCyan": "#007197",
-    "lightPurple": "#9854f1"
+    "lightRed": "#c12150",
+    "lightOrange": "#9c5100",
+    "lightYellow": "#7d6037",
+    "lightGreen": "#526d35",
+    "lightCyan": "#006d92",
+    "lightPurple": "#7e46c8",
+    "lightStep12OnLight": "#29478e"
   },
   "theme": {
     "primary": {
@@ -53,7 +50,7 @@
     },
     "text": {
       "dark": "darkStep12",
-      "light": "lightStep12"
+      "light": "lightStep12OnLight"
     },
     "textMuted": {
       "dark": "darkStep11",
@@ -63,25 +60,21 @@
       "dark": "darkStep1",
       "light": "lightStep1"
     },
-    "backgroundElement": {
-      "dark": "darkStep3",
-      "light": "lightStep3"
+    "backgroundPanel": {
+      "dark": "darkStep2",
+      "light": "lightStep2"
     },
     "border": {
       "dark": "darkStep7",
       "light": "lightStep7"
     },
-    "borderSubtle": {
-      "dark": "darkStep6",
-      "light": "lightStep6"
-    },
     "diffAdded": {
       "dark": "#4fd6be",
-      "light": "#1e725c"
+      "light": "#1e715b"
     },
     "diffRemoved": {
-      "dark": "#c53b53",
-      "light": "#c53b53"
+      "dark": "#d05f73",
+      "light": "#b5364c"
     },
     "diffAddedBg": {
       "dark": "#20303b",

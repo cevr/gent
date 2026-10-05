@@ -1,5 +1,5 @@
 import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
-import { Config, Effect, Fiber, Option, Predicate, Record, Schema } from "effect"
+import { Config, Effect, Fiber, Option, Predicate, Record, Schema, Struct } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { GentPlatform } from "@gent/core/host"
 import {
@@ -24,48 +24,85 @@ import tokyonight from "./themes/tokyonight.json" with { type: "json" }
 
 // ── theme types ─────────────────────────────────────────────────────────────
 
-// Core color palette for the application theme
-interface ThemeColors {
-  primary: RGBA
-  error: RGBA
-  warning: RGBA
-  success: RGBA
-  info: RGBA
-  text: RGBA
-  textMuted: RGBA
-  selectedListItemText: RGBA
-  background: RGBA
-  backgroundElement: RGBA
-  backgroundMenu: RGBA
-  border: RGBA
-  borderSubtle: RGBA
-  diffAdded: RGBA
-  diffRemoved: RGBA
-  diffAddedBg: RGBA
-  diffRemovedBg: RGBA
-  diffContextBg: RGBA
-  diffAddedLineNumberBg: RGBA
-  diffRemovedLineNumberBg: RGBA
-  markdownHeading: RGBA
-  markdownLink: RGBA
-  markdownLinkText: RGBA
-  markdownCode: RGBA
-  markdownBlockQuote: RGBA
-  markdownEmph: RGBA
-  markdownStrong: RGBA
-  markdownListItem: RGBA
-  syntaxComment: RGBA
-  syntaxKeyword: RGBA
-  syntaxFunction: RGBA
-  syntaxVariable: RGBA
-  syntaxString: RGBA
-  syntaxNumber: RGBA
-  syntaxType: RGBA
-  syntaxOperator: RGBA
-  syntaxPunctuation: RGBA
-}
+/**
+ * The tokens a theme JSON names, each one a color gent draws: opencode's
+ * names, cut to the ones with a consumer (the roles are in `apps/tui/AGENTS.md`).
+ * `selectedListItemText` and `backgroundPanel` may be left out: resolution
+ * supplies both.
+ */
+const JSON_TOKENS = [
+  "primary",
+  "error",
+  "warning",
+  "success",
+  "info",
+  "text",
+  "textMuted",
+  "background",
+  "border",
+  "diffAdded",
+  "diffRemoved",
+  "diffAddedBg",
+  "diffRemovedBg",
+  "diffContextBg",
+  "diffAddedLineNumberBg",
+  "diffRemovedLineNumberBg",
+  "markdownHeading",
+  "markdownLink",
+  "markdownLinkText",
+  "markdownCode",
+  "markdownBlockQuote",
+  "markdownEmph",
+  "markdownStrong",
+  "markdownListItem",
+  "syntaxComment",
+  "syntaxKeyword",
+  "syntaxFunction",
+  "syntaxVariable",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxType",
+  "syntaxOperator",
+  "syntaxPunctuation",
+] as const
+type JsonToken = (typeof JSON_TOKENS)[number]
 
-export type Theme = ThemeColors
+/** The resolved theme: every token as a color. */
+export type Theme = Record<JsonToken | "selectedListItemText" | "backgroundPanel", RGBA>
+
+/**
+ * The tokens drawn as text on the background: each reads at
+ * `MIN_TEXT_CONTRAST` there. The `system` theme is clamped to this rule at
+ * runtime; the bundled themes hold it in their JSON (`theme.test.tsx`).
+ */
+export const TEXT_TOKENS = [
+  "text",
+  "textMuted",
+  "primary",
+  "info",
+  "success",
+  "warning",
+  "error",
+  "diffAdded",
+  "diffRemoved",
+  "markdownHeading",
+  "markdownLink",
+  "markdownLinkText",
+  "markdownCode",
+  "markdownBlockQuote",
+  "markdownEmph",
+  "markdownStrong",
+  "markdownListItem",
+  "syntaxComment",
+  "syntaxKeyword",
+  "syntaxFunction",
+  "syntaxVariable",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxType",
+  "syntaxOperator",
+  "syntaxPunctuation",
+] as const satisfies ReadonlyArray<keyof Theme>
 
 /** A theme color an extension names; the host draws it in the active theme. */
 export const NamedThemeColor = Schema.Literals([
@@ -96,21 +133,129 @@ type Variant = {
 }
 type ColorValue = HexColor | RefName | Variant | RGBA
 
+/**
+ * opencode's theme schema. A key gent does not draw (an opencode theme's
+ * `backgroundElement`, `thinkingOpacity`, …) is ignored, so an opencode
+ * theme file resolves as it is.
+ */
 interface ThemeJson {
   $schema?: string
   defs?: Record<string, HexColor | RefName>
-  theme: Omit<Record<keyof ThemeColors, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
+  theme: Record<JsonToken, ColorValue> & {
     selectedListItemText?: ColorValue
-    backgroundMenu?: ColorValue
+    backgroundPanel?: ColorValue
   }
+}
+
+// ── contrast ────────────────────────────────────────────────────────────────
+
+/** WCAG 2.1 minimums: text on its background, and a glyph or rule (1.4.11). */
+export const MIN_TEXT_CONTRAST = 4.5
+export const MIN_GLYPH_CONTRAST = 3
+/** How far `text` stands from `textMuted`: the answer reads apart from what gent draws around it. */
+export const MIN_MUTED_STEP = 1.5
+
+const TRANSPARENT = RGBA.fromInts(0, 0, 0, 0)
+const BLACK = RGBA.fromInts(0, 0, 0)
+const WHITE = RGBA.fromInts(255, 255, 255)
+
+const relativeLuminance = (color: RGBA): number => {
+  const linear = (channel: number) => {
+    if (channel <= 0.04045) return channel / 12.92
+    return ((channel + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+}
+
+/** The WCAG contrast ratio of two opaque colors, 1 to 21. */
+export const contrastRatio = (a: RGBA, b: RGBA): number => {
+  const la = relativeLuminance(a)
+  const lb = relativeLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/** Codex's `is_light`: the background's perceived brightness is over half. */
+const isLight = (color: RGBA): boolean =>
+  (0.299 * color.r + 0.587 * color.g + 0.114 * color.b) * 255 > 128
+
+/** Black or white, whichever stands further from `background`. */
+const farEndpoint = (background: RGBA): RGBA => {
+  if (contrastRatio(BLACK, background) >= contrastRatio(WHITE, background)) return BLACK
+  return WHITE
+}
+
+/** The first of 255 steps from `from` to `to` that `passes`, else `to`. */
+const firstStep = (from: RGBA, to: RGBA, passes: (candidate: RGBA) => boolean): RGBA => {
+  for (let step = 1; step <= 255; step++) {
+    const candidate = tint(from, to, step / 255)
+    if (passes(candidate)) return candidate
+  }
+  return to
+}
+
+/**
+ * `color`, moved toward black or white by the smallest step that reads at
+ * `min` on `background`: Codex's bounded search (`style/contrast.rs`
+ * `foreground`), which keeps as much of the hue as the surface allows.
+ */
+const readableOn = (color: RGBA, background: RGBA, min = MIN_TEXT_CONTRAST): RGBA => {
+  if (contrastRatio(color, background) >= min) return color
+  return firstStep(color, farEndpoint(background), (step) => contrastRatio(step, background) >= min)
+}
+
+/** The answer's color and the muted color around it. */
+interface TextPair {
+  readonly text: RGBA
+  readonly muted: RGBA
+}
+
+/**
+ * `text` and `muted` kept `MIN_MUTED_STEP` apart: `muted` moves toward the
+ * background while it stays readable there, then `text` moves away from it.
+ */
+const readableStep = (text: RGBA, muted: RGBA, background: RGBA): TextPair => {
+  if (contrastRatio(text, muted) >= MIN_MUTED_STEP) return { text, muted }
+  let dimmer = muted
+  for (let step = 1; step <= 255; step++) {
+    const candidate = tint(muted, background, step / 255)
+    if (contrastRatio(candidate, background) < MIN_TEXT_CONTRAST) break
+    dimmer = candidate
+    if (contrastRatio(text, dimmer) >= MIN_MUTED_STEP) return { text, muted: dimmer }
+  }
+  const settled = dimmer
+  const brighter = firstStep(
+    text,
+    farEndpoint(background),
+    (step) => contrastRatio(step, settled) >= MIN_MUTED_STEP,
+  )
+  return { text: brighter, muted: settled }
+}
+
+/**
+ * The reader's message surface on a known background: Codex's prompt fill
+ * (`user_message_bg_rgb`: white at 12% on a dark background, black at 4% on
+ * a light one), kept readable under `text`.
+ */
+const panelOn = (background: RGBA, text: RGBA): RGBA => {
+  if (isLight(background)) return readableOn(tint(background, BLACK, 0.04), text)
+  return readableOn(tint(background, WHITE, 0.12), text)
 }
 
 // ── theme resolution ────────────────────────────────────────────────────────
 
 /**
- * Resolve a theme JSON to concrete RGBA values for a given mode
+ * Resolve a theme JSON to concrete RGBA values for a given mode.
+ *
+ * `terminalBackground` is the terminal's own background, when it reported
+ * one: a theme whose `background` is transparent draws on it, so the
+ * derived `backgroundPanel` is made from it. With neither, the panel is
+ * transparent: no fill.
  */
-export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
+export function resolveTheme(
+  theme: ThemeJson,
+  mode: "dark" | "light",
+  terminalBackground: Option.Option<RGBA> = Option.none(),
+): Theme {
   const defs = theme.defs ?? {}
   const themeColors = new Map(Object.entries(theme.theme))
 
@@ -137,19 +282,25 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light"): Theme {
     return resolveColor(c[mode])
   }
 
-  const { selectedListItemText, backgroundMenu, ...colors } = theme.theme
-  const resolved = Record.map(colors, resolveColor)
-  const selectedText = Option.fromNullishOr(selectedListItemText)
+  const resolved = Record.map(Struct.pick(theme.theme, JSON_TOKENS), resolveColor)
+  const optional = (token: "selectedListItemText" | "backgroundPanel") =>
+    Option.map(Option.fromNullishOr(theme.theme[token]), resolveColor)
+  const surface = Option.orElse(
+    Option.filter(Option.some(resolved.background), (background) => background.a > 0),
+    () => terminalBackground,
+  )
   return {
     ...resolved,
-    selectedListItemText: Option.match(selectedText, {
-      onNone: () => resolved.background,
-      onSome: resolveColor,
-    }),
-    backgroundMenu: Option.match(Option.fromNullishOr(backgroundMenu), {
-      onNone: () => resolved.backgroundElement,
-      onSome: resolveColor,
-    }),
+    selectedListItemText: Option.getOrElse(
+      optional("selectedListItemText"),
+      () => resolved.background,
+    ),
+    // A transparent panel is the derived one.
+    backgroundPanel: optional("backgroundPanel").pipe(
+      Option.filter((panel) => panel.a > 0),
+      Option.orElse(() => Option.map(surface, (background) => panelOn(background, resolved.text))),
+      Option.getOrElse(() => TRANSPARENT),
+    ),
   }
 }
 
@@ -253,7 +404,7 @@ function generateSystemTheme(colors: TerminalColors, mode: "dark" | "light"): Th
   const diffRemovedLineNumberBg = tint(gray(3), ansiColors.red, diffAlpha)
 
   return {
-    theme: {
+    theme: readableSystemColors({
       primary: ansiColors.cyan,
       error: ansiColors.red,
       warning: ansiColors.yellow,
@@ -263,9 +414,6 @@ function generateSystemTheme(colors: TerminalColors, mode: "dark" | "light"): Th
       textMuted,
       selectedListItemText: bg,
       background: bg,
-      backgroundElement: gray(3),
-      backgroundMenu: gray(3),
-      borderSubtle: gray(6),
       border: gray(7),
       diffAdded: ansiColors.green,
       diffRemoved: ansiColors.red,
@@ -291,7 +439,31 @@ function generateSystemTheme(colors: TerminalColors, mode: "dark" | "light"): Th
       syntaxType: ansiColors.cyan,
       syntaxOperator: ansiColors.cyan,
       syntaxPunctuation: fg,
-    },
+    }),
+  }
+}
+
+/** The terminal palette's colors, before the panel is derived from the background. */
+type SystemColors = Omit<Theme, "backgroundPanel">
+
+/**
+ * A terminal's palette made readable on its own background: a terminal can
+ * report any colors, so text, the border, the muted step and the selected
+ * row are each clamped (`readableOn`), as Codex clamps the colors it draws.
+ */
+const readableSystemColors = (colors: SystemColors): SystemColors => {
+  const background = colors.background
+  const text = Record.map(Struct.pick(colors, TEXT_TOKENS), (color) =>
+    readableOn(color, background),
+  )
+  const step = readableStep(text.text, text.textMuted, background)
+  return {
+    ...colors,
+    ...text,
+    text: step.text,
+    textMuted: step.muted,
+    border: readableOn(colors.border, background, MIN_GLYPH_CONTRAST),
+    selectedListItemText: readableOn(colors.selectedListItemText, text.primary),
   }
 }
 
@@ -544,6 +716,9 @@ export function ThemeProvider(props: ThemeProviderProps) {
   // The terminal's palette, once read. The `system` theme is drawn from it
   // for the mode in force, so a mode switch redraws it.
   const [systemColors, setSystemColors] = createSignal(Option.none<TerminalColors>())
+  // The terminal's own background, once it answers: a transparent theme
+  // draws on it, so `backgroundPanel` is derived from it.
+  const [terminalBackground, setTerminalBackground] = createSignal(Option.none<RGBA>())
   const themes = createMemo((): Record<string, ThemeJson> =>
     Option.match(systemColors(), {
       onNone: () => DEFAULT_THEMES,
@@ -575,6 +750,15 @@ export function ThemeProvider(props: ThemeProviderProps) {
             // Keep the default when palette detection fails.
             onFailure: keepDefault,
             onSuccess: (colors) => {
+              setTerminalBackground(
+                Option.map(
+                  Option.filter(
+                    Option.fromNullishOr(colors.defaultBackground),
+                    (hex) => hex.length > 0,
+                  ),
+                  (hex) => RGBA.fromHex(hex),
+                ),
+              )
               // Keep the default when the terminal does not report its palette.
               if (Option.isNone(Option.fromNullishOr(colors.palette[0]))) return keepDefault()
               setSystemColors(Option.some(colors))
@@ -600,7 +784,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
       ),
       () => DEFAULT_THEMES.fx,
     )
-    return resolveTheme(activeTheme, store.mode)
+    return resolveTheme(activeTheme, store.mode, terminalBackground())
   })
 
   const theme = lazyView(values)
