@@ -27,6 +27,7 @@ import {
   parseBashOutput,
   plural,
   shortId,
+  summaryAfterSubject,
   toolArgSummary,
   type PathPlace,
   type ToolInput,
@@ -999,15 +1000,29 @@ function CellToolRenderer(props: ToolRendererProps) {
     return theme.error
   }
 
+  // The outcome glyph stands in its own column, so a wrapped row hangs under its words.
   const OperationRow = (line: OperationLine) => (
-    <text>
-      <span style={{ fg: outcomeColor(line.outcome) }}>{outcomeGlyph(line.outcome)} </span>
-      <span style={{ fg: theme.text, bold: true }}>{line.tool}</span>
-      <Show when={line.summary.length > 0}>
-        <span style={{ fg: theme.textMuted }}> {line.summary}</span>
-      </Show>
-    </text>
+    <box flexDirection="row">
+      <text width={2} flexShrink={0} style={{ fg: outcomeColor(line.outcome) }}>
+        {outcomeGlyph(line.outcome)}
+      </text>
+      <text flexGrow={1} flexShrink={1}>
+        <span style={{ fg: theme.text, bold: true }}>{line.tool}</span>
+        <Show when={line.summary.length > 0}>
+          <span style={{ fg: theme.textMuted }}> {line.summary}</span>
+        </Show>
+      </text>
+    </box>
   )
+
+  /** An op's row words: its subject, then what its receipt adds, paths placed. */
+  const operationLine = (call: ToolCall, subject: string): OperationLine => ({
+    tool: subject,
+    outcome: callOutcome(call.status),
+    summary: Option.getOrElse(failureReason(call), () =>
+      summaryAfterSubject(call.summary ?? "", subject, pathPlace()),
+    ),
+  })
 
   // A run of one tool: one frame whose collapsed body is a tight list, one
   // line an op; opened, it draws each op as its own frame.
@@ -1029,11 +1044,9 @@ function CellToolRenderer(props: ToolRendererProps) {
             <box flexDirection="column">
               <For each={folded.calls}>
                 {(call) =>
-                  OperationRow({
-                    tool: toolArgSummary(call.toolName, call.input, pathPlace()),
-                    outcome: callOutcome(call.status),
-                    summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
-                  })
+                  OperationRow(
+                    operationLine(call, toolArgSummary(call.toolName, call.input, pathPlace())),
+                  )
                 }
               </For>
             </box>
@@ -1051,11 +1064,7 @@ function CellToolRenderer(props: ToolRendererProps) {
     <RegisteredToolCall
       toolCall={call}
       expanded={false}
-      fallback={OperationRow({
-        tool: call.toolName,
-        outcome: callOutcome(call.status),
-        summary: Option.getOrElse(failureReason(call), () => call.summary ?? ""),
-      })}
+      fallback={OperationRow(operationLine(call, call.toolName))}
     />
   )
 

@@ -322,7 +322,11 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   in native scrollback. A failed op has settled, so its head draws at once.
   Full opens a row per call with its renderer body and its line counts; only
   there does a call show its `#id`. Inside a cell's body a run of one tool's
-  ops folds into one frame (`read 30 files`), its body a tight list; the
+  ops folds into one frame (`read 30 files`), its body a tight list, one
+  row an op in its tool row's shape: `✓ src/a.ts · 3 lines`, the path once
+  (`summaryAfterSubject` drops a receipt's lead that repeats the subject and
+  places its other paths). The outcome glyph and a code line's `N │ ` gutter
+  are columns of their own, so a wrapped row hangs under its words. The
   transcript view (full detail) draws every op on its own
   (`FoldOperationsProvider`). An edit's collapsed body draws its hunks only
   (`diffHunkLines`: no `Index:`/`===`/`---`/`+++` preamble).

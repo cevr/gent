@@ -1612,11 +1612,16 @@ export function GutterText(props: GutterTextProps) {
           const lineNum = () => startLine() + index()
           // oxlint-disable-next-line gent/no-code-unit-padding -- lineNum adds numeric line indices; decimal digits and default space padding are ASCII
           const gutter = () => String(lineNum()).padStart(gutterWidth())
+          // The gutter is its own column: a wrapped line hangs under the code.
           return (
-            <text>
-              <span style={{ fg: theme.textMuted }}>{gutter()} │ </span>
-              <span style={{ fg: theme.text }}>{line}</span>
-            </text>
+            <box flexDirection="row">
+              <text width={gutterWidth() + 3} flexShrink={0} style={{ fg: theme.textMuted }}>
+                {gutter()} │{" "}
+              </text>
+              <text flexGrow={1} flexShrink={1} style={{ fg: theme.text }}>
+                {line}
+              </text>
+            </box>
           )
         }}
       </For>

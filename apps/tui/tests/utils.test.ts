@@ -38,6 +38,7 @@ import {
   formatUsageStats,
   headGraphemes,
   displayPath,
+  summaryAfterSubject,
   previewOutput,
   toolArgSummary,
   truncate,
@@ -533,6 +534,16 @@ describe("formatCost", () => {
 
 const CWD = `${HOME}/code/proj`
 const PLACE = { cwd: CWD, home: HOME }
+
+describe("summaryAfterSubject", () => {
+  test("a receipt that leads with its subject's path adds only the rest; other paths are placed", () => {
+    expect(summaryAfterSubject(`${CWD}/src/a.ts · 3 lines`, "src/a.ts", PLACE)).toBe("· 3 lines")
+    expect(summaryAfterSubject(`${CWD}/src/a.ts · 3 lines`, "read", PLACE)).toBe(
+      "src/a.ts · 3 lines",
+    )
+    expect(summaryAfterSubject("exit 2 · no such file", "ls", PLACE)).toBe("exit 2 · no such file")
+  })
+})
 
 describe("displayPath", () => {
   test("a path under the cwd reads from the cwd", () => {

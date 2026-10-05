@@ -19,7 +19,6 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
-  displayPath,
   failureReason,
   formatActivityHeader,
   formatActivityRow,
@@ -29,6 +28,7 @@ import {
   messageRendererContribution,
   type MessageRowProps,
   type PathPlace,
+  placedSummary,
   plural,
   rendererContribution,
   shortId,
@@ -338,24 +338,6 @@ const answerLines = (content: string): ReadonlyArray<string> => {
   while (end > 0 && (lines[end - 1] ?? "").trim().length === 0) end -= 1
   return lines.slice(0, end)
 }
-
-/**
- * A call's receipt summary with its paths read as the run rows read theirs:
- * against where the TUI launched (`gent-debug-tools/a.ts`), else under `~`.
- */
-const placedSummary = (summary: string, place: PathPlace): string =>
-  summary
-    .split(" ")
-    .map((word) =>
-      Option.match(
-        Option.liftPredicate(word, (value) => value.startsWith("/")),
-        {
-          onNone: () => word,
-          onSome: (path) => displayPath(path, place),
-        },
-      ),
-    )
-    .join(" ")
 
 /**
  * The child's calls as run rows, in the run's past-tense words: the calls
