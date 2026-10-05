@@ -16,6 +16,8 @@ import {
 } from "effect"
 import {
   acceptedEfforts,
+  type CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   type ApiClassContribution,
   type ApiClassRequest,
   type CatalogModel,
@@ -131,6 +133,20 @@ export const CredentialCacheCell = <C>(credentials: Schema.Schema<C>) =>
   })
 export type CredentialCacheCell<C> = ReturnType<typeof CredentialCacheCell<C>>["Type"]
 export type CredentialCacheCellRef<C> = SynchronizedRef.SynchronizedRef<CredentialCacheCell<C>>
+
+/** Profile-owned cells. A warm credential can only serve its own slot. */
+export const credentialCells = <C>(defaultCell: CredentialCacheCellRef<C>) => {
+  const cells = new Map<CredentialSlot, CredentialCacheCellRef<C>>([
+    [DEFAULT_CREDENTIAL_SLOT, defaultCell],
+  ])
+  return (slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT): CredentialCacheCellRef<C> => {
+    const held = cells.get(slot)
+    if (Predicate.isNotUndefined(held)) return held
+    const cell = SynchronizedRef.makeUnsafe<CredentialCacheCell<C>>(EMPTY_CREDENTIAL_CELL)
+    cells.set(slot, cell)
+    return cell
+  }
+}
 
 export const EMPTY_CREDENTIAL_CELL = Schema.TaggedStruct("Empty", {}).make({})
 

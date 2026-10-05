@@ -29,6 +29,8 @@ import type * as AiError from "effect/ai/AiError"
 import * as Prompt from "effect/ai/Prompt"
 import {
   type ApiClassContribution,
+  type CredentialSlot,
+  type StoredOAuthCredentials,
   type ModelDriverContribution,
   ProviderStopReason,
   reportProviderStopReason,
@@ -41,6 +43,7 @@ import {
   aiError,
   Auth,
   AuthApi,
+  AuthInfo,
   type LoadedModelCatalog,
   ModelCatalogSource,
   ModelResolver,
@@ -60,7 +63,8 @@ import {
 /**
  * The language model a turn resolves for `modelId` through the production
  * resolver, from `modelDrivers` and an auth store holding the API keys in
- * `stored` (store key → key). A driver test sends one request through it over
+ * `stored` (store key → key), plus optional slot-bound OAuth rows. It resolves
+ * `credentialSlot` when supplied, else the legacy default. A driver test sends a request over
  * a fake fetch to see which credential a sign-in sends; a failed resolution
  * is a defect. The resolver reads `catalog` (usually `fixtureModelCatalog()`)
  * and composes a driver's endpoint with `apiClasses`.
@@ -69,6 +73,12 @@ export const storedCredentialModel = (input: {
   readonly modelDrivers: ReadonlyArray<ModelDriverContribution>
   readonly apiClasses?: ReadonlyArray<ApiClassContribution>
   readonly stored: Readonly<Record<string, string>>
+  readonly oauth?: ReadonlyArray<{
+    readonly provider: string
+    readonly slot?: CredentialSlot
+    readonly credential: StoredOAuthCredentials
+  }>
+  readonly credentialSlot?: CredentialSlot
   readonly modelId: string
   readonly catalog: LoadedModelCatalog
 }): Layer.Layer<LanguageModel.LanguageModel> => {
@@ -84,8 +94,19 @@ export const storedCredentialModel = (input: {
   return Layer.effect(
     LanguageModel.LanguageModel,
     Effect.gen(function* () {
+      const auth = yield* Auth
+      for (const entry of input.oauth ?? []) {
+        yield* auth.set(
+          entry.provider,
+          AuthInfo.cases.Oauth.make({ type: "oauth", ...entry.credential }),
+          entry.slot,
+        )
+      }
       const resolver = yield* ModelResolver
-      return yield* resolver.resolve({ modelId: input.modelId })
+      return yield* resolver.resolve({
+        modelId: input.modelId,
+        ...omitUndefined({ credentialSlot: input.credentialSlot }),
+      })
     }).pipe(
       Effect.provideService(
         ExtensionRegistry,

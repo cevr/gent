@@ -46,6 +46,7 @@ import {
   SessionId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
+import { TestClock } from "effect/testing"
 import { RpcClient } from "effect/rpc"
 import { SqlClient } from "effect/sql"
 import {
@@ -55,6 +56,7 @@ import {
   AuthError,
   serializeAuthStore,
   AuthApi,
+  AuthInfo,
   ListAuthProvidersPayload,
   multiToolCallStep,
   textStep,
@@ -90,6 +92,7 @@ import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import {
   AuthMethod,
+  CredentialSlot,
   type ModelDriverContribution,
   ProviderAuthError,
 } from "../../src/domain/driver.js"
@@ -1309,6 +1312,313 @@ describe("provider login", () => {
     ),
   )
 
+  it.live("authorization refuses methods for the wrong immutable credential target", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const work = CredentialSlot.make("work")
+        let authorizations = 0
+        const extension = defineExtension({
+          id: "@test/method-target",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "method-target",
+              name: "Method Target",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [
+                  AuthMethod.make({ type: "oauth", label: "Primary", credentialTarget: "default" }),
+                  AuthMethod.make({ type: "oauth", label: "Named", credentialTarget: "named" }),
+                  AuthMethod.make({ type: "oauth", label: "Either" }),
+                ],
+                authorize: (ctx) =>
+                  Effect.gen(function* () {
+                    authorizations++
+                    yield* ctx.persist({ type: "api", key: "fake-login" })
+                    return Option.none()
+                  }),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [extension],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({})
+        const namedForDefault = yield* Effect.exit(
+          client.auth.authorize({ sessionId, provider: "method-target", method: 1 }),
+        )
+        const defaultForNamed = yield* Effect.exit(
+          client.auth.authorize({ sessionId, provider: "method-target", method: 0, slot: work }),
+        )
+        expect(Exit.isFailure(namedForDefault)).toBe(true)
+        expect(Exit.isFailure(defaultForNamed)).toBe(true)
+        expect(authorizations).toBe(0)
+        expect(yield* auth.listSlots("method-target")).toEqual([])
+        const methods = yield* client.auth.listMethods({ sessionId })
+        expect(methods["method-target"]?.map((method) => method.label)).toEqual([
+          "Primary",
+          "Named",
+          "Either",
+        ])
+        yield* client.auth.authorize({ sessionId, provider: "method-target", method: 0 })
+        yield* client.auth.authorize({
+          sessionId,
+          provider: "method-target",
+          method: 1,
+          slot: work,
+        })
+        yield* client.auth.authorize({
+          sessionId,
+          provider: "method-target",
+          method: 2,
+          slot: CredentialSlot.make("legacy-named"),
+        })
+        yield* client.auth.authorize({ sessionId, provider: "method-target", method: 2 })
+        expect(authorizations).toBe(4)
+        expect((yield* auth.listSlots("method-target")).length).toBe(3)
+      }),
+    ).pipe(Effect.timeout("8 seconds")),
+  )
+  it.live("named set and delete through an alias preserve every default and other label", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const personal = CredentialSlot.make("personal")
+        const work = CredentialSlot.make("work")
+        yield* auth.set("alias-slots", AuthApi.make({ type: "api", key: "fake-default" }))
+        yield* auth.set(
+          "alias-slots",
+          AuthApi.make({ type: "api", key: "fake-legacy-named" }),
+          personal,
+        )
+        yield* auth.set("owner-slots", AuthApi.make({ type: "api", key: "fake-work" }), work)
+        const extension = defineExtension({
+          id: "@test/alias-slots",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            const owner: ModelDriverContribution = {
+              id: "owner-slots",
+              name: "Slots",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: { methods: [AuthMethod.make({ type: "api", label: "Key" })] },
+            }
+            yield* host.register("modelDriver", owner)
+            yield* host.register("modelDriver", {
+              ...owner,
+              id: "alias-slots",
+              credentialFrom: owner.id,
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [extension],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({})
+        const rows = yield* client.auth.listProviders({ sessionId })
+        const summaries = rows.find((row) => row.provider === "owner-slots")?.credentials ?? []
+        expect(summaries.map((entry) => entry.slot).sort()).toEqual([
+          CredentialSlot.make("default"),
+          personal,
+          work,
+        ])
+        expect(
+          summaries.every(
+            (entry) =>
+              !Object.keys(entry).some((key) =>
+                ["key", "accountId", "access", "refresh", "directory"].includes(key),
+              ),
+          ),
+        ).toBe(true)
+        yield* client.auth.setKey({
+          sessionId,
+          provider: "alias-slots",
+          slot: personal,
+          key: "fake-new",
+        })
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("owner-slots", personal)),
+            (stored) => stored.type === "api" && stored.key === "fake-new",
+          ),
+        ).toBe(true)
+        yield* client.auth.deleteKey({ sessionId, provider: "alias-slots", slot: personal })
+        expect(Predicate.isUndefined(yield* auth.get("owner-slots", personal))).toBe(true)
+        expect(Predicate.isUndefined(yield* auth.get("alias-slots", personal))).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("alias-slots")),
+            (stored) => stored.type === "api" && stored.key === "fake-default",
+          ),
+        ).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("owner-slots", work)),
+            (stored) => stored.type === "api" && stored.key === "fake-work",
+          ),
+        ).toBe(true)
+      }),
+    ).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.live("an expired named login cannot write into the default credential", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const slot = CredentialSlot.make("personal")
+        yield* auth.set("expired-slots", AuthApi.make({ type: "api", key: "fake-default" }))
+        const extension = defineExtension({
+          id: "@test/expired-slots",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "expired-slots",
+              name: "Expired Slots",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "Login" })],
+                authorize: () =>
+                  Effect.succeedSome({ url: "http://localhost/login", method: "code" }),
+                callback: (ctx) => ctx.persist({ type: "api", key: "fake-expired-callback" }),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [extension],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({})
+        const login = yield* client.auth.authorize({
+          sessionId,
+          provider: "expired-slots",
+          method: 0,
+          slot,
+        })
+        if (Predicate.isNull(login)) return yield* Effect.die("expected pending login")
+        yield* TestClock.adjust("11 minutes")
+        const result = yield* Effect.exit(
+          client.auth.callback({
+            sessionId,
+            provider: "expired-slots",
+            method: 0,
+            authorizationId: login.authorizationId,
+          }),
+        )
+        expect(Exit.isFailure(result)).toBe(true)
+        expect(Predicate.isUndefined(yield* auth.get("expired-slots", slot))).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("expired-slots")),
+            (stored) => stored.type === "api" && stored.key === "fake-default",
+          ),
+        ).toBe(true)
+      }),
+    ).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+  )
+
+  it.live("a callback retains its original named owner, method and inputs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const auth = yield* Effect.provide(Effect.service(Auth), Auth.Test())
+        const slot = CredentialSlot.make("personal")
+        const legacy = AuthInfo.cases.Api.make({ type: "api", key: "fake-default" })
+        yield* auth.set("slot-oauth", legacy)
+        const login = defineExtension({
+          id: "@test/slot-login",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "slot-oauth",
+              name: "Slot OAuth",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: {
+                methods: [AuthMethod.make({ type: "oauth", label: "Import" })],
+                authorize: () =>
+                  Effect.succeedSome({ url: "http://localhost/auth", method: "code" }),
+                callback: (ctx) =>
+                  Effect.gen(function* () {
+                    expect(ctx.methodIndex).toBe(0)
+                    expect(ctx.slot).toBe(slot)
+                    expect(ctx.inputs?.["directory"]).toBe("/nonexistent/fake-import")
+                    yield* ctx.persist({ type: "api", key: "fake-named" })
+                  }),
+              },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [login],
+            authLayer: Layer.succeed(Auth, auth),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({})
+        const launch = yield* client.auth.authorize({
+          sessionId,
+          provider: "slot-oauth",
+          method: 0,
+          slot,
+          inputs: { directory: "/nonexistent/fake-import" },
+        })
+        if (Predicate.isNull(launch)) return yield* Effect.die("authorization absent")
+        yield* client.auth.callback({
+          sessionId,
+          provider: "changed-ui-selection",
+          method: 1,
+          authorizationId: launch.authorizationId,
+        })
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("slot-oauth", slot)),
+            (info) => info.type === "api" && info.key === "fake-named",
+          ),
+        ).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("slot-oauth")),
+            (info) => info.type === "api" && info.key === legacy.key,
+          ),
+        ).toBe(true)
+        yield* client.auth.setKey({ sessionId, provider: "slot-oauth", slot, key: "fake-replaced" })
+        yield* client.auth.deleteKey({ sessionId, provider: "slot-oauth", slot })
+        expect(Predicate.isUndefined(yield* auth.get("slot-oauth", slot))).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("slot-oauth")),
+            (info) => info.type === "api" && info.key === legacy.key,
+          ),
+        ).toBe(true)
+        const expired = yield* Effect.exit(
+          client.auth.callback({
+            sessionId,
+            provider: "slot-oauth",
+            method: 0,
+            authorizationId: launch.authorizationId,
+          }),
+        )
+        expect(Exit.isFailure(expired)).toBe(true)
+      }),
+    ).pipe(Effect.timeout("8 seconds")),
+  )
   // A login's pending state lives on the driver instance that authorized it.
   // A config edit between the two calls supersedes the session's profile;
   // the callback still reaches the instance that holds the login.

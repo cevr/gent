@@ -129,6 +129,8 @@ import {
   Auth,
   AuthApi,
   authorizeProvider,
+  captureProviderLogin,
+  type ProviderLoginTarget,
   completeProviderAuth,
   DecisionModelResolver,
   listAuthMethods,
@@ -1427,6 +1429,8 @@ const LOGIN_LEASE = Duration.minutes(10)
 
 /** The profile a pending login holds; see "login leases" in `RpcHandlers`. */
 interface LoginLease {
+  readonly sessionId: SessionId
+  readonly target: ProviderLoginTarget
   readonly profile: Pick<SessionProfile, "registryService" | "layerContext">
   readonly scope: Scope.Closeable
   /** Callbacks running on the lease. */
@@ -1573,11 +1577,15 @@ const RpcHandlers = GentRpcs.toLayer(
         const scope = yield* Scope.fork(handlersScope)
         const authorized = yield* Effect.gen(function* () {
           const profile = yield* resolveSessionProfile(input.sessionId).pipe(Scope.provide(scope))
+          const target = yield* underProfile(
+            profile,
+            captureProviderLogin(input.provider, input.method, input.slot, input.inputs),
+          )
           const authorization = yield* underProfile(
             profile,
-            authorizeProvider(input.sessionId, input.provider, input.method),
+            authorizeProvider(input.sessionId, target.provider, target.method, target),
           )
-          return { profile, authorization }
+          return { profile, authorization, target }
         }).pipe(Effect.onError(() => Scope.close(scope, Exit.void)))
         if (Option.isNone(authorized.authorization)) {
           yield* Scope.close(scope, Exit.void)
@@ -1585,6 +1593,8 @@ const RpcHandlers = GentRpcs.toLayer(
         }
         const authorizationId = authorized.authorization.value.authorizationId
         const lease: LoginLease = {
+          sessionId: input.sessionId,
+          target: authorized.target,
           profile: authorized.profile,
           scope,
           inFlight: 0,
@@ -1605,37 +1615,45 @@ const RpcHandlers = GentRpcs.toLayer(
         return authorized.authorization
       })
 
-    const completeLogin = (input: CallbackAuthInput) => {
-      const run = completeProviderAuth(
-        input.sessionId,
-        input.provider,
-        input.method,
-        input.authorizationId,
-        input.code,
-      )
-      const held = Option.fromNullishOr(loginLeases.get(input.authorizationId))
-      if (Option.isNone(held)) return inSessionProfile(input.sessionId, run)
-      const lease = held.value
-      return Effect.acquireUseRelease(
-        Effect.sync(() => {
-          lease.inFlight++
-        }),
-        () =>
-          underProfile(lease.profile, run).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                lease.done = true
+    const completeLogin = (input: CallbackAuthInput) =>
+      sessionCwd(input.sessionId).pipe(
+        Effect.flatMap(() => {
+          const held = Option.fromNullishOr(loginLeases.get(input.authorizationId))
+          if (Option.isNone(held) || held.value.done || held.value.sessionId !== input.sessionId) {
+            return Effect.fail(
+              new ProviderAuthError({ message: "Login expired or unavailable; authorize again" }),
+            )
+          }
+          const lease = held.value
+          const run = completeProviderAuth(
+            lease.sessionId,
+            lease.target.provider,
+            lease.target.method,
+            input.authorizationId,
+            input.code,
+            lease.target,
+          )
+          return Effect.acquireUseRelease(
+            Effect.sync(() => {
+              lease.inFlight++
+            }),
+            () =>
+              underProfile(lease.profile, run).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    lease.done = true
+                  }),
+                ),
+              ),
+            () =>
+              Effect.suspend(() => {
+                lease.inFlight--
+                if (!lease.done || lease.inFlight > 0) return Effect.void
+                return dropLoginLease(input.authorizationId, lease)
               }),
-            ),
-          ),
-        () =>
-          Effect.suspend(() => {
-            lease.inFlight--
-            if (!lease.done || lease.inFlight > 0) return Effect.void
-            return dropLoginLease(input.authorizationId, lease)
-          }),
+          )
+        }),
       )
-    }
 
     return {
       // ----------------------------------------------------------------------
@@ -1841,12 +1859,13 @@ const RpcHandlers = GentRpcs.toLayer(
       // A key typed for a driver that shares a sign-in is the owner's key.
       // Its prompt answers go into the same record, written once. A refused
       // answer fails with its own message; a store failure names the call.
-      "auth.setKey": ({ provider, key, metadata, sessionId }: SetAuthKeyInput) =>
+      "auth.setKey": ({ provider, key, metadata, sessionId, slot }: SetAuthKeyInput) =>
         inSessionProfile(
           sessionId,
           storeSignIn(
             provider,
             AuthApi.make({ type: "api", key, ...omitUndefined({ metadata }) }),
+            slot,
           ).pipe(
             Effect.catchTag("AuthError", (error) =>
               Effect.fail(authPersistenceError("set", provider, error)),
@@ -1855,10 +1874,10 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       // A sign-in other drivers share removes every credential it reads.
-      "auth.deleteKey": ({ provider, sessionId }: DeleteAuthKeyInput) =>
+      "auth.deleteKey": ({ provider, sessionId, slot }: DeleteAuthKeyInput) =>
         inSessionProfile(
           sessionId,
-          removeSignIn(provider).pipe(
+          removeSignIn(provider, slot).pipe(
             Effect.mapError((error) => authPersistenceError("delete", provider, error)),
           ),
         ),

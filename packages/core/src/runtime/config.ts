@@ -23,6 +23,7 @@ import {
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
+import { CredentialSlot } from "../domain/driver.js"
 import { canonicalJsonString } from "effect-encore"
 import { writeFileAtomic } from "./gent-platform.js"
 
@@ -122,6 +123,14 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * every request) and `models` (by model id, in the models.dev model shape).
  */
 const ProviderConfigEntry = Schema.Struct({
+  authOrder: Schema.optional(
+    Schema.Array(CredentialSlot).check(
+      Schema.isMinLength(1),
+      Schema.makeFilter((slots) => new Set(slots).size === slots.length, {
+        message: "credential slots must be distinct",
+      }),
+    ),
+  ),
   name: Schema.optional(Schema.String),
   class: Schema.optional(Schema.String),
   api: Schema.optional(Schema.String),

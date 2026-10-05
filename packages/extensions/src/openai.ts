@@ -47,6 +47,8 @@ import {
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
+  type CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   rateLimitResponse,
   retryAfterAt,
   type UpdateStoredOAuth,
@@ -63,6 +65,7 @@ import {
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  credentialCells,
   type CredentialFailure,
   checkCredentials,
   CredentialRefreshUnavailable,
@@ -1902,10 +1905,25 @@ export const buildOpenAIModelDriver = (
   envApiKey: Option.Option<string>,
   crypto: Crypto.Crypto,
 ): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
+  const cellFor = credentialCells(credentialCellRef)
   // The keys whose organization OpenAI refused a reasoning summary.
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
   const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
+  const accountStates = new Map<
+    CredentialSlot,
+    { readonly refusedKeys: RefusedKeys; readonly rejectedReasoning: RejectedReasoning }
+  >([[DEFAULT_CREDENTIAL_SLOT, { refusedKeys, rejectedReasoning }]])
+  const stateFor = (slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT) => {
+    const held = accountStates.get(slot)
+    if (Predicate.isNotUndefined(held)) return held
+    const state = {
+      refusedKeys: Ref.makeUnsafe(HashSet.empty<string>()),
+      rejectedReasoning: Ref.makeUnsafe(HashSet.empty<string>()),
+    }
+    accountStates.set(slot, state)
+    return state
+  }
   /** Whether `entry` is still the pending login under `authorizationId`. */
   const isPending = (authorizationId: string, entry: PendingCallbackEntry) =>
     pendingCallbacks.get(authorizationId) === entry
@@ -2011,7 +2029,7 @@ export const buildOpenAIModelDriver = (
           yield* entry.close
           yield* replaceHeldCredential(
             OpenAICredentials,
-            credentialCellRef,
+            cellFor(ctx.slot),
             signedIn,
             ctx.persist(result),
           )
@@ -2031,6 +2049,10 @@ export const buildOpenAIModelDriver = (
     resolveModel: (modelName, authInfo, hintsInput, catalog) =>
       Effect.gen(function* () {
         const auth = Option.fromNullishOr(authInfo)
+        const accountState = Option.match(auth, {
+          onNone: () => stateFor(),
+          onSome: (info) => stateFor(info.slot),
+        })
         const hints = Option.fromNullishOr(hintsInput)
         const entry = adapterEntry(Option.fromUndefinedOr(catalog), "openai", modelName)
         const body = openAiBody(entry, hints)
@@ -2044,7 +2066,7 @@ export const buildOpenAIModelDriver = (
             })
           }
           const creds = yield* makeOpenAICredentialCache(
-            credentialCellRef,
+            cellFor(auth.value.slot),
             realIO,
             auth.value.update,
           )
@@ -2057,7 +2079,7 @@ export const buildOpenAIModelDriver = (
               modelName,
               config,
               creds,
-              rejectedReasoning,
+              accountState.rejectedReasoning,
               body,
             ),
           )
@@ -2072,8 +2094,8 @@ export const buildOpenAIModelDriver = (
             modelName,
             config,
             apiKey.value,
-            refusedKeys,
-            rejectedReasoning,
+            accountState.refusedKeys,
+            accountState.rejectedReasoning,
             body,
           )
         }

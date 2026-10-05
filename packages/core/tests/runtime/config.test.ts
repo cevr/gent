@@ -57,6 +57,23 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("user configuration", () => {
+  it.live("rejects empty, duplicate and invalid credential orders", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownOption(UserConfig)
+      for (const authOrder of [
+        [],
+        ["personal", "personal"],
+        ["UPPER"],
+        ["../escape"],
+        ["x".repeat(33)],
+      ]) {
+        expect(Option.isNone(decode({ providers: { anthropic: { authOrder } } }))).toBe(true)
+      }
+      expect(
+        Option.isSome(decode({ providers: { anthropic: { authOrder: ["default", "personal"] } } })),
+      ).toBe(true)
+    }),
+  )
   describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({ disabledExtensions: ["@gent/todo"] })

@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   makeAnthropicCredentialCache,
+  AnthropicExtension,
   type AnthropicCredentialIO,
   type AnthropicKeychainEnv,
   AnthropicPlatform,
@@ -35,6 +36,7 @@ import {
   Path,
   PlatformError,
   Ref,
+  Result,
   Schema,
   Stream,
   SynchronizedRef,
@@ -42,9 +44,14 @@ import {
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import type { ChildProcessSpawner } from "effect/process"
+import { ChildProcessSpawner } from "effect/process"
 import {
   captureProviderStopReason,
+  storedCredentialModel,
+  createRpcHarness,
+  LanguageModelLayers,
+  testAgent,
+  textStep,
   fixtureModelCatalog,
   testHostFacts,
   turnNoticesText,
@@ -61,6 +68,7 @@ import {
 import {
   type ExtensionHostService,
   ProviderAuthError,
+  CredentialSlot,
   type ProviderHints,
   SessionId,
   ProviderAuthInfo,
@@ -3533,5 +3541,222 @@ describe("Anthropic reset time", () => {
       )
       expect(resetAt).toEqual(Option.none())
     }),
+  )
+})
+
+describe("named Anthropic directory import", () => {
+  it.scopedLive("imports only the requested directory through RPC", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const directory = path.join(home, "second")
+      yield* fs.makeDirectory(directory)
+      yield* fs.writeFileString(
+        path.join(directory, ".credentials.json"),
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: "fake-second-access",
+            refreshToken: "fake-second-refresh",
+            expiresAt: (yield* Clock.currentTimeMillis) + 3600000,
+          },
+        }),
+      )
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+      const { client, sessionId } = yield* createRpcHarness({
+        agents: [testAgent],
+        extensionInputs: [AnthropicExtension],
+        providerLayer,
+        home,
+      })
+      const methods = yield* client.auth.listMethods({ sessionId })
+      expect(methods["anthropic"]?.[2]?.prompts?.[0]?.key).toBe("directory")
+      const slot = CredentialSlot.make("personal")
+      yield* client.auth.authorize({
+        sessionId,
+        provider: "anthropic",
+        method: 2,
+        slot,
+        inputs: { directory },
+      })
+      const rows = yield* client.auth.listProviders({ sessionId })
+      const row = rows.find((row) => row.provider === "anthropic")
+      expect(
+        row?.credentials?.some(
+          (entry) => entry.slot === slot && entry.hasKey && entry.authType === "oauth",
+        ),
+      ).toBe(true)
+      expect(row?.hasKey).toBe(false)
+      const refused = yield* Effect.exit(
+        client.auth.authorize({
+          sessionId,
+          provider: "anthropic",
+          method: 0,
+          slot: CredentialSlot.make("other"),
+        }),
+      )
+      expect(Exit.isFailure(refused)).toBe(true)
+      const missing = yield* Effect.exit(
+        client.auth.authorize({
+          sessionId,
+          provider: "anthropic",
+          method: 2,
+          slot: CredentialSlot.make("missing"),
+          inputs: { directory: path.join(home, "missing") },
+        }),
+      )
+      expect(Exit.isFailure(missing)).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("named Anthropic credential cache", () => {
+  it.scopedLive("named refresh uses only direct OAuth and never the primary source or CLI", () =>
+    Effect.gen(function* () {
+      let spawned = 0
+      const services = Context.add(
+        yield* driverServices(
+          AnthropicPlatform.of({
+            platform: "linux",
+            home: "/nonexistent/gent-named-refresh",
+            env: {},
+          }),
+        ),
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.sync(() => {
+            spawned++
+          }).pipe(Effect.andThen(Effect.die("named refresh forbids CLI"))),
+        ),
+      )
+      const driver = buildAnthropicModelDriverLive(
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+        Option.none(),
+        services,
+        "1h",
+      )
+      const state = makeFakeFetchState()
+      const fetch = fakeFetchLayer(state, (request) => {
+        const refresh = new URLSearchParams(request.body ?? "").get("refresh_token")
+        if (refresh === "fake-revoked")
+          return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
+        return {
+          status: 200,
+          body: encodeExternalJson({
+            access_token: "fake-rotated-access",
+            refresh_token: "fake-rotated-refresh",
+            expires_in: 3600,
+          }),
+        }
+      })
+      for (const [slot, token, success] of [
+        [CredentialSlot.make("personal"), "fake-direct", true],
+        [CredentialSlot.make("revoked"), "fake-revoked", false],
+      ] as const) {
+        const model = storedCredentialModel({
+          modelDrivers: [driver],
+          stored: {},
+          oauth: [
+            {
+              provider: "anthropic",
+              slot,
+              credential: { access: "fake-expired", refresh: token, expires: 0 },
+            },
+          ],
+          modelId: "anthropic/claude-opus-4-6",
+          catalog: fixtureModelCatalog(),
+          credentialSlot: slot,
+        })
+        const result = yield* Effect.exit(Layer.build(model).pipe(Effect.provide(fetch)))
+        expect(Exit.isSuccess(result)).toBe(success)
+        if (Exit.isFailure(result)) {
+          const defect = Cause.findDefect(result.cause)
+          expect(
+            Result.isSuccess(defect) &&
+              Schema.is(ProviderAuthError)(defect.success) &&
+              defect.success.message.includes("import it again"),
+          ).toBe(true)
+        }
+      }
+      expect(state.captured.length).toBe(2)
+      expect(
+        state.captured.every((request) => request.url === "https://claude.ai/v1/oauth/token"),
+      ).toBe(true)
+      expect(
+        new URLSearchParams(state.captured[0]?.body ?? "").get("refresh_token") === "fake-direct",
+      ).toBe(true)
+      expect(
+        new URLSearchParams(state.captured[1]?.body ?? "").get("refresh_token") === "fake-revoked",
+      ).toBe(true)
+      expect(spawned).toBe(0)
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a warm named slot never serves an expired or missing slot, or invokes the primary CLI",
+    () =>
+      Effect.gen(function* () {
+        let spawned = 0
+        const guard = ChildProcessSpawner.make(() =>
+          Effect.sync(() => {
+            spawned++
+          }).pipe(Effect.andThen(Effect.die("named credentials must not invoke a process"))),
+        )
+        const services = Context.add(
+          yield* driverServices(
+            AnthropicPlatform.of({
+              platform: "linux",
+              home: "/nonexistent/gent-named-primary",
+              env: {},
+            }),
+          ),
+          ChildProcessSpawner.ChildProcessSpawner,
+          guard,
+        )
+        // One real builder survives all resolutions, exactly as an extension profile does.
+        const driver = buildAnthropicModelDriverLive(
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+            EMPTY_CREDENTIAL_CELL,
+          ),
+          Option.none(),
+          services,
+          "1h",
+        )
+        const work = CredentialSlot.make("work")
+        const personal = CredentialSlot.make("personal")
+        const oauth = [
+          {
+            provider: "anthropic",
+            slot: work,
+            credential: {
+              access: "fake-work",
+              refresh: "fake-work-refresh",
+              expires: (yield* Clock.currentTimeMillis) + 3600000,
+            },
+          },
+          {
+            provider: "anthropic",
+            slot: personal,
+            credential: { access: "fake-expired", refresh: "", expires: 0 },
+          },
+        ]
+        for (const [slot, success] of [
+          [work, true],
+          [personal, false],
+          [CredentialSlot.make("missing"), false],
+        ] as const) {
+          const model = storedCredentialModel({
+            modelDrivers: [driver],
+            stored: {},
+            oauth,
+            modelId: "anthropic/claude-opus-4-6",
+            catalog: fixtureModelCatalog(),
+            credentialSlot: slot,
+          })
+          const result = yield* Effect.exit(Layer.build(model))
+          expect(Exit.isSuccess(result)).toBe(success)
+        }
+        expect(spawned).toBe(0)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })

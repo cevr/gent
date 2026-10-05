@@ -43,10 +43,18 @@ export type DriverFailureId = typeof DriverFailureId.Type
 
 // ── Auth method wire types ──
 
+/** Nonsecret credential label. Omission selects the legacy default entry. */
+export const CredentialSlot = Schema.String.check(Schema.isPattern(/^[a-z0-9_-]{1,32}$/)).pipe(
+  Schema.brand("CredentialSlot"),
+)
+export type CredentialSlot = typeof CredentialSlot.Type
+export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
+
 /**
- * One text field an API sign-in asks for after the key, such as an account
- * id. The answer is not a secret: the store keeps it beside the key as
- * `metadata[key]`. When `env` names a variable that is set, `/auth` does not
+ * One provider-owned sign-in input. An API method asks after the key and
+ * stores the answer beside it as
+ * `metadata[key]`; an OAuth method receives it in `inputs`. When `env` names
+ * a variable that is set, `/auth` does not
  * ask: the driver reads the variable instead. A prompt the driver cannot run
  * without is not `optional`: until it has an answer or its variable, the
  * sign-in is not ready, and the auth listing names it in `missing`.
@@ -60,19 +68,31 @@ export const AuthPrompt = Schema.Struct({
 })
 export type AuthPrompt = typeof AuthPrompt.Type
 
-/** The answers to an API sign-in's prompts, by prompt key. */
+/** The answers to a sign-in's provider-owned prompts, by prompt key. */
 export const AuthMetadata = Schema.Record(Schema.String, Schema.String)
 export type AuthMetadata = typeof AuthMetadata.Type
 
 /**
- * How a provider signs in: an API key or an OAuth login. An API method may
- * ask `prompts` after the key, in order.
+ * How a provider signs in: an API key or an OAuth login. Either may ask
+ * provider-owned `prompts`, in order.
  */
 export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
   type: Schema.Literals(["api", "oauth"]),
   label: Schema.String,
+  /** Omitted methods keep legacy applicability to either credential target. */
+  credentialTarget: Schema.optional(Schema.Literals(["default", "named"])),
   prompts: Schema.optional(Schema.Array(AuthPrompt)),
 }) {}
+
+/** Provider-owned applicability, shared by authorization and target pickers. */
+export const authMethodAppliesTo = (
+  method: AuthMethod,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
+): boolean => {
+  if (Predicate.isUndefined(method.credentialTarget)) return true
+  if (slot === DEFAULT_CREDENTIAL_SLOT) return method.credentialTarget === "default"
+  return method.credentialTarget === "named"
+}
 
 export const AuthAuthorizationMethod = Schema.Literals(["auto", "code", "done"])
 export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
@@ -201,8 +221,12 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
  * `update`.
  */
 export const ProviderAuthInfo = Schema.TaggedUnion({
-  Api: { key: Schema.String, metadata: Schema.optional(AuthMetadata) },
-  Oauth: { update: UpdateStoredOAuth },
+  Api: {
+    key: Schema.String,
+    metadata: Schema.optional(AuthMetadata),
+    slot: Schema.optional(CredentialSlot),
+  },
+  Oauth: { update: UpdateStoredOAuth, slot: Schema.optional(CredentialSlot) },
 })
 export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>
 
@@ -233,6 +257,8 @@ interface ProviderAuthorizeContext {
   readonly methodIndex: number
   readonly authorizationId: string
   readonly persist: PersistAuth
+  readonly slot?: CredentialSlot
+  readonly inputs?: AuthMetadata
 }
 
 interface ProviderCallbackContext extends ProviderAuthorizeContext {

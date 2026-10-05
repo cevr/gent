@@ -24,7 +24,13 @@ import {
   InteractionDecisionConflictError,
   InteractionRequestMismatchError,
 } from "../domain/interaction.js"
-import { AuthMetadata, AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
+import {
+  AuthMetadata,
+  AuthMethod,
+  CredentialSlot,
+  DriverError,
+  ProviderAuthError,
+} from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
@@ -264,6 +270,7 @@ export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
  * nothing. `metadata` holds the answers to the method's prompts, kept beside the key.
  */
 export const SetAuthKeyInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
   provider: Schema.String,
   key: Schema.String,
   metadata: Schema.optional(AuthMetadata),
@@ -276,6 +283,7 @@ export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
  * not exist fails and removes nothing.
  */
 export const DeleteAuthKeyInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
   provider: Schema.String,
   sessionId: SessionId,
 })
@@ -298,6 +306,8 @@ const ListCatalogProvidersSuccess = Schema.Struct({
 })
 
 export const AuthorizeAuthInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
+  inputs: Schema.optional(AuthMetadata),
   sessionId: SessionId,
   provider: Schema.String,
   method: Schema.Finite,
