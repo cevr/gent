@@ -1100,9 +1100,22 @@ export function ClientProvider(props: ClientProviderProps) {
     }),
   )
 
+  /**
+   * When the last turn of the branch in view ended: the time its
+   * `TurnCompleted` was stored. The runtime stream and the event feed are two
+   * streams, so a `Running` the loop published before it went idle can land
+   * after that receipt. A turn that started before the receipt is the turn it
+   * ended: its late `Running` starts nothing. A new turn starts after it.
+   */
+  let turnEnded = Option.none<{ readonly key: string; readonly at: number }>()
+  const endedBefore = (key: string, startedAtMs: number): boolean =>
+    Option.exists(turnEnded, (ended) => ended.key === key && startedAtMs < ended.at)
+
   const applySessionRuntime: ClientTransportValue["applySessionRuntime"] = (input) => {
     if (!sameIdentity(session(), input)) return
-    setRunning(input.runtime._tag !== "Idle")
+    const { runtime } = input
+    if (runtime._tag !== "Idle" && endedBefore(identityKey(input), runtime.startedAtMs)) return
+    setRunning(runtime._tag !== "Idle")
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
@@ -1174,8 +1187,12 @@ export function ClientProvider(props: ClientProviderProps) {
     )
   }
 
-  const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
+  const applyAgentLifecycleEvent = (envelope: EventEnvelope): void => {
+    const { event } = envelope
     const lifecycle = reduceAgentLifecycle(event)
+    if (event._tag === "TurnCompleted") {
+      turnEnded = Option.some({ key: identityKey(event), at: envelope.createdAt })
+    }
     Option.map(lifecycle.running, setRunning)
     if (Option.isSome(lifecycle.error)) showError(lifecycle.error)
     // A user message starts the next turn; the notice from before it is spent.
@@ -1254,7 +1271,7 @@ export function ClientProvider(props: ClientProviderProps) {
     if (event._tag === "ErrorOccurred") {
       log.error("agent.error", { error: event.error, eventId: envelope.id })
     }
-    applyAgentLifecycleEvent(event)
+    applyAgentLifecycleEvent(envelope)
     applySessionMetadataEvent(event)
   }
 

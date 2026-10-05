@@ -6405,6 +6405,110 @@ describe("tool runs across steps", () => {
       expect(committedText.join("")).toContain("GROW-PROMPT")
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // A step streams its thought before its call. Drawn on its own, the thought
+  // left the live tail when the call joined the run's head, and a tail that
+  // shrinks under an item history holds the top of replays the transcript:
+  // the screen clears and every row is written again, so the flicker grew
+  // with the session. The run takes the thought at once instead.
+  it.scopedLive(
+    "a running turn's steps write history only for their own rows, however long the session",
+    () =>
+      Effect.gen(function* () {
+        const thinking = (id: string): ListMessage => ({
+          _tag: "regular-message",
+          id,
+          role: "assistant",
+          content: "",
+          reasoning: "",
+          images: [],
+          createdAt: 0,
+          segments: [reasoning(`THOUGHT ${id}`)],
+        })
+        const joined = (id: string, command: string) =>
+          step(id, [command], { before: [reasoning(`THOUGHT ${id}`)] })
+        const turnOutput = (answers: number) =>
+          Effect.gen(function* () {
+            const history = [
+              ...Array.from({ length: answers }, (_, index) =>
+                assistant(`old-${index}`, `OLD-ANSWER ${index}`),
+              ),
+              assistant("last", longBody("LAST")),
+              clientPrompt("turn-prompt", "TURN-PROMPT"),
+            ]
+            const [items, setItems] = createSignal<ListMessage[]>([
+              ...history,
+              step("t1", ["git status"]),
+            ])
+            const committedText: string[] = []
+            const resets: string[] = []
+            const setup = yield* renderScoped(
+              () => (
+                <Transcript
+                  items={items()}
+                  streaming
+                  onRenderer={(renderer) => {
+                    const reset = renderer.resetSplitFooterForReplay.bind(renderer)
+                    Object.defineProperty(renderer, "resetSplitFooterForReplay", {
+                      configurable: true,
+                      value: (options?: { readonly clearSavedLines?: boolean }) => {
+                        resets.push(`clearSavedLines=${String(options?.clearSavedLines === true)}`)
+                        reset(options)
+                      },
+                    })
+                    renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
+                      committedText.push(committedTextOf(event))
+                    })
+                  }}
+                />
+              ),
+              { width: 60, height: 14 },
+            )
+            const flushUntil = (
+              done: () => boolean,
+              limit: "1 second" | "10 seconds" = "10 seconds",
+            ) =>
+              Effect.promise(() => setup.flush()).pipe(
+                Effect.repeat({ until: done, schedule: Schedule.spaced("10 millis") }),
+                Effect.timeout(limit),
+                Effect.ignore,
+              )
+            // History takes every row above the live tail: the last answer's top rows too.
+            yield* flushUntil(() => committedText.join("").includes("LAST line 3"))
+            expect(committedText.join("")).toContain("LAST line 3")
+            // The launch replays once; only what the turn writes counts here.
+            resets.splice(0)
+            committedText.splice(0)
+            const play = (next: ReadonlyArray<ListMessage>, frameHolds: string) =>
+              Effect.gen(function* () {
+                setItems([...history, ...next])
+                yield* flushUntil(() => renderFrame(setup).includes(frameHolds))
+                expect(renderFrame(setup)).toContain(frameHolds)
+              })
+            yield* play([step("t1", ["git status"]), thinking("t2")], "● 1 tool")
+            yield* play([step("t1", ["git status"]), joined("t2", "bun test")], "● 2 tools")
+            // A replay comes once blank rows have stood inside an item for 300 ms.
+            yield* flushUntil(() => resets.length > 0, "1 second")
+            yield* play(
+              [step("t1", ["git status"]), joined("t2", "bun test"), thinking("t3")],
+              "● 2 tools",
+            )
+            yield* play(
+              [step("t1", ["git status"]), joined("t2", "bun test"), joined("t3", "git diff")],
+              "● 3 tools",
+            )
+            yield* flushUntil(() => resets.length > 0, "1 second")
+            return { resets, committed: committedText.join("") }
+          })
+        const short = yield* turnOutput(10)
+        const long = yield* turnOutput(200)
+        expect(short.resets).toEqual([])
+        expect(long.resets).toEqual([])
+        expect(long.committed).not.toContain("OLD-ANSWER")
+        expect(long.committed).toBe(short.committed)
+      }).pipe(Effect.timeout("50 seconds")),
+    55_000,
+  )
 })
 
 // ── collapse ladder ─────────────────────────────────────────────────────────

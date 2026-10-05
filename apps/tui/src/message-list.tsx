@@ -592,7 +592,10 @@ interface ToolRun {
   readonly calls: ReadonlyArray<ToolCall>
   /** The reasoning the run took before its calls, by the id of the call it came before. */
   readonly reasoning: ReadonlyMap<string, ReadonlyArray<string>>
-  /** The reasoning the run took from before the text that ended it. */
+  /**
+   * The reasoning the run took from before the text that ended it, or, while
+   * the run is open in a running turn, the reasoning since its last call.
+   */
   readonly closing: ReadonlyArray<string>
   /** Nothing after the run has ended it yet: another step may join it. */
   readonly open: boolean
@@ -718,7 +721,12 @@ const projectToolRuns = (
     }
     if (!acrossSteps) close()
   }
-  if (!turnRunning) close()
+  // A running turn's open run takes the reasoning held since its last call
+  // now: the next call or the answer text takes it at the head either way.
+  // Drawn on its own until then, the thought would leave the live tail when
+  // that call arrives, and the tail would shrink under history (`watchGap`).
+  if (turnRunning) Option.map(current, (entry) => takeClosing(entry, false, absorbed))
+  else close()
   return toolRunsOf(drafts, absorbed)
 }
 

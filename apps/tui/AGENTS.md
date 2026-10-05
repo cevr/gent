@@ -193,7 +193,12 @@ one that shrinks (the activity row going at a turn's end) leaves blank rows
 above the tail until it grows into them, never above the composer; so does a
 tail that shrinks after history took its top rows (a tool run that folds).
 Blank rows inside an item (history holds its top rows) that stay for 300 ms
-replay the transcript (`watchGap`). Patched OpenTUI grows the region with line
+replay the transcript (`watchGap`). A replay clears the screen and the saved
+lines and writes every row again, so its cost grows with the session: nothing
+a turn does as it runs may shrink the tail or flap the base. A thought waits
+inside its open run (`projectToolRuns`), and a `Running` from the runtime
+stream for a turn whose `TurnCompleted` has landed starts nothing (the
+runtime stream and the event feed are two streams; `client.tsx`). Patched OpenTUI grows the region with line
 feeds at the screen's last row, which keep the rows they push in scrollback
 (its own `CSI S` drops them). The rows above the canvas go to native history in order, only from final items
 (`isFinalItem` in `message-list.tsx`: a streamed `draft` answer waits for
@@ -296,7 +301,10 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   that call's own message only: an earlier message may already be in
   history), the reasoning between its calls, and the reasoning just before the
   answer text that ends it; the header counts each as a thought, and full
-  draws each where it came. Reasoning with no run is one line at collapsed and
+  draws each where it came. While a turn runs, the open run takes the
+  reasoning since its last call at once (as its closing reasoning until a call
+  or answer text follows), so a thought never draws on its own and then
+  leaves the live tail when the next call joins. Reasoning with no run is one line at collapsed and
   preview, `∴ Thought · <first summary> · N summaries`, and its markdown at
   full and in the transcript view.
 - **Child completion** (`delegate.client.tsx`). Collapsed is one line,
