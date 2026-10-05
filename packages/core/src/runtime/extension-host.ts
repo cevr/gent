@@ -99,6 +99,7 @@ import {
   bindSessionAgent,
   DEFAULT_AGENT_NAME,
   noRunBound,
+  ParentBoundError,
   resolveSessionAgent,
   type RunBound,
 } from "../domain/agent.js"
@@ -3240,7 +3241,7 @@ type RunSession = Pick<Session, "id" | "threadId" | "parentSessionId" | "cwd" | 
  * config as they are, links left to the file tools at each call. None when
  * its own agent is gone from the roster. Its own config reads leniently, as
  * the turn's own `getFresh` already refuses to run on a file that does not
- * load.
+ * load; a parent's reads strictly (`resolveParentBound`).
  */
 const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
   session: RunSession,
@@ -3270,42 +3271,67 @@ const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
 export const resolveParentBound: (
   session: Pick<Session, "id" | "threadId" | "parentSessionId">,
   launchCwd: string,
-) => Effect.Effect<RunBound, StorageError, SessionStorage | SessionProfileCache | ConfigService> =
-  Effect.fn("SessionRunAgent.resolveParentBound")(function* (session, launchCwd) {
-    if (!isSpawnedSession(session) || Predicate.isUndefined(session.parentSessionId)) {
-      return noRunBound
-    }
-    return yield* resolveSessionBound(session.parentSessionId, launchCwd)
-  })
+) => Effect.Effect<
+  RunBound,
+  ParentBoundError | StorageError,
+  SessionStorage | SessionProfileCache | ConfigService
+> = Effect.fn("SessionRunAgent.resolveParentBound")(function* (session, launchCwd) {
+  if (!isSpawnedSession(session) || Predicate.isUndefined(session.parentSessionId)) {
+    return noRunBound
+  }
+  return yield* resolveSessionBound(session.parentSessionId, launchCwd)
+})
 
 /**
  * The whole bound of the run of session `sessionId`, as its children
- * inherit it. A row that cannot be read or an agent gone from its roster
- * bounds nothing.
+ * inherit it. Fails closed with `ParentBoundError`, naming the session and
+ * its agent, when the row cannot be read, its config does not load, or its
+ * agent is gone from its roster: a child never runs wider than a parent
+ * whose bound nobody can read.
  */
 export const resolveSessionBound: (
   sessionId: SessionId,
   launchCwd: string,
-) => Effect.Effect<RunBound, StorageError, SessionStorage | SessionProfileCache | ConfigService> =
-  Effect.fn("SessionRunAgent.resolveSessionBound")(function* (sessionId, launchCwd) {
-    const parent = yield* (yield* SessionStorage).getSession(sessionId)
-    if (Predicate.isUndefined(parent)) return noRunBound
-    const cwd = parent.cwd ?? launchCwd
-    const config = yield* (yield* ConfigService).get(cwd)
-    const grandparent = yield* resolveParentBound(parent, launchCwd)
-    const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
-    const overrides = Option.fromUndefinedOr(parent.admission?.runSpec?.overrides)
-    const definition = resolveSessionAgent({
-      agents: profile.resolved.agents.values(),
-      configAgents: Option.fromUndefinedOr(config.agents),
-      name: parent.admission?.agent ?? DEFAULT_AGENT_NAME,
-      overrides,
+) => Effect.Effect<
+  RunBound,
+  ParentBoundError | StorageError,
+  SessionStorage | SessionProfileCache | ConfigService
+> = Effect.fn("SessionRunAgent.resolveSessionBound")(function* (sessionId, launchCwd) {
+  const parent = yield* (yield* SessionStorage).getSession(sessionId)
+  if (Predicate.isUndefined(parent)) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} cannot be read, so the bound of its run is unknown and its child runs nothing.`,
+      parentSessionId: sessionId,
     })
-    return Option.match(definition, {
-      onNone: () => noRunBound,
-      onSome: (agent) => bindSessionAgent(agent, { overrides, cwd, parent: grandparent }).bound,
+  }
+  const agent = parent.admission?.agent ?? DEFAULT_AGENT_NAME
+  const cwd = parent.cwd ?? launchCwd
+  const fresh = yield* (yield* ConfigService).getFresh(cwd)
+  if (fresh.failures.length > 0) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} runs as agent "${agent}", and its config does not load (${fresh.failures.map((failure) => failure.path).join(", ")}), so its child runs nothing until it is fixed.`,
+      parentSessionId: sessionId,
+      agent,
     })
+  }
+  const grandparent = yield* resolveParentBound(parent, launchCwd)
+  const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
+  const overrides = Option.fromUndefinedOr(parent.admission?.runSpec?.overrides)
+  const definition = resolveSessionAgent({
+    agents: profile.resolved.agents.values(),
+    configAgents: Option.fromUndefinedOr(fresh.config.agents),
+    name: agent,
+    overrides,
   })
+  if (Option.isNone(definition)) {
+    return yield* new ParentBoundError({
+      message: `Parent session ${sessionId} runs as agent "${agent}", which is gone from its roster, so its child runs nothing until the agent is back.`,
+      parentSessionId: sessionId,
+      agent,
+    })
+  }
+  return bindSessionAgent(definition.value, { overrides, cwd, parent: grandparent }).bound
+})
 
 // ── approval-service ────────────────────────────────────────────────────────
 

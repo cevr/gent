@@ -24,6 +24,7 @@ import {
   LanguageModelLayers,
   textStep,
   createRpcHarness,
+  testAgent,
   testLeafContext,
   testToolContext,
   waitFor,
@@ -608,6 +609,8 @@ const openHarness = Effect.gen(function* () {
   return yield* createRpcHarness({
     ...e2ePreset,
     providerLayer,
+    // The view alone, beside the default agent: a child's parent run resolves.
+    agents: [testAgent],
     extensionInputs: [AgentsViewExtension],
     cwd: "/nonexistent/agents-view-rpc",
   })

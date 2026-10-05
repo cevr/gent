@@ -4,6 +4,7 @@ import {
   AgentName,
   Model,
   ModelId,
+  ParentBoundError,
   ReasoningEffort,
   RunPathRefusedError,
   SessionDepthLimitError,
@@ -80,6 +81,7 @@ export const GentRpcError = Schema.Union([
   InvalidStateError,
   SessionDepthLimitError,
   RunPathRefusedError,
+  ParentBoundError,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 
 export type GentRpcError = typeof GentRpcError.Type

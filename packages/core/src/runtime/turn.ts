@@ -1528,17 +1528,32 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     return undefined
   }
   // The run's bound: its own and every parent run's, so a child never runs
-  // wider than its parent.
+  // wider than its parent. A parent bound nobody can resolve fails closed.
   const parentBound = yield* Option.match(session, {
-    onNone: () => Effect.succeed(noRunBound),
-    onSome: (value) => resolveParentBound(value, hostCtx.cwd),
+    onNone: () => Effect.succeed(Result.succeed(noRunBound)),
+    onSome: (value) => Effect.result(resolveParentBound(value, hostCtx.cwd)),
   })
+  if (Result.isFailure(parentBound)) {
+    const failure = parentBound.failure
+    if (failure._tag !== "ParentBoundError") return yield* failure
+    yield* eventStore
+      .publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: failure.message,
+        }),
+      )
+      .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- A parent bound that does not resolve ends the turn after the error event is published, as an unknown agent does.
+    return undefined
+  }
   const dispatchAgent = bindSessionAgent(definition.value, {
     overrides: Option.flatMap(admission, (value) =>
       Option.fromUndefinedOr(value.runSpec?.overrides),
     ),
     cwd: hostCtx.cwd,
-    parent: parentBound,
+    parent: parentBound.success,
   })
   const interactive = params.interactive
 

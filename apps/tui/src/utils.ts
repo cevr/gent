@@ -405,6 +405,8 @@ export const formatError = (error: UiError): string => {
       return `Depth: ${error.message}`
     case "RunPathRefusedError":
       return `Paths: ${error.message}`
+    case "ParentBoundError":
+      return `Parent: ${error.message}`
     case "ProviderAuthError":
       return `Auth: ${error.message}`
     case "DriverError":

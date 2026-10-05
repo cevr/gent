@@ -45,6 +45,7 @@ import {
   createRpcClient,
   createRpcHarness,
   fixedSessionProfiles,
+  testAgent,
   testSqliteStorage,
   emptyQueueSnapshot,
 } from "../../src/test-utils/harness"
@@ -208,6 +209,24 @@ type TestStorage = Layer.Layer<
  * collaborators. Each option replaces one collaborator; `sessionStorage`
  * wraps the real session storage to inject a failure or a racing write.
  */
+/**
+ * Every cwd's roster holds the default agent, as the shipped one does: a
+ * child's parent run must resolve, or the child is refused.
+ */
+const defaultAgentProfiles = fixedSessionProfiles(
+  new Map(),
+  ExtensionRegistry.fromResolved(
+    resolveExtensions([
+      {
+        manifest: { id: ExtensionId.make("@test/default-agent") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: { agents: [testAgent] },
+      },
+    ]),
+  ),
+)
+
 const sessionMutationsTestLayer = (
   options: {
     readonly storage?: TestStorage
@@ -234,7 +253,7 @@ const sessionMutationsTestLayer = (
     LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     testRuntimeEnvironment,
-    fixedSessionProfiles(),
+    defaultAgentProfiles,
     ConfigService.Test(),
     BunServices.layer,
   )

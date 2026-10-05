@@ -20,6 +20,7 @@ import {
   type Model,
   type ModelId,
   type ReasoningEffort,
+  type ParentBoundError,
   type RunPathRefusedError,
   type SessionAgent,
   type SessionDepthLimitError,
@@ -895,7 +896,8 @@ export interface ExtensionSessionService {
    * session's run overrides applied, bound by its run and every parent run
    * it was spawned under: `admitsTool` and `pathScopes` answer for the run
    * (`SessionAgent`). The current session when none is named; none when the
-   * agent is gone from the roster.
+   * agent is gone from the roster. Fails when a parent run's bound cannot
+   * be resolved (`ParentBoundError`), so a caller that checks fails closed.
    */
   readonly getAgent: (
     sessionId?: SessionId,
@@ -1541,6 +1543,7 @@ type SessionMutationError =
   | NotFoundError
   | SessionDepthLimitError
   | RunPathRefusedError
+  | ParentBoundError
 
 export interface SessionMutationsService {
   readonly createSession: (

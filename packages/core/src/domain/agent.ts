@@ -1195,6 +1195,18 @@ export class RunPathRefusedError extends Schema.TaggedError<RunPathRefusedError>
   },
 ) {}
 
+/**
+ * The bound of a spawned session's parent run cannot be resolved: the
+ * parent row cannot be read, its agent is gone from its roster, or its
+ * config does not load. A child is bounded by its parent run, so it fails
+ * closed: its create is refused, and its turns and file calls do not run.
+ */
+export class ParentBoundError extends Schema.TaggedError<ParentBoundError>()("ParentBoundError", {
+  message: Schema.String,
+  parentSessionId: SessionId,
+  agent: Schema.optional(AgentName),
+}) {}
+
 /** A parent at the nesting cap asked for one more child. */
 export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(
   "SessionDepthLimitError",

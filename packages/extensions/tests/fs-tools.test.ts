@@ -2548,4 +2548,41 @@ describe("run overrides narrow the agent", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
+
+  it.scopedLive(
+    "a parent whose agent left the roster bounds its child closed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const parent = yield* confinedParent(dirs, [
+          { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+        ])
+        const child = yield* parent.childOf({ agent: OPEN })
+        const { scoped: _removed, ...rest } = NARROWED_AGENTS
+        yield* writeAgents(dirs.cwd, rest)
+        // A new child is refused, and the refusal names the parent and its agent.
+        const refused = yield* parent.childOf({ agent: OPEN }).pipe(Effect.flip)
+        expect(refused._tag).toBe("ParentBoundError")
+        expect(refused.message).toContain(parent.sessionId)
+        expect(refused.message).toContain('"scoped"')
+        // The child that runs already does not run past the bound it lost.
+        const failed = yield* parent.client.session.events(child).pipe(
+          Stream.filter(({ event }) => event._tag === "ErrorOccurred"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+        yield* parent.client.message.send({ ...child, content: "Work." })
+        const errors = yield* Fiber.join(failed)
+        const reported: Array<string> = []
+        for (const { event } of errors) {
+          if (event._tag === "ErrorOccurred") reported.push(event.error)
+        }
+        expect(reported.join("\n")).toContain('"scoped"')
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
 })
