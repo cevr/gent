@@ -307,7 +307,12 @@ interface RunProcessOptions {
   /** Merge `env` over the inherited environment instead of replacing it. */
   readonly extendEnv?: boolean
   readonly timeout?: Duration.Duration
-  readonly stdin?: "pipe" | "ignore" | "inherit"
+  /** A stream is written to the child's stdin, which closes when the stream ends. */
+  readonly stdin?:
+    | "pipe"
+    | "ignore"
+    | "inherit"
+    | Stream.Stream<Uint8Array, PlatformError.PlatformError>
   readonly stdout?: "pipe" | "ignore" | "inherit"
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
