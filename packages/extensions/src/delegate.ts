@@ -1506,6 +1506,8 @@ export const CancelChild = tool({
       yield* ctx.Session.stopMessage({
         sessionId: entry.sessionId,
         branchId: entry.branchId,
+        // Core keys a stop by the child's loop (workspace, session, branch) and
+        // this id, so two parents' `start-1` cancels are two stops.
         requestId: RequestId.make(`delegate-cancel:${params.requestId}`),
         messageId: startMessageId(entry),
       }).pipe(Effect.asVoid, asDelegateError("Cannot submit child cancellation"))
