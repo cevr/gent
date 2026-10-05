@@ -14,8 +14,10 @@
  * `<data dir>/checkpoints/<first 16 hex of sha256(the work tree's top)>/`.
  * gent writes no ref, object or index entry into the user's repository. The
  * refs are the only record: `refs/checkpoints/<session>/<branch>/<turn>/start`
- * and `/end`, each path part the hex of the id, with the readable ids in the
- * commit trailers. One `for-each-ref` reads the whole timeline of a store.
+ * and `/end`, and a revert's `refs/reverts/<session>/<branch>/<request>/`
+ * `before`, `target` and `done`, each path part the hex of the id, with the
+ * readable ids in the commit trailers. One `for-each-ref` reads the whole
+ * timeline of a store.
  *
  * Zero model tokens: no tool, no prompt section, no notice.
  *
@@ -51,7 +53,9 @@ import {
   type Message,
   MessageId,
   messagePartsDisplayText,
+  pathWithin,
   request,
+  RequestId,
   resolveDataDir,
   SessionId,
   ToolCallVerdict,
@@ -92,6 +96,10 @@ export const CheckpointList = Schema.Struct({
   /** Why the branch has no checkpoints at all, such as a cwd outside git. */
   problem: Schema.optional(Schema.String),
   turns: Schema.Array(TurnRow),
+  /** The newest revert this branch made or landed on, done: undo writes back the files it wrote. */
+  undo: Schema.optional(Schema.Struct({ requestId: Schema.String, files: Schema.Int })),
+  /** The newest revert, when a stop cut it short after its target: finish it or undo it. */
+  unfinished: Schema.optional(Schema.Struct({ requestId: Schema.String })),
 })
 export type CheckpointList = typeof CheckpointList.Type
 
@@ -102,6 +110,34 @@ export const TurnPatch = Schema.Struct({
   patch: Schema.String,
 })
 export type TurnPatch = typeof TurnPatch.Type
+
+/**
+ * What a revert does. `Turn` takes the work tree back to before turn `#n`,
+ * and with `conversation` the conversation too, on a new branch. `Undo`
+ * reverts the newest revert; `Finish` writes a revert a stop cut short.
+ */
+export const RevertAction = Schema.TaggedUnion({
+  Turn: { n: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)), conversation: Schema.Boolean },
+  Undo: {},
+  Finish: {},
+})
+export type RevertAction = typeof RevertAction.Type
+
+export const RevertInput = Schema.Struct({
+  /** One revert: a repeat with the same id does the revert once. */
+  requestId: RequestId,
+  action: RevertAction,
+  /** Write the paths that others changed too; the revert's `before` keeps what it overwrites. */
+  overwrite: Schema.optional(Schema.Boolean),
+})
+type RevertInput = typeof RevertInput.Type
+
+/** The paths a revert wrote, and the branch a conversation revert made; or why it wrote nothing. */
+export const RevertOutcome = Schema.TaggedUnion({
+  Reverted: { files: Schema.Array(Schema.String), branchId: Schema.optional(BranchId) },
+  Refused: { reason: Schema.String, conflicts: Schema.Array(Schema.String) },
+})
+export type RevertOutcome = typeof RevertOutcome.Type
 
 // ── limits ──────────────────────────────────────────────────────────────────
 
@@ -407,6 +443,8 @@ interface Mark {
   readonly turn: Option.Option<MessageId>
   /** The revert request: on a revert's mark. */
   readonly requestId: Option.Option<string>
+  /** The branch a conversation revert made: on its `target`. */
+  readonly resultBranch: Option.Option<BranchId>
   readonly at: number
 }
 
@@ -434,6 +472,9 @@ const parseMark = (record: string): Option.Option<Mark> => {
     branchId: BranchId.make(branch),
     turn: Option.map(Option.fromUndefinedOr(trailers.get("Gent-Turn")), (id) => MessageId.make(id)),
     requestId: Option.fromUndefinedOr(trailers.get("Gent-Request")),
+    resultBranch: Option.map(Option.fromUndefinedOr(trailers.get("Gent-Result-Branch")), (id) =>
+      BranchId.make(id),
+    ),
     at,
   })
 }
@@ -596,6 +637,37 @@ const captureTree = Effect.fn("Checkpoints.captureTree")(function* (place: Place
   return { tree, skipped }
 })
 
+/**
+ * One mark: a commit of `tree` with its trailers and a fresh `Gent-At`, and
+ * its ref, created only once. Under the store lock.
+ */
+const markCommit = Effect.fn("Checkpoints.markCommit")(function* (
+  place: Place,
+  mark: {
+    readonly ref: string
+    readonly tree: string
+    readonly parent: Option.Option<string>
+    readonly trailers: ReadonlyArray<readonly [string, string]>
+  },
+) {
+  const at = yield* nextAt(place)
+  const kind = mark.trailers.find(([key]) => key === "Gent-Kind")?.[1] ?? "mark"
+  const message = [
+    `gent checkpoint: ${kind}`,
+    "",
+    ...mark.trailers.map(([key, value]) => `${key}: ${value}`),
+    `Gent-At: ${at}`,
+  ].join("\n")
+  const parents = Option.match(mark.parent, {
+    onNone: () => [],
+    onSome: (commit) => ["-p", commit],
+  })
+  const commit = yield* inStore(place, ["commit-tree", mark.tree, ...parents, "-m", message])
+  // Create only: the empty old value refuses a ref that exists.
+  yield* inStore(place, ["update-ref", mark.ref, commit, ""])
+  return commit
+})
+
 /** Capture the work tree as the turn's `kind` checkpoint. Under the store lock. */
 const capture = Effect.fn("Checkpoints.capture")(function* (
   place: Place,
@@ -608,22 +680,18 @@ const capture = Effect.fn("Checkpoints.capture")(function* (
   parent: Option.Option<string>,
 ) {
   const { tree, skipped } = yield* captureTree(place)
-  const at = yield* nextAt(place)
-  const message = [
-    `gent checkpoint: turn ${kind}`,
-    "",
-    `Gent-Kind: ${kind}`,
-    `Gent-Session: ${ids.sessionId}`,
-    `Gent-Branch: ${ids.branchId}`,
-    `Gent-Turn: ${ids.messageId}`,
-    `Gent-At: ${at}`,
-    `Gent-Skipped: ${skipped}`,
-  ].join("\n")
-  const parents = Option.match(parent, { onNone: () => [], onSome: (commit) => ["-p", commit] })
-  const commit = yield* inStore(place, ["commit-tree", tree, ...parents, "-m", message])
-  // Create only: the empty old value refuses a ref that exists.
-  yield* inStore(place, ["update-ref", checkpointRef(ids, kind), commit, ""])
-  return commit
+  return yield* markCommit(place, {
+    ref: checkpointRef(ids, kind),
+    tree,
+    parent,
+    trailers: [
+      ["Gent-Kind", kind],
+      ["Gent-Session", ids.sessionId],
+      ["Gent-Branch", ids.branchId],
+      ["Gent-Turn", ids.messageId],
+      ["Gent-Skipped", String(skipped)],
+    ],
+  })
 })
 
 /** Whether this session captures in `place`: a spawned one only where a store exists. */
@@ -759,11 +827,12 @@ const turnsOf = Effect.fn("Checkpoints.turnsOf")(function* (spans: Map<string, S
   const spanOf = (message: Message) =>
     spanIn(message.branchId, message.id, message.createdAt.getTime(), branches.size)
   const messages = branches.get(ctx.branchId)?.messages ?? []
-  return messages
+  const turns = messages
     .filter(opensTurn)
     .slice(-MAX_TURNS)
     .reverse()
     .map((message, index): Turn => ({ n: index + 1, message, span: spanOf(message) }))
+  return { turns, messages }
 })
 
 /** `diff --shortstat` of each end against its start, in one command. */
@@ -817,7 +886,7 @@ const listTurns = Effect.gen(function* () {
         return yield* readTimeline(found)
       }),
   })
-  const turns = yield* turnsOf(spansOf(marks))
+  const { turns } = yield* turnsOf(spansOf(marks))
   const ends = turns.flatMap((turn) =>
     Option.toArray(Option.flatMap(turn.span, (span) => span.end)).map((mark) => mark.commit),
   )
@@ -838,10 +907,32 @@ const listTurns = Effect.gen(function* () {
       ...counts,
     }
   })
-  const list: CheckpointList = Option.match(place, {
-    onNone: () => ({ problem: NOT_GIT(ctx.cwd), turns: rows }),
-    onSome: () => ({ turns: rows }),
+  const newest = newestRevert(marks, ctx.sessionId, ctx.branchId)
+  const undo = yield* Option.match(Option.all({ place, revert: newest }), {
+    onNone: () => Effect.succeedNone,
+    onSome: ({ place: found, revert }) =>
+      Effect.gen(function* () {
+        if (Option.isNone(revert.done)) return Option.none()
+        const files = yield* revertFiles(found, revert)
+        return Option.some({ requestId: revert.requestId, files: files.length })
+      }),
   })
+  const unfinished = Option.filter(
+    newest,
+    (revert) => Option.isSome(revert.target) && Option.isNone(revert.done),
+  )
+  const list: CheckpointList = {
+    ...Option.match(place, {
+      onNone: () => ({ problem: NOT_GIT(ctx.cwd) }),
+      onSome: () => ({}),
+    }),
+    turns: rows,
+    ...Option.match(undo, { onNone: () => ({}), onSome: (value) => ({ undo: value }) }),
+    ...Option.match(unfinished, {
+      onNone: () => ({}),
+      onSome: (revert) => ({ unfinished: { requestId: revert.requestId } }),
+    }),
+  }
   return list
 })
 
@@ -883,7 +974,7 @@ const turnPatch = Effect.fn("Checkpoints.turnPatch")(function* (n: number) {
   let marks: ReadonlyArray<Mark> = []
   if (yield* storeExists(place)) marks = yield* readTimeline(place)
   const spans = spansOf(marks)
-  const turn = (yield* turnsOf(spans)).find((found) => found.n === n)
+  const turn = (yield* turnsOf(spans)).turns.find((found) => found.n === n)
   if (Predicate.isUndefined(turn))
     return yield* new CheckpointsError({ message: `the branch has no turn #${n}` })
   const start = Option.flatMap(turn.span, (span) => span.start)
@@ -924,6 +1015,556 @@ const turnPatch = Effect.fn("Checkpoints.turnPatch")(function* (n: number) {
   return patch
 })
 
+// ── revert ──────────────────────────────────────────────────────────────────
+
+/** One revert's marks: `before` (the tree it replaced), `target` (the tree it writes), `done`. */
+interface Revert {
+  readonly requestId: string
+  readonly sessionId: SessionId
+  /** The branch the revert ran from. */
+  readonly branchId: BranchId
+  readonly before: Option.Option<Mark>
+  readonly target: Option.Option<Mark>
+  readonly done: Option.Option<Mark>
+  /** The branch a conversation revert made. */
+  readonly resultBranch: Option.Option<BranchId>
+}
+
+const revertRef = (requestId: string, kind: "before" | "target" | "done") =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    return `refs/reverts/${utf8Hex(ctx.sessionId)}/${utf8Hex(ctx.branchId)}/${utf8Hex(requestId)}/${kind}`
+  })
+
+const revertsOf = (marks: ReadonlyArray<Mark>) => {
+  const reverts = new Map<string, Revert>()
+  for (const mark of marks) {
+    if (Option.isNone(mark.requestId)) continue
+    if (mark.kind !== "before" && mark.kind !== "target" && mark.kind !== "done") continue
+    const requestId = mark.requestId.value
+    const known = reverts.get(requestId) ?? {
+      requestId,
+      sessionId: mark.sessionId,
+      branchId: mark.branchId,
+      before: Option.none(),
+      target: Option.none(),
+      done: Option.none(),
+      resultBranch: Option.none(),
+    }
+    reverts.set(requestId, {
+      ...known,
+      [mark.kind]: Option.some(mark),
+      resultBranch: Option.orElse(mark.resultBranch, () => known.resultBranch),
+    })
+  }
+  return reverts
+}
+
+/** When a revert's first and last marks were written. */
+const revertInterval = (revert: Revert) => {
+  const marks = [revert.before, revert.target, revert.done].flatMap(Option.toArray)
+  const times = marks.map((mark) => mark.at)
+  return { from: Math.min(...times), to: Math.max(...times) }
+}
+
+/** The newest revert the branch made, or the one that made the branch. */
+const newestRevert = (marks: ReadonlyArray<Mark>, sessionId: SessionId, branchId: BranchId) =>
+  Option.fromUndefinedOr(
+    [...revertsOf(marks).values()]
+      .filter(
+        (revert) =>
+          revert.sessionId === sessionId &&
+          (revert.branchId === branchId ||
+            Option.exists(revert.resultBranch, (made) => made === branchId)),
+      )
+      .sort((left, right) => revertInterval(left).from - revertInterval(right).from)
+      .at(-1),
+  )
+
+/** The paths two commits differ in. */
+const changedPaths = Effect.fn("Checkpoints.changedPaths")(function* (
+  place: Place,
+  from: string,
+  to: string,
+) {
+  if (from === to) return new Set<string>()
+  const result = yield* inStoreRun(place, [
+    "diff",
+    "--name-only",
+    "-z",
+    "--no-renames",
+    "--no-ext-diff",
+    from,
+    to,
+  ])
+  if (result.exitCode !== 0) return yield* gitFailure(["diff"], result)
+  return new Set(nulList(result.stdout))
+})
+
+/** Every file path of a tree. */
+const treePaths = Effect.fn("Checkpoints.treePaths")(function* (place: Place, tree: string) {
+  const result = yield* inStoreRun(place, ["ls-tree", "-r", "-z", "--name-only", tree])
+  if (result.exitCode !== 0) return yield* gitFailure(["ls-tree"], result)
+  return new Set(nulList(result.stdout))
+})
+
+const treeOf = (place: Place, commit: string) => inStore(place, ["rev-parse", `${commit}^{tree}`])
+
+/** The paths a revert writes: where its target differs from its before. */
+const revertFiles = Effect.fn("Checkpoints.revertFiles")(function* (place: Place, revert: Revert) {
+  if (Option.isNone(revert.before) || Option.isNone(revert.target)) return []
+  return [
+    ...(yield* changedPaths(place, revert.before.value.commit, revert.target.value.commit)),
+  ].sort()
+})
+
+/** Every other loop that works in this work tree, by name. */
+const blockers = Effect.fn("Checkpoints.blockers")(function* (place: Place) {
+  const ctx = yield* ExtensionContext
+  const path = yield* Path.Path
+  const loops = yield* ctx.Session.listActiveLoops
+  const names: Array<string> = []
+  for (const loop of loops) {
+    if (loop.sessionId === ctx.sessionId && loop.branchId === ctx.branchId) continue
+    if (!Option.exists(loop.status, (status) => status !== "Idle")) continue
+    const session = yield* ctx.Session.getSession(loop.sessionId)
+    const other = yield* locate(session?.cwd ?? ctx.cwd, ctx.home)
+    if (Option.isNone(other)) continue
+    const top = other.value.top
+    if (!pathWithin(path, place.top, top) && !pathWithin(path, top, place.top)) continue
+    const status = Option.getOrElse(loop.status, () => "working")
+    names.push(`${session?.name ?? "a session"} (${loop.sessionId}, ${status})`)
+  }
+  return names
+})
+
+interface Plan {
+  /** The paths to write, each from the target or removed when the target has no such file. */
+  readonly paths: ReadonlyArray<string>
+  /** The paths to write that someone else also changed, or that are on disk but not captured. */
+  readonly conflicts: ReadonlyArray<string>
+}
+
+/** A path on disk the `current` capture does not hold: ignored, or untracked over 2 MiB. */
+const uncaptured = Effect.fn("Checkpoints.uncaptured")(function* (
+  place: Place,
+  current: string,
+  paths: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const held = yield* treePaths(place, current)
+  return yield* Effect.filter(
+    paths.filter((file) => !held.has(file)),
+    (file) => fs.exists(path.join(place.top, file)),
+  )
+})
+
+/**
+ * Back to before a turn: the paths this session and the sessions below it
+ * changed since the turn began, each to its content at the turn's start.
+ * The store's marks since that start cut the time into intervals; one a
+ * lineage span covers is the lineage's, one no lineage span covers (the
+ * user, another session, a job left running) is someone else's, and one both
+ * cover is both. A path someone else changed is kept, and is a conflict when
+ * the lineage changed it too.
+ */
+const turnPlan = Effect.fn("Checkpoints.turnPlan")(function* (
+  place: Place,
+  marks: ReadonlyArray<Mark>,
+  start: Mark,
+  current: { readonly commit: string; readonly at: number },
+) {
+  const ctx = yield* ExtensionContext
+  const lineage = yield* lineageOf(ctx.sessionId)
+  const spans = [...spansOf(marks).values()]
+  const intervals = [
+    ...spans.map((span) => ({ ours: lineage.has(span.sessionId), ...spanInterval(span, spans) })),
+    ...[...revertsOf(marks).values()].map((revert) => ({
+      ours: lineage.has(revert.sessionId),
+      ...revertInterval(revert),
+    })),
+  ]
+  const points = [
+    ...marks.flatMap(({ at, commit }) => [{ at, commit }].filter(() => at >= start.at)),
+    current,
+  ]
+  const covered = (ours: boolean, from: number, to: number) =>
+    intervals.some(
+      (interval) => interval.ours === ours && interval.from <= from && interval.to >= to,
+    )
+  // Runs of intervals of one kind, so a run costs one diff.
+  const runs: Array<{ from: string; to: string; ours: boolean; theirs: boolean }> = []
+  for (const [index, point] of points.entries()) {
+    const next = points[index + 1]
+    if (Predicate.isUndefined(next)) break
+    const ours = covered(true, point.at, next.at)
+    const theirs = !ours || covered(false, point.at, next.at)
+    const last = runs.at(-1)
+    if (Predicate.isNotUndefined(last) && last.ours === ours && last.theirs === theirs)
+      last.to = next.commit
+    else runs.push({ from: point.commit, to: next.commit, ours, theirs })
+  }
+  const lineagePaths = new Set<string>()
+  const otherPaths = new Set<string>()
+  for (const run of runs) {
+    const changed = yield* changedPaths(place, run.from, run.to)
+    for (const file of changed) {
+      if (run.ours) lineagePaths.add(file)
+      if (run.theirs) otherPaths.add(file)
+    }
+  }
+  const sinceStart = yield* changedPaths(place, start.commit, current.commit)
+  const paths = [...sinceStart].filter((file) => lineagePaths.has(file)).sort()
+  const missing = new Set(yield* uncaptured(place, current.commit, paths))
+  const plan: Plan = {
+    paths,
+    conflicts: paths.filter((file) => otherPaths.has(file) || missing.has(file)),
+  }
+  return plan
+})
+
+/**
+ * Undo a revert: the paths it wrote, back to its `before`. A path changed
+ * since the revert wrote it is a conflict; a revert a stop cut short has
+ * none, since its write did not finish.
+ */
+const undoPlan = Effect.fn("Checkpoints.undoPlan")(function* (
+  place: Place,
+  undone: Revert,
+  current: string,
+) {
+  const written = yield* revertFiles(place, undone)
+  const before = Option.getOrThrow(undone.before).commit
+  const sinceBefore = yield* changedPaths(place, before, current)
+  const paths = written.filter((file) => sinceBefore.has(file))
+  const sinceWrite = yield* Option.match(undone.done, {
+    onNone: () => Effect.succeed(new Set<string>()),
+    onSome: (done) => changedPaths(place, done.commit, current),
+  })
+  const missing = new Set(yield* uncaptured(place, current, paths))
+  const plan: Plan = {
+    paths,
+    conflicts: paths.filter((file) => sinceWrite.has(file) || missing.has(file)),
+  }
+  return plan
+})
+
+/** A scratch index in the store, removed after `effect`. */
+const scratchIndex = (place: Place) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const index = `${place.store}/gent-revert.index`
+    yield* fs.remove(index, { force: true })
+    yield* Effect.addFinalizer(() => fs.remove(index, { force: true }).pipe(Effect.ignore))
+    return { GIT_INDEX_FILE: index }
+  })
+
+/** `base` with each of `paths` set from `source`, or removed where `source` has no such file. */
+const replacedTree = Effect.fn("Checkpoints.replacedTree")(function* (
+  place: Place,
+  base: string,
+  source: string,
+  paths: ReadonlyArray<string>,
+) {
+  const listing = yield* inStoreRun(place, ["ls-tree", "-r", "-z", "--full-tree", source])
+  if (listing.exitCode !== 0) return yield* gitFailure(["ls-tree"], listing)
+  const entries = new Map(
+    nulList(listing.stdout).map((line) => [line.slice(line.indexOf("\t") + 1), line] as const),
+  )
+  const wanted = new Set(paths)
+  const removals = paths.flatMap((file) =>
+    [`0 ${"0".repeat(40)}\t${file}`].filter(() => !entries.has(file)),
+  )
+  const additions = [...entries].flatMap(([file, line]) => [line].filter(() => wanted.has(file)))
+  return yield* Effect.gen(function* () {
+    const env = yield* scratchIndex(place)
+    yield* inStore(place, ["read-tree", base], { env })
+    const update = yield* inStoreRun(
+      place,
+      ["update-index", "--add", "--replace", "-z", "--index-info"],
+      { env, stdin: [...removals, ...additions].map((line) => `${line}\0`).join("") },
+    )
+    if (update.exitCode !== 0) return yield* gitFailure(["update-index"], update)
+    return yield* inStore(place, ["write-tree"], { env })
+  }).pipe(Effect.scoped)
+})
+
+/**
+ * Write `paths` of `tree` into the work tree: each file the tree holds from
+ * the store, each it lacks removed, then each directory a removal left
+ * empty. git writes no file beyond a symbolic link, and a removal whose
+ * directory resolves elsewhere is skipped.
+ */
+const writeWorkTree = Effect.fn("Checkpoints.writeWorkTree")(function* (
+  place: Place,
+  tree: string,
+  paths: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const held = yield* treePaths(place, tree)
+  const absent = paths.filter((file) => !held.has(file))
+  const present = paths.filter((file) => held.has(file))
+  for (const file of absent) {
+    const directory = path.dirname(file)
+    const real = yield* fs.realPath(path.join(place.top, directory)).pipe(Effect.option)
+    if (Option.isNone(real) || real.value !== path.join(place.top, directory)) continue
+    yield* fs.remove(path.join(place.top, file)).pipe(Effect.ignore)
+    let parent = directory
+    while (parent !== "." && parent !== "") {
+      const entries = yield* fs.readDirectory(path.join(place.top, parent)).pipe(Effect.option)
+      if (!Option.exists(entries, (names) => names.length === 0)) break
+      // Empty, checked: `recursive` is what removes a directory.
+      yield* fs.remove(path.join(place.top, parent), { recursive: true }).pipe(Effect.ignore)
+      parent = path.dirname(parent)
+    }
+  }
+  if (present.length === 0) return
+  yield* Effect.gen(function* () {
+    const env = yield* scratchIndex(place)
+    yield* inStore(place, ["read-tree", tree], { env })
+    const written = yield* inStoreRun(place, ["checkout-index", "-f", "-z", "--stdin"], {
+      env,
+      stdin: present.map((file) => `${file}\0`).join(""),
+    })
+    if (written.exitCode !== 0) return yield* gitFailure(["checkout-index"], written)
+  }).pipe(Effect.scoped)
+})
+
+const revertTrailers = (requestId: string, kind: "before" | "target" | "done") =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const trailers: ReadonlyArray<readonly [string, string]> = [
+      ["Gent-Kind", kind],
+      ["Gent-Session", ctx.sessionId],
+      ["Gent-Branch", ctx.branchId],
+      ["Gent-Request", requestId],
+    ]
+    return trailers
+  })
+
+/** Write a revert's target and mark it done, once; the answer names what it wrote. */
+const finishRevert = Effect.fn("Checkpoints.finishRevert")(function* (
+  place: Place,
+  revert: Revert,
+) {
+  const target = Option.getOrThrow(revert.target)
+  const files = yield* revertFiles(place, revert)
+  // A done revert only answers again: the work tree may have moved on since.
+  if (Option.isNone(revert.done)) {
+    const tree = yield* treeOf(place, target.commit)
+    yield* writeWorkTree(place, tree, files)
+    // The `done` names the revert's own refs, whichever request finishes it.
+    const ref = target.ref.replace(/\/target$/, "/done")
+    yield* markCommit(place, {
+      ref,
+      tree,
+      parent: Option.some(target.commit),
+      trailers: [
+        ["Gent-Kind", "done"],
+        ["Gent-Session", revert.sessionId],
+        ["Gent-Branch", revert.branchId],
+        ["Gent-Request", revert.requestId],
+      ],
+    })
+  }
+  const outcome: RevertOutcome = RevertOutcome.cases.Reverted.make({
+    files,
+    ...Option.match(revert.resultBranch, {
+      onNone: () => ({}),
+      onSome: (branchId) => ({ branchId }),
+    }),
+  })
+  return outcome
+})
+
+const refused = (reason: string, conflicts: ReadonlyArray<string> = []): RevertOutcome =>
+  RevertOutcome.cases.Refused.make({ reason, conflicts: [...conflicts] })
+
+/**
+ * Write a plan: record the tree it replaces (`before`), fork the
+ * conversation when asked, record the tree it writes (`target`), write the
+ * work tree, then `done`. Each ref is created once, so a repeat converges.
+ */
+const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
+  place: Place,
+  params: {
+    readonly requestId: string
+    readonly before: Option.Option<Mark>
+    readonly current: string
+    readonly source: string
+    readonly plan: Plan
+    readonly fork: Option.Option<{ readonly atMessageId: MessageId; readonly name: string }>
+  },
+) {
+  const ctx = yield* ExtensionContext
+  const currentTree = yield* treeOf(place, params.current)
+  const before = yield* Option.match(params.before, {
+    onSome: (mark) => Effect.succeed(mark.commit),
+    onNone: () =>
+      Effect.gen(function* () {
+        return yield* markCommit(place, {
+          ref: yield* revertRef(params.requestId, "before"),
+          tree: currentTree,
+          parent: Option.none(),
+          trailers: yield* revertTrailers(params.requestId, "before"),
+        })
+      }),
+  })
+  const made = yield* Option.match(params.fork, {
+    onNone: () => Effect.succeedNone,
+    onSome: (fork) =>
+      ctx.Session.forkBranch({
+        atMessageId: fork.atMessageId,
+        name: fork.name,
+        requestId: RequestId.make(params.requestId),
+      }).pipe(Effect.map(({ branchId }) => Option.some(branchId))),
+  })
+  const tree = yield* replacedTree(place, currentTree, params.source, params.plan.paths)
+  const target = yield* markCommit(place, {
+    ref: yield* revertRef(params.requestId, "target"),
+    tree,
+    parent: Option.some(before),
+    trailers: [
+      ...(yield* revertTrailers(params.requestId, "target")),
+      ...Option.toArray(made).map((branchId) => ["Gent-Result-Branch", branchId] as const),
+    ],
+  })
+  yield* writeWorkTree(place, tree, params.plan.paths)
+  yield* markCommit(place, {
+    ref: yield* revertRef(params.requestId, "done"),
+    tree,
+    parent: Option.some(target),
+    trailers: yield* revertTrailers(params.requestId, "done"),
+  })
+  const outcome: RevertOutcome = RevertOutcome.cases.Reverted.make({
+    files: [...params.plan.paths],
+    ...Option.match(made, { onNone: () => ({}), onSome: (branchId) => ({ branchId }) }),
+  })
+  return outcome
+})
+
+/** Back to before turn `#n`. */
+const revertTurn = Effect.fn("Checkpoints.revertTurn")(function* (
+  place: Place,
+  marks: ReadonlyArray<Mark>,
+  input: RevertInput,
+  action: { readonly n: number; readonly conversation: boolean },
+  before: Option.Option<Mark>,
+) {
+  const { turns, messages } = yield* turnsOf(spansOf(marks))
+  const turn = turns.find((found) => found.n === action.n)
+  if (Predicate.isUndefined(turn)) return refused(`the branch has no turn #${action.n}`)
+  const start = Option.flatMap(turn.span, (span) => span.start)
+  if (Option.isNone(start))
+    return refused(`turn #${action.n} has no checkpoint: no tool with a side effect ran in it`)
+  const opener = messages.findIndex((message) => message.id === turn.message.id)
+  const previous = Option.fromUndefinedOr(messages[opener - 1])
+  if (action.conversation && Option.isNone(previous))
+    return refused("this is the first turn: revert files only, or start a new session")
+  const current = yield* currentCommit(place, before)
+  const plan = yield* turnPlan(place, marks, start.value, current)
+  if (plan.conflicts.length > 0 && input.overwrite !== true)
+    return refused(
+      `others also changed ${plan.conflicts.length} of the files to revert; revert with overwrite to write them (undo returns them)`,
+      plan.conflicts,
+    )
+  return yield* applyPlan(place, {
+    requestId: input.requestId,
+    before,
+    current: current.commit,
+    source: start.value.commit,
+    plan,
+    fork: Option.filter(
+      Option.map(previous, (message) => ({
+        atMessageId: message.id,
+        name: `before: ${promptOf(turn.message)}`,
+      })),
+      () => action.conversation,
+    ),
+  })
+})
+
+/**
+ * The work tree now, as a commit in the store with its time: a repeat reuses
+ * the `before` its first run recorded.
+ */
+const currentCommit = Effect.fn("Checkpoints.currentCommit")(function* (
+  place: Place,
+  before: Option.Option<Mark>,
+) {
+  if (Option.isSome(before)) return { commit: before.value.commit, at: before.value.at }
+  const { tree } = yield* captureTree(place)
+  const commit = yield* inStore(place, ["commit-tree", tree, "-m", "gent checkpoint: now"])
+  const state = yield* Checkpoints
+  const at = Math.max(yield* Clock.currentTimeMillis, (state.lastAt.get(place.store) ?? 0) + 1)
+  return { commit, at }
+})
+
+/** Revert the newest revert of the branch. */
+const revertRevert = Effect.fn("Checkpoints.revertRevert")(function* (
+  place: Place,
+  marks: ReadonlyArray<Mark>,
+  input: RevertInput,
+  before: Option.Option<Mark>,
+) {
+  const ctx = yield* ExtensionContext
+  const undone = Option.filter(
+    newestRevert(marks, ctx.sessionId, ctx.branchId),
+    (revert) => Option.isSome(revert.before) && Option.isSome(revert.target),
+  )
+  if (Option.isNone(undone)) return refused("there is no revert to undo")
+  const current = yield* currentCommit(place, before)
+  const plan = yield* undoPlan(place, undone.value, current.commit)
+  if (plan.conflicts.length > 0 && input.overwrite !== true)
+    return refused(
+      `${plan.conflicts.length} of the files the revert wrote changed since; undo with overwrite to write them`,
+      plan.conflicts,
+    )
+  return yield* applyPlan(place, {
+    requestId: input.requestId,
+    before,
+    current: current.commit,
+    source: Option.getOrThrow(undone.value.before).commit,
+    plan,
+    fork: Option.none(),
+  })
+})
+
+const revert = Effect.fn("Checkpoints.revert")(function* (input: RevertInput) {
+  const ctx = yield* ExtensionContext
+  const place = yield* placeOrProblem
+  if (!(yield* storeExists(place))) return refused("this work tree has no checkpoints yet")
+  const working = yield* blockers(place)
+  if (working.length > 0)
+    return refused(
+      `another loop works in this work tree: ${working.join(", ")}; wait for it or stop it, then revert`,
+    )
+  return yield* Effect.gen(function* () {
+    const marks = yield* readTimeline(place)
+    const reverts = revertsOf(marks)
+    // A repeat converges: a done revert answers again, one cut short finishes.
+    const repeat = Option.fromUndefinedOr(reverts.get(input.requestId))
+    if (Option.exists(repeat, (known) => Option.isSome(known.target)))
+      return yield* finishRevert(place, Option.getOrThrow(repeat))
+    const before = Option.flatMap(repeat, (known) => known.before)
+    return yield* RevertAction.match(input.action, {
+      Turn: (action) => revertTurn(place, marks, input, action, before),
+      Undo: () => revertRevert(place, marks, input, before),
+      Finish: () =>
+        Effect.gen(function* () {
+          const unfinished = Option.filter(
+            newestRevert(marks, ctx.sessionId, ctx.branchId),
+            (known) => Option.isSome(known.target) && Option.isNone(known.done),
+          )
+          if (Option.isNone(unfinished)) return refused("there is no unfinished revert")
+          return yield* finishRevert(place, unfinished.value)
+        }),
+    })
+  }).pipe(underStoreLock(place))
+})
+
 // ── requests ────────────────────────────────────────────────────────────────
 
 export const CheckpointsRpc = defineRequests(CHECKPOINTS_EXTENSION_ID, {
@@ -944,6 +1585,18 @@ export const CheckpointsRpc = defineRequests(CHECKPOINTS_EXTENSION_ID, {
     input: Schema.Struct({ n: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)) }),
     output: TurnPatch,
     execute: ({ n }) => turnPatch(n).pipe(Effect.mapError(asCheckpointsError)),
+  }),
+  // No `answersDuringTurn`: a revert waits for the branch's turn and holds
+  // its side-mutation permit while it writes, so no turn of the branch starts
+  // on a tree half written.
+  Revert: request({
+    id: "checkpoints.revert",
+    description:
+      "Take the work tree, and on request the conversation, back to before turn #n; undo the newest revert; or finish one a stop cut short",
+    resources: [CheckpointsResource],
+    input: RevertInput,
+    output: RevertOutcome,
+    execute: (input) => revert(input).pipe(Effect.mapError(asCheckpointsError)),
   }),
 })
 
@@ -1058,7 +1711,12 @@ export const CheckpointsExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("resource", CheckpointsResource)
-    yield* host.register("request", CheckpointsRpc.List, CheckpointsRpc.Patch)
+    yield* host.register(
+      "request",
+      CheckpointsRpc.List,
+      CheckpointsRpc.Patch,
+      CheckpointsRpc.Revert,
+    )
     // A profile belongs to one cwd. Outside a git work tree it captures
     // nothing, so it registers no capture hook: its tool calls stay unjudged.
     if (yield* insideWorkTree(host.cwd)) {

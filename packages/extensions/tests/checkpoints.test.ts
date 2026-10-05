@@ -7,6 +7,7 @@ import {
   ExtensionHost,
   ExtensionId,
   ref,
+  RequestId,
   resolveDataDir,
   runProcess,
   tool,
@@ -20,8 +21,16 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
-import { type BranchId, messagePartsText, type SessionId } from "@gent/core/protocol"
-import { CheckpointList, CheckpointsRpc, pruneCheckpoints, TurnPatch } from "../src/checkpoints.js"
+import { BranchId, messagePartsText, type SessionId } from "@gent/core/protocol"
+import {
+  CheckpointList,
+  CheckpointsRpc,
+  pruneCheckpoints,
+  RevertAction,
+  RevertInput,
+  RevertOutcome,
+  TurnPatch,
+} from "../src/checkpoints.js"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -55,7 +64,12 @@ const repository = Effect.gen(function* () {
   return yield* sh(`${root}/repo`, "pwd -P")
 })
 
-const FileParams = Schema.Struct({ path: Schema.String, content: Schema.String })
+const FileParams = Schema.Struct({
+  path: Schema.String,
+  content: Schema.String,
+  /** The content this many times over: a big file from a small call. */
+  times: Schema.optional(Schema.Int),
+})
 const PathParams = Schema.Struct({ path: Schema.String })
 
 /** A file write in the session's work tree. */
@@ -64,14 +78,14 @@ const PutTool = tool({
   description: "Write a file",
   params: FileParams,
   output: Schema.String,
-  execute: ({ path: file, content }) =>
+  execute: ({ path: file, content, times }) =>
     Effect.gen(function* () {
       const ctx = yield* ExtensionContext
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const target = path.resolve(ctx.cwd, file)
       yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-      yield* fs.writeFileString(target, content)
+      yield* fs.writeFileString(target, content.repeat(times ?? 1))
       return "written"
     }).pipe(Effect.orDie),
 })
@@ -104,10 +118,21 @@ const put = (file: string, content: string) => toolCallStep("put", { path: file,
 
 type Steps = Parameters<typeof LanguageModelLayers.sequence>[0]
 
+const BranchIdOf = (id: string) => BranchId.make(id)
+
+const filesOf = (n: number) => RevertAction.cases.Turn.make({ n, conversation: false })
+const bothOf = (n: number) => RevertAction.cases.Turn.make({ n, conversation: true })
+const UNDO = RevertAction.cases.Undo.make({})
+const FINISH = RevertAction.cases.Finish.make({})
+
+/** The text of a file, or `<absent>`. */
+const contentOf = (repo: string, file: string) =>
+  sh(repo, `if [ -e '${file}' ]; then cat '${file}'; else echo '<absent>'; fi`)
+
 /** A session in `cwd` with the shipped extensions, the test file tools and a scripted model. */
 const checkpointSession = (cwd: string, home: string, steps: Steps) =>
   Effect.gen(function* () {
-    const { layer: providerLayer } = yield* LanguageModelLayers.sequence(steps)
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
     const { client, sessionId, branchId } = yield* createRpcHarness({
       ...e2ePreset,
       extensionInputs: [...e2ePreset.extensionInputs, FileToolsExtension],
@@ -119,7 +144,7 @@ const checkpointSession = (cwd: string, home: string, steps: Steps) =>
     const at = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) => {
       const call = (
         capability: { readonly extensionId: string; readonly capabilityId: string },
-        input: Record<string, number>,
+        input: { readonly n?: number } | typeof RevertInput.Encoded,
       ) =>
         client.extension.request({
           ...target,
@@ -155,10 +180,19 @@ const checkpointSession = (cwd: string, home: string, steps: Steps) =>
             `end checkpoint of ${content}`,
           )
         })
-      return { list, patch, turn }
+      const revert = (requestId: string, action: RevertAction, overwrite = false) =>
+        call(
+          ref(CheckpointsRpc.Revert),
+          Schema.encodeSync(RevertInput)({
+            requestId: RequestId.make(requestId),
+            action,
+            overwrite,
+          }),
+        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(RevertOutcome)))
+      return { list, patch, turn, revert }
     }
-    const { list, patch, turn } = at({ sessionId, branchId })
-    return { client, sessionId, branchId, list, patch, turn, at }
+    const { list, patch, turn, revert } = at({ sessionId, branchId })
+    return { client, controls, sessionId, branchId, list, patch, turn, revert, at }
   })
 
 /** The one store under the home's data directory, when there is one. */
@@ -415,6 +449,239 @@ Gent-At: ${at}")`,
         )
         expect(patch.patch).toContain("b/a.txt")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+})
+
+// ── revert ──────────────────────────────────────────────────────────────────
+
+const timed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds"))
+
+describe("turn reverts", () => {
+  it.live(
+    "a files-only revert restores the turn's paths byte for byte, removes a file the turn made, and keeps ignored files, big untracked files and files only the user changed",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          // `text` with no eol: a capture that converted line ends would store LF.
+          yield* sh(
+            repo,
+            "printf 'crlf.txt text\\n' > .gitattributes && printf 'x\\r\\ny\\r\\n' > crlf.txt && git add -A && git commit -qm attrs",
+          )
+          const bigSize = 3 * 1024 * 1024
+          const session = yield* checkpointSession(repo, home, [
+            multiToolCallStep(
+              { toolName: "put", input: { path: "a.txt", content: "two\n" } },
+              { toolName: "put", input: { path: "new/made.txt", content: "made\n" } },
+              { toolName: "put", input: { path: "crlf.txt", content: "changed\r\n" } },
+              { toolName: "put", input: { path: "dist/out.js", content: "built\n" } },
+              { toolName: "put", input: { path: "big.bin", content: "z", times: bigSize } },
+            ),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change things", "done 1")
+          yield* sh(repo, "printf 'mine\\n' > user.txt")
+          const outcome = yield* session.revert("revert-1", filesOf(1))
+          expect(outcome).toEqual({
+            _tag: "Reverted",
+            files: ["a.txt", "crlf.txt", "new/made.txt"],
+          })
+          expect(yield* contentOf(repo, "a.txt")).toBe("one")
+          expect(yield* sh(repo, "od -An -c crlf.txt")).toBe("x  \\r  \\n   y  \\r  \\n")
+          expect(yield* sh(repo, "test -e new && echo there || echo gone")).toBe("gone")
+          expect(yield* contentOf(repo, "dist/out.js")).toBe("built")
+          expect(yield* sh(repo, "wc -c < big.bin")).toBe(String(bigSize))
+          expect(yield* contentOf(repo, "user.txt")).toBe("mine")
+          // The user's index, HEAD and branches do not move.
+          expect(yield* sh(repo, "git status --porcelain=v1")).toContain("?? user.txt")
+          expect(yield* sh(repo, "git log --oneline | wc -l")).toBe("2")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a revert over a file the user also changed refuses and names it; overwrite writes it; undo returns the user's edit",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* sh(repo, "printf 'mine\\n' > a.txt")
+          const refused = yield* session.revert("revert-1", filesOf(1))
+          expect(refused).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("mine")
+          expect((yield* session.list).undo).toBeUndefined()
+          const overwritten = yield* session.revert("revert-2", filesOf(1), true)
+          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("one")
+          expect((yield* session.list).undo).toEqual({ requestId: "revert-2", files: 1 })
+          const undone = yield* session.revert("undo-1", UNDO)
+          expect(undone).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("mine")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a running loop in the same work tree blocks a revert; a running child in another work tree does not",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const elsewhere = yield* makeTempDirectoryScoped("cp-elsewhere-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+            { ...textStep("near 1"), gated: true },
+            { ...textStep("away 1"), gated: true },
+          ])
+          yield* session.turn("change a", "done 1")
+          const near = yield* session.client.session.create({
+            cwd: repo,
+            parentSessionId: session.sessionId,
+            parentBranchId: session.branchId,
+          })
+          yield* session.client.message.send({ ...near, content: "work here" })
+          yield* session.controls.waitForCall(2)
+          const refused = yield* session.revert("revert-1", filesOf(1))
+          expect(refused._tag).toBe("Refused")
+          if (refused._tag === "Refused") expect(refused.reason).toContain(near.sessionId)
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+          yield* session.controls.emitAll(2)
+          yield* waitFor(
+            session.client.message.list({ branchId: near.branchId }),
+            (messages) => messages.some((message) => messagePartsText(message.parts) === "near 1"),
+            8000,
+            "near reply",
+          )
+          const away = yield* session.client.session.create({
+            cwd: elsewhere,
+            parentSessionId: session.sessionId,
+            parentBranchId: session.branchId,
+          })
+          yield* session.client.message.send({ ...away, content: "work there" })
+          yield* session.controls.waitForCall(3)
+          const reverted = yield* session.revert("revert-2", filesOf(1))
+          expect(reverted).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          yield* session.controls.emitAll(3)
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a conversation revert forks before the turn and restores files; a repeat with the same request id makes no second branch; the first turn has no conversation to revert",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+            put("b.txt", "bee\n"),
+            textStep("done 2"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* session.turn("add b", "done 2")
+          const outcome = yield* session.revert("revert-1", bothOf(1))
+          expect(outcome._tag).toBe("Reverted")
+          if (outcome._tag !== "Reverted") return
+          expect(outcome.files).toEqual(["b.txt"])
+          const forked = BranchIdOf(outcome.branchId ?? "")
+          expect(forked).not.toBe(session.branchId)
+          expect(yield* contentOf(repo, "b.txt")).toBe("<absent>")
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+          const copied = yield* session.client.message.list({ branchId: forked })
+          expect(copied.at(-1)?.role).toBe("assistant")
+          expect(messagePartsText(copied.at(-1)?.parts ?? [])).toBe("done 1")
+          expect(yield* session.revert("revert-1", bothOf(1))).toEqual(outcome)
+          expect((yield* session.client.branch.list({ sessionId: session.sessionId })).length).toBe(
+            2,
+          )
+          // The fork lists the copied turn, with the checkpoints of the turn it copies.
+          const inFork = session.at({ sessionId: session.sessionId, branchId: forked })
+          expect((yield* inFork.list).turns.map((row) => [row.prompt, row.state])).toEqual([
+            ["change a", "captured"],
+          ])
+          const first = yield* session.revert("revert-2", bothOf(2))
+          expect(first).toMatchObject({ _tag: "Refused" })
+          if (first._tag === "Refused") expect(first.reason).toContain("this is the first turn")
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a revert stopped after its target is listed as unfinished, and finishing it writes the target",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          yield* session.revert("revert-1", filesOf(1))
+          // A stop between the target and the write: no `done`, the file as before.
+          const store = (yield* storeOf(home))[0] ?? ""
+          const done = (yield* storeRefs(store)).find((name) => name.endsWith("/done")) ?? ""
+          yield* sh(store, `git --git-dir="${store}" update-ref -d '${done}'`)
+          yield* sh(repo, "printf 'two\\n' > a.txt")
+          expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
+          const finished = yield* session.revert("finish-1", FINISH)
+          expect(finished).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(yield* contentOf(repo, "a.txt")).toBe("one")
+          expect((yield* session.list).unfinished).toBeUndefined()
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a child's edits made after its parent's turn revert with that turn; another top-level session's edits are kept",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+            put("child.txt", "child\n"),
+            textStep("child 1"),
+            put("other.txt", "other\n"),
+            textStep("other 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          const child = yield* session.client.session.create({
+            cwd: repo,
+            parentSessionId: session.sessionId,
+            parentBranchId: session.branchId,
+          })
+          yield* session.at(child).turn("child work", "child 1")
+          const other = yield* session.client.session.create({ cwd: repo })
+          yield* session.at(other).turn("other work", "other 1")
+          const outcome = yield* session.revert("revert-1", filesOf(1))
+          expect(outcome).toEqual({ _tag: "Reverted", files: ["a.txt", "child.txt"] })
+          expect(yield* contentOf(repo, "child.txt")).toBe("<absent>")
+          expect(yield* contentOf(repo, "other.txt")).toBe("other")
+        }),
+      ),
     30_000,
   )
 })

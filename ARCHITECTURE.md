@@ -1473,8 +1473,10 @@ section, no notice. Core has no checkpoint concept.
   (each part the hex of the id, created only once); the commit trailers carry
   `Gent-Kind`, `Gent-Session`, `Gent-Branch`, `Gent-Turn`, `Gent-At`
   (milliseconds, strictly increasing per store) and `Gent-Skipped`. An end
-  commit's parent is its start. One `for-each-ref` reads the timeline.
-- Requests (both `answersDuringTurn`): `checkpoints.list` gives the branch's
+  commit's parent is its start. A revert's refs are
+  `refs/reverts/<session>/<branch>/<request>/{before,target,done}` (see
+  Revert). One `for-each-ref` reads the timeline.
+- Reads (both `answersDuringTurn`): `checkpoints.list` gives the branch's
   turns newest first (`#1` is the newest; openers are user messages that are
   not runtime rows), each `captured`, `open` or `none` with its
   `diff --shortstat` (one `git log --shortstat` for all); a turn a fork copied
@@ -1483,6 +1485,34 @@ section, no notice. Core has no checkpoint concept.
   diff or textconv), cut at 10 MB; a first `#` line names other sessions,
   outside this session's lineage (it and the sessions below it), whose turns
   overlapped it.
+- Revert: `checkpoints.revert` (not `answersDuringTurn`, so it waits for the
+  branch's turn and holds its side-mutation permit while it writes) takes
+  `{ requestId, action, overwrite? }`. `Turn { n, conversation }` takes the
+  work tree back to before turn `#n`: the paths that this session's lineage
+  changed since that turn's start, each to its content at the start, and
+  nothing else. The store's marks since the start cut the time into
+  intervals; an interval a lineage span (or a lineage revert) covers is the
+  lineage's, one no lineage span covers is someone else's (the user, another
+  session, a job left running), and one both cover is both's. A path the
+  lineage changed that someone else changed too is a conflict, and so is a
+  path to write that is on disk but not in the capture of now (ignored, or
+  untracked over 2 MiB). A conflict refuses the revert and names the paths;
+  `overwrite` writes them. Another loop that works in the same work tree (a
+  top that holds or is held by this one) refuses it too, by name, id and
+  status. `conversation` also forks the branch with `Session.forkBranch` at
+  the message before the turn (a first turn has none and refuses); the
+  answer names the new branch. The write is `before` (the capture of now),
+  `target` (the tree to write, built in a scratch index; on a conversation
+  revert it carries `Gent-Result-Branch`), the files (`checkout-index` for
+  each path the target holds, a removal and its emptied directories for each
+  it lacks), then `done`, under `refs/reverts/<session>/<branch>/<request>/`.
+  A repeat by `requestId` answers again from its refs, or finishes one a stop
+  cut short after its `target`. `Undo` reverts the newest revert of the
+  branch (or of the revert that made it): the paths it wrote, back to its
+  `before`; a path changed since it wrote is a conflict. `Finish` writes an
+  unfinished revert. `checkpoints.list` names the newest revert as `undo`
+  (with its file count) once done, or `unfinished` without its `done`. A
+  refusal is an answer (`Refused { reason, conflicts }`), not an error.
 - Retention: a process fiber, started by the first `loopOpen` for a data
   directory, runs a pass a minute later and then daily: it removes a store
   whose work tree is gone, deletes refs whose `Gent-At` is over 30 days old,
