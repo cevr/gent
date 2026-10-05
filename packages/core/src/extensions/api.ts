@@ -179,6 +179,8 @@ export {
   runProcess,
   writeFileAtomic,
 } from "../runtime/gent-platform.js"
+// An extension that owns tables binds a SQL list as one parameter, as core's storage does.
+export { sqlInList } from "../storage/storage.js"
 export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // A context window's marker, as the runtime wrote it; a copy of its notice is no marker.

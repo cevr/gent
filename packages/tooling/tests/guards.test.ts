@@ -223,11 +223,11 @@ describe("SQL bound list guard", () => {
     const text = [
       "const rows = sql`SELECT id FROM sessions WHERE id IN ${sql.in(ids)}`",
       "// sql.in(ids) in a comment is prose",
-      "const portable = sql`SELECT id FROM sessions WHERE id IN (SELECT value FROM json_each(${json}))`",
+      "const portable = sql`SELECT id FROM sessions WHERE id IN ${sqlInList(sql, ids)}`",
     ].join("\n")
     const findings = findSqlBoundLists("packages/core/src/storage/storage.ts", text)
     expect(findings.map((finding) => finding.line)).toEqual([1])
-    expect(findings[0]?.message).toContain("json_each")
+    expect(findings[0]?.message).toContain("sqlInList")
     expect(findSqlBoundLists("packages/extensions/src/exec-tools.ts", text).length).toBe(1)
     expect(findSqlBoundLists("apps/tui/src/ops.ts", text).length).toBe(1)
     expect(findSqlBoundLists("packages/core/tests/storage/storage.test.ts", text)).toEqual([])

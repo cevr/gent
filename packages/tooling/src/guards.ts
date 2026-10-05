@@ -1205,9 +1205,9 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
  * `sql.in(list)` binds one parameter per item. A hosted SQLite (a Durable
  * Object) refuses a statement with more than 100 bound parameters, and a
  * session tree, a branch list or a job list has no such bound: the statement
- * works on a local file and fails on the host once the list grows. The
- * portable form binds the list once:
- * `IN (SELECT value FROM json_each(${json}))`.
+ * works on a local file and fails on the host once the list grows.
+ * `sqlInList` (core's storage, exported from `@gent/core/extensions/api` for
+ * an extension that owns tables) binds the list once through `json_each`.
  *
  * Every `SqlClient` in the source roots is bound as `sql`, so the call reads
  * as `sql.in(`. Tests may use it: their lists are fixed.
@@ -1222,7 +1222,7 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
     file,
     line: lineAt(code, match.index),
     message:
-      "`sql.in` binds one parameter per item, and a hosted SQLite refuses more than 100; bind the list as one JSON value: `IN (SELECT value FROM json_each(${json}))`",
+      "`sql.in` binds one parameter per item, and a hosted SQLite refuses more than 100; use `sqlInList(sql, values)` (`@gent/core/extensions/api`), which binds the list as one JSON parameter",
   }))
 }
 

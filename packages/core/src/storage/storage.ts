@@ -88,16 +88,18 @@ import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
 // ── bound lists ─────────────────────────────────────────────────────────────
 
-const encodeIdListJson = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)))
+const encodeListJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(Schema.Union([Schema.String, Schema.Finite]))),
+)
 
 /**
- * The `IN` operand for a list of any length, bound as one JSON parameter.
- * `sql.in` binds one parameter per item, and a hosted SQLite refuses a
- * statement with more than 100 (a Durable Object's limit); a session tree or a
- * branch list has no such bound.
+ * The `IN` operand for a list of any length, bound as one JSON parameter:
+ * `WHERE id IN ${sqlInList(sql, ids)}`. `sql.in` binds one parameter per
+ * item, and a hosted SQLite (a Durable Object) refuses a statement with more
+ * than 100; a session tree, a branch list or a job list has no such bound.
  */
-const inIdList = (sql: SqlClient.SqlClient, ids: ReadonlyArray<string>) =>
-  sql`(SELECT value FROM json_each(${encodeIdListJson(ids)}))`
+export const sqlInList = (sql: SqlClient.SqlClient, values: ReadonlyArray<string | number>) =>
+  sql`(SELECT value FROM json_each(${encodeListJson(values)}))`
 
 // ── owned tool call ─────────────────────────────────────────────────────────
 
@@ -381,7 +383,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               // A root thread's handoff that stays is detached from the parent it no longer has.
               const cascadedIds = yield* deletionSetOf(id)
               if (cascadedIds.length === 0) return []
-              const cascaded = inIdList(sql, cascadedIds)
+              const cascaded = sqlInList(sql, cascadedIds)
               const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`
                 SELECT id, session_id FROM branches WHERE session_id IN ${cascaded}`
               yield* sql`UPDATE sessions SET parent_session_id = NULL, parent_branch_id = NULL
@@ -503,7 +505,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             }>`SELECT m.branch_id, COUNT(*) as count
               FROM messages m
               JOIN sessions s ON s.id = m.session_id
-              WHERE m.branch_id IN ${inIdList(sql, branchIds)}
+              WHERE m.branch_id IN ${sqlInList(sql, branchIds)}
                 AND s.workspace_id = ${workspaceId}
               GROUP BY m.branch_id`
             const result = new Map<BranchId, number>()
@@ -1131,7 +1133,7 @@ export class RelationshipStorage extends Context.Service<
 
             const branchIds = branches.map((b) => b.id)
             const allMsgRawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
-            WHERE m.branch_id IN ${inIdList(sql, branchIds)}
+            WHERE m.branch_id IN ${sqlInList(sql, branchIds)}
               AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`
             const allMsgRows = yield* Effect.forEach(allMsgRawRows, (row) =>

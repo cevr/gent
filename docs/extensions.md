@@ -748,7 +748,9 @@ cascades, and write an interaction request and its own row in one
 transaction. A process Resource that owns tables creates and migrates them in
 its layer, under a migration table of its own: the cell runs `effect/sql`'s
 `Migrator` over `cell_migrations` with `CREATE TABLE IF NOT EXISTS`
-migrations. A `branch` Resource also gets its `BranchAddress` (session id,
+migrations. A list in a query binds through `sqlInList(sql, values)` from
+`@gent/core/extensions/api` (one JSON parameter), not `sql.in`: a hosted
+SQLite refuses more than 100 bound parameters, and a guard reports `sql.in`. A `branch` Resource also gets its `BranchAddress` (session id,
 branch id, cwd, home) and the services of the `process` Resources of its own
 extension that it names in `resources`. A layer that reads any other service
 does not compile. Process Resources build in extension resolution order, so a

@@ -32,6 +32,7 @@ import {
   ExtensionHost,
   ExtensionId,
   runProcess,
+  sqlInList,
   headChars,
   headTailChars,
   lineCount,
@@ -202,18 +203,6 @@ const RESTART_UNCHECKED_MESSAGE =
 
 const mapError = (message: string) => (cause: unknown) =>
   new BackgroundBashStorageError({ message, cause })
-
-const encodeListJson = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Array(Schema.Union([Schema.String, Schema.Finite]))),
-)
-
-/**
- * The `IN` operand for a list of any length, bound as one JSON parameter:
- * `sql.in` binds one parameter per item, and a hosted SQLite refuses more
- * than 100 in one statement.
- */
-const inList = (sql: SqlClient.SqlClient, values: ReadonlyArray<string | number>) =>
-  sql`(SELECT value FROM json_each(${encodeListJson(values)}))`
 
 const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState => {
   let status: BackgroundBashTerminalStatus = "interrupted"
@@ -535,7 +524,7 @@ export class BackgroundBashStorage extends Context.Service<
                 SET notice_read_at = ${readAt}
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
-                  AND tool_call_id IN ${inList(sql, toolCallIds)}
+                  AND tool_call_id IN ${sqlInList(sql, toolCallIds)}
                   AND (status = 'interrupted' OR undelivered_at IS NOT NULL)
                   AND notice_read_at IS NULL
               `
@@ -548,7 +537,7 @@ export class BackgroundBashStorage extends Context.Service<
               const completedAt = (yield* DateTime.nowAsDate).getTime()
               let stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL`
               if (unstopped.length > 0) {
-                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${inList(sql, unstopped)}`
+                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${sqlInList(sql, unstopped)}`
               }
               yield* sql`
                 UPDATE background_bash_jobs
