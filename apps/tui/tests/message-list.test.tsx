@@ -37,6 +37,7 @@ import {
   dateFromMillis,
   Message,
   MessageId,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
   OutputCut,
   SessionId,
@@ -368,6 +369,97 @@ describe("turn line", () => {
     // The duration stays.
     expect(formatTurnLine(event, { steps: true, width: 5 })).toBe("Worked for 1m 48s")
   })
+})
+
+/**
+ * A turn with a model-call budget: its turn line counts the calls against
+ * the limit from the newest step's receipt, the one notice near the limit
+ * folds to a `⧗` row, and both keep their first part at every width.
+ */
+describe("model-call budget rows", () => {
+  const budgeted = [
+    { outcome: "ToolCalls", usage: { inputTokens: 20_000, outputTokens: 1_200 }, costUsd: 0.02 },
+    { outcome: "ToolCalls", modelAttempts: { used: 5, limit: 8 } },
+    {
+      outcome: "Answered",
+      usage: { inputTokens: 18_000, outputTokens: 900 },
+      costUsd: 0.02,
+      modelAttempts: { used: 6, limit: 8 },
+    },
+  ].reduce(addStep, addRetry(addRetry(emptyTurnSteps)))
+  const turnLine: Extract<SessionEvent, { _tag: "turn-ended" }> = {
+    _tag: "turn-ended",
+    durationSeconds: 108,
+    steps: budgeted,
+    createdAt: 1,
+    seq: 1,
+  }
+  const notice: ListMessage = {
+    ...userMessage("regular-message", "m1:model-attempts", "BUDGET-NOTICE-BODY"),
+    metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 5, limit: 8 } },
+  }
+
+  test("the turn line counts the newest receipt's calls right after the time", () => {
+    expect(getSessionEventLabel(turnLine)).toBe(
+      "Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+    )
+    // A turn with no budget has no slot.
+    const unbudgeted = { ...turnLine, steps: addStep(emptyTurnSteps, { outcome: "Answered" }) }
+    expect(getSessionEventLabel(unbudgeted)).toBe("Worked for 1m 48s")
+  })
+
+  const rowsAt = (width: number) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[notice, turnLine]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { width, height: 10 },
+      )
+      return renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0)
+    })
+
+  it.scopedLive("at 100 columns the notice and the turn line are whole", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(100)).toEqual([
+        "  ⧗ 3 of 8 model calls left · the turn stops at 8 · send a message to go on",
+        "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+      ])
+    }),
+  )
+
+  it.scopedLive("at 60 columns each row drops its last parts and keeps the count", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(60)).toEqual([
+        "  ⧗ 3 of 8 model calls left · the turn stops at 8",
+        "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries",
+      ])
+    }),
+  )
+
+  it.scopedLive("at 40 columns each row keeps its first part", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(40)).toEqual([
+        "  ⧗ 3 of 8 model calls left",
+        "  ✻ Worked for 1m 48s · 6/8 model calls",
+      ])
+    }),
+  )
+
+  it.scopedLive("full detail draws the notice the model read", () =>
+    Effect.gen(function* () {
+      const frame = yield* renderLoaded([notice], true)
+      expect(frame).toContain("BUDGET-NOTICE-BODY")
+      expect(frame).not.toContain("⧗")
+    }),
+  )
 })
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.

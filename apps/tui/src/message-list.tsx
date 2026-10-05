@@ -110,7 +110,10 @@ import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
   lineCount,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
+  ModelAttempts,
+  modelAttemptsLeft,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -168,7 +171,9 @@ const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY):
 /**
  * What the model steps of one turn added up to, from each `StreamEnded`
  * (its outcome, usage and cost), and how many times a provider call was
- * retried (`ProviderRetrying`).
+ * retried (`ProviderRetrying`). `modelAttempts` is the newest step's budget
+ * receipt: a reading of the turn's own count, never summed. Absent for a
+ * turn with no budget.
  */
 const TurnSteps = Schema.Struct({
   count: Schema.Finite,
@@ -177,6 +182,7 @@ const TurnSteps = Schema.Struct({
   inputTokens: Schema.Finite,
   outputTokens: Schema.Finite,
   retries: Schema.Finite,
+  modelAttempts: Schema.optional(ModelAttempts),
 })
 type TurnSteps = Schema.Schema.Type<typeof TurnSteps>
 
@@ -195,6 +201,7 @@ export const addStep = (
     readonly outcome?: string
     readonly costUsd?: number
     readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+    readonly modelAttempts?: ModelAttempts
   },
 ): TurnSteps => ({
   ...steps,
@@ -203,6 +210,10 @@ export const addStep = (
   costUsd: steps.costUsd + (step.costUsd ?? 0),
   inputTokens: steps.inputTokens + (step.usage?.inputTokens ?? 0),
   outputTokens: steps.outputTokens + (step.usage?.outputTokens ?? 0),
+  ...Option.match(Option.fromUndefinedOr(step.modelAttempts ?? steps.modelAttempts), {
+    onNone: () => ({}),
+    onSome: (modelAttempts) => ({ modelAttempts }),
+  }),
 })
 
 /** A provider call of the turn failed and was tried again. */
@@ -268,12 +279,13 @@ const retryReason = (reason: string): string => {
 export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
 /**
- * The turn line, `Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04`: the
- * whole turn's time, then a retry count only when a provider call was
+ * The turn line, `Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k
+ * ↓2.1k · $0.04`: the whole turn's time, then the model calls it used of its
+ * budget only when it had one, a retry count only when a provider call was
  * retried, the tokens its steps read and wrote, and its cost. `steps` (the
  * preview level and up) adds the step count last. It counts no tools: the
  * run headers do. Where it is wider than `width` columns, the parts after
- * the time drop from the right; the time stays.
+ * the time drop from the right; the time stays, and the budget goes last.
  */
 export const formatTurnLine = (
   event: Extract<SessionEvent, { _tag: "turn-ended" }>,
@@ -281,6 +293,8 @@ export const formatTurnLine = (
 ): string => {
   const { steps } = event
   const parts: string[] = []
+  if (Predicate.isNotUndefined(steps.modelAttempts))
+    parts.push(`${steps.modelAttempts.used}/${steps.modelAttempts.limit} model calls`)
   if (steps.retries > 0) parts.push(plural(steps.retries, "retry", "retries"))
   const tokens = formatUsageStats({ input: steps.inputTokens, output: steps.outputTokens })
   if (tokens.length > 0) parts.push(tokens)
@@ -597,7 +611,40 @@ const runtimeRows = new Map<string, MessageRenderer>([
     (props) => <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />,
   ],
   [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow glyph="⇄" label="model changed" />],
+  [
+    MODEL_ATTEMPTS_MESSAGE_TYPE,
+    (props) => <BudgetNoticeRow attempts={decodeModelAttempts(props.details)} />,
+  ],
 ])
+
+const decodeModelAttempts = Schema.decodeUnknownOption(ModelAttempts)
+
+/**
+ * The model-call budget notice, `⧗ 3 of 8 model calls left · the turn stops
+ * at 8 · send a message to go on`, from its typed details (R6). Narrower than
+ * its parts, it drops them from the right; the count stays. A notice whose
+ * details do not decode says only what it is.
+ */
+const budgetNoticeLabel = (attempts: Option.Option<ModelAttempts>, width: number): string =>
+  Option.match(attempts, {
+    onNone: () => "model-call budget near its limit",
+    onSome: (attempts) => {
+      const parts = [
+        `${modelAttemptsLeft(attempts)} of ${attempts.limit} model calls left`,
+        `the turn stops at ${attempts.limit}`,
+        "send a message to go on",
+      ]
+      let kept = parts.length
+      while (kept > 1 && textWidth(parts.slice(0, kept).join(" · ")) > width) kept -= 1
+      return parts.slice(0, kept).join(" · ")
+    },
+  })
+
+function BudgetNoticeRow(props: { readonly attempts: Option.Option<ModelAttempts> }) {
+  const dimensions = useTerminalDimensions()
+  const width = () => Math.max(1, dimensions().width - EVENT_TEXT_COLUMN - FREE_LAST_COLUMN)
+  return <CollapsedRow glyph="⧗" label={budgetNoticeLabel(props.attempts, width())} />
+}
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
 const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
@@ -1687,6 +1734,8 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.steps.inputTokens,
       item.steps.outputTokens,
       item.steps.retries,
+      item.steps.modelAttempts?.used,
+      item.steps.modelAttempts?.limit,
     ])
   if (item._tag === "error")
     return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])

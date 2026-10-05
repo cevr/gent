@@ -29,6 +29,7 @@ import {
   BranchId,
   type CreateSessionInput,
   type CredentialReceipt,
+  type ModelAttempts,
   DEFAULT_AGENT_NAME,
   type EventEnvelope,
   type MessageId,
@@ -671,6 +672,12 @@ interface ClientAgentValue {
     readonly model: ModelId
     readonly receipt: Option.Option<CredentialReceipt>
   }>
+  /**
+   * The running turn's model-call budget, from its newest step's receipt
+   * (`SessionRuntimeMetrics.turnModelAttempts`). None for a turn with no
+   * budget, before its first step ends, and between turns.
+   */
+  turnModelAttempts: () => Option.Option<ModelAttempts>
 
   /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
   setError: (error: string) => void
@@ -1614,6 +1621,7 @@ export function ClientProvider(props: ClientProviderProps) {
         model: last.model,
         receipt: Option.fromUndefinedOr(last.receipt),
       })),
+    turnModelAttempts: () => Option.fromUndefinedOr(runtimeMetrics().turnModelAttempts),
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.
