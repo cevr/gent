@@ -150,13 +150,14 @@ const COMPACT = { paddingX: 1, paddingY: 1, boxBorderPadding: 0 } as const
  * Each part gets a marker color whose blue channel names it; the drawing's
  * escapes are then read back into the theme's colors.
  */
+const partMark = (blue: 1 | 2 | 3 | 4) => `#00000${blue}`
 const PART_MARKS = {
-  fg: "#000001",
-  border: "#000002",
-  junction: "#000002",
-  line: "#000003",
-  corner: "#000003",
-  arrow: "#000004",
+  fg: partMark(1),
+  border: partMark(2),
+  junction: partMark(2),
+  line: partMark(3),
+  corner: partMark(3),
+  arrow: partMark(4),
 } as const
 
 const PART_OF_MARK: ReadonlyMap<string, DiagramPart> = new Map([

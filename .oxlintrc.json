@@ -40,6 +40,8 @@
     "gent/no-code-unit-text-edit": "error",
     // Custom — a late TUI reply writes through `repliesInView`, not a counter of its own
     "gent/one-reply-writer": "error",
+    // Custom — every TUI color is a theme token: no literal color, no SGR dim (apps/tui/src)
+    "gent/theme-token-colors": "error",
 
     // Effect opt-in rules: house policy the preset leaves off.
     "effect/noPositionalLogArguments": "error",

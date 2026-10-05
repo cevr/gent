@@ -339,6 +339,17 @@ const CASES: ReadonlyArray<RuleCase> = [
     // a destructured fetcher and a helper's same-named parameter
     expectedCount: 21,
   },
+  {
+    // Every TUI color is a theme token; theme.tsx itself resolves colors.
+    rule: "gent/theme-token-colors",
+    invalid: "apps/tui/src/theme-token-colors.invalid.tsx",
+    valid: ["apps/tui/src/theme-token-colors.valid.tsx", "apps/tui/src/theme.tsx"],
+    // a hex literal and a hex template, five named or short-hex colors in
+    // color slots (a style key, three JSX attributes, a label's color), a hex
+    // JSX attribute, a dim style key, TextAttributes.DIM, RGBA.fromInts,
+    // RGBA.fromHex, an aliased RGBA's fromValues and parseColor
+    expectedCount: 14,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */

@@ -78,6 +78,7 @@ import {
   useRequiredContext,
 } from "./utils"
 import type { RGBA } from "@opentui/core"
+import type { Theme } from "./theme"
 import {
   type ClientContextValue,
   type ClientLog,
@@ -165,12 +166,8 @@ export const shortModelName = (name: string): string => {
   return name
 }
 
-interface ThemeColors {
-  textMuted: RGBA
-  error: RGBA
-  warning: RGBA
-  info: RGBA
-}
+/** The tokens the status row's labels draw with. */
+type ThemeColors = Pick<Theme, "textMuted" | "error" | "warning" | "info">
 
 const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   if (pct >= 90) return theme.error

@@ -52,7 +52,7 @@ Ported from opencode: its schema and token names, cut to the tokens gent draws. 
 - JSON themes in `src/themes/*.json` with `defs` + dark/light variants
 - `resolveTheme(themeJson, mode, terminalBackground)` resolves refs to RGBA values. A ported theme may omit `selectedListItemText` (the background) and `backgroundPanel`; a key gent does not draw is ignored, so an opencode theme file resolves as it is.
 - The palette's "Theme" level enumerates `all()`; "Mode" is the separate Dark/Light toggle.
-- Every color a component draws is a token from `useTheme()` (an extension names one through `NamedThemeColor`): no hex, color name or `dim` at a call site.
+- Every color a component draws is a token from `useTheme()` (an extension names one through `NamedThemeColor`): no hex, color name or `dim` at a call site. `gent/theme-token-colors` (`packages/tooling/src/gent-rules.ts`) rejects them in `apps/tui/src` outside `theme.tsx`.
 
 | Token                           | Role                                                                                                                                                                                                         |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
