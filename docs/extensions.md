@@ -888,8 +888,10 @@ every tool of the child works there.
 - gent runs the `postcreate` steps of your `.rift.toml` in the copy, for both
   kinds, with the `RIFT_*` variables. rift runs no hook of its own for these
   copies, so no `precreate` runs in your repository. A `.rift.toml` that rift
-  would refuse runs no step, and the note says why. gent's own git commands
-  run no hook of your repository.
+  would refuse runs no step, and the note says why: `version` must be the
+  TOML integer `1` (`1.0`, `1e0` and `"1"` are refused, as rift refuses
+  them). gent's own git commands run no hook of your repository, and write no
+  ref of it but `gent/<name>` and gent's own `refs/gent/base/<name>`.
 - When each child turn ends, the child's work goes back as one commit over
   the copy as it started (after its hooks), on the branch `gent/<name>` of
   your repository. The completion names the branch and its diffstat. Nothing
@@ -897,13 +899,23 @@ every tool of the child works there.
   delete it yourself. gent moves the branch only from the commit it last
   wrote. If you move the branch or check it out, gent leaves it, the
   completion says so, and the work stays in the copy.
-- The copy lives as long as the child's session. A session delete collects
-  the copy's last work to the branch and removes the copy; the branch stays.
-  When that collect fails, or the work cannot go on the branch, the copy
-  stays. A rift copy that has rift copies of its own stays. gent removes no
-  copy by age. A repeated start of the same call from the same session uses
-  the copy the first one made. A start whose session cannot be created
-  removes its copy.
+- A session delete collects the copy's last work to the branch; the branch
+  stays. A worktree copy is then removed. When that collect fails, the work
+  cannot go on the branch, or someone moved `refs/gent/base/<name>`, the copy
+  stays. gent never removes a rift copy: rift cannot refuse, in one step, to
+  remove a copy that has rift copies of its own, so after the collect the
+  copy stays, and its record says `retained` and why. Remove it yourself with
+  `rift remove` once you know nothing was made from it; removal from gent
+  comes with the copy list. gent removes no copy by age. A repeated start of
+  the same call from the same session uses the copy the first one made; a
+  retained copy is never used again. A start whose session was never stored
+  removes its worktree copy; one whose session was stored (even when the
+  start was interrupted before it heard so) leaves the copy to that session.
+- gent touches a copy only when it can prove the copy is the one it made: the
+  marker in the copy's git directory names the start, the copy's real path,
+  the kind of copy and its rift id, and the copy lies where gent or rift puts
+  copies. Anything else (a copy of a copy, a moved record, a link where the
+  marker goes) is kept, and gent says why.
 - A start is refused outside a git repository, and when less than 2 GB is
   free where the copy goes or `df` cannot say; start the child with
   `isolation: "shared"` then.

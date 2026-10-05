@@ -1252,30 +1252,58 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   - Hooks: gent sends `hooks: false`, so rift runs no `precreate` in the
     origin. gent reads `.rift.toml` with `Bun.TOML.parse`, checks it as rift
     does (`version = 1`, only the four hook lists, a non-empty `run`), and runs
-    the `postcreate` steps in the copy with the `RIFT_*` variables. Every git
+    the `postcreate` steps in the copy with the `RIFT_*` variables. rift reads
+    `version` as a `u32`, and `Bun.TOML.parse` reads `1.0` as the number 1, so
+    gent also reads the `version` token as written in the root table: a TOML
+    float or a string runs no step, and the start note says why. Every git
     command gent runs sets `core.hooksPath=/dev/null` and turns automatic
     maintenance off, so gent's plumbing runs no hook in the origin. rift itself
     still adds `/.rift` to the origin's `.git/info/exclude`.
   - Identity: the name is `child-<12 hex>` of a SHA-256 over the parent
     session, the parent branch, the start's request id and the resolved
     origin. A repeated start with all four adopts its copy; any other start
-    gets its own. A copy bound to one child session is never bound to another.
+    gets its own. A copy bound to one child session is never bound to another,
+    and a session whose index names one copy is never bound to another. The
+    delegate's `Session.create` request id is a SHA-256 of the same parent
+    session, parent branch and tool call, and the child's first message is
+    `delegate-start:<child session id>`: core keeps one session per request id
+    and one message per id, so two parents whose tool calls share an id get
+    two children.
   - Records: `<data dir>/workspaces/<name>.json`, under the extension file
-    lock, written as `creating` before gent makes anything. After the copy
-    exists gent writes an ownership marker (`gent-workspace`, the identity
-    digest) into the copy's git directory, runs the hooks, captures the base
-    (the copy after its hooks, as one commit on a private index, held by
-    `refs/gent/base/<name>` in the origin for a worktree and `refs/gent/base`
-    in a rift copy), and then writes `ready`. gent adopts or removes a copy
-    only when the record and the marker agree, and never a path that is, holds
-    or lies in the origin, or a worktree outside its directory. A directory it
-    cannot prove is kept, and the call says so. A crash recovers by phase:
-    `creating` with nothing there is made again, a marked half-made copy is
-    removed and made again.
+    lock, written as `creating` before gent makes anything. The record names
+    the real directory that holds the copy (`root`: gent's worktrees
+    directory, or the rift storage) and the copy's real path in it; a rift
+    record also keeps the copy's rift id (its `.rift`). After the copy exists
+    gent writes an ownership marker (`gent-workspace`) into the copy's git
+    directory: a SHA-256 of the identity digest, the copy's real path, the
+    backend and the rift id. gent proves the git directory without following
+    a link: a rift copy's `.git` is a directory in it; a worktree's `.git` is
+    a file whose `gitdir` resolves into the origin's `.git/worktrees/`; git
+    must name the same top level and git directory. A link or a directory at
+    the marker's place is refused; the marker goes to a new file beside it
+    and a rename puts it in place, so a link that a whole-tree copy brought
+    along is never written through. Then gent runs the hooks, captures the
+    base (the copy after its hooks, as one commit on a private index), writes
+    it into the record, and makes `refs/gent/base/<name>` (in the origin for
+    a worktree, in the copy for rift) with compare-and-swap from absent;
+    `ready` comes last. gent adopts, collects or removes a copy only when the
+    record and the marker agree and the copy's real path lies in the
+    directory its backend owns; never a path that is, holds or lies in the
+    origin. A directory it cannot prove is kept, and the call says so. A
+    crash recovers by phase: `creating` with nothing there is made again; a
+    marked half-made worktree is removed and made again (its base ref goes
+    only from the recorded base); a half-made rift copy is retained.
+  - `retained`: a record that gent keeps with its copy and never adopts,
+    collects or removes; the record says why. Every rift copy ends here, and
+    so does a copy whose base ref was already there, or a rift copy that a
+    later step of its making could not finish. Manual removal of a retained
+    copy comes with W2 (the copy list, confirmed by the user).
   - Merge-back is a branch, never a merge. At each child turn end the copy's
     tree goes on `refs/heads/gent/<name>` of the origin as one commit over the
-    base: `update-ref` for a worktree, a fetch to `refs/gent/incoming/<name>`
-    and then `update-ref` for a rift copy. gent moves or deletes the branch
+    base. A worktree shares the origin's objects; for a rift copy gent fetches
+    the commit by id into no ref (`--no-write-fetch-head`, then `cat-file -e`
+    proves the commit is there). Then `update-ref` moves the branch. gent
+    writes no other ref of the origin. gent moves or deletes the branch
     only with compare-and-swap from the commit it last wrote (the record keeps
     `tip`, and `nextTip` for a write in flight). A branch someone else moved,
     or one a worktree has checked out, stays as it is: the completion says so,
@@ -1284,14 +1312,23 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
     names the branch and a diffstat in its text and in `details.workspace`. No
     model call.
   - Lifetime is the child session's. The delegate's admission scope closes
-    after the registry write; it removes the copy only when the admission
-    failed before `Session.create` returned. After that the session owns the
-    copy. `sessionDeleted` collects and removes the copy under one lock; a
-    collect that fails or leaves the work in the copy keeps the copy and its
-    record. A `git worktree remove` that fails keeps the copy (no recursive
-    delete). A rift copy with rift descendants, or whose descendants rift
-    cannot list, stays. gent prunes nothing by age; a copy of a session that is
-    not deleted stays. The branch outlives the copy.
+    after the registry write. When the admission fails or is interrupted,
+    storage decides, not what the fiber saw: core can store the session and
+    then be interrupted before `Session.create` returns. The finalizer lists
+    the parent's sessions (`listSessions({ thread })`) for a child of this
+    parent branch whose cwd is in the copy (the copy's path is named by the
+    start's identity). A stored child gets the copy (bound); no stored child
+    releases it; a list that fails keeps it. `sessionDeleted` collects and
+    ends the copy under one lock; a collect that fails or leaves the work in
+    the copy keeps the copy and its record. A worktree copy is removed with
+    `git worktree remove` (one that fails keeps the copy; no recursive
+    delete), and its base ref goes only from the recorded base: a moved base
+    ref keeps the copy and the ref. gent never removes a rift copy: rift's
+    remove runs `preremove` and then trashes the whole subtree, so a copy
+    made from it in between goes too, and no `rift rpc` request refuses a copy
+    with descendants in one step. A rift copy is collected and then
+    `retained`. gent prunes nothing by age; a copy of a session that is not
+    deleted stays. The branch outlives the copy.
   - The session index (`<data dir>/workspaces/sessions/<session id>`) holds
     the bound copy's name, so a turn end of a session with no copy reads one
     missing file. A delete whose index was lost reads every record.
