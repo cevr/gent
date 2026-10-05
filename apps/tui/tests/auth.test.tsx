@@ -2204,10 +2204,22 @@ describe("Auth credentials", () => {
   const credentialServer = (initial: Info) => {
     let held = initial
     const writes: Array<string> = []
+    // While set, a list waits for it: the pane acts before its list arrives.
+    let listsHeld = Option.none<Deferred.Deferred<void>>()
+    const holdLists = Effect.map(Deferred.make<void>(), (gate) => {
+      listsHeld = Option.some(gate)
+      return Deferred.succeed(gate, void 0).pipe(
+        Effect.tap(() => Effect.sync(() => (listsHeld = Option.none()))),
+      )
+    })
     const credentialsOf = (): ReadonlyArray<Credential> => held.credentials ?? []
     const client = createMockClient({
       auth: {
-        listProviders: () => Effect.sync(() => [held]),
+        listProviders: () =>
+          Option.match(listsHeld, {
+            onNone: () => Effect.void,
+            onSome: (gate) => Deferred.await(gate),
+          }).pipe(Effect.andThen(Effect.sync(() => [held]))),
         listMethods: () => Effect.succeed({ anthropic: anthropicMethods }),
         setOrder: (input: { readonly order: ReadonlyArray<CredentialSlot> }) =>
           Effect.sync(() => {
@@ -2254,7 +2266,7 @@ describe("Auth credentials", () => {
           }),
       },
     })
-    return { client, writes }
+    return { client, writes, holdLists }
   }
 
   const single = {
@@ -2327,6 +2339,29 @@ describe("Auth credentials", () => {
       setup.mockInput.pressArrow("up")
       const top = yield* waitForFrame(setup, (frame) => !frame.includes("n rename"), "the default")
       expect(top).toContain("1 default")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a repeated reorder moves from the order the last one wrote", () =>
+    Effect.gen(function* () {
+      const { client, writes, holdLists } = credentialServer(withCredentials)
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("3 credentials"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("1 personal"))
+      // A held key: the second move comes before the first one's list.
+      const release = yield* holdLists
+      setup.mockInput.pressArrow("down", { shift: true })
+      yield* waitUntil(() => writes.length === 1, "the first write")
+      setup.mockInput.pressArrow("down", { shift: true })
+      yield* waitUntil(() => writes.length === 2, "the second write")
+      expect(writes).toEqual(["order default,personal", "order default"])
+      yield* release
+      yield* waitForFrame(setup, (frame) => frame.includes("– personal"), "personal out")
     }).pipe(Effect.timeout("10 seconds")),
   )
 

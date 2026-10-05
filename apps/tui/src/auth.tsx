@@ -893,6 +893,19 @@ export function Auth(props: AuthProps) {
 
   // ── Loading ───────────────────────────────────────────────────────
 
+  /**
+   * The order the pane wrote last, until a list shows it or the write is
+   * refused: a move made before then (a held key) starts from it.
+   */
+  const [written, setWritten] = createSignal(
+    Option.none<{ readonly provider: string; readonly order: ReadonlyArray<CredentialSlot> }>(),
+  )
+  const currentOrder = (provider: AuthProviderInfo): ReadonlyArray<CredentialSlot> =>
+    Option.match(
+      Option.filter(written(), (held) => held.provider === provider.provider),
+      { onNone: () => orderOf(provider), onSome: (held) => held.order },
+    )
+
   /** `keepScreen`: the answer refreshes the catalog only (`Refreshed`). */
   const loadAuth = (token: ReplyWriter, keepScreen = false) => {
     clientCtx.log.info("auth:load-start")
@@ -909,6 +922,17 @@ export function Auth(props: AuthProps) {
         Effect.tap(([providers, methods, others]) =>
           whileCurrent(token, () => {
             clientCtx.log.info("auth:load-complete", { providers: providers.length })
+            setWritten((held) =>
+              Option.filter(
+                held,
+                (last) =>
+                  !providers.some(
+                    (row) =>
+                      row.provider === last.provider &&
+                      orderOf(row).join("\n") === last.order.join("\n"),
+                  ),
+              ),
+            )
             const catalog = {
               providers: [...providers],
               others: [...others.providers],
@@ -1030,11 +1054,17 @@ export function Auth(props: AuthProps) {
       loadAuth(token, true)
     })
   const refused = (token: ReplyWriter) => (err: UiError) =>
-    whileCurrent(token, () => send(AuthEvent.cases.Refused.make({ error: formatError(err) })))
+    Effect.sync(() => setWritten(Option.none())).pipe(
+      Effect.andThen(
+        whileCurrent(token, () => send(AuthEvent.cases.Refused.make({ error: formatError(err) }))),
+      ),
+    )
 
-  /** Write `order` as `provider`'s `authOrder`. */
+  /** Write `order` as `provider`'s `authOrder`, the order the next move starts from. */
   const writeOrder = (provider: string, order: ReadonlyArray<CredentialSlot>) =>
-    clientCtx.client.auth.setOrder({ provider, order: [...order], sessionId })
+    Effect.sync(() => setWritten(Option.some({ provider, order }))).pipe(
+      Effect.andThen(clientCtx.client.auth.setOrder({ provider, order: [...order], sessionId })),
+    )
 
   /**
    * A credential added in the pane is used: a new label goes last in the
@@ -1050,7 +1080,7 @@ export function Auth(props: AuthProps) {
     if (!isNew) return Effect.void
     const order = Option.match(providerFor(catalog(), provider), {
       onNone: (): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
-      onSome: orderOf,
+      onSome: currentOrder,
     })
     return writeOrder(provider, [...order, slot])
   }
@@ -1065,8 +1095,8 @@ export function Auth(props: AuthProps) {
   // any one written order ends the conflict.
   const reorder = (provider: AuthProviderInfo, slot: CredentialSlot, direction: "up" | "down") =>
     Option.map(
-      Option.orElse(movedOrder(orderOf(provider), slot, direction), () =>
-        Option.liftPredicate(orderOf(provider), () => hasOrderConflict(provider)),
+      Option.orElse(movedOrder(currentOrder(provider), slot, direction), () =>
+        Option.liftPredicate(currentOrder(provider), () => hasOrderConflict(provider)),
       ),
       (order) => {
         setFocus(Option.some(slot))
@@ -1086,7 +1116,7 @@ export function Auth(props: AuthProps) {
   const deleteCredential = (provider: AuthProviderInfo, entry: CredentialEntry) => {
     const token = begin()
     setFocus(Option.none())
-    const order = orderOf(provider)
+    const order = currentOrder(provider)
     const keeps = order.filter((slot) => slot !== entry.slot)
     const inOrder = entry.slot !== DEFAULT_CREDENTIAL_SLOT && keeps.length < order.length
     // The default keeps its place: with nothing stored it reads the
