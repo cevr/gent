@@ -195,7 +195,7 @@ describe("auto-resume rows", () => {
             resume: { attempt: 2, resetAt: 3_790_000 },
           }),
         ),
-      ).toBe("↻ resumed after the usage limit reset · attempt 2")
+      ).toEqual({ glyph: "↻", label: "resumed after the usage limit reset · attempt 2" })
     }),
   )
 

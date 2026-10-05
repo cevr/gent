@@ -113,7 +113,6 @@ const absent = undefined
 const rowProps: MessageRowProps = {
   content: "",
   images: [],
-  interjection: false,
   details: {},
   disclosure: "collapsed",
 }

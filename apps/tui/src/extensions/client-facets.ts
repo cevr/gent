@@ -735,7 +735,6 @@ export type DisclosureLevel = "collapsed" | "preview" | "full"
 export interface MessageRowProps {
   readonly content: string
   readonly images: ReadonlyArray<ImagePartProjection>
-  readonly interjection: boolean
   readonly pendingMode?: "queued" | "steer"
   /** The message's `metadata.details`, for the renderer to decode. */
   readonly details: unknown

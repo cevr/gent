@@ -12,7 +12,8 @@ import {
   Show,
   useContext,
 } from "solid-js"
-import { Effect, Fiber, Match, Option, Schedule, Schema } from "effect"
+import { Effect, Fiber, Match, Option, Predicate, Schedule, Schema } from "effect"
+import { splitLines } from "@gent/core/protocol"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
@@ -27,13 +28,14 @@ import { useTheme } from "./theme"
 import {
   dropFirstGrapheme,
   dropLastGrapheme,
+  formatPreviewFooter,
   graphemeBoundaryFrom,
   truncate,
   truncateStart,
   useRequiredContext,
 } from "./utils"
 import { textWidth } from "./bun-adapter"
-import type { MessageRowProps } from "./extensions/client-facets"
+import type { DisclosureLevel, MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
@@ -1798,26 +1800,28 @@ export function ToolFrame(props: ToolFrameProps) {
 // ── message rows ────────────────────────────────────────────────────────────
 
 /**
- * The rows a user-role message draws: the plain rail row, and the one-line
- * row a harness message collapses to. The transcript draws them by default,
- * and a message renderer composes them for its own custom type.
+ * The rows a user-role message draws, in two lanes. Column 0 and the heavy
+ * `┃` rail belong to the reader: `UserRow` draws what the reader typed or
+ * steered. Everything gent or another agent wrote starts at column 2 behind
+ * its own glyph, muted and never bold, with wrapped lines hanging at column 4:
+ * `AgentMessageRow` for a message another session sent (`»`), `CollapsedRow`
+ * for a one-line runtime or extension notice. The transcript draws them by
+ * default, and a message renderer composes them for its own custom type.
  */
+
+/** Where a row outside the reader's lane puts its glyph, and where its text starts. */
+const GLYPH_COLUMN = 2
+const GLYPH_TEXT_COLUMN = 4
+
+/** Transcript rows keep the terminal's last column free (`FREE_LAST_COLUMN` in `message-list.tsx`). */
+const FREE_LAST_COLUMN = 1
+
+/** Body lines a message another session sent shows at the preview level. */
+const AGENT_MESSAGE_PREVIEW_LINES = 5
 
 /** The rail row: images, the pending label, then the text; `header` is a muted line above it. */
 export function UserRow(props: MessageRowProps & { readonly header?: string }) {
   const { theme } = useTheme()
-  const textColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.text
-  }
-  const labelColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.textMuted
-  }
-  const railColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.primary
-  }
   return (
     <box
       marginTop={1}
@@ -1826,7 +1830,7 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
       flexDirection="column"
       border={["left"]}
       borderStyle="heavy"
-      borderColor={railColor()}
+      borderColor={theme.primary}
     >
       <Show when={props.images.length > 0}>
         <For each={props.images}>
@@ -1843,11 +1847,11 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
           <Show when={props.pendingMode}>
             {(value) => (
               <text>
-                <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
+                <span style={{ fg: theme.textMuted, bold: true }}>[{value()}]</span>
               </text>
             )}
           </Show>
-          <text style={{ fg: textColor() }}>
+          <text style={{ fg: theme.text }}>
             <span style={{ bold: true }}>{props.content}</span>
           </text>
         </box>
@@ -1856,17 +1860,96 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
   )
 }
 
-/** One muted line behind the rail glyph, in place of the whole message. */
-export function CollapsedRow(props: { readonly label: string }) {
+/** A notice's glyph and its words: `↳` and `answered · Cache? → Redis`. */
+export interface CollapsedRowProps {
+  /** One column wide: R3's notice glyphs (`↳ ⇣ ⇄ ↻ ◷ ◉ ◌`). */
+  readonly glyph: string
+  readonly label: string
+}
+
+/** One muted notice in place of the whole message: its glyph at column 2, its words hanging at column 4. */
+export function CollapsedRow(props: CollapsedRowProps) {
   const { theme } = useTheme()
   return (
-    <box marginTop={1} flexDirection="row">
-      <text width={1} flexShrink={0} style={{ fg: theme.textMuted }}>
-        ┃
+    <box marginTop={1} paddingLeft={GLYPH_COLUMN} flexDirection="row">
+      <text width={GLYPH_TEXT_COLUMN - GLYPH_COLUMN} flexShrink={0} style={{ fg: theme.textMuted }}>
+        {props.glyph}
       </text>
-      <text paddingLeft={1} style={{ fg: theme.textMuted }}>
+      <text flexGrow={1} flexShrink={1} style={{ fg: theme.textMuted }}>
         {props.label}
       </text>
+    </box>
+  )
+}
+
+/** A message another session sent, as `AgentMessageRow` draws it. */
+interface AgentMessageRowProps {
+  /** Who wrote it, after the `»`: `child explore · 0e493eaf`. */
+  readonly head: string
+  /** The text it says, without the header the model reads. */
+  readonly body: string
+  readonly images?: ReadonlyArray<{ readonly mediaType: string }>
+  readonly disclosure: DisclosureLevel
+}
+
+/**
+ * A message another session (a child, a parent, a peer) or an agent wrote:
+ * never the reader's rail, never bold, the muted gray of a tool row.
+ * Collapsed is one line, `» <head> · <first body line>`, cut at the width.
+ * Preview adds five body lines behind a `│ ` gutter and counts the rest;
+ * full draws the whole body hanging at column 4.
+ */
+export function AgentMessageRow(props: AgentMessageRowProps) {
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const lines = createMemo(() => {
+    const images = (props.images ?? []).map(
+      (image) => `[Image: ${image.mediaType.replace("image/", "")}]`,
+    )
+    const body = splitLines(props.body)
+    let end = body.length
+    while (end > 0 && (body[end - 1] ?? "").trim().length === 0) end -= 1
+    return [...images, ...body.slice(0, end)]
+  })
+  // The columns right of the glyph column, less the free last column.
+  const width = () => Math.max(1, dimensions().width - GLYPH_COLUMN - FREE_LAST_COLUMN)
+  const headLine = () => {
+    const head = `» ${props.head}`
+    const first = lines()[0]
+    if (props.disclosure !== "collapsed" || Predicate.isUndefined(first))
+      return truncate(head, width())
+    return truncate(`${head} · ${first}`, width())
+  }
+  const preview = () => lines().slice(0, AGENT_MESSAGE_PREVIEW_LINES)
+  return (
+    <box marginTop={1} paddingLeft={GLYPH_COLUMN} flexDirection="column">
+      <text style={{ fg: theme.textMuted }} wrapMode="none">
+        {headLine()}
+      </text>
+      <Show when={props.disclosure === "preview" && preview().length > 0}>
+        <box paddingLeft={GLYPH_TEXT_COLUMN - GLYPH_COLUMN} flexDirection="column">
+          <For each={preview()}>
+            {(line) => (
+              <text style={{ fg: theme.textMuted }} wrapMode="none">
+                │ {truncate(line, width() - 4)}
+              </text>
+            )}
+          </For>
+          <Show when={lines().length > preview().length}>
+            <text style={{ fg: theme.textMuted }} wrapMode="none">
+              │{" "}
+              <span style={{ fg: theme.textMuted, dim: true }}>
+                {formatPreviewFooter(lines().length - preview().length)}
+              </span>
+            </text>
+          </Show>
+        </box>
+      </Show>
+      <Show when={props.disclosure === "full" && lines().length > 0}>
+        <box paddingLeft={GLYPH_TEXT_COLUMN - GLYPH_COLUMN}>
+          <text style={{ fg: theme.textMuted }}>{lines().join("\n")}</text>
+        </box>
+      </Show>
     </box>
   )
 }

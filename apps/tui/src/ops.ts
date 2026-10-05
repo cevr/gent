@@ -413,9 +413,9 @@ export const formatDoctorReport = (report: DoctorReport): string => {
 
 /**
  * `gent --debug` starts an in-memory server seeded with one sample session:
- * a transcript with the shipped tools' calls and results, a queued
- * interjection, and delegate rows, so the session view renders every
- * surface without a live model.
+ * a transcript with the shipped tools' calls and results, the reader's
+ * prompts and a steer, delegate rows, and a child's report and completion,
+ * so the session view renders every surface without a live model.
  */
 
 type DebugValue = Schema.Json
@@ -472,6 +472,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     branchId,
     role: "user",
     parts: [makeText("Review the TUI renderer cleanup and inspect the current implementation.")],
+    metadata: { fromClient: true },
     createdAt: nowPlus(-50_000),
   })
 
@@ -576,6 +577,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     branchId,
     role: "user",
     parts: [makeText("Actually check queue vs steer too.")],
+    metadata: { fromClient: true },
     createdAt: nowPlus(-38_000),
   })
 
@@ -598,6 +600,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     branchId,
     role: "user",
     parts: [makeText("Read the related session and review the audit output.")],
+    metadata: { fromClient: true },
     createdAt: nowPlus(-28_000),
   })
 
@@ -635,8 +638,8 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     parts: [
       makeJsonResult(asToolCallId("dbg-explore"), "delegate.start", {
         requestId: "dbg-explore",
-        sessionId: "019debug1-explore",
-        branchId: "019debug1-explore-branch",
+        sessionId: "019debe1-0e493eaf",
+        branchId: "019debe1-0e493eaf-branch",
       }),
       makeJsonResult(asToolCallId("dbg-review"), "delegate.start", {
         requestId: "dbg-review",
@@ -666,6 +669,93 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     createdAt: nowPlus(-21_000),
   })
 
+  // The explore child's report and its completion, as the session tools and
+  // the delegate store them: the TUI host reads no extension module, so the
+  // custom types and the header the model reads are written out here.
+  const explore = {
+    sessionId: "019debe1-0e493eaf",
+    branchId: "019debe1-0e493eaf-branch",
+    name: "explore",
+    relation: "child",
+  }
+  const childReport = Message.cases.interjection.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [
+      makeText(
+        [
+          `Message from your child "${explore.name}" (session ${explore.sessionId}):`,
+          "A child's completion arrives as its own child-completion message; this message is not one.",
+          "",
+          "The double border comes from two surfaces drawing one tool summary.",
+          "message-list.tsx draws the group header for the run,",
+          "and the cell renderer drew its own frame header inside it.",
+          "Checked apps/tui/src/tool-renderers.tsx: ToolFrameBody hides one header only.",
+          "A frame nested in a body draws its header again, by design.",
+          "So the second border is the nested frame, not a stray box.",
+          "Removing the outer header would lose the run's counts.",
+          "Removing the inner one loses the op's own subject line.",
+          "The fix that keeps both: fold consecutive ops of one tool.",
+          "That is FoldOperationsProvider, already on outside the transcript view.",
+          "I am checking whether the debug seed bypasses it next.",
+          "No edits made; this is a read-only report.",
+        ].join("\n"),
+      ),
+    ],
+    metadata: {
+      customType: "session-message",
+      extensionId: "@gent/session-tools",
+      details: { from: explore },
+    },
+    createdAt: nowPlus(-18_000),
+  })
+
+  const childCompletion = Message.cases.regular.make({
+    id: MessageId.make(yield* platform.randomId),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [
+      makeText(
+        [
+          `Child agent "explore" completed. requestId dbg-explore; session ${explore.sessionId}; branch ${explore.branchId}.`,
+          "Completion is a turn receipt, not task success. Read the output before relying on it.",
+          "",
+          "The double border is a nested ToolFrame inside the cell body.",
+          "FoldOperationsProvider folds consecutive ops of one tool into one frame.",
+          "The transcript view turns folding off on purpose: it is the raw view.",
+          "No change needed; the inline view already folds.",
+          "Evidence: apps/tui/src/tool-renderers.tsx and apps/tui/src/ui.tsx.",
+          "Read 4 files, searched 2 patterns.",
+        ].join("\n"),
+      ),
+    ],
+    metadata: {
+      customType: "child-completion",
+      extensionId: "@gent/delegate",
+      details: {
+        requestId: "dbg-explore",
+        sessionId: explore.sessionId,
+        branchId: explore.branchId,
+        agentName: "explore",
+        outcome: {},
+        usage: { input: 1200, output: 300, costUsd: 0.0123 },
+        tools: [
+          { name: "read", summary: "apps/tui/src/tool-renderers.tsx", status: "completed" },
+          { name: "grep", summary: "ToolFrameBody 6 matches", status: "completed" },
+          { name: "read", summary: "apps/tui/src/ui.tsx", status: "completed" },
+          { name: "grep", summary: "FoldOperationsProvider 3 matches", status: "completed" },
+          { name: "read", summary: "apps/tui/src/message-list.tsx", status: "completed" },
+          { name: "read", summary: "apps/tui/src/ops.ts", status: "completed" },
+        ],
+        toolCount: 6,
+      },
+    },
+    createdAt: nowPlus(-15_000),
+  })
+
   const seedMessages = [
     user1,
     assistant1,
@@ -677,6 +767,8 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     assistant4,
     toolResults2,
     assistant5,
+    childReport,
+    childCompletion,
   ]
 
   for (const message of seedMessages) {

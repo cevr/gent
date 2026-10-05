@@ -1,20 +1,23 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Clock, Effect, Option } from "effect"
-import { createSignal, Show } from "solid-js"
+import { createSignal, type JSX, Show } from "solid-js"
 import {
   type CliRenderer,
   NativeSpanFeed,
   OptimizedBuffer,
   resolveRenderLib,
   RGBA,
+  TextAttributes,
   TextRenderable,
 } from "@opentui/core"
 import { createTestRenderer, ManualClock } from "@opentui/core/testing"
 import { Terminal } from "@xterm/headless"
 import {
+  AgentMessageRow,
   CaretLine,
   caretWindow,
+  CollapsedRow,
   decoration,
   groupedRows,
   keyHint,
@@ -48,6 +51,8 @@ import {
   type Branch,
 } from "@gent/core/protocol"
 import { BranchPicker, modelRows, SettingsPicker } from "../src/pickers"
+import { useTheme } from "../src/theme"
+import type { DisclosureLevel } from "../src/extensions/client-facets"
 import { ThreadPane, type ThreadWindow } from "../src/extensions/thread-view.client"
 
 // ── select list ─────────────────────────────────────────────────────────────
@@ -1519,4 +1524,115 @@ describe("split region growth", () => {
         expect(rows).toEqual(expectedRows)
       }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
+})
+
+// ── message rows ────────────────────────────────────────────────────────────
+
+/**
+ * Speaker lanes. Column 0 and the `┃` rail belong to the reader. A row that
+ * another agent or the runtime wrote starts at column 2 with its own glyph,
+ * muted and never bold, and its wrapped lines hang at column 4.
+ */
+describe("message rows outside the reader's lane", () => {
+  const twelveLines = Array.from({ length: 12 }, (_, i) => `BODY-LINE-${i + 1}`).join("\n")
+  const longLine = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" ")
+
+  const draw = (row: () => JSX.Element, width: number) =>
+    Effect.gen(function* () {
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          colors = Option.some(useTheme().theme)
+          return row()
+        },
+        { width, height: 30 },
+      )
+      const frame = yield* waitForFrame(setup, (text) => /[»◷]/.test(text), "the row")
+      const theme = Option.getOrThrow(colors)
+      const drawn = setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans.filter((span) => span.text.trim().length > 0))
+      return {
+        lines: frame.split("\n").map((line) => line.trimEnd()),
+        // No span is bold, and every one is the muted gray of a tool row.
+        bold: drawn.filter((span) => (span.attributes & TextAttributes.BOLD) !== 0),
+        unmuted: drawn.filter((span) => !span.fg.equals(theme.textMuted)),
+      }
+    })
+
+  const agentRow = (disclosure: DisclosureLevel, width: number, body = twelveLines) =>
+    draw(
+      () => <AgentMessageRow head="child explore · 0e493eaf" body={body} disclosure={disclosure} />,
+      width,
+    )
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`a message another session sent is one muted line at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { lines, bold, unmuted } = yield* agentRow("collapsed", width)
+        const drawn = lines.filter((line) => line.length > 0)
+        expect(drawn).toHaveLength(1)
+        expect(drawn[0]?.startsWith("  » child explore")).toBe(true)
+        expect(drawn[0]?.length).toBeLessThanOrEqual(width - 1)
+        if (width >= 60) expect(drawn[0]).toBe("  » child explore · 0e493eaf · BODY-LINE-1")
+        expect(lines.join("\n")).not.toContain("┃")
+        expect(bold).toEqual([])
+        expect(unmuted).toEqual([])
+      }),
+    )
+  }
+
+  for (const width of [100, 60]) {
+    it.scopedLive(`preview shows five body lines and counts the rest at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { lines, bold, unmuted } = yield* agentRow("preview", width)
+        expect(lines.filter((line) => line.length > 0)).toEqual([
+          "  » child explore · 0e493eaf",
+          "    │ BODY-LINE-1",
+          "    │ BODY-LINE-2",
+          "    │ BODY-LINE-3",
+          "    │ BODY-LINE-4",
+          "    │ BODY-LINE-5",
+          "    │ … +7 lines (ctrl+o)",
+        ])
+        expect(bold).toEqual([])
+        expect(unmuted).toEqual([])
+      }),
+    )
+
+    it.scopedLive(`full shows the whole body, hanging at column 4, at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { lines, bold, unmuted } = yield* agentRow("full", width)
+        expect(lines.filter((line) => line.length > 0)).toEqual([
+          "  » child explore · 0e493eaf",
+          ...Array.from({ length: 12 }, (_, i) => `    BODY-LINE-${i + 1}`),
+        ])
+        expect(bold).toEqual([])
+        expect(unmuted).toEqual([])
+        const wrapped = (yield* agentRow("full", width, longLine)).lines.filter(
+          (line) => line.length > 0,
+        )
+        expect(wrapped.length).toBeGreaterThan(2)
+        for (const line of wrapped.slice(1)) expect(line).toMatch(/^ {4}\S/)
+      }),
+    )
+  }
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`a notice row has no rail and hangs at column 4 at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { lines, bold, unmuted } = yield* draw(
+          () => <CollapsedRow glyph="◷" label={`alarm fired · ${longLine}`} />,
+          width,
+        )
+        const drawn = lines.filter((line) => line.length > 0)
+        expect(drawn[0]?.startsWith("  ◷ alarm fired · word0")).toBe(true)
+        expect(drawn.length).toBeGreaterThan(1)
+        for (const line of drawn.slice(1)) expect(line).toMatch(/^ {4}\S/)
+        expect(lines.join("\n")).not.toContain("┃")
+        expect(bold).toEqual([])
+        expect(unmuted).toEqual([])
+      }),
+    )
+  }
 })

@@ -14,6 +14,7 @@ import {
   ClientContext,
   clientContributions,
   CollapsedRow,
+  type CollapsedRowProps,
   defineClientExtension,
   formatClock,
   formatDuration,
@@ -228,21 +229,25 @@ export function WakeTray(props: {
 /** A fired wake shows what fired and the note the model left itself, not the full line. */
 const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
 
-const wakeHead = (value: WakeDetails): string => {
-  if (value.outcome === "fired") return `${ALARM_GLYPH} alarm fired`
-  if (value.outcome === "timed-out") return `${MONITOR_GLYPH} monitor timed out`
-  return `${MONITOR_GLYPH} monitor matched`
+const wakeHead = (value: WakeDetails): CollapsedRowProps => {
+  if (value.outcome === "fired") return { glyph: ALARM_GLYPH, label: "alarm fired" }
+  if (value.outcome === "timed-out") return { glyph: MONITOR_GLYPH, label: "monitor timed out" }
+  return { glyph: MONITOR_GLYPH, label: "monitor matched" }
 }
 
 /** A resume's fire names the attempt instead of the note, which only says what it does. */
-export const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
+export const wakeLabel = (wake: Option.Option<WakeDetails>): CollapsedRowProps =>
   Option.match(wake, {
-    onNone: () => `${ALARM_GLYPH} alarm fired`,
+    onNone: () => ({ glyph: ALARM_GLYPH, label: "alarm fired" }),
     onSome: (value) => {
       if (Predicate.isNotUndefined(value.resume)) {
-        return `${RESUME_GLYPH} resumed after the usage limit reset · attempt ${value.resume.attempt}`
+        return {
+          glyph: RESUME_GLYPH,
+          label: `resumed after the usage limit reset · attempt ${value.resume.attempt}`,
+        }
       }
-      return `${wakeHead(value)} · ${value.note}`
+      const head = wakeHead(value)
+      return { glyph: head.glyph, label: `${head.label} · ${value.note}` }
     },
   })
 
@@ -324,7 +329,7 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
         },
       }),
       messageRendererContribution(WAKE_MESSAGE_TYPE, (props) => (
-        <CollapsedRow label={wakeLabel(decodeWakeDetails(props.details))} />
+        <CollapsedRow {...wakeLabel(decodeWakeDetails(props.details))} />
       )),
       widgetContribution({
         id: "wake.tray",

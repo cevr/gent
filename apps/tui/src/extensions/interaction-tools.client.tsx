@@ -309,13 +309,14 @@ export function QuestionPane(props: {
 
 const decodeAnswerDetails = Schema.decodeUnknownOption(QuestionAnswerDetails)
 
-const ANSWERED = "↳ answered · "
+const ANSWERED_GLYPH = "↳"
+const ANSWERED = "answered · "
 /** The fewest columns of the question an answered row keeps before it cuts the answer too. */
 const QUESTION_MIN_COLUMNS = 12
 
 /**
- * `↳ answered · <question> → <answer>` in one line of `width` columns: the
- * question is cut first, so the answer the user gave stays in view.
+ * `answered · <question> → <answer>` (the words after the row's `↳`) in one
+ * line of `width` columns: the question is cut first, so the answer the user gave stays in view.
  */
 export const answeredLabel = (question: string, answer: string, width: number): string => {
   const tail = ` → ${answer}`
@@ -341,15 +342,15 @@ const questionQueueLabel = (message: QueuedMessage): string =>
 /** One collapsed row per answer: the question and what the user said. */
 export function QuestionAnswerRows(props: { readonly details: unknown }) {
   const dimensions = useTerminalDimensions()
-  // The rail, its gap and the transcript's side margins.
-  const width = () => Math.max(QUESTION_MIN_COLUMNS * 2, dimensions().width - 4)
+  // The words start at column 4, and the transcript keeps its last column free.
+  const width = () => Math.max(QUESTION_MIN_COLUMNS * 2, dimensions().width - 5)
   const rows = () =>
     Option.match(decodeAnswerDetails(props.details), {
-      onNone: () => ["↳ answered a background question"],
+      onNone: () => ["answered a background question"],
       onSome: (details) =>
         details.answers.map((entry) => answeredLabel(entry.question, entry.answer, width())),
     })
-  return <For each={rows()}>{(label) => <CollapsedRow label={label} />}</For>
+  return <For each={rows()}>{(label) => <CollapsedRow glyph={ANSWERED_GLYPH} label={label} />}</For>
 }
 
 // ── extension ───────────────────────────────────────────────────────────────

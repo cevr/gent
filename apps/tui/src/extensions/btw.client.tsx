@@ -226,9 +226,10 @@ export const makeForkPane = (
 
 const decodeMergeDetails = Schema.decodeUnknownOption(ForkMergeDetails)
 
-const MERGED = "↳ merged btw · "
+const MERGED_GLYPH = "↳"
+const MERGED = "merged btw · "
 
-/** `↳ merged btw · <question> → <reply>` in one line of `width` columns, cut at its end. */
+/** `merged btw · <question> → <reply>` (the words after the row's `↳`) in one line of `width` columns, cut at its end. */
 const mergedLabel = (details: ForkMergeDetails, width: number): string =>
   truncate(`${MERGED}${details.question} → ${details.reply}`, width)
 
@@ -246,14 +247,14 @@ const mergeQueueLabel = (message: QueuedMessage): string =>
  */
 export function ForkMergeRow(props: { readonly details: unknown }) {
   const dimensions = useTerminalDimensions()
-  // The rail, its gap and the transcript's side margins.
-  const width = () => Math.max(textWidth(MERGED), dimensions().width - 4)
+  // The words start at column 4, and the transcript keeps its last column free.
+  const width = () => Math.max(textWidth(MERGED), dimensions().width - 5)
   const label = () =>
     Option.match(decodeMergeDetails(props.details), {
-      onNone: () => "↳ merged a btw fork",
+      onNone: () => "merged a btw fork",
       onSome: (details) => mergedLabel(details, width()),
     })
-  return <CollapsedRow label={label()} />
+  return <CollapsedRow glyph={MERGED_GLYPH} label={label()} />
 }
 
 /**

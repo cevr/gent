@@ -15,6 +15,7 @@ import {
 } from "effect"
 import {
   type ActiveExtensionSession,
+  AgentMessageRow,
   type AnyExtensionClientModule,
   autocompleteContribution,
   BUILTIN_TOOL_RENDERERS,
@@ -38,7 +39,6 @@ import {
   statusLabelContribution,
   truncate,
   truncatePath,
-  UserRow,
 } from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
 import { Socket } from "effect/socket"
@@ -727,7 +727,7 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
 
     return clientContributions(
       messageRendererContribution(GOAL_CONTEXT_MESSAGE_TYPE, () => (
-        <CollapsedRow label="↻ goal continuation" />
+        <CollapsedRow glyph="↻" label="goal continuation" />
       )),
       statusLabelContribution({
         priority: 40,
@@ -752,35 +752,33 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
 
 // ── session message row ─────────────────────────────────────────────────────
 
-/** A message from another session names its sender on a line of its own. */
+/** A message from another session names its sender at the head of its row. */
 const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
 
-/** The sender line fits the id: an auto-named child carries its whole task in the name. */
+/** The sender fits beside the id: an auto-named child carries its whole task in the name. */
 const SENDER_NAME_MAX_COLUMNS = 32
 
 /** Collapses runs of whitespace, then cuts by terminal columns via `truncate`. */
 const shortName = (name: string): string =>
   truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
 
-/** Who wrote a sent message: the relation, the cut name, and the short session id. */
-const senderLine = ({ from }: SessionMessageDetails): string => {
-  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
-    Option.map((relation) => `your ${relation}`),
-    Option.getOrElse(() => "session"),
-  )
+/** Who wrote a sent message: the relation word, the cut name, and the short session id. */
+const senderHead = ({ from }: SessionMessageDetails): string => {
   const name = Option.fromUndefinedOr(from.name).pipe(
-    Option.map((value) => ` "${shortName(value)}"`),
+    Option.map((value) => ` ${shortName(value)}`),
     Option.getOrElse(() => ""),
   )
-  return `» from ${who}${name} · ${shortId(from.sessionId)}`
+  return `${from.relation}${name} · ${shortId(from.sessionId)}`
 }
 
 /**
- * The model reads the header `sessionMessageText` writes, then the text. The
- * row puts the sender in its own muted line and `sessionMessageBody` removes
- * the header, old rows included, so blank lines in a name or body stay whole.
- * Details that do not decode draw the plain row. A thread's first message is
- * its task under a frame the thread's model reads; the row shows the task.
+ * Another session wrote these, so neither draws on the reader's rail: each is
+ * the `»` row, muted and never bold. The model reads the header
+ * `sessionMessageText` writes, then the text; the row names the sender at its
+ * head and `sessionMessageBody` removes the header, old rows included, so
+ * blank lines in a name or body stay whole. Details that do not decode draw
+ * the raw text under the bare relation word. A thread's first message is its
+ * task under a frame the thread's model reads; the row shows the task.
  */
 const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
   setup: Effect.succeed(
@@ -788,13 +786,21 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
       messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
         <Show
           when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
-          fallback={<UserRow {...props} />}
+          fallback={
+            <AgentMessageRow
+              head="session"
+              body={props.content}
+              images={props.images}
+              disclosure={props.disclosure}
+            />
+          }
         >
           {(details) => (
-            <UserRow
-              {...props}
-              header={senderLine(details())}
-              content={sessionMessageBody(details().from, props.content)}
+            <AgentMessageRow
+              head={senderHead(details())}
+              body={sessionMessageBody(details().from, props.content)}
+              images={props.images}
+              disclosure={props.disclosure}
             />
           )}
         </Show>
@@ -802,7 +808,12 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
       messageRendererContribution(
         THREAD_TASK_TYPE,
         (props) => (
-          <UserRow {...props} header="thread · task" content={threadTaskBody(props.content)} />
+          <AgentMessageRow
+            head="task from session"
+            body={threadTaskBody(props.content)}
+            images={props.images}
+            disclosure={props.disclosure}
+          />
         ),
         { prompt: threadTaskBody },
       ),

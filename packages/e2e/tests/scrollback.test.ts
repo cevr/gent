@@ -42,6 +42,12 @@ const SETTLE = { quietMs: 800, timeoutMs: 25_000 }
 /** The typed text is drawn once the child writes nothing for this long. */
 const TYPED = { quietMs: 200, timeoutMs: 5_000 }
 
+/**
+ * Turns that make a transcript taller than the short screen with rows to
+ * spare: each `--mock-empty` turn draws a prompt and two one-line runtime rows.
+ */
+const TALL_SESSION = 8
+
 const messageText = (index: number) => `scrollback probe ${index}`
 const encodeTerminalBytes = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 
@@ -79,7 +85,7 @@ describe("E2E: Scrollback ownership", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--mock-empty"], SHORT_SCREEN)
-        yield* submitMessages(ctx, 5)
+        yield* submitMessages(ctx, TALL_SESSION)
 
         const grid = yield* settleAndCapture(ctx, SETTLE)
         const history = historyText(grid)
@@ -104,7 +110,7 @@ describe("E2E: Scrollback ownership", () => {
         // repaints leaves the same row in the terminal twice. Counting is
         // what catches it; `toContain` cannot.
         const rows = gridText(grid)
-        for (const index of [1, 2, 3, 4, 5]) {
+        for (let index = 1; index <= TALL_SESSION; index++) {
           expect(countRows(rows, messageText(index))).toBe(1)
         }
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
