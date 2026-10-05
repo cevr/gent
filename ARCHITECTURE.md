@@ -1532,8 +1532,7 @@ since admission is judged where it points at the call. A handoff is no spawn
 the thread and takes that spawn's parent run bound (none for a root thread),
 and `admitRun` checks a handoff's named run `paths` against it, as for a
 spawn. The handoff keeps its predecessor's admission unless it names one. A
-predecessor that cannot be read, or a parent cycle, fails closed.
-Fail closed: a parent row that cannot be read,
+predecessor that cannot be read, or a parent cycle, fails closed. Fail closed: a parent row that cannot be read,
 a parent cwd whose config does not load, or a parent agent gone from its
 roster is a `ParentBoundError` naming the parent session and agent; a create
 of a child is refused with it, the child's turn ends with it as an
@@ -1543,7 +1542,12 @@ Authority follows the creating run, not the input: the `ExtensionContext`
 always the calling session (`runInfo.sessionId`), so a tool in a bounded run
 cannot make a root session or name a wider parent to leave its chain; a
 `parentBranchId` of another session is refused (`admitParent`). A client's
-`session.create` (the user) still names its parent.
+`session.create` (the user) still names its parent, and only a client sets
+`continueThread`, so only the user makes a handoff. An extension's reach is
+its run's: `Session.delete` and the `historyBranchId` of `Session.create`
+take only a session in the caller's thread or spawned below it
+(`getThreadTree`); any other is refused with `SessionReachError`, so a tool in
+a child cannot delete its parent or a sibling, or copy their history.
 Session create (`admitRun` in `server.ts`, before the storage transaction)
 also refuses, early and by name, a run `paths` entry that an agent scope or
 a parent run scope does not reach with at least its access

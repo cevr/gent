@@ -43,6 +43,7 @@ import {
   ExtensionId,
   type ExtensionServiceError,
   RunOverrides,
+  type SessionReachError,
   headChars,
   headTailChars,
   isRuntimeUserMessage,
@@ -179,10 +180,18 @@ const replaceEntry = (entries: ReadonlyArray<DelegateEntry>, entry: DelegateEntr
 
 /** Every fault behind the facade is one caller-facing error. */
 const asDelegateError = (message: string) =>
-  Effect.mapError((cause: ExtensionServiceError | PlatformError.PlatformError | DelegateError) => {
-    if (Schema.is(DelegateError)(cause)) return cause
-    return new DelegateError({ message: `${message}: ${cause.message}`, cause })
-  })
+  Effect.mapError(
+    (
+      cause:
+        | ExtensionServiceError
+        | SessionReachError
+        | PlatformError.PlatformError
+        | DelegateError,
+    ) => {
+      if (Schema.is(DelegateError)(cause)) return cause
+      return new DelegateError({ message: `${message}: ${cause.message}`, cause })
+    },
+  )
 
 // ── child turns ─────────────────────────────────────────────────────────────
 

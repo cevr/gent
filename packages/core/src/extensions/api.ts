@@ -161,6 +161,7 @@ export {
   ExtensionContext,
   ExtensionServiceError,
   ExtensionStatus,
+  SessionReachError,
   type ExtensionContextService,
   type ExtensionModelsService,
 } from "../domain/extension.js"

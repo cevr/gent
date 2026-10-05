@@ -913,6 +913,10 @@ bound of the session it continues: a handoff of a confined child stays
 confined, and one that names wider `paths` is refused. Deleting a spawned
 child deletes its handoffs too.
 
+A tool reaches only its own run's sessions: `ctx.Session.delete` and the
+`historyBranchId` of `ctx.Session.create` take a session in the caller's
+thread or one spawned below it. Any other fails with `SessionReachError`.
+
 The agent `getAgent` returns and the hooks receive is bound to its run:
 `admitsTool` and `pathScopes()` answer for the run, not for the definition. It
 is no definition to send or register: `AgentDefinition.make` refuses its

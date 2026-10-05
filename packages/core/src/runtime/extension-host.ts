@@ -37,6 +37,7 @@ import {
   type ExtensionScope,
   extensionServiceError,
   ExtensionServiceError,
+  SessionReachError,
   type ExtensionSetupServices,
   type ExtensionExtensionsService,
   type ExtensionStateFacet,
@@ -3664,6 +3665,52 @@ export const makeExtensionHostContextProvider = (
         ),
       ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
+    /**
+     * Refuses `sessionId` unless it is in the calling run's reach: the
+     * caller's thread and every session spawned below it (`getThreadTree`).
+     * Authority follows the calling run, never the id an extension names.
+     */
+    const requireReach = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      operation: string,
+      sessionId: SessionId,
+    ) =>
+      relationships((relationshipStorage) =>
+        relationshipStorage.getThreadTree(runInfo.sessionId),
+      ).pipe(
+        Effect.mapError(sessionError(operation)),
+        Effect.flatMap((tree) => {
+          if (tree.some((session) => session.id === sessionId)) return Effect.void
+          return Effect.fail(
+            new SessionReachError({
+              message: `Session ${sessionId} is outside this run's reach: its own thread and the sessions it spawned.`,
+              operation,
+              sessionId,
+            }),
+          )
+        }),
+      )
+
+    /** A `historyBranchId` must be a branch of a session in the caller's reach. */
+    const requireHistoryReach = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      historyBranchId: Option.Option<BranchId>,
+    ) =>
+      Option.match(historyBranchId, {
+        onNone: () => Effect.void,
+        onSome: (branchId) =>
+          branches((branchStorage) => branchStorage.getBranch(branchId)).pipe(
+            Effect.mapError(sessionError("create")),
+            Effect.flatMap((branch) =>
+              Option.match(Option.fromUndefinedOr(branch), {
+                // An unknown branch is refused by the create itself.
+                onNone: () => Effect.void,
+                onSome: (found) => requireReach(runInfo, "create", found.sessionId),
+              }),
+            ),
+          ),
+      })
+
     const fileLock = yield* facet(FileLockService, "FileLockService")
     const FileLock: ExtensionFileLockServiceApi = {
       withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
@@ -3834,27 +3881,35 @@ export const makeExtensionHostContextProvider = (
             service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
         create: (params) =>
-          mutations((service) =>
-            service.createSession({
-              name: params.name,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
-              // The calling session is the parent: its run bounds the new one.
-              parentSessionId: runInfo.sessionId,
-              parentBranchId: params.parentBranchId,
-              historyBranchId: params.historyBranchId,
-              admission: params.admission,
-              modelId: params.modelId,
-              reasoningLevel: params.reasoningLevel,
-              requestId: params.requestId,
-            }),
-          ).pipe(
-            Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
-            Effect.mapError(sessionError("create")),
+          requireHistoryReach(runInfo, Option.fromUndefinedOr(params.historyBranchId)).pipe(
+            Effect.andThen(
+              mutations((service) =>
+                service.createSession({
+                  name: params.name,
+                  cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
+                  // The calling session is the parent: its run bounds the new one.
+                  parentSessionId: runInfo.sessionId,
+                  parentBranchId: params.parentBranchId,
+                  historyBranchId: params.historyBranchId,
+                  admission: params.admission,
+                  modelId: params.modelId,
+                  reasoningLevel: params.reasoningLevel,
+                  requestId: params.requestId,
+                }),
+              ).pipe(
+                Effect.map(({ sessionId, branchId }) => ({ sessionId, branchId })),
+                Effect.mapError(sessionError("create")),
+              ),
+            ),
             inWorkspace,
           ),
         delete: (sessionId) =>
-          mutations((service) => service.deleteSession(sessionId)).pipe(
-            Effect.mapError(sessionError("delete")),
+          requireReach(runInfo, "delete", sessionId).pipe(
+            Effect.andThen(
+              mutations((service) => service.deleteSession(sessionId)).pipe(
+                Effect.mapError(sessionError("delete")),
+              ),
+            ),
             inWorkspace,
           ),
         send: (params) =>

@@ -2339,6 +2339,60 @@ const sessionMaker = (made: Array<SessionTarget>, foreign: ReadonlyArray<BranchI
     }),
   })
 
+/**
+ * Tools that reach other sessions through the `Session` facet: `session.drop`
+ * deletes the session `targets` holds under the named key (any other key:
+ * the first session `made` holds), and `session.copy` makes a child with the
+ * history of that session's branch.
+ */
+const sessionReacher = (
+  targets: ReadonlyMap<string, SessionTarget>,
+  made: ReadonlyArray<SessionTarget> = [],
+) =>
+  defineExtension({
+    id: "session-reacher",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      const target = (key: string) =>
+        Option.match(Option.fromUndefinedOr(targets.get(key) ?? made[0]), {
+          onNone: () => Effect.die(`no target ${key}`),
+          onSome: Effect.succeed,
+        })
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.drop",
+          description: "Delete a session",
+          params: Schema.Struct({ target: Schema.String }),
+          output: Schema.String,
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.delete((yield* target(params.target)).sessionId)
+              return "deleted"
+            }),
+        }),
+      )
+      yield* host.register(
+        "tool",
+        tool({
+          id: "session.copy",
+          description: "Make a child with another branch's history",
+          params: Schema.Struct({ target: Schema.String }),
+          output: Schema.String,
+          execute: (params) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              const created = yield* ctx.Session.create({
+                historyBranchId: (yield* target(params.target)).branchId,
+              })
+              return created.sessionId
+            }),
+        }),
+      )
+    }),
+  })
+
 /** Only the session a run calls from is a new session's parent: no create names another. */
 export const parentIsTheCaller = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
@@ -2725,6 +2779,52 @@ describe("run overrides narrow the agent", () => {
         expect(yield* turnFailures(parent.client, handoff)).toEqual([false, true])
         expect(yield* fs.exists(path.join(dirs.cwd, "b", "x.txt"))).toBe(false)
         yield* parent.controls.assertDone
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a tool in a child reaches only its own thread and what it spawned",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const made: Array<SessionTarget> = []
+        const targets = new Map<string, SessionTarget>()
+        const harness = yield* narrowedHarness(
+          dirs,
+          { agent: WIDE },
+          [
+            multiToolCallStep(
+              { toolName: "session.drop", input: { target: "parent" } },
+              { toolName: "session.drop", input: { target: "sibling" } },
+              { toolName: "session.copy", input: { target: "parent" } },
+              { toolName: "session.make", input: {} },
+            ),
+            toolCallStep("session.drop", { target: "made" }),
+            textStep("done"),
+          ],
+          [sessionMaker(made), sessionReacher(targets, made)],
+        )
+        const spawn = () =>
+          harness.client.session.create({
+            cwd: dirs.cwd,
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+            admission: { agent: WIDE },
+          })
+        const child = yield* spawn()
+        const sibling = yield* spawn()
+        targets.set("parent", harness)
+        targets.set("sibling", sibling)
+        // The second step drops the session the first step's tool made.
+        expect(yield* turnFailures(harness.client, child)).toEqual([true, true, true, false, false])
+        const grandchild = made[0]
+        expect(yield* harness.client.session.get({ sessionId: harness.sessionId })).not.toBeNull()
+        expect(yield* harness.client.session.get({ sessionId: sibling.sessionId })).not.toBeNull()
+        expect(made).toHaveLength(1)
+        if (Predicate.isNotUndefined(grandchild)) {
+          expect(yield* harness.client.session.get({ sessionId: grandchild.sessionId })).toBeNull()
+        }
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
