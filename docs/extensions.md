@@ -869,6 +869,41 @@ confine.
 A tool of your own reads the session's agent with
 `ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way.
 
+### Snapshot children
+
+`delegate.start` takes `isolation`. `shared` (the default) runs the child in
+your working tree. `snapshot` runs the child in its own copy of your git
+working tree: the `@gent/workspaces` extension makes the copy, and the child's
+session is created with the copy as its cwd (`Session.create({ cwd })`), so
+every tool of the child works there.
+
+- The copy holds your working tree as the child starts: your commits, your
+  uncommitted changes and your untracked files that git does not ignore.
+- `rift` makes the copy when it can (`rift rpc`, a whole-tree copy on btrfs,
+  else a filtered copy and the `.rift.toml` `postcreate` hooks). Else gent
+  makes a detached `git worktree` under `<data dir>/workspaces/worktrees/`,
+  puts your uncommitted state in it, and runs the same `postcreate` hooks. The
+  start result says which, in `workspace.note`.
+- When each child turn ends, the child's work goes back as one commit over
+  your working tree as the child started, on the branch `gent/<name>` of your
+  repository. The completion names the branch and its diffstat. Nothing
+  merges it: read it with `git show gent/<name>`, and merge, cherry-pick or
+  delete it yourself.
+- The copy lives as long as the child's session. A session delete collects
+  the copy's last work to the branch and removes the copy; the branch stays.
+  A copy nobody used for two days is removed when a loop opens. A repeated
+  start of the same call uses the copy the first one made. A start whose
+  session cannot be created removes its copy.
+- A start is refused outside a git repository, and when less than 2 GB is
+  free where the copy goes; start the child with `isolation: "shared"` then.
+
+A copy is not a sandbox. The child's `bash`, the cell and every other tool can
+still reach your repository and every other path, as with `paths`. A snapshot
+keeps the child's ordinary edits out of your working tree; it does not keep a
+command out. The copy is a new directory, so a project trust you gave your
+directory does not reach it: the child does not load your project's
+extensions until you trust the copy's directory too.
+
 ## Model router
 
 A `modelRouter` serves virtual models: ids `<router id>/<name>` that pick one

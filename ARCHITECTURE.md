@@ -1238,6 +1238,41 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   work for its parent, not unrelated work of its own. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
+- Snapshot children: `delegate.start` takes `isolation` (`shared`, the
+  default, or `snapshot`). `@gent/workspaces` (`packages/extensions/src/workspaces.ts`)
+  owns the copies and uses only the public extension API, `runProcess` and
+  the platform services. Core has no workspace concept: the seam is
+  `Session.create({ cwd })`, and the child's profile is the copy's.
+  - A copy holds the parent's working tree as the child starts. The parent's
+    tree is first written as one base commit (`HEAD` when it is clean) on a
+    private index. `rift rpc` makes the copy as a process (`copyAll` on btrfs;
+    a filtered copy and the `.rift.toml` `postcreate` hooks elsewhere). Any
+    rift failure but a committed `postcreate` failure falls back to a detached
+    `git worktree` under `<data dir>/workspaces/worktrees/` with the base tree
+    checked out unstaged and the same hooks run; the start result notes why.
+  - One record per copy, `<data dir>/workspaces/<name>.json`, under the
+    extension file lock. The name is `child-<hash of the start's requestId>`,
+    so a repeated start adopts its copy; a record with another requestId is a
+    collision. The delegate binds the child's session id to the record after
+    `Session.create`; a failed create releases the copy (`acquireRelease` on
+    the admission scope).
+  - Merge-back is a branch, never a merge. The workspaces `turnAfter` hook
+    commits the copy's tree (private index, parent = base) and puts it on
+    `refs/heads/gent/<name>` of the origin: `update-ref` for a worktree, a
+    `git fetch` from the copy for a rift copy. The same work keeps the same
+    commit; no work deletes the branch. The delegate's completion collects
+    once more, then names the branch and a diffstat in its text and in
+    `details.workspace`. No model call.
+  - Lifetime is the child session's. `sessionDeleted` collects and releases;
+    `loopOpen` prunes copies idle for two days whose child is not running. The
+    branch outlives the copy.
+  - Refusals: a cwd outside git, and under 2 GB free where the copy goes. The
+    four-child cap is checked before a copy is made.
+  - A copy is not a sandbox: the child's `bash` and cell still reach every
+    path. Project trust (`trustedProjects`, `isProjectExtensionDirectoryTrusted`)
+    is keyed by directory and does not follow the copy: the child's profile
+    lists the copy's project extensions and does not build them until the
+    owner trusts the copy's directory. No core change makes it follow.
 - The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
   refreshes on the delegate's and session-tools' `ExtensionStateChanged`
   pulses (`thread.start` sends the second), matched by
