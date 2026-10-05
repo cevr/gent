@@ -12,6 +12,54 @@ const EFFECT_TIMEOUT = "15 seconds"
 
 describe("drive scripts", () => {
   it.scopedLive(
+    "PTY and shell steps share declared env without inheriting the host's env",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const out = yield* makeTempDirectoryScoped("gent-drive-")
+        // oxlint-disable-next-line effect/noGlobals -- a scoped benign host sentinel proves the child environment is explicit
+        const hostEnv = Bun.env
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const previous = hostEnv["GENT_DRIVE_UNDECLARED"]
+            hostEnv["GENT_DRIVE_UNDECLARED"] = "host-only"
+            return Option.fromNullishOr(previous)
+          }),
+          (previous) =>
+            Effect.sync(() => {
+              Option.match(previous, {
+                onNone: () => {
+                  delete hostEnv["GENT_DRIVE_UNDECLARED"]
+                },
+                onSome: (value) => {
+                  hostEnv["GENT_DRIVE_UNDECLARED"] = value
+                },
+              })
+            }),
+        )
+        const printEnv =
+          'printf "%s|%s|%s|%s\\n" "$GENT_DRIVE_DECLARED" "${GENT_DRIVE_UNDECLARED-unset}" "$COLORTERM" "$LANG"'
+        yield* runDriveScript({
+          command: ["/bin/sh", "-c", `${printEnv}; while read -r line; do :; done`],
+          cwd: out,
+          env: { GENT_DRIVE_DECLARED: "script-value", LANG: "C" },
+          cols: 80,
+          rows: 6,
+          out,
+          steps: [
+            ["waitFor", "script-value", 5_000],
+            ["raw", "pty-env"],
+            ["sh", `${printEnv} > shell-env.txt`],
+          ],
+        })
+        const expected = "script-value|unset|truecolor|C"
+        expect(yield* fs.readFileString(`${out}/pty-env.raw`)).toContain(expected)
+        expect((yield* fs.readFileString(`${out}/shell-env.txt`)).trim()).toBe(expected)
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+    TEST_TIMEOUT,
+  )
+
+  it.scopedLive(
     "a resize reaches the program as SIGWINCH, and each capture lands in the out directory",
     () =>
       Effect.gen(function* () {

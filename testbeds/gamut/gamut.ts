@@ -15,7 +15,8 @@
  * `up` copies `fixture/` (the ledgerline app in its red state) to a fresh
  * scratch directory, pins the preset's models, launches this checkout's
  * `apps/tui/bin/gent` in a herdr pane, and records the run in a state file.
- * Nothing it does reaches the real `~/.gent/data.db`.
+ * Run state stays in that scratch directory. Offline catalog metadata is
+ * read from a scratch copy of the selected gent database and its WAL.
  *
  * A plain Bun script: it is a driver for a terminal program, not part of the
  * shipped runtime, and it builds no Effect layer. The pure parts it exports
@@ -26,11 +27,20 @@
 
 import { $ } from "bun"
 import { Database } from "bun:sqlite"
-import { mkdirSync, cpSync, renameSync, existsSync, rmSync } from "node:fs"
+import {
+  mkdirSync,
+  cpSync,
+  renameSync,
+  existsSync,
+  rmSync,
+  realpathSync,
+  mkdtempSync,
+} from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
+import { resolveDataDir } from "@gent/core/host"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CHECKOUT = resolve(HERE, "../..")
@@ -185,37 +195,49 @@ const ModelsDevPayload = Schema.fromJsonString(
     Schema.Struct({ models: Schema.Record(Schema.String, Schema.Unknown) }),
   ),
 )
-/** gent's own models.dev cache: provider-prefixed ids. */
-const GentModelsCache = Schema.fromJsonString(
-  Schema.Struct({ models: Schema.Array(Schema.Struct({ id: Schema.String })) }),
-)
-
 /**
- * The models.dev catalog as provider → model ids. It fetches the catalog, and
- * falls back to the copy gent keeps in `~/.gent/models.json` (read only) when
- * the fetch fails.
+ * The models.dev catalog as provider → model ids. Offline, read the chat
+ * snapshot gent stores in its database, through a scratch copy of it and
+ * its WAL. The selected database is never opened or changed here.
  */
 const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => {
-  try {
-    // curl, as the script shells out to herdr and git: it builds no Effect layer.
-    const body = await $`curl -sf -m 15 ${MODELS_DEV_URL}`.quiet().text()
+  const decode = (body: string): Record<string, ReadonlyArray<string>> => {
     const payload = Schema.decodeSync(ModelsDevPayload)(body)
     return Object.fromEntries(
       Object.entries(payload).map(([provider, entry]) => [provider, Object.keys(entry.models)]),
     )
+  }
+  try {
+    // curl, as the script shells out to herdr and git: it builds no Effect layer.
+    return decode(await $`curl -sf -m 15 ${MODELS_DEV_URL}`.quiet().text())
   } catch (error) {
-    const cachePath = join(homedir(), ".gent/models.json")
-    if (!existsSync(cachePath)) throw error
-    console.log(`models.dev unreachable (${String(error)}); using ${cachePath}`)
-    const cache = Schema.decodeSync(GentModelsCache)(await Bun.file(cachePath).text())
-    const catalog: Record<string, Array<string>> = {}
-    for (const { id } of cache.models) {
-      const slash = id.indexOf("/")
-      if (slash < 0) continue
-      const provider = id.slice(0, slash)
-      catalog[provider] = [...(catalog[provider] ?? []), id.slice(slash + 1)]
+    const dbPath = resolve(Effect.runSync(resolveDataDir(homedir())), "data.db")
+    if (!existsSync(dbPath)) throw error
+    const scratch = mkdtempSync(join(tmpdir(), "gent-gamut-catalog-"))
+    const copy = join(scratch, "data.db")
+    try {
+      await $`/bin/cp ${dbPath} ${copy}`.quiet()
+      if (existsSync(dbPath + "-wal")) {
+        await $`/bin/cp ${dbPath + "-wal"} ${copy + "-wal"}`.quiet()
+      }
+      const db = new Database(copy, { readonly: true })
+      let catalog: Record<string, ReadonlyArray<string>>
+      try {
+        const row = Schema.decodeUnknownSync(Schema.Struct({ body: Schema.String }))(
+          db.query("SELECT body FROM model_catalog_snapshots WHERE source = 'api.json'").get(),
+        )
+        catalog = decode(row.body)
+      } finally {
+        db.close()
+      }
+      console.log(`models.dev unreachable (${String(error)}); using ${dbPath} chat snapshot`)
+      return catalog
+    } catch {
+      // A missing or invalid snapshot leaves the caller's fetch error intact.
+      throw error
+    } finally {
+      await removeTree(scratch)
     }
-    return catalog
   }
 }
 
@@ -292,9 +314,9 @@ export const decodeState = (text: string): GamutState => Schema.decodeSync(State
 // ── State file ──────────────────────────────────────────────────────────
 
 /**
- * One run per checkout. Two rifts run the gamut at the same time, so the
- * state file carries the checkout name; a shared file let one rift's `down`
- * close the other rift's pane.
+ * The filename carries the checkout name. `readState` also checks the
+ * canonical checkout path: two checkouts with the same name must refuse
+ * each other's run, not close its pane or remove its scratch tree.
  */
 export const stateFileFor = (checkoutRoot: string): string =>
   join(tmpdir(), `gent-gamut-${basename(checkoutRoot)}.json`)
@@ -306,7 +328,12 @@ const readState = async (): Promise<GamutState> => {
   if (!(await file.exists())) {
     throw new Error(`no gamut run is up (${STATE_FILE} is missing). Run: bun run gamut up <preset>`)
   }
-  return decodeState(await file.text())
+  const state = decodeState(await file.text())
+  const owner = realpathSync(resolve(dirname(state.binary), "../../.."))
+  if (owner !== realpathSync(CHECKOUT)) {
+    throw new Error(`gamut run belongs to another checkout (${owner}); refusing ${STATE_FILE}`)
+  }
+  return state
 }
 
 // ── The default prompt ──────────────────────────────────────────────────
