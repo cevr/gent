@@ -413,6 +413,16 @@ describe("model-call budget rows", () => {
     expect(getSessionEventLabel(unbudgeted)).toBe("Worked for 1m 48s")
   })
 
+  test("a turn under a second keeps its model-call slot", () => {
+    const short = { ...turnLine, durationSeconds: 0 }
+    expect(getSessionEventLabel(short)).toBe(
+      "Worked for <1s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+    )
+    expect(formatTurnLine(short, { steps: false, width: 40 })).toBe(
+      "Worked for <1s · 6/8 model calls",
+    )
+  })
+
   const rowsAt = (width: number) =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(
