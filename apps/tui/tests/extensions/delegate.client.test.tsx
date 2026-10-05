@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option, Schedule, Schema } from "effect"
+import { Effect, Option, Schedule, Schema, Struct } from "effect"
 import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { onCleanup } from "solid-js"
@@ -106,6 +106,7 @@ const fullDetails = {
   sessionId: "childsess-1234",
   branchId: "branch-child",
   agentName: "delegate",
+  name: "delegate: review the loader",
   outcome: {},
   usage: { input: 1200, output: 300 },
   tools: [
@@ -113,6 +114,11 @@ const fullDetails = {
     { name: "bash", summary: "exit 1", status: "error" },
   ],
   toolCount: 7,
+  toolCounts: [
+    { name: "read", status: "completed", count: 6 },
+    { name: "bash", status: "error", count: 1 },
+  ],
+  durationMs: 12_000,
 }
 
 const renderList = (items: ReadonlyArray<SessionItem>, height = 40) =>
@@ -187,7 +193,7 @@ describe("delegate rows in native scrollback", () => {
         )
         const scrollback = saved.join("\n")
         expect(scrollback).toContain("review the loader")
-        expect(scrollback).toContain("read CHILD-NOTE.md 12 lines")
+        expect(scrollback).toContain("Read CHILD-NOTE.md 12 lines")
         expect(scrollback).toContain("CHILD-ANSWER: the loader is fine")
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
@@ -195,39 +201,54 @@ describe("delegate rows in native scrollback", () => {
 })
 
 describe("child-completion row", () => {
-  it.scopedLive("draws the agent, usage, calls, and answer, not the model's envelope", () =>
-    Effect.gen(function* () {
-      const frame = yield* loadedFrame([completion(fullDetails)])
-      expect(frame).toContain("delegate completed")
-      expect(frame).toContain("ess-1234")
-      expect(frame).toContain("↑1.2k ↓300")
-      expect(frame).toContain("✓ read CHILD-NOTE.md 12 lines")
-      expect(frame).toContain("✕ bash exit 1")
-      // The row lists the last calls; the details count the rest.
-      expect(frame).toContain("5 earlier calls")
-      expect(frame).not.toContain("Completion is a turn receipt")
-    }),
+  it.scopedLive(
+    "draws the child by name, its calls in run words, and its answer, not the envelope",
+    () =>
+      Effect.gen(function* () {
+        const frame = yield* loadedFrame([completion(fullDetails)])
+        // Full: the head names the child and adds its id, as a call shows its id only there.
+        expect(frame).toContain("◆ delegate: review the loader · ess-1234 · Read 6 files")
+        expect(frame).toContain("↑1.2k ↓300")
+        expect(frame).not.toContain("completed")
+        expect(frame).toContain("├ Read CHILD-NOTE.md 12 lines")
+        expect(frame).toContain("└ Ran exit 1 · failed")
+        // The row lists the last calls; the details count the rest.
+        expect(frame).toContain("5 earlier calls")
+        expect(frame).not.toContain("Completion is a turn receipt")
+      }),
   )
 
-  it.scopedLive("siblings started together show ids that tell them apart", () =>
+  it.scopedLive("siblings read apart by the task each was given", () =>
     Effect.gen(function* () {
       // UUIDv7 ids of children started in the same millisecond share their head.
       const first = "01a0ce0a-b3e7-7000-8000-00000000aaaa"
       const second = "01a0ce0a-b3e7-7000-8000-00000000bbbb"
-      const frame = yield* loadedFrame([
-        completion(
-          { ...fullDetails, sessionId: first },
-          envelope("CHILD-ANSWER: a"),
-          "completion-a",
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[
+              completion(
+                { ...fullDetails, sessionId: first, name: "delegate: read the docs" },
+                envelope("CHILD-ANSWER: a"),
+                "completion-a",
+              ),
+              completion(
+                { ...fullDetails, sessionId: second, name: "delegate: run the tests" },
+                envelope("CHILD-ANSWER: b"),
+                "completion-b",
+              ),
+            ]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
         ),
-        completion(
-          { ...fullDetails, sessionId: second },
-          envelope("CHILD-ANSWER: b"),
-          "completion-b",
-        ),
-      ])
-      expect(frame).toContain("delegate completed · 0000aaaa")
-      expect(frame).toContain("delegate completed · 0000bbbb")
+        { initialSession: parentSession, width: 100, height: 20 },
+      )
+      const frame = yield* waitForFrame(setup, (text) => text.includes("◆"), "completion rows")
+      expect(frame).toContain("◆ delegate: read the docs · Read 6 files")
+      expect(frame).toContain("◆ delegate: run the tests · Read 6 files")
+      // Collapsed, the name stands for the child: no id beside it.
+      expect(frame).not.toContain("0000aaaa")
     }),
   )
 
@@ -240,7 +261,7 @@ describe("child-completion row", () => {
           toolCount: 1,
         }),
       ])
-      expect(frame).toContain("✓ read LONG-")
+      expect(frame).toContain("└ Read LONG-")
       expect(frame).not.toContain("-TAIL")
     }),
   )
@@ -250,7 +271,9 @@ describe("child-completion row", () => {
       const frame = yield* loadedFrame([
         completion({ ...fullDetails, outcome: { interrupted: true } }),
       ])
-      expect(frame).toContain("delegate ended (interrupted)")
+      expect(frame).toContain("✕ delegate: review the loader")
+      expect(frame).toContain("· interrupted")
+      expect(frame).not.toContain("ended (")
     }),
   )
 
@@ -263,7 +286,8 @@ describe("child-completion row", () => {
           error: "CHILD-ERROR: sign-in failed, the keychain is locked",
         }),
       ])
-      expect(frame).toContain("delegate ended (model stream failed)")
+      expect(frame).toContain("✕ delegate: review the loader")
+      expect(frame).toContain("· model stream failed")
       expect(frame).toContain("CHILD-ERROR: sign-in failed")
     }),
   )
@@ -278,36 +302,71 @@ describe("child-completion row", () => {
   it.scopedLive("a row saved before the details grew reads its status from the envelope", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails)])
-      expect(frame).toContain("✓ delegate completed · ess-1234")
+      // No name was written: the agent and the id stand for the child.
+      expect(frame).toContain("◆ delegate · ess-1234")
       expect(frame).toContain("CHILD-ANSWER")
+      expect(frame).not.toContain("completed")
       expect(frame).not.toContain("Completion is a turn receipt")
     }),
   )
 
-  it.scopedLive("an older row for an interrupted child never draws a success mark", () =>
+  it.scopedLive("an older row for an interrupted child never draws a done mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion(oldDetails, envelope("CHILD-ANSWER: partial", "ended (interrupted)")),
       ])
-      expect(frame).toContain("✕ delegate ended (interrupted)")
-      expect(frame).not.toContain("✓ delegate")
+      expect(frame).toContain("✕ delegate · ess-1234 · ended (interrupted)")
+      expect(frame).not.toContain("◆ delegate")
     }),
   )
 
-  it.scopedLive("an older row for a failed child never draws a success mark", () =>
+  it.scopedLive("an older row for a failed child never draws a done mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
         completion(oldDetails, envelope("CHILD-ANSWER: none", "ended (model stream failed)")),
       ])
-      expect(frame).toContain("✕ delegate ended (model stream failed)")
+      expect(frame).toContain("✕ delegate · ess-1234 · ended (model stream failed)")
     }),
   )
 
   it.scopedLive("an older row whose envelope does not parse draws a neutral mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([completion(oldDetails, "CHILD-ANSWER: bare text")])
-      expect(frame).toContain("· child finished · ess-1234")
-      expect(frame).not.toContain("✓ child")
+      expect(frame).toContain("· child · ess-1234")
+      expect(frame).not.toContain("◆ child")
+    }),
+  )
+
+  it.scopedLive("an older row with more calls than it kept counts them, not their kinds", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([completion(Struct.omit(fullDetails, ["toolCounts"]))])
+      // Seven calls, two kept: the kinds of the kept two would undercount.
+      expect(frame).toContain("◆ delegate: review the loader · ess-1234 · 7 tools")
+    }),
+  )
+
+  it.scopedLive("a call's path reads against where the TUI launched, as run rows read theirs", () =>
+    Effect.gen(function* () {
+      const cwd = "/work"
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[
+              completion({
+                ...fullDetails,
+                tools: [{ name: "read", summary: `${cwd}/src/loader.ts`, status: "completed" }],
+                toolCount: 1,
+                toolCounts: [{ name: "read", status: "completed", count: 1 }],
+              }),
+            ]}
+            disclosure="full"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { initialSession: parentSession, width: 100, height: 20, cwd },
+      )
+      const frame = yield* waitForFrame(setup, (text) => text.includes("└ Read"), "call row")
+      expect(frame).toContain("└ Read src/loader.ts")
     }),
   )
 
@@ -345,6 +404,7 @@ describe("child-completion row on the ctrl+o ladder", () => {
   const answer = Array.from({ length: 8 }, (_, i) => `ANSWER-LINE-${i + 1}`).join("\n")
   const ladderDetails = {
     ...fullDetails,
+    name: "delegate: loader audit",
     usage: { input: 1200, output: 300, costUsd: 0.0123 },
     tools: Array.from({ length: 7 }, (_, i) => ({
       name: "read",
@@ -352,6 +412,12 @@ describe("child-completion row on the ctrl+o ladder", () => {
       status: "completed",
     })),
     toolCount: 14,
+    toolCounts: [
+      { name: "read", status: "completed", count: 10 },
+      { name: "bash", status: "completed", count: 3 },
+      { name: "bash", status: "error", count: 1 },
+    ],
+    durationMs: 72_000,
   }
   const drawAt = (
     disclosure: "collapsed" | "preview" | "full",
@@ -371,26 +437,39 @@ describe("child-completion row on the ctrl+o ladder", () => {
       )
       const frame = yield* waitForFrame(
         setup,
-        (text) => /[✓✕] delegate (completed|ended)/.test(text),
+        (text) => /[◆✕] delegate/.test(text),
         "completion row",
       )
       return frame.split("\n").map((line) => line.trimEnd())
     })
+  const headOf = (frame: ReadonlyArray<string>) =>
+    frame.find((line) => /^ {2}[◆✕] /.test(line)) ?? ""
 
   it.scopedLive(
-    "collapsed is one line that drops the usage, then the call count, when narrow",
+    "collapsed is one head line: the name, its work in run words, its time and its bill",
     () =>
       Effect.gen(function* () {
-        const wide = yield* drawAt("collapsed", 120)
-        expect(wide).toContain("  ✓ delegate completed · ess-1234 · 14 tools · ↑1.2k ↓300 $0.01")
+        const wide = yield* drawAt("collapsed", 100)
+        expect(headOf(wide)).toBe(
+          "  ◆ delegate: loader audit · Read 10 files · ran 4 commands · 1 failed · 1m 12s · ↑1.2k ↓300 $0.01",
+        )
         expect(wide.join("\n")).not.toContain("file-7.ts")
         expect(wide.join("\n")).not.toContain("ANSWER-LINE")
-        // The row is a tree node like a tool group: no user rail.
+        // A child is no tool run and no reader's message: its own glyph, no rail, no state word.
         expect(wide.join("\n")).not.toContain("┃")
+        expect(wide.join("\n")).not.toContain("completed")
+        expect(wide.join("\n")).not.toContain("●")
+      }),
+  )
+
+  it.scopedLive(
+    "narrow, the work's later kinds drop, then the bill, then the time, then the work",
+    () =>
+      Effect.gen(function* () {
         const narrow = yield* drawAt("collapsed", 60)
-        expect(narrow).toContain("  ✓ delegate completed · ess-1234 · 14 tools")
+        expect(headOf(narrow)).toBe("  ◆ delegate: loader audit · Read 10 files · 1 failed")
         const tight = yield* drawAt("collapsed", 40)
-        expect(tight).toContain("  ✓ delegate completed · ess-1234")
+        expect(headOf(tight)).toBe("  ◆ delegate: loader audit")
         for (const [frame, width] of [
           [narrow, 60],
           [tight, 40],
@@ -399,39 +478,42 @@ describe("child-completion row on the ctrl+o ladder", () => {
       }),
   )
 
-  it.scopedLive("a failed child's collapsed line ends with its error, cut first", () =>
+  it.scopedLive("a failed child says how it ended, and its error is cut first", () =>
     Effect.gen(function* () {
       const failed = {
         ...ladderDetails,
         outcome: { streamFailed: true },
         error: "CHILD-ERROR: sign-in failed, the keychain is locked\nmore detail",
       }
-      const wide = (yield* drawAt("collapsed", 120, failed)).join("\n")
-      expect(wide).toContain(
-        "✕ delegate ended (model stream failed) · ess-1234 · 14 tools · ↑1.2k ↓300 $0.01",
-      )
-      expect(wide).toContain("· CHILD-ERROR: sign-in failed")
+      const wide = headOf(yield* drawAt("collapsed", 100, failed))
+      expect(
+        wide.startsWith("  ✕ delegate: loader audit · model stream failed · Read 10 files"),
+      ).toBe(true)
+      expect(wide).toContain("· CHILD-ERROR")
       expect(wide).not.toContain("more detail")
-      const narrow = yield* drawAt("collapsed", 60, failed)
-      const [line = ""] = narrow.filter((value) => value.includes("✕ delegate"))
-      // The usage and the call count drop before the error does.
-      expect(line).toBe("  ✕ delegate ended (model stream failed) · ess-1234 · CHIL…")
-      expect(line.length).toBeLessThanOrEqual(59)
+      expect(wide.length).toBeLessThanOrEqual(99)
+      // The work and the bill drop before the error does.
+      expect(headOf(yield* drawAt("collapsed", 60, failed))).toBe(
+        "  ✕ delegate: loader audit · model stream failed · CHILD-E…",
+      )
+      // The way it ended never drops: the name is cut for it.
+      expect(headOf(yield* drawAt("collapsed", 40, failed))).toBe(
+        "  ✕ delegate: lo… · model stream failed",
+      )
     }),
   )
 
-  it.scopedLive("preview adds the last five calls as a tree and a five-line answer head", () =>
+  it.scopedLive("preview adds the last five calls as run rows and a five-line answer head", () =>
     Effect.gen(function* () {
-      for (const width of [120, 60]) {
+      for (const [width, row] of [
+        [100, "  └ Read file-3.ts, file-4.ts, file-5.ts, file-6.ts, file-7.ts"],
+        [60, "  └ Read file-3.ts, file-4.ts, file-5.ts, file-6.ts +1"],
+      ] as const) {
         const frame = yield* drawAt("preview", width)
-        const start = frame.findIndex((line) => line.includes("✓ delegate completed"))
-        expect(frame.slice(start + 1, start + 14)).toEqual([
+        const start = frame.findIndex((line) => line.includes("◆ delegate"))
+        expect(frame.slice(start + 1, start + 10)).toEqual([
           "  ├ … 9 earlier calls",
-          "  ├ ✓ read file-3.ts",
-          "  ├ ✓ read file-4.ts",
-          "  ├ ✓ read file-5.ts",
-          "  ├ ✓ read file-6.ts",
-          "  └ ✓ read file-7.ts",
+          row,
           "    │ ANSWER-LINE-1",
           "    │ ANSWER-LINE-2",
           "    │ ANSWER-LINE-3",
@@ -444,12 +526,14 @@ describe("child-completion row on the ctrl+o ladder", () => {
     }),
   )
 
-  it.scopedLive("full draws every call the details kept and the whole answer", () =>
+  it.scopedLive("full draws a row per kept call, the child's id and the whole answer", () =>
     Effect.gen(function* () {
-      const frame = (yield* drawAt("full", 120)).join("\n")
+      const lines = yield* drawAt("full", 100)
+      expect(headOf(lines).startsWith("  ◆ delegate: loader audit · ess-1234 · ")).toBe(true)
+      const frame = lines.join("\n")
       expect(frame).toContain("├ … 7 earlier calls")
-      expect(frame).toContain("├ ✓ read file-1.ts")
-      expect(frame).toContain("└ ✓ read file-7.ts")
+      expect(frame).toContain("├ Read file-1.ts")
+      expect(frame).toContain("└ Read file-7.ts")
       expect(frame).toContain("ANSWER-LINE-8")
       expect(frame).not.toContain("(ctrl+o)")
     }),

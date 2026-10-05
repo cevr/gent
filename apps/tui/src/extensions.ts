@@ -85,7 +85,13 @@ export { useTheme } from "./theme"
 export { pastedLine, typedKey, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 export { textWidth } from "./bun-adapter"
 export {
+  type ActivityCall,
+  type ActivityOperation,
+  activityRows,
+  displayPath,
   fitWidth,
+  formatActivityHeader,
+  formatActivityRow,
   formatAge,
   formatClock,
   formatCost,
@@ -95,9 +101,11 @@ export {
   formatTokens,
   formatUsageStats,
   isReferenceablePath,
+  type PathPlace,
   plural,
   repliesInView,
   type ReplyWriter,
+  runningCallLabel,
   shortId,
   type ToolInput,
   truncate,

@@ -46,6 +46,9 @@ import {
 /** A session in view that no listed row is. */
 const ELSEWHERE = { sessionId: SessionId.make("elsewhere"), branchId: BranchId.make("elsewhere") }
 
+/** Where the TUI launched: a child's call reads its paths against it. */
+const PLACE = { cwd: "/work", home: "/home/me" }
+
 // ── agents controller ───────────────────────────────────────────────────────
 
 /**
@@ -580,6 +583,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={open()}
           controller={{
             rows: () => [parent, child],
@@ -619,6 +623,7 @@ describe("Agents pane navigation", () => {
       const [open, setOpen] = createSignal(true)
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={open()}
           controller={{
             rows: () => [rowPane("agents-root", "Alpha", 0)],
@@ -666,6 +671,7 @@ describe("Agents pane navigation", () => {
 
         const setup = yield* renderScoped(() => (
           <AgentsPane
+            place={PLACE}
             open={true}
             controller={{
               rows,
@@ -720,6 +726,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={true}
           controller={{
             rows: () => [parent, child],
@@ -780,6 +787,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={true}
           controller={{
             rows: () => [busy],
@@ -809,7 +817,75 @@ describe("Agents pane navigation", () => {
 
       const frame = renderFrame(setup)
       expect(frame).toContain("Idle (1)")
-      expect(frame).toContain("Alpha · running")
+      // The glyph says it runs; no state word repeats it.
+      expect(frame).toMatch(/[◇◈◆] Alpha/)
+      expect(frame).not.toContain("· running")
+    }),
+  )
+
+  it.scopedLive("a selected row waiting on an answer says so: no glyph shows it", () =>
+    Effect.gen(function* () {
+      const busy: AgentRowEntry = { ...rowPane("ask", "Alpha", 0), section: "running", live: true }
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          place={PLACE}
+          open={true}
+          controller={{
+            rows: () => [busy],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () =>
+              Option.some({
+                status: "WaitingForInteraction",
+                model: Option.none(),
+                turns: 1,
+                costUsd: 0,
+                durationMs: 0,
+                omittedMessages: 0,
+              }),
+            select: () => {},
+            done: () => [],
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ))
+      expect(renderFrame(setup)).toContain("Alpha · waiting for an answer")
+    }),
+  )
+
+  it.scopedLive("a selected idle row draws its dot and no state word", () =>
+    Effect.gen(function* () {
+      const idle: AgentRowEntry = { ...rowPane("rest", "Alpha", 0), section: "idle", live: true }
+      const setup = yield* renderScoped(() => (
+        <AgentsPane
+          place={PLACE}
+          open={true}
+          controller={{
+            rows: () => [idle],
+            current: () => ELSEWHERE,
+            error: () => Option.none(),
+            loading: () => false,
+            refresh: () => {},
+            reload: () => {},
+            detail: () => Option.some(detail(1)),
+            select: () => {},
+            done: () => [],
+            open: () => true,
+          }}
+          onSelect={() => {}}
+          onDelete={() => {}}
+          onClose={() => {}}
+        />
+      ))
+      const frame = renderFrame(setup)
+      expect(frame).toContain("• Alpha")
+      expect(frame).not.toContain("Alpha · idle")
     }),
   )
 
@@ -848,6 +924,7 @@ describe("Agents pane delete", () => {
       const deleted: Array<string> = []
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={true}
           controller={{
             rows: () => [rowPane("doomed", "Alpha", 0)],
@@ -920,6 +997,7 @@ describe("Agents pane reopen", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          place={PLACE}
           open={open()}
           controller={controller}
           onSelect={() => {}}
@@ -962,6 +1040,7 @@ describe("Agents pane framing", () => {
         const setup = yield* renderScoped(
           () => (
             <AgentsPane
+              place={PLACE}
               open={true}
               controller={{
                 rows: () => [idle],
@@ -1031,6 +1110,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            place={PLACE}
             open={true}
             controller={{
               rows: () => [wide],
@@ -1081,6 +1161,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            place={PLACE}
             open={true}
             controller={{
               rows: () => [aged, long],
@@ -1137,6 +1218,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            place={PLACE}
             open={true}
             controller={{
               rows: () => [rowPane("erred", "Alpha", 0)],
@@ -1212,6 +1294,7 @@ describe("agents pane rows", () => {
     renderScoped(
       () => (
         <AgentsPane
+          place={PLACE}
           open={true}
           controller={{
             rows: () => listed,
@@ -1244,7 +1327,7 @@ describe("agents pane rows", () => {
             name: "delegate: fix the loader",
             runningSince: now - 72_000,
             updatedAt: now - 1_000,
-            activity: "running bash bun test",
+            runningCall: { tool: "bash", input: { command: "bun test" } },
           },
           { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
           { ...child("stored", "inactive", "root"), updatedAt: now - 2 * 3_600_000 },
@@ -1256,18 +1339,18 @@ describe("agents pane rows", () => {
         const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
 
         // The running agent: spinner, task, its current activity and how long it has run.
-        const worker = lines[lineOf("· running bash")] ?? ""
-        expect(worker).toMatch(/[◇◈◆] delegate.* · running bash/)
+        const worker = lines[lineOf("· Running")] ?? ""
+        expect(worker).toMatch(/[◇◈◆] delegate.* · Running/)
         expect(worker.trimEnd()).toMatch(/1m 1\ds$/)
         // The others: a still dot and the age of their last step.
         expect(lines[lineOf("waiting task")]).toContain("• delegate: waiting task")
         expect(lines[lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
         expect(lines[lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
         // Running first, in the order the server sent.
-        expect(lineOf("· running bash")).toBeLessThan(lineOf("waiting task"))
+        expect(lineOf("· Running")).toBeLessThan(lineOf("waiting task"))
         expect(lineOf("waiting task")).toBeLessThan(lineOf("stored task"))
         // Each row fits inside the rule, with nothing wrapped onto a line of its own.
-        for (const text of ["· running bash", "waiting task", "stored task"]) {
+        for (const text of ["· Running", "waiting task", "stored task"]) {
           expect(lines.filter((line) => line.includes(text))).toHaveLength(1)
           expect(lines[lineOf(text)]?.trimEnd().length ?? 0).toBeLessThanOrEqual(
             rule.trimEnd().length,
@@ -1284,14 +1367,14 @@ describe("agents pane rows", () => {
           ...child("worker", "running", "root"),
           name: `delegate: ${"x".repeat(120)}`,
           runningSince: now - 5_000,
-          activity: "running read src/loader.ts",
+          runningCall: { tool: "read", input: { path: "src/loader.ts" } },
         },
       ]
       const setup = yield* paneOver(listed, 43)
       const frame = yield* waitForFrame(setup, (next) => next.includes("delegate:"), "pane")
       const row = frame.split("\n").find((line) => line.includes("delegate:")) ?? ""
       expect(row).toContain("…")
-      expect(row).toContain("· running")
+      expect(row).toContain("· Reading")
       expect(row.trimEnd()).toMatch(/\ds$/)
     }),
   )
@@ -1305,12 +1388,12 @@ describe("agents pane rows", () => {
           createdAt: now - 2 * 3_600_000,
           updatedAt: now - 1_000,
           runningSince: now - 5_000,
-          activity: "running bash bun test",
+          runningCall: { tool: "bash", input: { command: "bun test" } },
         },
       ]
       const setup = yield* paneOver(listed, 43)
-      const frame = yield* waitForFrame(setup, (next) => next.includes("· running"), "pane")
-      const row = frame.split("\n").find((line) => line.includes("· running")) ?? ""
+      const frame = yield* waitForFrame(setup, (next) => next.includes("· Running"), "pane")
+      const row = frame.split("\n").find((line) => line.includes("· Running")) ?? ""
       expect(row.trimEnd()).toMatch(/ [56]s$/)
       expect(row).not.toContain("2h")
     }),
@@ -1396,10 +1479,10 @@ describe("idle middle parent", () => {
   it.scopedLive("the tray lists only the grandchild that works", () =>
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => (
-        <SubagentTray controller={controllerOver(() => false)} />
+        <SubagentTray place={PLACE} controller={controllerOver(() => false)} />
       ))
-      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
-      expect(frame).toContain("working · delegate: b task")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("b task"), "tray")
+      expect(frame).toContain("delegate: b task")
       expect(frame).not.toContain("a task")
     }),
   )
@@ -1409,6 +1492,7 @@ describe("idle middle parent", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            place={PLACE}
             open={true}
             controller={controllerOver(() => true)}
             onSelect={() => {}}
@@ -1456,6 +1540,7 @@ describe("thread rows", () => {
     renderScoped(
       () => (
         <AgentsPane
+          place={PLACE}
           open={true}
           controller={controllerOver(listed, current)}
           onSelect={() => {}}
@@ -1507,10 +1592,13 @@ describe("thread rows", () => {
       Effect.gen(function* () {
         const listed = [thread, child("worker", "running", "third")]
         const setup = yield* renderScoped(() => (
-          <SubagentTray controller={{ ...controllerOver(listed, "first"), open: () => false }} />
+          <SubagentTray
+            place={PLACE}
+            controller={{ ...controllerOver(listed, "first"), open: () => false }}
+          />
         ))
-        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
-        expect(frame).toContain("working · delegate: worker task")
+        const frame = yield* waitForFrame(setup, (next) => next.includes("worker task"), "tray")
+        expect(frame).toContain("delegate: worker task")
         expect(frame).not.toContain("fix auth")
       }),
   )
@@ -1523,10 +1611,13 @@ describe("thread rows", () => {
         // parent stays `first`, whose thread's row is `third`'s.
         const listed = [thread, child("worker", "running", "first")]
         const setup = yield* renderScoped(() => (
-          <SubagentTray controller={{ ...controllerOver(listed, "third"), open: () => false }} />
+          <SubagentTray
+            place={PLACE}
+            controller={{ ...controllerOver(listed, "third"), open: () => false }}
+          />
         ))
-        const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
-        expect(frame).toContain("working · delegate: worker task")
+        const frame = yield* waitForFrame(setup, (next) => next.includes("worker task"), "tray")
+        expect(frame).toContain("delegate: worker task")
       }),
   )
 
@@ -1854,13 +1945,16 @@ describe("done threads", () => {
     Effect.sync(() => {
       const running = ["a", "b"].map((id) => child(id, "running", "root"))
       const done = ["x", "y"].map((id) => threadRow(id, "idle"))
-      expect(trayLines(running, 80, done).map((line) => line.text)).toEqual([
-        "working · delegate: a task",
-        "working · delegate: b task",
-        "done · x notes",
-        "+1 more done",
+      const lines = trayLines(running, 80, done, PLACE)
+      expect(lines.map((line) => line.text)).toEqual([
+        "delegate: a task",
+        "delegate: b task",
+        "x notes",
+        "+1 more",
       ])
-      expect(trayLines([], 80, done).map((line) => line.pulse)).toEqual([false, false])
+      // The glyph is the state: the pulse for a running child, `◆` for a done thread.
+      expect(lines.map((line) => line.mark)).toEqual(["running", "running", "done", "none"])
+      expect(trayLines([], 80, done, PLACE).map((line) => line.mark)).toEqual(["done", "done"])
     }),
   )
 
@@ -1871,6 +1965,7 @@ describe("done threads", () => {
       const setup = yield* renderScoped(
         () => (
           <SubagentTray
+            place={PLACE}
             controller={{
               rows: () => [finished],
               current: here,
@@ -1887,28 +1982,31 @@ describe("done threads", () => {
         ),
         { width: 80, height: 10 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("done ·"), "done row")
-      expect(frame).toContain("done · release notes")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("release notes"), "done row")
+      expect(frame).toContain("◆ release notes")
+      expect(frame).not.toContain("done ·")
       expect(frame).toContain("ctrl+t sessions")
       setHere({ sessionId: finished.sessionId, branchId: finished.branchId })
-      yield* waitForFrame(setup, (next) => !next.includes("done ·"), "opened thread")
+      yield* waitForFrame(setup, (next) => !next.includes("release notes"), "opened thread")
     }),
   )
 })
 
 describe("trayLines", () => {
-  it.live("one line per running child by name, the rest counted", () =>
+  /** Where the TUI launched: a call's path reads against it, as the live line's does. */
+  const place = { cwd: "/work", home: "/home/me" }
+  it.live("one line per running child by name, no state word, the rest counted", () =>
     Effect.sync(() => {
       const running = ["a", "b", "c", "d", "e"].map((id) => child(id, "running", "root"))
-      const lines = trayLines(running, 60)
+      const lines = trayLines(running, 60, [], place)
       expect(lines.map((line) => line.text)).toEqual([
-        "working · delegate: a task",
-        "working · delegate: b task",
-        "working · delegate: c task",
-        "+2 more working",
+        "delegate: a task",
+        "delegate: b task",
+        "delegate: c task",
+        "+2 more",
       ])
-      expect(lines.map((line) => line.pulse)).toEqual([true, true, true, false])
-      expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("working · delegat…")
+      expect(lines.map((line) => line.mark)).toEqual(["running", "running", "running", "none"])
+      expect(trayLines(running.slice(0, 1), 12, [], place)[0]?.text).toBe("delegate: a…")
     }),
   )
   it.live("children keep their start order while their updates reorder the listing", () =>
@@ -1921,19 +2019,41 @@ describe("trayLines", () => {
       // Two polls of the same three children; each step bumps `updatedAt`.
       const first = [started("b", 2, 30), started("a", 1, 20), started("c", 3, 10)]
       const second = [started("c", 3, 50), started("b", 2, 40), started("a", 1, 35)]
-      const expected = [
-        "working · delegate: a task",
-        "working · delegate: b task",
-        "working · delegate: c task",
-      ]
-      expect(trayLines(first, 60).map((line) => line.text)).toEqual(expected)
-      expect(trayLines(second, 60).map((line) => line.text)).toEqual(expected)
+      const expected = ["delegate: a task", "delegate: b task", "delegate: c task"]
+      expect(trayLines(first, 60, [], place).map((line) => line.text)).toEqual(expected)
+      expect(trayLines(second, 60, [], place).map((line) => line.text)).toEqual(expected)
     }),
   )
-  it.live("a running child shows what it is doing now", () =>
+  it.live("a running child's call reads in the live line's words", () =>
     Effect.sync(() => {
-      const busy = { ...child("a", "running", "root"), activity: "running bash" }
-      expect(trayLines([busy], 60)[0]?.text).toBe("working · delegate: a task · running bash")
+      const busy = (runningCall: NonNullable<AgentRowEntry["runningCall"]>) =>
+        trayLines([{ ...child("a", "running", "root"), runningCall }], 80, [], place)[0]?.text
+      expect(busy({ tool: "bash", input: { command: "bun test" } })).toBe(
+        "delegate: a task · Running bun test",
+      )
+      expect(busy({ tool: "read", input: { path: "/work/src/loader.ts" } })).toBe(
+        "delegate: a task · Reading src/loader.ts",
+      )
+      // A cell reads in its source's verbs, never its code.
+      expect(
+        busy({
+          tool: "cell",
+          input: {
+            code: "await Promise.all([tools.read({path:'a.ts'}), tools.read({path:'b.ts'})])",
+          },
+        }),
+      ).toBe("delegate: a task · Reading 2 files")
+    }),
+  )
+  it.live("with no call running, the child's last streamed line shows", () =>
+    Effect.sync(() => {
+      const talking = { ...child("a", "running", "root"), activity: "Checking the tests" }
+      expect(trayLines([talking], 60, [], place)[0]?.text).toBe(
+        "delegate: a task · Checking the tests",
+      )
+      // A running call wins over the line streamed before it.
+      const both = { ...talking, runningCall: { tool: "bash", input: { command: "bun test" } } }
+      expect(trayLines([both], 60, [], place)[0]?.text).toBe("delegate: a task · Running bun test")
     }),
   )
   it.live("a long task name leaves room for what the child is doing", () =>
@@ -1941,12 +2061,14 @@ describe("trayLines", () => {
       const busy = {
         ...child("a", "running", "root"),
         name: "Run this shell command exactly: sleep 5; echo step one; sleep 40; echo finished",
-        activity: "running bash",
+        runningCall: { tool: "bash", input: { command: "sleep 40" } },
       }
-      const text = trayLines([busy], 80)[0]?.text ?? ""
-      expect(text.endsWith(" · running bash")).toBe(true)
-      expect(text.startsWith("working · Run this shell")).toBe(true)
-      expect(text.length).toBeLessThanOrEqual(80)
+      for (const width of [100, 60, 40]) {
+        const text = trayLines([busy], width, [], place)[0]?.text ?? ""
+        expect(text.endsWith(" · Running sleep 40")).toBe(true)
+        expect(text.startsWith("Run this")).toBe(true)
+        expect(text.length).toBeLessThanOrEqual(width)
+      }
     }),
   )
 })
@@ -1962,6 +2084,7 @@ describe("Subagent tray", () => {
       const setup = yield* renderScoped(() => (
         <DockProvider>
           <SubagentTray
+            place={PLACE}
             controller={{
               rows: () => rows,
               current: () => ({
@@ -1988,9 +2111,10 @@ describe("Subagent tray", () => {
         </DockProvider>
       ))
 
-      yield* waitForFrame(setup, () => renderFrame(setup).includes("working"), "tray")
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("child-a task"), "tray")
       const frame = renderFrame(setup)
-      expect(frame).toContain("working · delegate: child-a task")
+      expect(frame).toMatch(/[◇◈◆] delegate: child-a task/)
+      expect(frame).not.toContain("working")
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
       expect(frame).toContain("ctrl+t sessions")
@@ -1998,7 +2122,51 @@ describe("Subagent tray", () => {
       expect(refreshes).toEqual([])
 
       setOpen(true)
-      yield* waitForFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden")
+      yield* waitForFrame(setup, () => !renderFrame(setup).includes("child-a task"), "tray hidden")
+    }),
+  )
+
+  it.scopedLive("a running child is one line at 100, 60 and 40 columns: pulse, name, call", () =>
+    Effect.gen(function* () {
+      const busy: AgentRowEntry = {
+        ...child("busy", "running", "root"),
+        name: "delegate: Check docs/architecture against the retry code",
+        runningCall: { tool: "read", input: { path: "/work/ARCHITECTURE.md" } },
+      }
+      for (const width of [100, 60, 40]) {
+        const setup = yield* renderScoped(
+          () => (
+            <SubagentTray
+              place={PLACE}
+              controller={{
+                rows: () => [root("root", "idle"), busy],
+                current: () => ({
+                  sessionId: SessionId.make("root"),
+                  branchId: BranchId.make("root-branch"),
+                }),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                reload: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                done: () => [],
+                open: () => false,
+              }}
+            />
+          ),
+          { width, height: 6 },
+        )
+        const frame = yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "tray")
+        const line = frame.split("\n").find((value) => value.includes("ctrl+t sessions")) ?? ""
+        expect(line).toMatch(/^ ?[◇◈◆] dele/)
+        // The call keeps up to half the row; the name is cut to the rest.
+        expect(line).toContain("· Reading")
+        if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")
+        expect(line).toContain("ctrl+t sessions")
+        expect(line).not.toContain("working")
+        expect(line.trimEnd().length).toBeLessThanOrEqual(width)
+      }
     }),
   )
 
@@ -2011,6 +2179,7 @@ describe("Subagent tray", () => {
       const setup = yield* renderScoped(
         () => (
           <SubagentTray
+            place={PLACE}
             controller={{
               rows: () => wide,
               current: () => ({
@@ -2030,7 +2199,7 @@ describe("Subagent tray", () => {
         ),
         { width: 80, height: 10 },
       )
-      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
+      const frame = yield* waitForFrame(setup, (next) => next.includes("日本語"), "wide tray")
       // Padding counts display columns: each of these characters takes two.
       expect(frame).toContain("ctrl+t sessions")
     }),
@@ -2040,6 +2209,7 @@ describe("Subagent tray", () => {
     Effect.gen(function* () {
       const setup = yield* renderScoped(() => (
         <SubagentTray
+          place={PLACE}
           controller={{
             rows: () => rows,
             current: () => ({ sessionId: SessionId.make("child-b"), branchId: BranchId.make("b") }),
@@ -2055,7 +2225,7 @@ describe("Subagent tray", () => {
         />
       ))
       yield* Effect.promise(() => setup.renderOnce())
-      expect(renderFrame(setup)).not.toContain("working")
+      expect(renderFrame(setup)).not.toContain("task")
       expect(renderFrame(setup)).not.toContain("agents")
     }),
   )

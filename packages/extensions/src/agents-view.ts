@@ -20,7 +20,7 @@ import { DELEGATE_AGENT_NAME } from "./delegate.js"
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
 // DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
 // reconcileAgentRows, buildRowTree, projectAgentRows) and the activity fold
-// (emptyActivity, foldActivity, activityText) are pure with unit tests.
+// (emptyActivity, foldActivity, activityOf) are pure with unit tests.
 // AgentActivity and AgentActivityLive let a test run the activity service.
 
 // ── projection ──────────────────────────────────────────────────────────────
@@ -387,40 +387,57 @@ export const projectAgentRows = (params: {
 // ── live activity ───────────────────────────────────────────────────────────
 
 /**
- * What a running loop is doing now, folded from its event stream: the tools
- * still running, in start order, and the reply text streamed since its step began.
+ * The input fields that say what a call works on, bounded: the first line of
+ * a command, a path or a pattern, and a cell's source, whose calls the client
+ * reads as verbs. The client words the call, as its own live line words one;
+ * the server sends no words of its own.
  */
-interface ActivityFold {
-  readonly tools: ReadonlyArray<{ readonly id: string; readonly label: string }>
-  readonly partial: string
-}
-
-/** The input fields that say what a call works on, in the order they are read. */
 const ActivityInput = Schema.Struct({
   command: Schema.optional(Schema.String),
   path: Schema.optional(Schema.String),
   pattern: Schema.optional(Schema.String),
+  code: Schema.optional(Schema.String),
 })
+type ActivityInput = typeof ActivityInput.Type
 const decodeActivityInput = Schema.decodeUnknownOption(ActivityInput)
 
-/** `bash git status`: the tool and the first line of the command, path or pattern it works on. */
-const toolLabel = (toolName: string, input: Option.Option<typeof ActivityInput.Type>): string =>
-  input.pipe(
-    Option.flatMap((fields) =>
-      Option.fromUndefinedOr(
-        [fields.command, fields.path, fields.pattern]
-          .map((text) => (text ?? "").trim().split("\n")[0]?.trim() ?? "")
-          .find((text) => text.length > 0),
-      ),
-    ),
-    Option.map((detail) => `${toolName} ${detail}`),
-    Option.getOrElse(() => toolName),
-  )
+/** A running call as the tray reads it: its tool and what it works on. */
+const RunningCall = Schema.Struct({ tool: Schema.String, input: ActivityInput })
+type RunningCall = typeof RunningCall.Type
+
+/**
+ * What a running loop is doing now, folded from its event stream: the calls
+ * still running, in start order, and the reply text streamed since its step began.
+ */
+interface ActivityFold {
+  readonly tools: ReadonlyArray<{ readonly id: string; readonly call: RunningCall }>
+  readonly partial: string
+}
+
+/** Characters of the streamed line, and of a call's command, path or pattern, the tray keeps. */
+const ACTIVITY_CHARS = 80
+
+/** Characters of a cell's source the tray keeps: enough for the calls it opens with. */
+const CELL_CODE_CHARS = 2_000
+
+/** The first non-empty line of `text`, bounded. */
+const firstLine = (text: string) =>
+  headChars(text.trim().split("\n")[0]?.trim() ?? "", ACTIVITY_CHARS)
+
+/** The fields of a call's input that the tray reads, each bounded; the rest stay on the server. */
+const boundedInput = (input: Option.Option<ActivityInput>): ActivityInput => {
+  const fields = Option.getOrElse(input, (): ActivityInput => ({}))
+  const bound = (value: Option.Option<string>, cut: (text: string) => string) =>
+    Option.getOrUndefined(Option.map(value, cut))
+  return {
+    command: bound(Option.fromUndefinedOr(fields.command), firstLine),
+    path: bound(Option.fromUndefinedOr(fields.path), firstLine),
+    pattern: bound(Option.fromUndefinedOr(fields.pattern), firstLine),
+    code: bound(Option.fromUndefinedOr(fields.code), (code) => headChars(code, CELL_CODE_CHARS)),
+  }
+}
 
 export const emptyActivity: ActivityFold = { tools: [], partial: "" }
-
-/** Characters of the streamed line the tray keeps. */
-const ACTIVITY_CHARS = 80
 
 export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFold => {
   switch (event._tag) {
@@ -435,7 +452,7 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
           ...state.tools,
           {
             id: event.toolCallId,
-            label: toolLabel(event.toolName, decodeActivityInput(event.input)),
+            call: { tool: event.toolName, input: boundedInput(decodeActivityInput(event.input)) },
           },
         ],
       }
@@ -449,19 +466,25 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
   }
 }
 
-/** One line for the tray: the newest running tool and what it works on, else the last streamed line. */
-export const activityText = (state: ActivityFold): Option.Option<string> =>
-  Option.fromUndefinedOr(state.tools.at(-1)).pipe(
-    Option.map((tool) => headChars(`running ${tool.label}`, ACTIVITY_CHARS)),
-    Option.orElse(() =>
-      Option.fromUndefinedOr(
-        state.partial
-          .split("\n")
-          .map((text) => text.trim())
-          .findLast((text) => text.length > 0),
-      ).pipe(Option.map((line) => headChars(line, ACTIVITY_CHARS))),
-    ),
-  )
+/** What a running loop does now: its last streamed line and its newest running call. */
+const Activity = Schema.Struct({
+  line: Schema.optional(Schema.String),
+  call: Schema.optional(RunningCall),
+})
+type Activity = typeof Activity.Type
+
+/** The loop's last streamed line and newest running call; none when it shows neither. */
+export const activityOf = (state: ActivityFold): Option.Option<Activity> => {
+  const line = Option.fromUndefinedOr(
+    state.partial
+      .split("\n")
+      .map((text) => text.trim())
+      .findLast((text) => text.length > 0),
+  ).pipe(Option.map((text) => headChars(text, ACTIVITY_CHARS)))
+  const call = Option.map(Option.fromUndefinedOr(state.tools.at(-1)), (tool) => tool.call)
+  if (Option.isNone(line) && Option.isNone(call)) return Option.none()
+  return Option.some({ line: Option.getOrUndefined(line), call: Option.getOrUndefined(call) })
+}
 
 interface AgentActivityService {
   /**
@@ -478,7 +501,7 @@ interface AgentActivityService {
     readonly listed: ReadonlyArray<AgentRowKey>
     readonly watch: ReadonlyArray<AgentRowKey>
   }) => Effect.Effect<void, never, ExtensionContext>
-  readonly read: (key: AgentRowKey) => Effect.Effect<Option.Option<string>>
+  readonly read: (key: AgentRowKey) => Effect.Effect<Option.Option<Activity>>
 }
 
 /**
@@ -546,7 +569,7 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
       read: (key) =>
         Ref.get(folds).pipe(
           Effect.map((all) =>
-            Option.flatMap(Option.fromUndefinedOr(all.get(rowKey(key))), activityText),
+            Option.flatMap(Option.fromUndefinedOr(all.get(rowKey(key))), activityOf),
           ),
         ),
     })
@@ -613,8 +636,13 @@ export const AgentRowEntry = Schema.Struct({
    * one (a handoff chain). The row's own ids are the newest's.
    */
   sessions: Schema.optional(Schema.Array(SessionId)),
-  /** A running loop's current tool or last streamed line. Wire only, never stored. */
+  /** A running loop's last streamed line. Wire only, never stored. */
   activity: Schema.optional(Schema.String),
+  /**
+   * A running loop's newest running call: its tool and what it works on,
+   * which the client words as its live line does. Wire only, never stored.
+   */
+  runningCall: Schema.optional(RunningCall),
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
@@ -728,13 +756,13 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
         watch: loops.filter((row) => row.live && Option.isSome(row.parent)),
       })
       const rows = filterRows(buildRowTree(loops), input.query ?? "")
-      const lines = new Map<string, string>()
+      const now = new Map<string, Activity>()
       for (const row of rows) {
         // A thread's row says what its newest working session does.
         for (const member of row.members.toReversed()) {
-          const line = yield* activity.read(member)
-          if (Option.isNone(line)) continue
-          lines.set(rowKey(row), line.value)
+          const found = yield* activity.read(member)
+          if (Option.isNone(found)) continue
+          now.set(rowKey(row), found.value)
           break
         }
       }
@@ -763,7 +791,8 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
               (ids) => ids.length > 1,
             ),
           ),
-          activity: lines.get(rowKey(row)),
+          activity: now.get(rowKey(row))?.line,
+          runningCall: now.get(rowKey(row))?.call,
         })),
       }
     }),

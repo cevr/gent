@@ -337,13 +337,19 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   preview, `∴ Thought · <first summary> · N summaries`. At full and in the
   transcript view every reasoning block, a run's too, opens under a `∴` at
   column 2 and hangs its text at column 4.
-- **Child completion** (`delegate.client.tsx`). Collapsed is one line,
-  `✓ explore completed · 9f3a2c1d · 14 tools · ↑1.2k ↓300 $0.01`, with a
-  failed child's error last; narrow, the error is cut first, then the usage
-  drops, then the call count. Preview adds the child's last five calls as
-  tree rows (`├ … 9 earlier calls`) and a five-line head of its answer. Full
-  draws every call the details kept and the whole answer, muted and hanging at
-  column 4. It draws no user rail: it is a tree node like a tool group.
+- **Child completion** (`delegate.client.tsx`). Collapsed is one line at
+  column 2, `◆ <child's session name> · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
+  the work in the run header's words (from the details' `toolCounts`, so it
+  counts every call), its time and its bill, and no state word. A child that
+  ended badly draws `✕`, says how after its name (`· model stream failed`)
+  and ends with its error. Narrow, the error is cut first; then the work's
+  later kinds drop, then the bill, then the time, then the work; how it ended
+  never drops, and the name is cut for it. The child's id shows at full, or
+  beside the agent's name on a row saved before the name was. Preview adds
+  the child's last five calls as run rows (`├ … 9 earlier calls`,
+  `└ Read a.ts, b.ts +1`) and a five-line head of its answer. Full draws a
+  row per kept call and the whole answer, muted and hanging at column 4. It
+  draws no user rail and no `●`: a child has its own glyph.
 - **Connection notice** (`ConnectionWidget` in `app.tsx`). Collapsed is one
   line that counts the issues (`• connection · 6 model catalogs unavailable ·
 ctrl+o`), with a tree row for each failed extension; preview and full list
@@ -525,7 +531,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/goal`                              | `builtins.tsx`               | Goal label, goal continuation row                               |
 | `@gent/session-tools`                     | `builtins.tsx`               | Sender row for `session.send`                                   |
 | `@gent/herdr`                             | `builtins.tsx`               | Herdr activity reporter                                         |
-| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray (working and done rows) |
+| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray (running and done rows) |
 | `@gent/btw`                               | `btw.client.tsx`             | `/btw` fork pane                                                |
 | `@gent/cache`                             | `cache.client.tsx`           | Cache-miss rows, waste total, cache timer                       |
 | `@gent/delegate`                          | `delegate.client.tsx`        | `delegate.start` row, child-completion row                      |

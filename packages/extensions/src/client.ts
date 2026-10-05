@@ -4,7 +4,7 @@ export {
   CHILD_COMPLETION_TYPE,
   CHILD_TASK_TYPE,
   ChildCompletionDetails,
-  childOutcomeWords,
+  childFailureNames,
   childTaskBody,
   childTaskText,
   DELEGATE_EXTENSION_ID,

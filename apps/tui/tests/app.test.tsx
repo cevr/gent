@@ -827,8 +827,9 @@ const mountShortTerminalWithTrays = (
         parentSessionId: sessionId,
         sideThread: false,
       }
-      // Tasks 3 and 4 report no activity line: their row names the detail
-      // status only while the cursor is on it, which marks the cursor row.
+      // Tasks 3 and 4 report no activity line: their rows hold only their
+      // names. A short pane keeps one row, the cursor row, so the one task
+      // drawn marks where the cursor is.
       if (n <= 4) return row
       return { ...row, activity: "bash" }
     }
@@ -4467,7 +4468,7 @@ describe("App docked panes at short heights", () => {
         setup.mockInput.pressKey("t", { ctrl: true })
         yield* waitForFrame(
           setup,
-          (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3 · running"),
+          (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3"),
           "the agents pane with its cursor row",
         )
         const opened = renderFrame(setup)
@@ -4475,11 +4476,19 @@ describe("App docked panes at short heights", () => {
         expect(opened).not.toContain("alarm in now")
         const drawn = opened.split("\n").filter((line) => line.trim().length > 0)
         expect(closesInside(drawn)).toBe(true)
+        // The cursor row is marked by its background, not by a word.
+        const backgroundUnder = (text: string) =>
+          setup
+            .captureSpans()
+            .lines.flatMap((line) => line.spans)
+            .find((span) => span.text.includes(text))?.bg
+        const cursor = backgroundUnder("delegate: task 3")
         setup.mockInput.pressArrow("down")
         yield* waitForFrame(
           setup,
-          (frame) =>
-            frame.includes("delegate: task 4") && !frame.includes("delegate: task 3 · running"),
+          () =>
+            backgroundUnder("delegate: task 4")?.equals(cursor) === true &&
+            backgroundUnder("delegate: task 3")?.equals(cursor) !== true,
           "the cursor row after one move down",
         )
         setup.mockInput.pressEscape()
@@ -4506,7 +4515,7 @@ describe("App docked panes at short heights", () => {
           yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the agents pane")
           const frame = yield* waitForFrame(
             setup,
-            (current) => current.includes("delegate: task 3 · running"),
+            (current) => current.includes("delegate: task 3"),
             `the cursor row at ${height} rows`,
           )
           const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
@@ -4911,7 +4920,7 @@ describe("App docked panes at short heights", () => {
     () =>
       Effect.gen(function* () {
         const setup = yield* mountShortTerminalWithTrays(16)
-        yield* waitForFrame(setup, (frame) => frame.includes("+1 more working"), "full trays")
+        yield* waitForFrame(setup, (frame) => frame.includes("+1 more"), "full trays")
         yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
         setup.mockInput.pressEnter()
         yield* waitForFrame(
@@ -4930,7 +4939,7 @@ describe("App docked panes at short heights", () => {
         const frame = renderFrame(setup)
         // The trays hid while the pane the reader opened is open.
         expect(frame).not.toContain("alarm in now")
-        expect(frame).not.toContain("+1 more working")
+        expect(frame).not.toContain("+1 more")
       }).pipe(Effect.timeout("10 seconds")),
   )
   // At 10 rows (the blank footer rows given way) the btw pane has one body
@@ -7435,8 +7444,7 @@ describe("debug playground", () => {
           const frame = yield* waitForTerminal(
             setup,
             (text) =>
-              text.includes("Review the TUI renderer cleanup") &&
-              text.includes("✓ explore completed"),
+              text.includes("Review the TUI renderer cleanup") && text.includes("◆ explore"),
             "seeded transcript",
             5_000,
           )
@@ -7450,7 +7458,9 @@ describe("debug playground", () => {
           expect(frame).toContain(
             "  » child explore · 0e493eaf · The double border comes from two surfaces drawing one",
           )
-          expect(frame).toContain("  ✓ explore completed · 0e493eaf · 6 tools")
+          expect(frame).toContain(
+            "  ◆ explore · Read 4 files · searched 2 patterns · 41s · ↑1.2k ↓300 $0.01",
+          )
           expect(frame).toContain("┃ Review the TUI renderer cleanup")
           expect(frame).not.toContain("┃ » ")
         }).pipe(Effect.timeout("15 seconds")),

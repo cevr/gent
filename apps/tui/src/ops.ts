@@ -740,6 +740,8 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
         sessionId: explore.sessionId,
         branchId: explore.branchId,
         agentName: "explore",
+        // The child's session name heads the row, as it heads the child's `»` row.
+        name: explore.name,
         outcome: {},
         usage: { input: 1200, output: 300, costUsd: 0.0123 },
         tools: [
@@ -751,6 +753,11 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
           { name: "read", summary: "apps/tui/src/ops.ts", status: "completed" },
         ],
         toolCount: 6,
+        toolCounts: [
+          { name: "read", status: "completed", count: 4 },
+          { name: "grep", status: "completed", count: 2 },
+        ],
+        durationMs: 41_000,
       },
     },
     createdAt: nowPlus(-15_000),

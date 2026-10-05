@@ -6,20 +6,29 @@ import {
   CHILD_COMPLETION_TYPE,
   CHILD_TASK_TYPE,
   ChildCompletionDetails,
-  childOutcomeWords,
+  childFailureNames,
   childTaskBody,
   DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "@gent/extensions/client"
 import {
+  type ActivityCall,
+  type ActivityOperation,
+  activityRows,
   AgentMessageRow,
+  ClientContext,
   clientContributions,
   defineClientExtension,
+  displayPath,
   failureReason,
+  formatActivityHeader,
+  formatActivityRow,
+  formatDuration,
   formatPreviewFooter,
   formatUsageStats,
   messageRendererContribution,
   type MessageRowProps,
+  type PathPlace,
   plural,
   rendererContribution,
   shortId,
@@ -124,68 +133,155 @@ const PREVIEW_ANSWER_LINES = 5
 /** The columns a row keeps: the transcript indent, and the last column every row leaves free. */
 const ROW_INDENT = 2
 const FREE_LAST_COLUMN = 1
+/** The glyph and its space. */
+const GLYPH_COLUMNS = 2
 /** The fewest columns an error keeps on the head line before the line drops it. */
 const MIN_ERROR_COLUMNS = 4
+/** A child's name keeps at most these columns, as the `»` row's sender does. */
+const NAME_COLUMNS = 32
 
-/** How a headline's status words ended. */
-const endedBy = (status: string): "completed" | "badly" => {
-  if (status === "completed") return "completed"
-  return "badly"
-}
-
-/** What the row says about how the child ended; "unknown" never draws a success mark. */
+/** How the child ended: an end the row cannot read never draws the done mark. */
 interface CompletionState {
-  readonly who: string
-  readonly status: string
-  readonly ended: "completed" | "badly" | "unknown"
+  /** The child's session name, else its agent's name. */
+  readonly name: string
+  /** Whether `name` is the session's own: an agent's name needs the id beside it. */
+  readonly named: boolean
+  /** How the turn ended badly, in the words the parent model read; empty otherwise. */
+  readonly failure: string
+  readonly ended: "done" | "badly" | "unknown"
 }
 
 /**
  * The outcome in the details, else the headline `describeChildCompletion`
  * wrote in the message: rows saved before outcomes were written read it
- * there. A row with neither reads "finished" with a neutral mark.
+ * there. A row with neither draws a neutral mark.
  */
 const completionState = (details: CompletionDetails, content: string): CompletionState => {
-  const agentName = Option.fromUndefinedOr(details.agentName)
-  const outcome = Option.fromUndefinedOr(details.outcome)
-  if (Option.isSome(outcome)) {
-    const status = childOutcomeWords(outcome.value)
-    return {
-      who: Option.getOrElse(agentName, () => "child"),
-      status,
-      ended: endedBy(status),
-    }
+  const headline = readChildCompletionHeadline(content)
+  const agent = Option.fromUndefinedOr(details.agentName).pipe(
+    Option.orElse(() => Option.map(headline, (value) => value.agentName)),
+    Option.getOrElse(() => "child"),
+  )
+  const sessionName = Option.fromUndefinedOr(details.name).pipe(
+    Option.map((value) => value.replace(/\s+/g, " ").trim()),
+    Option.filter((value) => value.length > 0),
+  )
+  const who = {
+    name: Option.getOrElse(sessionName, () => agent),
+    named: Option.isSome(sessionName),
   }
-  return Option.match(readChildCompletionHeadline(content), {
-    onNone: () => ({
-      who: Option.getOrElse(agentName, () => "child"),
-      status: "finished",
-      ended: "unknown",
-    }),
-    onSome: (headline) => ({
-      who: Option.getOrElse(agentName, () => headline.agentName),
-      status: headline.status,
-      ended: endedBy(headline.status),
-    }),
+  const ended = (failure: string): CompletionState => {
+    if (failure.length > 0) return { ...who, failure, ended: "badly" }
+    return { ...who, failure, ended: "done" }
+  }
+  const outcome = Option.fromUndefinedOr(details.outcome)
+  if (Option.isSome(outcome)) return ended(childFailureNames(outcome.value).join(", "))
+  return Option.match(headline, {
+    onNone: () => ({ ...who, failure: "", ended: "unknown" }),
+    // An older row's headline says `completed`, or `ended (<how>)`.
+    onSome: ({ status }) =>
+      ended(
+        Option.getOrElse(
+          Option.liftPredicate(status, (value) => value !== "completed"),
+          () => "",
+        ),
+      ),
   })
 }
 
 /**
- * The row's head line, fitted to `width` columns after its mark:
- * `explore completed · 9f3a2c1d · 14 tools · ↑1.2k ↓300 $0.0123`, and for a
- * child that failed, ` · <the first line of its error>` last. Where the line
- * is too wide, the error is cut first, then the usage drops, then the call
- * count; the agent, the outcome and the child's id stay.
+ * A kept or counted call as the run vocabulary reads it: one op of its tool.
+ * The op carries the outcome; the call itself settled, so a failure counts once.
  */
-const completionLine = (
+const childCall = (
+  name: string,
+  status: ChildToolLine["status"],
+  summary: string,
+): ActivityCall => {
+  let outcome: ActivityOperation["outcome"] = "succeeded"
+  if (status === "error") outcome = "failed"
+  if (status === "incomplete") outcome = "incomplete"
+  return {
+    toolName: name,
+    status: "completed",
+    operations: [{ tool: name, outcome, detail: summary }],
+    code: "",
+  }
+}
+
+/**
+ * The child's work in the run header's words, fitted to `width` columns:
+ * `Read 10 files · ran 4 commands · 1 failed`. The counts hold every call;
+ * a row saved before them reads its kept calls when they are all of them,
+ * else counts its calls (`14 tools`), since the kept kinds would undercount.
+ */
+const workSummary = (details: CompletionDetails, width: number): string => {
+  const tools = details.tools ?? []
+  const counted = Option.fromUndefinedOr(details.toolCounts).pipe(
+    Option.map((counts) =>
+      counts.flatMap((count) =>
+        Array.from({ length: count.count }, () => childCall(count.name, count.status, "")),
+      ),
+    ),
+    Option.orElse(() =>
+      Option.liftPredicate(
+        tools.map((tool) => childCall(tool.name, tool.status, tool.summary)),
+        () => (details.toolCount ?? tools.length) === tools.length,
+      ),
+    ),
+  )
+  return Option.match(counted, {
+    onNone: () => plural(details.toolCount ?? 0, "tool"),
+    onSome: (calls) => formatActivityHeader(calls, width),
+  })
+}
+
+/** A text the line holds, or none for an empty one. */
+const nonEmpty = (text: string): Option.Option<string> =>
+  Option.liftPredicate(text, (value) => value.length > 0)
+
+/** The first line of a failed child's error; none for a child that completed. */
+const errorLine = (details: CompletionDetails): Option.Option<string> =>
+  Option.fromUndefinedOr(details.error).pipe(
+    Option.map((text) => (splitLines(text).find((line) => line.trim().length > 0) ?? "").trim()),
+    Option.filter((line) => line.length > 0),
+  )
+
+/**
+ * The row's head line after its glyph, fitted to `width` columns:
+ * `delegate: loader audit · Read 10 files · ran 4 commands · 1 failed · 1m 12s · ↑1.2k ↓300 $0.01`.
+ * A child that ended badly says how after its name, and its error ends the
+ * line. Where the line is too wide, the error is cut first; then the work's
+ * later kinds drop, then the bill, then the time, then the work. How it
+ * ended never drops: the name is cut for it. The child's id shows at the
+ * full level, or beside an agent's name when the row has no session name.
+ */
+const completionHead = (
   state: CompletionState,
   details: CompletionDetails,
-  options: { readonly width: number; readonly error: boolean },
+  options: { readonly width: number; readonly open: boolean },
 ): string => {
-  const head = `${state.who} ${state.status} · ${shortId(details.sessionId)}`
-  const optional: string[] = []
-  Option.map(Option.fromUndefinedOr(details.toolCount), (count) =>
-    optional.push(plural(count, "tool")),
+  /** ` · <part>` for a part the line holds; nothing for an empty one. */
+  const part = (text: string) =>
+    Option.match(nonEmpty(text), { onNone: () => "", onSome: (value) => ` · ${value}` })
+  const id = part(
+    Option.match(
+      Option.liftPredicate(details.sessionId, () => !state.named || options.open),
+      {
+        onNone: () => "",
+        onSome: shortId,
+      },
+    ),
+  )
+  const failure = part(state.failure)
+  const name = truncate(state.name, NAME_COLUMNS)
+  const base = `${name}${id}${failure}`
+  if (textWidth(base) > options.width) {
+    const room = Math.max(1, options.width - textWidth(`${id}${failure}`))
+    return truncate(`${truncate(name, room)}${id}${failure}`, options.width)
+  }
+  const time = Option.map(Option.fromUndefinedOr(details.durationMs), (ms) =>
+    formatDuration(ms, "compact"),
   )
   const usage = Option.fromUndefinedOr(details.usage).pipe(
     Option.map((value) =>
@@ -193,25 +289,30 @@ const completionLine = (
     ),
     Option.filter((text) => text.length > 0),
   )
-  Option.map(usage, (text) => optional.push(text))
-  const error = Option.fromUndefinedOr(details.error).pipe(
-    Option.filter(() => options.error),
-    Option.map((text) => (splitLines(text).find((line) => line.trim().length > 0) ?? "").trim()),
-    Option.filter((line) => line.length > 0),
-  )
-  const errorRoom = Option.match(error, {
+  // The error is the last part, below the full level; open, it is its own line.
+  const error = Option.filter(errorLine(details), () => !options.open)
+  const errorReserve = Option.match(error, {
     onNone: () => 0,
-    onSome: (line) => 3 + Math.min(MIN_ERROR_COLUMNS, textWidth(line)),
+    onSome: (text) => 3 + Math.min(MIN_ERROR_COLUMNS, textWidth(text)),
   })
-  const join = (parts: ReadonlyArray<string>) => [head, ...parts].join(" · ")
-  let kept = optional.length
-  while (kept > 0 && textWidth(join(optional.slice(0, kept))) + errorRoom > options.width) kept -= 1
-  const line = join(optional.slice(0, kept))
+  const join = (work: string, tail: ReadonlyArray<string>) =>
+    [base, ...Option.toArray(nonEmpty(work)), ...tail].join(" · ")
+  const tails = [[...Option.toArray(time), ...Option.toArray(usage)], Option.toArray(time), []]
+  let line = base
+  for (const tail of tails) {
+    const fixed = textWidth(join("", tail)) + errorReserve
+    if (fixed > options.width) continue
+    const work = workSummary(details, options.width - fixed - 3)
+    if (work.length === 0 || textWidth(join(work, tail)) + errorReserve <= options.width) {
+      line = join(work, tail)
+      break
+    }
+  }
   return Option.match(error, {
-    onNone: () => truncate(line, options.width),
+    onNone: () => line,
     onSome: (text) => {
       const room = options.width - textWidth(line) - 3
-      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return truncate(line, options.width)
+      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return line
       return `${line} · ${truncate(text, room)}`
     },
   })
@@ -225,25 +326,60 @@ const answerLines = (content: string): ReadonlyArray<string> => {
   return lines.slice(0, end)
 }
 
-/** The child's calls as tree rows: the calls before the last `max` counted on one row. */
-function ChildToolTree(props: { details: CompletionDetails; max: number; width: number }) {
+/**
+ * A call's receipt summary with its paths read as the run rows read theirs:
+ * against where the TUI launched (`gent-debug-tools/a.ts`), else under `~`.
+ */
+const placedSummary = (summary: string, place: PathPlace): string =>
+  summary
+    .split(" ")
+    .map((word) =>
+      Option.match(
+        Option.liftPredicate(word, (value) => value.startsWith("/")),
+        {
+          onNone: () => word,
+          onSome: (path) => displayPath(path, place),
+        },
+      ),
+    )
+    .join(" ")
+
+/**
+ * The child's calls as run rows, in the run's past-tense words: the calls
+ * before the last `max` counted on one row. Below the full level the rows
+ * fold a run of one tool and one outcome into one (`Read a.ts, b.ts`), as a
+ * tool group's preview does; open, each call is its own row.
+ */
+function ChildCallRows(props: {
+  details: CompletionDetails
+  max: number
+  open: boolean
+  width: number
+  place: PathPlace
+}) {
   const { theme } = useTheme()
   const tools = () => (props.details.tools ?? []).slice(-props.max)
   const earlier = () => Math.max(0, (props.details.toolCount ?? 0) - tools().length)
-  const icon = (tool: ChildToolLine) => {
-    if (tool.status === "error") return { glyph: "✕", color: theme.error }
-    if (tool.status === "incomplete") return { glyph: "?", color: theme.warning }
-    return { glyph: "✓", color: theme.textMuted }
+  const rows = createMemo(() => {
+    const calls = tools().map((tool) =>
+      childCall(tool.name, tool.status, placedSummary(tool.summary, props.place)),
+    )
+    if (props.open) return calls.flatMap((call) => activityRows([call]))
+    return activityRows(calls)
+  })
+  const color = (row: ReturnType<typeof activityRows>[number]) => {
+    if (row.outcome === "failed") return theme.error
+    if (row.outcome === "incomplete" || row.outcome === "cancelled") return theme.warning
+    return theme.textMuted
   }
   const connector = (index: number) => {
-    if (index === tools().length - 1) return "└"
+    if (index === rows().length - 1) return "└"
     return "├"
   }
-  const label = (tool: ChildToolLine) => {
-    let text = tool.name
-    if (tool.summary.length > 0) text = `${tool.name} ${tool.summary}`
-    // The connector, the mark and their spaces take four columns.
-    return truncate(text, props.width - 4)
+  // The connector and its space take two columns.
+  const text = (row: ReturnType<typeof activityRows>[number]) => {
+    const parts = formatActivityRow(row, props.width - 2)
+    return truncate(`${parts.head}${parts.tail}`, props.width - 2)
   }
   return (
     <box flexDirection="column">
@@ -252,12 +388,10 @@ function ChildToolTree(props: { details: CompletionDetails; max: number; width: 
           ├ … {plural(earlier(), "earlier call")}
         </text>
       </Show>
-      <For each={[...tools()]}>
-        {(tool, index) => (
-          // One row per call: a cell receipt's summary can be a long output head.
-          <text style={{ fg: theme.textMuted }} wrapMode="none">
-            {connector(index())} <span style={{ fg: icon(tool).color }}>{icon(tool).glyph}</span>{" "}
-            {label(tool)}
+      <For each={[...rows()]}>
+        {(row, index) => (
+          <text style={{ fg: color(row) }} wrapMode="none">
+            {connector(index())} {text(row)}
           </text>
         )}
       </For>
@@ -265,7 +399,9 @@ function ChildToolTree(props: { details: CompletionDetails; max: number; width: 
   )
 }
 
-function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetails }) {
+function ChildCompletionRow(
+  props: MessageRowProps & { details: CompletionDetails; place: PathPlace },
+) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const state = () => completionState(props.details, props.content)
@@ -273,13 +409,13 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
     const ended = state().ended
     if (ended === "badly") return { mark: "✕", color: theme.error }
     if (ended === "unknown") return { mark: "·", color: theme.textMuted }
-    return { mark: "✓", color: theme.success }
+    return { mark: "◆", color: theme.textMuted }
   }
   const open = () => props.disclosure === "full"
   // The columns right of the row's indent, less the free last column.
   const width = () => dimensions().width - ROW_INDENT - FREE_LAST_COLUMN
-  // Below the full level the error is the head line's last part; open, it is its own text.
-  const head = () => completionLine(state(), props.details, { width: width() - 2, error: !open() })
+  const head = () =>
+    completionHead(state(), props.details, { width: width() - GLYPH_COLUMNS, open: open() })
   const answer = createMemo(() => answerLines(props.content))
   const shownAnswer = () => {
     if (open()) return answer()
@@ -299,7 +435,13 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
         <Show when={open() && props.details.error}>
           {(error) => <text style={{ fg: theme.error }}>{error()}</text>}
         </Show>
-        <ChildToolTree details={props.details} max={calls()} width={width()} />
+        <ChildCallRows
+          details={props.details}
+          max={calls()}
+          open={open()}
+          width={width()}
+          place={props.place}
+        />
         <Show when={shownAnswer().length > 0}>
           <Show
             when={!open()}
@@ -336,8 +478,10 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
 // ── extension ───────────────────────────────────────────────────────────────
 
 export default defineClientExtension(DELEGATE_EXTENSION_ID, {
-  setup: Effect.succeed(
-    clientContributions(
+  setup: Effect.gen(function* () {
+    const { workspace } = yield* ClientContext
+    const place: PathPlace = { cwd: workspace.cwd, home: workspace.home }
+    return clientContributions(
       rendererContribution(["delegate.start"], (props) => <DelegateStartRow {...props} />),
       // Details that do not decode draw the raw text, off the reader's rail.
       messageRendererContribution(CHILD_COMPLETION_TYPE, (props) => (
@@ -352,7 +496,7 @@ export default defineClientExtension(DELEGATE_EXTENSION_ID, {
             />
           }
         >
-          {(details) => <ChildCompletionRow {...props} details={details()} />}
+          {(details) => <ChildCompletionRow {...props} details={details()} place={place} />}
         </Show>
       )),
       // A child's first message is its task under a frame the child's model
@@ -370,6 +514,6 @@ export default defineClientExtension(DELEGATE_EXTENSION_ID, {
         ),
         { prompt: childTaskBody },
       ),
-    ),
-  ),
+    )
+  }),
 })
