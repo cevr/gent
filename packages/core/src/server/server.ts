@@ -86,7 +86,9 @@ import {
   type SendMessageInput,
   SessionSnapshot,
   SessionView,
+  type RenameAuthKeyInput,
   type SetAuthKeyInput,
+  type SetAuthOrderInput,
   type SetDriverOverrideInput,
   SlashCommandInfo,
   type SubscribeEventsInput,
@@ -138,6 +140,8 @@ import {
   listCatalogProviders,
   makeExtensionModels,
   removeSignIn,
+  renameSignIn,
+  signInOrder,
   storeSignIn,
   type ModelCatalogFailure,
   ModelCatalogRecord,
@@ -1899,6 +1903,50 @@ const RpcHandlers = GentRpcs.toLayer(
           removeSignIn(provider, slot).pipe(
             Effect.mapError((error) => authPersistenceError("delete", provider, error)),
           ),
+        ),
+
+      // The order follows the label: a turn walks the renamed credential
+      // where it walked the old one.
+      "auth.renameKey": ({ provider, from, to, sessionId }: RenameAuthKeyInput) =>
+        inSessionProfile(
+          sessionId,
+          Effect.gen(function* () {
+            yield* renameSignIn(provider, from, to).pipe(
+              Effect.mapError(
+                (error) => new ProviderAuthError({ message: error.message, cause: error }),
+              ),
+            )
+            const held = yield* signInOrder(provider)
+            if (!held.order.includes(from)) return
+            yield* configService.setAuthOrder(
+              held.owner,
+              held.order.map((slot) => {
+                if (slot === from) return to
+                return slot
+              }),
+              held.entries,
+            )
+          }),
+        ),
+
+      // One entry holds a sign-in's order: the owner's in the user config.
+      // A project entry shadows it key by key, so the call reads the order
+      // back and names the entries that still win.
+      "auth.setOrder": ({ provider, order, sessionId }: SetAuthOrderInput) =>
+        inSessionProfile(
+          sessionId,
+          Effect.gen(function* () {
+            const held = yield* signInOrder(provider)
+            yield* configService.setAuthOrder(held.owner, order, held.entries)
+            const now = yield* signInOrder(provider)
+            const written =
+              now.order.length === order.length &&
+              order.every((slot, index) => now.order[index] === slot)
+            if (written) return
+            return yield* new ProviderAuthError({
+              message: `The project config (.gent/config.json) sets authOrder for ${now.entries.map((id) => `"${id}"`).join(", ")}, which wins over the user config: edit it there`,
+            })
+          }),
         ),
 
       "auth.listMethods": ({ sessionId }: ListAuthMethodsInput) =>

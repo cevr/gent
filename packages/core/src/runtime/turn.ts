@@ -115,6 +115,7 @@ import {
   type ProviderHints,
   ProviderStopReason,
   type RunEffort,
+  sameCredential,
 } from "../domain/driver.js"
 import {
   type AgentEvent,
@@ -2586,6 +2587,16 @@ const toolCallsFromResponseParts = (
     return []
   })
 
+/**
+ * What a step's receipt (`StreamEnded`) says its request ran on: the model,
+ * and the credential when the row names one. The cache the request wrote is
+ * theirs.
+ */
+interface RequestCall {
+  readonly model: ModelIdType
+  readonly credential: Option.Option<CredentialReceipt>
+}
+
 /** What a step's receipt (`StreamEnded`) says its request sent: the model, and the effort. */
 interface StepEffort {
   readonly model: ModelIdType
@@ -2657,6 +2668,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   lastCallAtMillis: Option.Option<number>
   /** The model the branch's last model request ran on. */
   lastCallModel: Option.Option<ModelIdType>
+  /** The credential that request went out with; none when its row names none. */
+  lastCallCredential: Option.Option<CredentialReceipt>
   /** The branch's step receipts, by the id of the assistant message each step wrote. */
   stepEfforts: ReadonlyMap<string, StepEffort>
   /**
@@ -2714,7 +2727,46 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const retryPolicy = yield* driverRetryPolicy(driverId)
 
   const modelRegistry = yield* ModelRegistry
-  const modelOption = yield* modelRegistry.get(contextModelId)
+  // The turn walks its sign-in's `authOrder`, first to last, and never comes
+  // back to a slot it left: a slot that answers serves the rest of the turn.
+  // A conflicting order fails here as it fails the request's resolution. The
+  // receipt carries the moment the slot's credential was signed in, so a new
+  // sign-in on the slot reads as another credential.
+  const selectCredential = Effect.gen(function* () {
+    const order = yield* requestCredentialOrder(
+      { modelId: resolved.modelId, driverId: Option.getOrUndefined(driverId) },
+      extensionRegistry,
+    )
+    if (Option.isNone(order)) return Option.none<CredentialReceipt>()
+    const { provider, slots } = order.value
+    const left = yield* params.turnLedger.passedCredentials(provider, slots)
+    const slot = slots.find((candidate) => !left.has(candidate))
+    if (Predicate.isUndefined(slot)) {
+      return yield* new ProviderAuthError({
+        message: `Every credential of provider "${provider}" failed this turn`,
+      })
+    }
+    return Option.some(
+      yield* modelRegistry.stamp({ provider: ProviderId.make(provider), slot }, extensionRegistry),
+    )
+  })
+  // The credential the step's first request goes out with, as the order
+  // chooses it now: its catalog view sets the window and the prices, and its
+  // cache is the one the step can read. None when the order fails; the
+  // request's resolution then reports why.
+  const nextCredential = yield* selectCredential.pipe(
+    Effect.orElseSucceed(() => Option.none<CredentialReceipt>()),
+  )
+  // A credential whose view does not list the model leaves the sign-in's own.
+  const pinnedModel = yield* Option.match(nextCredential, {
+    onNone: () => Effect.succeedNone,
+    onSome: (credential) =>
+      modelRegistry
+        .get(contextModelId, credential)
+        .pipe(Effect.orElseSucceed(() => Option.none<Model>())),
+  })
+  let modelOption = pinnedModel
+  if (Option.isNone(modelOption)) modelOption = yield* modelRegistry.get(contextModelId)
   if (Option.isNone(modelOption)) {
     return yield* new ModelContextCapabilityError({
       failure: ModelContextCapabilityFailure.cases.UnknownModel.make({
@@ -2753,13 +2805,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     })
   }
   // A model whose catalog entry names no cache lifetime never goes cold. A
-  // cache belongs to the model that wrote it: a turn on another model than
-  // the last request reads no cache either way, and handing its window off
-  // for that would surprise the reader who only switched models.
+  // cache belongs to the model and the credential that wrote it: a turn on
+  // another model, another account or a new sign-in than the last request
+  // reads no cache either way, and handing its window off for that would
+  // surprise the reader who only switched. A credential either side does not
+  // know (a row before receipts, a model no sign-in serves) counts as the same.
   const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
+  const sameAccount = Option.match(Option.all([params.lastCallCredential, nextCredential]), {
+    onNone: () => true,
+    onSome: ([last, next]) => sameCredential(last, next),
+  })
   const promptCache = Option.map(
     Option.all([
-      Option.filter(params.lastCallAtMillis, () => sameModel),
+      Option.filter(params.lastCallAtMillis, () => sameModel && sameAccount),
       promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
     ([lastCallAtMillis, ttlMs]): PromptCache => ({
@@ -2821,22 +2879,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     hints: { ...turnHints, cacheKey: params.sessionId },
     driverId: Option.getOrUndefined(driverId),
   }
-  // The turn walks its sign-in's `authOrder`, first to last, and never comes
-  // back to a slot it left: a slot that answers serves the rest of the turn.
-  // A conflicting order fails here as it fails the request's resolution.
-  const selectCredential = Effect.gen(function* () {
-    const order = yield* requestCredentialOrder(modelRequest, extensionRegistry)
-    if (Option.isNone(order)) return Option.none<CredentialReceipt>()
-    const { provider, slots } = order.value
-    const left = yield* params.turnLedger.passedCredentials(provider, slots)
-    const slot = slots.find((candidate) => !left.has(candidate))
-    if (Predicate.isUndefined(slot)) {
-      return yield* new ProviderAuthError({
-        message: `Every credential of provider "${provider}" failed this turn`,
-      })
-    }
-    return Option.some<CredentialReceipt>({ provider: ProviderId.make(provider), slot })
-  })
   // The slot the last request went out with, set as it is chosen: the
   // receipt, the price and a move name that slot, not the one the order
   // would choose now. A config edit changes only the next choice.
@@ -3395,6 +3437,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const turnRecordStorage = yield* TurnRecordStorage
     const processLocalReplay = yield* ProcessLocalToolReplay
     const eventStorage = yield* EventStorage
+    const sessionStorage = yield* SessionStorage
 
     /**
      * The model the branch last ran on or was told it continues with: a
@@ -3447,9 +3490,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (event._tag === "ProviderRetrying") return Option.some(createdAt + event.delayMs)
       return Option.none()
     }
-    const knownRequestModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
+    /** The model and credential of a step's request: the cache it wrote is theirs. */
+    const knownRequestCall = ({ event }: EventEnvelope): Option.Option<RequestCall> => {
       if (event._tag !== "StreamEnded") return Option.none()
-      return Option.fromUndefinedOr(event.model)
+      return Option.map(Option.fromUndefinedOr(event.model), (model) => ({
+        model,
+        credential: Option.fromUndefinedOr(event.credential),
+      }))
     }
     /** A step's receipt, by the id of the assistant message the step wrote. */
     const knownStepEffort = ({
@@ -3530,7 +3577,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly model: Option.Option<ModelIdType>
       readonly measure: Option.Option<StepMeasure>
       readonly lastCallAtMillis: Option.Option<number>
+      readonly lastCall: Option.Option<RequestCall>
       readonly lastCallModel: Option.Option<ModelIdType>
+      /** The credential of the last request; none when its row names none (unknown). */
+      readonly lastCallCredential: Option.Option<CredentialReceipt>
       readonly stepEfforts: ReadonlyMap<string, StepEffort>
       readonly lastEffort: Option.Option<StepEffort>
       readonly routed: Option.Option<ModelRouted>
@@ -3541,7 +3591,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       model: Option.none<ModelIdType>(),
       measure: Option.none<StepMeasure>(),
       lastCallAtMillis: Option.none<number>(),
+      lastCall: Option.none<RequestCall>(),
       lastCallModel: Option.none<ModelIdType>(),
+      lastCallCredential: Option.none<CredentialReceipt>(),
       stepEfforts: new Map<string, StepEffort>(),
       lastEffort: Option.none<StepEffort>(),
       routed: Option.none<ModelRouted>(),
@@ -3567,6 +3619,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         afterId: known.cursor,
       })
+      const lastCall = newest(events, knownRequestCall, known.lastCall)
       const current: KnownSteps = {
         cursor: Option.match(Option.fromUndefinedOr(events.at(-1)), {
           onNone: () => known.cursor,
@@ -3575,7 +3628,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         model: newest(events, knownStepModel, known.model),
         measure: newest(events, knownStepMeasure, known.measure),
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
-        lastCallModel: newest(events, knownRequestModel, known.lastCallModel),
+        lastCall,
+        lastCallModel: Option.map(lastCall, (call) => call.model),
+        lastCallCredential: Option.flatMap(lastCall, (call) => call.credential),
         stepEfforts: withStepEfforts(known.stepEfforts, events),
         lastEffort: newest(events, knownLastEffort, known.lastEffort),
         routed: newest(events, knownRoute, known.routed),
@@ -3584,6 +3639,33 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       yield* Ref.set(lastKnownStep, current)
       return current
+    })
+    /**
+     * Where the parent's running turn stands in each credential order, for a
+     * spawned child: the receipts of the parent branch's newest turn. A
+     * child runs inside that turn under the same sign-ins, so it starts each
+     * order there and never pays again for a refusal the parent proved.
+     * None for any other session.
+     */
+    const parentTurnCredentials = Effect.gen(function* () {
+      const session = yield* sessionStorage.getSession(scope.sessionId)
+      if (Predicate.isUndefined(session) || !isSpawnedSession(session)) return []
+      const { parentSessionId, parentBranchId } = session
+      if (Predicate.isUndefined(parentSessionId) || Predicate.isUndefined(parentBranchId)) return []
+      const events = yield* eventStorage.listEvents({
+        sessionId: parentSessionId,
+        branchId: parentBranchId,
+      })
+      const credentials = [...withStepCredentials(new Map(), events).values()]
+      const turn = newest(
+        events,
+        ({ event }) => {
+          if (event._tag !== "StreamEnded") return Option.none()
+          return Option.fromUndefinedOr(event.messageId)
+        },
+        Option.none(),
+      )
+      return credentials.filter(({ messageId }) => Option.contains(turn, messageId))
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
@@ -3936,6 +4018,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       measure: Option.Option<StepMeasure>
       lastCallAtMillis: Option.Option<number>
       lastCallModel: Option.Option<ModelIdType>
+      lastCallCredential: Option.Option<CredentialReceipt>
       stepEfforts: ReadonlyMap<string, StepEffort>
       overflowed: boolean
       /** The turn profile's revision, named on `StreamStarted`. */
@@ -3988,6 +4071,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: params.measure,
         lastCallAtMillis: params.lastCallAtMillis,
         lastCallModel: params.lastCallModel,
+        lastCallCredential: params.lastCallCredential,
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
         ledger: scope.ledger,
@@ -5048,6 +5132,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             measure: knownSteps.measure,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
             lastCallModel: knownSteps.lastCallModel,
+            lastCallCredential: knownSteps.lastCallCredential,
             stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
             profileRevision: Option.fromUndefinedOr(params.turnProfile.turnProfileRevision),
@@ -5264,6 +5349,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return resumed.interaction.value
         }
         if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
+        // A spawned child's turn starts where its parent's turn stands; its
+        // own receipts, read next, win over the parent's.
+        const parentCredentials = yield* parentTurnCredentials.pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("turn.parent-credential-read-failed").pipe(
+              Effect.annotateLogs({ error: String(cause) }),
+              Effect.as([]),
+            ),
+          ),
+        )
+        for (const { receipt } of parentCredentials) {
+          yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
+        }
         // The turn's place in each credential order lives in memory; after a
         // restart the receipts of the steps it ran say where it stood, as
         // `ModelRouted` says where its route stood.

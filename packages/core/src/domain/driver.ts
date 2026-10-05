@@ -52,10 +52,30 @@ export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
 
 /**
  * The credential a model request used: the provider that owns the sign-in
- * and the slot. Labels only, never a secret or an account.
+ * and the slot. Labels only, never a secret or an account. `signedInAt` is
+ * when the stored credential was signed in or replaced (a refresh keeps
+ * it), in epoch milliseconds; absent for a credential from the environment,
+ * one stored before the stamp, and a receipt written before the field.
  */
-export const CredentialReceipt = Schema.Struct({ provider: ProviderId, slot: CredentialSlot })
+export const CredentialReceipt = Schema.Struct({
+  provider: ProviderId,
+  slot: CredentialSlot,
+  signedInAt: Schema.optional(Schema.Finite),
+})
 export type CredentialReceipt = typeof CredentialReceipt.Type
+
+/**
+ * Whether two requests went out with one credential, so the cache one wrote
+ * can serve the other: the same sign-in, and the same sign-in moment when
+ * both receipts know it (a rename keeps it, a new sign-in on the slot does
+ * not); else the same slot. A receipt with no stamp compares by slot alone.
+ */
+export const sameCredential = (left: CredentialReceipt, right: CredentialReceipt): boolean => {
+  if (left.provider !== right.provider) return false
+  if (Predicate.isNotUndefined(left.signedInAt) && Predicate.isNotUndefined(right.signedInAt))
+    return left.signedInAt === right.signedInAt
+  return left.slot === right.slot
+}
 
 /**
  * One provider-owned sign-in input. An API method asks after the key and

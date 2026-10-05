@@ -26,6 +26,7 @@ import {
   encodeToolOutput,
   isRuntimeUserMessage,
   messagePartsText,
+  Session,
   type SessionAdmission,
 } from "../../src/domain/message"
 import * as Response from "effect/ai/Response"
@@ -103,6 +104,7 @@ import {
   EventStorage,
   MessageStorage,
   makeStorageTransaction,
+  SessionStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
@@ -2105,6 +2107,9 @@ describe("credential order", () => {
   /** Dollars per million tokens an API key pays; a subscription sign-in lists no price. */
   const apiPricing = { input: 3, output: 15 }
   const subscriptionPricing = { input: 0, output: 0 }
+  /** The window each credential lists the model with: the views differ, as an OAuth subset can. */
+  const API_WINDOW = 128_000
+  const SUBSCRIPTION_WINDOW = 200_000
 
   /** What a request with one credential streams, by how many it sent before. */
   type Reply = (call: number) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
@@ -2199,13 +2204,17 @@ describe("credential order", () => {
       },
       listModels: (_catalog, authInfo) => {
         let pricing = apiPricing
-        if (authInfo?._tag === "Oauth") pricing = subscriptionPricing
+        let contextLength = API_WINDOW
+        if (authInfo?._tag === "Oauth") {
+          pricing = subscriptionPricing
+          contextLength = SUBSCRIPTION_WINDOW
+        }
         return Effect.succeed([
           Model.make({
             id: fallbackModel,
             name: "Fallback model",
             provider: ProviderId.make(FALLBACK),
-            contextLength: 128_000,
+            contextLength,
             pricing,
           }),
         ])
@@ -2302,8 +2311,19 @@ describe("credential order", () => {
     }
   }
 
+  /** Each step's credential labels; its sign-in stamp is the store's clock, not the test's. */
+  const labelsOf = (ended: ReadonlyArray<AgentEvent>) =>
+    ended.flatMap((event) => {
+      if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+      return [{ provider: event.credential.provider, slot: event.credential.slot }]
+    })
+
   /** What a run's events say about its steps, its notices and its retries. */
   const credentialReport = (recorded: ReadonlyArray<AgentEvent>) => ({
+    projected: recorded.flatMap((event) => {
+      if (event._tag !== "ModelContextProjected") return []
+      return [event]
+    }),
     ended: recorded.filter((event) => event._tag === "StreamEnded"),
     errors: recorded.flatMap((event) => {
       if (event._tag !== "ErrorOccurred") return []
@@ -2367,7 +2387,7 @@ describe("credential order", () => {
       })
       // A refuses once; B answers the step and the tool step after it.
       expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
-      expect(run.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(run.ended)).toEqual([
         { provider: fallbackProvider, slot: personal },
         { provider: fallbackProvider, slot: personal },
       ])
@@ -2403,7 +2423,7 @@ describe("credential order", () => {
         replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
       })
       expect(stayed.sent).toEqual(["sk-a"])
-      expect(stayed.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(stayed.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
     }),
@@ -2529,9 +2549,62 @@ describe("credential order", () => {
         replies: { "sk-a": answer("from a"), env: answer("from env") },
       })
       expect(first.resolvedWith).toEqual(["sk-a"])
-      expect(first.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(first.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
+    }),
+  )
+
+  it.live("a step is projected by the window of the credential it goes out with", () =>
+    Effect.gen(function* () {
+      // The API key lists a 128k window, the subscription 200k. The first
+      // step goes out with the key and moves; the second runs on the sign-in.
+      const run = yield* credentialTurn({
+        name: "window",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, oauthLogin],
+        ],
+        replies: {
+          "sk-a": refusal,
+          oauth: (call) => {
+            if (call === 0) {
+              return Stream.fromIterable([
+                toolCallPart("echo", { text: "hi" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return answer("done")(call)
+          },
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "oauth", "oauth"])
+      expect(run.projected.map((event) => event.contextLimitTokens)).toEqual([
+        API_WINDOW,
+        SUBSCRIPTION_WINDOW,
+      ])
+    }),
+  )
+
+  it.live("a step's receipt carries its credential's sign-in; the environment's has none", () =>
+    Effect.gen(function* () {
+      const stored = yield* credentialTurn({
+        name: "stamp-stored",
+        stored: [[DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")]],
+        replies: { "sk-a": answer("from a") },
+      })
+      expect(stored.ended.map((event) => Predicate.isNumber(event.credential?.signedInAt))).toEqual(
+        [true],
+      )
+      const fromEnv = yield* credentialTurn({
+        name: "stamp-env",
+        stored: [],
+        replies: { env: answer("from env") },
+      })
+      expect(
+        fromEnv.ended.map((event) => Predicate.isUndefined(event.credential?.signedInAt)),
+      ).toEqual([true])
     }),
   )
 
@@ -2755,9 +2828,53 @@ describe("credential order", () => {
       const resumed = credentialReport((yield* durableEvents).slice(before))
       expect(second.sent).toEqual(["sk-b"])
       expect(resumed.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
-      expect(resumed.ended.map((event) => event.credential)).toEqual([
-        { provider: fallbackProvider, slot: personal },
-      ])
+      expect(labelsOf(resumed.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a spawned child starts where its parent's turn stands in the order", () =>
+    Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+      const replies = { "sk-a": refusal, "sk-b": answer("from b") }
+      const runOn = (root: ReturnType<typeof credentialRoot>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({
+              sessionId: root.sessionId,
+              branchId: root.branchId,
+              admission: root.admission,
+            })
+            yield* runAgentLoop(makeMessage(root.sessionId, root.branchId, "hello"), root.admission)
+          }),
+        ).pipe(Effect.provide(root.layer))
+      // The parent's turn: A refuses, B answers.
+      const parent = credentialRoot({ name: "parent", order, stored: twoKeys, storage, replies })
+      yield* runOn(parent)
+      expect(parent.sent).toEqual(["sk-a", "sk-b"])
+      // A child the parent's turn spawned goes out with B at once.
+      const child = credentialRoot({ name: "child", order, stored: twoKeys, storage, replies })
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: child.sessionId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+            admission: child.admission,
+          }),
+        )
+      }).pipe(Effect.provide(storage), Effect.orDie)
+      yield* runOn(child)
+      expect(child.sent).toEqual(["sk-b"])
+      // A session of its own starts at the top of the order.
+      const own = credentialRoot({ name: "own", order, stored: twoKeys, storage, replies })
+      yield* runOn(own)
+      expect(own.sent).toEqual(["sk-a", "sk-b"])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })

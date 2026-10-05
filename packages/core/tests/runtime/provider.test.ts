@@ -743,6 +743,52 @@ describe("model catalog resolution", () => {
  */
 
 describe("Auth", () => {
+  describe("credential sign-in stamp", () => {
+    // A cache the provider wrote is the credential's: the stamp tells a new
+    // sign-in on the slot from a refresh of the same one, and follows a rename.
+    it.effect(
+      "a sign-in stamps the credential; a refresh and a rename keep it; a new sign-in does not",
+      () =>
+        Effect.gen(function* () {
+          const auth = yield* Auth
+          const personal = CredentialSlot.make("personal")
+          const home = CredentialSlot.make("home")
+          const oauth = (refresh: string) =>
+            AuthInfo.cases.Oauth.make({ type: "oauth", access: "a", refresh, expires: 0 })
+          const stampOf = (slot: CredentialSlot) =>
+            auth.get("stamped", slot).pipe(Effect.map((info) => info?.signedInAt))
+          yield* TestClock.adjust("1 second")
+          yield* auth.set("stamped", oauth("first"), personal)
+          expect(yield* stampOf(personal)).toBe(1_000)
+          yield* TestClock.adjust("1 second")
+          // The driver writes its refreshed token without a stamp of its own.
+          yield* auth.update(
+            "stamped",
+            () => Effect.succeed(["refreshed", Option.some(oauth("refreshed"))] as const),
+            personal,
+          )
+          expect(yield* stampOf(personal)).toBe(1_000)
+          yield* auth.rename("stamped", personal, home)
+          expect(yield* stampOf(personal)).toBeUndefined()
+          expect(yield* stampOf(home)).toBe(1_000)
+          yield* TestClock.adjust("1 second")
+          yield* auth.set("stamped", oauth("again"), home)
+          expect(yield* stampOf(home)).toBe(3_000)
+          // A label in use, or one with nothing stored, moves nothing.
+          yield* auth.set("stamped", oauth("work"), personal)
+          expect(Exit.isFailure(yield* Effect.exit(auth.rename("stamped", home, personal)))).toBe(
+            true,
+          )
+          expect(
+            Exit.isFailure(
+              yield* Effect.exit(auth.rename("stamped", CredentialSlot.make("none"), home)),
+            ),
+          ).toBe(true)
+          expect(yield* stampOf(home)).toBe(3_000)
+        }).pipe(Effect.provide(Auth.Test())),
+    )
+  })
+
   describe("credential store serialization", () => {
     it.live("an update in flight holds back a set for the same provider", () =>
       Effect.gen(function* () {
@@ -1071,12 +1117,12 @@ describe("Auth", () => {
           ),
         ).toBe(true)
         expect((yield* fs.readFileString(dir + "/openai")) === original).toBe(true)
-        expect(
-          (yield* fs.readFileString(dir + "/.slots/openai/personal")) ===
-            (yield* Schema.encodeEffect(Schema.fromJsonString(Schema.toCodecJson(AuthInfo)))(
-              named,
-            )),
-        ).toBe(true)
+        // The stored file is the credential and the time it was signed in.
+        const file = yield* Schema.decodeEffect(
+          Schema.fromJsonString(Schema.toCodecJson(AuthInfo)),
+        )(yield* fs.readFileString(dir + "/.slots/openai/personal"))
+        expect(file).toMatchObject(named)
+        expect(Predicate.isNumber(file.signedInAt)).toBe(true)
         expect((yield* fs.stat(dir + "/.slots/openai/personal")).mode & 0o777).toBe(0o600)
         yield* auth.remove("openai", personal)
         expect(
@@ -1178,8 +1224,8 @@ describe("Auth", () => {
           key: "cf-token",
           metadata: { accountId: "acct-1", gatewayId: "gw-1" },
         })
-        expect(stored[0]).toEqual(withAnswers)
-        expect(reread).toEqual(withAnswers)
+        expect(stored[0]).toMatchObject(withAnswers)
+        expect(reread).toEqual(stored[0])
         expect(stored[1]).toEqual({ _tag: "Api", type: "api", key: "sk-older" })
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -1273,7 +1319,7 @@ describe("Auth", () => {
         const seen = new TextDecoder().decode(buffer.subarray(0, Number(size)))
         expect(seen).toContain('"sk-old"')
         const read = yield* reader.get("openai")
-        expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-new" }))
+        expect(read).toMatchObject(AuthInfo.cases.Api.make({ type: "api", key: "sk-new" }))
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
 
@@ -1309,7 +1355,7 @@ describe("Auth", () => {
           yield* Deferred.completeWith(release, Effect.void)
           yield* Fiber.join(updating)
           const read = yield* Fiber.join(reading)
-          expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-written" }))
+          expect(read).toMatchObject(AuthInfo.cases.Api.make({ type: "api", key: "sk-written" }))
           expect(yield* fs.exists(`${dir}/openai`)).toBe(true)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
@@ -2741,6 +2787,12 @@ describe("classifier credential order", () => {
     method: "decide",
     reason: new AiError.QuotaExhaustedError({}),
   })
+  const judgeRateLimited = (retryAfter: Duration.Duration) =>
+    AiError.make({
+      module: "Judge",
+      method: "decide",
+      reason: new AiError.RateLimitError({ retryAfter }),
+    })
   const networkFault = AiError.make({
     module: "Judge",
     method: "decide",
@@ -2771,8 +2823,18 @@ describe("classifier credential order", () => {
         id: "judge",
         name: "Judge",
         resolveModel: () => Effect.succeed(fakeResolution()),
-        listModels: () =>
-          Effect.succeed([Model.make({ ...catalogModel("judge/jev-1"), kind: "classifier" })]),
+        // Each key lists the judge at its own price: sk-b's is a hundred times sk-a's.
+        listModels: (_catalog, authInfo) => {
+          let price = 1
+          if (authInfo?._tag === "Api" && authInfo.key === "sk-b") price = 100
+          return Effect.succeed([
+            Model.make({
+              ...catalogModel("judge/jev-1"),
+              kind: "classifier",
+              pricing: { input: price, output: price },
+            }),
+          ])
+        },
         resolveDecisionModel: (_name, authInfo) => {
           let key = "env"
           if (authInfo?._tag === "Api") key = authInfo.key
@@ -2850,6 +2912,57 @@ describe("classifier credential order", () => {
       expect(asked).toEqual(["sk-a", "sk-b"])
       expect(Exit.isSuccess(decided)).toBe(true)
     }),
+  )
+
+  it.live("a classifier call is priced as the credential that answered lists it", () =>
+    Effect.gen(function* () {
+      const { decided } = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: { "sk-a": quotaSpent },
+      })
+      // One input and one output token at sk-b's 100 dollars per million each.
+      expect(Exit.isSuccess(decided) && decided.value.costUsd).toBeCloseTo(0.0002, 10)
+      const first = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: {},
+      })
+      expect(Exit.isSuccess(first.decided) && first.decided.value.costUsd).toBeCloseTo(0.000002, 10)
+    }),
+  )
+
+  it.live(
+    "a rate limit that clears soon gets one more try on its credential before the call moves",
+    () =>
+      Effect.gen(function* () {
+        const soon = yield* decideWith({
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          stored: [
+            [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+            [personal, "sk-b"],
+          ],
+          failures: { "sk-a": judgeRateLimited(Duration.millis(10)) },
+        })
+        expect(soon.asked).toEqual(["sk-a", "sk-a", "sk-b"])
+        expect(Exit.isSuccess(soon.decided)).toBe(true)
+        // A reset past the driver's retry cap moves the call at once.
+        const later = yield* decideWith({
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          stored: [
+            [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+            [personal, "sk-b"],
+          ],
+          failures: { "sk-a": judgeRateLimited(Duration.hours(1)) },
+        })
+        expect(later.asked).toEqual(["sk-a", "sk-b"])
+      }),
   )
 
   it.live("any other classifier failure ends the call on its credential", () =>

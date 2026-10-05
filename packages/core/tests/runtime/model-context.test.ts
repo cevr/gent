@@ -73,6 +73,7 @@ import {
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
+import { CredentialSlot } from "../../src/domain/driver"
 import {
   contextWindowOf,
   defineExtension,
@@ -1639,7 +1640,9 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * With `switchModel`, the session moves to another model with the same
  * lifetime before the second turn. With `spawned`, the turns run in a child
  * session of the harness session, whose lifetime is `childPromptCacheTtlMs`.
- * With `secondPrompt`, the second turn sends that text.
+ * With `secondPrompt`, the second turn sends that text. With
+ * `moveCredential`, the sign-in's order names another credential before the
+ * second turn, so it runs on another account than the first.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1649,6 +1652,7 @@ const runColdCacheTurns = (params: {
   readonly firstReplyHoldMs?: number
   readonly firstCallRateLimitedMs?: number
   readonly switchModel?: boolean
+  readonly moveCredential?: boolean
   readonly childPromptCacheTtlMs?: number
   readonly spawned?: boolean
   readonly secondPrompt?: string
@@ -1727,6 +1731,13 @@ const runColdCacheTurns = (params: {
     }
     const { sessionId, branchId } = target
     for (const content of [`${FIRST_PROMPT_MARK} one`, secondPrompt]) {
+      if (content === secondPrompt && params.moveCredential === true) {
+        yield* client.auth.setOrder({
+          sessionId,
+          provider: model.provider,
+          order: [CredentialSlot.make("personal")],
+        })
+      }
       if (content === secondPrompt && params.switchModel === true) {
         yield* client.session.updateSettings({
           sessionId,
@@ -1962,6 +1973,31 @@ describe("cold prompt cache", () => {
       expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
       expect(handoffMarkers(result.durable)).toHaveLength(0)
     }),
+  )
+
+  it.live(
+    "a turn on another credential than the last request never hands off for a cold cache",
+    () =>
+      Effect.gen(function* () {
+        // The cache belongs to the account that wrote it: a move to another
+        // reads none, like a model switch, and the turn's window goes whole.
+        const result = yield* runColdCacheTurns({
+          promptCacheTtlMs: Option.some(0),
+          firstInputTokens: LARGE_WINDOW_TOKENS,
+          compactor: true,
+          steps: [textStep("second reply"), textStep("spare reply")],
+          moveCredential: true,
+        })
+
+        expect(result.calls).toBe(2)
+        expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
+        expect(handoffMarkers(result.durable)).toHaveLength(0)
+        const slots = result.events.flatMap((event) => {
+          if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+          return [event.credential.slot]
+        })
+        expect(slots).toEqual([CredentialSlot.make("default"), CredentialSlot.make("personal")])
+      }),
   )
 
   it.live("a retried request restarts the cache lifetime at the retry", () =>

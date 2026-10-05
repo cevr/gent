@@ -1461,6 +1461,133 @@ describe("provider login", () => {
     ).pipe(Effect.timeout("8 seconds")),
   )
 
+  // `/auth` renames and reorders a sign-in's credentials: the credential
+  // keeps its sign-in under the new label, the order follows it into the
+  // owner's user entry, and a project entry that still wins is named.
+  it.live(
+    "a rename keeps the credential and its order; an order write names a project entry that wins",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const project = yield* makeTempDirectoryScoped("gent-auth-order-")
+          const home = yield* makeTempDirectoryScoped("gent-auth-order-home-")
+          const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+          const personal = CredentialSlot.make("personal")
+          const home_ = CredentialSlot.make("home")
+          const work = CredentialSlot.make("work")
+          const fallback = CredentialSlot.make("default")
+          yield* auth.set("order-slots", AuthApi.make({ type: "api", key: "fake-default" }))
+          yield* auth.set(
+            "order-slots",
+            AuthApi.make({ type: "api", key: "fake-personal" }),
+            personal,
+          )
+          yield* auth.set("order-slots", AuthApi.make({ type: "api", key: "fake-work" }), work)
+          const signedIn = (yield* auth.get("order-slots", personal))?.signedInAt
+          const userConfig = path.join(home, ".gent", "config.json")
+          yield* fs.makeDirectory(path.dirname(userConfig), { recursive: true })
+          // The alias holds the order before the rename: the write moves it to the owner.
+          yield* fs.writeFileString(
+            userConfig,
+            encodeJson({ providers: { "order-alias": { authOrder: ["personal", "default"] } } }),
+          )
+          const extension = defineExtension({
+            id: "@test/order-slots",
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              const owner: ModelDriverContribution = {
+                id: "order-slots",
+                name: "Ordered",
+                resolveModel: () => Effect.succeed(stubModel),
+                auth: { methods: [AuthMethod.make({ type: "api", label: "Key" })] },
+              }
+              yield* host.register("modelDriver", owner)
+              yield* host.register("modelDriver", {
+                ...owner,
+                id: "order-alias",
+                credentialFrom: owner.id,
+              })
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              agents: e2ePreset.agents,
+              providerLayer,
+              extensionInputs: [extension],
+              authLayer: Layer.succeed(Auth, auth),
+              configServiceLayer: ConfigService.Live.pipe(
+                Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+                Layer.provide(BunPlatformLive),
+              ),
+            }),
+          )
+          const { sessionId } = yield* client.session.create({ cwd: project })
+          const orderOf = client.auth
+            .listProviders({ sessionId })
+            .pipe(
+              Effect.map((rows) => rows.find((row) => row.provider === "order-slots")?.authOrder),
+            )
+          expect(yield* orderOf).toEqual([personal, fallback])
+
+          yield* client.auth.renameKey({
+            sessionId,
+            provider: "order-alias",
+            from: personal,
+            to: home_,
+          })
+          expect(Predicate.isUndefined(yield* auth.get("order-slots", personal))).toBe(true)
+          const moved = yield* auth.get("order-slots", home_)
+          expect(moved?.type === "api" && moved.key === "fake-personal").toBe(true)
+          // The same credential: a cache it wrote is still its own.
+          expect(moved?.signedInAt).toBe(signedIn)
+          expect(yield* orderOf).toEqual([home_, fallback])
+          const written = yield* fs
+            .readFileString(userConfig)
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+          expect(written).toEqual({
+            providers: { "order-slots": { authOrder: ["home", "default"] } },
+          })
+
+          // A label in use, and the default label, stay as they are.
+          const taken = yield* Effect.exit(
+            client.auth.renameKey({ sessionId, provider: "order-slots", from: home_, to: work }),
+          )
+          expect(Exit.isFailure(taken)).toBe(true)
+          const fixed = yield* Effect.exit(
+            client.auth.renameKey({
+              sessionId,
+              provider: "order-slots",
+              from: fallback,
+              to: personal,
+            }),
+          )
+          expect(Exit.isFailure(fixed)).toBe(true)
+
+          yield* client.auth.setOrder({ sessionId, provider: "order-slots", order: [work, home_] })
+          expect(yield* orderOf).toEqual([work, home_])
+          yield* client.auth.setOrder({ sessionId, provider: "order-slots", order: [] })
+          // No order left: the default serves alone, and the row lists no order of its own.
+          expect(yield* orderOf).toEqual([fallback])
+
+          const projectConfig = path.join(project, ".gent", "config.json")
+          yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+          yield* fs.writeFileString(
+            projectConfig,
+            encodeJson({ providers: { "order-slots": { authOrder: ["work"] } } }),
+          )
+          const shadowed = yield* Effect.exit(
+            client.auth.setOrder({ sessionId, provider: "order-slots", order: [home_, fallback] }),
+          )
+          expect(Exit.isFailure(shadowed)).toBe(true)
+          expect(String(shadowed)).toContain("project config")
+          expect(yield* orderOf).toEqual([work])
+        }).pipe(Effect.timeout("8 seconds")),
+      ).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("an expired named login cannot write into the default credential", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -118,6 +118,10 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
  *             record stored without any).
  * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
  *
+ * `signedInAt` is when the credential was signed in or replaced, stamped by
+ * the store's `set` (a refresh through `update` keeps it). A record stored
+ * before the stamp has none.
+ *
  * There is no "ambient auth owned by the driver" variant. Drivers that own
  * auth out-of-band (e.g. Claude Code SDK reading the OS keychain) bypass the
  * auth store entirely; add the variant when a caller needs a persisted
@@ -128,6 +132,7 @@ export const AuthInfo = Schema.TaggedUnion({
     type: Schema.Literal("api"),
     key: Schema.String,
     metadata: Schema.optional(AuthMetadata),
+    signedInAt: Schema.optional(Schema.Finite),
   },
   Oauth: {
     type: Schema.Literal("oauth"),
@@ -135,6 +140,7 @@ export const AuthInfo = Schema.TaggedUnion({
     refresh: Schema.String,
     expires: Schema.Finite,
     accountId: Schema.optional(Schema.String),
+    signedInAt: Schema.optional(Schema.Finite),
   },
 })
 export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
@@ -182,6 +188,12 @@ export const AuthProviderInfo = Schema.Struct({
    * turn and `hasKey` is false until they agree.
    */
   orderConflict: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The order a turn walks the credentials in, first to last: the config's
+   * `authOrder`, else the default alone. Present with `credentials`; a
+   * conflicting order reads as the default alone.
+   */
+  authOrder: Schema.optional(Schema.Array(CredentialSlot)),
 })
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
@@ -247,6 +259,16 @@ export interface AuthService {
     onPersisted?: Effect.Effect<void, never, never>,
   ) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
+  /**
+   * Move a credential to another slot under the provider's lock: the same
+   * credential, sign-in stamp and all, under the new label. Fails when
+   * `from` holds none or `to` holds one already.
+   */
+  readonly rename: (
+    provider: string,
+    from: CredentialSlot,
+    to: CredentialSlot,
+  ) => Effect.Effect<void, AuthError>
   /**
    * Read, then maybe write, one provider's credential. `f` receives what the
    * store holds now and returns a result plus the credential to write (none
@@ -325,8 +347,10 @@ export const serializeAuthStore = (
             exclusive(provider)(getOrDiscard(provider, slot)),
           ),
         ),
+    // A sign-in or a replacement is a new credential: the stamp says when,
+    // so a cache the old one wrote is never taken for this one's.
     set: (provider, info, slot, onPersisted) => {
-      let write = store.set(provider, info, slot)
+      let write = stamped(info).pipe(Effect.flatMap((next) => store.set(provider, next, slot)))
       if (Predicate.isNotUndefined(onPersisted)) {
         write = write.pipe(Effect.andThen(onPersisted), Effect.uninterruptible)
       }
@@ -334,16 +358,50 @@ export const serializeAuthStore = (
       return exclusive(provider)(write)
     },
     remove: (provider, slot) => exclusive(provider)(store.remove(provider, slot)),
+    rename: (provider, from, to) =>
+      exclusive(provider)(
+        Effect.gen(function* () {
+          const moved = yield* getOrDiscard(provider, from)
+          if (Predicate.isUndefined(moved))
+            return yield* new AuthError({ message: `No credential "${from}" for "${provider}"` })
+          if (Predicate.isNotUndefined(yield* getOrDiscard(provider, to)))
+            return yield* new AuthError({
+              message: `Credential "${to}" for "${provider}" already exists`,
+            })
+          // The new entry lands before the old one goes: a crash between
+          // them leaves the credential under both labels, never under none.
+          yield* store.set(provider, moved, to)
+          yield* store.remove(provider, from)
+        }),
+      ),
+    // A refresh is the same credential: it keeps the stamp of its sign-in.
     update: (provider, f, slot) =>
       exclusive(provider)(
         Effect.gen(function* () {
           const current = Option.fromUndefinedOr(yield* getOrDiscard(provider, slot))
           const [result, next] = yield* f(current)
-          if (Option.isSome(next)) yield* store.set(provider, next.value, slot)
+          if (Option.isSome(next)) {
+            const signedInAt = Option.flatMap(current, (held) =>
+              Option.fromUndefinedOr(held.signedInAt),
+            )
+            yield* store.set(provider, keepStamp(next.value, signedInAt), slot)
+          }
           return result
         }),
       ),
   }
+}
+
+/** `info` stamped now, unless it carries its sign-in stamp already (a moved credential). */
+const stamped = (info: AuthInfo): Effect.Effect<AuthInfo> => {
+  if (Predicate.isNotUndefined(info.signedInAt)) return Effect.succeed(info)
+  return Effect.map(Clock.currentTimeMillis, (signedInAt) => ({ ...info, signedInAt }))
+}
+
+/** A refreshed credential with the stamp of the sign-in it refreshes, when it has none. */
+const keepStamp = (next: AuthInfo, signedInAt: Option.Option<number>): AuthInfo => {
+  if (Predicate.isNotUndefined(next.signedInAt) || Option.isNone(signedInAt)) return next
+  return { ...next, signedInAt: signedInAt.value }
 }
 
 // ── auth file lock ──────────────────────────────────────────────────────────
@@ -780,6 +838,50 @@ export const removeSignIn = Effect.fn("removeSignIn")(function* (
 })
 
 /**
+ * Give a named credential of `provider`'s sign-in another label, in the
+ * profile of the `ExtensionRegistry` in context: the same credential under
+ * the key it is stored at. The default slot keeps its label, and no label
+ * becomes it.
+ */
+export const renameSignIn = Effect.fn("renameSignIn")(function* (
+  provider: string,
+  from: CredentialSlot,
+  to: CredentialSlot,
+) {
+  if (from === DEFAULT_CREDENTIAL_SLOT || to === DEFAULT_CREDENTIAL_SLOT) {
+    return yield* new AuthError({ message: `The "${DEFAULT_CREDENTIAL_SLOT}" label is fixed` })
+  }
+  const auth = yield* Auth
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const stored = yield* storedCredential(auth, modelDrivers, provider, from)
+  if (Option.isNone(stored)) {
+    return yield* new AuthError({ message: `No credential "${from}" for "${provider}"` })
+  }
+  yield* auth.rename(stored.value.key, from, to)
+})
+
+/**
+ * The config entries that hold `provider`'s credential order, in the profile
+ * of the `ExtensionRegistry` in context: the owner its order is written
+ * under, each entry that names an order for the sign-in (an alias's too),
+ * and the order a turn walks now (none when no entry names one, or they
+ * conflict).
+ */
+export const signInOrder = Effect.fn("CredentialOrder.signIn")(function* (provider: string) {
+  const registry = yield* ExtensionRegistry
+  const drivers = registry.getResolved().modelDrivers
+  const config = yield* registry.providerConfig
+  const named = configuredOrders(drivers, config, provider)
+  let order: ReadonlyArray<CredentialSlot> = []
+  if (orderConflict(drivers, config, provider).length === 0) order = named[0]?.[1] ?? []
+  return {
+    owner: credentialOwner(drivers, provider),
+    entries: named.map(([id]) => id),
+    order,
+  }
+})
+
+/**
  * Store a credential for `provider`'s sign-in under its owner, in the profile
  * of the `ExtensionRegistry` in context. Reads try the owner's key first, so
  * a key stored under a sharing driver's own id would sit behind it. An API
@@ -942,13 +1044,14 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
         Option.fromUndefinedOr(ordered.find((credential) => credential.hasKey)),
         () => Option.fromUndefinedOr(ordered[0]),
       )
-      if (Option.isNone(serving)) return { ...row, credentials }
+      if (Option.isNone(serving)) return { ...row, credentials, authOrder: order }
       const { hasKey, source, authType, missing } = serving.value
       return {
         provider: row.provider,
         required: row.required,
         hasKey,
         credentials,
+        authOrder: order,
         ...omitUndefined({
           name: row.name,
           source: Option.getOrUndefined(Option.liftPredicate(source, (from) => from !== "none")),
@@ -2980,13 +3083,19 @@ interface ClassifierCandidate {
  * A classifier model ready to answer, the catalog entry it resolved to, and
  * the credentials of its sign-in's order after the one it was built with: a
  * call whose credential fails with a proved credential failure tries them,
- * first to last.
+ * first to last. `slot` is the credential the model was built with, `retry`
+ * the driver's same-credential retries, and `entryFor` the model's entry as
+ * one credential lists it (an OAuth subset and its prices, or the API's):
+ * a call is priced by the credential that answered.
  */
 interface ResolvedDecisionModel {
   readonly modelId: ModelId
   readonly entry: Model
   readonly model: DecisionModel.DecisionModel
+  readonly slot: CredentialSlot
   readonly later: ReadonlyArray<ClassifierCandidate>
+  readonly retry: RetryPolicy
+  readonly entryFor: (slot: CredentialSlot) => Effect.Effect<Model>
 }
 
 /** The classifier models of one profile: the drivers of its `ExtensionRegistry`. */
@@ -3246,10 +3355,40 @@ const resolveDecisionModel = Effect.fn("DecisionModelResolver.resolve")(function
   const [first, ...rest] = candidates
   let current = first
   let later: ReadonlyArray<ClassifierCandidate> = rest
+  const driver = chosen.driver
+  const owner = credentialOwner(profile.drivers, driver.id)
+  // One driver's listing as one credential sees it; the union entry when
+  // that credential's view does not list the model, or its listing fails.
+  const entryFor = (slot: CredentialSlot): Effect.Effect<Model> =>
+    listModelCatalog(
+      { modelDrivers: new Map([[driver.id, driver]]), apiClasses: new Map() },
+      catalog,
+      (driverId) =>
+        catalogAuths(
+          auth,
+          profile.drivers,
+          profile.config,
+          driverId,
+          Option.some({ provider: ProviderId.make(owner), slot }),
+        ).pipe(Effect.mapError((error) => new ProviderAuthError({ message: error.message }))),
+    ).pipe(
+      Effect.map(
+        (listed) => listed.models.find((model) => model.id === chosen.model.id) ?? chosen.model,
+      ),
+      Effect.orElseSucceed(() => chosen.model),
+    )
   for (;;) {
     const built = yield* Effect.exit(current.model)
     if (Exit.isSuccess(built)) {
-      return { modelId: chosen.model.id, entry: chosen.model, model: built.value, later }
+      return {
+        modelId: chosen.model.id,
+        entry: chosen.model,
+        model: built.value,
+        slot: current.slot,
+        later,
+        retry: driver.retry ?? DEFAULT_RETRY_POLICY,
+        entryFor,
+      }
     }
     const failure = Cause.findErrorOption(built.cause)
     const [next, ...after] = later
@@ -3389,10 +3528,36 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
         // credential failure moves the call to the next one, any other
         // failure (or the last credential's) ends it. A classifier streams
         // nothing, so no output is lost by the move.
-        const ask = (model: DecisionModel.DecisionModel) =>
+        const askOnce = (model: DecisionModel.DecisionModel) =>
           model.decide(params.definition, { input: params.input })
+        // A rate limit the provider says clears within the driver's retry cap
+        // gets one more try on the same credential first, as a turn's request
+        // gets its retries; one that resets later moves on at once.
+        const ask = (model: DecisionModel.DecisionModel) =>
+          askOnce(model).pipe(
+            Effect.catchIf(
+              (error) => AiError.isAiError(error) && error.reason._tag === "RateLimitError",
+              (error) =>
+                Effect.gen(function* () {
+                  const now = yield* Clock.currentTimeMillis
+                  const at = resolved.retry.retryAt(error, now)
+                  if (Option.exists(at, (reset) => reset - now > resolved.retry.maxDelay))
+                    return yield* error
+                  yield* Effect.sleep(
+                    Duration.millis(
+                      Option.match(at, {
+                        onNone: () => resolved.retry.initialDelay,
+                        onSome: (reset) => Math.max(0, reset - now),
+                      }),
+                    ),
+                  )
+                  return yield* askOnce(model)
+                }),
+            ),
+          )
+        let answered = resolved.slot
         let outcome: Exit.Exit<
-          Effect.Success<ReturnType<typeof ask>>,
+          Effect.Success<ReturnType<typeof askOnce>>,
           AiError.AiError | ProviderAuthError
         > = yield* Effect.exit(ask(resolved.model))
         for (const candidate of resolved.later) {
@@ -3407,6 +3572,7 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
             }),
           )
           outcome = yield* Effect.exit(Effect.flatMap(candidate.model, ask))
+          answered = candidate.slot
         }
         const response = yield* Effect.mapError(outcome, (error) =>
           modelsError("decide", `models.decide (${resolved.modelId}) failed: ${error.message}`),
@@ -3415,10 +3581,13 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
         })
+        // The call is priced as the credential that answered lists the model:
+        // a subscription sign-in's subset can price it apart from an API key.
+        const entry = yield* resolved.entryFor(answered)
         // A price needs both billable counts: a count the reply leaves out, or
         // one no provider bills, leaves the price unknown, never a partial sum.
         const costUsd = Option.all({
-          pricing: Option.fromUndefinedOr(resolved.entry.pricing),
+          pricing: Option.fromUndefinedOr(entry.pricing),
           inputTokens: billableCount(Option.fromUndefinedOr(usage.inputTokens)),
           outputTokens: billableCount(Option.fromUndefinedOr(usage.outputTokens)),
         }).pipe(Option.map(({ pricing, ...counts }) => calculateCost(counts, Option.some(pricing))))
@@ -3746,6 +3915,17 @@ interface ModelRegistryService {
     modelId: string,
     credential?: CredentialReceipt,
   ) => Effect.Effect<Option.Option<Model>, ProviderAuthError, ExtensionRegistry>
+  /**
+   * `credential` with the moment its stored credential was signed in
+   * (`AuthInfo.signedInAt`), read through the drivers of `registry`, the
+   * calling turn's profile: what tells a new sign-in on the slot from the one
+   * a cache was written with. As it is for a credential with no stamp, none
+   * stored, or a store that fails to read.
+   */
+  readonly stamp: (
+    credential: CredentialReceipt,
+    registry: ExtensionRegistryService,
+  ) => Effect.Effect<CredentialReceipt>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
@@ -3770,6 +3950,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
                 return Option.fromUndefinedOr(models.find((model) => model.id === current))
               }),
             ),
+          stamp: (credential, registry) => stampCredential(authStore, credential, registry),
         })
       }),
     )
@@ -3797,6 +3978,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
               Option.some(madeUpModel(modelId, SCRIPTED_MODEL_CONTEXT_LIMIT_TOKENS, Option.none())),
             ),
           ),
+        stamp: catalog.stamp,
       })
     }),
   ).pipe(Layer.provide(ModelRegistry.Live))
@@ -3818,9 +4000,33 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
           if (models.length > 0) return Effect.succeedNone
           return Effect.succeedSome(madeUpModel(modelId, TEST_MODEL_CONTEXT_LIMIT_TOKENS, pricing))
         },
+        stamp: (credential) => Effect.succeed(credential),
       }),
     )
 }
+
+/** `credential` with its stored credential's sign-in stamp, read through `registry`'s drivers. */
+const stampCredential = (
+  authStore: AuthService,
+  credential: CredentialReceipt,
+  registry: ExtensionRegistryService,
+): Effect.Effect<CredentialReceipt> =>
+  Effect.gen(function* () {
+    const drivers = registry.getResolved().modelDrivers
+    const stored = yield* storedCredential(authStore, drivers, credential.provider, credential.slot)
+    const signedInAt = Option.flatMap(stored, (found) =>
+      Option.fromUndefinedOr(found.info.signedInAt),
+    )
+    if (Option.isNone(signedInAt)) return credential
+    return { ...credential, signedInAt: signedInAt.value }
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("credential.stamp-read-failed").pipe(
+        Effect.annotateLogs({ error: error.message }),
+        Effect.as(credential),
+      ),
+    ),
+  )
 
 // ── retry ───────────────────────────────────────────────────────────────────
 

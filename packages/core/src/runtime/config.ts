@@ -222,6 +222,34 @@ const configUpdates = {
     if (Predicate.isNotUndefined(current.model)) return Option.none()
     return Option.some(new UserConfig({ ...current, model }))
   },
+  /**
+   * `owner`'s `authOrder` set to `order` (an empty order clears it), and
+   * the order of each entry in `aliases` cleared, so one entry holds the
+   * sign-in's order. An entry left with no field is removed. `None` when
+   * nothing changes.
+   */
+  setAuthOrder: (
+    current: UserConfig,
+    owner: string,
+    order: ReadonlyArray<CredentialSlot>,
+    aliases: ReadonlyArray<string>,
+  ): Option.Option<UserConfig> => {
+    const providers = { ...current.providers }
+    let changed = false
+    const write = (id: string, next: ReadonlyArray<CredentialSlot>) => {
+      const { authOrder, ...rest } = providers[id] ?? {}
+      const held = authOrder ?? []
+      if (held.length === next.length && next.every((slot, index) => held[index] === slot)) return
+      changed = true
+      if (next.length > 0) providers[id] = { ...rest, authOrder: next }
+      else if (Object.keys(rest).length > 0) providers[id] = rest
+      else delete providers[id]
+    }
+    for (const alias of aliases) if (alias !== owner) write(alias, [])
+    write(owner, order)
+    if (!changed) return Option.none()
+    return Option.some(new UserConfig({ ...current, providers: nonEmptyRecord(providers) }))
+  },
 }
 
 /** User then project `agents` entries: a project entry replaces only the fields it names. */
@@ -293,13 +321,13 @@ const mergeEntries = (raw: RawConfig, before: RawConfig, after: RawConfig): RawC
   )
 
 /**
- * The record-of-struct fields a config write changes. Only `driverOverrides`
- * has a writer; a field no write changes never reaches the merge, because
- * `mergeChangedFields` skips an unchanged field, so a write keeps each
- * `agents` entry as the user wrote it. A new writer for another
- * record-of-struct field (`agents`) adds it here.
+ * The record-of-struct fields a config write changes: `driverOverrides`,
+ * and `providers` (its `authOrder`). A field no write changes never reaches
+ * the merge, because `mergeChangedFields` skips an unchanged field, so a
+ * write keeps each `agents` entry as the user wrote it. A new writer for
+ * another record-of-struct field (`agents`) adds it here.
  */
-const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides"])
+const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides", "providers"])
 
 /**
  * `raw` with each `UserConfig` field that differs between `before` and
@@ -379,6 +407,18 @@ interface ConfigServiceService {
    */
   readonly setModelIfUnset: (
     model: ModelId,
+  ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
+  /**
+   * Write a sign-in's credential order into the user config: `owner`'s
+   * `providers` entry gets `order` (empty: the field goes, and the default
+   * credential serves alone), and each entry in `aliases` (a driver that
+   * shares the sign-in) loses its own, so no two entries can conflict. A
+   * project entry still shadows the user's. Fails as `setDriverOverride` does.
+   */
+  readonly setAuthOrder: (
+    owner: string,
+    order: ReadonlyArray<CredentialSlot>,
+    aliases: ReadonlyArray<string>,
   ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
 }
 
@@ -878,6 +918,15 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             }),
           )
         }),
+
+        setAuthOrder: Effect.fn("ConfigService.setAuthOrder")(function* (owner, order, aliases) {
+          yield* mutateUserConfig((current) =>
+            Option.match(configUpdates.setAuthOrder(current, owner, order, aliases), {
+              onNone: () => ({ updated: current, save: false }),
+              onSome: (updated) => ({ updated, save: true }),
+            }),
+          )
+        }),
       }
 
       return service
@@ -924,6 +973,13 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           setModelIfUnset: (model) =>
             Ref.update(userConfigRef, (current) =>
               Option.getOrElse(configUpdates.setModelIfUnset(current, model), () => current),
+            ),
+          setAuthOrder: (owner, order, aliases) =>
+            Ref.update(userConfigRef, (current) =>
+              Option.getOrElse(
+                configUpdates.setAuthOrder(current, owner, order, aliases),
+                () => current,
+              ),
             ),
         })
       }),
