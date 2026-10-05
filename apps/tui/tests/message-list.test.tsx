@@ -9,10 +9,12 @@ import {
 } from "@opentui/core"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  addRetry,
   addStep,
   currentMillis,
   emptyTurnSteps,
   flushTranscriptForExit,
+  formatTurnLine,
   holdUntilRendererDestroyed,
   getSessionEventLabel,
   type Message as ListMessage,
@@ -221,17 +223,17 @@ describe("session event labels", () => {
       seq: 1,
     }
 
-    expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s... 1/3 · overloaded (529)")
+    expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s · 1/3 · overloaded (529)")
     expect(getSessionEventLabel(event, createdAt + 1_100)).toBe(
-      "Retrying in 1s... 1/3 · overloaded (529)",
+      "Retrying in 1s · 1/3 · overloaded (529)",
     )
     expect(getSessionEventLabel(event, createdAt + 2_000)).toBe(
-      "Retrying now... 1/3 · overloaded (529)",
+      "Retrying now · 1/3 · overloaded (529)",
     )
     expect(getSessionEventLabel({ ...event, outcome: "retried" }, createdAt + 20_000)).toBe(
       "Retried 1/3 · overloaded (529)",
     )
-    expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s... 1/3")
+    expect(getSessionEventLabel({ ...event, reason: "" }, createdAt)).toBe("Retrying in 2s · 1/3")
   })
 
   test("an error with a reset time names the wall-clock reset after its first line", () => {
@@ -268,32 +270,10 @@ describe("session event labels", () => {
 
   test("an interruption row joins its parts with the separator every row uses", () => {
     const event: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
-    expect(getSessionEventLabel(event)).toBe("Interrupted · what do you want to do instead?")
+    expect(getSessionEventLabel(event)).toBe("Interrupted · what should gent do instead?")
   })
 
-  // A pending retry's row is the one row that follows the clock.
-  it.scopedLive("a pending retry row counts down to now", () =>
-    Effect.gen(function* () {
-      const event: SessionEvent = {
-        _tag: "retrying",
-        attempt: 1,
-        maxAttempts: 3,
-        delayMs: 1000,
-        outcome: "pending",
-        reason: "",
-        createdAt: currentMillis(),
-        seq: 1,
-      }
-      const setup = yield* renderScoped(
-        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
-        { width: 80, height: 10 },
-      )
-      yield* waitForFrame(setup, (frame) => frame.includes("Retrying in 1s... 1/3"), "countdown")
-      yield* waitForFrame(setup, (frame) => frame.includes("Retrying now... 1/3"), "now", 3000)
-    }).pipe(Effect.timeout("8 seconds")),
-  )
-
-  // A row too long for the width wraps under its text: the glyph keeps its column.
+  // A settled retry shows at the preview level, where it happened.
   it.scopedLive("a wrapped retry row hangs its next line under the text", () =>
     Effect.gen(function* () {
       const event: SessionEvent = {
@@ -307,16 +287,16 @@ describe("session event labels", () => {
         seq: 1,
       }
       const setup = yield* renderScoped(
-        () => <MessageList items={[event]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
+        () => <MessageList items={[event]} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 40, height: 10 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Retried 1/3"), "the row")
       const lines = frame.split("\n")
-      const first = lines.findIndex((line) => line.includes("● Retried"))
-      const textColumn = (lines[first] ?? "").indexOf("Retried")
+      const first = lines.findIndex((line) => line.includes("↻ Retried"))
+      expect(lines[first]).toStartWith("  ↻ Retried")
       const next = lines[first + 1] ?? ""
       expect(next.trim().length).toBeGreaterThan(0)
-      expect(next.search(/\S/)).toBe(textColumn)
+      expect(next.search(/\S/)).toBe(4)
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -339,43 +319,54 @@ describe("session event labels", () => {
   })
 })
 
-describe("worked-for row", () => {
-  test("a turn's steps, tool calls, and cost follow the duration", () => {
-    const steps = [
-      { outcome: "ToolCalls", costUsd: 0.004 },
-      { outcome: "ToolCalls", costUsd: 0.005 },
-      { outcome: "Answered", costUsd: 0.003 },
-    ].reduce(addStep, emptyTurnSteps)
-    const event: SessionEvent = {
-      _tag: "turn-ended",
-      durationSeconds: 452,
-      steps,
-      createdAt: 0,
-      seq: 1,
-    }
-    expect(getSessionEventLabel(event)).toBe("Worked for 7m 32s · 3 steps · 2 tool calls · $0.01")
+describe("turn line", () => {
+  const steps = [
+    { outcome: "ToolCalls", costUsd: 0.02, usage: { inputTokens: 20_000, outputTokens: 1_200 } },
+    { outcome: "Answered", costUsd: 0.02, usage: { inputTokens: 18_000, outputTokens: 900 } },
+  ].reduce(addStep, emptyTurnSteps)
+  const ended = (
+    counted: typeof emptyTurnSteps,
+    durationSeconds = 108,
+  ): Extract<SessionEvent, { _tag: "turn-ended" }> => ({
+    _tag: "turn-ended",
+    durationSeconds,
+    steps: counted,
+    createdAt: 0,
+    seq: 1,
+  })
+
+  test("the turn line names the time, the retries, the tokens and the cost", () => {
+    expect(getSessionEventLabel(ended(addRetry(addRetry(steps))))).toBe(
+      "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04",
+    )
+  })
+
+  test("one retry is one, and a turn with none has no retry slot", () => {
+    expect(getSessionEventLabel(ended(addRetry(steps)))).toBe(
+      "Worked for 1m 48s · 1 retry · ↑38k ↓2.1k · $0.04",
+    )
+    expect(getSessionEventLabel(ended(steps))).toBe("Worked for 1m 48s · ↑38k ↓2.1k · $0.04")
   })
 
   test("a turn with no recorded steps keeps the plain duration", () => {
-    const event: SessionEvent = {
-      _tag: "turn-ended",
-      durationSeconds: 5,
-      steps: emptyTurnSteps,
-      createdAt: 0,
-      seq: 1,
-    }
-    expect(getSessionEventLabel(event)).toBe("Worked for 5s")
+    expect(getSessionEventLabel(ended(emptyTurnSteps, 5))).toBe("Worked for 5s")
+    // A step with no usage or price adds nothing to the line.
+    expect(getSessionEventLabel(ended(addStep(emptyTurnSteps, { outcome: "Answered" }), 5))).toBe(
+      "Worked for 5s",
+    )
   })
 
-  test("a single answered step without pricing reads as one step", () => {
-    const event: SessionEvent = {
-      _tag: "turn-ended",
-      durationSeconds: 5,
-      steps: addStep(emptyTurnSteps, { outcome: "Answered" }),
-      createdAt: 0,
-      seq: 1,
-    }
-    expect(getSessionEventLabel(event)).toBe("Worked for 5s · 1 step")
+  test("the preview adds the steps, and a narrow line drops parts from the right", () => {
+    const event = ended(addRetry(addRetry(steps)))
+    expect(formatTurnLine(event, { steps: true })).toBe(
+      "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04 · 2 steps",
+    )
+    expect(formatTurnLine(event, { steps: false, width: 45 })).toBe(
+      "Worked for 1m 48s · 2 retries · ↑38k ↓2.1k",
+    )
+    expect(formatTurnLine(event, { steps: false, width: 40 })).toBe("Worked for 1m 48s · 2 retries")
+    // The duration stays.
+    expect(formatTurnLine(event, { steps: true, width: 5 })).toBe("Worked for 1m 48s")
   })
 })
 
@@ -1074,7 +1065,7 @@ describe("transcript message rows", () => {
         seq,
       }))
       const setup = yield* renderScoped(() => (
-        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+        <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
       ))
       expect(setup.renderer.listenerCount("resize")).toBe(1)
     }),
@@ -2051,9 +2042,9 @@ describe("cell rows", () => {
         (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
         "cell renderer",
       )
-      // The header counts the ops by kind; the preview rows name them in
-      // past-tense words; the open row names them as the cell ran them.
-      expect(frame).toContain("● 2 tools · 1 read · 1 edit · 1 failed")
+      // The header counts the ops in the past-tense words the preview rows
+      // name them in; the open row names them as the cell ran them.
+      expect(frame).toContain("● Read 1 file · wrote 1 file · 1 failed")
       expect(frame).toContain("├ Read")
       expect(frame).toContain("└ Wrote · failed")
       expect(frame).toContain("└ cell read · ✕ write")
@@ -2101,7 +2092,7 @@ describe("cell rows", () => {
         { width: 80, height: 40 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("● 1 tool · 1 command")
+      expect(frame).toContain("● Ran 1 command")
       expect(frame).toContain("└ Ran seq 25")
       expect(frame).toContain("│ row 1")
       expect(frame).toContain("│ row 5")
@@ -2223,13 +2214,15 @@ describe("cell rows", () => {
       const theme = Option.getOrThrow(colors)
       const glyphs = setup
         .captureSpans()
-        .lines.flatMap((line) => line.spans.filter((span) => /^\s*[●✗] \d+ tool/.test(span.text)))
+        .lines.flatMap((line) =>
+          line.spans.filter((span) => /^\s*[●✗] Ran 1 command/.test(span.text)),
+        )
         .map((span) => ({ glyph: span.text.trim().slice(0, 1), fg: span.fg }))
       expect(glyphs.map((entry) => entry.glyph)).toEqual(["●", "●", "✗"])
       expect(glyphs[0]?.fg.equals(theme.textMuted)).toBe(true)
       expect(glyphs[1]?.fg.equals(theme.warning)).toBe(true)
       expect(glyphs[2]?.fg.equals(theme.error)).toBe(true)
-      expect(renderFrame(setup)).toContain("● 1 tool · 1 command · 1 failed")
+      expect(renderFrame(setup)).toContain("● Ran 1 command · 1 failed")
     }),
   )
 
@@ -2241,7 +2234,7 @@ describe("cell rows", () => {
         { width: 80, height: 20 },
       )
       const frame = renderFrame(setup)
-      expect(frame).toContain("1 tool · 1 command")
+      expect(frame).toContain("● Ran 1 command")
       expect(frame).not.toContain("└ Ran")
       expect(frame).not.toContain("row 1")
     }),
@@ -6135,7 +6128,7 @@ describe("tool group rows", () => {
 })
 
 describe("message rows", () => {
-  it.scopedLive("a steer row draws its text, and an answer its reasoning", () =>
+  it.scopedLive("a steer row draws its text, and an answer its reasoning from the preview on", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
         {
@@ -6165,12 +6158,12 @@ describe("message rows", () => {
         } satisfies ListMessage,
       ]
       const setup = yield* renderScoped(() => (
-        <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />
+        <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
       ))
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
       expect(frame).toContain("Stop and switch agent")
-      expect(frame).toContain("Considering current todo state")
+      expect(frame).toContain("∴ Thought · Considering current todo state")
     }),
   )
 })
@@ -6231,7 +6224,7 @@ describe("tool runs across steps", () => {
     frame
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => /^[●✗] \d+ tools?\b/.test(line))
+      .filter((line) => /^[●✗○] /.test(line))
   const draw = (items: SessionItem[], disclosure: DisclosureLevel, width = 100) =>
     renderScoped(
       () => <MessageList items={items} disclosure={disclosure} syntaxStyle={syntaxStyle} />,
@@ -6247,7 +6240,7 @@ describe("tool runs across steps", () => {
         step("s3", ["git diff"], { after: [text("All clean.")] }),
       ]
       const collapsed = yield* draw(items, "collapsed")
-      expect(headers(collapsed)).toEqual(["● 4 tools · 4 commands"])
+      expect(headers(collapsed)).toEqual(["● Ran 4 commands"])
       expect(collapsed).toContain("All clean.")
       const preview = yield* draw(items, "preview")
       expect(preview).toContain("└ Ran git status, bun test, bun run lint, git diff")
@@ -6289,7 +6282,7 @@ describe("tool runs across steps", () => {
         )
       // A turn runs and no answer ended the run: a step may still join it.
       const running = yield* shown()
-      expect(running).toContain("● 2 tools · 2 commands")
+      expect(running).toContain("● Ran 2 commands")
       expect(running).not.toContain("STEP-OUTPUT")
       // A turn that ends with no answer (an interrupt) ends the run.
       setStreaming(false)
@@ -6308,11 +6301,11 @@ describe("tool runs across steps", () => {
         step("t4", ["git diff"]),
       ]
       const frame = yield* draw(items, "collapsed")
-      expect(headers(frame)).toEqual(["● 2 tools · 2 commands", "● 2 tools · 2 commands"])
-      const first = frame.indexOf("● 2 tools")
+      expect(headers(frame)).toEqual(["● Ran 2 commands", "● Ran 2 commands"])
+      const first = frame.indexOf("● Ran 2 commands")
       const prose = frame.indexOf("Tests pass")
       expect(prose).toBeGreaterThan(first)
-      expect(frame.indexOf("● 2 tools", first + 1)).toBeGreaterThan(prose)
+      expect(frame.indexOf("● Ran 2 commands", first + 1)).toBeGreaterThan(prose)
     }),
   )
 
@@ -6324,13 +6317,13 @@ describe("tool runs across steps", () => {
         step("a3", ["git push"]),
       ]
       const frame = yield* draw(items, "preview")
-      expect(headers(frame)).toEqual(["● 2 tools · 1 command · 1 ask_user", "● 1 tool · 1 command"])
+      expect(headers(frame)).toEqual(["● Ran 1 command · asked 1 question", "● Ran 1 command"])
       expect(frame).toContain("└ Asked Ship it?")
     }),
   )
 
   it.scopedLive(
-    "reasoning before and between a run's steps counts in its header and opens at full",
+    "reasoning before and between a run's steps stays out of its header and opens at full",
     () =>
       Effect.gen(function* () {
         const items: SessionItem[] = [
@@ -6339,7 +6332,7 @@ describe("tool runs across steps", () => {
         ]
         for (const disclosure of ["collapsed", "preview"] as const) {
           const frame = yield* draw(items, disclosure)
-          expect(headers(frame)).toEqual(["● 2 tools · 2 commands · 2 thoughts"])
+          expect(headers(frame)).toEqual(["● Ran 2 commands"])
           expect(frame).not.toContain("THOUGHT")
         }
         const full = yield* draw(items, "full")
@@ -6349,7 +6342,7 @@ describe("tool runs across steps", () => {
         const firstRow = lines.findIndex((line) => line.includes("├ cell"))
         const secondRow = lines.findIndex((line) => line.includes("└ cell"))
         expect(first).toBeLessThan(firstRow)
-        expect(first).toBeGreaterThan(lines.findIndex((line) => line.includes("● 2 tools")))
+        expect(first).toBeGreaterThan(lines.findIndex((line) => line.includes("● Ran 2 commands")))
         expect(thought).toBeGreaterThan(firstRow)
         expect(secondRow).toBeGreaterThan(thought)
       }),
@@ -6366,7 +6359,7 @@ describe("tool runs across steps", () => {
       const frame = yield* draw(items, "preview", 60)
       const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
       expect(drawn.every((line) => line.trimEnd().length <= 60)).toBe(true)
-      expect(headers(frame)).toEqual(["● 7 tools · 6 read · 1 command"])
+      expect(headers(frame)).toEqual(["● Read 6 files · ran 1 command"])
       // The reads fold into one row: the subjects that fit, then a count.
       const reads = drawn.find((line) => line.includes("├ Read")) ?? ""
       expect(reads.trimEnd()).toMatch(/├ Read src\/module-0\/file\.ts, .* \+\d$/)
@@ -6391,14 +6384,16 @@ describe("tool runs across steps", () => {
           renderScoped(() => <Transcript items={items} />, { width, height: 30 }).pipe(
             Effect.map(renderFrame),
           )
-        const whole = "7 tools · 3 read · 2 commands · 1 search · 1 edit"
+        const whole = "Read 3 files · ran 2 commands · searched 1 pattern · edited 1 file"
         expect(headers(yield* drawLive(100))).toEqual([`● ${whole}`])
         // At `whole.length + 4` the header filled the columns the old rule
         // gave it, one more than its row has.
         for (const width of [whole.length + 4, whole.length + 5]) {
           const [header = ""] = headers(yield* drawLive(width))
           expect(header).not.toMatch(/\.\.\.|…/)
-          expect(header).toMatch(/^● 7 tools( · \d (read|commands|search|edit))*$/)
+          expect(header).toMatch(
+            /^● Read 3 files( · (ran 2 commands|searched 1 pattern|edited 1 file))*$/,
+          )
           expect(header.length).toBeLessThanOrEqual(width - 3)
         }
         expect(headers(yield* drawLive(whole.length + 5))).toEqual([`● ${whole}`])
@@ -6450,9 +6445,9 @@ describe("tool runs across steps", () => {
         // join it), so its head waits in the live view with both steps.
         yield* flushUntil(() => committedText.join("").includes("RUN-PROMPT"))
         expect(committedText.join("")).toContain("RUN-PROMPT")
-        expect(committedText.join("")).not.toContain("tool")
+        expect(committedText.join("")).not.toContain("● Ran")
         yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
-        expect(committedText.join("")).not.toContain("tool")
+        expect(committedText.join("")).not.toContain("● Ran")
         // A third step joins, and the stored answer ends the run: the head
         // moves to history once, with all three steps under one header.
         setItems([
@@ -6465,8 +6460,7 @@ describe("tool runs across steps", () => {
         ])
         yield* flushUntil(() => committedText.join("").includes("ANSWER line 1"))
         const history = committedText.join("")
-        expect(history.match(/● \d+ tools?/g)).toEqual(["● 3 tools"])
-        expect(history).toContain("● 3 tools · 3 commands")
+        expect(history.match(/● Ran \d+ commands?/g)).toEqual(["● Ran 3 commands"])
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -6508,7 +6502,7 @@ describe("tool runs across steps", () => {
           Effect.timeout("6 seconds"),
           Effect.ignore,
         )
-        const header = rows.findIndex((row) => row.includes("● 4 tools"))
+        const header = rows.findIndex((row) => row.includes("● Ran 4 commands"))
         const answer = rows.findIndex((row) => row.includes("AFTER-RUN"))
         expect(header).toBeGreaterThanOrEqual(0)
         // One blank row parts the run from the answer, as on screen.
@@ -6546,8 +6540,8 @@ describe("tool runs across steps", () => {
           Effect.ignore,
         )
       // At idle the run's top rows move to history: its header with one tool.
-      yield* flushUntil(() => committedText.join("").includes("● 1 tool"))
-      expect(committedText.join("")).toContain("● 1 tool · 1 command")
+      yield* flushUntil(() => committedText.join("").includes("● Ran 1 command"))
+      expect(committedText.join("")).toContain("● Ran 1 command")
       // A step joins the run history holds: history replays with the run's new header.
       committedText.splice(0)
       setItems([
@@ -6555,8 +6549,8 @@ describe("tool runs across steps", () => {
         step("g1", ["seq 30"], { stdout }),
         step("g2", ["git diff"]),
       ])
-      yield* flushUntil(() => committedText.join("").includes("● 2 tools"))
-      expect(committedText.join("")).toContain("● 2 tools · 2 commands")
+      yield* flushUntil(() => committedText.join("").includes("● Ran 2 commands"))
+      expect(committedText.join("")).toContain("● Ran 2 commands")
       expect(committedText.join("")).toContain("GROW-PROMPT")
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -6640,17 +6634,17 @@ describe("tool runs across steps", () => {
                 yield* flushUntil(() => renderFrame(setup).includes(frameHolds))
                 expect(renderFrame(setup)).toContain(frameHolds)
               })
-            yield* play([step("t1", ["git status"]), thinking("t2")], "● 1 tool")
-            yield* play([step("t1", ["git status"]), joined("t2", "bun test")], "● 2 tools")
+            yield* play([step("t1", ["git status"]), thinking("t2")], "● Ran 1 command")
+            yield* play([step("t1", ["git status"]), joined("t2", "bun test")], "● Ran 2 commands")
             // A replay comes once blank rows have stood inside an item for 300 ms.
             yield* flushUntil(() => resets.length > 0, "1 second")
             yield* play(
               [step("t1", ["git status"]), joined("t2", "bun test"), thinking("t3")],
-              "● 2 tools",
+              "● Ran 2 commands",
             )
             yield* play(
               [step("t1", ["git status"]), joined("t2", "bun test"), joined("t3", "git diff")],
-              "● 3 tools",
+              "● Ran 3 commands",
             )
             yield* flushUntil(() => resets.length > 0, "1 second")
             return { resets, committed: committedText.join("") }
@@ -6789,7 +6783,7 @@ describe("collapse ladder", () => {
   /** The rows under the group header, up to the first blank row. */
   const groupRows = (frame: string) => {
     const all = lines(frame)
-    const header = all.findIndex((line) => /^ {2}[●✗] \d+ tools?\b/.test(line))
+    const header = all.findIndex((line) => /^ {2}[●✗○] /.test(line))
     const end = all.findIndex((line, index) => index > header && line.trim().length === 0)
     return all.slice(header + 1, end)
   }
@@ -6970,7 +6964,7 @@ describe("collapse ladder", () => {
         const items: SessionItem[] = [assistantToolMessage(`m-${call.id}`, call)]
         for (const width of [120, 60]) {
           const collapsed = yield* draw(items, "collapsed", width)
-          const header = lines(collapsed).find((line) => line.includes("1 tool"))
+          const header = lines(collapsed).find((line) => /^ {2}[●✗○] /.test(line))
           expect(header).toContain("· 1 cancelled")
           expect(header).not.toContain("failed")
           expect(header).not.toContain("✗")
@@ -7027,12 +7021,12 @@ describe("collapse ladder", () => {
   })
 
   it.scopedLive(
-    "a run counts the reasoning before, inside and after it as thoughts, at 120 and 60",
+    "a run takes the reasoning before, inside and after it, and its header counts none, at 120 and 60",
     () =>
       Effect.gen(function* () {
         const wide = yield* draw(debugTurn(), "collapsed", 120)
         expect(lines(wide)).toContain(
-          "  ● 7 tools · 3 read · 2 commands · 1 search · 1 edit · 6 thoughts · 1 failed",
+          "  ● Read 3 files · ran 2 commands · searched 1 pattern · edited 1 file · 1 failed",
         )
         // The run took the thought before its first call and the one before the answer.
         expect(wide).not.toContain("Set up a scratch fixture")
@@ -7040,9 +7034,8 @@ describe("collapse ladder", () => {
         expect(wide).not.toContain("∴")
         expect(wide).toContain("The check for d.ts failed: it does not exist yet.")
         const narrow = yield* draw(debugTurn(), "collapsed", 60)
-        // The thoughts count is the first part a narrow header drops.
-        const [header = ""] = lines(narrow).filter((line) => line.includes("● 7 tools"))
-        expect(header).not.toContain("thought")
+        // A narrow header drops kinds from the right and keeps the failure.
+        const [header = ""] = lines(narrow).filter((line) => line.includes("● Read 3 files"))
         expect(header).toContain("· 1 failed")
         expect(header.length).toBeLessThanOrEqual(59)
       }),
@@ -7052,7 +7045,7 @@ describe("collapse ladder", () => {
     Effect.gen(function* () {
       const full = lines(yield* draw(debugTurn(), "full", 120))
       const at = (text: string) => full.findIndex((line) => line.includes(text))
-      expect(at("● 7 tools")).toBeLessThan(at("Set up a scratch fixture"))
+      expect(at("● Read 3 files")).toBeLessThan(at("Set up a scratch fixture"))
       expect(at("Set up a scratch fixture")).toBeLessThan(at("Read the three files"))
       expect(at("Check for the file")).toBeLessThan(at("Summarize."))
       expect(at("Summarize.")).toBeLessThan(at("The check for d.ts failed"))
@@ -7061,7 +7054,7 @@ describe("collapse ladder", () => {
   )
 
   it.scopedLive(
-    "reasoning with no call is one line at collapsed and preview, and its markdown at full",
+    "reasoning with no call hides at collapsed, is one line at preview, and its markdown at full",
     () =>
       Effect.gen(function* () {
         const reasoningText =
@@ -7077,17 +7070,22 @@ describe("collapse ladder", () => {
             ],
           },
         ]
-        for (const disclosure of ["collapsed", "preview"] as const) {
-          const wide = yield* draw(items, disclosure, 120)
-          expect(lines(wide)).toContain("  ∴ Thought · Verifying final test output · 3 summaries")
-          expect(wide).not.toContain("Refactoring")
-          const narrow = yield* draw(items, disclosure, 30)
-          const [line = ""] = lines(narrow).filter((value) => value.includes("∴"))
-          expect(line).toBe("  ∴ Thought · Verifying fina…")
-        }
-        const full = yield* draw(items, "full", 120)
-        expect(full).toContain("Refactoring LedgerStore.list")
-        expect(full).not.toContain("∴")
+        const collapsed = yield* draw(items, "collapsed", 120)
+        expect(collapsed).not.toContain("∴")
+        expect(collapsed).not.toContain("Verifying")
+        expect(collapsed).toContain("All green.")
+        const wide = yield* draw(items, "preview", 120)
+        expect(lines(wide)).toContain("  ∴ Thought · Verifying final test output · 3 summaries")
+        expect(wide).not.toContain("Refactoring")
+        const narrow = yield* draw(items, "preview", 30)
+        const [line = ""] = lines(narrow).filter((value) => value.includes("∴"))
+        expect(line).toBe("  ∴ Thought · Verifying fina…")
+        // The full level opens the thought under its glyph.
+        const full = lines(yield* draw(items, "full", 120))
+        expect(full.join("\n")).toContain("Refactoring LedgerStore.list")
+        expect(full.filter((value) => value.includes("∴"))).toEqual([
+          "  ∴ Verifying final test output",
+        ])
       }),
   )
 
@@ -7101,8 +7099,12 @@ describe("collapse ladder", () => {
         ]),
         thinkingOnly("held-after", "TRAILING-THOUGHT"),
       ]
-      const frame = lines(yield* draw(items, "collapsed", 120))
-      expect(frame).toContain("  ● 1 tool · 1 command")
+      // Both stay lone thoughts: the collapsed level hides them, the preview draws each.
+      const collapsed = lines(yield* draw(items, "collapsed", 120))
+      expect(collapsed).toContain("  ● Ran 1 command")
+      expect(collapsed.join("\n")).not.toContain("THOUGHT")
+      const frame = lines(yield* draw(items, "preview", 120))
+      expect(frame).toContain("  ● Ran 1 command")
       expect(frame).toContain("  ∴ Thought · EARLIER-THOUGHT")
       expect(frame).toContain("  ∴ Thought · TRAILING-THOUGHT")
     }),
@@ -7161,12 +7163,11 @@ describe("collapse ladder", () => {
         yield* flushUntil(() => committed.join("").includes("RUN-PROMPT"))
         yield* flushUntil(() => false).pipe(Effect.timeout("300 millis"), Effect.ignore)
         expect(committed.join("")).toContain("RUN-PROMPT")
-        expect(committed.join("")).not.toContain("tools")
+        expect(committed.join("")).not.toContain("● Ran")
         setItems([assistant("closing-earlier", longBody("EARLIER")), prompt, ...steps, answer])
-        yield* flushUntil(() => committed.join("").includes("● 2 tools"))
+        yield* flushUntil(() => committed.join("").includes("● Ran 2 commands"))
         const history = committed.join("")
-        expect(history.match(/● \d+ tools?/g)).toEqual(["● 2 tools"])
-        expect(history).toContain("● 2 tools · 2 commands · 3 thoughts")
+        expect(history.match(/● Ran \d+ commands?/g)).toEqual(["● Ran 2 commands"])
         expect(history).not.toContain("THOUGHT")
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
@@ -7223,11 +7224,11 @@ describe("collapse ladder", () => {
             (line) => line.length > 0,
           )
           expect(frame).toEqual([
-            "● PROVIDER-LINE-1",
-            "  PROVIDER-LINE-2",
-            "  PROVIDER-LINE-3",
-            "  PROVIDER-LINE-4",
-            "  … +6 lines (ctrl+o)",
+            "  ✗ PROVIDER-LINE-1",
+            "    PROVIDER-LINE-2",
+            "    PROVIDER-LINE-3",
+            "    PROVIDER-LINE-4",
+            "    … +6 lines (ctrl+o)",
           ])
         }
         const full = yield* draw(items, "full", width)
@@ -7240,7 +7241,218 @@ describe("collapse ladder", () => {
         "collapsed",
         60,
       )
-      expect(lines(short).filter((line) => line.length > 0)).toEqual(["● one", "  two"])
+      expect(lines(short).filter((line) => line.length > 0)).toEqual(["  ✗ one", "    two"])
+    }),
+  )
+
+  // ── one-line summaries ──
+
+  /** Two steps' usage and cost, as their `StreamEnded` events carry them. */
+  const usedSteps = [
+    { outcome: "ToolCalls", costUsd: 0.02, usage: { inputTokens: 20_000, outputTokens: 1_200 } },
+    { outcome: "Answered", costUsd: 0.02, usage: { inputTokens: 18_000, outputTokens: 900 } },
+  ].reduce(addStep, emptyTurnSteps)
+  const turnLine = (retries = 0): SessionItem => ({
+    _tag: "turn-ended",
+    durationSeconds: 23,
+    steps: Array.from({ length: retries }).reduce(addRetry, usedSteps),
+    createdAt: 1,
+    seq: 1,
+  })
+  const settledRetry: SessionItem = {
+    _tag: "retrying",
+    attempt: 1,
+    maxAttempts: 3,
+    delayMs: 1_000,
+    outcome: "retried",
+    reason: "Rate limit exceeded",
+    createdAt: 1,
+    seq: 1,
+  }
+  /** The rows a frame draws, from its first drawn row to its last. */
+  const drawnRows = (frame: string) => {
+    const all = lines(frame)
+    const first = all.findIndex((line) => line.length > 0)
+    const last = all.findLastIndex((line) => line.length > 0)
+    return all.slice(first, last + 1)
+  }
+  const SUMMARY_WIDTHS = [
+    {
+      width: 100,
+      header: "Read 3 files · ran 2 commands · searched 1 pattern · edited 1 file · 1 failed",
+    },
+    { width: 60, header: "Read 3 files · ran 2 commands · 1 failed" },
+    { width: 40, header: "Read 3 files · 1 failed" },
+  ] as const
+
+  for (const { width, header } of SUMMARY_WIDTHS) {
+    it.scopedLive(
+      `a finished tool turn is its prompt, one header, its failure, its answer and the turn line at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const rows = drawnRows(yield* draw([...debugTurn(), turnLine()], "collapsed", width))
+          const text = rows.filter((line) => line.length > 0)
+          const answer = text.filter((line) => /^ {2}[A-Za-z]/.test(line))
+          expect(text[0]).toBe("┃ debug tools")
+          expect(text[1]).toBe(`  ● ${header}`)
+          expect(text[2]).toStartWith("  └ Ran sleep 2; ls ")
+          expect(answer.join(" ")).toContain("The check for d.ts failed")
+          expect(text.at(-1)).toStartWith("  ✻ Worked for 23s")
+          // Nothing else: no thought, no step count, no second header.
+          expect(text).toHaveLength(4 + answer.length)
+          expect(rows.slice(1).join("\n")).not.toMatch(/∴|thought|\d+ tools?\b|\d+ steps?\b|Retr/)
+          expect(rows.every((line) => line.length <= width)).toBe(true)
+          // gent's own rows keep the terminal's last column free.
+          expect(text[1]?.length ?? width).toBeLessThan(width)
+          expect(text.at(-1)?.length ?? width).toBeLessThan(width)
+          // The turn line is gent's: column 2, its own glyph, one blank row above.
+          expect(rows.at(-2)).toBe("")
+        }),
+    )
+  }
+
+  it.scopedLive("the turn line names the retries, and the retry rows wait for the preview", () =>
+    Effect.gen(function* () {
+      // The prompt and the first step, a settled retry, then the step with the reads.
+      const turn = debugTurn()
+      const items: SessionItem[] = [
+        ...turn.slice(0, 2),
+        settledRetry,
+        ...turn.slice(2, 3),
+        assistant("retry-answer", "Read them."),
+        turnLine(2),
+      ]
+      const collapsed = drawnRows(yield* draw(items, "collapsed", 100))
+      // A settled retry passes the run: one header holds both steps.
+      expect(collapsed.filter((line) => line.startsWith("  ● "))).toEqual([
+        "  ● Read 3 files · ran 1 command",
+      ])
+      expect(collapsed.join("\n")).not.toContain("Retried")
+      expect(collapsed.at(-1)).toBe("  ✻ Worked for 23s · 2 retries · ↑38k ↓2.1k · $0.04")
+      const preview = drawnRows(yield* draw(items, "preview", 100))
+      expect(preview.filter((line) => line.startsWith("  ● "))).toHaveLength(1)
+      expect(preview).toContain("  ↻ Retried 1/3 · Rate limit exceeded")
+      expect(preview.at(-1)).toBe("  ✻ Worked for 23s · 2 retries · ↑38k ↓2.1k · $0.04 · 2 steps")
+      const narrow = drawnRows(yield* draw(items, "collapsed", 40))
+      expect(narrow.at(-1)).toBe("  ✻ Worked for 23s · 2 retries")
+    }),
+  )
+
+  it.scopedLive("a pending retry draws no transcript row: the live line carries it", () =>
+    Effect.gen(function* () {
+      const pending: SessionItem = {
+        ...settledRetry,
+        outcome: "pending",
+        createdAt: currentMillis(),
+      }
+      for (const disclosure of ["collapsed", "preview", "full"] as const) {
+        const frame = yield* draw([clientPrompt("wait", "WAITING"), pending], disclosure, 100)
+        expect(frame).toContain("WAITING")
+        expect(frame).not.toContain("Retr")
+      }
+    }),
+  )
+
+  it.scopedLive(
+    "a lone thought hides at collapsed, is one line at preview, and every thought opens with ∴ at full",
+    () =>
+      Effect.gen(function* () {
+        const lone: SessionItem[] = [
+          clientPrompt("lone-prompt", "check it"),
+          thinkingOnly("lone-thought", "**Weighing the cache**\n\nLRU fits the access pattern."),
+          assistant("lone-answer", "Done."),
+        ]
+        // Collapsed: no row and no gap for the thought.
+        expect(drawnRows(yield* draw(lone, "collapsed", 100))).toEqual([
+          "┃ check it",
+          "",
+          "  Done.",
+        ])
+        const preview = drawnRows(yield* draw(lone, "preview", 100))
+        expect(preview.some((line) => line.startsWith("  ∴ Thought · Weighing the cache"))).toBe(
+          true,
+        )
+        // Tall enough for the whole turn at full: a frame that overflows packs its rows.
+        const drawTall = (items: SessionItem[], width: number) =>
+          renderScoped(
+            () => <MessageList items={items} disclosure="full" syntaxStyle={syntaxStyle} />,
+            { width, height: 200 },
+          ).pipe(Effect.map(renderFrame))
+        for (const width of [100, 60]) {
+          const full = lines(yield* drawTall([...lone, ...debugTurn()], width))
+          for (const thought of [
+            "Weighing the cache",
+            "Set up a scratch fixture",
+            "Read the three files",
+            "Summarize.",
+          ]) {
+            const row = full.find((line) => line.includes(thought)) ?? ""
+            expect(row).toMatch(/^ {2}∴ /)
+          }
+        }
+        // A thought that wraps hangs its next line under its text, at column 4.
+        const long = "a thought long enough to wrap past the width of a narrow terminal"
+        const narrow = lines(yield* draw([thinkingOnly("wrap", long)], "full", 40))
+        const head = narrow.findIndex((line) => line.startsWith("  ∴ a thought"))
+        expect(head).toBeGreaterThanOrEqual(0)
+        expect(narrow[head + 1]).toMatch(/^ {4}\S/)
+      }),
+  )
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `turn, error, interruption and notice rows start at column 2 with their own glyph at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const items: SessionItem[] = [
+            { _tag: "error", error: "provider failed", createdAt: 1, seq: 1 },
+            { _tag: "interruption", createdAt: 2, seq: 2 },
+            turnLine(),
+            {
+              _tag: "notice",
+              key: "miss",
+              glyph: "◌",
+              color: "textMuted",
+              text: "cache miss",
+              createdAt: 4,
+              seq: 4,
+            },
+          ]
+          for (const disclosure of ["collapsed", "preview"] as const) {
+            const rows = drawnRows(yield* draw(items, disclosure, width))
+            const firstRows = rows.filter((line) => /^ {2}\S/.test(line))
+            expect(firstRows.map((line) => line.slice(0, 4))).toEqual([
+              "  ✗ ",
+              "  ■ ",
+              "  ✻ ",
+              "  ◌ ",
+            ])
+            expect(rows.join("\n")).toContain("Interrupted · what should gent do")
+            // Column 0 is the reader's alone.
+            expect(rows.filter((line) => /^\S/.test(line))).toEqual([])
+            // A row that wraps hangs at column 4.
+            expect(rows.filter((line) => /^ {3}\S|^ {5,}\S/.test(line))).toEqual([])
+            expect(rows.every((line) => line.length <= width - 1)).toBe(true)
+          }
+        }),
+    )
+  }
+
+  it.scopedLive("a running run blinks its bullet, never the child agent's diamond", () =>
+    Effect.gen(function* () {
+      const running = assistantToolMessage("blink", {
+        id: "blink-cell",
+        toolName: "cell",
+        status: "running",
+        input: { code: "await tools.bash({ command: 'sleep 9' })" },
+        summary: absent,
+        output: absent,
+        operations: [{ ...op("blink-op", "bash", { command: "sleep 9" }, ""), status: "running" }],
+      })
+      const frame = yield* draw([running], "collapsed", 100)
+      const header = lines(frame).find((line) => line.includes("Running 1 command")) ?? ""
+      expect(header).toMatch(/^ {2}[○●] Running 1 command$/)
+      expect(frame).not.toMatch(/[◇◈◆]/)
     }),
   )
 })
