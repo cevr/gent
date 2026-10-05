@@ -34,7 +34,7 @@ import {
   KEY_HINT_SEPARATOR,
   keyHint,
   KeyHints,
-  keyHintsRuns,
+  fitKeyHints,
   keyHintText,
   KeyHintsText,
   keyHintsWidth,
@@ -545,7 +545,7 @@ export function QueueWidget(props: QueueWidgetProps) {
         </For>
         <text wrapMode="none" style={{ fg: theme.textMuted }}>
           {"  "}
-          <KeyHintsText hints={keyHintsRuns([KeyHints.restoreQueue], width() - 2)} />
+          <KeyHintsText hints={fitKeyHints([KeyHints.restoreQueue], width() - 2)} />
         </text>
       </box>
     </Show>
@@ -688,7 +688,7 @@ export const statusCredentialLabel = (
  * narrow, the elapsed time goes first, then the label cuts; the way out stays.
  */
 export const activityLine = (label: string, elapsed: string, width: number) => {
-  const hints = keyHintsRuns([KeyHints.cancel], width)
+  const hints = fitKeyHints([KeyHints.cancel], width)
   const hint = textWidth(KEY_HINT_SEPARATOR) + keyHintsWidth(hints)
   if (textWidth(label + elapsed) + hint <= width) return { lead: label + elapsed, hints }
   return { lead: truncate(label, Math.max(1, width - hint)), hints }

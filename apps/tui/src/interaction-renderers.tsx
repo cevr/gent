@@ -16,7 +16,7 @@ import {
   caretWindow,
   eraseKey,
   keyHint,
-  keyHintsRuns,
+  fitKeyHints,
   KeyHintsText,
   KeyHints,
   useInPickerFrame,
@@ -290,7 +290,7 @@ export function OptionList(props: OptionListProps): JSX.Element {
     if (optionsScrollable() && documentScrollable()) {
       keys.push(keyHint("shift+pgup/pgdn", "scroll question"))
     }
-    return keyHintsRuns([...keys, KeyHints.cancel], dimensions().width - 2)
+    return fitKeyHints([...keys, KeyHints.cancel], dimensions().width - 2)
   }
 
   return (

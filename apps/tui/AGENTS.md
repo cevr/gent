@@ -136,9 +136,10 @@ typed text, Esc `close` on a pane and `back` on a sub-screen. A narrow row
 drops the move hint first, then takes each hint's short verb from the right
 (`keyHint(key, verb, short)`: `/revert` reads `enter all` for `enter files +
 conversation`), then drops hints from the right, and keeps the way out
-(`keyHintsRuns`). `KeyHintsText` draws what is kept as Codex does: each key
+(`fitKeyHints`). `KeyHintsText` draws what is kept as Codex does: each key
 bright (`theme.text`), its verb and the separators muted (`theme.textMuted`),
-both from `keyHintColors`, the one owner of those colors. Every hint row draws
+both from `keyHintColors`, the one owner of those colors. It draws them as tone
+runs (`TextRun` and `ToneRuns`), as every line drawn in parts does. Every hint row draws
 through it: a pane's, an ask's footer, the live line's `esc cancel`, the queue's
 `alt+up edit`, the empty state's `ctrl+p commands`. A status-row label that is
 a hint (`esc close` beside `transcript`) names its key (`StatusRowLabel.key`)

@@ -21,7 +21,7 @@ import {
   decoration,
   groupedRows,
   keyHint,
-  keyHintsRuns,
+  fitKeyHints,
   KeyHints,
   pickerHeight,
   PickerFrame,
@@ -949,7 +949,7 @@ describe("key hints", () => {
   const keys = [KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]
   /** The hints a row of `width` columns keeps, as the reader reads them. */
   const line = (hints: ReadonlyArray<ReturnType<typeof keyHint>>, width: number) =>
-    keyHintsRuns(hints, width)
+    fitKeyHints(hints, width)
       .map((hint) => `${hint.key} ${hint.verb}`)
       .join(" · ")
 

@@ -1,6 +1,16 @@
 import { ProcessError } from "@gent/core/extensions/api"
 import { dataPaths } from "@gent/sdk"
-import { DateTime, Duration, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
+import {
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  Stream,
+} from "effect"
 import { ChildProcess, type ChildProcessSpawner } from "effect/process"
 import {
   type Accessor,
@@ -35,6 +45,7 @@ import {
   inlineHead,
   lostRequest,
   randomId,
+  type TextRun,
   truncate,
   useRequiredContext,
 } from "./utils"
@@ -48,6 +59,7 @@ import {
   SelectList,
   type SelectListApi,
   type SelectListRow,
+  ToneRuns,
   useDockSpacer,
   usePickerGeometry,
 } from "./ui"
@@ -374,23 +386,16 @@ const fitForms = (labels: readonly StatusRowLabel[], budget: number): StatusRowL
 function StatusLabelText(props: { readonly label: StatusRowLabel }) {
   const { theme } = useTheme()
   // A label cut shorter than its key draws in its own color.
-  const key = () =>
-    Option.filter(Option.fromUndefinedOr(props.label.key), (key) =>
-      props.label.text.startsWith(key),
-    )
-  return (
-    <Show
-      when={Option.getOrUndefined(key())}
-      fallback={<span style={{ fg: props.label.color }}>{props.label.text}</span>}
-    >
-      {(shown) => (
-        <>
-          <span style={{ fg: keyHintColors(theme).key }}>{shown()}</span>
-          <span style={{ fg: props.label.color }}>{props.label.text.slice(shown().length)}</span>
-        </>
-      )}
-    </Show>
-  )
+  const runs = (): ReadonlyArray<TextRun<"key" | "label">> => {
+    const { key, text } = props.label
+    if (Predicate.isUndefined(key) || !text.startsWith(key)) return [{ text, tone: "label" }]
+    return [
+      { text: key, tone: "key" },
+      { text: text.slice(key.length), tone: "label" },
+    ]
+  }
+  const colors = () => ({ key: keyHintColors(theme).key, label: props.label.color })
+  return <ToneRuns runs={runs()} color={(tone) => colors()[tone]} />
 }
 
 /**

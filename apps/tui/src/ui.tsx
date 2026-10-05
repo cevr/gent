@@ -572,7 +572,7 @@ export const keyHintsWidth = (hints: ReadonlyArray<KeyHint>): number =>
  * the short verbs from the right, then drops hints from the right. The last
  * hint, the way out, stays. {@link KeyHintsText} draws them.
  */
-export const keyHintsRuns = (
+export const fitKeyHints = (
   hints: ReadonlyArray<KeyHint>,
   width: number,
 ): ReadonlyArray<KeyHint> => {
@@ -593,36 +593,40 @@ export const keyHintsRuns = (
   return shown
 }
 
+/** A hint row's two tones: the key, and what it does with the separators. */
+type KeyHintTone = "key" | "verb"
+
 /**
  * The colors of a key hint, as Codex's status line draws it: the key bright,
  * so `esc` reads at a glance in a row of gray, and what it does muted, with
  * the separators. Every hint row, the status row's included, reads them here.
  */
-export const keyHintColors = (theme: ReturnType<typeof useTheme>["theme"]) => ({
+export const keyHintColors = (
+  theme: ReturnType<typeof useTheme>["theme"],
+): Readonly<Record<KeyHintTone, RGBA>> => ({
   key: theme.text,
   verb: theme.textMuted,
 })
 
+/** The hints as runs, `enter` `select · ` `esc` ` close`: what {@link KeyHintsText} draws. */
+const keyHintRuns = (hints: ReadonlyArray<KeyHint>): ReadonlyArray<TextRun<KeyHintTone>> =>
+  hints
+    .flatMap((hint): ReadonlyArray<TextRun<KeyHintTone>> => [
+      { text: KEY_HINT_SEPARATOR, tone: "verb" },
+      { text: hint.key, tone: "key" },
+      { text: ` ${hint.verb}`, tone: "verb" },
+    ])
+    // The row opens on its first key, not a separator.
+    .slice(1)
+
 /**
- * The hints as runs inside a `<text>`: each key bright, its verb and the
- * separators muted. Fit them to the row first with {@link keyHintsRuns}.
+ * The hints inside a `<text>`, in the tone runs every line draws with: each
+ * key bright, its verb and the separators muted. Fit them to the row first
+ * with {@link fitKeyHints}.
  */
 export function KeyHintsText(props: { readonly hints: ReadonlyArray<KeyHint> }) {
   const { theme } = useTheme()
-  const colors = () => keyHintColors(theme)
-  return (
-    <For each={props.hints}>
-      {(hint, index) => (
-        <>
-          <Show when={index() > 0}>
-            <span style={{ fg: colors().verb }}>{KEY_HINT_SEPARATOR}</span>
-          </Show>
-          <span style={{ fg: colors().key }}>{hint.key}</span>
-          <span style={{ fg: colors().verb }}> {hint.verb}</span>
-        </>
-      )}
-    </For>
-  )
+  return <ToneRuns runs={keyHintRuns(props.hints)} color={(tone) => keyHintColors(theme)[tone]} />
 }
 
 /** Two rules and one body row: below this the rules give way. */
@@ -802,7 +806,7 @@ export function PickerFrame(
       </box>
       <Show when={!squeezed() && !bare()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-          <KeyHintsText hints={keyHintsRuns(props.keys, sectionWidth())} />
+          <KeyHintsText hints={fitKeyHints(props.keys, sectionWidth())} />
         </text>
       </Show>
     </box>
