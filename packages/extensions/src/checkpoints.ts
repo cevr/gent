@@ -64,7 +64,7 @@ import {
   type TurnAfterInput,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import { git, type GitOptions, gitFailure, gitRun, parseShortStat } from "./git-plumbing.js"
+import { git, type GitOptions, gitFailure, gitRun } from "./git-plumbing.js"
 import { WORKSPACE_MARKER_FILE } from "./workspaces.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
@@ -80,7 +80,10 @@ class CheckpointsError extends Schema.TaggedError<CheckpointsError>()("Checkpoin
  * One turn of the branch in view, newest first: `n` is 1 for the newest.
  * `captured` has a start and an end; `open` has a start only (the turn
  * runs, or its end capture failed); `none` has no checkpoint (it changed
- * nothing through a tool, or it ran outside a git work tree).
+ * nothing through a tool, or it ran outside a git work tree). `files`,
+ * `insertions` and `deletions` count the turn's change as its revert takes
+ * it back: what this session and the sessions below it wrote from the
+ * turn's start to the next turn's start, a child's late edits included.
  */
 const TurnRow = Schema.Struct({
   n: Schema.Int,
@@ -887,28 +890,28 @@ const turnsOf = Effect.fn("Checkpoints.turnsOf")(function* (spans: Map<string, S
   return { turns, messages }
 })
 
-/** `diff --shortstat` of each end against its start, in one command. */
-const shortStats = Effect.fn("Checkpoints.shortStats")(function* (
-  place: Place,
-  ends: ReadonlyArray<string>,
-) {
-  const stats = new Map<string, ReturnType<typeof parseShortStat>>()
-  if (ends.length === 0) return stats
-  const result = yield* inStoreRun(place, [
-    "log",
-    "--no-walk=unsorted",
-    "--no-ext-diff",
-    "--format=%x01%H",
-    "--shortstat",
-    ...ends,
-  ])
-  if (result.exitCode !== 0) return yield* gitFailure(["log"], result)
-  for (const chunk of result.stdout.split("\x01")) {
-    const [commit = "", ...rest] = chunk.trim().split("\n")
-    if (commit.length > 0) stats.set(commit, parseShortStat(rest.join("\n")))
+/**
+ * Each captured turn's window, by `n`: from its start to the start of the
+ * next newer turn with one, or to the store's newest mark. What the lineage
+ * wrote in it is the turn's change: its own, and what a child wrote after
+ * the turn ended, until the next turn began. A revert of turn `#n` takes
+ * back the windows of `#n` and of every newer turn. The newest mark stands
+ * for now, so a read writes nothing; an edit made since then to a path the
+ * lineage wrote is a conflict at the revert.
+ */
+const turnWindows = (turns: ReadonlyArray<Turn>, marks: ReadonlyArray<Mark>) => {
+  const windows = new Map<number, Window>()
+  const newest = marks.at(-1)
+  if (Predicate.isUndefined(newest)) return windows
+  let to: Point = newest
+  for (const turn of turns) {
+    const start = Option.flatMap(turn.span, (span) => span.start)
+    if (Option.isNone(start)) continue
+    if (rowState(turn.span) === "captured") windows.set(turn.n, { from: start.value, to })
+    to = start.value
   }
-  return stats
-})
+  return windows
+}
 
 const rowState = (span: Option.Option<Span>) => {
   if (Option.isNone(span) || Option.isNone(span.value.start)) return "none" as const
@@ -939,17 +942,24 @@ const listTurns = Effect.gen(function* () {
       }),
   })
   const { turns } = yield* turnsOf(spansOf(marks))
-  const ends = turns.flatMap((turn) =>
-    Option.toArray(Option.flatMap(turn.span, (span) => span.end)).map((mark) => mark.commit),
-  )
-  const stats = yield* Option.match(place, {
-    onNone: () => Effect.succeed(new Map<string, ReturnType<typeof parseShortStat>>()),
-    onSome: (found) => shortStats(found, ends),
+  const windows = [...turnWindows(turns, marks).entries()]
+  const changes = yield* Option.match(place, {
+    onNone: () => Effect.succeed([]),
+    onSome: (found) =>
+      lineageChanges(
+        found,
+        marks,
+        windows.map(([, window]) => window),
+      ),
   })
+  const changeOf = new Map(windows.map(([n], index) => [n, changes[index]] as const))
   const rows = turns.map((turn): TurnRow => {
-    const end = Option.flatMap(turn.span, (span) => span.end)
-    const stat = Option.flatMap(end, (mark) => Option.fromUndefinedOr(stats.get(mark.commit)))
-    const counts = Option.getOrElse(stat, () => ({ files: 0, insertions: 0, deletions: 0 }))
+    const change = changeOf.get(turn.n)
+    const counts = {
+      files: change?.paths.length ?? 0,
+      insertions: change?.insertions ?? 0,
+      deletions: change?.deletions ?? 0,
+    }
     return {
       n: turn.n,
       messageId: turn.message.id,
@@ -1027,32 +1037,47 @@ const turnPatch = Effect.fn("Checkpoints.turnPatch")(function* (n: number) {
   let marks: ReadonlyArray<Mark> = []
   if (yield* storeExists(place)) marks = yield* readTimeline(place)
   const spans = spansOf(marks)
-  const turn = (yield* turnsOf(spans)).turns.find((found) => found.n === n)
+  const { turns } = yield* turnsOf(spans)
+  const turn = turns.find((found) => found.n === n)
   if (Predicate.isUndefined(turn))
     return yield* new CheckpointsError({ message: `the branch has no turn #${n}` })
-  const start = Option.flatMap(turn.span, (span) => span.start)
-  const end = Option.flatMap(turn.span, (span) => span.end)
-  if (Option.isNone(start))
+  if (rowState(turn.span) === "none")
     return yield* new CheckpointsError({
       message: `turn #${n} has no checkpoint: no tool with a side effect ran in it`,
     })
-  if (Option.isNone(end))
+  const window = turnWindows(turns, marks).get(n)
+  if (Predicate.isUndefined(window))
     return yield* new CheckpointsError({
       message: `turn #${n} has no end checkpoint yet: it runs, or its end capture failed`,
     })
-  const diff = yield* inStoreRun(place, [
-    "diff",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--binary",
-    "--no-color",
-    start.value.commit,
-    end.value.commit,
-  ])
-  if (diff.exitCode !== 0) return yield* gitFailure(["diff"], diff)
+  const [change] = yield* lineageChanges(place, marks, [window])
+  // The row's paths only: an edit someone else made in the window is not the turn's.
+  const files = argumentBatches(change?.paths ?? [])
+  let body = ""
+  for (const batch of files) {
+    const diff = yield* inStoreRun(
+      place,
+      [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "--no-color",
+        window.from.commit,
+        window.to.commit,
+        "--",
+        ...batch,
+      ],
+      { env: { GIT_LITERAL_PATHSPECS: "1" } },
+    )
+    if (diff.exitCode !== 0) return yield* gitFailure(["diff"], diff)
+    body += diff.stdout
+    // capPatch cuts at the cap: past it, no batch adds to what is shown.
+    if (body.length > MAX_PATCH_BYTES) break
+  }
   const writers = yield* otherWriters([...spans.values()], {
-    from: start.value.at,
-    to: end.value.at,
+    from: window.from.at,
+    to: window.to.at,
   })
   const note = writers
     .slice(0, 1)
@@ -1063,7 +1088,7 @@ const turnPatch = Effect.fn("Checkpoints.turnPatch")(function* (n: number) {
   const patch: TurnPatch = {
     n,
     prompt: promptOf(turn.message),
-    patch: capPatch(`${note}${diff.stdout}`),
+    patch: capPatch(`${note}${body}`),
   }
   return patch
 })
@@ -1233,21 +1258,78 @@ const uncaptured = Effect.fn("Checkpoints.uncaptured")(function* (
   )
 })
 
+/** A capture and when it was taken: a mark, or the work tree now. */
+interface Point {
+  readonly commit: string
+  readonly at: number
+}
+
+/** The time between two captures. */
+interface Window {
+  readonly from: Point
+  readonly to: Point
+}
+
+/** A path's line counts between two captures; a binary file counts no lines. */
+interface LineCounts {
+  readonly insertions: number
+  readonly deletions: number
+}
+
 /**
- * Back to before a turn: the paths this session and the sessions below it
- * changed since the turn began, each to its content at the turn's start.
- * The store's marks since that start cut the time into intervals; one a
- * lineage span covers is the lineage's, one no lineage span covers (the
- * user, another session, a job left running) is someone else's, and one both
- * cover is both. A path someone else changed is kept, and is a conflict when
- * the lineage changed it too. Each interval counts on its own: a change and
- * its reversal in two intervals are both seen, though the ends agree.
+ * Each pair's changed paths with their line counts, `from` to `to`, in one
+ * command. `diff-tree --stdin` reads a line `<to> <from>` as a commit and its
+ * parent; with `--always` each line prints a header, a change or not, so the
+ * answers come in the order asked.
  */
-const turnPlan = Effect.fn("Checkpoints.turnPlan")(function* (
+const pairChanges = Effect.fn("Checkpoints.pairChanges")(function* (
+  place: Place,
+  pairs: ReadonlyArray<{ readonly from: string; readonly to: string }>,
+) {
+  const answers = pairs.map(() => new Map<string, LineCounts>())
+  if (pairs.length === 0) return answers
+  const args = ["diff-tree", "--stdin", "-r", "-z", "--numstat", "--no-renames", "--always"]
+  const result = yield* inStoreRun(place, [...args, "--no-textconv"], {
+    stdin: pairs.map((pair) => `${pair.to} ${pair.from}\n`).join(""),
+  })
+  if (result.exitCode !== 0) return yield* gitFailure(["diff-tree"], result)
+  // A binary file counts `-` lines.
+  const count = (text: string) => Number(text.replace(/^-$/, "0"))
+  let index = -1
+  // A header is a bare commit id; a path's record is `<added>\t<deleted>\t<path>`.
+  for (const record of nulList(result.stdout)) {
+    const first = record.indexOf("\t")
+    if (first < 0) {
+      index += 1
+      continue
+    }
+    const second = record.indexOf("\t", first + 1)
+    answers[index]?.set(record.slice(second + 1), {
+      insertions: count(record.slice(0, first)),
+      deletions: count(record.slice(first + 1, second)),
+    })
+  }
+  return answers
+})
+
+/**
+ * What this session's lineage (it and the sessions below it) changed in a
+ * window: the one source of a turn's row, its patch and its revert, so the
+ * row counts what the revert writes back.
+ *
+ * The store's marks in the window cut it into intervals; one a lineage span
+ * (or a lineage revert) covers is the lineage's, one no lineage span covers
+ * (the user, another session, a job left running) is someone else's, and one
+ * both cover is both. The change is each path the lineage changed in an
+ * interval that differs between the window's ends, with its lines counted
+ * from the window's start to its end; `shared` holds those someone else
+ * changed too. Each interval counts on its own: a change and its reversal in
+ * two intervals are both seen, though the ends agree.
+ */
+const lineageChanges = Effect.fn("Checkpoints.lineageChanges")(function* (
   place: Place,
   marks: ReadonlyArray<Mark>,
-  start: Mark,
-  current: { readonly commit: string; readonly at: number },
+  windows: ReadonlyArray<Window>,
 ) {
   const ctx = yield* ExtensionContext
   const lineage = yield* lineageOf(ctx.sessionId)
@@ -1259,32 +1341,62 @@ const turnPlan = Effect.fn("Checkpoints.turnPlan")(function* (
       ...revertInterval(revert),
     })),
   ]
-  const points = [
-    ...marks.flatMap(({ at, commit }) => [{ at, commit }].filter(() => at >= start.at)),
-    current,
-  ]
   const covered = (ours: boolean, from: number, to: number) =>
     intervals.some(
       (interval) => interval.ours === ours && interval.from <= from && interval.to >= to,
     )
-  const lineagePaths = new Set<string>()
-  const otherPaths = new Set<string>()
-  for (const [index, point] of points.entries()) {
-    const next = points[index + 1]
-    if (Predicate.isUndefined(next)) break
-    const ours = covered(true, point.at, next.at)
-    const theirs = !ours || covered(false, point.at, next.at)
-    for (const file of yield* changedPaths(place, point.commit, next.commit)) {
-      if (ours) lineagePaths.add(file)
-      if (theirs) otherPaths.add(file)
+  const steps = windows.map((window) => {
+    const inside = marks.filter((mark) => mark.at > window.from.at && mark.at < window.to.at)
+    const points: ReadonlyArray<Point> = [window.from, ...inside, window.to]
+    return points.slice(1).map((to, index): Window => ({ from: points[index] ?? to, to }))
+  })
+  // Each window's whole change first, then each interval of every window.
+  const answers = yield* pairChanges(place, [
+    ...windows.map((window) => ({ from: window.from.commit, to: window.to.commit })),
+    ...steps.flat().map((step) => ({ from: step.from.commit, to: step.to.commit })),
+  ])
+  let next = windows.length
+  return windows.map((_, index) => {
+    const lineagePaths = new Set<string>()
+    const otherPaths = new Set<string>()
+    for (const step of steps[index] ?? []) {
+      const ours = covered(true, step.from.at, step.to.at)
+      const theirs = !ours || covered(false, step.from.at, step.to.at)
+      for (const file of (answers[next] ?? new Map<string, LineCounts>()).keys()) {
+        if (ours) lineagePaths.add(file)
+        if (theirs) otherPaths.add(file)
+      }
+      next += 1
     }
-  }
-  const sinceStart = yield* changedPaths(place, start.commit, current.commit)
-  const paths = [...sinceStart].filter((file) => lineagePaths.has(file)).sort()
+    const whole = answers[index] ?? new Map<string, LineCounts>()
+    const paths = [...whole.keys()].filter((file) => lineagePaths.has(file)).sort()
+    const lines = paths.map((file) => whole.get(file) ?? { insertions: 0, deletions: 0 })
+    return {
+      paths,
+      shared: new Set(paths.filter((file) => otherPaths.has(file))),
+      insertions: lines.reduce((sum, counts) => sum + counts.insertions, 0),
+      deletions: lines.reduce((sum, counts) => sum + counts.deletions, 0),
+    }
+  })
+})
+
+/**
+ * Back to before a turn: what the lineage changed from the turn's start to
+ * now, each path to its content at the start. A path someone else changed
+ * is kept, and is a conflict when the lineage changed it too.
+ */
+const turnPlan = Effect.fn("Checkpoints.turnPlan")(function* (
+  place: Place,
+  marks: ReadonlyArray<Mark>,
+  start: Mark,
+  current: Point,
+) {
+  const [change] = yield* lineageChanges(place, marks, [{ from: start, to: current }])
+  const paths = change?.paths ?? []
   const missing = new Set(yield* uncaptured(place, current.commit, paths))
   const plan: Plan = {
     paths,
-    conflicts: paths.filter((file) => otherPaths.has(file) || missing.has(file)),
+    conflicts: paths.filter((file) => change?.shared.has(file) === true || missing.has(file)),
   }
   return plan
 })
@@ -1384,8 +1496,24 @@ const treeEntries = Effect.fn("Checkpoints.treeEntries")(function* (
   return entries
 })
 
-/** The bytes of the file names one `hash-object` call takes as arguments. */
-const HASH_ARGUMENT_BYTES = 64 * 1024
+/** The bytes of the file names one git call takes as arguments. */
+const ARGUMENT_BYTES = 64 * 1024
+
+/** File names in runs of at most `ARGUMENT_BYTES`, one git call each. */
+const argumentBatches = (files: ReadonlyArray<string>) => {
+  const batches: Array<Array<string>> = []
+  let size = ARGUMENT_BYTES
+  for (const file of files) {
+    const bytes = new TextEncoder().encode(file).length + 1
+    if (size + bytes > ARGUMENT_BYTES) {
+      batches.push([])
+      size = 0
+    }
+    batches.at(-1)?.push(file)
+    size += bytes
+  }
+  return batches
+}
 
 /**
  * Each of `paths` on disk now, as `<mode> <object>`, hashed byte for byte
@@ -1421,19 +1549,8 @@ const diskEntries = Effect.fn("Checkpoints.diskEntries")(function* (
     if (((yield* fs.stat(at)).mode & 0o100) !== 0) mode = "100755"
     files.push({ file, mode })
   }
-  const batches: Array<Array<string>> = []
-  let size = HASH_ARGUMENT_BYTES
-  for (const { file } of files) {
-    const bytes = new TextEncoder().encode(file).length + 1
-    if (size + bytes > HASH_ARGUMENT_BYTES) {
-      batches.push([])
-      size = 0
-    }
-    batches.at(-1)?.push(file)
-    size += bytes
-  }
   const objects: Array<string> = []
-  for (const batch of batches) {
+  for (const batch of argumentBatches(files.map(({ file }) => file))) {
     const hashed = yield* inStore(place, ["hash-object", ...write, "--no-filters", "--", ...batch])
     objects.push(...hashed.split("\n"))
   }

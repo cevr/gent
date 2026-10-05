@@ -1518,13 +1518,21 @@ section, no notice. Core has no checkpoint concept.
   Revert). One `for-each-ref` reads the timeline.
 - Reads (both `answersDuringTurn`): `checkpoints.list` gives the branch's
   turns newest first (`#1` is the newest; openers are user messages that are
-  not runtime rows), each `captured`, `open` or `none` with its
-  `diff --shortstat` (one `git log --shortstat` for all); a turn a fork copied
-  finds its checkpoints by its `createdAt` up the branch's parents.
-  `checkpoints.patch` gives turn `#n` as a git patch (`--binary`, no external
-  diff or textconv), cut at 10 MB; a first `#` line names other sessions,
-  outside this session's lineage (it and the sessions below it), whose turns
-  overlapped it.
+  not runtime rows), each `captured`, `open` or `none` with its change; a
+  turn a fork copied finds its checkpoints by its `createdAt` up the
+  branch's parents. A captured turn's change is what the lineage (this
+  session and the sessions below it) wrote in its window: from its start to
+  the start of the next newer turn with one, or to the store's newest mark
+  (it stands for now: a read writes nothing). So a delegated child's edits
+  after its parent's turn ended count in that turn. The window is cut as a
+  revert cuts its time (see Revert), by one owner (`lineageChanges`) that
+  the list, the patch and the revert share: a newest turn's row counts the
+  paths its revert writes back, and an older row its own share of what its
+  revert takes back. One `diff-tree --stdin --numstat` answers every window
+  and interval. `checkpoints.patch` gives turn `#n`'s change as a git patch
+  of those paths (`--binary`, no external diff or textconv), cut at 10 MB; a
+  first `#` line names other sessions, outside this session's lineage, whose
+  turns overlapped its window.
 - Revert: `checkpoints.revert` (not `answersDuringTurn`, so it waits for the
   branch's turn and holds its side-mutation permit while it writes) takes
   `{ requestId, action, overwrite? }`. `Turn { n, conversation }` takes the
