@@ -1,6 +1,14 @@
 /** Shared client schemas, projections, and the RPC contract. No host services. */
 export { AgentDefinition, AgentName, DEFAULT_AGENT_NAME, ReasoningEffort } from "./domain/agent.js"
-export { AuthMethod, AuthPrompt, authMethodAppliesTo } from "./domain/driver.js"
+export {
+  AuthMethod,
+  AuthPrompt,
+  authMethodAppliesTo,
+  type CredentialReceipt,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
+  sameCredential,
+} from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
 export { AgentEvent, EventEnvelope, InteractionPresented } from "./domain/event.js"
 // One decision schema; the client names its type `ApprovalResult`.

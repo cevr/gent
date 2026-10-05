@@ -33,6 +33,7 @@ import {
   AgentDefinition,
   AgentName,
   BranchId,
+  CredentialSlot,
   dateFromMillis,
   DEFAULT_AGENT_NAME,
   GentRpcError,
@@ -78,6 +79,7 @@ import {
   resolveHeadlessMissingSignIns,
   resolveInteractiveBootstrap,
   activityLine,
+  statusCredentialLabel,
   statusModelName,
   NO_MODEL_LABEL,
 } from "../src/app"
@@ -2274,6 +2276,116 @@ describe("App status and activity rows", () => {
     })
     expect(statusModelName(model, [model], [])).toBe("Claude Opus 5")
   })
+  // A sign-in of several credentials: the row names the one the model's
+  // newest request went out with, or `unknown` for a request recorded before
+  // receipts. One credential, or a newest request on another model, names none.
+  test("the status row names the credential of a sign-in that holds several", () => {
+    const model = new Model({
+      id: ModelId.make("anthropic/claude-opus-5"),
+      name: "Claude Opus 5",
+      provider: ProviderId.make("anthropic"),
+    })
+    const receipt = Option.some({ provider: "anthropic", slot: "personal" })
+    const several = [
+      {
+        provider: ProviderId.make("anthropic"),
+        hasKey: true,
+        required: false,
+        credentials: [
+          { slot: CredentialSlot.make("default"), hasKey: true, source: "stored" as const },
+          { slot: CredentialSlot.make("personal"), hasKey: true, source: "stored" as const },
+        ],
+      },
+    ]
+    const last = (on: string, used: typeof receipt) => Option.some({ model: on, receipt: used })
+    expect(statusCredentialLabel(model, last(model.id, receipt), several)).toEqual(
+      Option.some("personal"),
+    )
+    expect(statusCredentialLabel(model, last(model.id, Option.none()), several)).toEqual(
+      Option.some("unknown"),
+    )
+    expect(statusCredentialLabel(model, last("anthropic/other", receipt), several)).toEqual(
+      Option.none(),
+    )
+    expect(statusCredentialLabel(model, Option.none(), several)).toEqual(Option.none())
+    const single = [{ provider: ProviderId.make("anthropic"), hasKey: true, required: false }]
+    expect(statusCredentialLabel(model, last(model.id, receipt), single)).toEqual(Option.none())
+  })
+  for (const [width, shown] of [
+    [120, "via personal"],
+    [60, "personal"],
+  ] as const) {
+    it.scopedLive(
+      `the status row names the credential the last request used at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(`session-credential-${width}`)
+          const branchId = BranchId.make(`branch-credential-${width}`)
+          const sonnet = new Model({
+            id: ModelId.make("anthropic/claude-sonnet-5"),
+            name: "Claude Sonnet 5",
+            provider: ProviderId.make("anthropic"),
+            contextLength: 1_000_000,
+          })
+          const stored = (slot: string) => ({
+            slot: CredentialSlot.make(slot),
+            hasKey: true,
+            source: "stored" as const,
+          })
+          const { setup } = yield* mountApp({
+            client: {
+              model: { list: () => Effect.succeed([sonnet]) },
+              auth: {
+                listProviders: () =>
+                  Effect.succeed([
+                    {
+                      provider: ProviderId.make("anthropic"),
+                      hasKey: true,
+                      required: true,
+                      source: "stored" as const,
+                      authOrder: [CredentialSlot.make("default"), CredentialSlot.make("personal")],
+                      credentials: [stored("default"), stored("personal")],
+                    },
+                  ]),
+              },
+              session: {
+                getSnapshot: () =>
+                  Effect.succeed({
+                    sessionId,
+                    branchId,
+                    messages: [],
+                    lastEventId: nullValue,
+                    reasoningLevel: absent,
+                    resolvedModelId: sonnet.id,
+                    agent: AgentName.make("main"),
+                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    metrics: {
+                      turns: 1,
+                      durationMs: 0,
+                      costUsd: 0,
+                      lastCredential: {
+                        model: sonnet.id,
+                        receipt: {
+                          provider: ProviderId.make("anthropic"),
+                          slot: CredentialSlot.make("personal"),
+                        },
+                      },
+                    },
+                  }),
+              },
+            },
+            width,
+            initialSession: sessionNamed(sessionId, branchId, "Credential"),
+          })
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes(shown),
+            "the credential in the status row",
+          )
+          expect(frame).toContain("Sonnet 5")
+        }).pipe(Effect.timeout("4 seconds")),
+    )
+  }
   // A virtual model routes each turn: the row names it, the model its newest
   // route chose and that route's effort, and the gauge reads the chosen
   // model's window. A narrow row keeps the pair.

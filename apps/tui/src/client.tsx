@@ -28,6 +28,7 @@ import {
   type AgentName,
   BranchId,
   type CreateSessionInput,
+  type CredentialReceipt,
   DEFAULT_AGENT_NAME,
   type EventEnvelope,
   type MessageId,
@@ -659,6 +660,17 @@ interface ClientAgentValue {
    * models.dev provider's models, and its removal takes them away.
    */
   credentialsChanged: () => void
+  /** How many times a stored credential changed: a view of the sign-ins reads them again on it. */
+  credentialRevision: () => number
+  /**
+   * The model of the newest request that ended and the credential it went
+   * out with (`SessionRuntimeMetrics.lastCredential`); the receipt is None
+   * for a request recorded before receipts. None before any request.
+   */
+  lastCredential: () => Option.Option<{
+    readonly model: ModelId
+    readonly receipt: Option.Option<CredentialReceipt>
+  }>
 
   /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
   setError: (error: string) => void
@@ -1596,6 +1608,12 @@ export function ClientProvider(props: ClientProviderProps) {
       return Option.some(runnableModels())
     },
     credentialsChanged: () => setCredentialChanges((count) => count + 1),
+    credentialRevision: credentialChanges,
+    lastCredential: () =>
+      Option.map(Option.fromUndefinedOr(runtimeMetrics().lastCredential), (last) => ({
+        model: last.model,
+        receipt: Option.fromUndefinedOr(last.receipt),
+      })),
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.

@@ -107,7 +107,7 @@ State ownership rules:
 - Shared caches live under a provider/registry scope, not module globals.
 - Projections stay local and dumb. Do not promote derived display state into a second writer.
 - Render-local view unions in `src/` are Schema unions too (`effect/preferSchemaTaggedUnion` reads every tag spelling): `Schema.TaggedStruct` variants with `Schema.toTaggedUnion("_tag")` for a lowercase or kebab-case tag. Test the tag with `_tag ===` on a value whose payload holds class instances; `.guards` runs the full schema check.
-- Auth is a view (`auth.tsx`); when the session controller's auth gate detects missing required providers it docks in the footer like every pane, one `PickerFrame` per screen (provider list, methods, the key line, the OAuth wait).
+- Auth is a view (`auth.tsx`); when the session controller's auth gate detects missing required providers it docks in the footer like every pane, one `PickerFrame` per screen (provider list, a provider's credentials, the label line, methods, the key line, an OAuth method's inputs, the OAuth wait). The credentials screen writes through the server only (`auth.setOrder`, `auth.renameKey`, `auth.deleteKey`) and reads the catalog again; it keeps no copy of the order.
 - There is no router. `client.session()` says which session shows, `switchSession` is its one writer, and `App` keys the session mount on it.
 - `useRuntime()` is zero-arg — reads `useClient()` internally.
 - Composer reads from `SessionControllerContext`, not props.

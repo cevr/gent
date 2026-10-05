@@ -7,11 +7,22 @@ import {
   type AuthAuthorization,
   type AuthMethod,
   type AuthProviderInfo,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   type GentNamespacedClient,
   ProviderId,
   SessionId,
 } from "@gent/core/protocol"
-import { Auth, type AuthEvent, AuthState, listedProviders, transitionAuth } from "../src/auth"
+import {
+  Auth,
+  type AuthEvent,
+  AuthState,
+  credentialEntries,
+  labelProblem,
+  listedProviders,
+  movedOrder,
+  transitionAuth,
+} from "../src/auth"
 import { BunServices } from "@effect/platform-bun"
 import { App } from "../src/app"
 import { LinkOpener, LinkOpenerError } from "../src/os"
@@ -35,6 +46,24 @@ const provider = {
   provider: ProviderId.make("anthropic"),
   hasKey: false,
   required: true,
+} satisfies AuthProviderInfo
+
+const personal = CredentialSlot.make("personal")
+const work = CredentialSlot.make("work")
+
+/** Anthropic with three credentials: personal first, then the default; work left out. */
+const withCredentials = {
+  provider: ProviderId.make("anthropic"),
+  hasKey: true,
+  required: false,
+  source: "stored",
+  authType: "oauth",
+  authOrder: [personal, DEFAULT_CREDENTIAL_SLOT],
+  credentials: [
+    { slot: DEFAULT_CREDENTIAL_SLOT, hasKey: true, source: "stored", authType: "oauth" },
+    { slot: personal, hasKey: true, source: "stored", authType: "oauth" },
+    { slot: work, hasKey: true, source: "stored", authType: "api" },
+  ],
 } satisfies AuthProviderInfo
 
 const apiMethod = { type: "api", label: "API Key" } satisfies AuthMethod
@@ -281,6 +310,103 @@ describe("auth-state", () => {
     const method = transitionAuth(loaded(), { _tag: "OpenMethod", provider: "anthropic" })
 
     expect(transitionAuth(method, { _tag: "Back" }).screen).toEqual({ _tag: "List" })
+  })
+
+  test("back walks a credential's screens to its provider's credentials, then the list", () => {
+    const state = loaded([withCredentials])
+    const step = (from: typeof state, event: AuthEvent) => transitionAuth(from, event)
+    const label = step(state, { _tag: "OpenLabel", provider: "anthropic" })
+    expect(step(label, { _tag: "Back" }).screen).toEqual({
+      _tag: "Credentials",
+      provider: "anthropic",
+    })
+    const method = step(state, { _tag: "OpenMethod", provider: "anthropic", slot: work })
+    const key = step(method, { _tag: "OpenKey", provider: "anthropic", slot: work, prompts: [] })
+    expect(step(key, { _tag: "Back" }).screen).toEqual({
+      _tag: "Method",
+      provider: "anthropic",
+      slot: work,
+    })
+    expect(step(method, { _tag: "Back" }).screen).toEqual({
+      _tag: "Credentials",
+      provider: "anthropic",
+    })
+    const credentials = step(state, { _tag: "OpenCredentials", provider: "anthropic" })
+    expect(step(credentials, { _tag: "Back" }).screen).toEqual({ _tag: "List" })
+    // A provider with its default alone: a new label goes back to the default's methods.
+    const single = loaded()
+    const named = step(single, { _tag: "OpenMethod", provider: "anthropic", slot: work })
+    expect(step(named, { _tag: "Back" }).screen).toEqual({ _tag: "Method", provider: "anthropic" })
+    const newLabel = step(single, { _tag: "OpenLabel", provider: "anthropic" })
+    expect(step(newLabel, { _tag: "Back" }).screen).toEqual({
+      _tag: "Method",
+      provider: "anthropic",
+    })
+  })
+
+  test("an oauth method's inputs ask each prompt, and a needed one does not go on blank", () => {
+    const directory = { key: "directory", label: "Directory" }
+    const method = {
+      type: "oauth",
+      label: "Directory import",
+      prompts: [directory, gatewayPrompt],
+    } satisfies AuthMethod
+    const inputs = transitionAuth(loaded(), {
+      _tag: "OpenInputs",
+      provider: "anthropic",
+      slot: work,
+      methodIndex: 2,
+      method,
+    } satisfies AuthEvent)
+    expect(transitionAuth(inputs, { _tag: "Next" })).toEqual(inputs)
+    const typed = transitionAuth(inputs, { _tag: "Type", text: "/nonexistent/loop-probe-x" })
+    const next = transitionAuth(typed, { _tag: "Next" })
+    expect(next.screen).toMatchObject({ value: "", entered: ["/nonexistent/loop-probe-x"] })
+    expect(transitionAuth(next, { _tag: "Back" }).screen).toMatchObject({
+      value: "/nonexistent/loop-probe-x",
+      entered: [],
+    })
+  })
+
+  test("credentials list in the order a turn walks them, then the ones it leaves out", () => {
+    expect(
+      credentialEntries(withCredentials).map((entry) => `${entry.slot} ${entry.position ?? "–"}`),
+    ).toEqual(["personal 1", "default 2", "work –"])
+    // A provider with its default alone lists it from its own row.
+    expect(credentialEntries(provider)).toMatchObject([
+      { slot: "default", hasKey: false, position: 1 },
+    ])
+  })
+
+  test("a credential moves one place; down from the last takes it out, up from outside puts it last", () => {
+    const order = [personal, DEFAULT_CREDENTIAL_SLOT]
+    expect(movedOrder(order, DEFAULT_CREDENTIAL_SLOT, "up")).toEqual(
+      Option.some([DEFAULT_CREDENTIAL_SLOT, personal]),
+    )
+    expect(movedOrder(order, personal, "down")).toEqual(
+      Option.some([DEFAULT_CREDENTIAL_SLOT, personal]),
+    )
+    expect(movedOrder(order, personal, "up")).toEqual(Option.none())
+    expect(movedOrder(order, DEFAULT_CREDENTIAL_SLOT, "down")).toEqual(Option.some([personal]))
+    expect(movedOrder([personal], personal, "down")).toEqual(Option.none())
+    expect(movedOrder(order, work, "up")).toEqual(
+      Option.some([personal, DEFAULT_CREDENTIAL_SLOT, work]),
+    )
+    expect(movedOrder(order, work, "down")).toEqual(Option.none())
+  })
+
+  test("a label is a free slot name: never the default's, never one in use", () => {
+    expect(labelProblem(withCredentials, "Work Laptop", Option.none())).toEqual(
+      Option.some("A label is 1 to 32 of a-z, 0-9, _ and -"),
+    )
+    expect(labelProblem(withCredentials, "default", Option.none())).toEqual(
+      Option.some("default is the sign-in's own label"),
+    )
+    expect(labelProblem(withCredentials, "work", Option.none())).toEqual(
+      Option.some("work is in use"),
+    )
+    expect(labelProblem(withCredentials, "work", Option.some(work))).toEqual(Option.none())
+    expect(labelProblem(withCredentials, " team ", Option.none())).toEqual(Option.none())
   })
 })
 
@@ -783,6 +909,10 @@ describe("Auth route", () => {
           (frame) => frame.includes("Primary login") && frame.includes("Manual API key"),
         )
         expect(frame).not.toContain("Named import")
+        // The named import signs in a credential of its own: the last row adds one.
+        expect(frame).toContain("+ Add credential")
+        setup.mockInput.pressArrow("up")
+        yield* Effect.promise(() => setup.renderOnce())
         setup.mockInput.pressArrow("up")
         yield* Effect.promise(() => setup.renderOnce())
         setup.mockInput.pressEnter()
@@ -2043,5 +2173,273 @@ describe("Auth provider names", () => {
         "the method screen",
       )
     }).pipe(Effect.timeout("8 seconds")),
+  )
+})
+
+// ── credentials ─────────────────────────────────────────────────────────────
+
+describe("Auth credentials", () => {
+  const sessionId = SessionId.make("session-credentials")
+  const directoryImport = {
+    type: "oauth",
+    label: "Directory import",
+    credentialTarget: "named",
+    prompts: [{ key: "directory", label: "Directory" }],
+  } satisfies AuthMethod
+  const anthropicMethods = [
+    apiMethodRoute,
+    { type: "oauth", label: "Claude Code", credentialTarget: "default" },
+    directoryImport,
+  ] satisfies ReadonlyArray<AuthMethod>
+  type Info = AuthProviderInfo
+  type Credential = NonNullable<Info["credentials"]>[number]
+
+  /** A provider the server lists from `held`, with every write the pane makes recorded. */
+  const credentialServer = (initial: Info) => {
+    let held = initial
+    const writes: Array<string> = []
+    const credentialsOf = (): ReadonlyArray<Credential> => held.credentials ?? []
+    const client = createMockClient({
+      auth: {
+        listProviders: () => Effect.sync(() => [held]),
+        listMethods: () => Effect.succeed({ anthropic: anthropicMethods }),
+        setOrder: (input: { readonly order: ReadonlyArray<CredentialSlot> }) =>
+          Effect.sync(() => {
+            writes.push(`order ${input.order.join(",")}`)
+            held = { ...held, authOrder: [...input.order] }
+          }),
+        renameKey: (input: { readonly from: CredentialSlot; readonly to: CredentialSlot }) =>
+          Effect.sync(() => {
+            writes.push(`rename ${input.from}>${input.to}`)
+            held = {
+              ...held,
+              credentials: credentialsOf().map((credential) => {
+                if (credential.slot !== input.from) return credential
+                return { ...credential, slot: input.to }
+              }),
+            }
+          }),
+        deleteKey: (input: { readonly slot?: CredentialSlot }) =>
+          Effect.sync(() => {
+            writes.push(`delete ${input.slot ?? "default"}`)
+            held = {
+              ...held,
+              credentials: credentialsOf().filter((credential) => credential.slot !== input.slot),
+            }
+          }),
+        setKey: (input: { readonly slot?: CredentialSlot; readonly key: string }) =>
+          Effect.sync(() => {
+            writes.push(`key ${input.slot ?? "default"} ${input.key.length} chars`)
+          }),
+        authorize: (input: {
+          readonly slot?: CredentialSlot
+          readonly method: number
+          readonly inputs?: Readonly<Record<string, string>>
+        }) =>
+          Effect.sync(() => {
+            writes.push(
+              `authorize ${input.slot ?? "default"} ${input.method} ${Object.entries(
+                input.inputs ?? {},
+              )
+                .map(([key, value]) => `${key}=${value}`)
+                .join(",")}`,
+            )
+            return { authorizationId: "import", url: "", method: "done" as const }
+          }),
+      },
+    })
+    return { client, writes }
+  }
+
+  const single = {
+    provider: ProviderId.make("anthropic"),
+    hasKey: true,
+    required: false,
+    source: "stored",
+    authType: "oauth",
+  } satisfies Info
+
+  it.scopedLive("a provider's credentials show in the order a turn walks them, at any width", () =>
+    Effect.gen(function* () {
+      for (const width of [100, 60, 40]) {
+        const { client } = credentialServer(withCredentials)
+        const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+          client,
+          runtime: createMockRuntime(),
+          width,
+        })
+        const list = yield* waitForFrame(setup, (frame) => frame.includes("3 credentials"))
+        expect(list).toContain("anthropic [oauth] · 3 credentials")
+        setup.mockInput.pressEnter()
+        const screen = yield* waitForFrame(setup, (frame) => frame.includes("+ Add credential"))
+        expect(screen).toContain("Sign in · anthropic · 3 credentials")
+        expect(screen).toContain("1 personal [oauth]")
+        expect(screen).toContain("2 default [oauth]")
+        expect(screen).toContain("– work [api]")
+        // Every width keeps the way out.
+        expect(screen).toContain("esc back")
+        destroyRenderSetup(setup)
+      }
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("reorder, rename and a second ctrl+x write through the server", () =>
+    Effect.gen(function* () {
+      const { client, writes } = credentialServer(withCredentials)
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("3 credentials"))
+      setup.mockInput.pressEnter()
+      const screen = yield* waitForFrame(setup, (frame) => frame.includes("1 personal"))
+      expect(screen).toContain("shift+↑↓ reorder")
+      // personal goes down past the default; the cursor stays on it.
+      setup.mockInput.pressArrow("down", { shift: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("2 personal"), "the new order")
+      expect(writes).toEqual(["order default,personal"])
+      // Down to work, out of the order: n opens its label with its name.
+      setup.mockInput.pressArrow("down")
+      yield* waitForFrame(setup, (frame) => frame.includes("n rename"), "work under the cursor")
+      setup.mockInput.pressKey("n")
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · rename work"))
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* Effect.promise(() => setup.mockInput.typeText("team"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("– team [api]"), "the renamed row")
+      expect(writes).toEqual(["order default,personal", "rename work>team"])
+      // The first ctrl+x arms; the second removes the credential.
+      setup.mockInput.pressKey("x", { ctrl: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+x again to delete team"))
+      setup.mockInput.pressKey("x", { ctrl: true })
+      const gone = yield* waitForFrame(setup, (frame) => frame.includes("Removed team"), "removed")
+      expect(gone).not.toContain("– team")
+      expect(writes).toEqual(["order default,personal", "rename work>team", "delete team"])
+      // The default cannot take another name.
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressArrow("up")
+      const top = yield* waitForFrame(setup, (frame) => !frame.includes("n rename"), "the default")
+      expect(top).toContain("1 default")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("an added label signs in with its own methods and joins the order", () =>
+    Effect.gen(function* () {
+      const { client, writes } = credentialServer(single)
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic [oauth]"))
+      setup.mockInput.pressEnter()
+      const method = yield* waitForFrame(setup, (frame) => frame.includes("+ Add credential"))
+      expect(method).toContain("Claude Code")
+      expect(method).not.toContain("Directory import")
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · new credential"))
+      // The default's label and a label in use are refused on the line.
+      yield* Effect.promise(() => setup.mockInput.typeText("default"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("default is the sign-in's own label"))
+      setup.mockInput.pressKey("u", { ctrl: true })
+      yield* Effect.promise(() => setup.mockInput.typeText("work"))
+      setup.mockInput.pressEnter()
+      const named = yield* waitForFrame(setup, (frame) =>
+        frame.includes("Sign in · anthropic · work · method"),
+      )
+      expect(named).toContain("Directory import")
+      expect(named).not.toContain("Claude Code")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · work · API key"))
+      yield* Effect.promise(() => setup.mockInput.typeText("sk-fake-secret"))
+      const field = yield* waitForFrame(setup, (frame) => frame.includes("**************"))
+      expect(field).not.toContain("sk-fake")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("API key saved for anthropic · work"))
+      expect(writes).toEqual(["key work 14 chars", "order default,work"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a directory import asks its directory, then signs in with it", () =>
+    Effect.gen(function* () {
+      const { client, writes } = credentialServer(single)
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("anthropic [oauth]"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("+ Add credential"))
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("new credential"))
+      yield* Effect.promise(() => setup.mockInput.typeText("home"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Sign in · anthropic · home · method"))
+      setup.mockInput.pressArrow("down")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Directory ›"))
+      // A needed answer does not go on blank.
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.mockInput.typeText("/nonexistent/loop-probe-x"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("Authenticated anthropic · home"))
+      expect(writes).toEqual([
+        "authorize home 2 directory=/nonexistent/loop-probe-x",
+        "order default,home",
+      ])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("an order the project config overrides says so and keeps the screen", () =>
+    Effect.gen(function* () {
+      const shadowed =
+        'The project config (.gent/config.json) sets authOrder for "anthropic", which wins over the user config: edit it there'
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed([withCredentials]),
+          listMethods: () => Effect.succeed({ anthropic: anthropicMethods }),
+          setOrder: () => Effect.fail(new ProviderAuthError({ message: shadowed })),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 160,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("3 credentials"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("1 personal"))
+      setup.mockInput.pressArrow("down", { shift: true })
+      const refused = yield* waitForFrame(setup, (frame) => frame.includes("sets authOrder for"))
+      expect(refused).toContain("1 personal")
+      expect(refused).toContain("esc back")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a conflicting order names its entries above the credentials", () =>
+    Effect.gen(function* () {
+      const { client } = credentialServer({
+        ...withCredentials,
+        hasKey: false,
+        authOrder: [DEFAULT_CREDENTIAL_SLOT],
+        orderConflict: ["anthropic", "claude-code"],
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("authOrder conflict"))
+      expect(list).toContain("anthropic [authOrder conflict: anthropic, claude-code]")
+      setup.mockInput.pressEnter()
+      const screen = yield* waitForFrame(setup, (frame) => frame.includes("writes one order"))
+      expect(screen).toContain("[authOrder conflict: anthropic, claude-code]")
+      expect(screen).toContain("1 default")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
