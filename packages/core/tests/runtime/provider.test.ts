@@ -4408,6 +4408,36 @@ describe("named provider resolution", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
+  // A driver keeps a warm credential by label; the stamp is what tells it
+  // that the label now holds another sign-in.
+  it.scopedLive("a driver receives the sign-in stamp of the credential it resolves", () =>
+    Effect.gen(function* () {
+      const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+      const slot = CredentialSlot.make("personal")
+      yield* auth.set(
+        "stamp-slot",
+        AuthInfo.cases.Oauth.make({ type: "oauth", access: "fake", refresh: "r", expires: 1 }),
+        slot,
+      )
+      const received: Array<Option.Option<number>> = []
+      const driver: ModelDriverContribution = {
+        id: "stamp-slot",
+        name: "Stamped",
+        resolveModel: (_model, info) =>
+          Effect.sync(() => {
+            if (info?._tag === "Oauth") received.push(Option.fromUndefinedOr(info.signedInAt))
+            return fakeResolution()
+          }),
+      }
+      yield* resolveModel({ model: "stamp-slot/model", credentialSlot: slot }).pipe(
+        Effect.provide(buildProviderLayer([makeExt("stamp-slot", [driver])], auth)),
+      )
+      const stored = yield* auth.get("stamp-slot", slot)
+      expect(Predicate.isNumber(stored?.signedInAt)).toBe(true)
+      expect(received).toEqual([Option.fromUndefinedOr(stored?.signedInAt)])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
   it.scopedLive("a conflicting canonical order fails its own sign-in and leaves the others", () =>
     Effect.gen(function* () {
       const owner = makeProvider("order-owner")
