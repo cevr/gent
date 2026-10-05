@@ -18,10 +18,11 @@ import {
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { FetchHttpClient, HttpClient } from "effect/http"
-import { dateFromMillis } from "@gent/core/protocol"
+import { dateFromMillis, type GentConnectionError } from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
   interruptAtEachStep,
+  freePort,
   makeTempDirectoryScoped,
   serveModelCatalogFixture,
 } from "@gent/core/test-utils"
@@ -32,6 +33,7 @@ import {
   serverLock,
   serverLockFile,
   ServerLockEntry,
+  type GentServer,
 } from "../src/discovery"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname, networkInterfaces } from "node:os"
@@ -160,16 +162,6 @@ const provideFs = <A, E>(
 ): Effect.Effect<A, E, Scope.Scope> => effect.pipe(Effect.provide(PlatformLayer))
 
 const makeTmpHomeScoped = makeTempDirectoryScoped("gent-server-lock-test-")
-
-const unusedLoopbackPort = Effect.scoped(
-  Effect.acquireRelease(
-    Effect.sync(() =>
-      // oxlint-disable-next-line effect/noGlobals -- reserve a real loopback port for the SDK listener
-      Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") }),
-    ),
-    (server) => Effect.promise(() => server.stop(true)),
-  ).pipe(Effect.map((server) => server.port)),
-)
 
 const makeEntry = (overrides?: Partial<ServerLockEntry>) =>
   new ServerLockEntry({
@@ -388,7 +380,7 @@ describe("Server Lock", () => {
       provideFs(
         Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
-          const port = yield* unusedLoopbackPort
+          const port = yield* freePort
           const catalogOrigin = yield* serveModelCatalogFixture
           const options = {
             cwd: home,
@@ -431,7 +423,7 @@ describe("Server Lock", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        const port = yield* unusedLoopbackPort
+        const port = yield* freePort
         const entered = yield* Deferred.make<boolean>()
         const release = yield* Deferred.make<void>()
         const options = {
@@ -465,12 +457,78 @@ describe("Server Lock", () => {
   )
 
   it.scopedLive(
+    "cancellation as construction returns releases ownership in a continuing caller",
+    () =>
+      provideFs(
+        interruptAtEachStep(
+          Effect.gen(function* () {
+            const home = yield* makeTmpHomeScoped
+            const port = yield* freePort
+            let seeded = false
+            let boundaries = 0
+            const options = {
+              cwd: home,
+              port,
+              state: Gent.state.sqlite({ home }),
+              provider: Gent.provider.mock(),
+            }
+            return {
+              program: Gent.server({
+                ...options,
+                seed: Effect.sync(() => {
+                  seeded = true
+                }),
+              }),
+              // Walk from the completed seed through publication, mask restoration
+              // and the public return. No seed fiber is parked or interrupted.
+              at: () => {
+                if (seeded) boundaries += 1
+                return seeded
+              },
+              invariant: (
+                outcome: Exit.Exit<GentServer, GentConnectionError>,
+                interrupted: boolean,
+              ) =>
+                Effect.gen(function* () {
+                  expect(Exit.isFailure(outcome)).toBe(interrupted)
+                  if (Exit.isSuccess(outcome)) {
+                    expect(outcome.value._tag).toBe("Owned")
+                    expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(false)
+                    return
+                  }
+                  expect(Cause.hasInterruptsOnly(outcome.cause)).toBe(true)
+                  expect(
+                    yield* serverLock.hold(home).pipe(Effect.scoped),
+                    "lock released at return boundary " + boundaries,
+                  ).toBe(true)
+                  expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+                  // Reuse both resources before the trial's caller scope closes.
+                  yield* Effect.scoped(
+                    Effect.gen(function* () {
+                      const retry = yield* Gent.server(options)
+                      expect(retry._tag).toBe("Owned")
+                      expect(new URL(retry.url).port).toBe(String(port))
+                    }),
+                  )
+                }),
+            }
+          }),
+          128,
+        ).pipe(
+          Effect.tap((runs) => Effect.sync(() => expect(runs).toBeGreaterThan(1))),
+          Effect.timeout("60 seconds"),
+        ),
+      ),
+    90_000,
+  )
+
+  it.scopedLive(
     "a defect during memory construction releases its port and preserves the cause",
     () =>
       provideFs(
         Effect.gen(function* () {
           const home = yield* makeTmpHomeScoped
-          const port = yield* unusedLoopbackPort
+          const port = yield* freePort
           const defect = "seed failed"
           const options = {
             cwd: home,

@@ -1,5 +1,17 @@
-import { Effect, Exit, FileSystem, Match, Option, Path, Predicate, Schema, Scope } from "effect"
-import type { Context, Layer } from "effect"
+import {
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Schema,
+  Scope,
+} from "effect"
+import type { Layer } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
 import type { ChildProcessSpawner } from "effect/process"
@@ -664,23 +676,30 @@ const holderBlocksMessage = (
 
 export const resolveServer = (
   options: GentServerOptions,
-): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      // Construction owns lock, root and listener together. Failure releases them
-      // before returning; success keeps them until the caller closes.
-      const scope = yield* Scope.fork(yield* Effect.scope)
-      return yield* restore(resolveServerInternal(options).pipe(Scope.provide(scope))).pipe(
-        Effect.onExit((exit) => {
-          if (Exit.isFailure(exit)) return Scope.close(scope, exit)
-          return Effect.void
-        }),
+): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => {
+  // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
+  const construct = Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
+  return Effect.flatMap(Effect.context<Scope.Scope>(), (services) =>
+    Effect.callback<GentServer, GentConnectionError>((resume) => {
+      const scope = Scope.forkUnsafe(Context.get(services, Scope.Scope))
+      // Yield before startup so the callback's canceler is installed first.
+      // It owns startup until delivery, with no masked success callback after it.
+      const startup = Effect.runForkWith(services)(
+        Effect.yieldNow.pipe(Effect.andThen(construct), Scope.provide(scope)),
       )
+      startup.addObserver((exit) => {
+        if (Exit.isFailure(exit)) {
+          resume(Effect.onExit(exit, () => Scope.close(scope, exit)))
+        } else {
+          resume(exit)
+        }
+      })
+      // Cancellation stops and awaits startup before releasing what it acquired.
+      // Successful delivery leaves the child lifetime with the caller.
+      return Fiber.interrupt(startup).pipe(Effect.andThen(Scope.close(scope, Exit.interrupt())))
     }),
-  ).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
-    Effect.provide(LocalPlatformLayer),
   )
+}
 
 const resolveServerInternal = (
   options: GentServerOptions,
