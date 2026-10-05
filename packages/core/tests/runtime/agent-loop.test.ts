@@ -3851,7 +3851,7 @@ export default defineExtension({
       const readLog = fs
         .readFileString(log)
         .pipe(Effect.map((text) => text.split("\n").filter((line) => line.length > 0)))
-      return { write, read, hold, letGo, readLog }
+      return { write, read, hold, letGo, readLog, file }
     })
 
   it.scopedLive(
@@ -4021,6 +4021,30 @@ export default defineExtension({
         expect(lines.indexOf("release:one")).toBeGreaterThan(-1)
         expect(lines.indexOf("release:one")).toBeLessThan(lines.indexOf("open:two"))
         expect(lines.filter((line) => line.startsWith("open:"))).toEqual(["open:one", "open:two"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  // An in-place save sets the mtime before it copies the bytes. A run that
+  // resolves inside that window stats the new stamp and reads the old bytes,
+  // and the save ends in the same clock tick, so the stamp stays.
+  it.scopedLive(
+    "a save that ends in the clock tick of a resolve inside it reaches the next run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const { write, read, file } = yield* lifecycleHarness({})
+        expect(yield* read).toBe("one")
+        // The save's tick, a minute ahead, so it is never older than the
+        // run's resolve however long the test takes.
+        const tick = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
+        // The save began: the stamp moved, the bytes did not.
+        yield* fs.utimes(file, tick, tick)
+        expect(yield* read).toBe("one")
+        // It ends in the same tick: new bytes, the same size, mtime and inode.
+        yield* write("two")
+        yield* fs.utimes(file, tick, tick)
+        expect(yield* read).toBe("two")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
     20_000,
   )

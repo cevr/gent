@@ -512,6 +512,10 @@ code with its own bundler): a resolve with no
 input touched costs a stat of each and reads no input (about 1.5 ms for the
 scan); a save of the same bytes reads and hashes the inputs and builds nothing;
 an edit builds again (about 10 ms; the first build of a process about 70 ms).
+An in-place save sets the mtime before it copies the bytes, so a stamp whose
+mtime is within one tick of the file clock (`RACY_STAMP_MILLIS`, two seconds
+for FAT and HFS+) is kept as racy and the bytes decide, in a load and in the
+client's stale check alike (git's racy-git rule).
 A build is kept only when it is coherent: it read the inputs whose stats and
 bytes were taken before it, and their stats and bytes after it are the same, so
 a save during a build is never kept as the new version, even one that puts the

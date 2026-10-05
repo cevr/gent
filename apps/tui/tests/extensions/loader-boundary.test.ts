@@ -2085,6 +2085,9 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
       const fixture = yield* reloadFixture
       const fs = yield* FileSystem.FileSystem
       yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+      // Saved a minute before the look, so its stamp is trusted.
+      const earlier = DateTime.toDate(DateTime.subtract(yield* DateTime.now, { minutes: 1 }))
+      yield* fs.utimes(fixture.file("logged.client.ts"), earlier, earlier)
       yield* fixture.load
       const later = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
       yield* fs.utimes(fixture.file("logged.client.ts"), later, later)
@@ -2093,6 +2096,37 @@ export default { id: "@test/logged", setup: Effect.fail(new Error("setup refused
       expect([...reload.setUp]).toEqual([])
       expect(yield* fixture.stale).toBe(false)
       expect(yield* fixture.readLog).toEqual(["setup:v1"])
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // An in-place save sets the mtime before it copies the bytes, so a stamp in
+  // the tick of a look is no proof of the bytes: the look reads them. It
+  // reports a save once; the reload's own stamp is in that tick too, and the
+  // bytes it built from say it is current.
+  it.scopedLive("a save in the clock tick of the last look reloads once", () =>
+    Effect.gen(function* () {
+      const fixture = yield* reloadFixture
+      const fs = yield* FileSystem.FileSystem
+      const file = fixture.file("logged.client.ts")
+      // The tick, a minute ahead, so it is never older than a look however
+      // long the test takes.
+      const tick = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
+      yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v1"))
+      yield* fs.utimes(file, tick, tick)
+      yield* fixture.load
+      expect(yield* fixture.stale).toBe(false)
+      expect(yield* fixture.stale).toBe(false)
+      // A save in the same tick: new bytes, the same size, mtime and inode.
+      yield* fixture.write("logged.client.ts", loggedModule(fixture.log, "v2"))
+      yield* fs.utimes(file, tick, tick)
+      expect(yield* fixture.stale).toBe(true)
+      const reload = yield* fixture.load
+      yield* reload.retire
+      expect(commandIds(reload)).toEqual(["logged-v2-plain"])
+      expect(yield* fixture.stale).toBe(false)
+      expect(yield* fixture.stale).toBe(false)
+      const setups = (yield* fixture.readLog).filter((line) => line.startsWith("setup:"))
+      expect(setups).toEqual(["setup:v1", "setup:v2"])
     }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 

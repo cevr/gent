@@ -1349,7 +1349,7 @@ export const makeTuiExtensionLoader = (opts: {
       if (discovered.length !== seen.size) return true
       for (const entry of discovered) {
         if (!seen.has(entry.filePath)) return true
-        if (yield* extensionModuleChanged(entry.filePath, graphs)) return true
+        if (yield* extensionModuleChanged(entry.filePath, graphs, builder.module.hash)) return true
       }
       return false
     })

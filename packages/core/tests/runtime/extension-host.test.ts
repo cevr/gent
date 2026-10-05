@@ -3,6 +3,7 @@ import {
   Context,
   Crypto,
   Data,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -528,6 +529,7 @@ export default defineExtension({
     launch,
     extensionDir,
     index,
+    valueModule,
     // Replaced, as gent and most editors save: a new inode and mtime.
     writeValue: (value: string) =>
       writeFileAtomic(valueModule, `export const value = "${value}";\n`).pipe(
@@ -879,6 +881,69 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
     }).pipe(Effect.provide(Layer.merge(BunPlatformLive, BunGentPlatformLive))),
   )
 
+  // An in-place save sets the file's mtime before it copies the bytes, and
+  // the file clock ticks coarser than a millisecond. A resolve inside that
+  // window stats the new stamp and reads the old bytes; the save then ends in
+  // the same tick, so size, mtime and inode stay what the resolve saw.
+  it.scopedLive(
+    "a same-size save in the clock tick of the last resolve reaches the next resolve",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-profile-racy-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const entry = path.join(home, ".gent", "extensions", "marker.ts")
+        yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+        yield* fs.makeDirectory(launch, { recursive: true })
+        // In place, the inode kept: "one" and "two" save the same size.
+        const save = (value: "one" | "two") =>
+          fs.writeFileString(
+            entry,
+            `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-racy",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-racy/marker",
+      scope: "process",
+      layer: Layer.succeed(Marker, Marker.of({ value: "${value}" })),
+    }));
+  }),
+});
+`,
+          )
+        const marker = (profile: SessionProfile) =>
+          Context.get(profile.layerContext, SessionProfileResourceMarker).value
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* save("one")
+          expect(marker(yield* resolve)).toBe("one")
+          // The save's tick, a minute ahead, so it is never older than the
+          // resolve however long the test takes.
+          const tick = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
+          // The save began: the stamp moved, the bytes did not.
+          yield* fs.utimes(entry, tick, tick)
+          expect(marker(yield* resolve)).toBe("one")
+          // It ends in the same tick: new bytes, the same size, mtime and inode.
+          yield* save("two")
+          yield* fs.utimes(entry, tick, tick)
+          expect(marker(yield* resolve)).toBe("two")
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("an edited extension file builds its process resource again", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -970,7 +1035,14 @@ export default defineExtension({
           expect(yield* resolve).toBe(second)
           expect(yield* Ref.get(bundles)).toBe(built)
 
-          // Nothing touched: a stat of each input, no read and no build.
+          // Nothing touched since a save older than one tick of the file
+          // clock: a stat of each input, no read and no build. A stamp as
+          // recent as its mtime is not trusted, so the first resolve after
+          // the files age reads them once.
+          const aged = DateTime.toDate(DateTime.subtract(yield* DateTime.now, { minutes: 1 }))
+          yield* fs.utimes(fixture.index, aged, aged)
+          yield* fs.utimes(fixture.valueModule, aged, aged)
+          expect(yield* resolve).toBe(second)
           const readsBefore = yield* Ref.get(reads)
           expect(yield* resolve).toBe(second)
           expect(yield* Ref.get(reads)).toBe(readsBefore)
