@@ -875,9 +875,11 @@ it. No `paths`: the file tools reach every path.
 system without the check, so leave them out of the `tools` of an agent you
 confine.
 A tool of your own reads the session's agent with
-`ctx.Session.getAgent()` (`ExtensionContext`) and checks the same way: a call
-must lie in every scope of `agent.pathScopes()` (`scopeReaches` from
-`@gent/core/extensions/api`, after `resolveLinks` on both sides).
+`ctx.Session.getAgent()` (`ExtensionContext`), the agent bound to its run,
+and checks the same way: a call must lie in every scope of
+`agent.pathScopes()`, each scope's entries resolved against its own `cwd`
+(`scopeReaches` from `@gent/core/extensions/api`, after `resolveLinks` on
+both sides). `agent.admitsTool(id)` answers for the run too.
 
 A run's `paths` only narrow its agent's. Each entry must lie inside an agent
 entry with at least its access: a `write` entry inside a `write` entry, a
@@ -890,11 +892,22 @@ An agent without `paths` takes any run `paths`. Each file tool call then must
 lie in the agent's entries and in the run's.
 
 A child never exceeds its parent run. A session created with a
-`parentSessionId` (a `delegate.start` child included) must name entries inside
-every scope of the parent's run, or the create is refused the same way; a
-child that names no `paths` under a confined parent takes the parent's
-narrowest scope, stored as absolute paths. A run's `tools` do not carry to a
-child: the child holds what its own agent and its own run allow.
+`parentSessionId` (a `delegate.start` child included) holds a tool only when
+its parent run holds it too, and its file calls must lie in the parent run's
+paths too, whether it names `paths` or not. gent resolves the parent's bound
+again at each of the child's turns and file calls, so a parent agent its
+author narrows later narrows the child at once, and a link is judged where it
+points at the call. A child that names `paths` outside the parent run is
+refused at create, as above. When the parent's bound cannot be resolved (its
+agent is gone from the roster, its config does not load), the child fails
+closed with a `ParentBoundError` that names the parent session and agent: its
+create is refused, and its turns and file calls do not run.
+
+The agent `getAgent` returns and the hooks receive is bound to its run:
+`admitsTool` and `pathScopes()` answer for the run, not for the definition. It
+is no definition to send or register: `AgentDefinition.make` refuses its
+`bound` key, and the definition codec refuses to encode it, so `driver.list`
+only ever sends definitions.
 
 The admission an extension passes to `ctx.Session.create` is
 `{ agent, runSpec: { overrides } }`; the overrides take the run keys of a
