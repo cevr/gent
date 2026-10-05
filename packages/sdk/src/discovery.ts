@@ -665,8 +665,22 @@ const holderBlocksMessage = (
 export const resolveServer = (
   options: GentServerOptions,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
-  // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
-  Effect.provide(resolveServerInternal(options), LocalPlatformLayer)
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      // Construction owns lock, root and listener together. Failure releases them
+      // before returning; success keeps them until the caller closes.
+      const scope = yield* Scope.fork(yield* Effect.scope)
+      return yield* restore(resolveServerInternal(options).pipe(Scope.provide(scope))).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isFailure(exit)) return Scope.close(scope, exit)
+          return Effect.void
+        }),
+      )
+    }),
+  ).pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off -- the public entry point provides the local platform it resolves on.
+    Effect.provide(LocalPlatformLayer),
+  )
 
 const resolveServerInternal = (
   options: GentServerOptions,
