@@ -1968,9 +1968,7 @@ describe("interaction.respondInteraction", () => {
       Effect.gen(function* () {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-decision.db`
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
-          Layer.provide(BunPlatformLive),
-        )
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
         const finalReply = "approval resumed from stored decision"
         const firstProvider = yield* LanguageModelLayers.sequence([
           toolCallStep("approval_probe", { text: "approve deploy?" }),
@@ -3227,9 +3225,7 @@ describe("interaction.respondInteraction", () => {
         const pending = yield* Effect.gen(function* () {
           return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
-          Effect.provide(
-            SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
-          ),
+          Effect.provide(SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))),
           Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
         expect(pending).toEqual([])
@@ -3948,9 +3944,7 @@ describe("interaction.respondInteraction", () => {
               yield* storage.decide(first, first.q2, decisionJson)
             }).pipe(
               Effect.provide(
-                SqliteStorage.LiveWithSql(first.dbPath, Layer.empty, {}).pipe(
-                  Layer.provide(BunPlatformLive),
-                ),
+                SqliteStorage.LiveWithSql(first.dbPath).pipe(Layer.provide(BunPlatformLive)),
               ),
               Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(first.dbPath)),
             ),
@@ -3988,7 +3982,7 @@ const liveSessionProfiles = (
           Layer.mergeAll(
             BunPlatformLive,
             ConfigService.Test(),
-            SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
         Layer.orDie,
@@ -4008,20 +4002,26 @@ const makeProfile = (cwd: string, extensions: ReadonlyArray<LoadedExtension>) =>
   Effect.gen(function* () {
     const resolved = resolveExtensions(extensions)
     const registryContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+    const host = Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext)
     const started = yield* buildScopeResources({
       extensions: resolved.extensions,
       scope: "process",
-      context: Context.merge(Context.makeUnsafe<unknown>(new Map()), registryContext),
+      context: host,
+      buildContext: (_extension, before) => before,
       parent: yield* Effect.scope,
       restore: (effect) => effect,
     })
     const layerContext = started.context
+    const process = new Map(
+      Array.from(started.services, ([id, context]) => [id, { key: `${cwd}:${id}`, context }]),
+    )
     return {
       cwd,
       resolved,
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
       baseSections: [],
+      resourceBuilds: { host, process },
       generationId: ProcessGenerationId.make("test"),
     } satisfies SessionProfile
   })

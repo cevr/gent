@@ -90,7 +90,7 @@ import {
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStore } from "../../src/domain/event"
 import { InteractionPendingError } from "../../src/domain/interaction"
-import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
+import { ToolRunner } from "../../src/runtime/tools"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { getSessionSnapshot, SessionMutationsLive } from "../../src/server/server"
 import {
@@ -137,7 +137,7 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
   ])
 }
 const sessionRuntimeLayers = Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client)
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
+const makeClusterRunnerLayer = (storageLayer: typeof testSqliteStorage) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -155,7 +155,7 @@ const makeRuntimeLayer = (
   } = {},
 ) => {
   const registry = ExtensionRegistry.fromResolved(makeTestExtensions(options.tools))
-  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage
   const baseDeps = Layer.mergeAll(
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
@@ -1401,7 +1401,7 @@ describe("branch-scoped resources", () => {
 // ── session depth guard ─────────────────────────────────────────────────────
 
 describe("session depth guard", () => {
-  const depthStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const depthStorage = testSqliteStorage
   const run = <A, E>(
     effect: Effect.Effect<
       A,

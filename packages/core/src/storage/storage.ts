@@ -45,9 +45,8 @@ import {
   decodeStoredPromptPart,
   encodeEvent,
   encodeStoredMessage,
-  type FeatureMigrations,
   groupMessageChunkRows,
-  makeStorageInitLive,
+  StorageInitLive,
   MESSAGE_CHUNK_SELECT,
   type MessageChunkRow,
   SESSION_COLUMNS,
@@ -2131,46 +2130,30 @@ type FocusedStorage =
   | ClusterMessageStorage.MessageStorage
 
 /**
- * Repositories an extension adds to the same database.
- *
- * Core assembles the kernel's tables. A feature that owns tables of its own
- * supplies them here, built over the same SQL client and the same interaction
- * storage, so core never has to name them.
+ * The kernel's repositories over one SQL client. Each layer appears once in
+ * the graph, so the client and every repository build once: a composite
+ * reached by two paths builds once per path. An extension that owns tables
+ * builds its own repositories as a process Resource over the same client.
  */
-export type ExtraRepositories<A> = Layer.Layer<
-  A,
-  never,
-  SqlClient.SqlClient | InteractionStorage | GentPlatform
->
-
-/**
- * The kernel's repositories over one SQL client, and a feature's over both.
- * Each layer appears once in the graph, so the client and every repository
- * build once: a composite reached by two paths builds once per path.
- */
-const provideFocusedRepositories = <A, E, R>(
+const provideFocusedRepositories = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
-  extra: ExtraRepositories<A>,
-): Layer.Layer<FocusedStorage | A, E, R | GentPlatform | Crypto.Crypto> =>
+): Layer.Layer<FocusedStorage, E, R | GentPlatform | Crypto.Crypto> =>
   Layer.provideMerge(
-    extra,
-    Layer.provideMerge(
-      Layer.mergeAll(
-        SessionStorage.Live,
-        BranchStorage.Live,
-        MessageStorage.Live,
-        AgentLoopQueueStorage.Live,
-        EventStorage.Live,
-        RelationshipStorage.Live,
-        SessionOperationStorage.Live,
-        ToolCallBindingStorage.Live,
-        TurnRecordStorage.Live,
-        ModelCatalogSnapshotStorage.Live,
-        encoreSqlMessageStorage(),
-        InteractionStorage.Live,
-      ),
-      base,
+    Layer.mergeAll(
+      SessionStorage.Live,
+      BranchStorage.Live,
+      MessageStorage.Live,
+      AgentLoopQueueStorage.Live,
+      EventStorage.Live,
+      RelationshipStorage.Live,
+      SessionOperationStorage.Live,
+      ToolCallBindingStorage.Live,
+      TurnRecordStorage.Live,
+      ModelCatalogSnapshotStorage.Live,
+      encoreSqlMessageStorage(),
+      InteractionStorage.Live,
     ),
+    base,
   )
 
 const ensureDbDirectory = (dbPath: string) =>
@@ -2185,40 +2168,36 @@ const ensureDbDirectory = (dbPath: string) =>
 
 const makeLiveSqliteLayer = (
   dbPath: string,
-  featureMigrations: FeatureMigrations,
 ): Layer.Layer<
   SqlClient.SqlClient,
   StorageError | PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path
 > =>
-  makeStorageInitLive(featureMigrations).pipe(
+  StorageInitLive.pipe(
     Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))),
     Layer.provideMerge(ensureDbDirectory(dbPath)),
   )
 
-const makeMemorySqliteLayer = (
-  featureMigrations: FeatureMigrations,
-): Layer.Layer<SqlClient.SqlClient, StorageError> =>
-  makeStorageInitLive(featureMigrations).pipe(Layer.provideMerge(memorySqliteClientLayer))
+const memorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = StorageInitLive.pipe(
+  Layer.provideMerge(memorySqliteClientLayer),
+)
 
 export const SqliteStorage = {
   // Load-bearing: `deleteSession`'s atomic SELECT+DELETE runs in one transaction that
   // @effect/sql-sqlite-bun opens with BEGIN IMMEDIATE over its one connection, so it holds
   // the write lock from the start and no child row is committed between the recursive
   // SELECT and the DELETE.
-  LiveWithSql: <A>(
+  LiveWithSql: (
     dbPath: string,
-    extra: ExtraRepositories<A>,
-    featureMigrations: FeatureMigrations,
   ): Layer.Layer<
-    FocusedStorage | A,
+    FocusedStorage,
     StorageError | PlatformError.PlatformError,
     FileSystem.FileSystem | Path.Path | GentPlatform | Crypto.Crypto
-  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath, featureMigrations), extra),
+  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath)),
 
-  MemoryWithSql: <A>(
-    extra: ExtraRepositories<A>,
-    featureMigrations: FeatureMigrations,
-  ): Layer.Layer<FocusedStorage | A, StorageError, GentPlatform | Crypto.Crypto> =>
-    provideFocusedRepositories(makeMemorySqliteLayer(featureMigrations), extra),
+  MemoryWithSql: provideFocusedRepositories(memorySqliteLayer) satisfies Layer.Layer<
+    FocusedStorage,
+    StorageError,
+    GentPlatform | Crypto.Crypto
+  >,
 }

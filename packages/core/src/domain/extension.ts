@@ -11,6 +11,7 @@ import {
   type Scope,
   type Stream,
   TxRef,
+  type Types,
   TxSemaphore,
 } from "effect"
 import type { Decision } from "effect/ai"
@@ -41,7 +42,9 @@ import type {
   ModelDriverContribution,
   ModelRouterContribution,
 } from "./driver.js"
+import type { SqlClient } from "effect/sql"
 import type { ExtensionPlatformServices, GentPlatformOsInfo } from "../runtime/gent-platform.js"
+import type { InteractionStorage } from "../storage/storage.js"
 import {
   ActorCommandId,
   BranchId,
@@ -130,6 +133,31 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
     ? BranchScope
     : never
 
+// ── The host context of a build ─────────────────────────────────────────────
+
+/**
+ * The services the host gives every Resource build: the extension platform,
+ * the session database and its interaction storage. So an extension can own
+ * tables in the session database, and write an interaction request and its
+ * own row in one transaction.
+ */
+type ResourceHostServices = ExtensionPlatformServices | SqlClient.SqlClient | InteractionStorage
+
+/**
+ * The branch a branch Resource builds for: its session, its id, and the
+ * working directory and home its leaves see (`ExtensionContext`). Each
+ * branch Resource build gets it.
+ */
+export class BranchAddress extends Context.Service<
+  BranchAddress,
+  {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly cwd: string
+    readonly home: string
+  }
+>()("@gent/core/src/domain/extension/BranchAddress") {}
+
 // ── The Resource contribution ───────────────────────────────────────────────
 
 /**
@@ -141,6 +169,16 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
  *   include `ScopeOf<S>` so the typed scope brand gates instantiation. Work
  *   that must run when the resource starts goes in the layer build; disposal
  *   is a finalizer in that build. A layer that fails rejects its extension.
+ * - `resources` — the process Resources of the same extension whose services
+ *   a branch Resource's layer reads. A process Resource names none.
+ *
+ * A build reads the host's services (`ResourceHostServices`). A branch build
+ * also reads its `BranchAddress` and the services of the Resources it names,
+ * and nothing else: its build key holds exactly these, so an edit to another
+ * extension keeps it. A process build runs over the process Resources of the
+ * extensions before it too; no declaration names another extension's
+ * Resource, so typed code reads those only as optional
+ * (`Effect.serviceOption`).
  *
  * Consumers yield the service Tags the layer provides; they never see the
  * Resource.
@@ -149,6 +187,7 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never>
   readonly id: ResourceId
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
+  readonly resources: ReadonlyArray<AnyResourceContribution>
 }
 
 /**
@@ -163,31 +202,90 @@ export type AnyResourceContribution = ResourceContribution<any, ResourceScope, a
  * The services a resource definition's layer provides. A tool that names the
  * resource in `tool({ resources })` may yield them.
  */
-export type ResourceServices<Resource> =
+type ResourceServices<Resource> =
   Resource extends ResourceContribution<infer A, ResourceScope, infer _R, infer _E> ? A : never
+
+/**
+ * The services a `resources` declaration proves present. Only a tuple type
+ * proves which definitions the value holds; an array type such as
+ * `ReadonlyArray<typeof Counter>` also types an empty or partial array, so it
+ * grants nothing. A union of tuple types grants nothing either: a value of any
+ * member satisfies it, and `readonly [] | readonly [typeof Counter]` takes `[]`.
+ * The factories take `Resources` as a `const` type parameter, so an inline
+ * `resources: [Counter]` infers as a tuple.
+ */
+export type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
+  number extends Resources["length"]
+    ? never
+    : [Resources] extends [Types.UnionToIntersection<Resources>]
+      ? ResourceServices<Resources[number]>
+      : never
+
+/**
+ * A type that grants services makes the declaration that grants them
+ * required: a `Resources` argument other than the empty default requires
+ * `resources`. So no typed input or explicit type argument of `tool`,
+ * `request` or `defineResource` grants a service without the value that
+ * provides it.
+ */
+export type RequiredDeclarations<Resources> = [Resources] extends [ReadonlyArray<never>]
+  ? unknown
+  : { readonly resources: Resources }
+
+/** What a Resource of scope `S` naming `Resources` may read when it builds. */
+type ResourceBuildServices<
+  S extends ResourceScope,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+> = S extends "branch"
+  ? ResourceHostServices | BranchAddress | DeclaredResourceServices<Resources>
+  : ResourceHostServices
 
 // ── Smart constructor ───────────────────────────────────────────────────────
 
 /** Spec type accepted by {@link defineResource}. */
-interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
+type ResourceSpec<
+  A,
+  S extends ResourceScope,
+  R,
+  E,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+> = ResourceSpecFields<A, S, R, E, Resources> & RequiredDeclarations<Resources>
+
+interface ResourceSpecFields<
+  A,
+  S extends ResourceScope,
+  R,
+  E,
+  Resources extends ReadonlyArray<AnyResourceContribution>,
+> {
   /** Stable resource identity. */
   readonly id: string
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
+  /** The process Resources of this extension a branch Resource's layer reads. */
+  readonly resources?: Resources
 }
 
 /**
  * Author-facing factory for a {@link ResourceContribution}.
  *
  * The factory infers the generics from the inputs (so authors don't write
- * `<MyService, "process", never, never>`) and brands the resource id.
+ * `<MyService, "process", never, never>`) and brands the resource id. A layer
+ * that reads a service its build does not get does not compile.
  */
-export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
-  spec: ResourceSpec<A, S, R, E>,
+export const defineResource = <
+  A,
+  S extends ResourceScope,
+  R extends ResourceBuildServices<S, Resources> = never,
+  E = never,
+  const Resources extends ReadonlyArray<AnyResourceContribution> = ReadonlyArray<never>,
+>(
+  spec: ResourceSpec<A, S, R, E, Resources>,
 ): ResourceContribution<A, S, R, E> => ({
   id: ResourceId.make(spec.id),
   scope: spec.scope,
   layer: spec.layer,
+  resources: spec.resources ?? [],
 })
 
 // ── contribution ────────────────────────────────────────────────────────────
@@ -1372,15 +1470,29 @@ const validateAgents = (contribs: ExtensionContributions): Option.Option<string>
 
 const validateResources = (contribs: ExtensionContributions): Option.Option<string> => {
   for (const [i, resource] of (contribs.resources ?? []).entries()) {
-    if (Schema.is(ResourceId)(resource.id)) continue
-    return Option.some(`resources[${i}]: resource requires a non-empty id`)
+    if (!Schema.is(ResourceId)(resource.id)) {
+      return Option.some(`resources[${i}]: resource requires a non-empty id`)
+    }
+    // A process Resource builds over the host's services only; a branch
+    // Resource reads the process Resources it names, never another branch one.
+    const label = `resources[${i}] (${resource.id})`
+    const named = resource.resources
+    if (resource.scope === "process" && named.length > 0) {
+      return Option.some(`${label}: a process resource names no resources`)
+    }
+    const branchNamed = named.find((candidate) => candidate.scope !== "process")
+    if (!Predicate.isUndefined(branchNamed)) {
+      return Option.some(
+        `${label}: names resource "${branchNamed.id}", a branch resource; a branch resource names process resources only`,
+      )
+    }
   }
   return Option.none()
 }
 
 /**
- * Each resource a tool or a request names is a definition its own extension
- * registers. The check is by identity: a leaf yields the services of the
+ * Each resource a tool, a request or a branch resource names is a definition
+ * its own extension registers. The check is by identity: a leaf yields the services of the
  * definition it names, so another definition under the same id does not
  * provide them.
  */
@@ -1395,6 +1507,10 @@ const validateLeafResources = (contribs: ExtensionContributions): Option.Option<
     ...(contribs.requests ?? []).map((capability, i) => ({
       label: `requests[${i}] (${capability.id})`,
       resources: capability.resources,
+    })),
+    ...registered.map((resource, i) => ({
+      label: `resources[${i}] (${resource.id})`,
+      resources: resource.resources,
     })),
   ]
   for (const leaf of leaves) {

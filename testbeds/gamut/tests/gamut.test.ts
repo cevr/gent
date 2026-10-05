@@ -531,11 +531,7 @@ describe("gamut reads the schema gent migrates", () => {
       expect(openTurnSessions(db)).toEqual([])
       expect(runRecord(db, 0)).toEqual({ started: false, open: [], stored: false })
       expect(latestEventId(db)).toBe(0)
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(testSqliteStorage(Layer.empty, {})),
-      Effect.timeout("10 seconds"),
-    ),
+    }).pipe(Effect.scoped, Effect.provide(testSqliteStorage), Effect.timeout("10 seconds")),
   )
 })
 

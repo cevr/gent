@@ -100,7 +100,6 @@ import { BunServices } from "@effect/platform-bun"
 import { SqlClient } from "effect/sql"
 import { Auth, ModelResolver, textStep } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { noBranchTools } from "../../src/runtime/tools"
 import { RpcClient, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 
@@ -200,7 +199,7 @@ const sessionRuntimeLayer = (
   )
 
 type TestStorage = Layer.Layer<
-  Layer.Success<ReturnType<typeof testSqliteStorage<never>>>,
+  Layer.Success<typeof testSqliteStorage>,
   StorageError | PlatformError.PlatformError
 >
 
@@ -238,7 +237,7 @@ const sessionMutationsTestLayer = (
     readonly eventStore?: Layer.Layer<EventStore>
   } = {},
 ) => {
-  const storageLayer = options.storage ?? testSqliteStorage(Layer.empty, {})
+  const storageLayer = options.storage ?? testSqliteStorage
   const sessionStorageLayer = Layer.effect(
     SessionStorage,
     Effect.flatMap(SessionStorage, options.sessionStorage ?? Effect.succeed),
@@ -613,7 +612,7 @@ const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 const sessionQueriesActorFailureLayer = Layer.mergeAll(
-  testSqliteStorage(Layer.empty, {}),
+  testSqliteStorage,
   GentPlatform.Test(),
   ConfigService.Test(),
   testRuntimeEnvironment,
@@ -2341,7 +2340,7 @@ describe("session transport contract", () => {
 describe("requestId idempotency", () => {
   const makePersistentSessionMutationsLayer = (dbPath: string) =>
     sessionMutationsTestLayer({
-      storage: SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
+      storage: SqliteStorage.LiveWithSql(dbPath).pipe(
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
       ),
@@ -2385,7 +2384,7 @@ describe("requestId idempotency", () => {
         // One database; the process that retries no longer loads the agent.
         const shared = yield* Layer.build(
           Layer.mergeAll(
-            testSqliteStorage(Layer.empty, {}),
+            testSqliteStorage,
             sessionRuntimeLayer(),
             EventStore.Memory,
             AgentLoopSessionGovernance.Live,
@@ -2445,6 +2444,10 @@ describe("requestId idempotency", () => {
           layerContext,
           registryService: Context.get(layerContext, ExtensionRegistry),
           baseSections: [],
+          resourceBuilds: {
+            host: Context.merge(Context.makeUnsafe<unknown>(new Map()), layerContext),
+            process: new Map(),
+          },
           generationId: ProcessGenerationId.make("test"),
         }
         const profiles = Layer.succeed(
@@ -2455,7 +2458,7 @@ describe("requestId idempotency", () => {
           }),
         )
         const deps = Layer.mergeAll(
-          testSqliteStorage(Layer.empty, {}),
+          testSqliteStorage,
           sessionRuntimeLayer(),
           EventStore.Memory,
           AgentLoopSessionGovernance.Live,
@@ -2804,7 +2807,7 @@ describe("requestId idempotency", () => {
       const deliveredPromptRequestIds = new Set<string>()
 
       const makeLayer = (failPrompt: boolean) => {
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath, Layer.empty, {}).pipe(
+        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(
           Layer.provide(BunServices.layer),
           Layer.provide(GentPlatform.Test()),
         )
@@ -3577,10 +3580,6 @@ describe("server root composition", () => {
             configServiceLayer: counted("config", ConfigService.Test()),
             approvalLayer: counted("approval", ApprovalService.Test()),
             extraLayers: [counted("extra", Layer.empty)],
-            branchTools: {
-              ...noBranchTools,
-              storage: counted("storage", noBranchTools.storage),
-            },
           }),
         )
         expect(yield* Ref.get(builds)).toEqual({
@@ -3588,7 +3587,6 @@ describe("server root composition", () => {
           config: 1,
           approval: 1,
           extra: 1,
-          storage: 1,
         })
       }).pipe(Effect.timeout("8 seconds")),
     ),

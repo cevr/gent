@@ -133,7 +133,7 @@ const harnessWithHome = (
             fs.writeFileString(`${home}/.gent/delegates/${branchId}.json`, encodeRegistry(entries)),
           ),
         )
-    return { ...harness, home, registryOf, writeRegistry }
+    return { ...harness, cwd, home, registryOf, writeRegistry }
   }).pipe(Effect.provide(BunFileSystem.layer))
 
 type Harness = Effect.Success<ReturnType<typeof harnessWithHome>>
@@ -1667,6 +1667,85 @@ const cappedResults = (messages: ReadonlyArray<{ readonly parts: ReadonlyArray<P
     if (!Predicate.isReadonlyObject(result)) return false
     return String(result["error"]).includes("unfinished children")
   })
+
+// ── cancel ──────────────────────────────────────────────────────────────────
+
+/**
+ * A cancel stops the child its parent names. Two parents in one workspace can
+ * each own a child under the tool call id `start-1`; the stop each cancel
+ * submits must be its own, or the second returns the first's receipt and its
+ * child runs on.
+ */
+describe("a cancel", () => {
+  it.live(
+    "two parents that each cancel their start-1 child end both children as interrupted",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const names = ["first", "second"] as const
+          const opened = {
+            first: yield* Deferred.make<void>(),
+            second: yield* Deferred.make<void>(),
+          }
+          /** Which parent a request belongs to: its first text ends with the parent's name. */
+          const nameOf = (texts: ReadonlyArray<string>) =>
+            names.find((name) => texts[0]?.endsWith(name) === true)
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const name = nameOf(texts)
+            if (Predicate.isUndefined(name)) return Effect.succeed(reply("no such parent"))
+            // Each child's stream opens and stalls: it runs until its parent cancels it.
+            if (texts[0]?.includes(childTask) === true)
+              return Effect.succeed(stalledStream("working", opened[name]))
+            const calls = promptToolCallIds(options.prompt).length
+            if (calls === 0) {
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: `${childTask} ${name}` }, "start-1"),
+              )
+            }
+            if (calls === 1) {
+              return Deferred.await(opened[name]).pipe(
+                Effect.as(toolStep("delegate.cancel", { requestId: "start-1" }, "cancel-1")),
+              )
+            }
+            return Effect.succeed(reply("cancelled"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client } = harness
+          const second = yield* client.session.create({ cwd: harness.cwd })
+          const parents = [{ sessionId: harness.sessionId, branchId: harness.branchId }, second]
+          for (const [index, parent] of parents.entries()) {
+            yield* client.message.send({ ...parent, content: `parent ${names[index]}` })
+            const [entry] = yield* waitFor(
+              harness.registryOf(parent.branchId),
+              (entries) => Predicate.isNotUndefined(entries[0]?.completed),
+              5_000,
+              `the ${names[index]} parent's cancel ended its child`,
+            )
+            expect(entry).toMatchObject({ requestId: "start-1", completed: { interrupted: true } })
+          }
+          const children = (yield* client.session.list()).filter((session) =>
+            parents.some((parent) => parent.sessionId === session.parentSessionId),
+          )
+          expect(children).toHaveLength(2)
+          for (const child of children) {
+            if (Predicate.isUndefined(child.activeBranchId)) return yield* Effect.die("no branch")
+            const end = yield* client.session
+              .events({ sessionId: child.id, branchId: child.activeBranchId })
+              .pipe(
+                Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+                Stream.take(1),
+                Stream.runHead,
+              )
+            expect(Option.map(end, (envelope) => envelope.event)).toMatchObject(
+              Option.some({ _tag: "TurnCompleted", interrupted: true }),
+            )
+          }
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+})
 
 describe("starts over the pending cap", () => {
   it.live(

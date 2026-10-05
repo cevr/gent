@@ -193,7 +193,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/http"
-import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
+import { ToolRunner } from "../runtime/tools.js"
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { sweepToolImages } from "../runtime/tool-image.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
@@ -2016,7 +2016,7 @@ export const StateLocation = Schema.TaggedUnion({
 })
 export type StateLocation = typeof StateLocation.Type
 
-interface DependenciesConfig<A = never> {
+interface DependenciesConfig {
   cwd: string
   home: string
   platform: string
@@ -2037,24 +2037,13 @@ interface DependenciesConfig<A = never> {
   failOnExtensionFailure: boolean
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
-  /**
-   * The branch-tool feature this deployment ships — its migrations, storage,
-   * and per-branch factory as one value. Required, not defaulted: a root that
-   * ships a stateful tool surface must name its feature. A tool or request
-   * that declares another feature (`branchTools`) fails its extension's load
-   * with the reason. A deployment whose tools are all stateless passes
-   * `noBranchTools`.
-   */
-  branchTools: BranchToolFeature<A>
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
 
-const makeStorageLayer = <A>(config: DependenciesConfig<A>) => {
-  const branchTools = config.branchTools
-  if (config.state._tag === "Memory")
-    return SqliteStorage.MemoryWithSql(branchTools.storage, branchTools.migrations)
-  return SqliteStorage.LiveWithSql(config.state.dbPath, branchTools.storage, branchTools.migrations)
+const makeStorageLayer = (state: StateLocation) => {
+  if (state._tag === "Memory") return SqliteStorage.MemoryWithSql
+  return SqliteStorage.LiveWithSql(state.dbPath)
 }
 
 const makeClusterRunnerLayer = (state: StateLocation) => {
@@ -2063,13 +2052,13 @@ const makeClusterRunnerLayer = (state: StateLocation) => {
   return SingleRunner.layer({ runnerStorage })
 }
 
-export const createDependencies = <A = never>(config: DependenciesConfig<A>) => {
+export const createDependencies = (config: DependenciesConfig) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
   })
 
-  const storageLive = makeStorageLayer(config)
+  const storageLive = makeStorageLayer(config.state)
   const clusterRunnerLive = makeClusterRunnerLayer(config.state)
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
@@ -2192,9 +2181,6 @@ export const createDependencies = <A = never>(config: DependenciesConfig<A>) => 
   // path that reaches it, and a graph that names a composite twice in each of
   // several levels builds it a power of that many times.
   const host = Layer.mergeAll(
-    // The app names the branch-tool feature it ships. The loop builds its
-    // layer without knowing what it is.
-    Layer.succeed(CurrentBranchToolFeature, config.branchTools),
     // The platform services extension leaves yield directly, re-provided
     // here so every root must supply them.
     extensionPlatformServicesLive,

@@ -6,7 +6,7 @@ import {
   type Message,
   type Session,
   type SessionId,
-  windowDetails,
+  contextWindowOf,
 } from "@gent/core/protocol"
 import {
   clientCommandContribution,
@@ -52,7 +52,7 @@ import { childTaskBody, threadTaskBody } from "@gent/extensions/client"
 const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 
 /** The marker details the pane reads; the loop owns the schema and the parse. */
-type WindowDetails = Option.Option.Value<ReturnType<typeof windowDetails>>
+type WindowDetails = Option.Option.Value<ReturnType<typeof contextWindowOf>>
 
 /** One context window on one branch: what the model saw between two handoffs. */
 export interface ThreadWindow {
@@ -146,7 +146,7 @@ const cutsOf = (
 ): ReadonlyArray<Cut> =>
   markers
     .flatMap((marker) =>
-      Option.match(windowDetails(marker), {
+      Option.match(contextWindowOf(marker), {
         onNone: () => [],
         onSome: (details) => {
           const at = body.findIndex((message) => message.id === details.keepFromMessageId)
@@ -211,8 +211,8 @@ export const windowsOf = (
   branchId: BranchId,
   messages: ReadonlyArray<Message>,
 ): ReadonlyArray<ThreadWindow> => {
-  const markers = messages.filter((message) => Option.isSome(windowDetails(message)))
-  const body = messages.filter((message) => Option.isNone(windowDetails(message)))
+  const markers = messages.filter((message) => Option.isSome(contextWindowOf(message)))
+  const body = messages.filter((message) => Option.isNone(contextWindowOf(message)))
   const cuts = cutsOf(body, markers)
   const windows: Array<ThreadWindow> = []
   let start = 0

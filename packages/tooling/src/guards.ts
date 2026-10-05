@@ -577,10 +577,10 @@ export const findBannedEslintDisableBlocks = (
 /**
  * SQL table-name prefixes owned by a feature.
  *
- * Core's migration chain builds the kernel's tables. A feature contributes the
- * migrations for its own tables at the same seam it contributes its
- * repositories, so a core source file naming one of these is core reaching
- * back into a feature it should not know about.
+ * Core's migration chain builds the kernel's tables. An extension that owns
+ * tables creates and migrates them in a process Resource of its own, so a core
+ * source file naming one of these is core reaching back into an extension it
+ * should not know about.
  */
 const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
@@ -615,7 +615,7 @@ export const findCoreFeatureIndependenceFindings = (
     findings.push({
       file,
       line: index + 1,
-      message: `core must not name a "${table.value}" table; the feature that owns it contributes its own migrations through the storage assembler's feature-migrations seam`,
+      message: `core must not name a "${table.value}" table; the extension that owns it migrates its own tables in a process Resource`,
     })
   }
   return findings
@@ -3022,7 +3022,15 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     // reports the same failure.
     file: "packages/core/tests/extensions/api.test.ts",
     text: "missingEffectContext:off -- the test asserts that this leaf does not compile",
-    count: 6,
+    count: 7,
+  },
+  {
+    // The type tests assert that a resource layer needing a service its
+    // build does not get fails to compile; the Effect diagnostic reports the
+    // same failure.
+    file: "packages/core/tests/extensions/api.test.ts",
+    text: "missingLayerContext:off -- the test asserts that this resource does not compile",
+    count: 3,
   },
 ]
 
@@ -3865,8 +3873,8 @@ interface PackageSurface {
  * Every workspace package has a row, so an `exports` map added anywhere is
  * checked. Core's public entry points follow their audience. Two authoring
  * surfaces are deliberately split: `extensions/api` for extensions that use
- * the loop, `extensions/branch-tools` for the rarer feature that implements a
- * loop seam. Keeping them apart is what keeps `api` small. `protocol` serves
+ * the loop, `extensions/branch-tools` for the rarer extension whose tools
+ * hold branch state and recover their own calls. Keeping them apart is what keeps `api` small. `protocol` serves
  * clients, `host` serves the processes that compose a server, and
  * `test-utils` serves tests. `@gent/extensions` is the builtin composition
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the

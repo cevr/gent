@@ -2,22 +2,16 @@
  * The shipped extensions as E2E presets for extension tests. The builtin
  * agents extension contributes the agents, so `agents` stays empty.
  */
-import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import { BuiltinExtensions } from "@gent/extensions"
 
 import { CellExtension } from "../../src/cell.js"
 import type { E2ELayerConfig } from "@gent/core/test-utils"
 
-/**
- * The shipped composition: every builtin extension (the agents among them), and the branch-tool
- * feature the cell surface among them runs on. Named together because the
- * `cell` tool declares the feature, and its extension fails to load in a
- * root that does not install it.
- */
+/** The shipped composition: every builtin extension, the agents and the cell among them. */
 export const shippedPreset = {
   agents: [],
   extensionInputs: BuiltinExtensions,
-  branchTools: CellBranchTools,
-} satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs" | "branchTools">
+} satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs">
 
 /**
  * Native tool surface for tool-behavior tests. Without the cell builtin the

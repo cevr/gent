@@ -56,6 +56,7 @@ import {
   makeCollectingExtensionHost,
   mapExtensionServiceError,
   provideExtensionServices,
+  type BranchAddress,
   type ResourceScope,
   sealRuntimeLoadedEffect,
   SessionMutations,
@@ -112,7 +113,6 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { type BranchToolFeature, CurrentBranchToolFeature } from "./tools.js"
 import {
   type ExtensionPlatformServices,
   GentPlatform,
@@ -280,20 +280,20 @@ const exitErasedEffect = <A>(
 }
 
 // oxlint-disable-next-line typescript/no-explicit-any -- The resource membrane erases heterogeneous service outputs.
-export type ErasedResourceLayer = Layer.Layer<any, never, never>
+type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
  * Resource layers erase to `Layer.Layer<any>` so their heterogeneous error and
  * requirement channels do not leak into callers.
  */
-export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
+const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
   const erased = layer as unknown as ErasedResourceLayer
   return erased
 }
 
 // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The empty layer is the erased identity for heterogeneous resource composition.
-export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
+const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
 
 /** Per-leaf facts layered over the current run's host context. */
 interface ExtensionLeafFrame {
@@ -1113,6 +1113,19 @@ interface BuiltScopeResources {
   readonly failed: ReadonlyArray<FailedResourceBuild>
   /** The given context with every live extension's services merged over it. */
   readonly context: Context.Context<unknown>
+  /** The services each live extension's Resources of the scope built, and only those. */
+  readonly services: ReadonlyMap<ExtensionId, Context.Context<unknown>>
+}
+
+/** What the branch Resources of one profile's extensions build over. */
+export interface ResourceBuildInputs {
+  /** The host's services every Resource build reads (`ResourceHostServices`). */
+  readonly host: Context.Context<unknown>
+  /** Each extension's live process Resources: their build key and the services they built. */
+  readonly process: ReadonlyMap<
+    ExtensionId,
+    { readonly key: string; readonly context: Context.Context<unknown> }
+  >
 }
 
 /**
@@ -1125,49 +1138,54 @@ const extensionResourceIdentity = (extension: LoadedExtension): string => {
   return `${extension.scope}:${extension.manifest.id}:${source}`
 }
 
-const resourceScopesOf = (extension: LoadedExtension): ReadonlySet<ResourceScope> =>
-  new Set((extension.contributions.resources ?? []).map((resource) => resource.scope))
+/** Whether an extension's branch Resources name any of its process Resources. */
+const branchReadsProcess = (extension: LoadedExtension): boolean =>
+  (extension.contributions.resources ?? []).some(
+    (resource) => resource.scope === "branch" && resource.resources.length > 0,
+  )
 
 /**
- * The build key of each extension's `scope` Resources: `root`, then the
- * identities of everything the build reads, in resolution order. Two builds
- * with one key build the same code over the same services, so a later build
- * can share an earlier one.
- *
- * A process Resource builds over the process Resources of the extensions
- * before it, so its key is theirs and its own: an edit changes the key of
- * the edited extension and of each one after it. A branch Resource builds
- * over the whole process context, where a later extension can override a
- * service an earlier one built, and over the branch Resources before it. So
- * its key holds every process-bearing extension, then the branch-bearing
- * ones up to and including it.
- *
- * These are the keys of what the set declares. A profile's process Resources
- * key on what started instead (`startProcessResources`), since a last good
- * version can start in place of a declared version.
+ * The build key of each extension's branch Resources: what the build reads.
+ * A branch Resource reads the host, its branch and the process Resources of
+ * its own extension it names. So its key is its extension's identity, or,
+ * when it names process Resources, the key those were built under: an edit
+ * to another extension keeps it, and an edit to its own extension gives a
+ * new one. Two builds with one key build the same code over the same
+ * services, so a later run can share an earlier one's build.
  */
-export const resourceBuildKeys = (
+export const branchResourceKeys = (
   extensions: ReadonlyArray<LoadedExtension>,
-  scope: ResourceScope,
-  root: string,
+  inputs: ResourceBuildInputs,
 ): ReadonlyMap<LoadedExtension, string> => {
-  const sorted = sortExtensionsByScope(extensions)
-  const chain = [root]
-  if (scope === "branch") {
-    for (const extension of sorted) {
-      if (resourceScopesOf(extension).has("process")) {
-        chain.push(extensionResourceIdentity(extension))
-      }
-    }
-  }
   const keys = new Map<LoadedExtension, string>()
-  for (const extension of sorted) {
-    if (!resourceScopesOf(extension).has(scope)) continue
-    chain.push(extensionResourceIdentity(extension))
-    keys.set(extension, chain.join("\u0000"))
+  for (const extension of extensions) {
+    if (!resourceScopesOf(extension).has("branch")) continue
+    const processKey = inputs.process.get(extension.manifest.id)
+    let read = extensionResourceIdentity(extension)
+    if (branchReadsProcess(extension) && !Predicate.isUndefined(processKey)) read = processKey.key
+    keys.set(extension, ["branch", read].join("\u0000"))
   }
   return keys
 }
+
+/**
+ * The context one extension's branch Resources build over: the host's
+ * services, the branch, and the process services of that extension when its
+ * branch Resources name them.
+ */
+export const branchBuildContext = (
+  extension: LoadedExtension,
+  inputs: ResourceBuildInputs,
+  address: Context.Context<BranchAddress>,
+): Context.Context<unknown> => {
+  const context = Context.merge(inputs.host, address)
+  const process = inputs.process.get(extension.manifest.id)
+  if (!branchReadsProcess(extension) || Predicate.isUndefined(process)) return context
+  return Context.merge(context, process.context)
+}
+
+const resourceScopesOf = (extension: LoadedExtension): ReadonlySet<ResourceScope> =>
+  new Set((extension.contributions.resources ?? []).map((resource) => resource.scope))
 
 /**
  * An extension's compactor, run as that extension's leaf: the run's host
@@ -1219,8 +1237,8 @@ const mergeResourceServices = (
  * Build one scope's Resources extension by extension, in resolution order, so
  * a later extension's service wins exactly as it does in the registry (a
  * compactor joins a chain instead; see `mergeResourceServices`). Each
- * extension builds in its own child of `parent`, over the services the
- * extensions before it built. A build that fails closes its own scope, is
+ * extension builds in its own child of `parent`, over its `buildContext`.
+ * A build that fails closes its own scope, is
  * logged naming its extension, and is returned in `failed`; the other
  * extensions' Resources stay live. Process and branch Resources both build
  * here.
@@ -1233,7 +1251,17 @@ const mergeResourceServices = (
 export const buildScopeResources = (params: {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly scope: ResourceScope
+  /** The context the built services merge over, for the leaves that read them. */
   readonly context: Context.Context<unknown>
+  /**
+   * What one extension's Resources build over, given the context with the
+   * services of the extensions before it: a process build reads them, a
+   * branch build reads only its own (`branchBuildContext`).
+   */
+  readonly buildContext: (
+    extension: LoadedExtension,
+    before: Context.Context<unknown>,
+  ) => Context.Context<unknown>
   readonly parent: Scope.Scope
   readonly restore: Restore
   readonly reuse?: (extension: LoadedExtension) => Option.Option<Context.Context<unknown>>
@@ -1253,6 +1281,7 @@ export const buildScopeResources = (params: {
     let context = params.context
     const active: Array<LoadedExtension> = []
     const failed: Array<FailedResourceBuild> = []
+    const services = new Map<ExtensionId, Context.Context<unknown>>()
     /** Share or build one extension's Resources over the context so far. */
     const start = (extension: LoadedExtension) =>
       Effect.gen(function* () {
@@ -1262,7 +1291,7 @@ export const buildScopeResources = (params: {
         const built = yield* params
           .restore(
             Layer.build(buildResourceLayer([extension], params.scope)).pipe(
-              Effect.provideContext(context),
+              Effect.provideContext(params.buildContext(extension, context)),
               Effect.provideService(Scope.Scope, extensionScope),
             ),
           )
@@ -1287,6 +1316,7 @@ export const buildScopeResources = (params: {
       const built = yield* start(extension)
       if (Exit.isSuccess(built)) {
         context = mergeResourceServices(context, built.value, extension.manifest.id)
+        services.set(extension.manifest.id, built.value)
         active.push(extension)
         continue
       }
@@ -1299,6 +1329,7 @@ export const buildScopeResources = (params: {
         const previous = yield* start(fallback.value)
         if (Exit.isSuccess(previous)) {
           context = mergeResourceServices(context, previous.value, fallback.value.manifest.id)
+          services.set(fallback.value.manifest.id, previous.value)
           active.push(fallback.value)
           continue
         }
@@ -1309,7 +1340,7 @@ export const buildScopeResources = (params: {
         message: causeChainMessage(Cause.squash(built.cause)),
       })
     }
-    return { active, failed, context }
+    return { active, failed, context, services }
   })
 
 // ── host-platform ───────────────────────────────────────────────────────────
@@ -2140,37 +2171,8 @@ const collectDuplicateExtensionIds = (
   }
 }
 
-/**
- * The leaves of one extension that name a branch-tool feature other than the
- * one the root installs. Such a leaf's storage and per-branch services exist
- * in no other root, so it would fail on its first call.
- */
-const branchToolFeatureErrors = (
-  contribs: ExtensionContributions,
-  installed: BranchToolFeature<never>,
-): ReadonlyArray<string> => {
-  const leaves = [
-    ...(contribs.tools ?? []).flatMap((capability, i) => {
-      if (!isToolCapability(capability)) return []
-      const metadata = getToolMetadata(capability)
-      return [{ label: `tools[${i}] (${metadata.id})`, feature: metadata.branchTools }]
-    }),
-    ...(contribs.requests ?? []).map((capability, i) => ({
-      label: `requests[${i}] (${capability.id})`,
-      feature: capability.branchTools,
-    })),
-  ]
-  return leaves.flatMap(({ label, feature }) => {
-    if (Predicate.isUndefined(feature) || feature === installed) return []
-    return [
-      `${label}: runs on the branch-tool feature "${feature.id}", which this root does not install (it installs "${installed.id}")`,
-    ]
-  })
-}
-
 const collectValidationFailures = (
   extensions: ReadonlyArray<LoadedExtension>,
-  installedBranchTools: BranchToolFeature<never>,
 ): ReadonlyMap<string, { ext: LoadedExtension; errors: ReadonlyArray<string> }> => {
   const failures = new Map<string, { ext: LoadedExtension; errors: string[] }>()
 
@@ -2185,12 +2187,6 @@ const collectValidationFailures = (
   }
 
   collectDuplicateExtensionIds(extensions, addFailure)
-
-  for (const ext of extensions) {
-    for (const error of branchToolFeatureErrors(ext.contributions, installedBranchTools)) {
-      addFailure(ext, error)
-    }
-  }
 
   const collectScopedCollisions = <T>(
     pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
@@ -2258,29 +2254,27 @@ const collectValidationFailures = (
 }
 
 /**
- * Fail each extension whose declarations conflict with another's or with the
- * root: a leaf that names a branch-tool feature fails unless it is the one
- * `CurrentBranchToolFeature` holds, the feature the root installs.
+ * Fail each extension whose declarations conflict with another's: a duplicate
+ * id, or a same-scope capability, agent, driver, API class or router key.
  */
 export const validateLoadedExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<ExtensionActivationResult> =>
-  Effect.gen(function* () {
-    const failures = collectValidationFailures(extensions, yield* CurrentBranchToolFeature)
-    if (failures.size === 0) return { active: [...extensions], failed: [] }
+): ExtensionActivationResult => {
+  const failures = collectValidationFailures(extensions)
+  if (failures.size === 0) return { active: [...extensions], failed: [] }
 
-    const active: LoadedExtension[] = []
-    const failed: FailedExtension[] = []
-    for (const ext of extensions) {
-      const failure = failures.get(extensionKey(ext))
-      if (Predicate.isUndefined(failure)) {
-        active.push(ext)
-        continue
-      }
-      failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
+  const active: LoadedExtension[] = []
+  const failed: FailedExtension[] = []
+  for (const ext of extensions) {
+    const failure = failures.get(extensionKey(ext))
+    if (Predicate.isUndefined(failure)) {
+      active.push(ext)
+      continue
     }
-    return { active, failed }
-  })
+    failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
+  }
+  return { active, failed }
+}
 
 // ── profile ─────────────────────────────────────────────────────────────────
 
@@ -2322,6 +2316,8 @@ export interface SessionProfile {
   readonly layerContext: RuntimeProfileServiceContext
   readonly registryService: ExtensionRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
+  /** What its extensions' branch Resources build over: the host, and each one's process services. */
+  readonly resourceBuilds: ResourceBuildInputs
   /**
    * Identity of the process that built this profile. A process-local tool
    * binding is replayable only inside it.
@@ -2444,7 +2440,7 @@ export const loadRuntimeProfileDeclarations = (
     // 5. Validate declarations without acquiring process resources. The new
     // versions validate among themselves first. One that fails runs its last
     // good version, if that is another version.
-    const fresh = yield* validateLoadedExtensions(setup.active)
+    const fresh = validateLoadedExtensions(setup.active)
     const replaced = new Map<LoadedExtension, LoadedExtension>()
     for (const failure of fresh.failed) {
       const failedFresh = Option.fromNullishOr(
@@ -2464,7 +2460,7 @@ export const loadRuntimeProfileDeclarations = (
       ...setup.active.map((extension) => replaced.get(extension) ?? extension),
       ...kept,
     ]
-    let extensionDeclarations = yield* validateLoadedExtensions(candidates)
+    let extensionDeclarations = validateLoadedExtensions(candidates)
     const rejected: FailedExtension[] = []
     for (;;) {
       const colliding = candidates.filter(
@@ -2478,7 +2474,7 @@ export const loadRuntimeProfileDeclarations = (
         if (!Predicate.isUndefined(failure)) rejected.push(failure)
       }
       candidates = candidates.filter((extension) => !colliding.includes(extension))
-      extensionDeclarations = yield* validateLoadedExtensions(candidates)
+      extensionDeclarations = validateLoadedExtensions(candidates)
     }
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
@@ -2514,6 +2510,7 @@ const buildSessionProfile = (params: {
   readonly resolved: ResolvedExtensions
   readonly coreSections: ReadonlyArray<PromptSection>
   readonly resourceContext: Context.Context<unknown>
+  readonly resourceBuilds: ResourceBuildInputs
   readonly generationId: ProcessGenerationId
   readonly providerConfig: Effect.Effect<ProviderConfig>
 }) =>
@@ -2536,6 +2533,7 @@ const buildSessionProfile = (params: {
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
       baseSections: params.coreSections,
+      resourceBuilds: params.resourceBuilds,
       generationId: params.generationId,
     } satisfies SessionProfile
   })
@@ -2695,6 +2693,8 @@ interface StartedProcessResources {
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
   readonly context: Context.Context<unknown>
+  /** Each live extension's process Resources: their key and the services they built. */
+  readonly process: ResourceBuildInputs["process"]
 }
 
 export class SessionProfileCache extends Context.Service<
@@ -2703,7 +2703,11 @@ export class SessionProfileCache extends Context.Service<
 >()("@gent/core/src/runtime/extension-host/SessionProfileCache") {
   static Live = (
     config: SessionProfileCacheConfig,
-  ): Layer.Layer<SessionProfileCache, never, ExtensionPlatformServices | ConfigService> =>
+  ): Layer.Layer<
+    SessionProfileCache,
+    never,
+    ExtensionPlatformServices | ConfigService | SqlClient.SqlClient | InteractionStorage
+  > =>
     Layer.effect(
       SessionProfileCache,
       Effect.gen(function* () {
@@ -2714,13 +2718,14 @@ export class SessionProfileCache extends Context.Service<
         const crypto = yield* Crypto.Crypto
         const httpClient = yield* HttpClient.HttpClient
         const platform = yield* GentPlatform
-        // The feature the root installs, read once where the root builds this
-        // cache: each profile validates its extensions' leaves against it.
-        const installedBranchTools = yield* CurrentBranchToolFeature
+        const sql = yield* SqlClient.SqlClient
+        const interactions = yield* InteractionStorage
         // Every profile's resources close with this server scope.
         const serverScope = yield* Scope.Scope
         const generationId = ProcessGenerationId.make(yield* platform.randomId)
 
+        // What every Resource build reads (`ResourceHostServices`), and the
+        // config the leaves read through the profile.
         const platformServicesContext: Context.Context<unknown> = Context.makeUnsafe<unknown>(
           new Map(),
         ).pipe(
@@ -2731,7 +2736,8 @@ export class SessionProfileCache extends Context.Service<
           Context.add(HttpClient.HttpClient, httpClient),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),
-          Context.add(CurrentBranchToolFeature, installedBranchTools),
+          Context.add(SqlClient.SqlClient, sql),
+          Context.add(InteractionStorage, interactions),
         )
 
         interface ProfileEntry {
@@ -2926,15 +2932,18 @@ export class SessionProfileCache extends Context.Service<
             // The key of a build is the identities of the builds it runs over,
             // as they started: a last good version that runs in place of a
             // version that failed to start is named by its own version, and a
-            // build after it by that version too (`resourceBuildKeys` names
-            // what the set declares, not what started). `buildScopeResources`
+            // build after it by that version too. `buildScopeResources`
             // shares or builds one extension at a time in resolution order,
             // and each one it shares or builds is live over the ones before.
+            // A branch Resource that reads an extension's process Resources
+            // keys on that extension's key (`branchResourceKeys`).
             const chain = [place]
             const keyOf = (extension: LoadedExtension) =>
               [...chain, extensionResourceIdentity(extension)].join("\u0000")
+            const keys = new Map<ExtensionId, string>()
             const accept = (extension: LoadedExtension, key: string) => {
               chain.push(extensionResourceIdentity(extension))
+              keys.set(extension.manifest.id, key)
               held.push(key)
             }
             // The set as it runs: each last good version in place of the
@@ -2944,6 +2953,7 @@ export class SessionProfileCache extends Context.Service<
               extensions,
               scope: "process",
               context: platformServicesContext,
+              buildContext: (_extension, before) => before,
               parent: serverScope,
               restore,
               reuse: (extension) => {
@@ -2976,18 +2986,26 @@ export class SessionProfileCache extends Context.Service<
                       if (sameSource(other, extension)) return previous
                       return other
                     })
-                    if (collectValidationFailures(substituted, installedBranchTools).size > 0)
-                      return false
+                    if (collectValidationFailures(substituted).size > 0) return false
                     effective = substituted
                     return true
                   }),
                 )
               },
             })
+            const process = new Map<
+              ExtensionId,
+              { key: string; context: Context.Context<unknown> }
+            >()
+            for (const [id, context] of started.services) {
+              const key = keys.get(id)
+              if (!Predicate.isUndefined(key)) process.set(id, { key, context })
+            }
             return {
               active: started.active,
               failed: started.failed.map(({ failure }) => failure),
               context: started.context,
+              process,
             }
           })
 
@@ -3045,6 +3063,7 @@ export class SessionProfileCache extends Context.Service<
                   resolved,
                   coreSections: declarations.coreSections,
                   resourceContext: started.context,
+                  resourceBuilds: { host: platformServicesContext, process: started.process },
                   generationId,
                   providerConfig: Effect.map(configService.get(cwd), (current) => ({
                     providers: current.providers,
@@ -4238,6 +4257,7 @@ export const resolveTurnProfile = (params: {
       turnHostCtx: hostProvider.forRun(runInfo),
       turnInteractive: interactive,
       turnCapabilityContext: profile.layerContext,
+      turnResourceBuilds: profile.resourceBuilds,
       turnGenerationId: profile.generationId,
       ...omitUndefined({ turnProfileRevision: profile.revision }),
     }

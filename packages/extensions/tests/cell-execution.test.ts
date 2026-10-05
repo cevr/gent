@@ -1,7 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Exit, Fiber, FileSystem, Option, Path, Ref, Schema } from "effect"
 import { staticToolBinding } from "@gent/core/test-utils"
-import { StorageError } from "@gent/core/extensions/branch-tools"
+import { CurrentTurnStop, StorageError, type TurnStop } from "@gent/core/extensions/branch-tools"
 import { CellStorage, CellOperationHost, CellWorker } from "../src/cell.js"
 import { CellEvaluationError } from "../src/cell-protocol.js"
 import {
@@ -50,6 +50,29 @@ const replyText = (owner: CellOwner, call: CellCall, host = noHostCalls) =>
   )
 
 describe("recorded cell execution", () => {
+  it.scopedLive(
+    "a cell whose turn already stopped does not start, and its result says so",
+    () =>
+      Effect.gen(function* () {
+        const [call] = yield* setupCalls(["1"], [])
+        if (!call) return yield* Effect.die("Missing cell")
+        const cells = yield* openCellOwner(unusedWorker)
+        const stopped: TurnStop = {
+          stopped: Effect.void,
+          isStopped: Effect.succeed(true),
+          closing: Effect.succeed(false),
+        }
+        const result = yield* runCell(cells, call).pipe(
+          Effect.provideService(CurrentTurnStop, stopped),
+        )
+        expect(result).toMatchObject({
+          isFailure: true,
+          result: { message: "Cell did not start because execution was cancelled." },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
   it.scopedLive(
     "records reset once and does not clear newer state on repeat",
     () =>
