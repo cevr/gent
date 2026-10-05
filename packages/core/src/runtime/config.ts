@@ -3,9 +3,11 @@ import {
   Effect,
   Equal,
   FileSystem,
+  Function,
   Layer,
   Option,
   Path,
+  PlatformError,
   Predicate,
   Ref,
   Result,
@@ -349,17 +351,32 @@ interface ConfigServiceService {
 }
 
 /**
- * A fresh config read: the merged config, every file that did not load, and
- * what the files hold (`fingerprint`). `config` holds only the fields core
- * decodes, and an extension reads its own keys from the same files at setup
- * (`guard`, `routers`): the fingerprint names every key of both files, so a
- * session profile keyed by it is built again when one of them changes. It
- * leaves out `disabledExtensions`, which the profile key holds as its effect
- * (the extensions that run), and is the same for a missing file and `{}`.
+ * One config file as a read found it: its text, missing, or not readable
+ * (the read failed; a file that is not JSON is `Read`).
+ */
+const ConfigFileRead = Schema.TaggedUnion({
+  Read: { path: Schema.String, text: Schema.String },
+  Missing: { path: Schema.String },
+  Unreadable: { path: Schema.String, message: Schema.String },
+})
+type ConfigFileRead = typeof ConfigFileRead.Type
+
+/**
+ * A fresh config read: the merged config, every file that did not load, the
+ * files as the read found them (`files`), and what they hold
+ * (`fingerprint`). `config` holds only the fields core decodes, and an
+ * extension reads its own keys from the same files at setup (`guard`,
+ * `routers`). A session profile is built from one read: its key holds the
+ * fingerprint, and its setups read `files` (`configSnapshotFileSystem`), so
+ * the profile and its key agree. The fingerprint names every key of the
+ * files but `disabledExtensions`, which the profile key holds as its effect
+ * (the extensions that run); a missing file is the same as `{}`, and a file
+ * that cannot be read is `unreadable`.
  */
 export interface FreshConfig {
   readonly config: UserConfig
   readonly failures: ReadonlyArray<ConfigLoadError>
+  readonly files: ReadonlyArray<ConfigFileRead>
   readonly fingerprint: string
 }
 
@@ -379,6 +396,75 @@ const configFingerprint = (content: string): string =>
       )
     },
   })
+
+/** What the files hold, in read order: each one's keys, or `unreadable`. */
+const configFilesFingerprint = (files: ReadonlyArray<ConfigFileRead>): string =>
+  files
+    .map((file) =>
+      ConfigFileRead.match(file, {
+        Read: ({ path, text }) => `${path}=${configFingerprint(text)}`,
+        Missing: ({ path }) => `${path}=${configFingerprint("{}")}`,
+        Unreadable: ({ path }) => `${path}=unreadable`,
+      }),
+    )
+    .join("\u0000")
+
+/**
+ * A file system that answers reads of the config files from one read of
+ * them (`files`): `exists` and `readFile`/`readFileString` of a config path
+ * give what the read found, a missing file is `NotFound`, and a file the read
+ * could not read fails again. Every other path, and every other operation,
+ * goes to `fs`. A profile build runs its extension scan and setups over it,
+ * so what they read of the config is what the profile key names.
+ */
+export const configSnapshotFileSystem = (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  files: ReadonlyArray<ConfigFileRead>,
+): FileSystem.FileSystem => {
+  const byPath = new Map(files.map((file) => [path.resolve(file.path), file]))
+  const answer = <A>(
+    method: string,
+    filePath: string,
+    read: (text: string) => A,
+    otherwise: Effect.Effect<A, PlatformError.PlatformError>,
+  ): Effect.Effect<A, PlatformError.PlatformError> =>
+    Option.match(Option.fromUndefinedOr(byPath.get(path.resolve(filePath))), {
+      onNone: () => otherwise,
+      onSome: (file) =>
+        ConfigFileRead.match(file, {
+          Read: ({ text }): Effect.Effect<A, PlatformError.PlatformError> =>
+            Effect.succeed(read(text)),
+          Missing: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method,
+                pathOrDescriptor: filePath,
+                description: "No such file or directory",
+              }),
+            ),
+          Unreadable: ({ message }) =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "FileSystem",
+                method,
+                pathOrDescriptor: filePath,
+                description: message,
+              }),
+            ),
+        }),
+    })
+  return FileSystem.make({
+    ...fs,
+    access: (filePath, options) =>
+      answer("access", filePath, Function.constVoid, fs.access(filePath, options)),
+    readFile: (filePath) =>
+      answer("readFile", filePath, (text) => new TextEncoder().encode(text), fs.readFile(filePath)),
+  })
+}
 
 export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
   path: Schema.String,
@@ -494,58 +580,72 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           Effect.mapError(loadError(filePath)),
         )
 
-      // The decoded read of each file, kept while its stat (mtime, size and
-      // inode) is the same, so a turn does not read and decode unchanged files. A
-      // changed or new file is read at once; a missing one reads as empty. Only
-      // a decode is kept: a read that failed (EMFILE, a permission changed and
-      // back) is tried again on the next call, since the stat need not change.
-      const decodedFiles = new Map<
-        string,
-        {
-          readonly stamp: string
-          readonly read: Result.Result<UserConfig, ConfigLoadError>
-          readonly fingerprint: string
-        }
-      >()
-      /** The fingerprint of the file's last read; `unread` when no read of it was kept. */
-      const fingerprintOf = (filePath: string) =>
-        decodedFiles.get(filePath)?.fingerprint ?? "unread"
+      // The read of each file, kept while its stat (mtime, size and inode) is
+      // the same, so a turn does not read and decode unchanged files. A
+      // changed or new file is read at once; a missing one reads as empty.
+      // Only a read is kept: a read that failed (EMFILE, a permission changed
+      // and back) is tried again on the next call, since the stat need not
+      // change. An entry holds the decode and what the file held (`file`).
+      interface KeptRead {
+        readonly stamp: string
+        readonly read: Result.Result<UserConfig, ConfigLoadError>
+        readonly file: ConfigFileRead
+      }
+      const keptReads = new Map<string, KeptRead>()
       const fileStamp = (filePath: string) =>
         fs.stat(filePath).pipe(
           Effect.map(fileVersion),
           Effect.orElseSucceed(() => "missing"),
         )
-      const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
+      /** The file as it is now; fails only when it cannot be read. */
+      const readConfigFile = (filePath: string): Effect.Effect<KeptRead, ConfigLoadError> =>
         Effect.gen(function* () {
           const stamp = yield* fileStamp(filePath)
-          const cached = Option.fromUndefinedOr(decodedFiles.get(filePath))
-          if (Option.isSome(cached) && cached.value.stamp === stamp) {
-            return yield* Result.match(cached.value.read, {
-              onSuccess: Effect.succeed,
-              onFailure: Effect.fail,
-            })
-          }
-          const content = yield* readConfigText(filePath).pipe(Effect.mapError(loadError(filePath)))
-          const read = yield* Effect.result(decodeConfigText(filePath, content))
-          decodedFiles.set(filePath, { stamp, read, fingerprint: configFingerprint(content) })
-          return yield* Result.match(read, { onSuccess: Effect.succeed, onFailure: Effect.fail })
+          const cached = Option.fromUndefinedOr(keptReads.get(filePath))
+          if (Option.isSome(cached) && cached.value.stamp === stamp) return cached.value
+          const text = yield* fs.exists(filePath).pipe(
+            Effect.flatMap((exists) => {
+              if (exists) return Effect.asSome(fs.readFileString(filePath))
+              return Effect.succeedNone
+            }),
+            Effect.mapError(loadError(filePath)),
+          )
+          const read = yield* Effect.result(
+            decodeConfigText(
+              filePath,
+              Option.getOrElse(text, () => "{}"),
+            ),
+          )
+          const file = Option.match(text, {
+            onNone: () => ConfigFileRead.cases.Missing.make({ path: filePath }),
+            onSome: (content) => ConfigFileRead.cases.Read.make({ path: filePath, text: content }),
+          })
+          const kept: KeptRead = { stamp, read, file }
+          keptReads.set(filePath, kept)
+          return kept
         })
+      const unreadable = (error: ConfigLoadError) =>
+        ConfigFileRead.cases.Unreadable.make({ path: error.path, message: error.message })
 
-      // The user file as it is now. An unchanged file answers from the decode
-      // cache without the lock. A changed one is decoded under the writers'
-      // lock, and publishes the snapshot there: reads and writes of the user
-      // file take turns, so the snapshot published last is the file read last,
+      // The user file as it is now. An unchanged file answers from the kept
+      // read without the lock. A changed one is read under the writers'
+      // lock, and publishes the decode there: reads and writes of the user
+      // file take turns, so the config published last is the file read last,
       // and a read that raced a write cannot put the older config back.
-      const readUserConfig: Effect.Effect<Result.Result<UserConfig, ConfigLoadError>> = Effect.gen(
+      const readUserConfig: Effect.Effect<Result.Result<KeptRead, ConfigLoadError>> = Effect.gen(
         function* () {
           const stamp = yield* fileStamp(userConfigPath)
-          const cached = Option.fromUndefinedOr(decodedFiles.get(userConfigPath))
-          if (Option.isSome(cached) && cached.value.stamp === stamp) return cached.value.read
+          const cached = Option.fromUndefinedOr(keptReads.get(userConfigPath))
+          if (Option.isSome(cached) && cached.value.stamp === stamp)
+            return Result.succeed(cached.value)
           return yield* SynchronizedRef.modifyEffect(userConfigRef, (current) =>
-            Effect.result(readConfigFresh(userConfigPath)).pipe(
-              Effect.map((read) => [
-                read,
-                Result.match(read, { onSuccess: (decoded) => decoded, onFailure: () => current }),
+            Effect.result(readConfigFile(userConfigPath)).pipe(
+              Effect.map((kept) => [
+                kept,
+                Result.match(kept, {
+                  onSuccess: ({ read }) => Result.getOrElse(read, () => current),
+                  onFailure: () => current,
+                }),
               ]),
             ),
           )
@@ -557,14 +657,17 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // is fixed (`getFresh`). Writes never start from this snapshot: each
       // one reads the user file again and refuses when it does not decode.
       const loadUserConfig = readUserConfig.pipe(
-        Effect.flatMap((read) =>
-          Result.match(read, {
-            onSuccess: () => Effect.void,
-            onFailure: (error) =>
-              Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
-                Effect.annotateLogs({ path: userConfigPath, error: error.message }),
-              ),
-          }),
+        Effect.flatMap((kept) =>
+          Result.match(
+            Result.flatMap(kept, ({ read }) => read),
+            {
+              onSuccess: () => Effect.void,
+              onFailure: (error) =>
+                Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
+                  Effect.annotateLogs({ path: userConfigPath, error: error.message }),
+                ),
+            },
+          ),
         ),
       )
 
@@ -630,35 +733,41 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // refuses to run on either: the stand-in can grant more than the file.
       const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
         const failures: Array<ConfigLoadError> = []
+        const files: Array<ConfigFileRead> = []
         const userRead = yield* readUserConfig
-        // Read at once after the file's read, and before any extension setup
-        // reads the file: a setup never reads an older file than the
-        // fingerprint its profile is keyed by.
-        const userFingerprint = fingerprintOf(userConfigPath)
-        let user: UserConfig
-        if (Result.isSuccess(userRead)) {
-          user = userRead.success
-        } else {
+        let user = yield* SynchronizedRef.get(userConfigRef)
+        if (Result.isFailure(userRead)) {
           failures.push(userRead.failure)
-          user = yield* SynchronizedRef.get(userConfigRef)
+          files.push(unreadable(userRead.failure))
+        } else {
+          files.push(userRead.success.file)
+          if (Result.isSuccess(userRead.success.read)) user = userRead.success.read.success
+          else failures.push(userRead.success.read.failure)
         }
         let project = new UserConfig({})
-        let projectFingerprint = configFingerprint("{}")
         const projectScope = yield* hasProjectScope({ user: home, project: cwd }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
         )
         if (projectScope) {
-          const projectPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
-          const projectRead = yield* Effect.result(readConfigFresh(projectPath))
-          projectFingerprint = fingerprintOf(projectPath)
-          if (Result.isSuccess(projectRead)) project = projectRead.success
-          else failures.push(projectRead.failure)
+          const projectRead = yield* Effect.result(
+            readConfigFile(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
+          )
+          if (Result.isFailure(projectRead)) {
+            failures.push(projectRead.failure)
+            files.push(unreadable(projectRead.failure))
+          } else {
+            files.push(projectRead.success.file)
+            if (Result.isSuccess(projectRead.success.read))
+              project = projectRead.success.read.success
+            else failures.push(projectRead.success.read.failure)
+          }
         }
         return {
           config: mergeConfigs(user, project),
           failures,
-          fingerprint: `user:${userFingerprint}\u0000project:${projectFingerprint}`,
+          files,
+          fingerprint: configFilesFingerprint(files),
         }
       })
 
@@ -718,6 +827,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 config: mergeConfigs(user, emptyProjectConfig),
                 failures: [],
                 // It reads no file, so no file an extension reads can change.
+                files: [],
                 fingerprint: "test",
               }
             }),

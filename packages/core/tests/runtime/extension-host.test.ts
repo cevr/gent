@@ -16,6 +16,7 @@ import {
   Predicate,
   Ref,
   References,
+  Result,
   Schema,
   Scope,
   Stream,
@@ -1690,6 +1691,108 @@ export default defineExtension({
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A profile is built from one read of the config: an edit that lands
+  // after the read and before the setups does not reach them, so the profile
+  // runs the config its key names.
+  it.scopedLive("an edit between the config read and the setups does not reach the profile", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      yield* fs.writeFileString(projectConfig, '{"mark":"A"}')
+      // What each setup read of the project config.
+      const read: Array<string> = []
+      const reader = defineExtension({
+        id: "@gent/test-session-profile/config-reader",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          const files = yield* FileSystem.FileSystem
+          const text = yield* files
+            .readFileString(path.join(host.cwd, ".gent", "config.json"))
+            .pipe(Effect.orDie)
+          read.push(text)
+        }),
+      })
+      let edited = false
+      const editAfterRead = (live: ConfigService["Service"]): ConfigService["Service"] => ({
+        ...live,
+        getFresh: (cwd) =>
+          live.getFresh(cwd).pipe(
+            Effect.tap(() => {
+              if (edited) return Effect.void
+              edited = true
+              return fs.writeFileString(projectConfig, '{"mark":"B"}').pipe(Effect.orDie)
+            }),
+          ),
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const first = yield* Effect.scoped(cache.resolve(launch))
+        expect(read).toEqual(['{"mark":"A"}'])
+        // The edit is undone: the next read names the first profile's config.
+        yield* fs.writeFileString(projectConfig, '{"mark":"A"}')
+        expect(yield* Effect.scoped(cache.resolve(launch))).toBe(first)
+        expect(read).toEqual(['{"mark":"A"}'])
+      }).pipe(
+        Effect.provide(
+          makeCacheLayer({ cwd: launch, home, extensions: [reader], wrapConfig: editAfterRead }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A config file that cannot be read has no content to name: the profile
+  // built from that read sees the same failure, and a read that works again
+  // builds a new one.
+  it.scopedLive("a config file that cannot be read reaches the setups as unreadable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      // A directory where the file is: a read of it fails, and it is not missing.
+      yield* fs.makeDirectory(projectConfig, { recursive: true })
+      const read: Array<string> = []
+      const reader = defineExtension({
+        id: "@gent/test-session-profile/unreadable-reader",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          const files = yield* FileSystem.FileSystem
+          const result = yield* files
+            .readFileString(path.join(host.cwd, ".gent", "config.json"))
+            .pipe(Effect.result)
+          read.push(Result.getOrElse(result, () => "failed"))
+        }),
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const broken = yield* Effect.scoped(cache.resolve(launch))
+        expect(read).toEqual(["failed"])
+        yield* fs.remove(projectConfig, { recursive: true })
+        yield* fs.writeFileString(projectConfig, "{}")
+        expect(yield* Effect.scoped(cache.resolve(launch))).not.toBe(broken)
+        expect(read).toEqual(["failed", "{}"])
+      }).pipe(
+        Effect.provide(
+          makeCacheLayer({
+            cwd: launch,
+            home,
+            extensions: [reader],
+            allowFailedExtensions: true,
+          }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   // Each edit to the list derives a new profile. The one it replaces holds

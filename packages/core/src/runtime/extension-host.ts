@@ -115,6 +115,7 @@ import {
 import {
   type ConfigLoadError,
   ConfigService,
+  configSnapshotFileSystem,
   fileVersion,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
@@ -2811,6 +2812,20 @@ export class SessionProfileCache extends Context.Service<
           Context.add(SqlClient.SqlClient, sql),
           Context.add(InteractionStorage, interactions),
         )
+        /**
+         * The services a profile build's extension scan and setups read: the
+         * platform's, with the config files as `fresh` found them. The build
+         * reads the config once: its key holds that read's fingerprint, and
+         * what a setup reads of the config files is that same read, so an
+         * edit between the two cannot leave a profile that disagrees with
+         * its key. Resource builds and leaves read the live files.
+         */
+        const configReadContext = (fresh: FreshConfig): Context.Context<unknown> =>
+          Context.add(
+            platformServicesContext,
+            FileSystem.FileSystem,
+            configSnapshotFileSystem(fs, pathSvc, fresh.files),
+          )
 
         interface ProfileEntry {
           /** The declaration key and the last good versions the build decided by. */
@@ -3189,7 +3204,7 @@ export class SessionProfileCache extends Context.Service<
                 effectiveInputs(inputsFor(cwd), fresh.config),
                 scan,
                 lastGoodFor(place),
-              ).pipe(Effect.provideContext(platformServicesContext)),
+              ).pipe(Effect.provideContext(configReadContext(fresh))),
             )
             // Profiles of one declaration key differ only by the last good
             // versions their builds decided by; the one whose versions are
@@ -3288,7 +3303,7 @@ export class SessionProfileCache extends Context.Service<
                   const fresh = yield* restore(configService.getFresh(canonicalCwd))
                   const scan = yield* restore(
                     scanRuntimeProfileExtensions(inputsFor(canonicalCwd), graphs).pipe(
-                      Effect.provideContext(platformServicesContext),
+                      Effect.provideContext(configReadContext(fresh)),
                     ),
                   )
                   const list = listKey(
