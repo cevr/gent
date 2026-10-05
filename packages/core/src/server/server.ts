@@ -162,8 +162,11 @@ import {
 import {
   type AgentName,
   type AgentPathEntry,
+  bindSessionAgent,
   DEFAULT_AGENT_NAME,
   isReasoningEffort,
+  noRunBound,
+  type PathScope,
   resolveAgentRoster,
   resolveSessionAgent,
   RunPathRefusedError,
@@ -733,8 +736,7 @@ const makeSessionMutationsService: Effect.Effect<
   const requireScopeReaches = Effect.fn("SessionMutations.requireScopeReaches")(function* (
     entries: ReadonlyArray<AgentPathEntry>,
     base: string,
-    scope: ReadonlyArray<AgentPathEntry>,
-    scopeBase: string,
+    scope: PathScope,
     owner: string,
   ) {
     const resolve = (from: string) => (entry: AgentPathEntry) =>
@@ -742,13 +744,13 @@ const makeSessionMutationsService: Effect.Effect<
         path,
         access: entry.access,
       }))
-    const reach = yield* Effect.forEach(scope, resolve(scopeBase))
+    const reach = yield* Effect.forEach(scope.entries, resolve(scope.cwd))
     const within = (inner: string, outer: string) => pathWithin(pathService, outer, inner)
     for (const entry of entries) {
       if (scopeReaches(reach, yield* resolve(base)(entry), within)) continue
-      const named = scope.map((outer) => `${outer.path} (${outer.access})`).join(", ")
+      const named = scope.entries.map((outer) => `${outer.path} (${outer.access})`).join(", ")
       return yield* new RunPathRefusedError({
-        message: `Run paths entry "${entry.path}" (${entry.access}) is outside ${owner}'s paths: ${named}. A run's paths only narrow its agent's. Paths are relative to ${base}.`,
+        message: `Run paths entry "${entry.path}" (${entry.access}) is outside ${owner}'s paths: ${named}, relative to ${scope.cwd}. A run's paths only narrow its agent's. Paths are relative to ${base}.`,
         path: entry.path,
         access: entry.access,
       })
@@ -814,8 +816,9 @@ const makeSessionMutationsService: Effect.Effect<
       return yield* new NotFoundError({ message: `Unknown agent: ${name}` })
     }
     if (Option.isNone(named)) return
-    for (const scope of agent.pathScopes()) {
-      yield* requireScopeReaches(named.value, cwd, scope, cwd, `agent "${name}"`)
+    const own = bindSessionAgent(agent, { overrides: Option.none(), cwd, parent: noRunBound })
+    for (const scope of own.pathScopes()) {
+      yield* requireScopeReaches(named.value, cwd, scope, `agent "${name}"`)
     }
   })
 
@@ -833,25 +836,27 @@ const makeSessionMutationsService: Effect.Effect<
     const parent = yield* sessionStorage.getSession(parentSessionId)
     if (Predicate.isUndefined(parent)) return requested
     const parentCwd = parent.cwd ?? runtimeEnvironment.cwd
+    const overrides = Option.fromUndefinedOr(parent.admission?.runSpec?.overrides)
     const parentAgent = resolveSessionAgent({
       ...(yield* rosterFor(parentCwd)),
       name: parent.admission?.agent ?? DEFAULT_AGENT_NAME,
-      overrides: Option.fromUndefinedOr(parent.admission?.runSpec?.overrides),
+      overrides,
     })
     const parentScopes = Option.match(parentAgent, {
       onNone: () => [],
-      onSome: (agent) => agent.pathScopes(),
+      onSome: (agent) =>
+        bindSessionAgent(agent, { overrides, cwd: parentCwd, parent: noRunBound }).pathScopes(),
     })
     const narrowest = parentScopes.at(-1)
     if (Predicate.isUndefined(narrowest)) return requested
     if (Option.isSome(named)) {
       for (const scope of parentScopes) {
-        yield* requireScopeReaches(named.value, cwd, scope, parentCwd, "the parent run")
+        yield* requireScopeReaches(named.value, cwd, scope, "the parent run")
       }
       return requested
     }
-    const paths = narrowest.map((entry) => ({
-      path: pathService.resolve(parentCwd, entry.path),
+    const paths = narrowest.entries.map((entry) => ({
+      path: pathService.resolve(narrowest.cwd, entry.path),
       access: entry.access,
     }))
     return {

@@ -689,11 +689,13 @@ const encodeFileText = (file: Omit<FileText, "lossy">): Uint8Array => {
 // ── agent paths ─────────────────────────────────────────────────────────────
 
 /**
- * An agent's path scopes confine these file tools (`pathScopes`: its
- * `paths`, then each run's narrowing): read and grep accept any entry, write
- * and edit only a write entry, and a call must lie in every scope. An agent
- * without scopes reaches every path. This is not a sandbox: bash, the cell
- * and every other tool reach the file system without the check.
+ * A session's path scopes confine these file tools (`pathScopes`: its
+ * agent's `paths`, its run's, and those of every parent run it was spawned
+ * under, each with the cwd its entries resolve against): read and grep
+ * accept any entry, write and edit only a write entry, and a call must lie
+ * in every scope. An agent without scopes reaches every path. This is not a
+ * sandbox: bash, the cell and every other tool reach the file system
+ * without the check.
  */
 
 type PathAccess = AgentPathEntry["access"]
@@ -706,8 +708,10 @@ class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeErro
 
 /**
  * Refuses `target` (absolute, `..` already resolved) when one of the session
- * agent's path scopes has no entry that grants `access` and holds it. Links
- * resolve on both sides before the check (`resolveLinks`).
+ * run's path scopes has no entry that grants `access` and holds it. Links
+ * resolve on both sides at each call (`resolveLinks`), so a link retargeted
+ * since the run started is judged by where it points now. A run whose
+ * parent bound cannot be resolved fails here (`Session.getAgent`).
  */
 const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
   target: string,
@@ -718,26 +722,26 @@ const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
   const agent = yield* ctx.Session.getAgent()
   const scopes = Option.match(agent, {
     onNone: () => [],
-    onSome: (definition) => definition.pathScopes(),
+    onSome: (run) => run.pathScopes(),
   })
   if (scopes.length === 0) return
   const real = { path: yield* resolveLinks(target), access }
   const within = (inner: string, outer: string) => pathWithin(path, outer, inner)
   for (const scope of scopes) {
-    const resolved = yield* Effect.forEach(scope, (entry) =>
-      Effect.map(resolveLinks(path.resolve(ctx.cwd, entry.path)), (root) => ({
+    const resolved = yield* Effect.forEach(scope.entries, (entry) =>
+      Effect.map(resolveLinks(path.resolve(scope.cwd, entry.path)), (root) => ({
         path: root,
         access: entry.access,
       })),
     )
     if (scopeReaches(resolved, real, within)) continue
     const named = (kind: PathAccess) =>
-      scope
+      scope.entries
         .filter((entry) => kind === "read" || entry.access === "write")
         .map((entry) => entry.path)
         .join(", ") || "none"
     return yield* new PathScopeError({
-      message: `${target} is outside this agent's paths for ${access}. Readable: ${named("read")}. Writable: ${named("write")}. Paths are relative to ${ctx.cwd}.`,
+      message: `${target} is outside this agent's paths for ${access}. Readable: ${named("read")}. Writable: ${named("write")}. Paths are relative to ${scope.cwd}.`,
       path: target,
       access,
     })

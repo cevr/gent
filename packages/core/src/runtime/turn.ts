@@ -2,6 +2,8 @@ import {
   type AgentDefinition,
   AgentName,
   type AgentName as AgentNameType,
+  bindSessionAgent,
+  noRunBound,
   resolveSessionAgent,
   calculateCost,
   DEFAULT_AGENT_NAME,
@@ -1350,9 +1352,11 @@ interface SessionRoute {
   readonly name: AgentNameType
   /**
    * That agent from the roster (extension agents and config `agents`
-   * entries) with the run's overrides applied (`resolveSessionAgent`); none
-   * when no agent has the name. Its `driver` is its own: a config
-   * `driverOverrides` entry reaches `modelDriver` only.
+   * entries) with the run's model, effort, limits and addendum applied
+   * (`resolveSessionAgent`); none when no agent has the name. Routing only:
+   * a turn binds it to its run (`bindSessionAgent`) before it holds a tool.
+   * Its `driver` is its own: a config `driverOverrides` entry reaches
+   * `modelDriver` only.
    */
   readonly definition: Option.Option<AgentDefinition>
   readonly modelId: ModelId
@@ -1522,7 +1526,13 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  const dispatchAgent = definition.value
+  const dispatchAgent = bindSessionAgent(definition.value, {
+    overrides: Option.flatMap(admission, (value) =>
+      Option.fromUndefinedOr(value.runSpec?.overrides),
+    ),
+    cwd: hostCtx.cwd,
+    parent: noRunBound,
+  })
   const interactive = params.interactive
 
   // Derive extension projections from explicit prompt/message slots.

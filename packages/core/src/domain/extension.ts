@@ -21,6 +21,7 @@ import {
   type ModelId,
   type ReasoningEffort,
   type RunPathRefusedError,
+  type SessionAgent,
   type SessionDepthLimitError,
 } from "./agent.js"
 import {
@@ -891,12 +892,13 @@ export interface ExtensionSessionService {
   /**
    * The agent a session runs as, resolved as its turns resolve it: the
    * roster (extension agents and config `agents` entries) with the
-   * session's run overrides applied. The current session when none is named;
-   * none when the agent is gone from the roster.
+   * session's run overrides applied, bound by its run: `admitsTool` and
+   * `pathScopes` answer for the run (`SessionAgent`). The current session
+   * when none is named; none when the agent is gone from the roster.
    */
   readonly getAgent: (
     sessionId?: SessionId,
-  ) => Effect.Effect<Option.Option<AgentDefinition>, ExtensionServiceError>
+  ) => Effect.Effect<Option.Option<SessionAgent>, ExtensionServiceError>
   /**
    * Rename the current session. With `expectedName` it renames only while
    * the stored name is still that one, checked in the transaction that

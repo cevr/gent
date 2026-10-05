@@ -4,11 +4,13 @@ import { Effect, Option, Result, Schema, SchemaIssue } from "effect"
 import {
   AgentDefinition,
   AgentName,
+  bindSessionAgent,
   cacheWriteRate,
   calculateCost,
   DriverRef,
   effectiveModelDriver,
   ModelId,
+  noRunBound,
   parseModelId,
   ProviderId,
   resolveSessionAgent,
@@ -191,14 +193,17 @@ describe("a run spec the previous gent reads", () => {
 
 // ── old tool lists ──────────────────────────────────────────────────────────
 
-/** The agent `name` runs as under one agent and the run overrides a stored row holds. */
-const runAs = (agent: AgentDefinition, row: string) =>
-  resolveSessionAgent({
+/** The agent `name` runs as, in cwd `/w` with no parent, under the run overrides a stored row holds. */
+const runAs = (agent: AgentDefinition, row: string) => {
+  const overrides = Option.fromUndefinedOr(readRunSpec(row).overrides)
+  const definition = resolveSessionAgent({
     agents: [agent],
     configAgents: Option.none(),
     name: agent.name,
-    overrides: Option.fromUndefinedOr(readRunSpec(row).overrides),
+    overrides,
   }).pipe(Option.getOrThrow)
+  return bindSessionAgent(definition, { overrides, cwd: "/w", parent: noRunBound })
+}
 
 describe("old tool lists", () => {
   const reader = AgentDefinition.make({
@@ -265,10 +270,43 @@ describe("run narrowing", () => {
     })
     const run = runAs(painter, '{"overrides":{"paths":[{"path":"a/b","access":"read"}]}}')
     expect(run.pathScopes()).toEqual([
-      [{ path: "a", access: "write" }],
-      [{ path: "a/b", access: "read" }],
+      { cwd: "/w", entries: [{ path: "a", access: "write" }] },
+      { cwd: "/w", entries: [{ path: "a/b", access: "read" }] },
     ])
-    expect(painter.pathScopes()).toEqual([[{ path: "a", access: "write" }]])
+  })
+
+  test("an agent takes no narrowing as authoring input", () => {
+    const authored = {
+      name: AgentName.make("painter"),
+      narrowings: [{ tools: ["read"] }],
+    }
+    expect(() => AgentDefinition.make(authored)).toThrow("has keys the schema does not name")
+  })
+
+  // driver.list sends roster definitions; a client decodes them.
+  test("a definition through the wire admits the tools and paths it admits in process", () => {
+    const painter = AgentDefinition.make({
+      name: AgentName.make("painter"),
+      tools: ["read", "write", "!bash"],
+      paths: [
+        { path: "a", access: "write" },
+        { path: "docs", access: "read" },
+      ],
+    })
+    const wire = Schema.encodeSync(Schema.fromJsonString(StoredAgentDefinition))(painter)
+    const decoded = Schema.decodeSync(Schema.fromJsonString(StoredAgentDefinition))(wire)
+    for (const id of ["read", "write", "bash", "grep"]) {
+      expect(decoded.admitsTool(id)).toBe(painter.admitsTool(id))
+    }
+    expect(decoded.paths).toEqual(painter.paths)
+  })
+
+  test("a session's run agent does not go out as a definition", () => {
+    const run = runAs(
+      AgentDefinition.make({ name: AgentName.make("painter"), tools: ["read", "write"] }),
+      '{"overrides":{"tools":["read"]}}',
+    )
+    expect(() => Schema.encodeSync(StoredAgentDefinition)(run)).toThrow("run agent")
   })
 
   test("a run's other overrides still reshape the agent", () => {

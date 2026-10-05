@@ -94,7 +94,13 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "../domain/capability.js"
-import { type AgentDefinition, DEFAULT_AGENT_NAME, resolveSessionAgent } from "../domain/agent.js"
+import {
+  type AgentDefinition,
+  bindSessionAgent,
+  DEFAULT_AGENT_NAME,
+  noRunBound,
+  resolveSessionAgent,
+} from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
 import type {
   ApiClassContribution,
@@ -3686,12 +3692,17 @@ export const makeExtensionHostContextProvider = (
                   Effect.gen(function* () {
                     const profile = yield* cache.resolve(cwd)
                     const config = yield* configService.get(cwd)
-                    return resolveSessionAgent({
-                      agents: profile.resolved.agents.values(),
-                      configAgents: Option.fromUndefinedOr(config.agents),
-                      name: admission?.agent ?? DEFAULT_AGENT_NAME,
-                      overrides: Option.fromUndefinedOr(admission?.runSpec?.overrides),
-                    })
+                    const overrides = Option.fromUndefinedOr(admission?.runSpec?.overrides)
+                    return Option.map(
+                      resolveSessionAgent({
+                        agents: profile.resolved.agents.values(),
+                        configAgents: Option.fromUndefinedOr(config.agents),
+                        name: admission?.agent ?? DEFAULT_AGENT_NAME,
+                        overrides,
+                      }),
+                      (definition) =>
+                        bindSessionAgent(definition, { overrides, cwd, parent: noRunBound }),
+                    )
                   }).pipe(Effect.scoped),
                 ),
               )
