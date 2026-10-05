@@ -1693,6 +1693,7 @@ describe("the status row names the child the reader watches", () => {
       expect(labels[0]?.color).toBe("info")
       // On a narrow row the way back gives way after the debug mark, before the cwd.
       expect(labels[1]?.short?.text).toBe("")
+      expect(labels[1]?.key).toBe("ctrl+t")
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1777,6 +1778,32 @@ describe("the status row names the child the reader watches", () => {
       const frame = yield* waitForFrame(setup, (next) => next.includes("$0.002"), "status row")
       return frame.split("\n").find((line) => line.includes("$0.002")) ?? ""
     })
+
+  it.scopedLive("the way back draws its key bright, as every hint does", () =>
+    Effect.gen(function* () {
+      const labels = yield* childLabels("explore")
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          const { theme } = useTheme()
+          colors = Option.some(theme)
+          const row = labels.map((item) => ({
+            ...item,
+            color: resolveThemeColor(theme, item.color),
+          }))
+          return <StatusRow labels={row} />
+        },
+        { width: 100, height: 4 },
+      )
+      yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "status row")
+      const theme = Option.getOrThrow(colors)
+      const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
+      expect(spans.find((span) => span.text === "ctrl+t")?.fg.equals(theme.text)).toBe(true)
+      expect(spans.find((span) => span.text.includes("sessions"))?.fg.equals(theme.textMuted)).toBe(
+        true,
+      )
+    }).pipe(Effect.timeout("8 seconds")),
+  )
 
   // The child label never costs the reader the way back or the cwd: at each
   // width they show as on the same row without it.

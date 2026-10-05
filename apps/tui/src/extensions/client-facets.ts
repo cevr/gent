@@ -890,6 +890,8 @@ export interface StatusLabelItem {
    * Absent, the label keeps its text, and only the row's last cut shortens it.
    */
   readonly short?: StatusLabelShort
+  /** The key a hint label opens with (`ctrl+t` of `ctrl+t sessions`): it draws bright, as in a hint row. */
+  readonly key?: string
 }
 
 /** Where a status label sits: the left group, or the right group before the gauge and cost. */

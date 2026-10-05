@@ -117,7 +117,8 @@ const subtreeRows = (
   }
 }
 
-const TRAY_HINT = "ctrl+t sessions"
+const TRAY_KEY = "ctrl+t"
+const TRAY_HINT = `${TRAY_KEY} sessions`
 const TRAY_MAX_ROWS = 3
 /**
  * Columns of a child's name on the status row; a delegate's name is often its
@@ -1403,6 +1404,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
               {
                 text: TRAY_HINT,
                 color: "textMuted",
+                key: TRAY_KEY,
                 short: { text: "", rank: STATUS_YIELD.cwd - 0.5 },
               },
             ],

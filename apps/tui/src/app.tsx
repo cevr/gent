@@ -756,9 +756,12 @@ export function Session(props: SessionProps) {
 
   /** The extension status labels of one group, by priority, each with its short form. */
   const extensionLabels = (anchor: StatusLabelAnchor): StatusRowLabel[] =>
-    ext
-      .statusLabelItems(anchor)
-      .map((item) => ({ text: item.text, color: resolveColor(item.color), short: item.short }))
+    ext.statusLabelItems(anchor).map((item) => ({
+      text: item.text,
+      color: resolveColor(item.color),
+      short: item.short,
+      key: item.key,
+    }))
 
   const connectionLabels = (): StatusRowLabel[] => {
     const items: StatusRowLabel[] = []
