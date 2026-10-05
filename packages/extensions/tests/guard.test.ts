@@ -29,7 +29,7 @@ import {
   textStep,
   toolCallStep,
 } from "@gent/core/test-utils"
-import { callSubject, callText, makeGuardExtension } from "../src/guard.js"
+import { callSubjects, callText, makeGuardExtension } from "../src/guard.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
@@ -136,6 +136,20 @@ const toolsExtension = (ran: Array<string>) =>
             Effect.sync(() => {
               ran.push(command)
               return `ran ${command}`
+            }),
+        }),
+      )
+      yield* host.register(
+        "tool",
+        tool({
+          id: "copy",
+          description: "Copy to a path with a command",
+          params: Schema.Struct({ command: Schema.String, path: Schema.String }),
+          output: Schema.String,
+          execute: ({ command, path }) =>
+            Effect.sync(() => {
+              ran.push(`${command} -> ${path}`)
+              return `copied to ${path}`
             }),
         }),
       )
@@ -308,6 +322,59 @@ describe("@gent/guard", () => {
   )
 
   it.scopedLive(
+    "a deny rule holds when the call carries a field the tool does not read",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* guardedSession({
+          guard: Option.some({ rules: [{ tool: "run", match: "rm -rf *", effect: "deny" }] }),
+          answers: [label("allow")],
+          steps: [
+            toolCallStep("run", { command: "rm -rf build", path: "ignored" }),
+            textStep("finished"),
+          ],
+        })
+        const { results, answered } = yield* session.run("Clean.", true)
+        expect(outcomes(results)[0]).toContain('the guard rule "run" matching "rm -rf *" denies it')
+        expect(session.ran).toEqual([])
+        expect(answered).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
+    "each subject field meets the rules: a deny on any field denies, and an allow needs every field",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* guardedSession({
+          guard: Option.some({
+            policy: POLICY,
+            rules: [
+              { tool: "copy", match: "cp *", effect: "allow" },
+              { tool: "copy", match: "/tmp/*", effect: "allow" },
+              { tool: "copy", match: "/etc/*", effect: "deny" },
+            ],
+          }),
+          answers: [label("deny")],
+          steps: [
+            toolCallStep("copy", { command: "cp a b", path: "/tmp/b" }),
+            toolCallStep("copy", { command: "cp a b", path: "/etc/passwd" }),
+            toolCallStep("copy", { command: "cp a b", path: "/home/b" }),
+            textStep("finished"),
+          ],
+        })
+        const { results } = yield* session.run("Copy.", true)
+        const [tmp, etc, home] = outcomes(results)
+        expect(tmp).toBe("ok")
+        expect(etc).toContain('the guard rule "copy" matching "/etc/*" denies it')
+        // `/home/b` meets no rule: the classifier judges the call.
+        expect(home).toContain("the guard policy forbids it")
+        expect(session.ran).toEqual(["cp a b -> /tmp/b"])
+        expect(session.calls).toHaveLength(1)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
     "a read-only tool runs without a model call",
     () =>
       Effect.gen(function* () {
@@ -444,17 +511,14 @@ describe("@gent/guard", () => {
 })
 
 describe("guard call text", () => {
-  it.effect("a rule's subject is a string input, or the one subject field of an object", () =>
+  it.effect("a rule's subjects are a string input, or each subject field of an object", () =>
     Effect.sync(() => {
-      const subject = (input: Schema.Json) => callSubject({ input })
-      expect(subject("echo hi")).toEqual(Option.some("echo hi"))
-      expect(subject({ command: "ls", description: "list" })).toEqual(Option.some("ls"))
-      expect(subject({ code: "await tools.run('ls')" })).toEqual(
-        Option.some("await tools.run('ls')"),
-      )
-      // Two subject fields: a field the tool ignores never makes a rule match.
-      expect(subject({ command: "rm -rf /", code: "git status" })).toEqual(Option.none())
-      expect(subject({ count: 3 })).toEqual(Option.none())
+      const subjects = (input: Schema.Json) => callSubjects({ input })
+      expect(subjects("echo hi")).toEqual(["echo hi"])
+      expect(subjects({ command: "ls", description: "list" })).toEqual(["ls"])
+      expect(subjects({ code: "await tools.run('ls')" })).toEqual(["await tools.run('ls')"])
+      expect(subjects({ command: "rm -rf /", path: "src" })).toEqual(["rm -rf /", "src"])
+      expect(subjects({ count: 3 })).toEqual([])
     }),
   )
 

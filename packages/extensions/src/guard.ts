@@ -37,7 +37,7 @@ const RuleEffect = Schema.Literals(["allow", "ask", "deny"])
 const GuardRule = Schema.Struct({
   /** A glob over the tool id: `*` is any run of characters, `?` one character. */
   tool: Schema.String.check(Schema.isMinLength(1)),
-  /** A glob over the call's subject (`callSubject`); absent, every call of the tool. */
+  /** A glob over each of the call's subjects (`callSubjects`); absent, every call of the tool. */
   match: Schema.optional(Schema.String),
   effect: RuleEffect,
 })
@@ -145,27 +145,29 @@ const decodeCallInput = Schema.decodeUnknownOption(Schema.Json)
 const isJsonObject = (json: Schema.Json): json is { readonly [key: string]: Schema.Json } =>
   Predicate.isObject(json) && !Array.isArray(json)
 
-/** The input fields a call's subject can be: the text a `match` glob reads. */
+/** The input fields a call's subject can be: the texts a `match` glob reads. */
 const SUBJECT_FIELDS = ["command", "code", "path", "url", "query"] as const
 
+/** A call's input as named fields; none for an input that is not an object. */
+const decodeCallFields = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Unknown))
+
 /**
- * The text a rule's `match` reads: a string input itself, or the one subject
- * field an object input holds as a string. An input with none of them, or
- * with more than one, has no subject: a `match` rule cannot decide it, so a
- * field the tool ignores never makes a rule match.
+ * The texts a rule's `match` reads: a string input itself, or each subject
+ * field an object input holds as a string. The input is the one the tool
+ * runs with (its decoded parameters), so a field the tool drops is not here.
  */
-export const callSubject = (call: Pick<ToolCallInput, "input">): Option.Option<string> =>
-  Option.flatMap(decodeCallInput(call.input), (input) => {
-    if (Predicate.isString(input)) return Option.some(input)
-    if (!isJsonObject(input)) return Option.none()
-    const present = SUBJECT_FIELDS.flatMap((field) => {
-      const value = input[field]
-      if (!Predicate.isString(value)) return []
-      return [value]
-    })
-    if (present.length !== 1) return Option.none()
-    return Option.fromUndefinedOr(present[0])
+export const callSubjects = (call: Pick<ToolCallInput, "input">): ReadonlyArray<string> => {
+  if (Predicate.isString(call.input)) return [call.input]
+  return Option.match(decodeCallFields(call.input), {
+    onNone: () => [],
+    onSome: (fields) =>
+      SUBJECT_FIELDS.flatMap((field) => {
+        const value = fields[field]
+        if (!Predicate.isString(value)) return []
+        return [value]
+      }),
   })
+}
 
 interface CompiledRule {
   readonly rule: GuardRule
@@ -179,15 +181,16 @@ const compileRule = (rule: GuardRule): CompiledRule => ({
   match: Option.map(Option.fromUndefinedOr(rule.match), globPattern),
 })
 
-const ruleMatches = (compiled: CompiledRule, call: ToolCallInput) => {
+/** Whether the rule applies to the call read through one subject (none: the call has no subject). */
+const ruleMatches = (
+  compiled: CompiledRule,
+  call: ToolCallInput,
+  subject: Option.Option<string>,
+) => {
   if (!compiled.tool.test(call.toolName)) return false
   return Option.match(compiled.match, {
     onNone: () => true,
-    onSome: (pattern) =>
-      Option.match(callSubject(call), {
-        onNone: () => false,
-        onSome: (subject) => pattern.test(subject),
-      }),
+    onSome: (pattern) => Option.exists(subject, (text) => pattern.test(text)),
   })
 }
 
@@ -197,22 +200,44 @@ const ruleText = (rule: GuardRule) =>
     onSome: (match) => `"${rule.tool}" matching "${match}"`,
   })
 
-/** The verdict of the last rule that matches the call; none when no rule does. */
+/**
+ * The rules' verdict on a call; none when no rule decides it. Each subject
+ * is judged on its own, by the last rule that matches it, and the strictest
+ * answer wins: a deny or ask on any subject decides the call. An allow
+ * decides only when every subject is allowed; a subject no rule matches
+ * leaves the call to the next step of the judgement.
+ */
 const ruleVerdict = (
   rules: ReadonlyArray<CompiledRule>,
   call: ToolCallInput,
-): Option.Option<ToolCallVerdict> =>
-  Option.map(
-    Option.fromUndefinedOr(rules.findLast((compiled) => ruleMatches(compiled, call))),
-    ({ rule }): ToolCallVerdict => {
-      if (rule.effect === "allow") return ToolCallVerdict.cases.Allow.make({})
-      if (rule.effect === "ask")
-        return ToolCallVerdict.cases.Ask.make({ reason: `the guard rule ${ruleText(rule)} asks` })
-      return ToolCallVerdict.cases.Deny.make({
-        reason: `the guard rule ${ruleText(rule)} denies it`,
-      })
-    },
+): Option.Option<ToolCallVerdict> => {
+  const subjects = callSubjects(call)
+  const views = subjects.map(Option.some)
+  if (views.length === 0) views.push(Option.none())
+  const decided = views.map((subject) =>
+    Option.fromUndefinedOr(rules.findLast((compiled) => ruleMatches(compiled, call, subject))),
   )
+  const strictest = (effect: GuardRule["effect"]) =>
+    Option.fromUndefinedOr(
+      decided.flatMap(Option.toArray).find((compiled) => compiled.rule.effect === effect),
+    )
+  const denied = strictest("deny")
+  if (Option.isSome(denied))
+    return Option.some(
+      ToolCallVerdict.cases.Deny.make({
+        reason: `the guard rule ${ruleText(denied.value.rule)} denies it`,
+      }),
+    )
+  const asked = strictest("ask")
+  if (Option.isSome(asked))
+    return Option.some(
+      ToolCallVerdict.cases.Ask.make({
+        reason: `the guard rule ${ruleText(asked.value.rule)} asks`,
+      }),
+    )
+  if (decided.every(Option.isSome)) return Option.some(ToolCallVerdict.cases.Allow.make({}))
+  return Option.none()
+}
 
 // ── classify ────────────────────────────────────────────────────────────────
 
