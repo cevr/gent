@@ -3545,9 +3545,23 @@ export function createSessionController(props: {
       if (settled) ext.refreshCommands()
     })
 
+  /** The no-model refusal on screen: a model pick answers it, so the pick dismisses it. */
+  let noModelRefusal = Option.none<{ readonly target: SessionIdentity; readonly reason: string }>()
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()
-    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }))
+    const answered = noModelRefusal
+    noModelRefusal = Option.none()
+    cast(
+      client
+        .updateSessionSettings({ modelId: Option.some(modelId) })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() =>
+              Option.map(answered, ({ target, reason }) => client.dismissErrorIn(target, reason)),
+            ),
+          ),
+        ),
+    )
   }
 
   const onReasoningSelect = (level: Option.Option<EffortSetting>) => {
@@ -3576,7 +3590,22 @@ export function createSessionController(props: {
         requestId,
       )
     }
-    return client.sendMessage(target, content, requestId)
+    // A session nobody named a model for refuses the send (`NoModelError`):
+    // the message comes back to the draft with the hint, and the model
+    // picker opens on the session in view, so the next Enter can send it.
+    return client.sendMessage(target, content, requestId).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (
+            Predicate.isTagged(error, "NoModelError") &&
+            sameIdentity(client.sessionIdentity(), target)
+          ) {
+            noModelRefusal = Option.some({ target, reason: error.message })
+            dispatchSessionUi(SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" }))
+          }
+        }),
+      ),
+    )
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {

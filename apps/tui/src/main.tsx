@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command, Flag, Argument } from "effect/cli"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive, ScriptedLanguageModel } from "@gent/core/host"
 import {
   Config,
   Context,
@@ -21,7 +21,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, makeHandover } from "./os"
-import { AgentName } from "@gent/core/protocol"
+import { AgentName, ModelId } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer } from "@opentui/core"
@@ -134,6 +134,13 @@ const gentFlags = {
     Flag.withDescription("Agent for the new headless session (-H only; default: main)"),
     Flag.optional,
   ),
+  model: Flag.String("model").pipe(
+    Flag.withAlias("m"),
+    Flag.withDescription(
+      "Model for the new headless session, as provider/model (-H only; default: the user's, `model` in ~/.gent/config.json)",
+    ),
+    Flag.optional,
+  ),
   approveAll: Flag.Boolean("approve-all").pipe(
     Flag.withDescription(
       "Approve every ask of the headless turn (-H only; default: decline, as no user is present)",
@@ -150,11 +157,16 @@ const gentFlags = {
  */
 const refuseHeadlessInput = (given: {
   readonly agent: boolean
+  readonly model: boolean
   readonly approveAll: boolean
   readonly promptArg: boolean
 }): Effect.Effect<void, CliStartupError> => {
   const refusals: ReadonlyArray<readonly [boolean, string]> = [
     [given.agent, "--agent applies to headless mode; add -H with a prompt"],
+    [
+      given.model,
+      "--model applies to headless mode; add -H with a prompt, or pick one with /model",
+    ],
     [given.approveAll, "--approve-all applies to headless mode; add -H with a prompt"],
     [given.promptArg, "a prompt argument needs -H; use -p to start the TUI with a prompt"],
   ]
@@ -182,6 +194,7 @@ const runGent = ({
   prompt,
   promptArg,
   agent,
+  model,
   approveAll,
 }: {
   readonly connect: Option.Option<string>
@@ -194,14 +207,17 @@ const runGent = ({
   readonly prompt: Option.Option<string>
   readonly promptArg: Option.Option<string>
   readonly agent: Option.Option<string>
+  readonly model: Option.Option<string>
   readonly approveAll: boolean
 }) =>
   Effect.gen(function* () {
     // The server checks the name against its roster when the session starts.
     const requestedAgent = Option.map(agent, (name) => AgentName.make(name))
+    const requestedModel = Option.map(model, (id) => ModelId.make(id))
     if (!headless) {
       yield* refuseHeadlessInput({
         agent: Option.isSome(requestedAgent),
+        model: Option.isSome(requestedModel),
         approveAll,
         promptArg: Option.isSome(promptArg),
       })
@@ -266,6 +282,11 @@ const runGent = ({
           message: "--agent applies to a new session; drop --session to use it",
         })
       }
+      if (Option.isSome(requestedModel) && Option.isSome(session)) {
+        return yield* new CliStartupError({
+          message: "--model applies to a new session; drop --session to use it",
+        })
+      }
       yield* waitForHeadlessReady(bundle.runtime.lifecycle.waitForReady)
       const state = yield* resolveHeadlessState({
         client: bundle.client,
@@ -277,6 +298,12 @@ const runGent = ({
           {
             admission: Option.getOrUndefined(
               Option.map(requestedAgent, (name) => ({ agent: name })),
+            ),
+            // A scripted server's model is the explicit one when no flag names another.
+            modelId: Option.getOrUndefined(
+              Option.orElse(requestedModel, () =>
+                Option.liftPredicate(ScriptedLanguageModel.modelId, () => scriptedModel),
+              ),
             ),
           },
           Predicate.isNotUndefined,
@@ -448,6 +475,7 @@ const resume = Command.make(
       prompt,
       promptArg: Option.none(),
       agent: Option.none(),
+      model: Option.none(),
       approveAll: false,
     }),
 )

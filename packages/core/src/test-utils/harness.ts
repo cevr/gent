@@ -62,8 +62,8 @@ import {
   AgentDefinition,
   bindSessionAgent,
   DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
   Model,
+  ModelId,
   type ModelPricing,
   noRunBound,
   parseModelId,
@@ -114,7 +114,7 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 import { omitUndefined } from "../domain/guards.js"
 import {
   captureCurrentToolBinding,
@@ -304,21 +304,35 @@ const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
     }),
   })
 
-/** The agent a test runs when it names none: `main`, on the default model. */
+/**
+ * The model the test agent runs. Gent ships no default model; a test names
+ * this one, as a user names theirs.
+ */
+export const TEST_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
+
+/** The agent a test runs when it names none: `main`, on `TEST_MODEL_ID`. */
 export const testAgent = AgentDefinition.make({
   name: DEFAULT_AGENT_NAME,
   description: "Test agent",
+  model: TEST_MODEL_ID,
 })
+
+/**
+ * The user config a test root reads when the test names none: the user's
+ * model is `TEST_MODEL_ID`, as a user's first `/model` pick writes theirs,
+ * so a shipped agent that names no model runs it.
+ */
+const testUserConfig = new UserConfig({ model: TEST_MODEL_ID })
 
 /** A queue with no steering and no follow-up entries. */
 export const emptyQueueSnapshot = (): QueueSnapshot =>
   new QueueSnapshot({ steering: [], followUp: [] })
 
-const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
+const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(TEST_MODEL_ID))
 
 /**
  * What an `extensionInputs` preset needs for a turn to run beside `agents:
- * [testAgent]`: a driver that lists the default model. The driver's model is never called; the test
+ * [testAgent]`: a driver that lists the test agent's model. The driver's model is never called; the test
  * hands the runtime its own language model through `providerLayer`.
  */
 export const testTurnExtension = defineExtension({
@@ -331,7 +345,7 @@ export const testTurnExtension = defineExtension({
       listModels: () =>
         Effect.succeed([
           new Model({
-            id: DEFAULT_MODEL_ID,
+            id: TEST_MODEL_ID,
             name: "Test model",
             provider: defaultProviderId,
             contextLength: 128_000,
@@ -1778,7 +1792,8 @@ interface E2ELayerOptions {
    */
   readonly modelCatalogHttpLayer?: Layer.Layer<HttpClient.HttpClient>
   /**
-   * ConfigService override. Default is `ConfigService.Test()`.
+   * ConfigService override. Default is `ConfigService.Test` with the user's
+   * model set to `TEST_MODEL_ID`.
    * Provide `ConfigService.Live` (or a custom layer) to exercise per-cwd
    * config resolution — e.g., for driver-override-from-session-cwd tests.
    */
@@ -1917,7 +1932,7 @@ const e2eDependencies = (
       authLayer: config.authLayer ?? Auth.Test(),
       modelCatalogHttpLayer: config.modelCatalogHttpLayer ?? modelCatalogFixtureLayer,
       approvalLayer: config.approvalLayer ?? ApprovalService.Test(),
-      configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),
+      configServiceLayer: config.configServiceLayer ?? ConfigService.Test(testUserConfig),
       sessionProfileCacheLayer: config.sessionProfileCacheLayer,
       // `"test"` stubs the tool runner; otherwise the production runner runs.
       toolRunnerLayer: Option.getOrUndefined(
@@ -1982,6 +1997,12 @@ type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
   E2EStateSource & {
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
+    /**
+     * The seeded session's own model, as `/model` sets it. A root whose
+     * config names no user model (a `ConfigService.Live` over a test home)
+     * names it here.
+     */
+    readonly modelId?: ModelId
   }
 
 /**
@@ -1998,7 +2019,7 @@ type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
  */
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
-    const { admission, ...layerConfig } = config
+    const { admission, modelId, ...layerConfig } = config
     // One working directory: the layer launches in it and the seeded session runs in it.
     const cwd = yield* Option.match(Option.fromUndefinedOr(config.cwd), {
       onNone: () => makeTempDirectoryScoped("gent-test-cwd-"),
@@ -2007,7 +2028,7 @@ export const createRpcHarness = (config: RpcHarnessConfig) =>
     const { client } = yield* createRpcClient(createE2ELayer({ ...layerConfig, cwd }))
     const { sessionId, branchId } = yield* client.session.create({
       cwd,
-      ...omitUndefined({ admission }),
+      ...omitUndefined({ admission, modelId }),
     })
     return { client, sessionId, branchId }
   })

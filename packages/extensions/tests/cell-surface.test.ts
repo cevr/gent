@@ -46,6 +46,7 @@ import {
   ConfigService,
   testLeafContext,
   testToolContext,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import { FetchHttpClient } from "effect/http"
@@ -1099,6 +1100,8 @@ describe("shipped model surface", () => {
           providerLayer,
           home,
           cwd,
+          // The user config on disk names no model: the session names its own.
+          modelId: TEST_MODEL_ID,
           configServiceLayer: ConfigService.Live.pipe(
             Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
             Layer.provide(BunPlatformLive),

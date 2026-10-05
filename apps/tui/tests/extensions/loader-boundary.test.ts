@@ -1532,7 +1532,7 @@ describe("loadTuiExtensions", () => {
           onExtensionStateChanged: () => () => {},
           onSessionEvent: () => () => {},
           modelCatalog: () => Option.none(),
-          selectedModel: () => "test/model",
+          selectedModel: () => Option.some("test/model"),
         },
       })
       return Effect.gen(function* () {

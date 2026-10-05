@@ -13,6 +13,7 @@ import {
   makeTempDirectoryScoped,
   textStep,
   toolCallStep,
+  TEST_MODEL_ID,
 } from "@gent/core/test-utils"
 import { AgentsExtension } from "../src/agents.js"
 import { ExtensionAdminExtension } from "../src/extension-admin.js"
@@ -248,6 +249,8 @@ const adminServer = (params: {
       cwd,
       allowFailedExtensions: params.allowFailedExtensions === true,
       approvalLayer: ApprovalService.Live,
+      // The user config on disk names no model: the session names its own.
+      modelId: TEST_MODEL_ID,
       // The verbs write the config files; the server reads them as they are.
       configServiceLayer: ConfigService.Live.pipe(
         Layer.provide(RuntimeEnvironment.Live({ cwd, home })),

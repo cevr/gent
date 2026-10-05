@@ -47,7 +47,8 @@ export const basePromptSections = [
 ]
 
 /**
- * The default agent and its persona. Its model is `DEFAULT_MODEL_ID`, at
+ * The default agent and its persona. It names no model: the user's (config
+ * `model`, which the first `/model` pick writes) runs it, at
  * `high` effort: the default of most providers and of the prior arts, and a
  * model that accepts no `high` clamps it. `max` costs more on every turn.
  * Children run as the `delegate` agent, so there is no roster of role

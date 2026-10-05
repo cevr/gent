@@ -60,7 +60,6 @@ import {
 import {
   AgentDefinition,
   AgentName,
-  DEFAULT_MODEL_ID,
   DriverRef,
   ModelId,
   Model,
@@ -129,6 +128,7 @@ import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
   recordingEventStore,
+  TEST_MODEL_ID,
   testSqliteStorage,
   waitFor,
 } from "../../src/test-utils/harness"
@@ -389,29 +389,33 @@ describe("session route driver", () => {
       driver: DriverRef.make({ id: "anthropic-proxy" }),
     })
     const route = routeOf(agent, { special: DriverRef.make({ id: "openai-proxy" }) })
-    expect(route.modelDriver.driverId).toEqual(Option.some("anthropic-proxy"))
-    expect(route.modelDriver.contextModelId).toBe(ModelId.make("anthropic-proxy/claude-sonnet-5"))
+    expect(Option.getOrThrow(route.modelDriver).driverId).toEqual(Option.some("anthropic-proxy"))
+    expect(Option.getOrThrow(route.modelDriver).contextModelId).toBe(
+      ModelId.make("anthropic-proxy/claude-sonnet-5"),
+    )
   })
 
   test("a config override routes an agent that names no driver", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const route = routeOf(agent, { primary: DriverRef.make({ id: "openai" }) })
-    expect(route.modelDriver.driverId).toEqual(Option.some("openai"))
-    expect(route.modelDriver.contextModelId).toBe(ModelId.make("openai/claude-sonnet-5"))
+    expect(Option.getOrThrow(route.modelDriver).driverId).toEqual(Option.some("openai"))
+    expect(Option.getOrThrow(route.modelDriver).contextModelId).toBe(
+      ModelId.make("openai/claude-sonnet-5"),
+    )
   })
 
   test("no driver and no override route through the model id's provider", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     for (const route of [routeOf(agent), routeOf(agent, {})]) {
-      expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
-      expect(route.modelDriver.contextModelId).toBe(modelId)
+      expect(Option.getOrThrow(route.modelDriver).driverId).toEqual(Option.some("anthropic"))
+      expect(Option.getOrThrow(route.modelDriver).contextModelId).toBe(modelId)
     }
   })
 
   test("an override for another agent does not route this one", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
     const route = routeOf(agent, { secondary: DriverRef.make({ id: "openai" }) })
-    expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
+    expect(Option.getOrThrow(route.modelDriver).driverId).toEqual(Option.some("anthropic"))
   })
 })
 
@@ -4210,7 +4214,7 @@ describe("virtual model routing", () => {
             routingExtension({
               choices: [
                 { model: LIGHT_MODEL, reason: "light" },
-                { model: DEFAULT_MODEL_ID, reason: "default" },
+                { model: TEST_MODEL_ID, reason: "default" },
               ],
               fallback: 1,
               route: () => Effect.succeed({ choice: 0, reason: "any" }),
@@ -4223,7 +4227,7 @@ describe("virtual model routing", () => {
           providers
             .filter((provider) => provider.required)
             .map((provider) => String(provider.provider)),
-        ).toEqual(DEFAULT_MODEL_ID.split("/").slice(0, 1))
+        ).toEqual(TEST_MODEL_ID.split("/").slice(0, 1))
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )

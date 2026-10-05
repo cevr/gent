@@ -990,7 +990,7 @@ describe("Herdr integration", () => {
         () =>
           Effect.succeed({
             status: "Idle",
-            model: "test/model",
+            model: Option.some("test/model"),
             turns: 0,
             costUsd: 0,
             durationMs: 0,

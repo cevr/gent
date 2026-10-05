@@ -7,7 +7,6 @@ import {
   resolveSessionAgent,
   calculateCost,
   DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
   type DriverRef,
   effectiveEffort,
   effectiveModelDriver,
@@ -19,7 +18,7 @@ import {
   promptCacheTtlMsFor,
   ProviderId,
   type ReasoningEffort,
-  resolveAgentModel,
+  noModelError,
 } from "../domain/agent.js"
 import {
   AGENT_PROMPT_PRIORITY,
@@ -1399,12 +1398,16 @@ interface SessionRoute {
    * `modelDriver` only.
    */
   readonly definition: Option.Option<AgentDefinition>
-  readonly modelId: ModelId
+  /**
+   * The session's own model, else the agent's, else the user's (config
+   * `model`); none when nobody named one. Gent ships no default model.
+   */
+  readonly modelId: Option.Option<ModelId>
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The level without the session's own: what clearing it falls back to. */
   readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
-  /** The driver the model dispatches through, and the catalog id it reaches. */
-  readonly modelDriver: EffectiveModelDriver
+  /** The driver the model dispatches through, and the catalog id it reaches; none without a model. */
+  readonly modelDriver: Option.Option<EffectiveModelDriver>
   /** The driver the agent names (its own, else config `driverOverrides`). */
   readonly driverRef: Option.Option<DriverRef>
 }
@@ -1415,15 +1418,17 @@ interface SessionRoute {
  * `agents[name]` and then by the admission's run overrides. The model
  * dispatches through the agent's own driver; when it names none, through
  * config `driverOverrides[name]`; else through the model id's provider. The
- * session's own model and reasoning win over the agent's; an unknown agent
- * falls back to the default model. The turn, the snapshot footer and the
- * auth gate all read it here, so a child session is its agent everywhere and
- * the three cannot disagree on a model or driver.
+ * session's own model and reasoning win over the agent's. An agent that
+ * names no model runs the user's (config `model`, which the first `/model`
+ * pick writes), so a child runs the model its user chose. With none of them
+ * the route has no model, and a send is refused (`NoModelError`). The turn, the snapshot footer and
+ * the auth gate all read it here, so a child session is its agent everywhere
+ * and the three cannot disagree on a model or driver.
  */
 export const resolveSessionRoute = (params: {
   readonly agents: ReadonlyArray<AgentDefinition>
   readonly admission: Option.Option<SessionAdmission>
-  readonly config: Pick<UserConfig, "agents" | "driverOverrides">
+  readonly config: Pick<UserConfig, "agents" | "driverOverrides" | "model">
   readonly session: SessionSettingsSource
 }): SessionRoute => {
   const name = Option.getOrElse(
@@ -1438,11 +1443,9 @@ export const resolveSessionRoute = (params: {
       Option.fromUndefinedOr(admission.runSpec?.overrides),
     ),
   })
-  const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
-    Option.match(definition, {
-      onNone: () => DEFAULT_MODEL_ID,
-      onSome: resolveAgentModel,
-    }),
+  const modelId = Option.fromUndefinedOr(params.session.modelId).pipe(
+    Option.orElse(() => Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.model))),
+    Option.orElse(() => Option.fromUndefinedOr(params.config.model)),
   )
   const defaultReasoningLevel = Option.flatMap(definition, (agent) =>
     Option.fromUndefinedOr(agent.reasoningEffort),
@@ -1461,7 +1464,7 @@ export const resolveSessionRoute = (params: {
       () => defaultReasoningLevel,
     ),
     defaultReasoningLevel,
-    modelDriver: effectiveModelDriver(driverRef, modelId),
+    modelDriver: Option.map(modelId, (id) => effectiveModelDriver(driverRef, id)),
     driverRef,
   }
 }
@@ -1469,20 +1472,23 @@ export const resolveSessionRoute = (params: {
 /**
  * The driver a route's turn needs a credential for. A virtual model needs its
  * default choice's: the model its turn runs on when its router does not choose.
+ * A route with no model needs none.
  */
 export const routeCredentialDriver = (
   route: SessionRoute,
   profile: Parameters<typeof servedVirtualModel>[0],
 ): Option.Option<string> =>
-  Option.match(
-    servedVirtualModel(profile, route.modelId).pipe(
-      Option.flatMap(Result.getSuccess),
-      Option.flatMap((served) => virtualDefaultModel(served.model)),
+  Option.flatMap(route.modelId, (selected) =>
+    Option.match(
+      servedVirtualModel(profile, selected).pipe(
+        Option.flatMap(Result.getSuccess),
+        Option.flatMap((served) => virtualDefaultModel(served.model)),
+      ),
+      {
+        onNone: () => effectiveModelDriver(route.driverRef, selected).driverId,
+        onSome: (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
+      },
     ),
-    {
-      onNone: () => route.modelDriver.driverId,
-      onSome: (modelId) => effectiveModelDriver(route.driverRef, modelId).driverId,
-    },
   )
 
 /** The agent a session's turns run as, by name; the default when the session names none. */
@@ -1564,6 +1570,21 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
       )
       .pipe(Effect.orDie)
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
+    return undefined
+  }
+  // A turn admitted without `message.send` (an extension's send, a create's
+  // first prompt) meets the same refusal here: no turn runs on a model nobody named.
+  if (Option.isNone(route.modelId) || Option.isNone(route.modelDriver)) {
+    yield* eventStore
+      .publish(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: noModelError(currentAgent).message,
+        }),
+      )
+      .pipe(Effect.orDie)
+    // oxlint-disable-next-line effect/noNullish -- A turn with no model ends after the error event is published, as an unknown agent does.
     return undefined
   }
   // The run's bound: its own and every parent run's, so a child never runs
@@ -1670,10 +1691,10 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     toolBindings,
     hostToolBindings,
     systemPrompt: systemPromptBlocks(systemPrompt, compileSharedSystemPrompt(sections)),
-    modelId: route.modelId,
+    modelId: route.modelId.value,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    modelDriver: route.modelDriver,
+    modelDriver: route.modelDriver.value,
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
