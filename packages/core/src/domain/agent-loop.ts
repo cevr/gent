@@ -19,7 +19,7 @@ import {
   CurrentWorkspaceId,
   WorkspaceId,
 } from "./ids.js"
-import { ModelId, ReasoningEffort } from "./agent.js"
+import { ModelAttempts, ModelId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
 import { omitUndefined } from "./guards.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -168,6 +168,13 @@ export const SessionRuntimeMetrics = Schema.Struct({
    */
   turnEffort: Schema.optional(Schema.Struct({ level: Schema.optional(ReasoningEffort) })),
   /**
+   * The running turn's model-call budget, from its newest step's receipt
+   * (`StreamEnded.modelAttempts`): what it used of its limit. Absent for a
+   * turn with no budget, before its first step ends, and once it completes:
+   * the next turn starts a budget of its own.
+   */
+  turnModelAttempts: Schema.optional(ModelAttempts),
+  /**
    * The credential of the newest step that ended on a model
    * (`StreamEnded.credential`): what the status row names when a sign-in has
    * more than one. `receipt` is absent for a row written before receipts and
@@ -206,7 +213,7 @@ export const stepSessionMetrics = (
     case "StreamStarted":
       return { ...metrics, turnEffort: omitUndefined({ level: event.reasoningLevel }) }
     case "TurnCompleted": {
-      const { turnEffort: _ended, ...idle } = metrics
+      const { turnEffort: _ended, turnModelAttempts: _spent, ...idle } = metrics
       return {
         ...idle,
         turns: metrics.turns + 1,
@@ -263,6 +270,7 @@ export const stepSessionMetrics = (
           onNone: () => metrics.lastInputTokens,
           onSome: (usage) => usage.inputTokens,
         }),
+        ...omitUndefined({ turnModelAttempts: event.modelAttempts }),
       }
       // A step that ended on no model (a failed request) leaves the last one.
       if (Predicate.isUndefined(event.model)) return ended

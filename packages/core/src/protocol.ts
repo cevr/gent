@@ -51,11 +51,14 @@ export {
   cacheWriteRate,
   effectiveEffort,
   Model,
+  ModelAttempts,
+  modelAttemptsLeft,
+  MODEL_ATTEMPTS_NOTICE_LEFT,
   ModelId,
   promptCacheTtlMsFor,
   ProviderId,
 } from "./domain/agent.js"
-export { QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
+export { MODEL_ATTEMPTS_MESSAGE_TYPE, QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
 export {
   initialSessionMetrics,
   type ModelContextMetrics,
