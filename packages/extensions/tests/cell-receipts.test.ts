@@ -35,6 +35,7 @@ import {
   waitFor,
   ApprovalService,
   SqliteStorage,
+  EventStore,
   CurrentWorkspaceId,
   WorkspaceId,
   createRpcClient,
@@ -73,7 +74,6 @@ import {
   ToolRunner,
   ModelContextLedger,
   StorageError,
-  EventStore,
 } from "@gent/core/extensions/branch-tools"
 import {
   CellKernelResource,

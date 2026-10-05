@@ -71,6 +71,8 @@ export { BunGentPlatformLive, BunProviderLockLive } from "../runtime/gent-platfo
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
+// The in-memory event store a branch-tool test runs its tool runner over.
+export { EventStore } from "../domain/event.js"
 export { CurrentWorkspaceId, WorkspaceId } from "../domain/ids.js"
 // Protocol values only tests read: event and error fixtures, projections.
 export { type SessionRuntimeState } from "../domain/agent-loop.js"

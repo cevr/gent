@@ -1,3 +1,4 @@
+import { FetchHttpClient, type HttpClient } from "effect/http"
 import { describe, expect, it } from "effect-bun-test"
 import type { ChildProcessSpawner } from "effect/process"
 import {
@@ -377,7 +378,11 @@ const routes = Effect.gen(function* () {
   const anthropicCell =
     yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
   const anthropicServices = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Crypto.Crypto
+    | HttpClient.HttpClient
   >().pipe(
     Effect.map(
       Context.add(
@@ -385,7 +390,7 @@ const routes = Effect.gen(function* () {
         AnthropicPlatform.of({ platform: "linux", home: "/nonexistent/gent-test-home", env: {} }),
       ),
     ),
-    Effect.provide(BunServices.layer),
+    Effect.provide(Layer.merge(BunServices.layer, FetchHttpClient.layer)),
   )
   const routes: ReadonlyArray<Route> = [
     {

@@ -485,10 +485,7 @@ function ChildCompletionRow(
               </For>
               <Show when={answer().length > shownAnswer().length}>
                 <text style={{ fg: theme.textMuted }} wrapMode="none">
-                  │{" "}
-                  <span style={{ fg: theme.textMuted, dim: true }}>
-                    {formatPreviewFooter(answer().length - shownAnswer().length)}
-                  </span>
+                  │ {formatPreviewFooter(answer().length - shownAnswer().length)}
                 </text>
               </Show>
             </box>

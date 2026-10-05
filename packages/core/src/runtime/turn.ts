@@ -1455,7 +1455,7 @@ interface SessionRoute {
    * (`resolveSessionAgent`); none when no agent has the name. Routing only:
    * a turn binds it to its run (`bindSessionAgent`) before it holds a tool.
    * Its `driver` is its own: a config `driverOverrides` entry reaches
-   * `modelDriver` only.
+   * `driverRef` only.
    */
   readonly definition: Option.Option<AgentDefinition>
   /**
@@ -1466,9 +1466,11 @@ interface SessionRoute {
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The level without the session's own: what clearing it falls back to. */
   readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
-  /** The driver the model dispatches through, and the catalog id it reaches; none without a model. */
-  readonly modelDriver: Option.Option<EffectiveModelDriver>
-  /** The driver the agent names (its own, else config `driverOverrides`). */
+  /**
+   * The driver the agent names (its own, else config `driverOverrides`). A
+   * reader with a model derives the driver it dispatches through, and the
+   * catalog id it reaches, from both (`effectiveModelDriver`).
+   */
   readonly driverRef: Option.Option<DriverRef>
 }
 
@@ -1524,7 +1526,6 @@ export const resolveSessionRoute = (params: {
       () => defaultReasoningLevel,
     ),
     defaultReasoningLevel,
-    modelDriver: Option.map(modelId, (id) => effectiveModelDriver(driverRef, id)),
     driverRef,
   }
 }
@@ -1634,7 +1635,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   }
   // A turn admitted without `message.send` (an extension's send, a create's
   // first prompt) meets the same refusal here: no turn runs on a model nobody named.
-  if (Option.isNone(route.modelId) || Option.isNone(route.modelDriver)) {
+  if (Option.isNone(route.modelId)) {
     yield* eventStore
       .publish(
         ErrorOccurred.make({
@@ -1754,7 +1755,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelId: route.modelId.value,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    modelDriver: route.modelDriver.value,
+    modelDriver: effectiveModelDriver(route.driverRef, route.modelId.value),
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
@@ -1796,7 +1797,10 @@ const ROUTE_REASON_CHARS = 200
  * first slot of its sign-in's `authOrder` the turn has not left, with that
  * slot's sign-in stamp, so a new sign-in on the slot reads as another
  * credential. None where the model names no sign-in. Fails when the order
- * fails or the turn left every slot.
+ * fails or the turn left every slot. A move never leaves the last slot of
+ * the order it reads, so the turn has left every slot only when the order
+ * changed while it ran (or after the receipts a resume or a child's first
+ * turn starts from): the failure says so.
  */
 const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(function* (params: {
   readonly request: ResolveModelRequest
@@ -1811,7 +1815,7 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
   const slot = slots.find((candidate) => !left.has(candidate))
   if (Predicate.isUndefined(slot)) {
     return yield* new ProviderAuthError({
-      message: `Every credential of provider "${provider}" failed this turn`,
+      message: `The authOrder of provider "${provider}" changed during this turn, and the turn already left every credential it names now (${slots.join(", ")}). The next turn starts again at its first credential`,
     })
   }
   return Option.some(
@@ -3011,6 +3015,69 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ),
     )
   const eventStore = yield* EventStore
+  /**
+   * Leave the credential the failed request used (`used`), when its failure
+   * (`cause`) proved it cannot serve and the order as it reads now names
+   * another slot the turn has not left: a refusal, an exhausted quota, a
+   * rate limit past its retries, or a failure the driver proved. Any other
+   * failure, a cancelled step, or the last slot stays where it is. The user
+   * reads a notice.
+   */
+  const moveCredential = (cause: unknown) =>
+    Effect.gen(function* () {
+      if (yield* wasInterrupted(params.activeStream)) return false
+      const refusal = credentialRefusal(cause)
+      if (Option.isNone(refusal)) return false
+      const failed = yield* Ref.get(used)
+      if (Option.isNone(failed)) return false
+      const { provider, slot } = failed.value
+      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
+        Effect.orElseSucceed(Option.none),
+      )
+      if (Option.isNone(order) || order.value.provider !== provider) return false
+      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
+      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
+      if (Predicate.isUndefined(next)) return false
+      yield* params.turnLedger.passCredential(provider, slot)
+      yield* Effect.logInfo("turn.credential-moved").pipe(
+        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
+      )
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
+          notice: true,
+        }),
+      )
+      return true
+    }).pipe(Effect.provideService(EventStore, eventStore))
+  /**
+   * Run `attempt`, and run it again each time its failure moves the turn to
+   * the next credential of its order (`moveCredential`). The step's request
+   * and the handoff summary both walk the order here, under one rule: a
+   * summary that a credential refuses is made on the next one, and the step
+   * after it starts there with no second notice. `causeOf` reads the model's
+   * failure out of the attempt's error, none when it carries none.
+   */
+  const walkCredentials = <A, E, R>(
+    attempt: Effect.Effect<A, E, R>,
+    causeOf: (error: E) => Option.Option<unknown>,
+  ): Effect.Effect<A, E, R> => {
+    const visit: Effect.Effect<A, E, R> = attempt.pipe(
+      Effect.catch((error) =>
+        Option.match(causeOf(error), {
+          onNone: () => Effect.fail(error),
+          onSome: (cause) =>
+            Effect.flatMap(moveCredential(cause), (moved) => {
+              if (moved) return Effect.suspend(() => visit)
+              return Effect.fail(error)
+            }),
+        }),
+      ),
+    )
+    return visit
+  }
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
@@ -3047,6 +3114,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
+    walkCredentials: (compact) =>
+      walkCredentials(compact, (error) => Option.fromUndefinedOr(error.cause)),
   }).pipe(
     // The compactor runs with the context a tool call on this branch gets:
     // the session's cwd and facets, and the agent whose window it compacts.
@@ -3200,43 +3269,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       return { ...collected, windowFull, contextOverflow }
     })
 
-  /**
-   * Leave the credential the failed request used (`used`), when a failure
-   * proved it cannot serve and the order as it reads now names another slot
-   * the turn has not left: a refusal, an exhausted quota, a rate limit past
-   * its retries, or a failure the driver proved. Any other failure, a
-   * cancelled step, or the last slot stays where it is. The user reads a notice.
-   */
-  const moveCredential = (streamError: ProviderError) =>
-    Effect.gen(function* () {
-      if (yield* wasInterrupted(params.activeStream)) return false
-      const refusal = credentialRefusal(streamError.cause)
-      if (Option.isNone(refusal)) return false
-      const failed = yield* Ref.get(used)
-      if (Option.isNone(failed)) return false
-      const { provider, slot } = failed.value
-      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
-        Effect.orElseSucceed(Option.none),
-      )
-      if (Option.isNone(order) || order.value.provider !== provider) return false
-      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
-      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
-      if (Predicate.isUndefined(next)) return false
-      yield* params.turnLedger.passCredential(provider, slot)
-      yield* Effect.logInfo("turn.credential-moved").pipe(
-        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
-      )
-      yield* publishEventOrDie(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
-          notice: true,
-        }),
-      )
-      return true
-    })
-
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
@@ -3287,18 +3319,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       // keeps a step that wrote something. When it proves the credential
       // cannot serve, the turn leaves that slot and runs the step again on
       // the next one of its order, under the same attempt budget.
-      const visit: Effect.Effect<
-        CollectedTurnResponse,
-        ProviderError | ProviderAuthError,
-        R | EventStore
-      > = attempt.pipe(
-        Effect.catchTag("ProviderError", (streamError) =>
-          Effect.flatMap(moveCredential(streamError), (moved) => {
-            if (moved) return Effect.suspend(() => visit)
-            return Effect.fail(streamError)
-          }),
-        ),
-      )
+      const visit = walkCredentials(attempt, (error) => {
+        if (error._tag !== "ProviderError") return Option.none()
+        return Option.some(error.cause)
+      })
       return visit.pipe(
         Effect.catchTag("ProviderError", (streamError) =>
           Effect.flatMap(

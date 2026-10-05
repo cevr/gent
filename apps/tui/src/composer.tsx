@@ -676,16 +676,7 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
             <text flexGrow={1} wrapMode="none" truncate style={{ fg: descriptionColor() }}>
               {/* Optional description is supplied by the external extension contribution. */}
               <Show when={Option.getOrUndefined(description())}>
-                {(text) => (
-                  <span
-                    style={{
-                      fg: descriptionColor(),
-                      dim: !isSelected(),
-                    }}
-                  >
-                    {truncate(text(), descriptionWidth())}
-                  </span>
-                )}
+                {(text) => truncate(text(), descriptionWidth())}
               </Show>
             </text>
           </box>
@@ -1821,6 +1812,8 @@ export function Composer(props: ComposerProps) {
               ]}
               backgroundColor="transparent"
               focusedBackgroundColor="transparent"
+              textColor={theme.text}
+              focusedTextColor={theme.text}
             />
           </box>
         </box>

@@ -57,9 +57,8 @@ import {
   type ReasoningEffort,
   type RunEffort,
   omitUndefined,
+  GentPlatform,
 } from "@gent/core/extensions/api"
-// The host's loopback listener for a sign-in redirect (`GentPlatform.loopbackServer`).
-import { GentPlatform } from "@gent/core/extensions/branch-tools"
 import {
   adapterEntry,
   catalogModels,

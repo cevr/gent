@@ -22,6 +22,9 @@ import {
   findStaleSteeringReceipts,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
+  findBunfigPreloads,
+  findMissingRootBunfig,
+  findWorkflowRunPaths,
   findUnadaptedSeams,
   findUnconsumedExports,
   enabledLintRules,
@@ -268,6 +271,35 @@ describe("host-only import guard", () => {
       "packages/core/tests/runtime/provider.test.ts",
     ])
       expect(findHostOnlyImports(file, text)).toEqual([])
+  })
+
+  const globals = [
+    "// Bun.YAML.parse in a comment loads nothing",
+    'const note = "Bun.TOML.parse in a string loads nothing"',
+    "const header = Bun.YAML.parse(text)",
+    "type Loaded = Bun.OnLoadResultObject",
+    'const config = Bun["TOML"].parse(text)',
+    "const peek = Bun.peek",
+  ].join("\n")
+
+  test("reports each read of the global Bun in portable source, not a type or a comment", () => {
+    const findings = findHostOnlyImports("packages/extensions/src/skills.ts", globals)
+    expect(findings.map((finding) => finding.line)).toEqual([3, 5, 6])
+    expect(findings[0]?.message).toContain("`Bun.YAML`")
+  })
+
+  test("a kept read passes only in its file, and only that member", () => {
+    const toml = "const config = Bun.TOML.parse(text)\nconst header = Bun.YAML.parse(text)"
+    const kept = findHostOnlyImports("packages/extensions/src/workspaces.ts", toml)
+    expect(kept.map((finding) => finding.line)).toEqual([2])
+    const elsewhere = findHostOnlyImports("packages/extensions/src/skills.ts", toml)
+    expect(elsewhere.map((finding) => finding.line)).toEqual([1, 2])
+  })
+
+  test("the Bun cell worker reads the global Bun", () => {
+    expect(findHostOnlyImports("packages/extensions/src/cell-worker-boundary.ts", globals)).toEqual(
+      [],
+    )
   })
 })
 
@@ -879,6 +911,103 @@ describe("test lane defaults guard", () => {
     expect(laneFindings("packages/core/package.json", "tsc --noEmit")).toEqual([])
     expect(laneFindings("testbeds/gamut/fixture/package.json", "bun test")).toEqual([])
     expect(laneFindings("packages/core/tsconfig.json", "bun test")).toEqual([])
+  })
+})
+
+// ── bunfig preloads ─────────────────────────────────────────────────────────
+
+describe("bunfig preload guard", () => {
+  const tracked = ["packages/tooling/src/test-preload.ts", "apps/tui/scripts/dev-preload.ts"]
+  const rootBunfig = '[test]\npreload = ["./packages/tooling/src/test-preload.ts"]\n'
+
+  test("a root bunfig that preloads the test preload, and a workspace's existing preloads, pass", () => {
+    expect(findBunfigPreloads("bunfig.toml", rootBunfig, tracked)).toEqual([])
+    const tui =
+      'preload = ["./scripts/dev-preload.ts"]\n\n[test]\npreload = ["@opentui/solid/preload"]\n'
+    expect(findBunfigPreloads("apps/tui/bunfig.toml", tui, tracked)).toEqual([])
+  })
+
+  // A bare `bun test` at the root reads only the root bunfig: without the
+  // preload its tests log and write into the real home.
+  test("a root bunfig without the test preload is reported", () => {
+    const other = '[test]\npreload = ["./other.ts"]\n'
+    expect(
+      findBunfigPreloads("bunfig.toml", other, [...tracked, "other.ts"]).map(
+        (finding) => finding.message,
+      ),
+    ).toEqual([expect.stringContaining("bare `bun test` at the root")])
+  })
+
+  test("a preload path that names no tracked file is reported at its line", () => {
+    const moved =
+      'preload = ["./scripts/gone.ts"]\n\n[test]\npreload = ["@opentui/solid/preload"]\n'
+    expect(
+      findBunfigPreloads("apps/tui/bunfig.toml", moved, tracked).map((finding) => [
+        finding.line,
+        finding.message,
+      ]),
+    ).toEqual([[1, expect.stringContaining("`./scripts/gone.ts`")]])
+  })
+
+  test("no root bunfig is reported on the root manifest", () => {
+    expect(findMissingRootBunfig(tracked).map((finding) => finding.file)).toEqual(["package.json"])
+    expect(findMissingRootBunfig([...tracked, "bunfig.toml"])).toEqual([])
+  })
+})
+
+// ── workflow run paths ──────────────────────────────────────────────────────
+
+describe("workflow run path guard", () => {
+  const tracked = ["packages/e2e/src/release-smoke.ts", "apps/tui/package.json", "install.sh"]
+  const outputs = ["apps/tui/bin/gent", "apps/tui/bin/gent-cell", "apps/tui/dist"]
+  const workflow = (run: string, extra = "") =>
+    [
+      "name: Release",
+      "jobs:",
+      "  build:",
+      "    steps:",
+      "      - name: Smoke",
+      `        run: ${run}`,
+      extra,
+    ].join("\n")
+  const found = (text: string) =>
+    findWorkflowRunPaths(".github/workflows/release.yml", text, tracked, outputs).map((finding) => [
+      finding.line,
+      finding.message,
+    ])
+
+  test("a run line that names tracked files and build outputs passes", () => {
+    expect(found(workflow("bun packages/e2e/src/release-smoke.ts apps/tui/bin"))).toEqual([])
+    expect(found(workflow("codesign --sign - apps/tui/bin/gent apps/tui/bin/gent-cell"))).toEqual(
+      [],
+    )
+    expect(found(workflow('version="$(jq -r .version apps/tui/package.json)"'))).toEqual([])
+  })
+
+  // The release runs only on a tag, so a moved path fails at release time.
+  test("a run line that names a moved file is reported at its line", () => {
+    expect(found(workflow("bun packages/e2e/src/smoke.ts apps/tui/bin"))).toEqual([
+      [6, expect.stringContaining("`packages/e2e/src/smoke.ts`")],
+    ])
+  })
+
+  test("a block run reports the line that names the path", () => {
+    const text = workflow("|\n          set -e\n          bun packages/e2e/src/gone.ts")
+    expect(found(text)).toEqual([[8, expect.stringContaining("`packages/e2e/src/gone.ts`")]])
+  })
+
+  test("a path resolves against the step's working directory", () => {
+    const text = workflow(
+      "cp ../packages/e2e/src/release-smoke.ts .",
+      "        working-directory: dist",
+    )
+    expect(found(text)).toEqual([])
+  })
+
+  test("a file that is not a workflow is not read", () => {
+    expect(
+      findWorkflowRunPaths("lefthook.yml", workflow("bun packages/gone.ts"), tracked, outputs),
+    ).toEqual([])
   })
 })
 
@@ -2030,6 +2159,7 @@ describe("steering file paths", () => {
       "docs/extensions.md",
       "testbeds/gamut/README.md",
       "patches/README.md",
+      "packages/e2e/README.md",
       "packages/extensions/src/skills/bundled/principles/SKILL.md",
       "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
     ]) {
@@ -2040,6 +2170,8 @@ describe("steering file paths", () => {
       "plans/some-plan.md",
       "docs/research/2026-09-06-x.md",
       "README.md",
+      "CONTRIBUTING.md",
+      "packages/e2e/src/README.md",
       "testbeds/gamut/fixture/README.md",
       "packages/extensions/src/skills/bundled/principles/notes.txt",
     ]) {

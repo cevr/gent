@@ -13,6 +13,7 @@
         "../ARCHITECTURE.md",
         "../NORTH_STAR.md",
         "../PRIOR_ART.md",
+        "../packages/*/README.md",
         "../apps/*/AGENTS.md",
         "../apps/*/CLAUDE.md",
         "../packages/*/AGENTS.md",

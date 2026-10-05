@@ -1885,13 +1885,13 @@ const AGENT_MESSAGE_PREVIEW_LINES = 5
 
 /**
  * The rail row: images, then the text; `header` is a muted line above it.
- * Right of the rail, every row of the block sits on the reader's surface
- * (Codex's prompt fill) out to the row's end. No padding row: the surface
+ * Right of the rail, every row of the block sits on `theme.backgroundPanel`
+ * (Codex's prompt fill unless the theme names one) out to the row's end. No padding row: the surface
  * marks the block on its own rows, and the rail alone when the terminal's
  * background is unknown.
  */
 export function UserRow(props: MessageRowProps & { readonly header?: string }) {
-  const { theme, messageSurface } = useTheme()
+  const { theme } = useTheme()
   return (
     <box
       marginTop={1}
@@ -1905,7 +1905,7 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
         paddingLeft={1}
         paddingRight={1}
         flexDirection="column"
-        backgroundColor={messageSurface()}
+        backgroundColor={theme.backgroundPanel}
       >
         <Show when={props.images.length > 0}>
           <For each={props.images}>
@@ -2037,10 +2037,7 @@ export function AgentMessageRow(props: AgentMessageRowProps) {
           </For>
           <Show when={lines().length > preview().length}>
             <text style={{ fg: theme.textMuted }} wrapMode="none">
-              │{" "}
-              <span style={{ fg: theme.textMuted, dim: true }}>
-                {formatPreviewFooter(lines().length - preview().length)}
-              </span>
+              │ {formatPreviewFooter(lines().length - preview().length)}
             </text>
           </Show>
         </box>

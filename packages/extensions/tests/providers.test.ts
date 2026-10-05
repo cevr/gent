@@ -1,3 +1,4 @@
+import { FetchHttpClient, type HttpClient } from "effect/http"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
@@ -87,8 +88,12 @@ const anthropicDriverIn = Effect.fn("test.anthropicDriverIn")(function* (
   promptCacheTtl: "5m" | "1h",
 ) {
   const platform = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-  >()
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Crypto.Crypto
+    | HttpClient.HttpClient
+  >().pipe(Effect.provide(FetchHttpClient.layer))
   return buildAnthropicModelDriver(
     yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
     Option.none(),

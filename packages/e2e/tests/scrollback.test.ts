@@ -19,10 +19,12 @@ import { Effect, FileSystem, Option, Result, Schema } from "effect"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
   countRows,
+  fedStream,
   gridText,
   historyText,
   keys,
   ptyWaitFor,
+  rawForFailure,
   screenWaitFor,
   seedAndSpawn,
   settleAndCapture,
@@ -49,7 +51,6 @@ const TYPED = { quietMs: 200, timeoutMs: 5_000 }
 const TALL_SESSION = 8
 
 const messageText = (index: number) => `scrollback probe ${index}`
-const encodeTerminalBytes = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 
 class TranscriptReadinessError extends Schema.TaggedError<TranscriptReadinessError>()(
   "TranscriptReadinessError",
@@ -127,10 +128,10 @@ describe("E2E: Scrollback ownership", () => {
 
         // A resize re-lays out the transcript and replays it. The replay must
         // not drop rows, and must not add a second copy of any of them.
-        const beforeResize = ctx.output.length
+        const beforeResize = ctx.written()
         ctx.resize({ cols: SHORT_SCREEN.cols, rows: 24 })
         yield* waitFor(
-          Effect.sync(() => ctx.output.length),
+          Effect.sync(() => ctx.written()),
           (length) => length > beforeResize,
           10_000,
           "the repaint after the resize",
@@ -176,7 +177,7 @@ describe("E2E: Scrollback ownership", () => {
             Effect.mapError(
               (error) =>
                 new TranscriptReadinessError({
-                  message: `${error.message}\nPTY bytes: ${encodeTerminalBytes(ctx.output)}`,
+                  message: `${error.message}\nPTY bytes: ${rawForFailure(ctx)}`,
                 }),
             ),
           )
@@ -497,12 +498,7 @@ describe("E2E: Settle then capture", () => {
   it.live("the capture reads what the child wrote while it waited for quiet", () =>
     Effect.gen(function* () {
       let output = "first frame\r\n"
-      const child = {
-        get output() {
-          return output
-        },
-        size: { cols: 40, rows: 6 },
-      }
+      const child = fedStream(() => output, { cols: 40, rows: 6 })
       const capture = settleAndCapture(child, { quietMs: 100, timeoutMs: 2_000 })
       // A repaint lands after the capture is built and before it runs.
       output += "second frame\r\n"

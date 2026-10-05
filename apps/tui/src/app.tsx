@@ -18,7 +18,14 @@ import { formatCost, formatDuration, isConversation, plural, randomId, truncate 
 import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
 import { createEffect, createMemo, createSignal, ErrorBoundary, For, on, Show } from "solid-js"
-import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
+import {
+  buildSyntaxStyle,
+  DEFAULT_THEMES,
+  resolveTheme,
+  resolveThemeColor,
+  ThemeProvider,
+  useTheme,
+} from "./theme"
 import {
   KeyboardScopeProvider,
   useCopyOnSelect,
@@ -1120,9 +1127,11 @@ const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
  * What a render throw leaves on screen. The session view is gone with its
  * keys, so this screen keeps one way out: ctrl+c or ctrl+d exits. The error
  * goes to the client log with its stack, since the screen shows only the
- * message.
+ * message. It draws outside the theme provider (a throw may have come from
+ * there), so it reads the default theme's error color.
  */
-function FatalScreen(props: { readonly error: unknown }) {
+function FatalScreen(props: { readonly error: unknown; readonly mode?: "dark" | "light" }) {
+  const error = resolveTheme(DEFAULT_THEMES.fx, props.mode ?? "dark").error
   const exit = useExit()
   const client = useClient()
   const cause = decodeError(props.error)
@@ -1146,7 +1155,7 @@ function FatalScreen(props: { readonly error: unknown }) {
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={1}>
       <text>
-        <span style={{ fg: "red", bold: true }}>Fatal error</span>
+        <span style={{ fg: error, bold: true }}>Fatal error</span>
       </text>
       <text>{message}</text>
       {/* No theme here (it may be what failed): the key reads bold, as Codex draws key names. */}
@@ -1162,7 +1171,7 @@ export function App(props: AppProps) {
     <ErrorBoundary
       fallback={(error) => (
         <KeyboardScopeProvider>
-          <FatalScreen error={error} />
+          <FatalScreen error={error} mode={props.initialThemeMode} />
         </KeyboardScopeProvider>
       )}
     >

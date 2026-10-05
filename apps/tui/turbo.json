@@ -2,7 +2,7 @@
   "extends": ["//"],
   "tasks": {
     "typecheck": {
-      "inputs": ["$TURBO_EXTENDS$", "scripts/**"]
+      "inputs": ["$TURBO_EXTENDS$", "scripts/**", "../../testbeds/gamut/gamut.ts"]
     },
     "build": {
       "inputs": ["$TURBO_EXTENDS$", "scripts/**/*.ts"],

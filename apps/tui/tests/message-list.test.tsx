@@ -73,6 +73,8 @@ import {
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/extensions/client-facets"
 import { useTheme } from "../src/theme"
+// oxlint-disable-next-line gent/declared-workspace-imports -- the gamut live-check driver is in no workspace; its wait is checked on this renderer's frames
+import { isSettled, WAIT_START, waitStep } from "../../../testbeds/gamut/gamut"
 import { FrameClicks, ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import {
   BUILTIN_TOOL_RENDERERS,
@@ -3823,8 +3825,9 @@ describe("native transcript rows in history", () => {
     15_000,
   )
 
-  // White at 12% over the dark terminal's `#1d1f21`.
-  const SURFACE = "56,58,60"
+  // fx's panel on the dark terminal's `#1d1f21`: white at 12% (#383a3c),
+  // faded until its muted header reads (#343638).
+  const SURFACE = "52,54,56"
   for (const width of [100, 60, 40]) {
     it.scopedLive(
       `the reader's surface reaches history as drawn, and again after a replay, at ${width} columns`,
@@ -7872,6 +7875,22 @@ describe("collapse ladder", () => {
       expect(preview.at(-1)).toBe("  ✻ Worked for 23s · 2 retries · ↑38k ↓2.1k · $0.04 · 2 steps")
       const narrow = drawnRows(yield* draw(items, "collapsed", 40))
       expect(narrow.at(-1)).toBe("  ✻ Worked for 23s · 2 retries")
+    }),
+  )
+
+  // `bun run gamut wait` reads the pane tail, where the turn line is the last
+  // transcript row. The frame comes from this renderer, so a turn row that
+  // reads busy turns this red rather than the live check hanging.
+  it.scopedLive("the gamut wait settles on a finished turn's frame", () =>
+    Effect.gen(function* () {
+      const frame = yield* draw([...debugTurn(), turnLine(2)], "collapsed", 100)
+      expect(drawnRows(frame).at(-1)).toStartWith("  ✻ Worked for 23s")
+      const finished = { started: true, open: [], stored: true }
+      const progress = [frame, frame].reduce(
+        (sofar, text) => waitStep(sofar, text, finished, true),
+        WAIT_START,
+      )
+      expect(isSettled(progress)).toBe(true)
     }),
   )
 

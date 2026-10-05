@@ -2856,7 +2856,9 @@ describe("tool signatures", () => {
       const signatures = yield* Effect.forEach(tools.flat(), renderToolSignature)
       expect(signatures.length).toBeGreaterThan(shippedSignatures.length)
       expect(signatures.filter((line) => /: Promise<object(\[\])?>/.test(line))).toEqual([])
-    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+    }).pipe(
+      Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer)),
+    ),
   )
 
   for (const [capability, expected] of shippedSignatures) {
