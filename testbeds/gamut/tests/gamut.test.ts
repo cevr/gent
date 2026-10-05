@@ -265,6 +265,13 @@ describe("a settled run", () => {
     const pane = "wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
+  // The turn line ends each finished turn as the last transcript row, so it
+  // is inside the pane tail every wait reads.
+  test("a finished turn's turn line settles on the second read", () => {
+    const pane =
+      "┃ fix the ledger\n\n  Done.\n\n  ✻ Worked for 42s · ↑12k ↓1.1k · $0.08\n\nidle · work (main) · GPT-6.1 Sol\n"
+    expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
+  })
   test("an idle root with a working background child is not settled", () => {
     // The tray's running row: the pulse (`◇◈◆◈`) at its head, no state word.
     for (const pulse of ["◇", "◈"]) {
@@ -277,9 +284,10 @@ describe("a settled run", () => {
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
+    const generating = { started: true, open: ["main"], stored: true }
     const pane =
-      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nwork (main) · GPT-5.6 Sol\n"
-    expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
+      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nidle · work (main) · GPT-5.6 Sol\n"
+    expect(settlesAt(repeated(pane, generating, 10), true)).toBe(-1)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
     const open = { started: true, open: ["child"], stored: true }
@@ -315,7 +323,7 @@ describe("a settled run", () => {
     const quiet = { started: false, open: [], stored: false }
     const reads = [
       ...repeated(idlePane, quiet, QUIET_READS - 1),
-      ["  ✻ Generating (1s)\n", quiet] as const,
+      [`${idlePane} ◇ delegate: audit  ctrl+t sessions\n`, quiet] as const,
       ...repeated(idlePane, quiet, QUIET_READS),
     ]
     expect(settlesAt(reads, false)).toBe(2 * QUIET_READS - 1)

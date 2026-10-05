@@ -869,22 +869,27 @@ const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
 const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
- * Whether the pane and the record are idle: every turn has ended and the pane
- * shows no busy row. The footer is only a hint: its first slot shows `idle`,
- * `ready`, a held error or an extension notice (`apps/tui/src/app.tsx`,
- * `phaseLabels`), and the error and notice texts are free text, so the footer
- * cannot say idle on its own. The prompt text is echoed in the transcript, so
- * matching on a word the reply should contain proves nothing either.
+ * Whether the pane shows a working child: a running child's tray row starts
+ * with its pulse (`◇◈◆◈`, `workingIconFrame` in `apps/tui/src/utils.ts`).
+ * `◆` is also a done thread's glyph, so only the other two frames read busy:
+ * idle needs several reads in a row, and the record's open turns cover a
+ * stored child too. The row covers a child that is admitted and not yet
+ * stored. The TUI's agents tests render the tray and check this predicate on
+ * the frame, so a change to the row turns them red.
  */
-const isIdle = (paneText: string, record: RunRecord): boolean => {
-  const lines = paneText.split("\n").map((line) => line.trim())
-  // The live line (`✻ Thinking`, `✻ Running …`) shows while a turn runs; a
-  // running child's tray row starts with its pulse (`◇◈◆◈`). `◆` is also a
-  // done thread's glyph, so only the other two frames read busy: idle needs
-  // several reads in a row, and the record's open turns cover a child too.
-  const busy = lines.some((line) => /^[◇◈] /.test(line) || /^✻ /.test(line))
-  return record.open.length === 0 && !busy
-}
+export const paneShowsWorkingChild = (paneText: string): boolean =>
+  paneText.split("\n").some((line) => /^[◇◈] /.test(line.trim()))
+
+/**
+ * Whether the run is idle: every turn has ended in the record and the pane
+ * shows no working child. The record holds the turn state; no pane row
+ * stands for it. The live line and the turn line share the `✻` glyph, so a
+ * pane check on it read a finished turn as busy. The footer cannot say idle
+ * either: its first slot shows `idle`, `ready`, a held error or an extension
+ * notice (`apps/tui/src/app.tsx`, `phaseLabels`), the last two free text.
+ */
+const isIdle = (paneText: string, record: RunRecord): boolean =>
+  record.open.length === 0 && !paneShowsWorkingChild(paneText)
 
 /** Where a wait stands: idle reads in a row with and without proof the send was handled. */
 interface WaitProgress {
