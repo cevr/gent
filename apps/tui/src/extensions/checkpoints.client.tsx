@@ -59,7 +59,9 @@ type TurnRow = CheckpointList["turns"][number]
 interface RevertEntry {
   readonly key: string
   readonly enter: RevertAction
-  /** The files-only revert; none on an undo or finish row. */
+  /** What `enter` does on the row, as the key row names it. */
+  readonly enterHint: ReturnType<typeof keyHint>
+  /** The files-only revert; none on an undo or finish row, whose key row has no `f`. */
   readonly filesOnly: Option.Option<RevertAction>
   /** The turn the row reverts, for the detail line. */
   readonly n: Option.Option<number>
@@ -90,6 +92,10 @@ export const turnLine = (turn: TurnRow, width: number, now: number): string => {
   return truncate(`${lead}${prompt} · ${tail}`, width)
 }
 
+/** `enter` on a turn row; a narrow key row reads `enter all` before it drops `f files only`. */
+const TURN_HINT = keyHint("enter", "files + conversation", "all")
+const UNDO_HINT = keyHint("enter", "undo")
+
 /** The rows over the turns: undo the newest revert, or finish or undo one a stop cut short. */
 export const actionEntries = (list: CheckpointList): ReadonlyArray<RevertEntry> => {
   const undo = Option.match(Option.fromUndefinedOr(list.undo), {
@@ -98,6 +104,7 @@ export const actionEntries = (list: CheckpointList): ReadonlyArray<RevertEntry> 
       {
         key: `undo:${last.requestId}`,
         enter: RevertAction.cases.Undo.make({}),
+        enterHint: UNDO_HINT,
         filesOnly: Option.none(),
         n: Option.none(),
         done: (files) => `undid the last revert: ${plural(files, "file")} written back`,
@@ -112,6 +119,7 @@ export const actionEntries = (list: CheckpointList): ReadonlyArray<RevertEntry> 
       {
         key: `finish:${cut.requestId}`,
         enter: RevertAction.cases.Finish.make({}),
+        enterHint: keyHint("enter", "finish"),
         filesOnly: Option.none(),
         n: Option.none(),
         done: (files) => `finished the revert: ${plural(files, "file")}`,
@@ -120,6 +128,7 @@ export const actionEntries = (list: CheckpointList): ReadonlyArray<RevertEntry> 
       {
         key: `undo:${cut.requestId}`,
         enter: RevertAction.cases.Undo.make({}),
+        enterHint: UNDO_HINT,
         filesOnly: Option.none(),
         n: Option.none(),
         done: (files) => `undid the cut-short revert: ${plural(files, "file")}`,
@@ -136,6 +145,7 @@ export const turnEntry = (turn: TurnRow): Option.Option<RevertEntry> => {
   return Option.some({
     key: `turn:${turn.messageId}`,
     enter: RevertAction.cases.Turn.make({ n: turn.n, conversation: true }),
+    enterHint: TURN_HINT,
     filesOnly: Option.some(RevertAction.cases.Turn.make({ n: turn.n, conversation: false })),
     n: Option.some(turn.n),
     done: (files) =>
@@ -310,10 +320,18 @@ function RevertPane(props: { readonly controller: RevertController }) {
         onSome: (n) => `review: /diff turn ${n} · conversation only: /fork`,
       }),
     )
+  // The keys the row under the cursor answers: an undo row has no `f`.
   const keys = () => [
     KeyHints.move,
-    keyHint("enter", "files + conversation"),
-    keyHint("f", "files only"),
+    Option.match(cursor(), { onNone: () => TURN_HINT, onSome: (entry) => entry.enterHint }),
+    ...Option.toArray(
+      Option.liftPredicate(keyHint("f", "files only"), () =>
+        Option.match(cursor(), {
+          onNone: () => true,
+          onSome: (entry) => Option.isSome(entry.filesOnly),
+        }),
+      ),
+    ),
     ...Option.toArray(
       Option.liftPredicate(keyHint("o", "overwrite"), () => controller.canOverwrite()),
     ),

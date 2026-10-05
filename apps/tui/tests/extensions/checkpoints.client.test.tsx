@@ -232,6 +232,40 @@ describe("revert pane", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  /** The pane's key row: its last line. */
+  const keyRow = (frame: string) =>
+    frame
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .at(-1) ?? ""
+
+  // The key row names what the row under the cursor does, and keeps every
+  // such key down to 40 columns: a long verb takes its short form before a
+  // key drops.
+  for (const [width, undoKeys, turnKeys] of [
+    [
+      100,
+      "↑↓ move · enter undo · esc close",
+      "↑↓ move · enter files + conversation · f files only · esc close",
+    ],
+    [
+      60,
+      "↑↓ move · enter undo · esc close",
+      "enter files + conversation · f files only · esc close",
+    ],
+    [40, "↑↓ move · enter undo · esc close", "enter all · f files only · esc close"],
+  ] as const) {
+    it.scopedLive(`the key row keeps the cursor row's keys at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { setup } = yield* openPane(width, { ...list, undo: { requestId: "r-1", files: 2 } })
+        yield* waitForFrame(setup, (frame) => keyRow(frame) === undoKeys, "the undo row's keys")
+        setup.mockInput.pressArrow("down")
+        yield* waitForFrame(setup, (frame) => keyRow(frame) === turnKeys, "the turn row's keys")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
   it.scopedLive("after a revert the top row undoes it", () =>
     Effect.gen(function* () {
       const { setup, log } = yield* openPane(

@@ -1582,8 +1582,12 @@ sha256(path)>`; what moved is hashed into the store, and an aside whose
   that made it): the paths it wrote, back to its `before`; a path changed
   since its target is a conflict. `Finish` writes an unfinished revert; with
   `overwrite` it writes over later edits too, and its `before` keeps them for
-  undo. `checkpoints.list` names the newest revert as `undo`
-  (with its file count) once done, or `unfinished` without its `done`. A
+  undo. An undo is a revert record whose marks also carry `Gent-Undoes:
+<request>` (additive: an older store has none). `checkpoints.list` names
+  the newest revert as `undo` (with its file count) once done, unless it is
+  itself a done undo, which leaves nothing to undo (its undo would redo the
+  revert; a turn row does that by name), and `Undo` refuses then too; it
+  names the newest as `unfinished` without its `done`. A
   refusal is an answer (`Refused { reason, conflicts }`), not an error.
 - Client: `/diff turn [n]` is a target of `@gent/git`'s `/diff` (see the TUI
   extensions). `/revert` (`apps/tui/src/extensions/checkpoints.client.tsx`,
@@ -1594,7 +1598,9 @@ sha256(path)>`; what moved is hashed into the store, and an aside whose
   sits on top. `enter` reverts files and conversation and moves the shell to
   the new branch (`shell.switchSession`); `f` reverts files only; after a
   refusal over paths, `o` sends the same request again with `overwrite`.
-  Each press is a new `requestId`. The pane refuses at once while the session
+  The key row names what the row under the cursor answers (`enter undo` on
+  an undo row, which has no `f`), and a narrow row reads `enter all` before
+  it drops `f files only`. Each press is a new `requestId`. The pane refuses at once while the session
   in view runs a turn (`activity` is `working`): the revert would otherwise
   wait for the turn's end with no word. The prompt does not go back to the
   composer: the client facets have no composer verb.

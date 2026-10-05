@@ -133,8 +133,9 @@ row is data: `PickerFrame` takes `keys` and draws them in one vocabulary
 (`KeyHints` and `keyHintsLine` in `ui.tsx`, also exported to client
 extensions): lowercase keys, one `·` separator, Enter `select` on a row and
 `submit` on typed text, Esc `close` on a pane and `back` on a sub-screen. A
-narrow row drops the move hint first, then hints from the right, and keeps the
-way out. An ask's footer uses the same line.
+narrow row drops the move hint first, then takes each hint's short verb from
+the right (`keyHint(key, verb, short)`: `/revert` reads `enter all` for `enter
+files + conversation`), then drops hints from the right, and keeps the way out. An ask's footer uses the same line.
 
 The live line (`ActivityRow` in `app.tsx`) reads
 `✻ <phase> (<elapsed>) · esc cancel`; the `✻` pulses on the spinner clock.
