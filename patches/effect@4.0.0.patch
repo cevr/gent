@@ -1,5 +1,5 @@
 diff --git a/dist/ai/LanguageModel.js b/dist/ai/LanguageModel.js
-index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..dc424438124407ed678557956e51a2f6ff2281f3 100644
+index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3fa72037f 100644
 --- a/dist/ai/LanguageModel.js
 +++ b/dist/ai/LanguageModel.js
 @@ -17,6 +17,7 @@ import * as Prompt from "./Prompt.js";
@@ -10,6 +10,26 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..dc424438124407ed678557956e51a2f6
  import * as Toolkit from "./Toolkit.js";
  /**
   * Service key for text generation, structured output, and tool calls.
+@@ -414,8 +415,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+           providerOptions.incrementalPrompt = prepared.value.prompt;
+         }
+       }
+-      const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(Toolkit.empty)));
+       const rawContent = yield* generateWithNonIncrementalFallback();
++      const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(emptyToolkitFor(options, rawContent))));
+       const content = yield* Schema.decodeEffect(ResponseSchema)(rawContent);
+       if (tracker) {
+         const responseMetadata = content.find(part => part.type === "response-metadata");
+@@ -446,8 +447,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+           providerOptions.incrementalPrompt = prepared.value.prompt;
+         }
+       }
+-      const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(Toolkit.empty)));
+       const rawContent = yield* generateWithNonIncrementalFallback();
++      const ResponseSchema = Schema.mutable(Schema.Array(Response.Part(emptyToolkitFor(options, rawContent))));
+       const content = yield* Schema.decodeEffect(ResponseSchema)(rawContent);
+       if (tracker) {
+         const responseMetadata = content.find(part => part.type === "response-metadata");
 @@ -500,12 +501,14 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
          providerOptions.incrementalPrompt = prepared.value.prompt;
        }
@@ -27,7 +47,27 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..dc424438124407ed678557956e51a2f6
        if (tracker) {
          const responseMetadata = content.find(part => part.type === "response-metadata");
          if (Predicate.isNotUndefined(responseMetadata) && Predicate.isNotUndefined(responseMetadata.id)) {
-@@ -682,12 +685,19 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -583,8 +586,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+           providerOptions.incrementalPrompt = prepared.value.prompt;
+         }
+       }
+-      const schema = Schema.NonEmptyArray(Response.StreamPart(Toolkit.empty));
+-      const decodeParts = Schema.decodeEffect(schema);
++      const decodeParts = decodeEmptyToolkitParts(options);
+       return pipe(streamWithNonIncrementalFallback(), Stream.mapArrayEffect(parts => decodeParts(parts).pipe(tracker ? Effect.tap(decodedParts => {
+         for (const part of decodedParts) {
+           if (part.type === "response-metadata" && Predicate.isNotUndefined(part.id)) {
+@@ -615,8 +617,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+           providerOptions.incrementalPrompt = prepared.value.prompt;
+         }
+       }
+-      const schema = Schema.NonEmptyArray(Response.StreamPart(Toolkit.empty));
+-      const decodeParts = Schema.decodeEffect(schema);
++      const decodeParts = decodeEmptyToolkitParts(options);
+       return pipe(streamWithNonIncrementalFallback(), Stream.mapArrayEffect(parts => decodeParts(parts).pipe(tracker ? Effect.tap(decodedParts => {
+         for (const part of decodedParts) {
+           if (part.type === "response-metadata" && part.id) {
+@@ -682,12 +683,19 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
          providerOptions.incrementalPrompt = prepared.value.prompt;
        }
      }
@@ -49,7 +89,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..dc424438124407ed678557956e51a2f6
          for (const part of decodedParts) {
            if (part.type === "response-metadata" && Predicate.isNotUndefined(part.id)) {
              tracker.markParts(providerOptions.prompt.content, part.id);
-@@ -1248,8 +1258,19 @@ const resolveToolCalls = (content, toolkit, messages, concurrency) => {
+@@ -1248,8 +1256,30 @@ const resolveToolCalls = (content, toolkit, messages, concurrency) => {
  // =============================================================================
  // Utilities
  // =============================================================================
@@ -66,6 +106,17 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..dc424438124407ed678557956e51a2f6
 +  return Toolkit.make(...Object.values(toolkit.tools), ...Array.from(missing, name => Tool.dynamic(name, {
 +    parameters: Schema.Unknown
 +  })));
++};
++// A request without tools still gets a reply that can call one. With tool call
++// resolution off, that call decodes too, and the caller answers it.
++const emptyToolkitFor = (options, parts) => options.disableToolCallResolution === true ? withCalledTools(Toolkit.empty, parts) : Toolkit.empty;
++const decodeEmptyToolkitParts = options => {
++  const decodeParts = Schema.decodeEffect(Schema.NonEmptyArray(Response.StreamPart(Toolkit.empty)));
++  return parts => {
++    const toolkit = emptyToolkitFor(options, parts);
++    if (toolkit === Toolkit.empty) return decodeParts(parts);
++    return Schema.decodeEffect(Schema.NonEmptyArray(Response.StreamPart(toolkit)))(parts);
++  };
 +};
  // Provider-executed tools bypass Toolkit, so validate their parameters here.
  const validateProviderExecutedToolCalls = (toolkit, parts) => Effect.forEach(parts, part => {

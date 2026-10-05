@@ -2835,7 +2835,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             disableToolCallResolution: true,
           })
         }
-        return model.streamText({ prompt })
+        // No tool goes on the request, but the reply can still call one: the
+        // tool runner answers it (`Unknown tool: <id>`), as for any step.
+        return model.streamText({ prompt, disableToolCallResolution: true })
       }),
     ),
   )

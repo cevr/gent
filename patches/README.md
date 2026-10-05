@@ -214,6 +214,16 @@ and "a call the tool runner refuses …" in
 `packages/core/tests/runtime/tools.test.ts` cover it; "tool declarations on
 the wire" in the first file pins each driver's declaration bytes.
 
+A request with no toolkit, or an empty one, takes an early return that
+decodes the reply against `Toolkit.empty`, so any tool call in it fails the
+reply. A turn that advertises no tool sends no toolkit. The patch makes that
+early return decode a called name with opaque parameters too
+(`emptyToolkitFor`, `decodeEmptyToolkitParts`), but only with
+`disableToolCallResolution: true`, which the turn now passes on that path.
+The flag does not go on the request, so the request is the same bytes.
+Without the flag, the early return decodes as upstream does. "a turn that
+advertises no tool" in the same test file covers it.
+
 Remove this patch when an Effect release decodes tool call parameters as
 opaque with tool call resolution off, and decodes a call to an undeclared
 name. Checked on 2026-10-04: 4.0.0, the latest release, does neither. It

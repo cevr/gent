@@ -703,6 +703,38 @@ describe("refused tool calls on the wire", () => {
   }
 })
 
+describe("a turn that advertises no tool", () => {
+  for (const wire of drivers) {
+    it.live(`${wire.provider}: the request declares no tool, and a call fails as its result`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { bodies, events } = yield* runTurn(
+            wire,
+            [wire.toolCall("todo", { todo: "milk", done: false }), wire.text("done")],
+            { extensions: [] },
+          )
+          expect(bodies).toHaveLength(2)
+          // No `tools` and no `tool_choice`, as before tool calls were checked by the runner.
+          expect(bodies.map((body) => declarationsOf(body))).toEqual(["{}", "{}"])
+          const failed = events.flatMap((event) =>
+            Match.value(event).pipe(
+              Match.tags({ ToolCallFailed: (call) => [call] }),
+              Match.orElse(() => []),
+            ),
+          )
+          expect(failed.map((event) => event.toolName)).toEqual(["todo"])
+          expect(failed[0]?.output ?? "").toContain("Unknown tool: todo")
+          expect(encodeExternalJson(bodies[1] ?? {})).toContain("Unknown tool: todo")
+          expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
+          expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
+            { streamFailed: false },
+          ])
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    )
+  }
+})
+
 // ── tools with no arguments ─────────────────────────────────────────────────
 
 /**
