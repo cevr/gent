@@ -55,6 +55,8 @@ interface SourceForms {
   readonly comments: ReadonlyArray<CommentBody>
   /** Process-shaped identifiers and test titles, rather than product strings. */
   readonly names: ReadonlyArray<CommentBody>
+  /** Each value read of a member of the global `Bun` (`Bun.YAML`), not a type name such as `Bun.OnLoadResult`. */
+  readonly bunReads: ReadonlyArray<CommentBody>
   /** Comments blanked. */
   readonly code: string
   /**
@@ -152,6 +154,7 @@ interface ParsedText {
   readonly errors: ReadonlyArray<CommentBody>
   readonly comments: ReadonlyArray<CommentBody>
   readonly names: ReadonlyArray<CommentBody>
+  readonly bunReads: ReadonlyArray<CommentBody>
   readonly spans: ReadonlyArray<Span>
   readonly module: ModuleSyntax
   readonly seams: SeamSyntax
@@ -307,6 +310,7 @@ const parsedText = (file: string, text: string): ParsedText => {
   const dynamicReads: Array<ModuleRead> = []
   const literalSpecifiers: Array<string> = []
   const names: Array<CommentBody> = []
+  const bunReads: Array<CommentBody> = []
   const isTestCallee = (node: Expression | Super): boolean => {
     if (node.type === "Identifier") return ["test", "it", "describe"].includes(node.name)
     if (node.type === "MemberExpression") return isTestCallee(node.object)
@@ -340,6 +344,12 @@ const parsedText = (file: string, text: string): ParsedText => {
       }
     },
     MemberExpression: (node) => {
+      if (node.object.type === "Identifier" && node.object.name === "Bun") {
+        let member = "[computed]"
+        if (node.property.type === "Identifier" && !node.computed) member = node.property.name
+        if (node.property.type === "Literal") member = String(node.property.value)
+        bunReads.push({ line: lineOf(node.start), body: `Bun.${member}` })
+      }
       if (node.computed || node.property.type !== "Identifier") return
       const name = node.property.name
       for (const specifier of Option.toArray(literalImportOf(node.object))) {
@@ -407,6 +417,7 @@ const parsedText = (file: string, text: string): ParsedText => {
     errors,
     comments,
     names,
+    bunReads,
     spans: spans
       .map((span) => ({ ...span, start: span.start - shift, end: span.end - shift }))
       .sort((a, b) => a.start - b.start),
@@ -454,11 +465,12 @@ const sourceForms = (file: string, text: string): SourceForms => {
     return created
   })
   return Option.getOrElse(Option.fromNullishOr(cache.get(text)), () => {
-    const { errors, comments, names, spans, module, seams } = parsedText(file, text)
+    const { errors, comments, names, bunReads, spans, module, seams } = parsedText(file, text)
     const forms: SourceForms = {
       errors,
       comments,
       names,
+      bunReads,
       code: blankedSpans(text, spans, ["comment"], false),
       codeOnly: blankedSpans(text, spans, ["comment", "string", "template", "jsx-text"], false),
       module,
@@ -1248,13 +1260,26 @@ export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Fin
  * `packages/core/src/runtime/gent-platform-bun.ts` behind `@gent/core/host-bun`;
  * a portable module takes the host fact through a service the host provides.
  * A type-only import loads nothing, and a dynamic import loads only when it
- * runs. The test utilities are a Bun test host. The bundle check in
+ * runs. A read of the global `Bun` (`Bun.YAML.parse`) imports nothing and
+ * fails on a hosted root all the same, so it is reported too; a type name
+ * such as `Bun.OnLoadResult` reads nothing. The test utilities are a Bun test
+ * host, and the cell worker (`gent-cell`) is a Bun binary of its own that no
+ * extension imports. The bundle check in
  * `packages/tooling/tests/portable-graph.test.ts` follows the same graph
  * through the dependencies, which a file scan cannot read.
  */
 const PORTABLE_SOURCE = /^packages\/(?:core|extensions)\/src\//
 const BUN_HOST_SOURCE =
-  /^packages\/core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)$/
+  /^packages\/(?:core\/src\/(?:host-bun\.ts|runtime\/gent-platform-bun\.ts|test-utils\/.*)|extensions\/src\/cell-worker-boundary\.ts)$/
+
+/**
+ * The reads of the global `Bun` that portable source keeps, by file, each
+ * with its reason. The workspaces extension reads a `.rift.toml` only to run
+ * rift's hooks, which spawn processes a hosted root does not have; no TOML
+ * parser in the dependency tree runs on a hosted root. A hosted workspace
+ * provider (H3) takes the parse with the spawn.
+ */
+const BUN_READS_KEPT = [{ file: "packages/extensions/src/workspaces.ts", read: "Bun.TOML" }]
 
 /** A specifier only a Bun process (or a process that can spawn) can load. */
 const HOST_ONLY_SPECIFIER =
@@ -1262,13 +1287,24 @@ const HOST_ONLY_SPECIFIER =
 
 export const findHostOnlyImports = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!PORTABLE_SOURCE.test(file) || BUN_HOST_SOURCE.test(file)) return []
-  return sourceForms(file, text)
-    .module.valueImports.filter(({ specifier }) => HOST_ONLY_SPECIFIER.test(specifier))
+  const forms = sourceForms(file, text)
+  const imports = forms.module.valueImports
+    .values()
+    .filter(({ specifier }) => HOST_ONLY_SPECIFIER.test(specifier))
     .map(({ specifier, line }) => ({
       file,
       line,
       message: `\`${specifier}\` loads only in a Bun process, and this module loads on a hosted root too; take the host fact through a service the host provides (\`GentPlatform\`, a layer), or move the code to the Bun host behind \`@gent/core/host-bun\``,
     }))
+  const globals = forms.bunReads
+    .values()
+    .filter(({ body }) => !BUN_READS_KEPT.some((kept) => kept.file === file && kept.read === body))
+    .map(({ body, line }) => ({
+      file,
+      line,
+      message: `\`${body}\` reads the global \`Bun\`, which a hosted root does not have, and this module loads there too; use a portable package or an Effect platform service, or move the code to the Bun host behind \`@gent/core/host-bun\``,
+    }))
+  return [...imports, ...globals].toSorted((a, b) => a.line - b.line)
 }
 
 /** One module of a bundle's metafile: what it imports, by the specifier it wrote and how. */

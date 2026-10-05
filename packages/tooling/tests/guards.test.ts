@@ -272,6 +272,35 @@ describe("host-only import guard", () => {
     ])
       expect(findHostOnlyImports(file, text)).toEqual([])
   })
+
+  const globals = [
+    "// Bun.YAML.parse in a comment loads nothing",
+    'const note = "Bun.TOML.parse in a string loads nothing"',
+    "const header = Bun.YAML.parse(text)",
+    "type Loaded = Bun.OnLoadResultObject",
+    'const config = Bun["TOML"].parse(text)',
+    "const peek = Bun.peek",
+  ].join("\n")
+
+  test("reports each read of the global Bun in portable source, not a type or a comment", () => {
+    const findings = findHostOnlyImports("packages/extensions/src/skills.ts", globals)
+    expect(findings.map((finding) => finding.line)).toEqual([3, 5, 6])
+    expect(findings[0]?.message).toContain("`Bun.YAML`")
+  })
+
+  test("a kept read passes only in its file, and only that member", () => {
+    const toml = "const config = Bun.TOML.parse(text)\nconst header = Bun.YAML.parse(text)"
+    const kept = findHostOnlyImports("packages/extensions/src/workspaces.ts", toml)
+    expect(kept.map((finding) => finding.line)).toEqual([2])
+    const elsewhere = findHostOnlyImports("packages/extensions/src/skills.ts", toml)
+    expect(elsewhere.map((finding) => finding.line)).toEqual([1, 2])
+  })
+
+  test("the Bun cell worker reads the global Bun", () => {
+    expect(findHostOnlyImports("packages/extensions/src/cell-worker-boundary.ts", globals)).toEqual(
+      [],
+    )
+  })
 })
 
 // ── vendor model pins ───────────────────────────────────────────────────────
