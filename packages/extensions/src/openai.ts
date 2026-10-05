@@ -56,6 +56,7 @@ import {
   type ProviderHints,
   type ReasoningEffort,
   type RunEffort,
+  omitUndefined,
 } from "@gent/core/extensions/api"
 // The host's loopback listener for a sign-in redirect (`GentPlatform.loopbackServer`).
 import { GentPlatform } from "@gent/core/extensions/branch-tools"
@@ -958,7 +959,11 @@ const toStored = (creds: OpenAICredentials): StoredOAuthCredentials => {
  * and refreshes through it, so a sign-in or a refresh in one profile is the
  * credential the others adopt.
  */
-const openAIStore = (update: UpdateStoredOAuth): CredentialStore<OpenAICredentials> => ({
+const openAIStore = (
+  update: UpdateStoredOAuth,
+  signedInAt: Option.Option<number>,
+): CredentialStore<OpenAICredentials> => ({
+  ...omitUndefined({ signedInAt: Option.getOrUndefined(signedInAt) }),
   update: <A, E>(
     f: (
       stored: Option.Option<OpenAICredentials>,
@@ -979,12 +984,14 @@ const openAIStore = (update: UpdateStoredOAuth): CredentialStore<OpenAICredentia
 /**
  * The OpenAI credential cache over a cell that outlives one `resolveModel`
  * call. A cell allocated per call would disable the cache and lose the
- * rotated refresh token. `update` is the stored sign-in's store access.
+ * rotated refresh token. `update` is the stored sign-in's store access, and
+ * `signedInAt` its stamp (`ProviderAuthInfo.signedInAt`).
  */
 export const makeOpenAICredentialCache = (
   cellRef: CredentialCacheCellRef<OpenAICredentials>,
   io: OpenAICredentialIO,
   update: UpdateStoredOAuth,
+  signedInAt: Option.Option<number> = Option.none(),
 ): Effect.Effect<CredentialCache<OpenAICredentials>> =>
   makeCredentialCache({
     label: "OpenAI",
@@ -1016,7 +1023,7 @@ export const makeOpenAICredentialCache = (
         })),
       )
     },
-    store: Option.some(openAIStore(update)),
+    store: Option.some(openAIStore(update, signedInAt)),
   })
 
 // ── codex transform ─────────────────────────────────────────────────────────
@@ -2084,6 +2091,7 @@ export const buildOpenAIModelDriver = (
             cellFor(auth.value.slot),
             realIO,
             auth.value.update,
+            Option.fromUndefinedOr(auth.value.signedInAt),
           )
           yield* checkCredentials(creds)
           return AiModel.make(

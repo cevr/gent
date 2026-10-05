@@ -280,7 +280,10 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
  * `listModels`. An API key carries the answers to its method's prompts
  * (`metadata`, absent for a key stored without any). An OAuth sign-in carries
  * no token copy: the store is the one source, read and written through
- * `update`.
+ * `update`. Its `signedInAt` is the stamp of the sign-in the label holds now
+ * (absent for one stored before stamps): a cache a driver keeps per label
+ * serves only that sign-in, so a label renamed or signed in again is never
+ * answered by the account it held before.
  */
 export const ProviderAuthInfo = Schema.TaggedUnion({
   Api: {
@@ -288,7 +291,11 @@ export const ProviderAuthInfo = Schema.TaggedUnion({
     metadata: Schema.optional(AuthMetadata),
     slot: Schema.optional(CredentialSlot),
   },
-  Oauth: { update: UpdateStoredOAuth, slot: Schema.optional(CredentialSlot) },
+  Oauth: {
+    update: UpdateStoredOAuth,
+    slot: Schema.optional(CredentialSlot),
+    signedInAt: Schema.optional(Schema.Finite),
+  },
 })
 export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>
 

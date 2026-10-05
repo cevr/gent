@@ -1157,6 +1157,7 @@ const toProviderAuthInfo = (
   }
   return ProviderAuthInfo.cases.Oauth.make({
     slot,
+    ...omitUndefined({ signedInAt: info.signedInAt }),
     update: <A, E>(
       f: (
         stored: Option.Option<StoredOAuthCredentials>,

@@ -28,6 +28,7 @@ import {
   isRecordArray,
   type JsonRecord,
   Model,
+  omitUndefined,
   type ModelCatalogView,
   modelFromCatalog,
   credentialFailureMetadata,
@@ -123,7 +124,13 @@ export const isTransientTokenStatus = (status: number): boolean => status === 42
 export const CredentialCacheCell = <C>(credentials: Schema.Schema<C>) =>
   Schema.TaggedUnion({
     Empty: {},
-    Durable: { creds: credentials, at: Schema.Finite, invalidated: Schema.Boolean },
+    Durable: {
+      creds: credentials,
+      at: Schema.Finite,
+      invalidated: Schema.Boolean,
+      /** The sign-in stamp of the label it was read for (`CredentialStore.signedInAt`). */
+      signedInAt: Schema.optional(Schema.Finite),
+    },
     PendingPersist: {
       creds: credentials,
       /** The stored credential the rotation replaced; the write lands only over it. */
@@ -208,6 +215,13 @@ export interface CredentialStore<C> {
     f: (stored: Option.Option<C>) => Effect.Effect<readonly [A, Option.Option<C>], E>,
   ) => Effect.Effect<A, E | ProviderAuthError>
   readonly same: (a: C, b: C) => boolean
+  /**
+   * The stamp of the sign-in the request's label holds
+   * (`ProviderAuthInfo.signedInAt`). A warm cell read for another stamp is
+   * not served: the label was renamed or signed in again since, and the
+   * store holds the credential it names now.
+   */
+  readonly signedInAt?: number
 }
 
 interface CredentialCacheConfig<C> {
@@ -236,8 +250,22 @@ export const makeCredentialCache = <C>(
   Effect.sync(() => {
     const Cell = CredentialCacheCell(config.credentials)
     const sameCredential = Schema.toEquivalence(config.credentials)
+    const signedInAt = Option.flatMap(config.store, (store) =>
+      Option.fromUndefinedOr(store.signedInAt),
+    )
     const durable = (creds: C, at: number, invalidated: boolean): CredentialCacheCell<C> =>
-      Cell.cases.Durable.make({ creds, at, invalidated })
+      Cell.cases.Durable.make({
+        creds,
+        at,
+        invalidated,
+        ...omitUndefined({ signedInAt: Option.getOrUndefined(signedInAt) }),
+      })
+    // A cell read for another sign-in of the label is never served warm.
+    const sameSignIn = (cell: CredentialCacheCell<C>): boolean =>
+      Option.match(signedInAt, {
+        onNone: () => true,
+        onSome: (stamp) => cell._tag === "Durable" && cell.signedInAt === stamp,
+      })
 
     const signedOut = new ProviderAuthError({
       message: `The ${config.label} sign-in was removed. Sign in again with /auth.`,
@@ -366,6 +394,7 @@ export const makeCredentialCache = <C>(
           if (
             current._tag === "Durable" &&
             Option.isSome(cached) &&
+            sameSignIn(current) &&
             now - current.at < CREDENTIAL_CACHE_TTL_MS &&
             freshEnoughAt(config.expiresAt(cached.value), now)
           ) {

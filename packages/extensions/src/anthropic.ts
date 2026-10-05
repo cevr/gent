@@ -1190,7 +1190,7 @@ export const makeAnthropicCredentialCache = (
 /** Named imports belong to Gent, never to the primary external source. */
 const buildNamedCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  update: UpdateStoredOAuth,
+  signIn: { readonly update: UpdateStoredOAuth; readonly signedInAt?: number },
   services: AnthropicDriverServices,
 ) =>
   makeCredentialCache<ClaudeCredentials>({
@@ -1240,7 +1240,7 @@ const buildNamedCredentialCache = (
           stored: Option.Option<ClaudeCredentials>,
         ) => Effect.Effect<readonly [A, Option.Option<ClaudeCredentials>], E>,
       ) =>
-        update((stored) =>
+        signIn.update((stored) =>
           Effect.map(
             f(
               Option.map(stored, (value) => ({
@@ -1260,6 +1260,7 @@ const buildNamedCredentialCache = (
           ),
         ),
       same: (a, b) => a.refreshToken === b.refreshToken,
+      ...omitUndefined({ signedInAt: signIn.signedInAt }),
     }),
   })
 
@@ -3032,7 +3033,7 @@ export const buildAnthropicModelDriver = (
           const slot = auth.value.slot ?? DEFAULT_CREDENTIAL_SLOT
           let cacheEffect = buildLiveCredentialCache(cellFor(slot), services)
           if (slot !== DEFAULT_CREDENTIAL_SLOT) {
-            cacheEffect = buildNamedCredentialCache(cellFor(slot), auth.value.update, services)
+            cacheEffect = buildNamedCredentialCache(cellFor(slot), auth.value, services)
           }
           const creds = yield* cacheEffect
           yield* checkCredentials(creds)

@@ -81,6 +81,8 @@ import {
   type ProviderHints,
   SessionId,
   ProviderAuthInfo,
+  type StoredOAuthCredentials,
+  type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import {
@@ -3628,6 +3630,45 @@ describe("named Anthropic directory import", () => {
 })
 
 describe("named Anthropic credential cache", () => {
+  it.live("a label that holds another sign-in is never answered by the warm cell of the last", () =>
+    Effect.gen(function* () {
+      // The store as the request's `update` reads it, label by label.
+      const store = new Map<CredentialSlot, StoredOAuthCredentials>()
+      const slotA = CredentialSlot.make("a")
+      const updateFor =
+        (slot: CredentialSlot): UpdateStoredOAuth =>
+        (f) =>
+          Effect.gen(function* () {
+            const [result, next] = yield* f(Option.fromUndefinedOr(store.get(slot)))
+            if (Option.isSome(next)) store.set(slot, next.value)
+            return result
+          })
+      const signIn = (access: string, signedInAt: number) => {
+        store.set(slotA, { access, refresh: `${access}-refresh`, expires: FUTURE_MS })
+        return ProviderAuthInfo.cases.Oauth.make({
+          slot: slotA,
+          update: updateFor(slotA),
+          signedInAt,
+        })
+      }
+      const driver = yield* buildAnthropicModelDriver(
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+        Option.none(),
+      )
+      const sent = (authInfo: ProviderAuthInfo) =>
+        Effect.gen(function* () {
+          const state = makeFakeFetchState()
+          yield* runOne(yield* driver.resolveModel("claude-opus-4-6", authInfo), state)
+          return state.captured.at(-1)?.headers["authorization"]
+        })
+      // A request on `a` warms its cell with the first account.
+      expect(yield* sent(signIn("fake-first", 1))).toBe("Bearer fake-first")
+      // Within the cell's lifetime, `a` is renamed away and another
+      // credential is renamed into it, with its own sign-in stamp.
+      expect(yield* sent(signIn("fake-second", 2))).toBe("Bearer fake-second")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("named refresh uses only direct OAuth and never the primary source or CLI", () =>
     Effect.gen(function* () {
       let spawned = 0
