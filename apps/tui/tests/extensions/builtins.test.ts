@@ -995,6 +995,9 @@ describe("Herdr integration", () => {
             costUsd: 0,
             durationMs: 0,
             omittedMessages: 0,
+            effort: Option.none(),
+            firstPrompt: Option.none(),
+            lastAnswer: Option.none(),
           }),
       ).pipe(Effect.provideContext(context))
       controller.refresh("")

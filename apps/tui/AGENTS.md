@@ -503,7 +503,7 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 | ------------------ | ----------------------------------------------------------------------- |
 | `/new`, `/clear`   | Start a new session                                                     |
 | `/help`            | Open the command palette                                                |
-| `/sessions`        | Sessions pane: one row per thread, live and stored; side threads marked |
+| `/sessions`        | Sessions pane: one row per thread, needs you first; side threads marked |
 | `/agents`, `/tree` | Aliases of `/sessions`                                                  |
 | `/branch`          | Create new branch                                                       |
 | `/fork`            | Fork from a message                                                     |
@@ -538,7 +538,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/goal`                              | `builtins.tsx`               | Goal label, goal continuation row                               |
 | `@gent/session-tools`                     | `builtins.tsx`               | Sender row for `session.send`                                   |
 | `@gent/herdr`                             | `builtins.tsx`               | Herdr activity reporter                                         |
-| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray (running and done rows) |
+| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray, `↳ child` status label |
 | `@gent/btw`                               | `btw.client.tsx`             | `/btw` fork pane                                                |
 | `@gent/cache`                             | `cache.client.tsx`           | Cache-miss rows, waste total, cache timer                       |
 | `@gent/delegate`                          | `delegate.client.tsx`        | `delegate.start` row, child-completion row                      |

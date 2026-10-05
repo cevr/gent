@@ -5,9 +5,11 @@ import {
   type AgentRowEntry,
   AgentsViewRpc,
   BTW_EXTENSION_ID,
+  childTaskBody,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
+  threadTaskBody,
 } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
@@ -27,14 +29,18 @@ import {
   KeyHints,
   type PathPlace,
   PickerFrame,
+  pickerHeight,
   runningCallLabel,
   selectable,
   SelectList,
   type SelectListRow,
   sessionQuery,
+  STATUS_YIELD,
+  statusLabelContribution,
   textWidth,
   TrayFrame,
   truncate,
+  truncatePath,
   usePickerGeometry,
   useSpinnerClock,
   useTerminalDimensions,
@@ -67,6 +73,15 @@ const holds = (row: AgentRowEntry, sessionId: string): boolean =>
 
 /** A thread's stable identity: its key, which a handoff keeps while the row's ids move. */
 const threadOf = (row: AgentRowEntry): string => row.thread ?? row.sessionId
+
+/**
+ * Whether the row's loop is in a turn: running, or needing the reader while
+ * its turn goes on (parked on an ask, or working past a background question).
+ * A loop that needs the reader but is idle has only questions left open.
+ */
+const working = (row: AgentRowEntry): boolean =>
+  row.section === "running" ||
+  (row.section === "needs" && Predicate.isNotUndefined(row.status) && row.status !== "Idle")
 
 /**
  * Descendants of `root` at any depth, in the server's parent-before-child
@@ -102,6 +117,8 @@ const subtreeRows = (
 
 const TRAY_HINT = "ctrl+t sessions"
 const TRAY_MAX_ROWS = 3
+/** Columns of a child's name on the status row: a delegate's name is often its whole task. */
+const WATCHED_NAME = 32
 
 /** What a row is called: its session name, else its cwd, else its id. */
 const nameFor = (row: AgentRowEntry): string =>
@@ -182,9 +199,7 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
   const dimensions = useTerminalDimensions()
   const tick = useSpinnerClock()
   const running = () =>
-    subtreeRows(props.controller.rows(), props.controller.current()).filter(
-      (row) => row.section === "running",
-    )
+    subtreeRows(props.controller.rows(), props.controller.current()).filter(working)
   // A done thread the shell is on is shown, so it leaves the tray at once.
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
@@ -268,6 +283,16 @@ interface AgentsController {
   readonly done: () => ReadonlyArray<AgentRowEntry>
 }
 
+/** The controller as its extension holds it: also what the status row reads. */
+interface AgentsSource extends AgentsController {
+  /**
+   * The row of the session in view, when that session is a child (it names
+   * a parent): the status row names it. `None` until a listing for the
+   * session in view has come back.
+   */
+  readonly watched: () => Option.Option<AgentRowEntry>
+}
+
 /** The agents pane's name in the host's one pane slot. */
 const AGENTS_PANE = "agents.pane"
 
@@ -298,7 +323,7 @@ export const makeAgentsController = (
     input: ListAgentsInput,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
   fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
-): Effect.Effect<AgentsController, never, ClientContext> =>
+): Effect.Effect<AgentsSource, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle, activity } = yield* ClientContext
     const empty: ReadonlyArray<AgentRowEntry> = []
@@ -345,18 +370,18 @@ export const makeAgentsController = (
       const now = rows.find((entry) => entry.live && sameKey(entry, key))
       if (Predicate.isUndefined(now)) return
       const stamp = progressStamp(now)
-      if (now.section !== "running" && stamp === readStamp) return
+      if (!working(now) && stamp === readStamp) return
       readStamp = stamp
       readDetail()
     }
 
-    // Each thread's section at the last listing, and the side threads that
-    // finished since, keyed by thread: a handoff moves a row to a new session
-    // but keeps its thread. They live here, outside any component, so the
-    // tray keeps them while it hides for the pane. An entry also names the
-    // thread the shell was on when it finished (`scope`), the root whose
-    // whole listing says whether the thread still exists.
-    const lastSection = new Map<string, AgentRowEntry["section"]>()
+    // Whether each thread was in a turn at the last listing, and the side
+    // threads that finished since, keyed by thread: a handoff moves a row to
+    // a new session but keeps its thread. They live here, outside any
+    // component, so the tray keeps them while it hides for the pane. An entry
+    // also names the thread the shell was on when it finished (`scope`), the
+    // root whose whole listing says whether the thread still exists.
+    const lastWorking = new Map<string, boolean>()
     const [finished, setFinished] = createSignal<
       ReadonlyMap<string, { readonly row: AgentRowEntry; readonly scope: string }>
     >(new Map())
@@ -378,7 +403,7 @@ export const makeAgentsController = (
           if (!gone) next.set(key, entry)
           continue
         }
-        if (now.section === "running" || holds(now, here)) continue
+        if (working(now) || holds(now, here)) continue
         next.set(key, { ...entry, row: now })
       }
       // What finished is read in the shell's subtree, where the tray shows it.
@@ -386,8 +411,8 @@ export const makeAgentsController = (
       for (const row of inView) {
         const key = threadOf(row)
         if (
-          lastSection.get(key) === "running" &&
-          row.section !== "running" &&
+          lastWorking.get(key) === true &&
+          !working(row) &&
           finishesSilently(row) &&
           !next.has(key)
         ) {
@@ -397,7 +422,7 @@ export const makeAgentsController = (
       // The reader sees the thread the shell is on too: a finish watched from
       // inside it is seen, so it is no done row back at its starter.
       const seen = [...inView, ...reply.rows.filter((row) => holds(row, here))]
-      for (const row of seen) lastSection.set(threadOf(row), row.section)
+      for (const row of seen) lastWorking.set(threadOf(row), working(row))
       setFinished(next)
     }
 
@@ -471,13 +496,27 @@ export const makeAgentsController = (
         return Option.none()
       return Option.map(reply.activityRows, (complete) => subtreeRows(complete, reply.session))
     }
+    // The complete listing holds the session in view's own row: a child's
+    // names its parent. Derived on each read, never stored.
+    const watched = (): Option.Option<AgentRowEntry> => {
+      const reply = listing.value()
+      const here = transport.currentSession()
+      if (!sameKey(reply.session, here) || reply.view !== view()) return Option.none()
+      return Option.flatMap(reply.activityRows, (complete) =>
+        Option.fromUndefinedOr(
+          complete.find(
+            (row) => holds(row, here.sessionId) && Predicate.isNotUndefined(row.parentSessionId),
+          ),
+        ),
+      )
+    }
     lifecycle.addCleanup(
       activity.include(() => {
         const sessionId = transport.currentSession().sessionId
         const children = descendants()
         if (Option.isNone(children)) return { sessionId, state: "unknown" }
         const live = children.value.filter((row) => row.section !== "inactive")
-        if (live.some((row) => row.status === "WaitingForInteraction"))
+        if (live.some((row) => row.section === "needs" || row.status === "WaitingForInteraction"))
           return { sessionId, state: "blocked" }
         if (live.some((row) => row.status === "Running")) return { sessionId, state: "working" }
         if (live.some((row) => row.status !== "Idle")) return { sessionId, state: "unknown" }
@@ -585,21 +624,66 @@ export const makeAgentsController = (
       select,
       open,
       done,
+      watched,
     }
   })
 
 /** Section headings, with the count each carries. Empty sections are skipped. */
 const SECTION_TITLE = {
+  needs: "Needs you",
   running: "Running",
   idle: "Idle",
   inactive: "Inactive",
 } satisfies Record<AgentRowEntry["section"], string>
 
-/** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by its section, its own state. */
-const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
-  const count = (state: AgentRowEntry["section"]) =>
-    rows.filter((row) => row.section === state).length
-  return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
+/** The state word the details column leads with. */
+const SECTION_WORD = {
+  needs: "needs you",
+  running: "running",
+  idle: "idle",
+  inactive: "inactive",
+} satisfies Record<AgentRowEntry["section"], string>
+
+/**
+ * The pane title: `Sessions · 1 needs you · 2 running · 3 idle`. Each loop
+ * counts in its section, its own state; a state no loop is in is left out.
+ */
+const paneTitle = (rows: ReadonlyArray<AgentRowEntry>): string => {
+  const sections: ReadonlyArray<AgentRowEntry["section"]> = ["needs", "running", "idle", "inactive"]
+  const counts = sections.flatMap((section) => {
+    const count = rows.filter((row) => row.section === section).length
+    if (count === 0) return []
+    return [`${count} ${SECTION_WORD[section]}`]
+  })
+  return ["Sessions", ...counts].join(" · ")
+}
+
+/**
+ * The status glyph: its shape says the state, so it reads without colour.
+ * `●` needs the reader, the pulse works, `○` is idle, `·` has no loop.
+ */
+const statusGlyph = (section: AgentRowEntry["section"], frame: string): string => {
+  if (section === "needs") return "●"
+  if (section === "running") return frame
+  if (section === "idle") return "○"
+  return "·"
+}
+
+/**
+ * Why a row needs the reader: its loop waits on an answer (the listing's
+ * status, or the selected row's live detail), or it left background
+ * questions open. Blank for a row that needs nothing.
+ */
+const needsReason = (row: AgentRowEntry, detail: Option.Option<ExtensionAgentDetail>): string => {
+  if (
+    row.status === "WaitingForInteraction" ||
+    Option.exists(detail, (value) => value.status === "WaitingForInteraction")
+  )
+    return "waiting for an answer"
+  const open = row.openQuestions ?? 0
+  if (open === 1) return "1 open question"
+  if (open > 1) return `${open} open questions`
+  return ""
 }
 
 /** Tree prefix from depth. The server already ordered parents before children. */
@@ -613,8 +697,8 @@ const liveDetail = (
 
 /**
  * What a row's agent is doing now, as the tray says it (`doingFor`). The
- * glyph says running or idle, so no state word repeats it; a selected row
- * whose detail waits on an answer says so, which no glyph shows.
+ * glyph says the state, so no state word repeats it. A row that needs the
+ * reader says why instead: that is what the reader acts on.
  */
 const activityFor = (
   row: AgentRowEntry,
@@ -622,18 +706,15 @@ const activityFor = (
   detail: Option.Option<ExtensionAgentDetail>,
   place: PathPlace,
 ): string => {
-  const doing = doingFor(row, place)
-  if (doing.length > 0) return doing
-  return liveDetail(selected, detail).pipe(
-    Option.filter((value) => value.status === "WaitingForInteraction"),
-    Option.match({ onNone: () => "", onSome: () => "waiting for an answer" }),
-  )
+  const reason = needsReason(row, liveDetail(selected, detail))
+  if (reason.length > 0) return reason
+  return doingFor(row, place)
 }
 
 /**
- * The section a row's glyph draws: the listing reports a resident loop as
- * idle (it never reads state), so the selected row's live detail shows the
- * pulse when the loop runs. The row stays under its listed heading.
+ * The section a row's glyph draws: a listing read between two steps can lag
+ * the loop, so the selected row's live detail shows what it reads now. The
+ * row stays under its listed heading.
  */
 const glyphSection = (
   row: AgentRowEntry,
@@ -643,7 +724,8 @@ const glyphSection = (
   Option.match(liveDetail(selected, detail), {
     onNone: () => row.section,
     onSome: (value) => {
-      if (value.status === "Running" || value.status === "WaitingForInteraction") return "running"
+      if (row.section === "needs" || value.status === "WaitingForInteraction") return "needs"
+      if (value.status === "Running") return "running"
       return row.section
     },
   })
@@ -661,7 +743,7 @@ const ageFor = (row: AgentRowEntry, now: number): string =>
  * its age; every other row shows the age of its last step (`3m`).
  */
 const timeFor = (row: AgentRowEntry, now: number): string => {
-  if (row.section !== "running") return ageFor(row, now)
+  if (!working(row)) return ageFor(row, now)
   return Option.match(Option.fromUndefinedOr(row.runningSince), {
     onNone: () => ageFor(row, now),
     onSome: (runningSince) => formatDuration(now - runningSince, "compact"),
@@ -674,10 +756,22 @@ const timeFor = (row: AgentRowEntry, now: number): string => {
  * what the agent is doing off the row.
  */
 const rowLabel = (head: string, name: string, doing: string, width: number): string => {
-  if (doing.length === 0) return `${head}${name}`
+  const parts = rowParts(head, name, doing, width)
+  return `${head}${parts.name}${parts.doing}`
+}
+
+/** A row label's name and its ` · <doing>`, each cut to its share of the row. */
+interface RowParts {
+  readonly name: string
+  readonly doing: string
+}
+
+/** `rowLabel`'s name and ` · <doing>` apart, so the pane draws each in its own colour. */
+const rowParts = (head: string, name: string, doing: string, width: number): RowParts => {
+  if (doing.length === 0) return { name, doing: "" }
   const shown = truncate(doing, Math.floor(width / 2))
   const nameWidth = Math.max(1, width - textWidth(head) - textWidth(" · ") - textWidth(shown))
-  return `${head}${truncate(name, nameWidth)} · ${shown}`
+  return { name: truncate(name, nameWidth), doing: ` · ${shown}` }
 }
 
 /**
@@ -711,13 +805,16 @@ const rightColumn = (row: AgentRowEntry, now: number, rowWidth: number): string 
 }
 
 /**
- * One pane row: the left text, padded, and the right column drawn muted. The
- * status glyph is the column at `glyphAt` in `left`, drawn in its own colour;
- * `None` when the row draws no glyph.
+ * One pane row in runs, each drawn in its own colour: the lead (the current
+ * marker and the tree indent), the status glyph, the name with the space
+ * before it, the rest of the left text (` · <doing>` and the padding), and
+ * the right column. An armed row is its delete prompt alone, in `lead`.
  */
 interface RowLine {
-  readonly left: string
-  readonly glyphAt: Option.Option<number>
+  readonly lead: string
+  readonly glyph: string
+  readonly name: string
+  readonly rest: string
   readonly right: string
 }
 
@@ -781,6 +878,142 @@ export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string
     },
   })
 
+// ── details column ──────────────────────────────────────────────────────────
+
+/** Terminal columns from which the pane draws the details column beside the list. */
+const DETAILS_FROM = 100
+
+/** The details column's share of the pane: 40%, its `│` rule included. */
+const detailsWidth = (width: number): number => Math.floor(width * 0.4)
+
+/** Lines of the last answer the column shows at most; a cut answer ends in `…`. */
+const ANSWER_LINES = 3
+
+/** A path as the reader writes it: `~` for the home directory. */
+const homePath = (path: string, home: string): string => {
+  if (home.length === 0) return path
+  if (path === home || path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`
+  return path
+}
+
+/** The first `count` non-blank lines of `text`; when more follow, the last kept ends in `…`. */
+const headLines = (text: string, count: number): ReadonlyArray<string> => {
+  const lines = text.split("\n").filter((line) => line.trim().length > 0)
+  if (lines.length <= count) return lines
+  const kept = lines.slice(0, Math.max(1, count))
+  return [...kept.slice(0, -1), `${kept.at(-1) ?? ""}…`]
+}
+
+/** `3 turns · $0.01 · 1m 12s` once idle; `turn 4 running · $0.01` while the loop is in a turn. */
+const progressLabel = (value: ExtensionAgentDetail): string => {
+  if (value.status === "Idle") {
+    return [
+      formatTurns(value.turns),
+      formatCost(value.costUsd),
+      formatDuration(value.durationMs, "compact"),
+    ].join(" · ")
+  }
+  return [`turn ${value.turns + 1} running`, formatCost(value.costUsd)].join(" · ")
+}
+
+/**
+ * How a details run is drawn: the agent name, the state glyph, plain text,
+ * muted, or a muted path (cut from its start).
+ */
+type DetailTone = "name" | "glyph" | "plain" | "muted" | "path"
+
+interface DetailRun {
+  readonly text: string
+  readonly tone: DetailTone
+}
+
+/**
+ * The selected row's details, one array of runs per line: its name; its
+ * glyph and state word (and why it needs the reader); `model · effort`;
+ * turns, cost and time; its cwd; what it does now, else the head of its last
+ * answer; and its task. A line with nothing to say is left out, so a stored
+ * session (no live detail) shows its name, state and cwd.
+ */
+const detailLines = (
+  row: AgentRowEntry,
+  section: AgentRowEntry["section"],
+  glyph: string,
+  detail: Option.Option<ExtensionAgentDetail>,
+  place: PathPlace,
+  answerLines: number,
+): ReadonlyArray<ReadonlyArray<DetailRun>> => {
+  const reason = needsReason(row, detail)
+  const state = [
+    SECTION_WORD[section],
+    ...Option.toArray(Option.liftPredicate(reason, (text) => text.length > 0)),
+  ]
+  const lines: Array<ReadonlyArray<DetailRun>> = [
+    [{ text: nameFor(row), tone: "name" }],
+    [
+      { text: glyph, tone: "glyph" },
+      { text: ` ${state.join(" · ")}`, tone: "plain" },
+    ],
+  ]
+  if (Option.isSome(detail)) {
+    const model = [
+      ...Option.toArray(Option.map(detail.value.model, shortModel)),
+      ...Option.toArray(detail.value.effort),
+    ].join(" · ")
+    if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
+    lines.push([{ text: progressLabel(detail.value), tone: "muted" }])
+  }
+  if (Predicate.isNotUndefined(row.cwd)) {
+    lines.push([{ text: homePath(row.cwd, place.home), tone: "path" }])
+  }
+  const doing = doingFor(row, place)
+  if (doing.length > 0) {
+    lines.push([{ text: doing, tone: "plain" }])
+  } else {
+    const answer = Option.getOrElse(
+      Option.flatMap(detail, (value) => value.lastAnswer),
+      () => "",
+    )
+    for (const line of headLines(answer, answerLines)) lines.push([{ text: line, tone: "muted" }])
+  }
+  const task = Option.flatMap(detail, (value) => value.firstPrompt).pipe(
+    Option.map(taskLine),
+    Option.filter((line) => line.length > 0),
+  )
+  if (Option.isSome(task)) lines.push([{ text: `Task: ${task.value}`, tone: "muted" }])
+  return lines
+}
+
+/**
+ * The task a first prompt states: its first line once a child's or a
+ * thread's source line is stripped, as the thread view's preview reads it.
+ */
+const taskLine = (prompt: string): string =>
+  Option.getOrElse(
+    Option.fromUndefinedOr(
+      threadTaskBody(childTaskBody(prompt))
+        .split("\n")
+        .find((line) => line.trim().length > 0),
+    ),
+    () => "",
+  ).trim()
+
+/**
+ * The runs of one details line cut to `width` columns, the cut landing on
+ * the last run reached. A path keeps its tail, where its name is.
+ */
+const fitRuns = (runs: ReadonlyArray<DetailRun>, width: number): ReadonlyArray<DetailRun> => {
+  const fitted: Array<DetailRun> = []
+  let left = width
+  for (const run of runs) {
+    if (left <= 0) break
+    let text = truncate(run.text, left)
+    if (run.tone === "path") text = truncate(truncatePath(run.text, left), left)
+    fitted.push({ ...run, text })
+    left -= textWidth(text)
+  }
+  return fitted
+}
+
 export function AgentsPane(props: {
   open: boolean
   onClose: () => void
@@ -812,24 +1045,47 @@ export function AgentsPane(props: {
   // than a bordered pane's.
   const { rowWidth } = usePickerGeometry()
 
+  const dimensions = useTerminalDimensions()
+  // A wide terminal draws the selected row's details in a column beside the
+  // list; a narrower one keeps the one-line detail under it.
+  const wide = () => dimensions().width >= DETAILS_FROM
+  const columnWidth = () => {
+    if (wide()) return detailsWidth(dimensions().width)
+    return 0
+  }
+  // The columns a list row may use: the picker's, less the details column.
+  const listWidth = () => Math.max(0, rowWidth() - columnWidth())
+
   const tick = useSpinnerClock()
-  // The running pulse animates; idle and inactive share a dot and differ by colour.
-  const glyphFor = (section: AgentRowEntry["section"]): string => {
-    if (section === "running") return workingIconFrame(tick())
-    return "•"
-  }
+  // The shape says the state; the pulse animates while the loop works.
+  const glyphFor = (section: AgentRowEntry["section"]): string =>
+    statusGlyph(section, workingIconFrame(tick()))
 
-  const colorFor = (section: AgentRowEntry["section"], selected: boolean) => {
-    if (selected) return theme.selectedListItemText
-    if (section === "running") return theme.success
-    if (section === "inactive") return theme.textMuted
-    return theme.text
-  }
-
+  // Colour follows the shape: attention in `warning`, work in `text`, rest muted.
   const glyphColorFor = (section: AgentRowEntry["section"], selected: boolean) => {
     if (selected) return theme.selectedListItemText
-    if (section === "idle") return theme.warning
-    return colorFor(section, selected)
+    if (section === "needs") return theme.warning
+    if (section === "running") return theme.text
+    return theme.textMuted
+  }
+
+  // The name in the agent-name colour; a stored session's is muted with its dot.
+  const nameColorFor = (row: AgentRowEntry, selected: boolean) => {
+    if (selected) return theme.selectedListItemText
+    if (row.section === "inactive") return theme.textMuted
+    return theme.info
+  }
+
+  const mutedFor = (selected: boolean) => {
+    if (selected) return theme.selectedListItemText
+    return theme.textMuted
+  }
+
+  // The selected row, for the details column: the list reports its cursor.
+  const [cursor, setCursor] = createSignal(Option.none<AgentRowEntry>())
+  const onCursor = (row: Option.Option<AgentRowEntry>) => {
+    setCursor(row)
+    props.controller.select(row)
   }
 
   // First Ctrl+X arms the selected row; the second deletes it. The shell's own
@@ -845,53 +1101,41 @@ export function AgentsPane(props: {
     return true
   }
 
-  const lineColor = (row: AgentRowEntry, section: AgentRowEntry["section"], selected: boolean) => {
-    if (Option.contains(armed(), row.sessionId)) return theme.error
-    return colorFor(section, selected)
-  }
-
   /**
-   * `<marker><indent><glyph> task · activity` on the left, padded so the
+   * `<marker><indent><glyph> name · activity` on the left, padded so the
    * right column (the side-thread mark, then the run time or age) sits on
    * the right edge.
    */
   const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
-      return { left: deletePrompt(row), glyphAt: Option.none(), right: "" }
+      return { lead: deletePrompt(row), glyph: "", name: "", rest: "", right: "" }
     }
-    const right = rightColumn(row, DateTime.toEpochMillis(DateTime.nowUnsafe()), rowWidth())
-    const width = Math.max(0, rowWidth() - textWidth(right) - 2)
+    const right = rightColumn(row, DateTime.toEpochMillis(DateTime.nowUnsafe()), listWidth())
+    const width = Math.max(0, listWidth() - textWidth(right) - 2)
     const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
-    const label = rowLabel(
-      `${lead}${glyphFor(glyphSection(row, selected, props.controller.detail()))} `,
+    const head = `${lead}${glyphFor(glyphSection(row, selected, props.controller.detail()))} `
+    const parts = rowParts(
+      head,
       nameFor(row),
       activityFor(row, selected, props.controller.detail(), props.place),
       width,
     )
-    const left = fitWidth(label, width)
+    // Cut and padded as one label, then split back into its runs. Each
+    // glyph is one code unit, so the split points are the parts' lengths.
+    const left = fitWidth(`${head}${parts.name}${parts.doing}`, width)
+    const nameAt = lead.length + 1
+    const nameEnd = nameAt + 1 + parts.name.length
     return {
-      left: `${left}  `,
-      glyphAt: Option.liftPredicate(lead.length, (at) => at < left.length),
+      lead: left.slice(0, lead.length),
+      glyph: left.slice(lead.length, nameAt),
+      name: left.slice(nameAt, nameEnd),
+      rest: `${left.slice(nameEnd)}  `,
       right,
     }
   }
 
-  /** The row's left text in three runs: before the glyph, the glyph, after it. */
-  const leftRuns = (line: RowLine) =>
-    Option.match(line.glyphAt, {
-      onNone: () => ({ before: line.left, glyph: "", after: "" }),
-      onSome: (at) => ({
-        before: line.left.slice(0, at),
-        glyph: line.left.slice(at, at + 1),
-        after: line.left.slice(at + 1),
-      }),
-    })
-
-  const rightColor = (row: AgentRowEntry, selected: boolean) => {
-    if (selected || Option.contains(armed(), row.sessionId))
-      return lineColor(row, row.section, selected)
-    return theme.textMuted
-  }
+  const armedColor = (row: AgentRowEntry) =>
+    Option.liftPredicate(theme.error, () => Option.contains(armed(), row.sessionId))
 
   /** The list's rows: a heading opens each section. */
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
@@ -914,18 +1158,22 @@ export function AgentsPane(props: {
           }
           const section = () => glyphSection(row, selected(), props.controller.detail())
           const line = () => rowLine(row, selected())
+          // An armed row is one warning: every run in `error`.
+          const tone = (color: ReturnType<typeof mutedFor>) =>
+            Option.getOrElse(armedColor(row), () => color)
           return (
             <box id={id} backgroundColor={background()} paddingLeft={1}>
               {/* One row, one line: the time is right-aligned into the budget, so
                   an overflowing label is cut rather than wrapped under it, the
                   way the autocomplete popup and the thread rows clamp theirs. */}
-              <text wrapMode="none" truncate style={{ fg: lineColor(row, section(), selected()) }}>
-                {leftRuns(line()).before}
-                <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                  {leftRuns(line()).glyph}
+              <text wrapMode="none" truncate style={{ fg: tone(theme.text) }}>
+                <span style={{ fg: tone(mutedFor(selected())) }}>{line().lead}</span>
+                <span style={{ fg: tone(glyphColorFor(section(), selected())) }}>
+                  {line().glyph}
                 </span>
-                {leftRuns(line()).after}
-                <span style={{ fg: rightColor(row, selected()) }}>{line().right}</span>
+                <span style={{ fg: tone(nameColorFor(row, selected())) }}>{line().name}</span>
+                <span style={{ fg: tone(mutedFor(selected())) }}>{line().rest}</span>
+                <span style={{ fg: tone(mutedFor(selected())) }}>{line().right}</span>
               </text>
             </box>
           )
@@ -936,12 +1184,68 @@ export function AgentsPane(props: {
   const sticky = (values: ReadonlyArray<AgentRowEntry>): Option.Option<number> =>
     Option.some(Math.max(0, values.findIndex(isCurrent)))
 
+  // The row under the cursor as the latest listing shows it: a re-read
+  // moves its state and activity while the cursor stays on it.
+  const cursorRow = () =>
+    Option.flatMap(cursor(), (row) =>
+      Option.fromUndefinedOr(visible().find((entry) => sameKey(entry, row))),
+    )
+  // The selected row's detail is the controller's, which it reads for that row alone.
+  const cursorDetail = (row: AgentRowEntry) =>
+    Option.filter(props.controller.detail(), () => row.live)
+  const cursorSection = () =>
+    Option.match(cursorRow(), {
+      onNone: () => "idle" as const,
+      onSome: (row) => glyphSection(row, true, cursorDetail(row)),
+    })
+  // The details column's lines for the row under the cursor.
+  const details = (answerLines: number) =>
+    Option.match(cursorRow(), {
+      onNone: () => [],
+      onSome: (row) =>
+        detailLines(
+          row,
+          cursorSection(),
+          glyphFor(cursorSection()),
+          cursorDetail(row),
+          props.place,
+          answerLines,
+        ),
+    })
+  // Lines the list draws: its filter row, each row, and a heading per section.
+  const listLines = () => {
+    const rows = visible()
+    if (rows.length === 0) return 2
+    const headings = rows.filter((row, index) => rows[index - 1]?.section !== row.section).length
+    return 1 + rows.length + headings
+  }
+  // A wide pane asks for the rows its taller column needs: the list's, or
+  // the details' with the whole answer head. The frame keeps its own caps.
+  const wideHeight = () =>
+    Option.liftPredicate(
+      pickerHeight(Math.max(listLines(), details(ANSWER_LINES).length) - 1, dimensions().height, 1),
+      wide,
+    )
+  // The answer head takes what the column's rows leave, at least one line.
+  const columnLines = () => {
+    const rows = Option.getOrElse(wideHeight(), () => 0) - 4
+    const fixed = details(0).length
+    return details(Math.min(ANSWER_LINES, Math.max(1, rows - fixed)))
+  }
+  const columnColor = (tone: DetailTone, section: AgentRowEntry["section"]) => {
+    if (tone === "name") return theme.info
+    if (tone === "glyph") return glyphColorFor(section, false)
+    if (tone === "plain") return theme.text
+    return theme.textMuted
+  }
+
   return (
     <Show when={props.open}>
       {/* A heading opens each section, so the pane draws more lines than it
-          has rows; the frame adds the detail line under them. */}
+          has rows. Under 100 columns the frame adds the detail line under
+          them; from 100 the details column stands beside the list instead. */}
       <PickerFrame
-        title={`Sessions · ${countsLabel(visible())}`}
+        title={paneTitle(visible())}
         keys={[
           KeyHints.move,
           KeyHints.select,
@@ -949,45 +1253,84 @@ export function AgentsPane(props: {
           keyHint("ctrl+t", "hide"),
           KeyHints.close,
         ]}
-        detail={Option.liftPredicate(
-          detailLabel(props.controller.detail()),
-          () => visible().length > 0,
+        height={Option.getOrUndefined(wideHeight())}
+        detail={Option.getOrUndefined(
+          Option.liftPredicate(
+            Option.liftPredicate(
+              detailLabel(props.controller.detail()),
+              () => visible().length > 0,
+            ),
+            () => !wide(),
+          ),
         )}
         error={props.controller.error()}
       >
-        <SelectList
-          id="agents"
-          open={props.open}
-          rows={rows}
-          rowKey={(row) => `${row.sessionId}/${row.branchId}`}
-          filter={{ onQueryChange: props.controller.refresh }}
-          sticky={sticky}
-          // One detail read per selection, not per keystroke batch: the
-          // controller ignores a repeat of the row it is already fetching.
-          onCursor={props.controller.select}
-          extraKeys={(event, selected) => {
-            if (event.name === "escape" && Option.isSome(armed())) {
-              setArmed(Option.none())
-              return true
-            }
-            if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
-            setArmed(Option.none())
-            // The arrows the palette uses between levels: ← leaves the pane for
-            // the composer, → opens the agent under the cursor as ↵ does.
-            if (event.name === "left") {
-              props.onClose()
-              return true
-            }
-            if (event.name === "right") {
-              Option.match(selected, { onNone: () => {}, onSome: props.onSelect })
-              return true
-            }
-            return false
-          }}
-          loading={props.controller.loading}
-          onSelect={props.onSelect}
-          onDismiss={props.onClose}
-        />
+        {/* The list and the column share one row box that stays mounted, so
+            a resize across the threshold redraws the column alone and the
+            list keeps its cursor and filter. */}
+        <box flexDirection="row" flexGrow={1}>
+          <box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <SelectList
+              id="agents"
+              open={props.open}
+              rows={rows}
+              rowKey={(row) => `${row.sessionId}/${row.branchId}`}
+              filter={{ onQueryChange: props.controller.refresh }}
+              sticky={sticky}
+              // One detail read per selection, not per keystroke batch: the
+              // controller ignores a repeat of the row it is already fetching.
+              onCursor={onCursor}
+              extraKeys={(event, selected) => {
+                if (event.name === "escape" && Option.isSome(armed())) {
+                  setArmed(Option.none())
+                  return true
+                }
+                if (event.ctrl === true && event.name === "x") return armOrDelete(selected)
+                setArmed(Option.none())
+                // The arrows the palette uses between levels: ← leaves the pane for
+                // the composer, → opens the agent under the cursor as ↵ does.
+                if (event.name === "left") {
+                  props.onClose()
+                  return true
+                }
+                if (event.name === "right") {
+                  Option.match(selected, { onNone: () => {}, onSome: props.onSelect })
+                  return true
+                }
+                return false
+              }}
+              loading={props.controller.loading}
+              onSelect={props.onSelect}
+              onDismiss={props.onClose}
+            />
+          </box>
+          <Show when={wide()}>
+            <box
+              flexDirection="column"
+              flexShrink={0}
+              width={columnWidth()}
+              border={["left"]}
+              borderColor={theme.border}
+              paddingLeft={1}
+              paddingRight={1}
+              overflow="hidden"
+            >
+              <For each={columnLines()}>
+                {(runs) => (
+                  <text wrapMode="none" height={1} flexShrink={0}>
+                    <For each={fitRuns(runs, Math.max(0, columnWidth() - 3))}>
+                      {(run) => (
+                        <span style={{ fg: columnColor(run.tone, cursorSection()) }}>
+                          {run.text}
+                        </span>
+                      )}
+                    </For>
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
+        </box>
       </PickerFrame>
     </Show>
   )
@@ -1013,6 +1356,24 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
     }
 
     return clientContributions(
+      // A child session in view says so on the status row, and how to get
+      // back to the tree: the reader can tell a child from its parent at a
+      // glance. The way back gives way on a narrow row after the debug mark.
+      statusLabelContribution({
+        priority: 0,
+        produce: () =>
+          Option.match(controller.watched(), {
+            onNone: () => [],
+            onSome: (row) => [
+              { text: `↳ child ${truncate(nameFor(row), WATCHED_NAME)}`, color: "info" },
+              {
+                text: TRAY_HINT,
+                color: "textMuted",
+                short: { text: "", rank: STATUS_YIELD.cwd - 0.5 },
+              },
+            ],
+          }),
+      }),
       widgetContribution({
         id: "agents.tray",
         // Under the status line, not between the transcript and the composer:

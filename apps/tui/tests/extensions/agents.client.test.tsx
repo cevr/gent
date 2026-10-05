@@ -23,7 +23,10 @@ import {
   ClientContext,
   makeClientContextLayer,
   type ExtensionAgentDetail,
+  STATUS_YIELD,
 } from "../../src/extensions/client-facets"
+import { StatusRow } from "../../src/composer"
+import { useTheme } from "../../src/theme"
 import { DockProvider, PickerFrame } from "../../src/ui"
 import {
   createMockClient,
@@ -75,6 +78,9 @@ const detail = (turns: number): ExtensionAgentDetail => ({
   costUsd: 0,
   durationMs: 0,
   omittedMessages: 0,
+  effort: Option.none(),
+  firstPrompt: Option.none(),
+  lastAnswer: Option.none(),
 })
 
 describe("Agents controller detail", () => {
@@ -750,6 +756,9 @@ describe("Agents pane navigation", () => {
                       costUsd: 0.125,
                       durationMs: 93_000,
                       omittedMessages: 0,
+                      effort: Option.none(),
+                      firstPrompt: Option.none(),
+                      lastAnswer: Option.none(),
                     }),
                   )
                 },
@@ -804,6 +813,9 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
+                effort: Option.none(),
+                firstPrompt: Option.none(),
+                lastAnswer: Option.none(),
               }),
             select: () => {},
             done: () => [],
@@ -845,6 +857,9 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
+                effort: Option.none(),
+                firstPrompt: Option.none(),
+                lastAnswer: Option.none(),
               }),
             select: () => {},
             done: () => [],
@@ -884,7 +899,7 @@ describe("Agents pane navigation", () => {
         />
       ))
       const frame = renderFrame(setup)
-      expect(frame).toContain("• Alpha")
+      expect(frame).toContain("○ Alpha")
       expect(frame).not.toContain("Alpha · idle")
     }),
   )
@@ -906,13 +921,13 @@ describe("Agents pane navigation", () => {
         return <pane.component />
       }
       const setup = yield* renderScoped(() => <Session />)
-      expect(renderFrame(setup)).not.toContain("Sessions ·")
+      expect(renderFrame(setup)).not.toContain("ctrl+t hide")
 
       setup.mockInput.pressKey("t", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => frame.includes("Sessions ·"), "the pane opened")
+      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "the pane opened")
       // The open pane's own keys leave ctrl+t to the dispatch, which closes it.
       setup.mockInput.pressKey("t", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => !frame.includes("Sessions ·"), "the pane closed")
+      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+t hide"), "the pane closed")
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -987,6 +1002,9 @@ describe("Agents pane reopen", () => {
               costUsd: 0,
               durationMs: 0,
               omittedMessages: 0,
+              effort: Option.none(),
+              firstPrompt: Option.none(),
+              lastAnswer: Option.none(),
             })
           },
         ),
@@ -1057,6 +1075,9 @@ describe("Agents pane framing", () => {
                     costUsd: 0.125,
                     durationMs: 93_000,
                     omittedMessages: 0,
+                    effort: Option.none(),
+                    firstPrompt: Option.none(),
+                    lastAnswer: Option.none(),
                   }),
                 select: () => {},
                 done: () => [],
@@ -1080,7 +1101,8 @@ describe("Agents pane framing", () => {
 
         // The title carries its counts, on the first line inside the top rule.
         const top = lines.findIndex((line) => line.startsWith("────"))
-        expect(lines[top + 1]).toContain("Sessions · 0 running, 1 idle, 0 inactive")
+        expect(lines[top + 1]).toContain("Sessions · 1 idle")
+        expect(lines[top + 1]).not.toContain("running")
 
         // One muted footer line, immediately under the bottom rule.
         const bottom = lines.findLastIndex((line) => line.startsWith("────"))
@@ -1342,8 +1364,9 @@ describe("agents pane rows", () => {
         const worker = lines[lineOf("· Running")] ?? ""
         expect(worker).toMatch(/[◇◈◆] delegate.* · Running/)
         expect(worker.trimEnd()).toMatch(/1m 1\ds$/)
-        // The others: a still dot and the age of their last step.
-        expect(lines[lineOf("waiting task")]).toContain("• delegate: waiting task")
+        // The others: a ring for idle, a dot for stored, and the age of their last step.
+        expect(lines[lineOf("waiting task")]).toContain("○ delegate: waiting task")
+        expect(lines[lineOf("stored task")]).toContain("· delegate: stored task")
         expect(lines[lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
         expect(lines[lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
         // Running first, in the order the server sent.
@@ -1433,6 +1456,301 @@ describe("agents pane rows", () => {
   )
 })
 
+// ── command center ──────────────────────────────────────────────────────────
+
+/**
+ * The pane as an agent command center: what waits on the reader first, the
+ * state in the glyph's shape, counts in the title, and a details column for
+ * the selected row once the terminal is wide.
+ */
+describe("agents pane command center", () => {
+  /**
+   * The selected row's live detail: a delegate child parked on an ask, three
+   * turns in. Its first prompt is its task under the parent's frame.
+   */
+  const asking: ExtensionAgentDetail = {
+    status: "WaitingForInteraction",
+    model: Option.some("anthropic/claude-sonnet-5-5"),
+    effort: Option.some("high"),
+    turns: 3,
+    costUsd: 0.012,
+    durationMs: 72_000,
+    omittedMessages: 0,
+    firstPrompt: Option.some(
+      "Task from your parent session main. Your final reply in this turn is your result.\n\nCheck docs/architecture against the code\nThen report.",
+    ),
+    lastAnswer: Option.some("Which docs folder is current?"),
+  }
+
+  /** The pane over `listed` at `width` columns, with the theme it drew in. */
+  const paneAt = (
+    listed: ReadonlyArray<AgentRowEntry>,
+    width: number,
+    detail: Option.Option<ExtensionAgentDetail> = Option.some(asking),
+  ) =>
+    Effect.gen(function* () {
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          colors = Option.some(useTheme().theme)
+          return (
+            <AgentsPane
+              place={PLACE}
+              open={true}
+              controller={{
+                rows: () => listed,
+                current: () => ELSEWHERE,
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                reload: () => {},
+                detail: () => detail,
+                select: () => {},
+                done: () => [],
+                open: () => true,
+              }}
+              onSelect={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          )
+        },
+        { width, height: 30 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions"), "pane")
+      const lines = frame.split("\n")
+      // The spans of the first line whose text holds `text`: a key with its
+      // glyph finds the list row, not the details column's name line.
+      const spansOf = (text: string) =>
+        setup.captureSpans().lines.find((line) =>
+          line.spans
+            .map((span) => span.text)
+            .join("")
+            .includes(text),
+        )?.spans ?? []
+      return { frame, lines, spansOf, theme: Option.getOrThrow(colors) }
+    })
+
+  const waiting = (now: number): ReadonlyArray<AgentRowEntry> => [
+    {
+      ...root("asks", "needs"),
+      name: "check the docs",
+      status: "WaitingForInteraction",
+      cwd: "/home/me/work/docs",
+      updatedAt: now - 12_000,
+    },
+    {
+      ...root("questions", "needs"),
+      name: "debug ask",
+      status: "Idle",
+      openQuestions: 1,
+      updatedAt: now - 20_000,
+    },
+    {
+      ...root("worker", "running"),
+      name: "explore",
+      runningSince: now - 41_000,
+      runningCall: { tool: "read", input: { path: "ARCHITECTURE.md" } },
+    },
+  ]
+
+  const resting = (now: number): ReadonlyArray<AgentRowEntry> => [
+    { ...root("first", "idle"), name: "greeting", updatedAt: now - 5_000 },
+    { ...root("rest", "idle"), name: "debug delegate", updatedAt: now - 9_000 },
+    { ...root("stored", "inactive"), name: "debug scenario", updatedAt: now - 35_000 },
+  ]
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `what waits on the reader comes first, each state in its glyph's shape, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const { lines, spansOf, theme } = yield* paneAt(waiting(now), width)
+          const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+          // The title counts each state there is, and no state there is not.
+          expect(lines[lineOf("Sessions")]).toContain(
+            truncateTitle("Sessions · 2 needs you · 1 running", width),
+          )
+          expect(lines[lineOf("Sessions")]).not.toContain("0 ")
+          // Needs you is the first section.
+          expect(lineOf("Needs you (2)")).toBeGreaterThan(-1)
+          expect(lineOf("Needs you (2)")).toBeLessThan(lineOf("Running (1)"))
+          expect(lineOf("● check th")).toBeGreaterThan(lineOf("Needs you (2)"))
+          expect(lineOf("● check th")).toBeLessThan(lineOf("Running (1)"))
+          // A filled dot: the loop waits on the reader. The pulse: it works.
+          // At 40 columns a long name is cut, but the glyph and the name lead.
+          expect(lineOf("● debug ask")).toBeGreaterThan(lineOf("● check th"))
+          expect(lines[lineOf("explore")]).toMatch(/[◇◈◆] explore/)
+          if (width >= 60) {
+            expect(lineOf("● check the docs · waiting for an answer")).toBeGreaterThan(-1)
+            expect(lineOf("● debug ask · 1 open question")).toBeGreaterThan(-1)
+            expect(lines[lineOf("explore")]).toContain("explore · Reading ARCHITECTURE.md")
+          }
+          // The dot is the attention colour; the name the agent-name colour.
+          const asks = spansOf("● debug ask")
+          expect(asks.find((span) => span.text.includes("●"))?.fg.equals(theme.warning)).toBe(true)
+          expect(asks.find((span) => span.text.includes("debug ask"))?.fg.equals(theme.info)).toBe(
+            true,
+          )
+          const works = spansOf("explore")
+          expect(works.find((span) => /[◇◈◆]/.test(span.text))?.fg.equals(theme.text)).toBe(true)
+        }),
+    )
+
+    it.scopedLive(`an idle loop draws a ring and a stored one a dot, at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const { lines, spansOf, theme } = yield* paneAt(resting(now), width, Option.none())
+        const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+        expect(lines[lineOf("Sessions")]).toContain(
+          truncateTitle("Sessions · 2 idle · 1 inactive", width),
+        )
+        expect(lines[lineOf("Sessions")]).not.toContain("running")
+        expect(lineOf("○ debug delegate")).toBeGreaterThan(-1)
+        expect(lineOf("· debug scenario")).toBeGreaterThan(lineOf("○ debug delegate"))
+        // Idle needs nothing: its ring is muted, as is a stored session's dot and name.
+        // (The cursor sits on the first row, drawn in the selection's colours.)
+        const idle = spansOf("○ debug delegate")
+        expect(idle.find((span) => span.text.includes("○"))?.fg.equals(theme.textMuted)).toBe(true)
+        const stored = spansOf("· debug scenario")
+        expect(stored.find((span) => span.text.includes("·"))?.fg.equals(theme.textMuted)).toBe(
+          true,
+        )
+        expect(
+          stored.find((span) => span.text.includes("debug scenario"))?.fg.equals(theme.textMuted),
+        ).toBe(true)
+      }),
+    )
+  }
+
+  it.scopedLive("at 100 columns the selected row's details stand in a column beside the list", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { frame, lines } = yield* paneAt(waiting(now), 100)
+      // The column is ruled off at one place on every body line.
+      const body = lines.filter((line) => line.includes("check the docs ·"))
+      expect(body).toHaveLength(1)
+      const rule = (body[0] ?? "").lastIndexOf("│")
+      expect(rule).toBeGreaterThan(50)
+      for (const text of [
+        "● needs you · waiting for an answer",
+        "claude-sonnet-5-5 · high",
+        "turn 4 running · $0.01",
+        "~/work/docs",
+        "Which docs folder is current?",
+        "Task: Check docs/architecture",
+      ]) {
+        const line = lines.find((candidate) => candidate.includes(text)) ?? ""
+        expect(line.indexOf(text)).toBeGreaterThan(rule)
+      }
+      // A child's task reads without the parent's frame around it.
+      expect(frame).not.toContain("Task from your parent")
+      // The one-line detail under the list gives way to the column.
+      expect(frame).not.toContain("claude-sonnet-5-5  ·  turn 4 running")
+    }),
+  )
+
+  it.scopedLive("under 100 columns the one-line detail stays and no column draws", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const { frame } = yield* paneAt(waiting(now), 60)
+      expect(frame).toContain("claude-sonnet-5-5  ·  turn 4 running")
+      expect(frame).not.toContain("claude-sonnet-5-5 · high")
+      expect(frame).not.toContain("Task:")
+    }),
+  )
+})
+
+/** The title as a pane `width` columns wide draws it: cut to its section width. */
+const truncateTitle = (title: string, width: number): string => {
+  if (title.length <= width - 2) return title
+  return title.slice(0, width - 3)
+}
+
+describe("the status row names the child the reader watches", () => {
+  it.scopedLive("viewing a child session shows ↳ child and its name, then the way back", () =>
+    Effect.gen(function* () {
+      const here = { sessionId: SessionId.make("kid"), branchId: BranchId.make("kid-branch") }
+      const contributions = yield* provideClientServices(agentsExtension.setup, {
+        requestReply: {
+          rows: [{ ...child("kid", "running", "main"), name: "explore", sideThread: true }],
+        },
+        currentSession: () => here,
+      })
+      const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
+      yield* waitUntil(() => produce().length > 0, "the watched child's label")
+      expect(produce().map((label) => label.text)).toEqual(["↳ child explore", "ctrl+t sessions"])
+      expect(produce()[0]?.color).toBe("info")
+      // On a narrow row the way back gives way after the debug mark, before the cwd.
+      expect(produce()[1]?.short?.text).toBe("")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a session with no parent shows no child label", () =>
+    Effect.gen(function* () {
+      const here = { sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }
+      let replied = false
+      const contributions = yield* provideClientServices(agentsExtension.setup, {
+        requestEffect: () =>
+          Effect.sync(() => {
+            replied = true
+            return { rows: [root("main", "idle"), child("kid", "running", "main")] }
+          }),
+        currentSession: () => here,
+      })
+      const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
+      yield* waitUntil(() => replied, "the listing read")
+      expect(produce()).toEqual([])
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`the label sits on the status row at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const setup = yield* renderScoped(
+          () => {
+            const { theme } = useTheme()
+            return (
+              <StatusRow
+                labels={[
+                  {
+                    text: "idle",
+                    color: theme.textMuted,
+                    short: { text: "", rank: STATUS_YIELD.phase },
+                  },
+                  {
+                    text: "repo",
+                    color: theme.textMuted,
+                    short: { text: "", rank: STATUS_YIELD.cwd },
+                  },
+                  {
+                    text: "Claude Sonnet 5.5",
+                    color: theme.textMuted,
+                    short: { text: "Sonnet 5.5", rank: STATUS_YIELD.model },
+                  },
+                  { text: "↳ child explore", color: theme.info },
+                  {
+                    text: "ctrl+t sessions",
+                    color: theme.textMuted,
+                    short: { text: "", rank: STATUS_YIELD.cwd - 0.5 },
+                  },
+                ]}
+              />
+            )
+          },
+          { width, height: 4 },
+        )
+        const frame = yield* waitForFrame(setup, (next) => next.includes("↳ child"), "status row")
+        const row = frame.split("\n").find((line) => line.includes("↳ child")) ?? ""
+        expect(row).toContain("↳ child explore")
+        if (width >= 100) expect(row).toContain("↳ child explore · ctrl+t sessions")
+        if (width < 60) expect(row).not.toContain("ctrl+t")
+      }).pipe(Effect.timeout("8 seconds")),
+    )
+  }
+})
+
 describe("agents pane counts and detail", () => {
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
@@ -1446,6 +1764,9 @@ describe("agents pane counts and detail", () => {
         costUsd: 0.028,
         durationMs: 0,
         omittedMessages: 0,
+        effort: Option.none(),
+        firstPrompt: Option.none(),
+        lastAnswer: Option.none(),
       })
       expect(detailLabel(Option.some(detail("Running", 0)))).toBe(
         "claude-sonnet-5  ·  turn 1 running  ·  $0.03",
@@ -1503,13 +1824,13 @@ describe("idle middle parent", () => {
         { width: 100, height: 20 },
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
-      expect(frame).toContain("1 running, 2 idle, 0 inactive")
+      expect(frame).toContain("Sessions · 1 running · 2 idle")
       expect(frame).toContain("Running (1)")
       expect(frame).toContain("Idle (2)")
-      // An idle loop draws the still dot; only the working one pulses.
+      // An idle loop draws the ring; only the working one pulses.
       const lineOf = (name: string) => frame.split("\n").find((line) => line.includes(name)) ?? ""
-      expect(lineOf("delegate: a task")).toContain("• delegate: a task")
-      expect(lineOf("delegate: b task")).not.toContain("• delegate: b task")
+      expect(lineOf("delegate: a task")).toContain("○ delegate: a task")
+      expect(lineOf("delegate: b task")).not.toContain("○ delegate: b task")
     }),
   )
 })
@@ -1555,13 +1876,15 @@ describe("thread rows", () => {
     "a thread's row counts its sessions, and a narrow pane drops the side-thread mark first",
     () =>
       Effect.gen(function* () {
-        const wide = yield* paneAt([thread], "elsewhere", 120)
+        // Wide enough that the list beside the details column keeps 80 columns.
+        const wide = yield* paneAt([thread], "elsewhere", 140)
         const wideFrame = yield* waitForFrame(
           wide,
           (next) => next.includes("fix auth"),
           "wide pane",
         )
-        const wideRow = wideFrame.split("\n").find((line) => line.includes("fix auth")) ?? ""
+        // The list row, under the details column's name line on the filter row.
+        const wideRow = wideFrame.split("\n").findLast((line) => line.includes("fix auth")) ?? ""
         expect(wideRow).toContain("side thread  3 sessions")
 
         const narrow = yield* paneAt([thread], "elsewhere", 60)
