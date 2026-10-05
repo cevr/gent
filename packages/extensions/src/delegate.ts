@@ -58,13 +58,7 @@ import {
   type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import {
-  type CollectedWork,
-  type WorkspaceError,
-  type WorkspaceRecord,
-  Workspaces,
-  workspaceBranch,
-} from "./workspaces.js"
+import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
 
 // Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
 // DelegateEntry name the registry's shapes in assertions. StartChild,
@@ -546,14 +540,20 @@ interface ChildWork {
 }
 
 /** The completion's line for a collected copy, and its details. */
-const workOf = (work: CollectedWork): ChildWork =>
-  Option.match(work.branch, {
+const workOf = (work: CollectedWork): ChildWork => {
+  if (Predicate.isNotUndefined(work.problem)) {
+    return {
+      line: `Work: not on a branch: ${work.problem} (${work.path}).`,
+      details: { path: work.path, error: work.problem },
+    }
+  }
+  return Option.match(Option.fromUndefinedOr(work.branch), {
     onNone: () => ({
       line: `Work: no changes in the child's copy at ${work.path}.`,
       details: { path: work.path, files: 0, insertions: 0, deletions: 0 },
     }),
     onSome: (branch) => ({
-      line: `Work: branch ${branch}, one commit over your working tree as the child started (${work.files} files, +${work.insertions} -${work.deletions}). Nothing is merged; read it with git show ${branch}.`,
+      line: `Work: branch ${branch}, one commit over the child's copy as it started (${work.files} files, +${work.insertions} -${work.deletions}). Nothing is merged; read it with git show ${branch}.`,
       details: {
         path: work.path,
         branch,
@@ -563,16 +563,21 @@ const workOf = (work: CollectedWork): ChildWork =>
       },
     }),
   })
+}
 
 /**
  * A snapshot child's work, brought back to the origin as a branch before its
- * completion goes out; a shared child has none. A collect that fails is one
- * line in the completion, which still goes out.
+ * completion goes out; a shared child has none. The completion is for the
+ * child's start turn, which the workspaces turn end may have collected
+ * already: the same turn is collected once. A collect that fails is one line
+ * in the completion, which still goes out.
  */
 const childWork = Effect.fn("Delegate.childWork")(function* (entry: DelegateEntry) {
   const places = yield* Effect.serviceOption(Workspaces)
   if (Option.isNone(places)) return Option.none<ChildWork>()
-  const collected = yield* places.value.collect(entry.sessionId).pipe(Effect.result)
+  const collected = yield* places.value
+    .collect(entry.sessionId, startMessageId(entry.requestId))
+    .pipe(Effect.result)
   if (collected._tag === "Success") return Option.map(collected.success, workOf)
   const message = collected.failure.message
   return Option.some<ChildWork>({
@@ -692,7 +697,7 @@ export const childTaskBody = (text: string): string =>
 const childPlace = (sessionId: SessionId) =>
   Effect.gen(function* () {
     const places = yield* Effect.serviceOption(Workspaces)
-    if (Option.isNone(places)) return Option.none<WorkspaceRecord>()
+    if (Option.isNone(places)) return Option.none()
     return yield* places.value.find(sessionId)
   })
 
@@ -708,12 +713,7 @@ const submitStart = (entry: DelegateEntry) =>
       content: childTaskText(
         ctx.sessionId,
         entry.prompt,
-        Option.getOrUndefined(
-          Option.map(place, (record) => ({
-            cwd: record.cwd,
-            branch: workspaceBranch(record.name),
-          })),
-        ),
+        Option.getOrUndefined(Option.map(place, ({ cwd, branch }) => ({ cwd, branch }))),
       ),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       completion: "admission",
@@ -901,9 +901,13 @@ interface AdmitParams {
 type Isolation = "shared" | "snapshot"
 
 /**
- * A snapshot child's place, held for the admission: a failed admission (the
- * session create, the bind) releases the copy it made, a successful one keeps
- * it for the child. A shared child gets none.
+ * A snapshot child's place for the admission. The copy's record exists from
+ * the first step of its making, so a failed or interrupted admission whose
+ * child session was never created removes the copy by its name (the
+ * finalizer on the admission's scope, which closes after the registry
+ * write). Once the session is created, nothing here removes the copy: the
+ * session owns it, and its delete releases it. The making itself can be
+ * interrupted. A shared child gets none.
  */
 const admissionPlace = Effect.fn("Delegate.admissionPlace")(function* (params: AdmitParams) {
   if (params.isolation !== "snapshot") return Option.none()
@@ -918,23 +922,27 @@ const admissionPlace = Effect.fn("Delegate.admissionPlace")(function* (params: A
   if (Predicate.isUndefined(params.requestId)) {
     return yield* new DelegateError({ message: 'isolation "snapshot" needs a request id' })
   }
-  const key = params.requestId
-  const place = yield* Effect.acquireRelease(
-    places.value.acquire({ key, cwd: ctx.cwd }),
-    (acquired, exit) => {
-      if (Exit.isSuccess(exit)) return Effect.void
-      return places.value
-        .release(acquired.name)
+  const start = yield* places.value.locate({ key: params.requestId, cwd: ctx.cwd })
+  const created = yield* Ref.make(false)
+  yield* Effect.addFinalizer((exit) =>
+    Effect.gen(function* () {
+      if (Exit.isSuccess(exit) || (yield* Ref.get(created))) return
+      yield* places.value
+        .release(start.name)
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("delegate.workspace.release.failed").pipe(
-              Effect.annotateLogs({ name: acquired.name, cause: Cause.pretty(cause) }),
+              Effect.annotateLogs({ name: start.name, cause: Cause.pretty(cause) }),
             ),
           ),
         )
-    },
+    }),
   )
-  return Option.some({ place, bind: places.value.bind })
+  const place = yield* places.value.acquire(start)
+  /** The session exists: from here the copy is the session's, whatever fails next. */
+  const handOff = (sessionId: SessionId) =>
+    Ref.set(created, true).pipe(Effect.andThen(places.value.bind(place.name, sessionId)))
+  return Option.some({ place, handOff })
 })
 
 const unfinished = (entries: ReadonlyArray<DelegateEntry>) =>
@@ -951,76 +959,74 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
   const ctx = yield* ExtensionContext
   const admitted = yield* registry
     .modify((entries) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const requested = Option.fromUndefinedOr(params.requestId)
-          const existing = Option.flatMap(requested, (id) =>
-            Option.fromUndefinedOr(entries.find((entry) => entry.requestId === id)),
-          )
-          if (Option.isSome(existing)) {
-            if (existing.value.prompt !== params.prompt) {
-              return yield* new DelegateError({ message: "Child start request input changed" })
-            }
-            const child = yield* ctx.Session.getSession(existing.value.sessionId)
-            if (Predicate.isUndefined(child)) {
-              return yield* new DelegateError({ message: "Child session no longer exists" })
-            }
-            return { next: entries, result: { ...existing.value, notes: [] } }
+      Effect.gen(function* () {
+        const requested = Option.fromUndefinedOr(params.requestId)
+        const existing = Option.flatMap(requested, (id) =>
+          Option.fromUndefinedOr(entries.find((entry) => entry.requestId === id)),
+        )
+        if (Option.isSome(existing)) {
+          if (existing.value.prompt !== params.prompt) {
+            return yield* new DelegateError({ message: "Child start request input changed" })
           }
-          // At the cap, a child deleted since the last reconcile frees its slot.
-          let current = entries
-          if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
-            current = yield* Effect.forEach(current, settleIfGone)
+          const child = yield* ctx.Session.getSession(existing.value.sessionId)
+          if (Predicate.isUndefined(child)) {
+            return yield* new DelegateError({ message: "Child session no longer exists" })
           }
-          if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
-            return yield* new DelegateError({
-              message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
-            })
-          }
-          const place = yield* admissionPlace(params)
-          // The child is its agent for every turn it runs, not only this one.
-          const child = yield* ctx.Session.create({
-            name: childName(params.prompt),
-            ...Option.match(place, {
-              onNone: () => ({}),
-              onSome: ({ place }) => ({ cwd: place.cwd }),
-            }),
-            parentSessionId: ctx.sessionId,
-            parentBranchId: ctx.branchId,
-            admission: {
-              agent: DELEGATE_AGENT_NAME,
-              runSpec: childRunSpec(params.runSpec),
-            },
-            ...Record.filter(
-              { requestId: params.requestId, historyBranchId: params.historyBranchId },
-              Predicate.isNotUndefined,
-            ),
+          return { next: entries, result: { ...existing.value, notes: [] } }
+        }
+        // At the cap, a child deleted since the last reconcile frees its slot.
+        let current = entries
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+          current = yield* Effect.forEach(current, settleIfGone)
+        }
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+          return yield* new DelegateError({
+            message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
-          if (Option.isSome(place)) yield* place.value.bind(place.value.place.name, child.sessionId)
-          const requestId = Option.getOrElse(requested, () =>
-            RequestId.make(`run:${child.sessionId}`),
-          )
-          const entry: DelegateEntry = {
-            requestId,
-            ...child,
-            agentName: DELEGATE_AGENT_NAME,
-            prompt: params.prompt,
-            ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
-            private: false,
-            submitted: false,
-            delivered: false,
-          }
-          return {
-            next: [...current, entry],
-            result: {
-              ...entry,
-              notes: Option.match(place, { onNone: () => [], onSome: ({ place }) => place.notes }),
-            },
-          }
-        }),
-      ),
+        }
+        const place = yield* admissionPlace(params)
+        // The child is its agent for every turn it runs, not only this one.
+        const child = yield* ctx.Session.create({
+          name: childName(params.prompt),
+          ...Option.match(place, {
+            onNone: () => ({}),
+            onSome: ({ place }) => ({ cwd: place.cwd }),
+          }),
+          parentSessionId: ctx.sessionId,
+          parentBranchId: ctx.branchId,
+          admission: {
+            agent: DELEGATE_AGENT_NAME,
+            runSpec: childRunSpec(params.runSpec),
+          },
+          ...Record.filter(
+            { requestId: params.requestId, historyBranchId: params.historyBranchId },
+            Predicate.isNotUndefined,
+          ),
+        })
+        if (Option.isSome(place)) yield* place.value.handOff(child.sessionId)
+        const requestId = Option.getOrElse(requested, () =>
+          RequestId.make(`run:${child.sessionId}`),
+        )
+        const entry: DelegateEntry = {
+          requestId,
+          ...child,
+          agentName: DELEGATE_AGENT_NAME,
+          prompt: params.prompt,
+          ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          private: false,
+          submitted: false,
+          delivered: false,
+        }
+        return {
+          next: [...current, entry],
+          result: {
+            ...entry,
+            notes: Option.match(place, { onNone: () => [], onSome: ({ place }) => place.notes }),
+          },
+        }
+      }),
     )
-    .pipe(asDelegateError("Child start failed"))
+    .pipe(Effect.scoped, asDelegateError("Child start failed"))
   if (!admitted.submitted) {
     yield* submitStart(admitted).pipe(asDelegateError("Child start failed"))
     // Only the flag changes: a hook may have settled the row since it was written.
@@ -1412,10 +1418,10 @@ export const StartChild = tool({
       branchId: entry.branchId,
       ...Option.match(place, {
         onNone: () => ({}),
-        onSome: (record) => ({
+        onSome: (place) => ({
           workspace: {
-            path: record.cwd,
-            branch: workspaceBranch(record.name),
+            path: place.cwd,
+            branch: place.branch,
             ...Option.match(
               Option.liftPredicate(entry.notes.join("; "), (note) => note.length > 0),
               { onNone: () => ({}), onSome: (note) => ({ note }) },
