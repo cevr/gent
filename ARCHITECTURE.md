@@ -98,6 +98,8 @@ updates this list in the same commit.
     encode carries at more than a quarter of the byte limit is left out of
     that encode, so only undecodable bytes fail
     (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    A cell result carries the images its code shows, through the same
+    projection (see the cell section). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
     `packages/core/src/runtime/model-context.ts`; `saveToolImage` in
     `packages/core/src/runtime/tool-image.ts`.
@@ -1995,6 +1997,32 @@ cost; a close stops it and records nothing. Cells queued before cancellation
 cannot evaluate, and a cell whose turn already stopped (`isStopped`) does not
 start.
 
+A cell shows a tool image to the model the way it shows text: an object
+tagged `ToolImage` (a `saveToolImage` result, an entry of an MCP result's
+`images`) in the value of its last expression or in a `console` output
+call's arguments goes to the model as an image after the cell's result. The
+worker finds each where the display reads (`shownToolImages` in
+`cell-value.ts`): a plain object or an array, own data properties only, at a
+depth and position the display shows, so the search runs no cell code. It
+sends each image's data fields on the `Evaluated` frame
+(`CellEvaluation.images`, additive and optional; a result stored before it
+decodes as it was). The host keeps those that decode as a `ToolImage`, with
+only the schema's fields, and stores them in the result, so the request
+projection sends them as it sends a native tool's image, and the blob store
+keeps their files; there is no second image path. An image the cell only
+binds, or an inner call returns that the cell does not show, stays out: an
+image is paid in every later request of the session (a 1280x800 screenshot
+is about 1,400 tokens at Anthropic's `w*h/750`), so only the code decides which images the model needs. A cell result
+carries at most 5 (`maximumCellImages`): each image once, the newest shown,
+as the last screenshot is the state the cell ended on, and the display names
+how many it left out. Five is the smallest per-request bound of a shipped
+API class (Chat Completions) and the step at which a request leaves out its
+oldest images, so one cell never makes a request drop the images it just
+sent. A failed cell carries none. Prime Agent and Codex's `exec` code mode
+take an explicit helper (`attach_image`, `image(...)`) because their display
+is text; opencode's code mode sends every image a nested call returns
+(`PRIOR_ARTS.md`).
+
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
@@ -2415,21 +2443,12 @@ rules come before the pass for read-only tools:
 { "guard": { "rules": [{ "tool": "mcp.computer-use.*", "effect": "ask" }] } }
 ```
 
-An MCP image reaches the model as an image only on a native call. Through the
-cell, the model reads the cell's text, which names the image's `path`. An
-agent whose `tools` hold the server's tools and not `cell` calls them
-natively, so it sees each screenshot:
-
-```json
-{
-  "agents": {
-    "computer": {
-      "description": "Uses the Mac's apps through computer use",
-      "tools": ["mcp.computer-use.*", "read"]
-    }
-  }
-}
-```
+An MCP image reaches the model as an image on a native call, and through
+the cell when the cell shows it: `const shot = await
+tools.mcp["computer-use"].js(...); shot` (or `shot.images[0]`, or a
+`console.log` of it) sends the screenshot after the cell's result, as the
+cell section says. A cell that reads only the text of a result sends no
+image.
 
 A `url` entry without its own `Authorization` header signs in with OAuth, all
 inside the extension. `/mcp login <server>` runs the SDK's `auth()` with a

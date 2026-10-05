@@ -527,7 +527,10 @@ the session keeps every image. A blob stays while any stored message holds
 it, however old the session; a server start removes a blob no stored message
 references once nobody used it for a day. `toolImageFile(image)` gives the
 path of an image's file, for code that reads the bytes (an MCP result names
-it beside each image, so a cell reads it).
+it beside each image, so a cell reads it). A tool image a cell returns or
+logs (`const shot = await tools.screenshot({ path }); shot`) reaches the model
+the same way, after the cell's result, under `Image from cell ...`: at most
+the newest 5 per cell. An image the cell only binds or reads stays out.
 
 ### request — extension-to-extension RPC
 
