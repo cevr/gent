@@ -2997,6 +2997,19 @@ describe("classifier credential order", () => {
       })
       expect(asked).toEqual(["sk-a", "sk-b"])
       expect(Exit.isSuccess(decided)).toBe(true)
+      // A reset before the deadline that leaves the retry less time than the
+      // wait moves at once too: the retry would race the deadline for its answer.
+      const close = yield* decideWith({
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, "sk-a"],
+          [personal, "sk-b"],
+        ],
+        failures: { "sk-a": judgeRateLimited(Duration.millis(1_500)) },
+        timeoutMs: 2_000,
+      })
+      expect(close.asked).toEqual(["sk-a", "sk-b"])
+      expect(Exit.isSuccess(close.decided)).toBe(true)
     }),
   )
 
