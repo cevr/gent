@@ -105,6 +105,24 @@ describe("Sessions", () => {
       }).pipe(Effect.provide(testSqliteStorage)),
   )
 
+  it.live("a turn's model-attempt reading is its reservation count, none before its first", () =>
+    Effect.gen(function* () {
+      const operations = yield* SessionOperationStorage
+      const sessionId = SessionId.make("model-reading-session")
+      const branchId = BranchId.make("model-reading-branch")
+      const messageId = MessageId.make("model-reading-message")
+      yield* ensureStorageParents({ sessionId, branchId })
+      expect(yield* operations.modelAttemptsUsed({ messageId })).toBe(0)
+      const address = { sessionId, branchId, messageId, max: 2 }
+      yield* operations.reserveModelAttempt(address)
+      expect(yield* operations.modelAttemptsUsed({ messageId })).toBe(1)
+      yield* operations.reserveModelAttempt(address)
+      // A refused reservation leaves the count where the ceiling stopped it.
+      expect(yield* operations.reserveModelAttempt(address)).toBe(false)
+      expect(yield* operations.modelAttemptsUsed({ messageId })).toBe(2)
+    }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
   it.live("creates and retrieves a session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage

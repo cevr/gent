@@ -235,6 +235,11 @@ export type MessageRole = typeof MessageRole.Type
  * with an answer rather than being cut off mid-plan. Like the others it is
  * never a turn to answer on its own.
  *
+ * `model-attempts` is the one notice a turn with a model-call budget gets
+ * near its limit: how many calls are left, what happens when none is, and
+ * how to go on. Its details are the reading it was written at
+ * (`ModelAttempts`).
+ *
  * `steering` is the marker older builds wrote over the custom type of an
  * interjection delivered at a step boundary. Stored rows still carry it, so
  * it stays a runtime type. A delivery now keeps the sender's custom type and
@@ -244,11 +249,15 @@ export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
   "context-window",
   "max-steps",
+  "model-attempts",
   "model-change",
   "steering",
 ])
 export type RuntimeUserMessageType = typeof RuntimeUserMessageType.Type
 const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
+
+/** The custom type of a turn's model-call budget notice. */
+export const MODEL_ATTEMPTS_MESSAGE_TYPE: RuntimeUserMessageType = "model-attempts"
 
 // Message Metadata — extension-authored envelope for hidden/custom messages
 

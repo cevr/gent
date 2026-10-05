@@ -13,6 +13,9 @@ import {
   type EffectiveModelDriver,
   isReasoningEffort,
   type Model,
+  type ModelAttempts,
+  modelAttemptsLeft,
+  MODEL_ATTEMPTS_NOTICE_LEFT,
   ModelId,
   type ModelId as ModelIdType,
   promptCacheTtlMsFor,
@@ -42,6 +45,7 @@ import {
   decodeToolOutput,
   encodeToolOutput,
   Message,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   messagePartsToolCallParts,
   isSpawnedSession,
   normalizeResponseParts,
@@ -313,6 +317,10 @@ const continuationMessageIdForTurn = (messageId: MessageId, step: number): Messa
  */
 const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
   MessageId.make(`${messageId}:final-step`)
+
+/** The one model-call budget notice of a turn: a recovered step finds it written. */
+const modelAttemptsNoticeIdForTurn = (messageId: MessageId): MessageId =>
+  MessageId.make(`${messageId}:model-attempts`)
 
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
@@ -615,6 +623,8 @@ const reportStreamFailure = (
     retryAt: Option.Option<number>
     /** The credential the step's last request went out with. */
     credential?: CredentialReceipt
+    /** The turn's model-call budget as the step ended; absent for a turn with none. */
+    modelAttempts?: ModelAttempts
   },
   streamError: ProviderError,
   message: string,
@@ -631,7 +641,7 @@ const reportStreamFailure = (
         model: params.modelId,
         outcome: "Failed",
         ...effortReceipt(Option.fromUndefinedOr(params.reasoningLevel)),
-        ...omitUndefined({ credential: params.credential }),
+        ...omitUndefined({ credential: params.credential, modelAttempts: params.modelAttempts }),
       }),
     )
     const failure = {
@@ -664,6 +674,8 @@ export const collectModelTurnResponse = (params: {
   reasoningLevel?: RunEffort
   /** The credential the step's request goes out with, read when the step ends. */
   readCredential?: Effect.Effect<Option.Option<CredentialReceipt>>
+  /** The turn's model-call budget, read when the step ends; none for a turn with no budget. */
+  readModelAttempts?: Effect.Effect<Option.Option<ModelAttempts>>
   activeStream: ActiveStreamHandle
 }) =>
   Effect.gen(function* () {
@@ -702,11 +714,15 @@ export const collectModelTurnResponse = (params: {
           // Nothing observable was produced yet: let the caller's retry policy try again.
           if (!hasObservableOutput) return yield* streamError
           const credential = yield* params.readCredential ?? Effect.succeedNone
+          const modelAttempts = yield* params.readModelAttempts ?? Effect.succeedNone
           yield* reportStreamFailure(
             {
               ...params,
               retryAt: Option.none(),
-              ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
+              ...omitUndefined({
+                credential: Option.getOrUndefined(credential),
+                modelAttempts: Option.getOrUndefined(modelAttempts),
+              }),
             },
             streamError,
             "stream error, persisting partial output",
@@ -742,6 +758,8 @@ export const collectFailedModelTurnResponse = (params: {
   retryAt: Option.Option<number>
   /** The credential the step's last request went out with. */
   credential?: CredentialReceipt
+  /** The turn's model-call budget as the step ended; absent for a turn with none. */
+  modelAttempts?: ModelAttempts
 }) =>
   Effect.gen(function* () {
     const interrupted = yield* wasInterrupted(params.activeStream)
@@ -2723,7 +2741,36 @@ type ModelTurnSource = {
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
+  /** The turn's model-call budget as it reads when run; none for a turn with no budget. */
+  readonly modelAttempts: Effect.Effect<Option.Option<ModelAttempts>>
 }
+
+/**
+ * The turn's model-call budget as its reservation row reads now
+ * (`modelAttemptsUsed`); none for a turn with no budget. A read that fails
+ * is none too: the reading is a receipt, and the reservation still holds the
+ * limit.
+ */
+const readModelAttempts = (params: {
+  readonly messageId: MessageId
+  readonly limit: Option.Option<number>
+}): Effect.Effect<Option.Option<ModelAttempts>, never, SessionOperationStorage> =>
+  Option.match(params.limit, {
+    onNone: () => Effect.succeedNone,
+    onSome: (limit) =>
+      Effect.gen(function* () {
+        const operations = yield* SessionOperationStorage
+        return yield* operations.modelAttemptsUsed({ messageId: params.messageId })
+      }).pipe(
+        Effect.map((used) => Option.some({ used, limit })),
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.model-attempts-read-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<ModelAttempts>()),
+          ),
+        ),
+      ),
+  })
 
 const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
@@ -2759,8 +2806,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
   const operations = yield* SessionOperationStorage
+  const attemptLimit = Option.fromUndefinedOr(resolved.agent.maxModelAttempts)
+  // The budget as the reservation row reads when the step ends: its receipt.
+  const modelAttempts = readModelAttempts({
+    messageId: params.messageId,
+    limit: attemptLimit,
+  }).pipe(Effect.provideService(SessionOperationStorage, operations))
   // None: the agent sets no ceiling. Some(false): the turn spent it.
-  const reserveAttempt = Option.match(Option.fromUndefinedOr(resolved.agent.maxModelAttempts), {
+  const reserveAttempt = Option.match(attemptLimit, {
     onNone: () => Effect.succeedNone,
     onSome: (max) =>
       operations
@@ -2789,7 +2842,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     const admission = yield* reserveAttempt
     if (Option.isSome(admission) && !admission.value) {
       return yield* new ProviderError({
-        message: "Model-attempt budget exhausted",
+        message: modelAttemptsSpent(Option.getOrElse(attemptLimit, () => 0)),
         model: resolved.modelId,
       })
     }
@@ -3197,6 +3250,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ),
     ),
     credential,
+    modelAttempts,
     collect: <R>(
       effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
     ) => {
@@ -3243,26 +3297,31 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       )
       return visit.pipe(
         Effect.catchTag("ProviderError", (streamError) =>
-          Effect.flatMap(Effect.all([Clock.currentTimeMillis, credential]), ([nowMs, used]) =>
-            collectFailedModelTurnResponse({
-              ...omitUndefined({ credential: Option.getOrUndefined(used) }),
-              messageId: params.messageId,
-              step: params.step,
-              streamError,
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              modelId: resolved.modelId,
-              reasoningLevel: Option.getOrUndefined(reasoningLevel),
-              activeStream: params.activeStream,
-              // One recovery per refusal: a step that already handed off, or the
-              // last step of the budget, fails the turn as any failure does.
-              contextOverflow:
-                !params.overflowed &&
-                !params.finalStep &&
-                retryPolicy.contextOverflow(streamError.cause),
-              refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
-              retryAt: limitResetAt(retryPolicy, streamError, nowMs),
-            }),
+          Effect.flatMap(
+            Effect.all([Clock.currentTimeMillis, credential, modelAttempts]),
+            ([nowMs, used, attempts]) =>
+              collectFailedModelTurnResponse({
+                ...omitUndefined({
+                  credential: Option.getOrUndefined(used),
+                  modelAttempts: Option.getOrUndefined(attempts),
+                }),
+                messageId: params.messageId,
+                step: params.step,
+                streamError,
+                sessionId: params.sessionId,
+                branchId: params.branchId,
+                modelId: resolved.modelId,
+                reasoningLevel: Option.getOrUndefined(reasoningLevel),
+                activeStream: params.activeStream,
+                // One recovery per refusal: a step that already handed off, or the
+                // last step of the budget, fails the turn as any failure does.
+                contextOverflow:
+                  !params.overflowed &&
+                  !params.finalStep &&
+                  retryPolicy.contextOverflow(streamError.cause),
+                refusedAgain: params.overflowed && retryPolicy.contextOverflow(streamError.cause),
+                retryAt: limitResetAt(retryPolicy, streamError, nowMs),
+              }),
           ),
         ),
         Effect.flatMap(withStopReason),
@@ -3398,6 +3457,24 @@ const EMPTY_RESPONSE_INSTRUCTION =
  */
 const MAX_STEPS_INSTRUCTION =
   "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
+
+/**
+ * The one notice a turn with a model-call budget reads, at the first step
+ * boundary with `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer left: what the
+ * calls count, what happens when none is left, and what to do with the rest.
+ * A notice, not a stop: the cap stays, and the model decides how to finish.
+ */
+const modelAttemptsNotice = (attempts: ModelAttempts): string =>
+  `This turn has ${modelAttemptsLeft(attempts)} of its ${attempts.limit} model calls left. Every model request uses one, a retry or a context summary too, and when none is left the turn stops before it answers. Finish with the calls left: answer now with what you have established, or save your progress where it can be read later and say what is unfinished. Do not start new work. A new message starts a new turn with a fresh budget.`
+
+/**
+ * Why a turn stopped at its model-call budget, and how to go on: the error
+ * row, a child's completion and a headless run all print it. The budget binds
+ * one turn, so a new message runs with a fresh one; nothing lifts the cap of
+ * the turn it stopped.
+ */
+const modelAttemptsSpent = (limit: number): string =>
+  `Stopped at the model-call budget: ${limit} of ${limit} model calls used this turn. Its work so far is kept. Send a message to continue with a fresh budget of ${limit}, or raise maxModelAttempts for the run.`
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
   "Your previous step was cut off by the output limit or a full context window before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
@@ -4160,6 +4237,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           modelId: params.resolved.modelId,
           reasoningLevel: Option.getOrUndefined(source.reasoningLevel),
           readCredential: source.credential,
+          readModelAttempts: source.modelAttempts,
           activeStream: params.activeStream,
         }),
       )
@@ -4190,6 +4268,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // driver override routes `provider/model` to `driver/model`.
         const pricedModel = params.resolved.modelDriver.contextModelId
         const credential = yield* source.credential
+        const modelAttempts = yield* source.modelAttempts
         const streamEndedCost = yield* computeStreamEndedCost({
           modelId: pricedModel,
           usage: Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
@@ -4212,7 +4291,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
             outcome: outcome._tag,
             ...effortReceipt(source.reasoningLevel),
-            ...omitUndefined({ credential: Option.getOrUndefined(credential) }),
+            ...omitUndefined({
+              credential: Option.getOrUndefined(credential),
+              modelAttempts: Option.getOrUndefined(modelAttempts),
+            }),
           }),
         )
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
@@ -4319,7 +4401,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                   interrupted: true,
                   outcome: "Interrupted",
                   ...effortReceipt(source.reasoningLevel),
-                  ...omitUndefined({ credential: Option.getOrUndefined(yield* source.credential) }),
+                  ...omitUndefined({
+                    credential: Option.getOrUndefined(yield* source.credential),
+                    modelAttempts: Option.getOrUndefined(yield* source.modelAttempts),
+                  }),
                 }),
               )
               yield* persistCutStep("Interrupted")
@@ -5172,6 +5257,33 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* Effect.logWarning("turn.max-steps-final").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
+      }
+      // Near its model-call budget the turn reads one notice, at the first
+      // boundary with few calls left. Written once: the reading is skipped once
+      // the turn holds it, and a recovered step finds it by id.
+      const noticeId = modelAttemptsNoticeIdForTurn(params.state.message.id)
+      if (!resolved.messages.some((existing) => existing.id === noticeId)) {
+        const reading = yield* readModelAttempts({
+          messageId: params.state.message.id,
+          limit: Option.fromUndefinedOr(resolved.agent.maxModelAttempts),
+        })
+        const near = Option.filter(reading, (attempts) => {
+          const left = modelAttemptsLeft(attempts)
+          return left > 0 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
+        })
+        if (Option.isSome(near)) {
+          yield* appendBoundaryLine(
+            Message.cases.regular.make({
+              id: noticeId,
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: modelAttemptsNotice(near.value) })],
+              createdAt: yield* DateTime.nowAsDate,
+              metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: near.value },
+            }),
+          )
+        }
       }
       if (params.step === 1) {
         yield* scope.turnLedger.noteModel({ agent: currentTurnAgent, model: resolved.modelId })
