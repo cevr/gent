@@ -53,7 +53,7 @@ const subcommand = (args: ReadonlyArray<string>): string => {
 }
 
 /** One git command in `cwd`, whatever its exit: its code and its output, untrimmed. */
-const gitRun = (cwd: string, args: ReadonlyArray<string>, options: GitOptions = {}) =>
+export const gitRun = (cwd: string, args: ReadonlyArray<string>, options: GitOptions = {}) =>
   runProcess("git", ["-C", cwd, ...QUIET_GIT, ...args], {
     env: options.env ?? {},
     extendEnv: true,
@@ -65,7 +65,7 @@ const gitRun = (cwd: string, args: ReadonlyArray<string>, options: GitOptions = 
   }).pipe(Effect.mapError((error) => new GitError({ message: error.message })))
 
 /** The failure of a command that exited with `exitCode`, in git's last words. */
-const gitFailure = (
+export const gitFailure = (
   args: ReadonlyArray<string>,
   result: { readonly exitCode: number; readonly stderr: string },
 ) => {

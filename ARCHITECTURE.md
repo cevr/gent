@@ -1433,6 +1433,63 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   and the answer from the branch's last assistant message; nothing scans the
   event log. These are reported stream totals, not model-attempt accounting.
 
+### Turn checkpoints
+
+`@gent/checkpoints` (`packages/extensions/src/checkpoints.ts`) records the
+work tree at the start and the end of each turn, so a user can review what a
+turn changed and take it back. It sends the model nothing: no tool, no prompt
+section, no notice. Core has no checkpoint concept.
+
+- Capture: the start is the first `toolCall` hook of a turn for a tool that
+  declares a side effect (not `readonly`), before that call runs. The hook
+  always answers `Allow` and only captures; a failed capture is logged, never
+  an ask. Calls of one step wait for the same capture (a per-turn memo in a
+  process Resource, the capture forked in its scope). A turn that reads only
+  or calls no tool captures nothing. The end is the `turnAfter` hook, only for
+  a turn with a start. A tree capture catches every writer: the file tools,
+  bash, the cell, MCP tools. A recovered turn finds its start ref and captures
+  no second one.
+- Cost on the gate: a profile whose cwd is outside a git work tree registers
+  no capture hook, so its calls stay unjudged. In a git work tree every call is
+  judged: a top-level call keeps its `Allow` in memory (stored only in a park
+  write that happens anyway), and a cell operation stores it in its operation
+  record (one more SQLite transaction per cell operation).
+- Who captures: a session that is not spawned always does; a spawned one (a
+  delegate child, a `/btw` fork) only where the work tree's store exists, so a
+  snapshot child in its own copy pays nothing.
+- Store: one private bare git repository per work tree,
+  `<data dir>/checkpoints/<16 hex of sha256(realpath of the git top)>/`, with
+  a `worktree` file that names the top. gent writes no ref, object or index
+  entry into the user's repository, and reads it with no optional lock. Every
+  store command runs as `--git-dir=<store> --work-tree=<top>` with the quiet
+  git settings, `core.fsync=objects,reference`, no eol or filter conversion
+  (`--attr-source` is the empty tree), and gent's own identity. A store write
+  holds `FileLock` on `<store>/index`. Captured: tracked and untracked files
+  that git does not ignore, and files the user's repository tracks though an
+  ignore rule names them; not captured: untracked files over 2 MiB (the commit
+  counts them in `Gent-Skipped`) and the files of a nested repository (a
+  gitlink).
+- Record: the refs are the only record. `refs/checkpoints/<session>/<branch>/<turn>/{start,end}`
+  (each part the hex of the id, created only once); the commit trailers carry
+  `Gent-Kind`, `Gent-Session`, `Gent-Branch`, `Gent-Turn`, `Gent-At`
+  (milliseconds, strictly increasing per store) and `Gent-Skipped`. An end
+  commit's parent is its start. One `for-each-ref` reads the timeline.
+- Requests (both `answersDuringTurn`): `checkpoints.list` gives the branch's
+  turns newest first (`#1` is the newest; openers are user messages that are
+  not runtime rows), each `captured`, `open` or `none` with its
+  `diff --shortstat` (one `git log --shortstat` for all); a turn a fork copied
+  finds its checkpoints by its `createdAt` up the branch's parents.
+  `checkpoints.patch` gives turn `#n` as a git patch (`--binary`, no external
+  diff or textconv), cut at 10 MB; a first `#` line names other sessions,
+  outside this session's lineage (it and the sessions below it), whose turns
+  overlapped it.
+- Retention: a process fiber, started by the first `loopOpen` for a data
+  directory, runs a pass a minute later and then daily: it removes a store
+  whose work tree is gone, deletes refs whose `Gent-At` is over 30 days old,
+  and runs `gc --prune=1.day`, which keeps the objects of a capture that runs
+  at the same time, so the pass takes no lock. `sessionDeleted` deletes the
+  session's refs from its work tree's store.
+
 ### Interactions (Cold Pattern)
 
 Session snapshots and event replay use the same storage-backed event service,
@@ -1596,7 +1653,7 @@ Key properties:
   reading an assistant-message binding row. Native replay uses this same check.
   Inner-operation storage can use it without synthetic transcript tool calls.
   Its caller must verify receipt ownership.
-- **No permission rules in core; one hook.** A tool call that asks the user asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC. It has the `toolCall` hook: before a call runs (a call of the model, or one the cell's code makes, since both go through `ToolRunner.runBound`), every extension's hook gives a `ToolCallVerdict` (`Allow`, `Ask { reason }`, `Deny { reason }`; `domain/capability.ts`). The strictest verdict wins (deny over ask over allow), and a hook that fails answers `Ask`. `Ask` is one approval request through the same `ApprovalService`, so a turn with no answerer (headless without `--approve-all`) declines. A denied or declined call does not run: the model reads a failed tool result that names the reason, and the turn goes on. With no hook the gate reads nothing and the call runs as before: the requests keep their bytes. The gate runs inside the tool's handler, after the input decodes and before the body, so a hook reads the input the body runs with (a field the parameters drop is not there), and a call whose input does not decode fails as before with no judgement. A call is judged once. A top-level call that parks keeps its verdict in its turn record (`PendingToolCall.verdict` and `gate`, both optional); a cell operation keeps them in its operation record. The verdict is stored with its gate `pending` before the call asks or runs, and an approved `Ask` is stored `passed` before the call goes on (and before the tool's own approval asks); a store that fails fails the call, which does not run. A resumed call applies the kept verdict: a `passed` gate does not ask again (the skipped ask keeps its place in the call's count, so the tool's own approval takes its stored answer), and a `pending` `Ask` asks the same question again and takes the stored answer. An absent gate reads as `pending`. A call that was allowed and ran is never run again. The shipped `@gent/guard` (`packages/extensions/src/guard.ts`) holds the rules, and it registers no hook until a config holds a `guard` entry.
+- **No permission rules in core; one hook.** A tool call that asks the user asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC. It has the `toolCall` hook: before a call runs (a call of the model, or one the cell's code makes, since both go through `ToolRunner.runBound`), every extension's hook gives a `ToolCallVerdict` (`Allow`, `Ask { reason }`, `Deny { reason }`; `domain/capability.ts`). The strictest verdict wins (deny over ask over allow), and a hook that fails answers `Ask`. `Ask` is one approval request through the same `ApprovalService`, so a turn with no answerer (headless without `--approve-all`) declines. A denied or declined call does not run: the model reads a failed tool result that names the reason, and the turn goes on. With no hook the gate reads nothing and the call runs as before: the requests keep their bytes. The gate runs inside the tool's handler, after the input decodes and before the body, so a hook reads the input the body runs with (a field the parameters drop is not there), and a call whose input does not decode fails as before with no judgement. A call is judged once. A top-level call that parks keeps its verdict in its turn record (`PendingToolCall.verdict` and `gate`, both optional); a cell operation keeps them in its operation record. The verdict is stored with its gate `pending` before the call asks or runs, and an approved `Ask` is stored `passed` before the call goes on (and before the tool's own approval asks); a store that fails fails the call, which does not run. A resumed call applies the kept verdict: a `passed` gate does not ask again (the skipped ask keeps its place in the call's count, so the tool's own approval takes its stored answer), and a `pending` `Ask` asks the same question again and takes the stored answer. An absent gate reads as `pending`. A call that was allowed and ran is never run again. The shipped `@gent/guard` (`packages/extensions/src/guard.ts`) holds the rules, and it registers no hook until a config holds a `guard` entry. The shipped `@gent/checkpoints` registers a hook that always answers `Allow` and captures a turn's start, only in a profile whose cwd is in a git work tree (see Turn checkpoints).
 
 Files: `domain/interaction.ts` (InteractionPendingError, makeInteractionService), `runtime/extension-host.ts` (ApprovalService), `storage/storage.ts` (InteractionStorage, the pending read seam), `domain/agent-loop.ts` (WaitingForInteraction), `runtime/agent-loop.ts` (respond orchestration).
 
