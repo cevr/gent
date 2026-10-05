@@ -65,6 +65,7 @@ import {
   type SystemPromptInput,
   type ToolPolicyFragment,
   type SessionDeletedInput,
+  type ToolCallInput,
   type TurnAfterInput,
   validateExtensionPackage,
 } from "../domain/extension.js"
@@ -94,6 +95,7 @@ import {
   isToolCapability,
   type PromptSection,
   type RequestCapability,
+  ToolCallVerdict,
   type ToolCapability,
 } from "../domain/capability.js"
 import {
@@ -123,6 +125,7 @@ import {
 import {
   type ConfigLoadError,
   ConfigService,
+  configSnapshotFileSystem,
   fileVersion,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
@@ -322,7 +325,7 @@ export const provideExtensionLeaf =
 
 // ── extension-hooks ─────────────────────────────────────────────────────────
 
-interface CompiledExtensionHooks {
+export interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentExtensionHostContext>
@@ -343,7 +346,17 @@ interface CompiledExtensionHooks {
   readonly emitSessionDeleted: (
     input: SessionDeletedInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
+  /** Whether any extension judges tool calls; without one a call runs unjudged. */
+  readonly judgesToolCalls: boolean
+  /** The strictest verdict of every `toolCall` hook; `Allow` with none. */
+  readonly judgeToolCall: (
+    input: ToolCallInput,
+  ) => Effect.Effect<ToolCallVerdict, never, CurrentExtensionHostContext>
 }
+
+/** How strict a verdict is; the strictest of a call's hooks wins. */
+const verdictRank = (verdict: ToolCallVerdict): number =>
+  ToolCallVerdict.match(verdict, { Allow: () => 0, Ask: () => 1, Deny: () => 2 })
 
 /** A notice with the extension whose projection returned it. */
 export interface ExtensionTurnNotice {
@@ -370,6 +383,50 @@ interface HookTurnProjectionSlot {
 interface RegisteredHook<Input> {
   readonly extensionId: ExtensionId
   readonly handler: (input: Input) => Effect.Effect<void, unknown, unknown>
+}
+
+interface RegisteredToolCallHook {
+  readonly extensionId: ExtensionId
+  readonly handler: (input: ToolCallInput) => Effect.Effect<ToolCallVerdict, unknown, unknown>
+}
+
+/**
+ * One `toolCall` hook's verdict. A hook that fails or dies answers `Ask`: a
+ * gate that cannot judge fails closed, and the user decides.
+ */
+const runToolCallHook = (slot: RegisteredToolCallHook, input: ToolCallInput) => {
+  const failed = (what: string, detail: string) =>
+    Effect.logWarning(`extension.hook.tool-call.${what}`).pipe(
+      Effect.annotateLogs({ extensionId: slot.extensionId, toolName: input.toolName, detail }),
+      Effect.as(
+        ToolCallVerdict.cases.Ask.make({
+          reason: `The ${slot.extensionId} check of this call failed: ${detail}`,
+        }),
+      ),
+    )
+  return sealErasedEffect<ToolCallVerdict, never>(
+    () =>
+      // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
+      slot
+        .handler(input)
+        .pipe(
+          provideExtensionLeaf({ extensionId: slot.extensionId, toolCallId: input.toolCallId }),
+        ),
+    {
+      onFailure: (error) => failed("failed", String(error)),
+      onDefect: (defect) => failed("defect", String(defect)),
+    },
+  ).pipe(
+    Effect.tap((verdict) =>
+      Effect.logDebug("extension.hook.tool-call.verdict").pipe(
+        Effect.annotateLogs({
+          extensionId: slot.extensionId,
+          toolName: input.toolName,
+          verdict: verdict._tag,
+        }),
+      ),
+    ),
+  )
 }
 
 const runHook = <Input>(input: Input, registered: RegisteredHook<Input>) =>
@@ -458,6 +515,7 @@ const collectHookSlot = (
     turnAfter: RegisteredHook<TurnAfterInput>[]
     loopOpen: RegisteredHook<void>[]
     sessionDeleted: RegisteredHook<SessionDeletedInput>[]
+    toolCall: RegisteredToolCallHook[]
   },
 ) => {
   switch (slot.kind) {
@@ -488,6 +546,12 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "toolCall":
+      slots.toolCall.push({
+        extensionId: ext.manifest.id,
+        handler: (input) => eraseHookEffect(slot.hook.handler(input)),
+      })
+      return
   }
 }
 
@@ -507,12 +571,14 @@ export const compileExtensionHooks = (
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
   const loopOpenSlots: RegisteredHook<void>[] = []
   const sessionDeletedSlots: RegisteredHook<SessionDeletedInput>[] = []
+  const toolCallSlots: RegisteredToolCallHook[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
     loopOpen: loopOpenSlots,
     sessionDeleted: sessionDeletedSlots,
+    toolCall: toolCallSlots,
   }
 
   for (const ext of sorted) {
@@ -622,6 +688,21 @@ export const compileExtensionHooks = (
             ),
           ),
         { concurrency: Math.max(sessionDeletedSlots.length, 1), discard: true },
+      ),
+
+    judgesToolCalls: toolCallSlots.length > 0,
+    // Every hook judges at once; the strictest verdict wins, and among equals
+    // the first in scope order, so its reason is the one the model reads.
+    judgeToolCall: (input) =>
+      Effect.forEach(toolCallSlots, (slot) => runToolCallHook(slot, input), {
+        concurrency: Math.max(toolCallSlots.length, 1),
+      }).pipe(
+        Effect.map((verdicts) =>
+          verdicts.reduce<ToolCallVerdict>((strictest, next) => {
+            if (verdictRank(next) > verdictRank(strictest)) return next
+            return strictest
+          }, ToolCallVerdict.cases.Allow.make({})),
+        ),
       ),
   }
 }
@@ -2643,9 +2724,9 @@ const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
 
 /**
- * The raw disabled list as the config names it, and the extension files on
- * disk (`extensionScanStamp`). It only finds a profile the same inputs
- * resolved before; the profile itself is keyed by `profileKey`.
+ * The raw disabled list as the config names it, the config files' version
+ * and the extension files on disk (`filesStamp`). It only finds a profile the
+ * same inputs resolved before; the profile itself is keyed by `profileKey`.
  */
 const listKey = (
   place: string,
@@ -2658,6 +2739,8 @@ const listKey = (
  * up, and the files they load from, so the key holds the active and the
  * failed extension ids and the file versions, not the disabled list: an id
  * no extension has builds no second profile, and an edited file builds one.
+ * The config files are among those files: an extension reads its own config
+ * keys at setup, so an edited config builds a new profile too.
  * An extension that runs its last good version names that version too.
  */
 const profileKey = (
@@ -2739,6 +2822,20 @@ export class SessionProfileCache extends Context.Service<
           Context.add(SqlClient.SqlClient, sql),
           Context.add(InteractionStorage, interactions),
         )
+        /**
+         * The services a profile build's extension scan and setups read: the
+         * platform's, with the config files as `fresh` found them. The build
+         * reads the config once: its key holds that read's fingerprint, and
+         * what a setup reads of the config files is that same read, so an
+         * edit between the two cannot leave a profile that disagrees with
+         * its key. Resource builds and leaves read the live files.
+         */
+        const configReadContext = (fresh: FreshConfig): Context.Context<unknown> =>
+          Context.add(
+            platformServicesContext,
+            FileSystem.FileSystem,
+            configSnapshotFileSystem(fs, pathSvc, fresh.files),
+          )
 
         interface ProfileEntry {
           /** The declaration key and the last good versions the build decided by. */
@@ -2859,7 +2956,16 @@ export class SessionProfileCache extends Context.Service<
             .map(([key, version]) => [key, version].join("\u0000"))
             .toSorted()
             .join("\u0002")
-        const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
+        // The config files are in the stamp too: an extension reads its own
+        // config keys at setup (`@gent/guard`, `@gent/router`), so an edit
+        // to them builds a new profile for the next turn, while a turn that
+        // holds the old one keeps its lease.
+        const filesStamp = (
+          place: string,
+          scan: ExtensionScan,
+          fresh: FreshConfig,
+        ): ReadonlyArray<string> => [
+          `config:${platform.hash("sha256", fresh.fingerprint)}`,
           ...extensionScanStamp(scan),
           ...Array.from(reloads.get(place) ?? new Map<string, number>())
             .map(([id, count]) => `reload:${id}#${count}`)
@@ -3102,13 +3208,13 @@ export class SessionProfileCache extends Context.Service<
               Option.fromNullishOr(entries.get(key)),
             ).pipe(Option.filter(runsCurrentLastGood))
             if (Option.isSome(aliased)) return aliased.value
-            const files = filesStamp(place, scan)
+            const files = filesStamp(place, scan, fresh)
             const declarations = yield* restore(
               loadRuntimeProfileDeclarations(
                 effectiveInputs(inputsFor(cwd), fresh.config),
                 scan,
                 lastGoodFor(place),
-              ).pipe(Effect.provideContext(platformServicesContext)),
+              ).pipe(Effect.provideContext(configReadContext(fresh))),
             )
             // Profiles of one declaration key differ only by the last good
             // versions their builds decided by; the one whose versions are
@@ -3207,13 +3313,13 @@ export class SessionProfileCache extends Context.Service<
                   const fresh = yield* restore(configService.getFresh(canonicalCwd))
                   const scan = yield* restore(
                     scanRuntimeProfileExtensions(inputsFor(canonicalCwd), graphs).pipe(
-                      Effect.provideContext(platformServicesContext),
+                      Effect.provideContext(configReadContext(fresh)),
                     ),
                   )
                   const list = listKey(
                     place,
                     effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                    filesStamp(place, scan),
+                    filesStamp(place, scan, fresh),
                   )
                   const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
                   recordLastGood(place, entry.profile.resolved)

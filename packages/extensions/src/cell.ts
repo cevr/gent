@@ -44,6 +44,7 @@ import {
   SessionId,
   tool,
   ToolCallId,
+  ToolCallVerdict,
   type ToolCapability,
   ToolResultFailure,
 } from "@gent/core/extensions/api"
@@ -78,6 +79,9 @@ import {
   ToolBindingIdentity,
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
+  type ToolCallGate,
+  ToolCallGateState,
+  type KeptToolCallVerdict,
   type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
@@ -147,6 +151,19 @@ const Operation = Schema.Struct({
   binding: ToolBindingIdentity,
   input: Schema.Json,
   state: CellToolOperationState,
+  /**
+   * The verdict the `toolCall` hooks gave the operation. An operation resumed
+   * after a restart applies it and is not judged again. Absent when no hook
+   * judged it, and on records written before the verdict existed.
+   */
+  verdict: Schema.optional(ToolCallVerdict),
+  /**
+   * Whether the operation passed its gate: `passed` once the user approved
+   * its `Ask`, so a resumed operation does not ask that question again and
+   * its own approval takes the answer the record keeps. Absent reads as
+   * `pending`.
+   */
+  gate: Schema.optional(ToolCallGateState),
 })
 type CellToolOperation = typeof Operation.Type
 const OperationJson = Schema.fromJsonString(Operation)
@@ -201,6 +218,13 @@ interface CellToolOperationStorageService {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) => Effect.Effect<CellToolOperation, StorageError>
+  /** Keep the verdict the hooks gave the operation, its gate `pending`; the first one stays. */
+  readonly judge: (
+    key: CellToolOperationKey,
+    verdict: ToolCallVerdict,
+  ) => Effect.Effect<void, StorageError>
+  /** Keep that the user approved the operation's `Ask`: its gate is `passed`. */
+  readonly pass: (key: CellToolOperationKey) => Effect.Effect<void, StorageError>
   /** The call took its answer and runs on: it waits for nothing now. */
   readonly take: (
     key: CellToolOperationKey,
@@ -500,6 +524,28 @@ const makeToolOperationStorage = Effect.gen(function* () {
       yield* write(key, completed)
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
+  const judge = Effect.fn("CellToolOperationStorage.judge")(function* (
+    key: CellToolOperationKey,
+    verdict: ToolCallVerdict,
+  ) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      const operation = yield* read(key)
+      if (Predicate.isNotUndefined(operation.verdict)) return
+      yield* write(key, { ...operation, verdict, gate: "pending" })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
+  const pass = Effect.fn("CellToolOperationStorage.pass")(function* (key: CellToolOperationKey) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      const operation = yield* read(key)
+      if (Predicate.isUndefined(operation.verdict))
+        return yield* new StorageError({ message: "A cell operation with no verdict cannot pass" })
+      yield* write(key, { ...operation, gate: "passed" })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
   return {
     admit,
     get,
@@ -507,6 +553,8 @@ const makeToolOperationStorage = Effect.gen(function* () {
     listForToolCall,
     suspend,
     resume,
+    judge,
+    pass,
     take,
     complete,
   } satisfies CellToolOperationStorageService
@@ -2114,6 +2162,8 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
   >
   readonly toolCallId: ToolCallId
   readonly binding: Option.Option<ResolvedToolCapability>
+  /** How the call meets the `toolCall` hooks: the verdict it keeps, or where to keep one. */
+  readonly gate?: ToolCallGate
 }) {
   const runner = yield* ToolRunner
   if (
@@ -2134,6 +2184,7 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
         input: params.request.input,
       },
       params.binding,
+      params.gate,
     )
     .pipe(
       // An inner call waits for its answer in place, so it never parks. A
@@ -2283,6 +2334,22 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           },
           toolCallId: admitted.toolCallId,
           binding: Option.some(binding),
+          // A resumed operation keeps the verdict its first run applied and
+          // its gate's state: a passed gate does not ask again.
+          gate: {
+            ...omitUndefined({
+              kept: Option.getOrUndefined(
+                Option.map(
+                  Option.fromUndefinedOr(admitted.verdict),
+                  (verdict): KeptToolCallVerdict => ({
+                    verdict,
+                    gate: admitted.gate ?? "pending",
+                  }),
+                ),
+              ),
+            }),
+            onPassed: storage.pass(key),
+          },
         }).pipe(
           Effect.provideService(CurrentCellToolOperation, key),
           Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
@@ -2410,6 +2477,13 @@ export const makeCellToolHost = (
               request,
               toolCallId: admission.operation.toolCallId,
               binding: captured,
+              // The verdict and an approval of its `Ask` are kept before the
+              // call goes on, so a restart resumes it without a second
+              // judgement or question; a write that fails fails the call.
+              gate: {
+                onVerdict: (verdict) => storage.judge(key, verdict),
+                onPassed: storage.pass(key),
+              },
             }).pipe(
               Effect.provideService(CurrentCellToolOperation, key),
               Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
@@ -2877,11 +2951,21 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
     return yield* new AgentLoopError({ message: "Cell execution requires a recorded turn call" })
   }
   const cell = call.value
+  // The cell's inner calls run as the turn's agent, as the cell itself does.
+  const agentName = Option.flatMap(yield* Effect.serviceOption(ExtensionContext), (ctx) =>
+    Option.fromUndefinedOr(ctx.agentName),
+  )
   const params = {
     cell,
     toolBindings: call.value.toolBindings,
     catalog: yield* buildCellCatalog(call.value.toolBindings),
-    profile: profile.value,
+    profile: {
+      ...profile.value,
+      turnHostCtx: {
+        ...profile.value.turnHostCtx,
+        ...omitUndefined({ agentName: Option.getOrUndefined(agentName) }),
+      },
+    },
     ledger: ledger.value,
   }
   yield* requireCellHostBranch(params)
