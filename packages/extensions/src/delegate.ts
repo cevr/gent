@@ -84,8 +84,8 @@ export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
 
 /**
  * The one agent every child runs as. A child inherits neither its caller's
- * agent nor the session's model, only the caller run's path bound
- * (`session.create` keeps a child inside its parent's paths). Its model and
+ * agent nor the session's model, only the caller run's bound (its tools and
+ * paths never exceed its parent run's). Its model and
  * effort come from this definition, reshaped by `agents.delegate` in
  * `.gent/config.json` (user, then project), and a call's own `overrides`
  * win over both; their `tools` and `paths` only narrow it. That config entry is where a pairing such as

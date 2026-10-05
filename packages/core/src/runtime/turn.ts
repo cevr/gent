@@ -94,6 +94,7 @@ import {
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   provideExtensionLeaf,
+  resolveParentBound,
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
@@ -1526,12 +1527,18 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
+  // The run's bound: its own and every parent run's, so a child never runs
+  // wider than its parent.
+  const parentBound = yield* Option.match(session, {
+    onNone: () => Effect.succeed(noRunBound),
+    onSome: (value) => resolveParentBound(value, hostCtx.cwd),
+  })
   const dispatchAgent = bindSessionAgent(definition.value, {
     overrides: Option.flatMap(admission, (value) =>
       Option.fromUndefinedOr(value.runSpec?.overrides),
     ),
     cwd: hostCtx.cwd,
-    parent: noRunBound,
+    parent: parentBound,
   })
   const interactive = params.interactive
 

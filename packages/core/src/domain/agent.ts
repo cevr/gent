@@ -464,7 +464,7 @@ export interface PathScope {
  * run's, and those of every parent run it was spawned under. Not a field of
  * any definition: a run only narrows its agent, and a child its parent.
  */
-interface RunBound {
+export interface RunBound {
   readonly tools: ReadonlyArray<ReadonlyArray<string>>
   readonly paths: ReadonlyArray<PathScope>
 }

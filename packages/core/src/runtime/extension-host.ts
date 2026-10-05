@@ -100,6 +100,7 @@ import {
   DEFAULT_AGENT_NAME,
   noRunBound,
   resolveSessionAgent,
+  type RunBound,
 } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
 import type {
@@ -3228,6 +3229,84 @@ export class SessionProfileCache extends Context.Service<
     )
 }
 
+// ── session run agent ───────────────────────────────────────────────────────
+
+/** What resolution needs of a session: its cwd, its admission, and its parent edge. */
+type RunSession = Pick<Session, "id" | "threadId" | "parentSessionId" | "cwd" | "admission">
+
+/**
+ * The agent `session` runs as, bound by its run and by every parent run it
+ * was spawned under (`bindSessionAgent`), resolved now: the roster and
+ * config as they are, links left to the file tools at each call. None when
+ * its own agent is gone from the roster. Its own config reads leniently, as
+ * the turn's own `getFresh` already refuses to run on a file that does not
+ * load.
+ */
+const resolveRunAgent = Effect.fn("SessionRunAgent.resolveRunAgent")(function* (
+  session: RunSession,
+  launchCwd: string,
+) {
+  const cwd = session.cwd ?? launchCwd
+  const parent = yield* resolveParentBound(session, launchCwd)
+  const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
+  const config = yield* (yield* ConfigService).get(cwd)
+  const overrides = Option.fromUndefinedOr(session.admission?.runSpec?.overrides)
+  return Option.map(
+    resolveSessionAgent({
+      agents: profile.resolved.agents.values(),
+      configAgents: Option.fromUndefinedOr(config.agents),
+      name: session.admission?.agent ?? DEFAULT_AGENT_NAME,
+      overrides,
+    }),
+    (definition) => bindSessionAgent(definition, { overrides, cwd, parent }),
+  )
+})
+
+/**
+ * The bound a session's run inherits: none for a root session or a
+ * handoff (`isSpawnedSession`); for a spawned session, its parent run's
+ * whole bound (`resolveSessionBound`).
+ */
+export const resolveParentBound: (
+  session: Pick<Session, "id" | "threadId" | "parentSessionId">,
+  launchCwd: string,
+) => Effect.Effect<RunBound, StorageError, SessionStorage | SessionProfileCache | ConfigService> =
+  Effect.fn("SessionRunAgent.resolveParentBound")(function* (session, launchCwd) {
+    if (!isSpawnedSession(session) || Predicate.isUndefined(session.parentSessionId)) {
+      return noRunBound
+    }
+    return yield* resolveSessionBound(session.parentSessionId, launchCwd)
+  })
+
+/**
+ * The whole bound of the run of session `sessionId`, as its children
+ * inherit it. A row that cannot be read or an agent gone from its roster
+ * bounds nothing.
+ */
+export const resolveSessionBound: (
+  sessionId: SessionId,
+  launchCwd: string,
+) => Effect.Effect<RunBound, StorageError, SessionStorage | SessionProfileCache | ConfigService> =
+  Effect.fn("SessionRunAgent.resolveSessionBound")(function* (sessionId, launchCwd) {
+    const parent = yield* (yield* SessionStorage).getSession(sessionId)
+    if (Predicate.isUndefined(parent)) return noRunBound
+    const cwd = parent.cwd ?? launchCwd
+    const config = yield* (yield* ConfigService).get(cwd)
+    const grandparent = yield* resolveParentBound(parent, launchCwd)
+    const profile = yield* (yield* SessionProfileCache).resolve(cwd).pipe(Effect.scoped)
+    const overrides = Option.fromUndefinedOr(parent.admission?.runSpec?.overrides)
+    const definition = resolveSessionAgent({
+      agents: profile.resolved.agents.values(),
+      configAgents: Option.fromUndefinedOr(config.agents),
+      name: parent.admission?.agent ?? DEFAULT_AGENT_NAME,
+      overrides,
+    })
+    return Option.match(definition, {
+      onNone: () => noRunBound,
+      onSome: (agent) => bindSessionAgent(agent, { overrides, cwd, parent: grandparent }).bound,
+    })
+  })
+
 // ── approval-service ────────────────────────────────────────────────────────
 
 /**
@@ -3685,25 +3764,17 @@ export const makeExtensionHostContextProvider = (
         getAgent: (sessionId) =>
           sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
             Effect.flatMap((session) => {
-              const cwd = session?.cwd ?? environment.cwd
-              const admission = session?.admission
+              // A session that cannot be read runs as the default agent, unbound by any parent.
+              const subject = session ?? { id: sessionId ?? runInfo.sessionId }
               return profiles((cache) =>
                 configs((configService) =>
-                  Effect.gen(function* () {
-                    const profile = yield* cache.resolve(cwd)
-                    const config = yield* configService.get(cwd)
-                    const overrides = Option.fromUndefinedOr(admission?.runSpec?.overrides)
-                    return Option.map(
-                      resolveSessionAgent({
-                        agents: profile.resolved.agents.values(),
-                        configAgents: Option.fromUndefinedOr(config.agents),
-                        name: admission?.agent ?? DEFAULT_AGENT_NAME,
-                        overrides,
-                      }),
-                      (definition) =>
-                        bindSessionAgent(definition, { overrides, cwd, parent: noRunBound }),
-                    )
-                  }).pipe(Effect.scoped),
+                  sessions((sessionStorage) =>
+                    resolveRunAgent(subject, environment.cwd).pipe(
+                      Effect.provideService(SessionProfileCache, cache),
+                      Effect.provideService(ConfigService, configService),
+                      Effect.provideService(SessionStorage, sessionStorage),
+                    ),
+                  ),
                 ),
               )
             }),
