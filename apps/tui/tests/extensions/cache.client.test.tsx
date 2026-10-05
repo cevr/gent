@@ -1652,6 +1652,32 @@ describe("cache scan refresh", () => {
     expect(refreshAfter(history.envelopes.slice(0, -1))).toEqual(Option.some(MINUTE + SECOND))
   })
 
+  test("a request on another account restarts the clock: its cache is the one it wrote", () => {
+    const receipt = (slot: string, signedInAt: number): CredentialReceipt => ({
+      provider: ProviderId.make("anthropic"),
+      slot: CredentialSlot.make(slot),
+      signedInAt,
+    })
+    const history = makeHistory()
+    history.input(0, "t1")
+    history.step({
+      start: SECOND,
+      end: 10 * SECOND,
+      turn: "t1",
+      usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+      credential: receipt("default", 1),
+    })
+    history.input(MINUTE, "t2")
+    history.step({
+      start: MINUTE + SECOND,
+      end: 2 * MINUTE,
+      turn: "t2",
+      usage: { inputTokens: 31_000, cacheWriteTokens: 31_000 },
+      credential: receipt("personal", 2),
+    })
+    expect(refreshAfter(history.envelopes)).toEqual(Option.some(MINUTE + SECOND))
+  })
+
   test("a compaction clears the clock until the next request goes out", () => {
     const history = cachedFirstStep()
     history.compaction(MINUTE)
