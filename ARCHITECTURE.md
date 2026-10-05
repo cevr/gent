@@ -2369,7 +2369,67 @@ when the server answers 400, 404, 405, 406, 415, 422 or 501 (never on 401 or
 403, which SSE would refuse too). Strings expand `${NAME}` and
 `${NAME:-default}`, and a value is taken literally; an entry whose variable is
 unset is skipped with a warning. A stdio `cwd` resolves against the session's
-cwd.
+cwd, after its variables expand.
+
+A `plugin` entry runs a server that another tool's plugin ships, such as
+Codex's computer use, and an update of the plugin needs no edit:
+
+```json
+{
+  "mcpServers": {
+    "computer-use": {
+      "plugin": "~/.codex/plugins/cache/openai-bundled/unified-computer-use",
+      "server": "cua_repl"
+    }
+  }
+}
+```
+
+Each setup reads the entry `server` from the `.mcp.json` in the `plugin`
+directory. When that directory has no `.mcp.json`, the entry reads the
+version directory that Codex runs (`active_plugin_version` in Codex's
+`core-plugin-common/src/installed.rs`): `local` when it is there, else the
+newest subdirectory by semantic version (by text when a name is not one).
+Only a name of ASCII letters, digits, `.`, `+`, `_` and `-` counts. The file's
+servers are its `mcpServers` object, else its top-level object, as Codex and
+Claude Code read them. `plugin` expands `${NAME}`, a leading `~` is the home
+directory, and a relative path resolves against the session's cwd. The named
+server is a `command` or `url` entry and runs as one, with the rules of the
+plugin's own tool: `${PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_ROOT}` expand to the
+plugin root (the directory of the `.mcp.json`), and a stdio server gets both
+in its environment; a stdio server runs in its `cwd` resolved against the
+root, else in the root; and a `command` that starts with `./` or `../`
+resolves against that directory. The `enabled` and `timeoutMs` of the `plugin`
+entry apply. The entry keys with its plugin root, so a new version lists
+again. A missing directory, no `.mcp.json`, a file that is not a JSON object,
+no server of that name, or a server entry that does not decode makes the
+entry `misconfigured` with the reason, and the other servers still run. gent
+reads a plugin only when an entry names it.
+
+Computer use can click and type in any app, so its tools must ask before they
+run. A `@gent/guard` rule (see `docs/extensions.md`) in `~/.gent/config.json`
+asks before each call of the server's tools, from the model or from the cell;
+rules come before the pass for read-only tools:
+
+```json
+{ "guard": { "rules": [{ "tool": "mcp.computer-use.*", "effect": "ask" }] } }
+```
+
+An MCP image reaches the model as an image only on a native call. Through the
+cell, the model reads the cell's text, which names the image's `path`. An
+agent whose `tools` hold the server's tools and not `cell` calls them
+natively, so it sees each screenshot:
+
+```json
+{
+  "agents": {
+    "computer": {
+      "description": "Uses the Mac's apps through computer use",
+      "tools": ["mcp.computer-use.*", "read"]
+    }
+  }
+}
+```
 
 A `url` entry without its own `Authorization` header signs in with OAuth, all
 inside the extension. `/mcp login <server>` runs the SDK's `auth()` with a
@@ -2462,7 +2522,7 @@ The read-only `mcp.status` host tool and the `/mcp` slash command report each
 server's transport, tool count, connection, and health: `healthy` (listed or
 connected), `expired` (the server refused the credential; the reason names
 `/mcp login`), `logged-out` (the server refused an OAuth entry that has no
-stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, or names an unset variable),
+stored login; the reason names `/mcp login`), `misconfigured` (the entry cannot run: it does not decode, names an unset variable, or names a plugin server that cannot be read),
 `degraded` (a connect, list or call failed in the transport), or `unknown`
 (read from the cache, not yet connected). With no server configured, only
 `/mcp` is registered, and it says where to add one.

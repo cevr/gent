@@ -710,7 +710,11 @@ It judges a call in this order, and the first answer wins:
    also matches `git push`). The last rule that matches a subject decides
    that subject, and the strictest answer wins: a deny or an ask on any
    subject decides the call, and an allow decides only when every subject is
-   allowed. A subject no rule matches leaves the call to the next step.
+   allowed. A subject no rule matches leaves the call to the next step. A
+   rule without `match` takes every call of its tools: `{ "tool":
+"mcp.computer-use.*", "effect": "ask" }` asks before each call of the
+   `computer-use` MCP server's tools (the MCP section of `ARCHITECTURE.md`
+   shows that server's `plugin` entry).
 2. A `readonly` tool runs.
 3. With a `policy`, a classifier (`ExtensionContext.Models.decide`) reads the
    policy and the call and answers allow, ask or deny. `model` names one of

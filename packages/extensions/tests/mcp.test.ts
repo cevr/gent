@@ -512,7 +512,7 @@ describe("mcp config", () => {
         expect(report).toContain("- user (stdio): unknown, 5 tools, not connected")
         for (const name of ["switched", "typo"]) {
           expect(report).toContain(
-            `- ${name} (auto): misconfigured, 0 tools, not connected\n  config: Missing key at ["command"]; Missing key at ["url"]\n`,
+            `- ${name} (auto): misconfigured, 0 tools, not connected\n  config: Missing key at ["command"]; Missing key at ["url"]; Missing key at ["plugin"]\n`,
           )
         }
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
@@ -837,6 +837,193 @@ describe("mcp config", () => {
         expect(toolIds(contributions).every((id) => id.startsWith("mcp.fixture."))).toBe(true)
         expect(toolIds(contributions)).toHaveLength(5)
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+})
+
+// ── plugin servers ──────────────────────────────────────────────────────────
+
+/**
+ * A plugin cache as Codex lays it out, `<plugin>/<version>/.mcp.json`, in a
+ * scratch home. `writeVersion` writes one version directory: the fixture
+ * server, a `bin/start` script that runs it, and a `.mcp.json` whose
+ * `cua_repl` entry names both by paths relative to that directory and the
+ * plugin-root variables. A start logs its arguments to `starts.log` there.
+ */
+const makePluginCache = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const fixture = yield* makeFixture
+  const home = path.join(fixture.directory, "home")
+  const plugin = path.join(home, ".codex/plugins/cache/openai-bundled/unified-computer-use")
+  const source = yield* fs.readFileString(fixture.server)
+  const writeVersion = (version: string) =>
+    Effect.gen(function* () {
+      const root = path.join(plugin, version)
+      yield* fs.makeDirectory(path.join(root, "bin"), { recursive: true })
+      yield* fs.writeFileString(path.join(root, "server.cjs"), source)
+      yield* fs.writeFileString(
+        path.join(root, "bin", "start"),
+        `#!/bin/sh\nexec "${process.execPath}" "$@"\n`,
+      )
+      yield* fs.chmod(path.join(root, "bin", "start"), 0o755)
+      yield* fs.writeFileString(
+        path.join(root, ".mcp.json"),
+        encodeJson({
+          mcpServers: {
+            other: { command: "/nonexistent/gent-probe-x" },
+            cua_repl: {
+              type: "stdio",
+              command: "./bin/start",
+              args: ["server.cjs", "${CLAUDE_PLUGIN_ROOT}"],
+              env: { MCP_FIXTURE_LOG: "${PLUGIN_ROOT}/starts.log" },
+            },
+          },
+        }),
+      )
+      return root
+    })
+  /** The arguments of each start of the server in `root`. */
+  const startsIn = (root: string) =>
+    fs.readFileString(path.join(root, "starts.log")).pipe(
+      Effect.map((text) => text.split("\n").filter((line) => line !== "")),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    )
+  return { fixture, home, plugin, writeVersion, startsIn }
+})
+
+describe("mcp plugin servers", () => {
+  it.scopedLive(
+    "a plugin entry runs its server from the newest version directory, with paths relative to it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cache = yield* makePluginCache
+        const older = yield* cache.writeVersion("1.2.0")
+        const newest = yield* cache.writeVersion("1.10.0")
+        // Neither is a version: a name Codex refuses, and a file.
+        yield* fs.makeDirectory(path.join(cache.plugin, "not a version"))
+        yield* fs.writeFileString(path.join(cache.plugin, "9.9.9"), "not a directory")
+        yield* fs.makeDirectory(path.join(cache.home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(cache.home, ".gent", "mcp.json"),
+          encodeJson({
+            mcpServers: {
+              "computer-use": {
+                plugin: "~/.codex/plugins/cache/openai-bundled/unified-computer-use",
+                server: "cua_repl",
+              },
+            },
+          }),
+        )
+        const setup = collectTestContributions(McpExtension.setup, {
+          home: cache.home,
+          cwd: cache.fixture.directory,
+        })
+        expect(toolIds(yield* setup)).toContain("mcp.computer-use.echo")
+        // `1.10.0` is newer than `1.2.0` as a version, though not as text.
+        expect(yield* cache.startsIn(newest)).toEqual([encodeJson([newest])])
+        expect(yield* cache.startsIn(older)).toEqual([])
+        // An update installs a new version beside the old ones: the next setup runs it.
+        const updated = yield* cache.writeVersion("1.11.0")
+        expect(toolIds(yield* setup)).toContain("mcp.computer-use.echo")
+        expect(yield* cache.startsIn(updated)).toEqual([encodeJson([updated])])
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a local version wins over numbered ones, and a plugin directory that holds .mcp.json is its own root",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cache = yield* makePluginCache
+        const local = yield* cache.writeVersion("local")
+        const numbered = yield* cache.writeVersion("2.0.0")
+        // A Claude Code plugin: `.mcp.json` at its root, a flat map of servers,
+        // whose `cwd` names the fixture server's directory through the root.
+        const claude = path.join(cache.fixture.directory, "claude-plugin")
+        yield* fs.makeDirectory(path.join(claude, "1.0.0"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(claude, ".mcp.json"),
+          encodeJson({
+            tools: {
+              command: process.execPath,
+              args: ["server.cjs"],
+              env: { MCP_FIXTURE_LOG: "${CLAUDE_PLUGIN_ROOT}/starts.log" },
+              cwd: "${CLAUDE_PLUGIN_ROOT}/..",
+            },
+          }),
+        )
+        const extension = McpServers("@test/mcp-plugin-roots", {
+          codex: { plugin: cache.plugin, server: "cua_repl" },
+          claude: { plugin: claude, server: "tools" },
+        })
+        const ids = toolIds(
+          yield* collectTestContributions(extension.setup, {
+            home: cache.home,
+            cwd: cache.fixture.directory,
+          }),
+        )
+        expect(ids).toContain("mcp.codex.echo")
+        expect(ids).toContain("mcp.claude.echo")
+        expect(yield* cache.startsIn(local)).toHaveLength(1)
+        expect(yield* cache.startsIn(numbered)).toEqual([])
+        expect(yield* cache.startsIn(claude)).toHaveLength(1)
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(platformLayer)),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a plugin entry that cannot run is misconfigured with why, and the other servers still run",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cache = yield* makePluginCache
+        yield* cache.writeVersion("1.0.0")
+        const empty = path.join(cache.fixture.directory, "empty-plugin")
+        yield* fs.makeDirectory(empty)
+        const broken = path.join(cache.fixture.directory, "broken-plugin")
+        yield* fs.makeDirectory(broken)
+        yield* fs.writeFileString(path.join(broken, ".mcp.json"), "{ not json")
+        const { result } = yield* runMcpCell(
+          McpServers("@test/mcp-plugin-errors", {
+            broken: { plugin: broken, server: "s" },
+            empty: { plugin: empty, server: "s" },
+            fixture: cache.fixture.stdio(),
+            gone: { plugin: "/nonexistent/gent-probe-x", server: "s" },
+            unnamed: { plugin: cache.plugin, server: "missing" },
+          }),
+          "JSON.stringify(await tools.mcp.status())",
+        )
+        expect(result).toMatchObject({ name: "cell", isFailure: false })
+        const status = yield* cellDisplay(result, StatusDisplay)
+        const manifest = path.join(cache.plugin, "1.0.0", ".mcp.json")
+        expect(
+          status.servers.map((server) => [server.name, server.health, server.reason ?? ""]),
+        ).toEqual([
+          [
+            "broken",
+            "misconfigured",
+            `plugin: ${path.join(broken, ".mcp.json")} is not a JSON object`,
+          ],
+          [
+            "empty",
+            "misconfigured",
+            `plugin: ${empty} holds no .mcp.json and no version directory`,
+          ],
+          ["fixture", "healthy", ""],
+          ["gone", "misconfigured", "plugin: /nonexistent/gent-probe-x cannot be read"],
+          [
+            "unnamed",
+            "misconfigured",
+            `plugin: ${manifest} has no server "missing" (it has other, cua_repl)`,
+          ],
+        ])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
     30_000,
   )
 })
