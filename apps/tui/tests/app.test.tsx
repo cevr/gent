@@ -91,6 +91,7 @@ import {
   renderFrame,
   renderScoped,
   TerminalOutput,
+  terminalText,
   snapshotNaming,
   testPlatformLayer,
 } from "./render-harness-boundary"
@@ -7658,5 +7659,82 @@ export default defineClientExtension("@test/there", {
       )
       expect(sentMessages).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("native history across a turn", () => {
+  // A long answer leaves history holding its top rows at idle. A turn grows
+  // the footer by its activity row and gives the rows back when it ends. A
+  // turn the server timed under half a second must still put its turn line
+  // there: rows left blank inside the cut answer write all of history again.
+  it.scopedLive("a turn under half a second writes history only once", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-short-turn")
+      const branchId = BranchId.make("branch-short-turn")
+      const feed = yield* Queue.unbounded<EventEnvelope>()
+      let nextId = 0
+      const push = (event: EventEnvelope["event"]) => {
+        nextId += 1
+        Queue.offerUnsafe(
+          feed,
+          EventEnvelope.make({ id: EventId.make(nextId), createdAt: nextId, event }),
+        )
+      }
+      const message = (id: string, role: "user" | "assistant", text: string) =>
+        AgentEvent.cases.MessageReceived.make({
+          message: StoredMessage.cases.regular.make({
+            id: MessageId.make(id),
+            sessionId,
+            branchId,
+            role,
+            parts: [Prompt.textPart({ text })],
+            createdAt: dateFromMillis(nextId + 1),
+          }),
+        })
+      push(
+        AgentEvent.cases.StreamSynchronized.make({
+          sessionId,
+          branchId,
+          lastEventId: EventId.make(0),
+        }),
+      )
+      push(message("ask", "user", "LONG-ASK"))
+      push(
+        message(
+          "long",
+          "assistant",
+          Array.from({ length: 30 }, (_, index) => `LONG line ${index + 1}`).join("\n\n"),
+        ),
+      )
+      const { setup } = yield* mountApp({
+        client: { session: { events: () => Stream.fromQueue(feed) } },
+        width: 60,
+        height: 20,
+        initialSession: sessionNamed(sessionId, branchId, "Short turn"),
+      })
+      const historyHasTopOfAnswer = () => terminalText(setup).includes("LONG line 1")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("LONG line 30") && historyHasTopOfAnswer(),
+        "the answer's top rows in history",
+        6_000,
+      )
+      const resets: string[] = []
+      const reset = setup.renderer.resetSplitFooterForReplay.bind(setup.renderer)
+      setup.renderer.resetSplitFooterForReplay = (options) => {
+        resets.push(`clearSavedLines=${String(options?.clearSavedLines === true)}`)
+        reset(options)
+      }
+      push(message("probe", "user", "PROBE-ASK"))
+      push(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+      yield* waitForFrame(setup, (frame) => frame.includes("esc cancel"), "the activity row")
+      push(message("probe-answer", "assistant", "PROBE-ANSWER"))
+      yield* waitForFrame(setup, (frame) => frame.includes("PROBE-ANSWER"), "the answer")
+      push(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 40 }))
+      yield* waitForFrame(setup, (frame) => !frame.includes("esc cancel"), "the turn's end")
+      // Blank rows inside an item replay history once they stand 300 ms.
+      yield* waitForFrame(setup, () => resets.length > 0, "a replay", 1_000).pipe(Effect.ignore)
+      expect(resets).toEqual([])
+    }).pipe(Effect.timeout("15 seconds")),
   )
 })
