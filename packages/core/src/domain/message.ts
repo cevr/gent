@@ -258,7 +258,7 @@ export type RuntimeUserMessageType = typeof RuntimeUserMessageType.Type
 const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
 
 /** The custom type of a turn's model-call budget notice. */
-export const MODEL_ATTEMPTS_MESSAGE_TYPE: RuntimeUserMessageType = "model-attempts"
+export const MODEL_ATTEMPTS_MESSAGE_TYPE = "model-attempts" satisfies RuntimeUserMessageType
 
 // Message Metadata — extension-authored envelope for hidden/custom messages
 

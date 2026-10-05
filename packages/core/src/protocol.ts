@@ -58,7 +58,12 @@ export {
   promptCacheTtlMsFor,
   ProviderId,
 } from "./domain/agent.js"
-export { MODEL_ATTEMPTS_MESSAGE_TYPE, QueueEntryInfo, QueueSnapshot } from "./domain/message.js"
+export {
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
+  QueueEntryInfo,
+  QueueSnapshot,
+  RuntimeUserMessageType,
+} from "./domain/message.js"
 export {
   initialSessionMetrics,
   type ModelContextMetrics,

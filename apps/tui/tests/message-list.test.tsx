@@ -39,6 +39,7 @@ import {
   MODEL_ATTEMPTS_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
   OutputCut,
+  RuntimeUserMessageType,
   SessionId,
   ToolCallId,
   AgentEvent,
@@ -1302,6 +1303,36 @@ describe("rows that fold until full detail is on", () => {
       expect(frame).not.toContain("MODEL-NOTICE-BODY")
     }),
   )
+
+  // Each runtime kind states its row: a notice folds to its line, the rest
+  // draw by lane as the `»` row headed by the kind.
+  const runtimeFirstRows = {
+    "context-window": "  ⇣ new context window",
+    "model-change": "  ⇄ model changed",
+    "model-attempts": "  ⧗ model-call budget near its limit",
+    continuation: "  » continuation",
+    "max-steps": "  » max-steps",
+    steering: "  » steering",
+  } satisfies Record<RuntimeUserMessageType, string>
+  for (const kind of RuntimeUserMessageType.literals) {
+    it.scopedLive(`the runtime's ${kind} line draws its own row`, () =>
+      Effect.gen(function* () {
+        const line: ListMessage = {
+          ...compactionMessage(),
+          id: `${kind}:b1:m5`,
+          content: "RUNTIME-LINE-BODY",
+          metadata: { customType: kind },
+        }
+        const setup = yield* renderScoped(
+          () => <MessageList items={[line]} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
+          { width: 100, height: 10 },
+        )
+        const lines = renderFrame(setup).split("\n")
+        const first = runtimeFirstRows[kind]
+        expect(lines.some((row) => row.startsWith(first))).toBe(true)
+      }),
+    )
+  }
 })
 
 /**

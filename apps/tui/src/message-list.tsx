@@ -117,6 +117,7 @@ import {
   MODEL_CHANGE_MESSAGE_TYPE,
   ModelAttempts,
   modelAttemptsLeft,
+  RuntimeUserMessageType,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -586,18 +587,36 @@ export const isMessageItem = Predicate.or(
   Predicate.isTagged("interjection-message"),
 )
 
-/** The runtime's own user-role messages collapse to one line; an extension draws its own kinds. */
-const runtimeRows = new Map<string, MessageRenderer>([
-  [
-    CONTEXT_WINDOW_MESSAGE_TYPE,
-    (props) => <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />,
-  ],
-  [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow glyph="⇄" label="model changed" />],
-  [
-    MODEL_ATTEMPTS_MESSAGE_TYPE,
-    (props) => <BudgetNoticeRow attempts={decodeModelAttempts(props.details)} />,
-  ],
-])
+/**
+ * The row of each of the runtime's own user-role kinds: a notice collapses to
+ * one line, and `lane` draws by its lane (a `continuation` is the `»` row). The
+ * record names every kind, so a new kind does not compile until it has a row.
+ * An extension draws its own kinds.
+ */
+const runtimeRows = {
+  [CONTEXT_WINDOW_MESSAGE_TYPE]: (props) => (
+    <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />
+  ),
+  [MODEL_CHANGE_MESSAGE_TYPE]: () => <CollapsedRow glyph="⇄" label="model changed" />,
+  [MODEL_ATTEMPTS_MESSAGE_TYPE]: (props) => (
+    <BudgetNoticeRow attempts={decodeModelAttempts(props.details)} />
+  ),
+  continuation: "lane",
+  "max-steps": "lane",
+  steering: "lane",
+} satisfies Record<RuntimeUserMessageType, MessageRenderer | "lane">
+
+const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
+
+/** The runtime's own row for `customType`, when the runtime names the kind and does not leave it to the lane. */
+const runtimeRow = (customType: string): Option.Option<MessageRenderer> =>
+  Option.liftPredicate(customType, isRuntimeUserMessageType).pipe(
+    Option.flatMap((kind): Option.Option<MessageRenderer> => {
+      const row = runtimeRows[kind]
+      if (row === "lane") return Option.none()
+      return Option.some(row)
+    }),
+  )
 
 const decodeModelAttempts = Schema.decodeUnknownOption(ModelAttempts)
 
@@ -682,7 +701,7 @@ function UserMessage(
             Option.fromUndefinedOr(ext.messageRenderers().get(customType)),
             (entry) => entry.component,
           ),
-          () => Option.fromUndefinedOr(runtimeRows.get(customType)),
+          () => runtimeRow(customType),
         ),
       ),
     )

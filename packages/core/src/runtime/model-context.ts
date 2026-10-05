@@ -687,10 +687,10 @@ export const toPrompt = (
 // ── model-context-window ────────────────────────────────────────────────────
 
 /** Custom type of the durable marker that starts a context window. */
-export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-window"
+export const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window" satisfies RuntimeUserMessageType
 
 /** The durable line the loop writes when a branch's model changes between steps. */
-export const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
+export const MODEL_CHANGE_MESSAGE_TYPE = "model-change" satisfies RuntimeUserMessageType
 
 /** What a model-change notice announced; the next boundary compares against it. */
 const ModelChangeDetails = Schema.TaggedStruct(MODEL_CHANGE_MESSAGE_TYPE, {
