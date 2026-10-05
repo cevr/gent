@@ -25,6 +25,14 @@
  *   `~/.gent`. A test that needs a specific data directory still sets its
  *   own: a home it passes, or `GENT_DATA_DIR` through its config provider or
  *   a child process's environment.
+ * - `XDG_CACHE_HOME` names one directory of the checkout,
+ *   `node_modules/.cache/gent-test`, whatever the shell set, and it outlives
+ *   every run. A gent that a test starts from source (the e2e fixtures, the
+ *   headless CLI tests) gets a temp home of its own, and the source preload
+ *   keeps its JSX transforms under `$XDG_CACHE_HOME`, else under that home:
+ *   a start that finds none runs Babel on every `.tsx` file, about 5
+ *   CPU-seconds against 1.5 with them. On a loaded machine that start missed
+ *   its bound. The cache is content-addressed, so the starts share it.
  * - `GENT_MODEL_CATALOG_URL` names a closed local port: no test reaches
  *   models.dev, whatever root it builds.
  * - No test reaches the network. A request or connection to a host other
@@ -56,6 +64,7 @@ import { Socket } from "node:net"
 import * as os from "node:os"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Array as Arr, Option, Predicate, References, Schema } from "effect"
 
 /** Longer than every inner `Effect.timeout` a test sets without its own bun timeout. */
@@ -74,6 +83,10 @@ const testHome = mkdtempSync(join(tmpdir(), "gent-test-home-"))
 Bun.env["HOME"] = testHome
 // oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
 Reflect.deleteProperty(Bun.env, "GENT_DATA_DIR")
+// oxlint-disable-next-line effect/noGlobals -- the preload sets the test process's environment before any Effect runtime
+Bun.env["XDG_CACHE_HOME"] = fileURLToPath(
+  new URL("../../../node_modules/.cache/gent-test", import.meta.url),
+)
 // A server a test starts without the fixture client (an SDK `Gent.server`, a
 // child process) fetches the models.dev catalog from a closed local port: its
 // first read fails at once, and the catalog reports itself unavailable.
