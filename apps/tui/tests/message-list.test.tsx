@@ -3881,8 +3881,9 @@ describe("native transcript rows in history", () => {
     15_000,
   )
 
-  // White at 12% over the dark terminal's `#1d1f21`.
-  const SURFACE = "56,58,60"
+  // fx's panel on the dark terminal's `#1d1f21`: white at 12% (#383a3c),
+  // faded until its muted header reads (#343638).
+  const SURFACE = "52,54,56"
   for (const width of [100, 60, 40]) {
     it.scopedLive(
       `the reader's surface reaches history as drawn, and again after a replay, at ${width} columns`,
