@@ -20,7 +20,6 @@ import {
   decoration,
   defineClientExtension,
   type ExtensionAgentDetail,
-  fitWidth,
   formatAge,
   formatCost,
   formatDuration,
@@ -37,7 +36,9 @@ import {
   sessionQuery,
   STATUS_YIELD,
   statusLabelContribution,
+  type TextRun,
   textWidth,
+  ToneRuns,
   TrayFrame,
   truncate,
   truncatePath,
@@ -853,18 +854,11 @@ const rightColumn = (row: AgentRowEntry, now: number, rowWidth: number): string 
 }
 
 /**
- * One pane row in runs, each drawn in its own colour: the lead (the current
- * marker and the tree indent), the status glyph, the name with the space
- * before it, the rest of the left text (` · <doing>` and the padding), and
- * the right column. An armed row is its delete prompt alone, in `lead`.
+ * How a pane row's run is drawn: the status glyph, the agent name, or muted
+ * (the current marker and the tree indent, ` · <doing>`, the padding, the
+ * right column, and an armed row's delete prompt).
  */
-interface RowLine {
-  readonly lead: string
-  readonly glyph: string
-  readonly name: string
-  readonly rest: string
-  readonly right: string
-}
+type RowTone = "glyph" | "name" | "muted"
 
 /** What a second Ctrl+X deletes: the row's session, or each session of its thread. */
 const deletePrompt = (row: AgentRowEntry): string => {
@@ -970,10 +964,7 @@ const progressLabel = (value: ExtensionAgentDetail): string => {
  */
 type DetailTone = "name" | "glyph" | "plain" | "muted" | "path"
 
-interface DetailRun {
-  readonly text: string
-  readonly tone: DetailTone
-}
+type DetailRun = TextRun<DetailTone>
 
 /**
  * The selected row's details, one array of runs per line: its name; its
@@ -1046,21 +1037,17 @@ const taskLine = (prompt: string): string =>
   ).trim()
 
 /**
- * The runs of one details line cut to `width` columns, the cut landing on
- * the last run reached. A path keeps its tail, where its name is.
+ * The runs of one details line cut to `width` columns. A path, alone on its
+ * line, keeps its tail, where its name is.
  */
-const fitRuns = (runs: ReadonlyArray<DetailRun>, width: number): ReadonlyArray<DetailRun> => {
-  const fitted: Array<DetailRun> = []
-  let left = width
-  for (const run of runs) {
-    if (left <= 0) break
-    let text = truncate(run.text, left)
-    if (run.tone === "path") text = truncate(truncatePath(run.text, left), left)
-    fitted.push({ ...run, text })
-    left -= textWidth(text)
-  }
-  return fitted
-}
+const fitRuns = (runs: ReadonlyArray<DetailRun>, width: number): ReadonlyArray<DetailRun> =>
+  truncateRuns(
+    runs.map((run) => {
+      if (run.tone !== "path") return run
+      return { ...run, text: truncatePath(run.text, width) }
+    }),
+    width,
+  )
 
 export function AgentsPane(props: {
   open: boolean
@@ -1154,32 +1141,30 @@ export function AgentsPane(props: {
    * right column (the side-thread mark, then the run time or age) sits on
    * the right edge.
    */
-  const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
-    if (Option.contains(armed(), row.sessionId)) {
-      return { lead: deletePrompt(row), glyph: "", name: "", rest: "", right: "" }
-    }
+  const rowRuns = (row: AgentRowEntry, selected: boolean): ReadonlyArray<TextRun<RowTone>> => {
+    if (Option.contains(armed(), row.sessionId)) return [{ text: deletePrompt(row), tone: "muted" }]
     const right = rightColumn(row, DateTime.toEpochMillis(DateTime.nowUnsafe()), listWidth())
     const width = Math.max(0, listWidth() - textWidth(right) - 2)
     const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
-    const head = `${lead}${glyphFor(glyphSection(row, selected, props.controller.detail()))} `
+    const glyph = `${glyphFor(glyphSection(row, selected, props.controller.detail()))} `
     const parts = rowParts(
-      head,
+      `${lead}${glyph}`,
       nameFor(row),
       activityFor(row, selected, props.controller.detail(), props.place),
       width,
     )
-    // Cut and padded as one label, then split back into its runs. Each
-    // glyph is one code unit, so the split points are the parts' lengths.
-    const left = fitWidth(`${head}${parts.name}${parts.doing}`, width)
-    const nameAt = lead.length + 1
-    const nameEnd = nameAt + 1 + parts.name.length
-    return {
-      lead: left.slice(0, lead.length),
-      glyph: left.slice(lead.length, nameAt),
-      name: left.slice(nameAt, nameEnd),
-      rest: `${left.slice(nameEnd)}  `,
-      right,
-    }
+    const left = truncateRuns<RowTone>(
+      [
+        { text: lead, tone: "muted" },
+        { text: glyph, tone: "glyph" },
+        { text: parts.name, tone: "name" },
+        { text: parts.doing, tone: "muted" },
+      ],
+      width,
+    )
+    const used = left.reduce((sum, run) => sum + textWidth(run.text), 0)
+    const pad = " ".repeat(Math.max(0, width - used) + 2)
+    return [...left, { text: `${pad}${right}`, tone: "muted" }]
   }
 
   const armedColor = (row: AgentRowEntry) =>
@@ -1205,23 +1190,21 @@ export function AgentsPane(props: {
             return "transparent"
           }
           const section = () => glyphSection(row, selected(), props.controller.detail())
-          const line = () => rowLine(row, selected())
           // An armed row is one warning: every run in `error`.
           const tone = (color: ReturnType<typeof mutedFor>) =>
             Option.getOrElse(armedColor(row), () => color)
+          const runColor = (kind: RowTone) => {
+            if (kind === "glyph") return tone(glyphColorFor(section(), selected()))
+            if (kind === "name") return tone(nameColorFor(row, selected()))
+            return tone(mutedFor(selected()))
+          }
           return (
             <box id={id} backgroundColor={background()} paddingLeft={1}>
               {/* One row, one line: the time is right-aligned into the budget, so
                   an overflowing label is cut rather than wrapped under it, the
                   way the autocomplete popup and the thread rows clamp theirs. */}
               <text wrapMode="none" truncate style={{ fg: tone(theme.text) }}>
-                <span style={{ fg: tone(mutedFor(selected())) }}>{line().lead}</span>
-                <span style={{ fg: tone(glyphColorFor(section(), selected())) }}>
-                  {line().glyph}
-                </span>
-                <span style={{ fg: tone(nameColorFor(row, selected())) }}>{line().name}</span>
-                <span style={{ fg: tone(mutedFor(selected())) }}>{line().rest}</span>
-                <span style={{ fg: tone(mutedFor(selected())) }}>{line().right}</span>
+                <ToneRuns runs={rowRuns(row, selected())} color={runColor} />
               </text>
             </box>
           )
@@ -1366,13 +1349,10 @@ export function AgentsPane(props: {
               <For each={columnLines()}>
                 {(runs) => (
                   <text wrapMode="none" height={1} flexShrink={0}>
-                    <For each={fitRuns(runs, Math.max(0, columnWidth() - 3))}>
-                      {(run) => (
-                        <span style={{ fg: columnColor(run.tone, cursorSection()) }}>
-                          {run.text}
-                        </span>
-                      )}
-                    </For>
+                    <ToneRuns
+                      runs={fitRuns(runs, Math.max(0, columnWidth() - 3))}
+                      color={(tone) => columnColor(tone, cursorSection())}
+                    />
                   </text>
                 )}
               </For>
