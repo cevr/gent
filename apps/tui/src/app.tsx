@@ -40,9 +40,12 @@ import {
   DockProvider,
   KEY_HINT_SEPARATOR,
   keyHint,
+  keyHintColors,
+  keyHintRuns,
   KeyHints,
   fitKeyHints,
   keyHintText,
+  ToneRuns,
   KeyHintsText,
   keyHintsWidth,
   useDockPaneOpen,
@@ -1128,10 +1131,12 @@ const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
  * keys, so this screen keeps one way out: ctrl+c or ctrl+d exits. The error
  * goes to the client log with its stack, since the screen shows only the
  * message. It draws outside the theme provider (a throw may have come from
- * there), so it reads the default theme's error color.
+ * there), so it reads the default theme's colors: its error color, and its
+ * key-hint colors for the way out.
  */
 function FatalScreen(props: { readonly error: unknown; readonly mode?: "dark" | "light" }) {
-  const error = resolveTheme(DEFAULT_THEMES.fx, props.mode ?? "dark").error
+  const fallback = resolveTheme(DEFAULT_THEMES.fx, props.mode ?? "dark")
+  const error = fallback.error
   const exit = useExit()
   const client = useClient()
   const cause = decodeError(props.error)
@@ -1158,9 +1163,11 @@ function FatalScreen(props: { readonly error: unknown; readonly mode?: "dark" | 
         <span style={{ fg: error, bold: true }}>Fatal error</span>
       </text>
       <text>{message}</text>
-      {/* No theme here (it may be what failed): the key reads bold, as Codex draws key names. */}
       <text>
-        <span style={{ bold: true }}>{KeyHints.exit.key}</span> {KeyHints.exit.verb}
+        <ToneRuns
+          runs={keyHintRuns([KeyHints.exit])}
+          color={(tone) => keyHintColors(fallback)[tone]}
+        />
       </text>
     </box>
   )

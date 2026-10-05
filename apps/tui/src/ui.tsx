@@ -608,8 +608,11 @@ export const keyHintColors = (
   verb: theme.textMuted,
 })
 
-/** The hints as runs, `enter` `select · ` `esc` ` close`: what {@link KeyHintsText} draws. */
-const keyHintRuns = (hints: ReadonlyArray<KeyHint>): ReadonlyArray<TextRun<KeyHintTone>> =>
+/**
+ * The hints as runs, `enter` `select · ` `esc` ` close`: what {@link KeyHintsText}
+ * draws, and what the fatal screen draws in the default theme's colors.
+ */
+export const keyHintRuns = (hints: ReadonlyArray<KeyHint>): ReadonlyArray<TextRun<KeyHintTone>> =>
   hints
     .flatMap((hint): ReadonlyArray<TextRun<KeyHintTone>> => [
       { text: KEY_HINT_SEPARATOR, tone: "verb" },

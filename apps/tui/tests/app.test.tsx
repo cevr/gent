@@ -121,7 +121,7 @@ import {
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { useWorkspace } from "../src/workspace"
-import { useTheme } from "../src/theme"
+import { DEFAULT_THEMES, resolveTheme, useTheme } from "../src/theme"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -1676,7 +1676,13 @@ describe("App session view and fatal screen", () => {
         (current) => current.includes("Fatal error"),
         "fatal",
       )
-      expect(frame).toContain("ctrl+c")
+      expect(frame).toContain("ctrl+c exit")
+      // Outside the theme provider the way out still reads as a hint: the
+      // default theme's key color, then its muted verb.
+      const fallback = resolveTheme(DEFAULT_THEMES.fx, "dark")
+      const hint = rowSpans(setup, "ctrl+c exit")
+      expect(wordsIn(hint, fallback.text)).toEqual(["ctrl+c"])
+      expect(wordsIn(hint, fallback.textMuted)).toEqual(["exit"])
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns() === 1, "exit")
