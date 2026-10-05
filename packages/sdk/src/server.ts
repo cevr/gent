@@ -11,8 +11,8 @@ import {
   ModelRegistry,
   ModelResolver,
   ScriptedLanguageModel,
-  StateLocation,
 } from "@gent/core/host"
+import { BunHostModules, BunSqlite } from "@gent/core/host-bun"
 import { BunHttpServer } from "@effect/platform-bun"
 import { Headers, HttpRouter, HttpServer } from "effect/http"
 import { BuiltinExtensionModules, BuiltinExtensions } from "@gent/extensions"
@@ -124,8 +124,9 @@ export const buildOwnedServer = (
       ),
     )
     // A user extension imports the same `@effect/*` packages the shipped ones do;
-    // the core loader binds `effect` and its modules.
-    yield* platform.bindModules(BuiltinExtensionModules)
+    // the core loader binds `effect` and its modules, and the Bun host binds
+    // `@effect/platform-bun`.
+    yield* platform.bindModules(new Map([...BuiltinExtensionModules, ...BunHostModules]))
     const observability = GentObservability(options.cwd, logLevel, paths.logDir)
     const coreServices = yield* Layer.buildWithScope(
       createDependencies({
@@ -137,9 +138,9 @@ export const buildOwnedServer = (
         osVersion: osInfo.release,
         shell: options.shell,
         authDirectory: options.authDirectory,
-        state: Option.match(dbPath, {
-          onNone: () => StateLocation.cases.Memory.make({}),
-          onSome: (path) => StateLocation.cases.Disk.make({ dbPath: path }),
+        sql: Option.match(dbPath, {
+          onNone: () => BunSqlite.memory,
+          onSome: (path) => BunSqlite.file(path),
         }),
         extensions: options.extensions ?? BuiltinExtensions,
         // A scripted model needs no catalog: a model the catalog does not

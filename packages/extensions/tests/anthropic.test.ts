@@ -1,4 +1,5 @@
-import { createDependencies, StateLocation } from "@gent/core/host"
+import { createDependencies } from "@gent/core/host"
+import { BunSqlite } from "@gent/core/host-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   makeAnthropicCredentialCache,
@@ -54,6 +55,7 @@ import {
   ConfigService,
   modelCatalogFixture,
   BunGentPlatformLive,
+  BunProviderLockLive,
   LanguageModelLayers,
   testAgent,
   textStep,
@@ -3879,7 +3881,13 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
           yield* afterRename(to)
         }),
     }
-    const basePlatform = yield* Layer.build(Layer.mergeAll(BunServices.layer, BunGentPlatformLive))
+    const basePlatform = yield* Layer.build(
+      Layer.mergeAll(
+        BunServices.layer,
+        BunGentPlatformLive,
+        BunProviderLockLive.pipe(Layer.provide(BunServices.layer)),
+      ),
+    )
     const platform = Layer.succeedContext(Context.add(basePlatform, FileSystem.FileSystem, fs))
     const ready = yield* Deferred.make<ReturnType<typeof buildAnthropicModelDriverLive>>()
     const extension = defineExtension({
@@ -3911,7 +3919,7 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
         home,
         platform: "linux",
         authDirectory,
-        state: StateLocation.cases.Memory.make({}),
+        sql: BunSqlite.memory,
         extensions: [extension],
         failOnExtensionFailure: true,
         overrides: {

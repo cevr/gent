@@ -39,7 +39,7 @@ import {
   waitFor,
   TEST_MODEL_ID,
 } from "@gent/core/test-utils"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import {
   AgentName,
   defineExtension,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import { Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 import {
@@ -60,7 +61,7 @@ describe("message search index removal", () => {
         db.close()
       })
 
-      const storage = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const storage = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
         Layer.provide(GentPlatform.Test()),
         Layer.provide(BunServices.layer),
       )
@@ -136,7 +137,7 @@ describe("session admission", () => {
       Effect.gen(function* () {
         const dir = yield* makeTempDirectoryScoped("gent-session-admission-")
         const dbPath = `${dir}/data.db`
-        const storage = SqliteStorage.LiveWithSql(dbPath).pipe(
+        const storage = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
           Layer.provide(GentPlatform.Test()),
           Layer.provide(BunServices.layer),
         )

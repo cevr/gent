@@ -62,10 +62,12 @@ import {
   ModelRegistry,
   modelCatalog,
   finishPart,
+  ProviderLock,
   resolveDriverModel,
   textStep,
   toolCallPart,
 } from "../../src/runtime/provider"
+import { BunProviderLockLive } from "../../src/runtime/gent-platform-bun"
 import { BunServices } from "@effect/platform-bun"
 import { Decision, DecisionModel, Model as AiModel, LanguageModel } from "effect/ai"
 import { test as bunTest } from "bun:test"
@@ -742,6 +744,11 @@ describe("model catalog resolution", () => {
  * entry.
  */
 
+/** The Bun host of `Auth.Live`: its file system and the provider lock file every process honors. */
+const fileLockHost = Layer.provideMerge(BunProviderLockLive, BunServices.layer)
+/** A host whose process is the only writer of its store: the provider lock stays in memory. */
+const inProcessLockHost = Layer.merge(ProviderLock.InProcess, BunServices.layer)
+
 describe("Auth", () => {
   describe("credential store serialization", () => {
     it.live("an update in flight holds back a set for the same provider", () =>
@@ -830,7 +837,7 @@ describe("Auth", () => {
         )
         expect(Exit.isFailure(failed)).toBe(true)
         expect(yield* Ref.get(published)).toBe(1)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive(
@@ -882,7 +889,7 @@ describe("Auth", () => {
               ),
             ).toBe(true)
           }
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive("dot-segment slot discovery returns only its credential labels", () =>
@@ -900,7 +907,7 @@ describe("Auth", () => {
         expect(yield* auth.listSlots("unrelated")).toEqual([CredentialSlot.make("default")])
         expect((yield* auth.list).slice().sort()).toEqual([".", "..", "unrelated"])
         expect((yield* fs.readFileString(dir + "/unrelated")) === original).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive("named provider addresses cannot escape the slots directory", () =>
@@ -924,7 +931,7 @@ describe("Auth", () => {
           ).toBe(true)
         }
         expect(yield* fs.exists(dir + "/personal")).toBe(false)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive(
@@ -985,7 +992,7 @@ describe("Auth", () => {
               (stored) => stored.type === "oauth" && stored.refresh === next.refresh,
             ),
           ).toBe(true)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive(
@@ -1043,7 +1050,7 @@ describe("Auth", () => {
             ),
           ).toBe(true)
           expect(Predicate.isUndefined(yield* holder.get("openai"))).toBe(true)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive("keeps named credentials independent of the unchanged default file", () =>
@@ -1085,7 +1092,7 @@ describe("Auth", () => {
             (info) => info.type === "api" && info.key === legacy.key,
           ),
         ).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive("discovers providers stored only in named slots", () =>
@@ -1101,7 +1108,7 @@ describe("Auth", () => {
         expect(yield* auth.list).toEqual(["named-only"])
         expect(yield* auth.listSlots("named-only")).toEqual([CredentialSlot.make("work")])
         expect(Predicate.isUndefined(yield* auth.get("named-only"))).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     // A named-slot directory that cannot be read hides only its named
@@ -1125,7 +1132,7 @@ describe("Auth", () => {
         )
         expect([...(yield* auth.list)].sort()).toEqual(["named", "openai"])
         expect(yield* auth.listSlots("broken")).toEqual([])
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive("persists round-trip to disk", () =>
@@ -1147,7 +1154,7 @@ describe("Auth", () => {
 
         expect(fetched?.type).toBe("api")
         if (fetched?.type === "api") expect(fetched.key).toBe("sk-on-disk")
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(fileLockHost)),
     )
 
     // A sign-in's prompt answers are an additive field: a key stored before
@@ -1181,7 +1188,7 @@ describe("Auth", () => {
         expect(stored[0]).toEqual(withAnswers)
         expect(reread).toEqual(withAnswers)
         expect(stored[1]).toEqual({ _tag: "Api", type: "api", key: "sk-older" })
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(fileLockHost)),
     )
 
     it.scopedLive("discards a corrupt entry and returns undefined", () =>
@@ -1202,58 +1209,64 @@ describe("Auth", () => {
         // removed so the next launch isn't held back by it.
         const stillThere = yield* fs.exists(`${dir}/openai`)
         expect(stillThere).toBe(false)
-      }).pipe(Effect.provide(BunServices.layer)),
+      }).pipe(Effect.provide(fileLockHost)),
     )
 
     // Two stores over one directory stand for two gent processes: each has
-    // its own in-process lock, so only the directory's lock orders them.
-    it.scopedLive("updates from two stores over one directory run one at a time", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const dir = yield* fs.makeTempDirectoryScoped()
-        const first = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
-        const second = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
-        const counter = (info: Option.Option<AuthInfo>): number =>
-          Option.match(info, {
-            onNone: () => 0,
-            onSome: (found) => {
-              if (found.type !== "api") return 0
-              return Number(found.key)
-            },
-          })
-        const write = (count: number) =>
-          Option.some(AuthInfo.cases.Api.make({ type: "api", key: String(count) }))
-        const firstInside = yield* Deferred.make<boolean>()
-        const secondInside = yield* Deferred.make<boolean>()
-        // The first update holds its read until the second is inside its
-        // own update, or until it is clear the second is kept out.
-        const firstUpdate = yield* first
-          .update("openai", (current) =>
+    // its own in-process lock, so only the host's `ProviderLock` orders them.
+    // The Bun host takes a lock file every process honors; a host that is the
+    // only writer of its store orders its stores in memory.
+    for (const [lock, host] of [
+      ["the lock file", fileLockHost],
+      ["the in-process provider lock", inProcessLockHost],
+    ] as const)
+      it.scopedLive(`updates from two stores over one directory run one at a time: ${lock}`, () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const first = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const second = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const counter = (info: Option.Option<AuthInfo>): number =>
+            Option.match(info, {
+              onNone: () => 0,
+              onSome: (found) => {
+                if (found.type !== "api") return 0
+                return Number(found.key)
+              },
+            })
+          const write = (count: number) =>
+            Option.some(AuthInfo.cases.Api.make({ type: "api", key: String(count) }))
+          const firstInside = yield* Deferred.make<boolean>()
+          const secondInside = yield* Deferred.make<boolean>()
+          // The first update holds its read until the second is inside its
+          // own update, or until it is clear the second is kept out.
+          const firstUpdate = yield* first
+            .update("openai", (current) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(firstInside, true)
+                yield* Deferred.await(secondInside).pipe(Effect.timeoutOption("300 millis"))
+                return ["first", write(counter(current) + 1)] satisfies readonly [
+                  string,
+                  Option.Option<AuthInfo>,
+                ]
+              }),
+            )
+            .pipe(Effect.forkScoped)
+          yield* Deferred.await(firstInside)
+          yield* second.update("openai", (current) =>
             Effect.gen(function* () {
-              yield* Deferred.succeed(firstInside, true)
-              yield* Deferred.await(secondInside).pipe(Effect.timeoutOption("300 millis"))
-              return ["first", write(counter(current) + 1)] satisfies readonly [
+              yield* Deferred.succeed(secondInside, true)
+              return ["second", write(counter(current) + 1)] satisfies readonly [
                 string,
                 Option.Option<AuthInfo>,
               ]
             }),
           )
-          .pipe(Effect.forkScoped)
-        yield* Deferred.await(firstInside)
-        yield* second.update("openai", (current) =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(secondInside, true)
-            return ["second", write(counter(current) + 1)] satisfies readonly [
-              string,
-              Option.Option<AuthInfo>,
-            ]
-          }),
-        )
-        yield* Fiber.join(firstUpdate)
-        // Both increments land: neither update read the value the other replaced.
-        expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
-    )
+          yield* Fiber.join(firstUpdate)
+          // Both increments land: neither update read the value the other replaced.
+          expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
+        }).pipe(Effect.provide(host), Effect.timeout("5 seconds")),
+      )
 
     // A write that truncates the file in place shows a reader in another
     // process an empty file for a moment. A reader that opened the file
@@ -1274,7 +1287,7 @@ describe("Auth", () => {
         expect(seen).toContain('"sk-old"')
         const read = yield* reader.get("openai")
         expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-new" }))
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive(
@@ -1311,7 +1324,7 @@ describe("Auth", () => {
           const read = yield* Fiber.join(reading)
           expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-written" }))
           expect(yield* fs.exists(`${dir}/openai`)).toBe(true)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     // A cancel of a turn waiting on another process's refresh must end the
@@ -1347,7 +1360,7 @@ describe("Auth", () => {
         yield* Deferred.completeWith(release, Effect.void)
         yield* Fiber.join(holding)
         expect(Option.isSome(ended)).toBe(true)
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("10 seconds")),
     )
 
     it.scopedLive("stores a credential readable only by its owner", () =>
@@ -1357,7 +1370,7 @@ describe("Auth", () => {
         const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
         yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-secret" }))
         expect(((yield* fs.stat(`${dir}/openai`)).mode & 0o777).toString(8)).toBe("600")
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+      }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
   })
 })

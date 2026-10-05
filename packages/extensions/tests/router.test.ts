@@ -7,7 +7,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  Crypto,
+  type Crypto,
   Effect,
   FileSystem,
   Layer,
@@ -49,6 +49,7 @@ import {
   testTurnExtension,
   textStep,
   waitFor,
+  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
@@ -1028,7 +1029,7 @@ const replayOnSol = Effect.fn("test.replayOnSol")(function* (
     yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL),
     new Map(),
     Option.none(),
-    yield* Crypto.Crypto,
+    yield* bunDriverHostServices,
   )
   const state = makeFakeFetchState()
   for (const step of sent) {

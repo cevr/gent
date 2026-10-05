@@ -8,6 +8,7 @@ import {
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
   findE2eFixtureImportFindings,
+  findHostOnlyImports,
   findProcessNames,
   findSqlBoundLists,
   findEffectVersionDrift,
@@ -231,6 +232,42 @@ describe("SQL bound list guard", () => {
     expect(findSqlBoundLists("packages/extensions/src/exec-tools.ts", text).length).toBe(1)
     expect(findSqlBoundLists("apps/tui/src/ops.ts", text).length).toBe(1)
     expect(findSqlBoundLists("packages/core/tests/storage/storage.test.ts", text)).toEqual([])
+  })
+})
+
+// ── the portable import graph ───────────────────────────────────────────────
+
+describe("host-only import guard", () => {
+  const text = [
+    'import { Database } from "bun:sqlite"',
+    'import type { SqliteClient } from "@effect/sql-sqlite-bun"',
+    'import { BunHttpServer } from "@effect/platform-bun"',
+    'export { BunServices } from "@effect/platform-bun"',
+    'export type { BunCrypto } from "@effect/platform-bun"',
+    'import "node:child_process"',
+    'import { spawn } from "child_process"',
+    'import { $ } from "bun"',
+    'const late = () => import("@effect/platform-bun")',
+    'import { Effect } from "effect"',
+  ].join("\n")
+
+  test("reports each top-level load of a Bun or process module in portable source", () => {
+    const findings = findHostOnlyImports("packages/core/src/runtime/provider.ts", text)
+    expect(findings.map((finding) => finding.line)).toEqual([1, 3, 4, 6, 7, 8])
+    expect(findings[0]?.message).toContain("@gent/core/host-bun")
+    expect(findHostOnlyImports("packages/extensions/src/mcp.ts", text).length).toBe(6)
+  })
+
+  test("the Bun host, the test utilities and the processes outside core may load them", () => {
+    for (const file of [
+      "packages/core/src/runtime/gent-platform-bun.ts",
+      "packages/core/src/host-bun.ts",
+      "packages/core/src/test-utils/harness.ts",
+      "packages/sdk/src/server.ts",
+      "apps/tui/src/main.tsx",
+      "packages/core/tests/runtime/provider.test.ts",
+    ])
+      expect(findHostOnlyImports(file, text)).toEqual([])
   })
 })
 
@@ -3575,6 +3612,7 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
         "./extensions/api": "./src/extensions/api.ts",
         "./extensions/branch-tools": "./src/extensions/branch-tools.ts",
         "./host": "./src/host.ts",
+        "./host-bun": "./src/host-bun.ts",
         "./protocol": "./src/protocol.ts",
         "./test-utils": "./src/test-utils/index.ts",
       },

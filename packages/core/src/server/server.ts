@@ -8,8 +8,8 @@ import {
   Layer,
   Option,
   Path,
+  type PlatformError,
   Predicate,
-  Schema,
   Scope,
   Stream,
 } from "effect"
@@ -2044,25 +2044,6 @@ interface DependencyOverrides {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
-/** A host's own SQLite client, as a layer the root builds once. */
-const HostedSqlClient = Schema.declare<Layer.Layer<SqlClient.SqlClient>>(
-  (value): value is Layer.Layer<SqlClient.SqlClient> => Layer.isLayer(value),
-)
-
-/**
- * Where a composition root keeps its state. `Disk` names the SQLite file it
- * writes, so choosing disk persistence and naming the file are one decision.
- * `Hosted` is a SQLite client the host opens and owns (a Durable Object's
- * storage): the root runs its migrations and repositories over it and sets no
- * connection PRAGMA.
- */
-export const StateLocation = Schema.TaggedUnion({
-  Disk: { dbPath: Schema.String },
-  Memory: {},
-  Hosted: { sql: HostedSqlClient },
-})
-export type StateLocation = typeof StateLocation.Type
-
 interface DependenciesConfig {
   cwd: string
   home: string
@@ -2075,11 +2056,17 @@ interface DependenciesConfig {
    */
   authDirectory?: string
   /**
-   * Where this deployment keeps its state. `Disk` carries the database file
-   * it writes; the path travels with the mode so no root can pick disk
-   * persistence and leave the location to a default.
+   * The SQLite client this deployment keeps its state in, opened by the host
+   * and built once: the Bun host's file or in-memory connection
+   * (`BunSqlite.file(dbPath)`, `BunSqlite.memory` from `@gent/core/host-bun`),
+   * or a host's own (a Durable Object's storage). The root runs its
+   * migrations and repositories over it; the client layer sets its PRAGMAs.
    */
-  state: StateLocation
+  sql: Layer.Layer<
+    SqlClient.SqlClient,
+    StorageError | PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  >
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
   /** Extensions to load. Composition roots pass this in. */
@@ -2087,13 +2074,6 @@ interface DependenciesConfig {
   /** Internal composition-root knobs used by tests to preset the production root. */
   overrides?: DependencyOverrides
 }
-
-const makeStorageLayer = (state: StateLocation) =>
-  StateLocation.match(state, {
-    Disk: ({ dbPath }) => SqliteStorage.LiveWithSql(dbPath),
-    Memory: () => SqliteStorage.MemoryWithSql,
-    Hosted: ({ sql }) => SqliteStorage.HostedWithSql(sql),
-  })
 
 /**
  * One runner owns a root's storage on every host: the SDK server holds the
@@ -2110,7 +2090,7 @@ export const createDependencies = (config: DependenciesConfig) => {
     home: config.home,
   })
 
-  const storageLive = makeStorageLayer(config.state)
+  const storageLive = SqliteStorage.WithSql(config.sql)
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only

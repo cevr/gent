@@ -3,7 +3,8 @@ import { it } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Path } from "effect"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { runProcess } from "@gent/core/extensions/api"
-import { BunPlatformLive, GentPlatform } from "@gent/core/host"
+import { GentPlatform } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import * as RuntimePublicSdk from "../src/index"
 
 describe("SDK public surface", () => {

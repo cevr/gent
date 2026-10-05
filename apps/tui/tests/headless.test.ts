@@ -16,7 +16,7 @@ import {
   TurnCompleted,
   TEST_MODEL_ID,
 } from "@gent/core/test-utils"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import { BuiltinExtensions } from "@gent/extensions"
 import { BunServices } from "@effect/platform-bun"
 import { describe, it, expect, test } from "effect-bun-test"

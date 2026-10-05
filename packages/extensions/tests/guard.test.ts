@@ -30,7 +30,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { type AgentEvent, messagePartsText } from "@gent/core/protocol"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import {
   ApprovalService,
   collectTestContributions,

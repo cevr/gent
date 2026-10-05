@@ -14,7 +14,8 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { BunPlatformLive, GentPlatform, MessageStorage } from "@gent/core/host"
+import { GentPlatform, MessageStorage } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import {
   type LoadedExtension,
   captureTurnTools,
@@ -2855,7 +2856,7 @@ describe("tool signatures", () => {
       const signatures = yield* Effect.forEach(tools.flat(), renderToolSignature)
       expect(signatures.length).toBeGreaterThan(shippedSignatures.length)
       expect(signatures.filter((line) => /: Promise<object(\[\])?>/.test(line))).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
   for (const [capability, expected] of shippedSignatures) {

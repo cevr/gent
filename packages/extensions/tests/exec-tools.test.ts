@@ -61,7 +61,8 @@ import {
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BunPlatformLive, GentPlatform } from "@gent/core/host"
+import { GentPlatform } from "@gent/core/host"
+import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
 import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
@@ -70,7 +71,7 @@ import * as AiError from "effect/ai/AiError"
 
 /** SQLite storage in the file at `path`, so a later layer reads what an earlier one wrote. */
 const fileStorage = (path: string) =>
-  SqliteStorage.LiveWithSql(path).pipe(
+  SqliteStorage.WithSql(BunSqlite.file(path)).pipe(
     Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
   )
 
@@ -118,7 +119,7 @@ const liveBytes = Effect.sync(() => {
 })
 
 const makePlatformLayer = () =>
-  makeProcessLayer(SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)))
+  makeProcessLayer(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)))
 const provideBun = <A, E, R>(e: Effect.Effect<A, E, R>) => Effect.provide(e, makePlatformLayer())
 
 const processTestTimeout = 5_000
@@ -1236,7 +1237,9 @@ describe("BashTool execution", () => {
       }).pipe(Effect.provide(BackgroundBashStorage.Live))
       expect(claim._tag).toBe("Terminal")
       if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
-    }).pipe(Effect.provide(SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)))),
+    }).pipe(
+      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
+    ),
   )
 
   it.live("a column another process added after this one read the table is no failure", () =>
@@ -1254,7 +1257,9 @@ describe("BashTool execution", () => {
       yield* sql.unsafe(`DROP TABLE background_bash_jobs`)
       const missing = yield* Effect.exit(addBackgroundBashColumn([], "notice_read_at", "INTEGER"))
       expect(missing._tag).toBe("Failure")
-    }).pipe(Effect.provide(SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)))),
+    }).pipe(
+      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
+    ),
   )
 
   it.live(
@@ -1287,7 +1292,11 @@ describe("BashTool execution", () => {
           { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
         ])
         expect(unread.after).toEqual([])
-      }).pipe(Effect.provide(SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)))),
+      }).pipe(
+        Effect.provide(
+          SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
+        ),
+      ),
   )
 
   it.scopedLive(
@@ -2412,7 +2421,7 @@ describe("a background job the server stopped", () => {
           expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
           // A red run must not leave the job's group behind.
           yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-pid, "SIGKILL")))
-          const storageLayer = SqliteStorage.LiveWithSql(storagePath).pipe(
+          const storageLayer = SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(
             Layer.provide(BunPlatformLive),
           )
           // The host names the job's process in the row before it crashes.
@@ -2476,7 +2485,7 @@ describe("a background job the server stopped", () => {
           stdout: "ignore",
           stderr: "ignore",
         })
-        const storageLayer = SqliteStorage.LiveWithSql(`${directory}/gent.db`).pipe(
+        const storageLayer = SqliteStorage.WithSql(BunSqlite.file(`${directory}/gent.db`)).pipe(
           Layer.provide(BunPlatformLive),
         )
         yield* Effect.gen(function* () {

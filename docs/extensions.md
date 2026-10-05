@@ -310,8 +310,9 @@ shipped extension imports (`effect/ai`, `effect/http`, `effect/process`,
 `packages/core/src/runtime/extension-host.ts` lists). Core binds them to the
 modules gent runs, so a Tag or Schema class the file imports is the one core
 uses, in tests as in the binary. The gent server also binds the `@effect/*`
-packages the shipped extensions import (the provider SDKs and
-`@effect/platform-bun`). Any other package import resolves from the file's
+packages the shipped extensions import (the provider SDKs), and the Bun host
+binds `@effect/platform-bun`. A shipped extension imports no Bun module: it
+takes a loopback listener from `GentPlatform.loopbackServer`. Any other package import resolves from the file's
 own directory.
 
 ## Disabling Extensions

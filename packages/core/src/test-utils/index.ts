@@ -40,6 +40,7 @@ export {
   interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  bunDriverHostServices,
   seedAuthKeys,
   storedCredentialModel,
   type SequenceStep,
@@ -65,7 +66,7 @@ export {
 } from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
-export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+export { BunGentPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
