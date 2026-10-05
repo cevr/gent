@@ -62,6 +62,7 @@ import {
   AgentDefinition,
   AgentName,
   DriverRef,
+  effectiveModelDriver,
   ModelId,
   Model,
   ProviderId,
@@ -377,13 +378,21 @@ describe("agent turn response collectors", () => {
 
 describe("session route driver", () => {
   const modelId = ModelId.make("anthropic/claude-sonnet-5")
-  const routeOf = (agent: AgentDefinition, driverOverrides?: Readonly<Record<string, DriverRef>>) =>
-    resolveSessionRoute({
+  /** The driver the route's model dispatches through, as the turn derives it. */
+  const routeOf = (
+    agent: AgentDefinition,
+    driverOverrides?: Readonly<Record<string, DriverRef>>,
+  ) => {
+    const route = resolveSessionRoute({
       agents: [agent],
       admission: Option.some({ agent: agent.name }),
       config: { driverOverrides },
       session: { modelId },
     })
+    return {
+      modelDriver: Option.map(route.modelId, (id) => effectiveModelDriver(route.driverRef, id)),
+    }
+  }
 
   test("the agent's own driver wins over a config override", () => {
     const agent = AgentDefinition.make({

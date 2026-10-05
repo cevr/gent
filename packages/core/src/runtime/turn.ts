@@ -1433,7 +1433,7 @@ interface SessionRoute {
    * (`resolveSessionAgent`); none when no agent has the name. Routing only:
    * a turn binds it to its run (`bindSessionAgent`) before it holds a tool.
    * Its `driver` is its own: a config `driverOverrides` entry reaches
-   * `modelDriver` only.
+   * `driverRef` only.
    */
   readonly definition: Option.Option<AgentDefinition>
   /**
@@ -1444,9 +1444,11 @@ interface SessionRoute {
   readonly reasoningLevel: Option.Option<ReasoningEffort>
   /** The level without the session's own: what clearing it falls back to. */
   readonly defaultReasoningLevel: Option.Option<ReasoningEffort>
-  /** The driver the model dispatches through, and the catalog id it reaches; none without a model. */
-  readonly modelDriver: Option.Option<EffectiveModelDriver>
-  /** The driver the agent names (its own, else config `driverOverrides`). */
+  /**
+   * The driver the agent names (its own, else config `driverOverrides`). A
+   * reader with a model derives the driver it dispatches through, and the
+   * catalog id it reaches, from both (`effectiveModelDriver`).
+   */
   readonly driverRef: Option.Option<DriverRef>
 }
 
@@ -1502,7 +1504,6 @@ export const resolveSessionRoute = (params: {
       () => defaultReasoningLevel,
     ),
     defaultReasoningLevel,
-    modelDriver: Option.map(modelId, (id) => effectiveModelDriver(driverRef, id)),
     driverRef,
   }
 }
@@ -1612,7 +1613,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   }
   // A turn admitted without `message.send` (an extension's send, a create's
   // first prompt) meets the same refusal here: no turn runs on a model nobody named.
-  if (Option.isNone(route.modelId) || Option.isNone(route.modelDriver)) {
+  if (Option.isNone(route.modelId)) {
     yield* eventStore
       .publish(
         ErrorOccurred.make({
@@ -1732,7 +1733,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelId: route.modelId.value,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    modelDriver: route.modelDriver.value,
+    modelDriver: effectiveModelDriver(route.driverRef, route.modelId.value),
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
     child: Option.exists(session, isSpawnedSession),
