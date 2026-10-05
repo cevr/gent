@@ -1099,6 +1099,12 @@ every tool of the child works there.
 - A start is refused outside a git repository, and when less than 2 GB is
   free where the copy goes or `df` cannot say; start the child with
   `isolation: "shared"` then.
+- A parent run with `paths` bounds its snapshot child by those paths as they
+  resolve in the parent's cwd, not in the copy: the copy lies outside them,
+  so the child's file tools refuse every path in its copy. gent does not move
+  the parent's paths into the copy, since core cannot tell a copy from any
+  other cwd a create names. Give such a child no `paths` parent, or use
+  `isolation: "shared"`.
 
 A copy is not a sandbox. The child's `bash`, the cell and every other tool can
 still reach your repository and every other path, as with `paths`. A snapshot

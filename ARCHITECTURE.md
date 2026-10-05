@@ -1253,7 +1253,12 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Snapshot children: `delegate.start` takes `isolation` (`shared`, the
   default, or `snapshot`). `@gent/workspaces` (`packages/extensions/src/workspaces.ts`)
   owns the copies and uses only the public extension API, `runProcess` and
-  the platform services. Core has no workspace concept: the seam is
+  the platform services. A path-confined parent run bounds its snapshot
+  child by its scopes in the parent's cwd, so the child's file calls in its
+  copy are refused (decided in the narrow-only batch, Round 6, on least
+  authority): core has no copy relation, and moving a parent's relative
+  entries into whatever cwd a create names would let a confined run reach
+  any directory by naming it. Core has no workspace concept: the seam is
   `Session.create({ cwd })`, and the child's profile is the copy's.
   - The backend: `rift rpc` with `copyAll` (one snapshot, an exact copy) only
     when the origin is a rift workspace on btrfs. Everywhere else, and for any
