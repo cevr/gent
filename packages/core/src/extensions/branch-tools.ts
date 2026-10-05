@@ -37,13 +37,10 @@
 export {
   type BranchToolFeature,
   type BranchToolHostServices,
-  type BranchToolLayerFactory,
-  BranchToolWork,
+  noBranchTools,
 } from "../runtime/tools.js"
-export { eraseResourceLayer } from "../runtime/extension-host.js"
 
 // Storage the feature contributes and reads.
-export type { FeatureMigrations } from "../storage/schema.js"
 export { InteractionStorage } from "../storage/storage.js"
 export { MessageStorage } from "../storage/storage.js"
 export { EventStore } from "../domain/event.js"
@@ -52,11 +49,11 @@ export { makeOwnedToolCallReader, type OwnedToolCallAddress } from "../storage/s
 export { StorageError } from "../domain/errors.js"
 export { EventStoreError } from "../domain/event.js"
 
-// The questions core asks a dispatching feature.
+// What a tool's `recover` reads and answers.
 export {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
-  ToolCallRecoveryService,
+  type ToolRecoveryCall,
 } from "../runtime/tools.js"
 
 // Identifying and resolving the calls a feature dispatches.
@@ -74,7 +71,7 @@ export {
   type AgentLoopTurnProfile,
   runAgentLoopTurnProfile,
 } from "../runtime/turn.js"
-export { neverInterrupted, type TurnInterruptionStatus } from "../runtime/tools.js"
+export { CurrentTurnStop, type TurnStop } from "../runtime/tools.js"
 export { AgentLoopError } from "../domain/agent-loop.js"
 
 // Reporting what the feature did to the model's context.

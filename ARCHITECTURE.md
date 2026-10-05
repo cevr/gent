@@ -1425,10 +1425,11 @@ client responds via respondInteraction RPC
 cancel while an owned call waits: the cell cancels, its call ends, the turn
   ends and dismisses the dialog (InteractionResolved dismissed: true)
 loop close (server stop) while an owned call waits: the turn is interrupted,
-  then BranchToolWork.stop ends the cell and records nothing, as a crash
-  would; after a restart the request is rehydrated, the turn resumes on it
-  (cell recovery suspends), and an answer runs the waiting operation once;
-  the cell then reports its worker state as lost
+  then the cell's turn-stop watcher sees the close and ends the cell, which
+  records nothing, as a crash would; after a restart the request is
+  rehydrated, the turn resumes on it (the cell's recover suspends), and an
+  answer runs the waiting operation once; the cell then reports its worker
+  state as lost
 ```
 
 **Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. The source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
@@ -1569,17 +1570,32 @@ A terminated session opens no loop: each operation that would start one
 termination marker first and fails with `Session terminated`, and an actor
 built for a terminated session skips its eager open. So a send after a delete
 or a terminate runs no `loopOpen` hook and builds no branch Resources.
-The loop behavior in `runtime/agent-loop.ts` uses this supplied scope to build `CellExecution.Branch`
-and supplies the service to turn execution. Each branch owns a separate service and lazy
-worker. Closing the loop scope closes that worker. Source runs have no
+The cell owns its state through two Resources it registers, as any extension
+can. `CellStorageResource` (process scope) builds `CellStorage` and the
+`RetainedBindings` projection over the session database: it runs the cell's
+own migrations, recorded in `cell_migrations`, so its ids never meet core's
+chain. Migration `1_cell_tables` creates `cell_executions`,
+`cell_tool_operations` and `cell_namespaces` only where they are missing, with
+the columns, keys and checks they had as migrations 012-014 of core's chain; a
+database from that time keeps those three ids in `gent_storage_migrations`,
+and core never reuses them. A database opened earlier without the cell gets
+the tables when the cell first loads. `CellKernelResource` (branch scope)
+names the storage and reads `BranchAddress`; it builds `CellExecution`, so
+each branch owns a separate service and lazy worker, and closing the branch's
+generation closes that worker. Its build key holds only the cell's own process
+key (`branchResourceKeys`), so an edit to an extension the cell does not read
+keeps the worker and its function bindings. The `cell` tool names both, and
+its `recover` settles a cell a crash left in flight. Source runs have no
 build artifact, so builtin tools carry no durable identity there; cells record a
 `ProcessLocal` binding that names the live resource generation instead. Such an
 operation resumes only inside that generation and is rejected with
 `SourceMismatch` after a restart or replacement. Compiled hosts keep durable
-artifact identities. The existing interrupt
-command now also calls the branch cell service's cancellation operation. It
-signals active evaluation and waits for cleanup. Cells queued before cancellation
-cannot evaluate; the branch interrupt flag also stops later calls in that turn.
+artifact identities. The cell body runs uninterruptibly and forks one watcher
+per call on `CurrentTurnStop`: an interrupt cancels the cell, which signals
+active evaluation and waits for cleanup, so the result reports what the cancel
+cost; a close stops it and records nothing. Cells queued before cancellation
+cannot evaluate, and a cell whose turn already stopped (`isStopped`) does not
+start.
 
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact

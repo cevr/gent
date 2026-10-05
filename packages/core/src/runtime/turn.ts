@@ -157,7 +157,6 @@ import {
   staticToolEntries,
   ToolBindingReplayError,
   ToolCallRecoveryOutcome,
-  ToolCallRecoveryService,
   ToolInteractionPending,
   type TurnInterruption,
   type TurnStop,
@@ -4341,7 +4340,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A tool that keeps durable receipts can settle a call the crash left in
       // flight: its own `recover` answers, as a leaf of its extension. Every
       // other call is decided below by the parked mark.
-      const recovery = yield* Effect.serviceOption(ToolCallRecoveryService)
       const recoverers = new Map(
         staticToolEntries(turnRegistry(params.turnProfile)).flatMap((entry) => {
           const recover = getToolMetadata(entry.capability).recover
@@ -4367,19 +4365,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               asAgentLoopError("Tool call recovery failed"),
             ),
           onNone: () =>
-            Option.match(recovery, {
-              onNone: () =>
-                Effect.succeed<ToolCallRecoveryOutcome>(
-                  ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
-                ),
-              onSome: (service) =>
-                service
-                  .recover(call)
-                  .pipe(
-                    runAgentLoopTurnProfile(params.turnProfile),
-                    asAgentLoopError("Tool call recovery failed"),
-                  ),
-            }),
+            Effect.succeed<ToolCallRecoveryOutcome>(
+              ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
+            ),
         })
         if (outcome._tag === "Suspended") {
           return {

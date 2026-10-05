@@ -277,7 +277,7 @@ export type ErasedResourceLayer = Layer.Layer<any, never, never>
  * Resource layers erase to `Layer.Layer<any>` so their heterogeneous error and
  * requirement channels do not leak into callers.
  */
-export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
+const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
   const erased = layer as unknown as ErasedResourceLayer
   return erased

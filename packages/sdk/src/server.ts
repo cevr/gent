@@ -15,7 +15,8 @@ import {
 } from "@gent/core/host"
 import { BunHttpServer } from "@effect/platform-bun"
 import { Headers, HttpRouter, HttpServer } from "effect/http"
-import { BuiltinExtensionModules, BuiltinExtensions, CellBranchTools } from "@gent/extensions"
+import { BuiltinExtensionModules, BuiltinExtensions } from "@gent/extensions"
+import { noBranchTools } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/ai"
 import { GentLogLevel, GentObservability } from "./logger.js"
 import {
@@ -142,7 +143,7 @@ export const buildOwnedServer = (
           onSome: (path) => StateLocation.cases.Disk.make({ dbPath: path }),
         }),
         extensions: options.extensions ?? BuiltinExtensions,
-        branchTools: options.branchTools ?? CellBranchTools,
+        branchTools: options.branchTools ?? noBranchTools,
         // A scripted model needs no catalog: a model the catalog does not
         // list (none stored, models.dev unreachable) still runs.
         overrides: {

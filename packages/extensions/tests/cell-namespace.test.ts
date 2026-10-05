@@ -1,10 +1,22 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Option, Predicate, Ref, Schema, Stream } from "effect"
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import { BranchStorage, SessionStorage } from "@gent/core/host"
 import {
   createRpcHarness,
   finishPart,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textDeltaPart,
   textStep,
   toolCallPart,
@@ -34,7 +46,8 @@ import {
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
 import {
-  CellBranchTools,
+  CellKernelResource,
+  CellStorageResource,
   type CellExecution,
   CellOperationHost,
   CellStorage,
@@ -341,6 +354,7 @@ describe("thread namespace", () => {
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
             yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("resource", CellStorageResource, CellKernelResource)
             yield* host.register("tool", CellTool)
           }),
         })
@@ -357,7 +371,6 @@ describe("thread namespace", () => {
               artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
             },
           ],
-          branchTools: CellBranchTools,
         })
         const cellResults = (branch: BranchId) =>
           client.message
@@ -462,6 +475,7 @@ describe("model context directives from a cell", () => {
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
             yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("resource", CellStorageResource, CellKernelResource)
             yield* host.register("tool", CellTool)
           }),
         })
@@ -475,7 +489,6 @@ describe("model context directives from a cell", () => {
               artifactIdentity: LoadedArtifactIdentity.make("model-context-directive-source"),
             },
           ],
-          branchTools: CellBranchTools,
         })
         yield* client.message.send({ sessionId, branchId, content: "older history" })
         yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
@@ -558,6 +571,7 @@ describe("model context directives from a cell", () => {
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
             yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("resource", CellStorageResource, CellKernelResource)
             yield* host.register("tool", CellTool)
           }),
         })
@@ -571,7 +585,6 @@ describe("model context directives from a cell", () => {
               artifactIdentity: LoadedArtifactIdentity.make("retained-bindings-source"),
             },
           ],
-          branchTools: CellBranchTools,
         })
         yield* client.message.send({ sessionId, branchId, content: "bind the rows" })
         yield* waitFor(client.message.list({ branchId }), hasReply("rows bound"))
@@ -611,6 +624,7 @@ describe("model context directives from a cell", () => {
             setup: Effect.gen(function* () {
               const host = yield* ExtensionHost
               yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+              yield* host.register("resource", CellStorageResource, CellKernelResource)
               yield* host.register(
                 "tool",
                 CellTool,
@@ -637,7 +651,6 @@ describe("model context directives from a cell", () => {
                 ),
               },
             ],
-            branchTools: CellBranchTools,
           })
           yield* client.message.send({ sessionId, branchId, content: "keep older context" })
           yield* waitFor(client.message.list({ branchId }), hasReply("history reply"))
@@ -675,4 +688,106 @@ describe("model context directives from a cell", () => {
       20000,
     )
   }
+})
+
+// ── kernel across an edit ───────────────────────────────────────────────────
+
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/**
+ * A user extension the cell does not read: one process resource, which logs
+ * its release with the extension's version.
+ */
+const unrelatedSource = (version: string, log: string) => `import { appendFileSync } from "node:fs";
+import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Unrelated extends Context.Service<Unrelated, { readonly version: string }>()("@test/unrelated/Unrelated") {}
+const version = ${encodeJsonText(version)};
+export default defineExtension({
+  id: "@test/unrelated",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "@test/unrelated/process",
+      scope: "process",
+      layer: Layer.effect(Unrelated, Effect.acquireRelease(
+        Effect.sync(() => Unrelated.of({ version })),
+        () => Effect.sync(() => appendFileSync(${encodeJsonText(log)}, "release:" + version + "\\n")),
+      )),
+    }));
+  }),
+});
+`
+
+describe("cell kernel across an edit", () => {
+  it.scopedLive(
+    "an edit to another extension with process resources keeps the worker: a function binding survives",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* makeTempDirectoryScoped("gent-cell-edit-home-")
+        const cwd = yield* makeTempDirectoryScoped("gent-cell-edit-cwd-")
+        const extensionsDir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionsDir, { recursive: true })
+        const log = path.join(home, "unrelated.log")
+        yield* fs.writeFileString(log, "")
+        const unrelatedFile = path.join(extensionsDir, "unrelated.ts")
+        yield* fs.writeFileString(unrelatedFile, unrelatedSource("one", log))
+        const fixture = defineExtension({
+          id: "cell-edit-fixture",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("resource", CellStorageResource, CellKernelResource)
+            yield* host.register("tool", CellTool)
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "function seven() { return 7 }" }),
+          textStep("defined"),
+          toolCallStep("cell", { code: "seven()" }),
+          textStep("called"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [],
+          extensionInputs: [
+            { ...fixture, artifactIdentity: LoadedArtifactIdentity.make("cell-edit-source") },
+          ],
+          home,
+          cwd,
+        })
+        const replied = (text: string) =>
+          waitFor(
+            client.message.list({ branchId }),
+            (items) =>
+              items.some(
+                (item) => item.role === "assistant" && messagePartsText(item.parts) === text,
+              ),
+            10_000,
+            `reply ${text}`,
+          )
+        yield* client.message.send({ sessionId, branchId, content: "define a function" })
+        yield* replied("defined")
+        yield* fs.writeFileString(unrelatedFile, unrelatedSource("two", log))
+        yield* client.message.send({ sessionId, branchId, content: "call it" })
+        yield* replied("called")
+        // The edit reached the session: the profile before it retired.
+        yield* waitFor(
+          fs.readFileString(log),
+          (text) => text.includes("release:one"),
+          5_000,
+          "the first version released",
+        )
+        const results = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result")
+          .filter((part) => part.name === "cell")
+        expect(results).toHaveLength(2)
+        expect(results[1]).toMatchObject({ isFailure: false, result: { display: "7" } })
+        expect(results[1]?.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
+    30000,
+  )
 })

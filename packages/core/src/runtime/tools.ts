@@ -68,7 +68,6 @@ import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiToolkit from "effect/ai/Toolkit"
 import * as AiError from "effect/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
-import type { CurrentAgentLoopTurnProfile } from "./turn.js"
 
 // ── turn-interruption ───────────────────────────────────────────────────────
 
@@ -83,7 +82,7 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
  */
 
 /** Asks whether the turn now running has been interrupted. */
-export interface TurnInterruptionStatus {
+interface TurnInterruptionStatus {
   readonly interrupted: Effect.Effect<boolean>
 }
 
@@ -615,7 +614,7 @@ interface BranchToolLayerInput {
  * on purpose: the loop merges it into the branch context and reads only what
  * it knows to look for, such as `BranchToolWork`.
  */
-export type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedResourceLayer
+type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedResourceLayer
 
 interface BranchToolWorkApi {
   /** Cancel in-flight work. Must be safe to call when nothing is running. */
@@ -1316,27 +1315,7 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
 })
 export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 
-/** Recovery runs inside the turn and settles receipts with the turn's runtime services. */
-type ToolCallRecoveryServices =
-  | CurrentAgentLoopTurnProfile
-  | EventStore
-  | GentPlatform
-  | MessageStorage
-  | ToolRunner
-
-interface ToolCallRecoveryApi {
-  /** Recover one pending call, or report that it is not recoverable here. */
-  readonly recover: (
-    params: ToolRecoveryCall,
-  ) => Effect.Effect<ToolCallRecoveryOutcome, ToolCallRecoveryError, ToolCallRecoveryServices>
-}
-
 export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(
   "@gent/core/src/runtime/tools/ToolCallRecoveryError",
   { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
-
-export class ToolCallRecoveryService extends Context.Service<
-  ToolCallRecoveryService,
-  ToolCallRecoveryApi
->()("@gent/core/src/runtime/tools/ToolCallRecoveryService") {}

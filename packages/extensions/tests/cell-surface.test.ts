@@ -1,6 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  Cause,
   Effect,
   Exit,
   Fiber,
@@ -40,7 +39,6 @@ import {
   WorkspaceId,
   createRpcClient,
   toolResultMessageIdForTurn,
-  testSqliteStorage,
   ApprovalService,
   turnRequestText,
   systemTextOf,
@@ -87,7 +85,8 @@ import {
   getToolMetadata,
 } from "@gent/core/extensions/branch-tools"
 import {
-  CellBranchTools,
+  CellKernelResource,
+  CellStorageResource,
   CellStorage,
   CellExtension,
   CellTool,
@@ -127,7 +126,12 @@ import {
   StartChild,
 } from "../src/delegate.js"
 import { SqlClient } from "effect/sql"
-import { platform, askThenLoseWorker } from "./helpers/cell-kernel.js"
+import {
+  platform,
+  askThenLoseWorker,
+  cellTestStorage,
+  withCellStorage,
+} from "./helpers/cell-kernel.js"
 
 // The cell's model surface: the context host, the shipped surface, child
 // cells, branch lifetime, RPC recovery, guidelines, signatures and the catalog.
@@ -162,11 +166,7 @@ const decodeReply = Schema.decodeUnknownSync(
   }),
 )
 
-const layer = Layer.mergeAll(
-  testSqliteStorage(CellBranchTools.storage, CellBranchTools.migrations),
-  GentPlatform.Test(),
-  ModelContextLedger.Branch,
-)
+const layer = Layer.mergeAll(cellTestStorage, GentPlatform.Test(), ModelContextLedger.Branch)
 
 const seedTranscript = Effect.gen(function* () {
   yield* ensureStorageParents({ sessionId: sessionIdContextHost, branchId: branchIdContextHost })
@@ -923,27 +923,6 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
 
 describe("shipped model surface", () => {
   it.scopedLive(
-    "the shipped extensions without the cell feature stop the root at load",
-    () =>
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          createRpcHarness({
-            agents: [],
-            extensionInputs: shippedPreset.extensionInputs,
-            providerLayer: LanguageModelLayers.debug(),
-          }),
-        )
-        expect(exit._tag).toBe("Failure")
-        if (exit._tag === "Failure") {
-          expect(Cause.pretty(exit.cause)).toContain(
-            'tools[0] (cell): runs on the branch-tool feature "cell", which this root does not install (it installs "none")',
-          )
-        }
-      }).pipe(Effect.timeout("15 seconds")),
-    20000,
-  )
-
-  it.scopedLive(
     "a cell starts in its session's working directory, not the host's",
     () =>
       Effect.gen(function* () {
@@ -1264,7 +1243,6 @@ describe("shipped model surface", () => {
         const harness = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [...shippedPreset.extensionInputs, closedAgent],
-          branchTools: CellBranchTools,
           providerLayer,
           admission: { agent: AgentName.make("closed") },
         })
@@ -1313,7 +1291,6 @@ describe("shipped model surface", () => {
         const harness = yield* createRpcHarness({
           ...shippedPreset,
           extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
-          branchTools: CellBranchTools,
           providerLayer,
           admission: { agent: AgentName.make("scoped") },
         })
@@ -1383,6 +1360,7 @@ describe("child cell", () => {
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
             yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("resource", CellStorageResource, CellKernelResource)
             yield* host.register("tool", CellTool)
           }),
         })
@@ -1399,7 +1377,6 @@ describe("child cell", () => {
               artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
             },
           ],
-          branchTools: CellBranchTools,
         })
         const content = "delegate from a cell"
         yield* client.message.send({ sessionId, branchId, content })
@@ -1456,10 +1433,9 @@ it.scopedLive("rejects cell dispatch without a branch owner", () =>
     Effect.provide(
       createE2ELayer({
         agents: [],
-        branchTools: CellBranchTools,
         extensions: [],
         providerLayer: LanguageModelLayers.debug(),
-      }),
+      }).pipe(withCellStorage),
     ),
   ),
 )
@@ -1580,7 +1556,6 @@ describe("branch cell lifetime", () => {
               artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
             },
           ],
-          branchTools: CellBranchTools,
         })
         let completions = 0
         for (const [index, turn] of turns.entries()) {
@@ -1668,6 +1643,7 @@ describe("branch cell lifetime", () => {
                 sourcePath: "cell-lifetime",
                 artifactIdentity: LoadedArtifactIdentity.make("cell-lifetime-source"),
                 contributions: {
+                  resources: [CellStorageResource, CellKernelResource],
                   tools: [
                     tool({
                       id: "hidden",
@@ -1693,7 +1669,6 @@ describe("branch cell lifetime", () => {
             const { client, sessionId, branchId } = yield* createRpcHarness({
               extensions,
               providerLayer,
-              branchTools: CellBranchTools,
               agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools: ["hidden"] })],
             })
             expect(yield* Ref.get(pids)).toEqual([])
@@ -1879,6 +1854,11 @@ describe("saved cell recovery through RPC", () => {
           const nativeCalls = yield* Ref.make(0)
           const cellCalls = yield* Ref.make(0)
           const approvalCalls = yield* Ref.make(0)
+          // The stand-in settles its crashed calls as the real cell does, from
+          // the cell's receipts.
+          const recoverCell = getToolMetadata(CellTool).recover
+          if (Predicate.isUndefined(recoverCell))
+            return yield* Effect.die("The cell has no recover")
           const extensions: ReadonlyArray<LoadedExtension> = [
             {
               manifest: { id: ExtensionId.make("cell-recovery") },
@@ -1886,6 +1866,7 @@ describe("saved cell recovery through RPC", () => {
               sourcePath: "cell-recovery",
               artifactIdentity: LoadedArtifactIdentity.make("cell-recovery-source"),
               contributions: {
+                resources: [CellStorageResource],
                 tools: [
                   StartChild,
                   CancelChild,
@@ -1910,6 +1891,7 @@ describe("saved cell recovery through RPC", () => {
                     dispatches: true,
                     params: Schema.Struct({ code: Schema.String }),
                     output: Schema.Finite,
+                    recover: recoverCell,
                     execute: () => Ref.updateAndGet(cellCalls, (n) => n + 1),
                   }),
                   tool({
@@ -1938,9 +1920,8 @@ describe("saved cell recovery through RPC", () => {
               extensions,
               providerLayer,
               agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME, deniedTools })],
-              branchTools: CellBranchTools,
               approvalLayer: ApprovalService.Live,
-            }),
+            }).pipe(withCellStorage),
           )
           const { client } = yield* createRpcClient(Layer.succeedContext(context))
           const { sessionId, branchId } = yield* client.session.create({})
