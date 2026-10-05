@@ -1691,7 +1691,10 @@ const RpcHandlers = GentRpcs.toLayer(
 
       // The first model a user picks is the user's model: with none in the
       // user config, the pick is also written there as `model`, which every
-      // agent that names none runs (`resolveSessionRoute`).
+      // agent that names none runs (`resolveSessionRoute`). The session is
+      // read first, so a pick for a missing one writes nothing; the config
+      // write goes before the session's, so a user config that cannot be
+      // written refuses the pick with nothing changed.
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
         rpc(
           "session.updateSettings",
