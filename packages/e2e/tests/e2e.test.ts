@@ -154,14 +154,14 @@ describe("E2E: Session", () => {
       Effect.gen(function* () {
         // `--mock-empty` keeps the turn offline: memory state, no seeded
         // session, a model that answers nothing. The home footer reads
-        // "ready"; only the session route renders the "Generating" label.
+        // "ready"; only the session route renders the `✻` live line.
         const ctx = yield* seedAndSpawn(["--mock-empty"])
         yield* ptyWaitFor(ctx, "ready", { timeout: 10_000 })
         ctx.pty.write("hi")
         // Enter must reach the composer after the text it submits is drawn.
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys.enter)
-        yield* ptyWaitFor(ctx, "Generating", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "✻ Thinking", { timeout: 10_000 })
         ctx.pty.write(keys["ctrl+c"])
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
     TEST_TIMEOUT,

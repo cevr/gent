@@ -37,18 +37,16 @@ import {
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
 import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  waitFor,
-} from "../../src/test-utils/language-model"
-import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  emptyQueueSnapshot,
   fixedSessionProfiles,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
   testAgent,
   testSqliteStorage,
-  emptyQueueSnapshot,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   DEFAULT_SESSION_NAME,
@@ -84,7 +82,11 @@ import {
   type SessionRuntimeService,
 } from "../../src/runtime/session"
 import * as Prompt from "effect/ai/Prompt"
-import { SessionMutations, type SessionMutationsService } from "../../src/domain/extension"
+import {
+  ExtensionStatus,
+  SessionMutations,
+  type SessionMutationsService,
+} from "../../src/domain/extension"
 import {
   AgentDefinition,
   AgentName,
@@ -378,22 +380,20 @@ const racySessionMutationsLayer = (params: {
 describe("extension health snapshot", () => {
   test("reports one typed issue row per failed extension", () => {
     const snapshot = buildExtensionHealthSnapshot([
-      {
-        manifest: { id: ExtensionId.make("@gent/memory") },
+      ExtensionStatus.cases.Failed.make({
+        id: "@gent/memory",
         scope: "builtin",
         sourcePath: "builtin",
-        status: "failed",
         phase: "startup",
         error: "startup boom",
-      },
-      {
-        manifest: { id: ExtensionId.make("@gent/plan") },
+      }),
+      ExtensionStatus.cases.Failed.make({
+        id: "@gent/plan",
         scope: "builtin",
         sourcePath: "builtin",
-        status: "failed",
         phase: "setup",
         error: "setup boom",
-      },
+      }),
     ])
 
     expect(snapshot._tag).toBe("Degraded")
@@ -432,12 +432,11 @@ describe("extension health snapshot", () => {
 
   test("returns a healthy snapshot when every extension has no issues", () => {
     const snapshot = buildExtensionHealthSnapshot([
-      {
-        manifest: { id: ExtensionId.make("@gent/memory") },
+      ExtensionStatus.cases.Active.make({
+        id: "@gent/memory",
         scope: "builtin",
         sourcePath: "builtin",
-        status: "active",
-      },
+      }),
     ])
 
     expect(snapshot).toEqual({

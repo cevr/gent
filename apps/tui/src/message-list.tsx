@@ -487,7 +487,6 @@ export type AssistantSegment = Schema.Schema.Type<typeof AssistantSegment>
 interface MessageBase {
   id: string
   role: "user" | "assistant" | "system" | "tool"
-  pendingMode?: "queued" | "steer"
   /** Concatenated text content (derived — used by picker, search) */
   content: string
   /** Concatenated reasoning (derived) */
@@ -592,7 +591,10 @@ interface ToolRun {
   readonly calls: ReadonlyArray<ToolCall>
   /** The reasoning the run took before its calls, by the id of the call it came before. */
   readonly reasoning: ReadonlyMap<string, ReadonlyArray<string>>
-  /** The reasoning the run took from before the text that ended it. */
+  /**
+   * The reasoning the run took from before the text that ended it, or, while
+   * the run is open in a running turn, the reasoning since its last call.
+   */
   readonly closing: ReadonlyArray<string>
   /** Nothing after the run has ended it yet: another step may join it. */
   readonly open: boolean
@@ -718,7 +720,12 @@ const projectToolRuns = (
     }
     if (!acrossSteps) close()
   }
-  if (!turnRunning) close()
+  // A running turn's open run takes the reasoning held since its last call
+  // now: the next call or the answer text takes it at the head either way.
+  // Drawn on its own until then, the thought would leave the live tail when
+  // that call arrives, and the tail would shrink under history (`watchGap`).
+  if (turnRunning) Option.map(current, (entry) => takeClosing(entry, false, absorbed))
+  else close()
   return toolRunsOf(drafts, absorbed)
 }
 
@@ -728,11 +735,9 @@ interface StepMessage {
   readonly draft?: true
 }
 
-/** A queued follow-up and a pending retry wait at the end until they take their place. */
-const waitsInPlace = (item: SessionItem): boolean => {
-  if (!isMessageItem(item)) return item._tag === "retrying" && item.outcome === "pending"
-  return item.role !== "assistant" && Predicate.isNotUndefined(item.pendingMode)
-}
+/** A pending retry waits at the end until it takes its place. */
+const waitsInPlace = (item: SessionItem): boolean =>
+  !isMessageItem(item) && item._tag === "retrying" && item.outcome === "pending"
 
 /** Reasoning and blank text between calls leave a run open. */
 const passesRun = (segment: AssistantSegment): boolean =>
@@ -1474,7 +1479,6 @@ export function MessageList(props: MessageListProps) {
                     content={item.content}
                     images={item.images}
                     interjection={item._tag === "interjection-message"}
-                    pendingMode={item.pendingMode}
                     customType={item.metadata?.customType}
                     details={item.metadata?.details}
                     disclosure={props.disclosure}
@@ -1540,7 +1544,6 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.reasoning,
       item.images.length,
       item.createdAt,
-      item.pendingMode,
       (item.segments ?? []).map(segmentFingerprint),
       item.metadata?.customType,
       item.metadata?.hidden,
@@ -1617,7 +1620,6 @@ const isFinalItem = (item: SessionItem, turnRunning: boolean, runs: ToolRuns): b
   if (isMessageItem(item))
     return (
       item.draft !== true &&
-      Predicate.isUndefined(item.pendingMode) &&
       !messageToolCalls(item).some(isRunningCall) &&
       (runs.headedBy.get(item.id) ?? []).every(
         (run) => !run.open && !run.streamed && !run.calls.some(isRunningCall),
@@ -1768,8 +1770,7 @@ export const readerPrompt = (
   promptOf: (customType: string) => Option.Option<(content: string) => string>,
 ): Option.Option<string> => {
   if (!isMessageItem(item) || item.role !== "user") return Option.none()
-  if (Predicate.isNotUndefined(item.pendingMode) || item.metadata?.hidden === true)
-    return Option.none()
+  if (item.metadata?.hidden === true) return Option.none()
   const asked = Option.fromUndefinedOr(item.metadata?.customType).pipe(
     Option.flatMap(promptOf),
     Option.map((text) => text(item.content)),

@@ -539,7 +539,8 @@ export const KeyHints = {
   /** Stops what runs: a turn, an ask. */
   cancel: { key: "esc", verb: "cancel" },
   // OpenTUI reads Alt/Option as meta; cmd (super) reaches only a kitty-protocol terminal.
-  restoreQueue: { key: "alt+up", verb: "restore" },
+  /** Takes every waiting message back into the draft to edit. */
+  restoreQueue: { key: "alt+up", verb: "edit" },
   /** Arms the row; a second press deletes it. */
   delete: { key: "ctrl+x", verb: "delete" },
   exit: { key: "ctrl+c", verb: "exit" },
@@ -1803,16 +1804,12 @@ export function ToolFrame(props: ToolFrameProps) {
  * and a message renderer composes them for its own custom type.
  */
 
-/** The rail row: images, the pending label, then the text; `header` is a muted line above it. */
+/** The rail row: images, then the text; `header` is a muted line above it. */
 export function UserRow(props: MessageRowProps & { readonly header?: string }) {
   const { theme } = useTheme()
   const textColor = () => {
     if (props.interjection) return theme.warning
     return theme.text
-  }
-  const labelColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.textMuted
   }
   const railColor = () => {
     if (props.interjection) return theme.warning
@@ -1839,13 +1836,6 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
         <box flexDirection="column">
           <Show when={props.header}>
             {(header) => <text style={{ fg: theme.textMuted }}>{header()}</text>}
-          </Show>
-          <Show when={props.pendingMode}>
-            {(value) => (
-              <text>
-                <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
-              </text>
-            )}
           </Show>
           <text style={{ fg: textColor() }}>
             <span style={{ bold: true }}>{props.content}</span>

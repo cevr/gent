@@ -3,6 +3,7 @@ import { Effect, Fiber, Match, Option, Schema } from "effect"
 import {
   AuthAuthorization,
   AuthMethod,
+  authMethodAppliesTo,
   AuthPrompt,
   AuthProviderInfo,
   type SessionId,
@@ -360,12 +361,24 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
   return apply(event)
 }
 
-/** The methods the server offers for a provider, empty when it offers none. */
-const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<AuthMethod> =>
-  Option.getOrElse(
+/** A method keeps its provider position as its RPC address after filtering. */
+interface MethodChoice {
+  readonly index: number
+  readonly method: AuthMethod
+}
+
+/** The choices usable by the current default-target picker, in provider order. */
+const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<MethodChoice> => {
+  const offered = Option.getOrElse(
     Option.fromNullishOr(catalog.methods[provider]),
     (): ReadonlyArray<AuthMethod> => [],
   )
+  return offered.flatMap((method, index) => {
+    const choice = { index, method }
+    if (authMethodAppliesTo(method)) return [choice]
+    return []
+  })
+}
 
 /** Every provider the catalog knows: the active ones, then the search's. */
 const allProviders = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> => [
@@ -977,17 +990,11 @@ export function Auth(props: AuthProps) {
       )),
     )
 
-  /** A method row carries its own index: the server addresses methods by position. */
-  interface MethodChoice {
-    readonly index: number
-    readonly method: AuthMethod
-  }
-
   const methodRows = (): ReadonlyArray<SelectListRow<MethodChoice>> =>
     Option.match(methodScreen(), {
       onNone: (): ReadonlyArray<SelectListRow<MethodChoice>> => [],
       onSome: (current) =>
-        methodsFor(catalog(), current.provider).map((method, index) =>
+        methodsFor(catalog(), current.provider).map(({ method, index }) =>
           selectable({ index, method }, (isSelected, id) => (
             <box
               id={id}

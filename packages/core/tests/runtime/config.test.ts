@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
+  DateTime,
   Deferred,
   Effect,
   Fiber,
@@ -35,14 +36,15 @@ import {
 import { resolveSessionRoute } from "../../src/runtime/turn"
 import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
-import { createRpcHarness, TEST_MODEL_ID } from "../../src/test-utils/harness"
 import {
+  createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   type SequenceStep,
   systemTextOf,
+  TEST_MODEL_ID,
   waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/test-utils/harness"
 import { textStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -57,6 +59,23 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("user configuration", () => {
+  it.live("rejects empty, duplicate and invalid credential orders", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownOption(UserConfig)
+      for (const authOrder of [
+        [],
+        ["personal", "personal"],
+        ["UPPER"],
+        ["../escape"],
+        ["x".repeat(33)],
+      ]) {
+        expect(Option.isNone(decode({ providers: { anthropic: { authOrder } } }))).toBe(true)
+      }
+      expect(
+        Option.isSome(decode({ providers: { anthropic: { authOrder: ["default", "personal"] } } })),
+      ).toBe(true)
+    }),
+  )
   describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({ disabledExtensions: ["@gent/todo"] })
@@ -809,6 +828,7 @@ describe("user configuration", () => {
         const cwd = yield* fs.makeTempDirectoryScoped()
         const home = yield* fs.makeTempDirectoryScoped()
         const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
         yield* fs.writeFileString(projectConfigPath, encodeJson({ disabledExtensions: ["x"] }))
         const reads = yield* Ref.make<ReadonlyArray<string>>([])
@@ -828,6 +848,12 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          // A stamp as recent as its mtime is not trusted, so the first read
+          // after the files age reads them once; then the stamps hold.
+          const aged = DateTime.toDate(DateTime.subtract(yield* DateTime.now, { minutes: 1 }))
+          yield* fs.utimes(projectConfigPath, aged, aged)
+          yield* fs.utimes(userConfigPath, aged, aged)
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
           const before = (yield* Ref.get(reads)).length
           expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
           expect((yield* cfg.get(cwd)).disabledExtensions).toEqual(["x"])
@@ -842,6 +868,46 @@ describe("user configuration", () => {
         }).pipe(Effect.provide(liveConfigAt(cwd, home, countingReads)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
+
+    // An in-place save sets the file's mtime before it copies the bytes, and
+    // the file clock ticks coarser than a millisecond. A read inside that
+    // window stats the new stamp and reads the old bytes; the save then ends
+    // in the same tick, so size, mtime and inode stay what the read saw.
+    for (const file of ["project", "user"] as const) {
+      it.scopedLive(
+        `a same-size ${file} config save in the clock tick of the last read reaches the next read`,
+        () =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem
+            const path = yield* Path.Path
+            const cwd = yield* fs.makeTempDirectoryScoped()
+            const home = yield* fs.makeTempDirectoryScoped()
+            const configPath = path.join(
+              { project: cwd, user: home }[file],
+              ConfigService.CONFIG_RELATIVE,
+            )
+            yield* fs.makeDirectory(path.dirname(configPath), { recursive: true })
+            // In place, the inode kept: "one" and "two" save the same size.
+            const save = (value: "one" | "two") =>
+              fs.writeFileString(configPath, encodeJson({ disabledExtensions: [value] }))
+            yield* save("one")
+            yield* Effect.gen(function* () {
+              const cfg = yield* ConfigService
+              expect((yield* cfg.get()).disabledExtensions).toEqual(["one"])
+              // The save's tick, a minute ahead, so it is never older than the
+              // read however long the test takes.
+              const tick = DateTime.toDate(DateTime.add(yield* DateTime.now, { minutes: 1 }))
+              // The save began: the stamp moved, the bytes did not.
+              yield* fs.utimes(configPath, tick, tick)
+              expect((yield* cfg.get()).disabledExtensions).toEqual(["one"])
+              // It ends in the same tick: new bytes, the same size, mtime and inode.
+              yield* save("two")
+              yield* fs.utimes(configPath, tick, tick)
+              expect((yield* cfg.get()).disabledExtensions).toEqual(["two"])
+            }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+          }).pipe(Effect.provide(BunServices.layer)),
+      )
+    }
 
     it.scopedLive("a launch project config that breaks drops its cached settings", () =>
       Effect.gen(function* () {

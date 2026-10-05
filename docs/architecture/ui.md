@@ -4,7 +4,7 @@ Every pass sweeps the TUI as a user sees it, next to the prior-art TUIs, run sid
 
 ## Reference TUIs
 
-The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): vercel-labs/fx first, then pi and opencode, each with what to read and how to run it. Never the `curl … | bash` installer. Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
+The references are the `ui` rows of [`PRIOR_ART.md`](../../PRIOR_ART.md): Claude Code first for the transcript (a clear transcript, a north star), vercel-labs/fx for input and layout, then pi and opencode, each with what to read and how to run it. Never the `curl … | bash` installer. Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
 
 ## How to run
 
@@ -25,7 +25,8 @@ The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): verc
 7. Errors and notices: provider error, retry, overflow/compaction notice; wording and placement.
 8. Status: model, context gauge, cost, cwd, busy state.
 9. Selection and copy (OSC 52), links, mouse.
-10. Consistency inside gent: the same key or word means the same thing on every surface; each pane shows its way out.
+10. A clear transcript: a user message, an agent reply, a child agent, a queued message and a tool call each look different at a glance; finished work is one summary line with its detail on demand.
+11. Consistency inside gent: the same key or word means the same thing on every surface; each pane shows its way out.
 
 ## Report
 

@@ -89,7 +89,7 @@ const TOOL_IMAGE_MAX_BYTES = (5 * 1024 * 1024 * 3) / 4
  * 2,000 pixels in a request of more than 20 images; at 2,000 pixels every
  * driver's request stays valid, whatever the number of images. Each provider
  * scales a larger image down itself, so more pixels cost only bytes. Pi,
- * opencode and Claude Code keep the same bound (`PRIOR_ARTS.md`).
+ * opencode and Claude Code keep the same bound (`PRIOR_ART.md`).
  */
 const TOOL_IMAGE_MAX_SIDE = 2_000
 
@@ -433,7 +433,7 @@ const SIDE_BOUNDS: ReadonlyArray<number> = (() => {
 /**
  * The encodes the store tries, in order, until one is inside the byte limit:
  * at each side bound, the image's own format, then JPEG at falling quality.
- * The order is the prior arts' (`PRIOR_ARTS.md`, tool image scaling).
+ * The order is the prior art's (`PRIOR_ART.md`, tool image scaling).
  */
 const encodesFor = (format: ImageTranscode["format"]): ReadonlyArray<ImageTranscode> => {
   // PNG is lossless and takes no quality; JPEG's own encode is the ladder's first.

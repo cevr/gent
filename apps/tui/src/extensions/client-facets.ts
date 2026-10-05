@@ -738,7 +738,6 @@ export interface MessageRowProps {
   readonly content: string
   readonly images: ReadonlyArray<ImagePartProjection>
   readonly interjection: boolean
-  readonly pendingMode?: "queued" | "steer"
   /** The message's `metadata.details`, for the renderer to decode. */
   readonly details: unknown
   /** The transcript's level, so a row folds with `ctrl+o` like every other block. */
@@ -802,7 +801,8 @@ const MessageRendererContribution = Schema.Struct({
   /**
    * The one line the queue widget shows for a waiting message of this type
    * (a background answer as `↳ answer · <question>`). Without it the widget
-   * shows the message's text; a restore takes the text either way.
+   * shows `↳ steer · <first line>` or `↳ queued · <first line>`; a restore
+   * takes the text either way.
    */
   queueLabel: Schema.optional(contributed<(message: QueuedMessage) => string>()),
 })

@@ -62,6 +62,9 @@ import {
   modelFromCatalog,
   ReasoningOption,
   type PersistAuth,
+  authMethodAppliesTo,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
@@ -145,6 +148,17 @@ type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
   provider: ProviderId,
+  credentials: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        slot: CredentialSlot,
+        hasKey: Schema.Boolean,
+        source: AuthSource,
+        authType: Schema.optional(AuthMethod.fields.type),
+        missing: Schema.optional(Schema.Array(Schema.String)),
+      }),
+    ),
+  ),
   /** The driver's display name ("OpenCode"); a client shows it in place of the id. */
   name: Schema.optional(Schema.String),
   /** The sign-in is ready: a credential, and an answer to each prompt it needs. */
@@ -186,26 +200,42 @@ class AuthEntryInvalid extends Schema.TaggedError<AuthEntryInvalid>()("AuthEntry
 
 /** The raw store under `serializeAuthStore`; it neither locks nor discards. */
 interface AuthStoreAccess {
+  readonly listSlots?: (provider: string) => Effect.Effect<ReadonlyArray<CredentialSlot>, AuthError>
   readonly get: (
     provider: string,
+    slot?: CredentialSlot,
     // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
   ) => Effect.Effect<AuthInfo | undefined, AuthError | AuthEntryInvalid>
-  readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
-  readonly remove: (provider: string) => Effect.Effect<void, AuthError>
+  readonly set: (
+    provider: string,
+    info: AuthInfo,
+    slot?: CredentialSlot,
+  ) => Effect.Effect<void, AuthError>
+  readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
   /** The provider ids an entry is stored under, decoded or not. */
   readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
 }
 
 export interface AuthService {
+  readonly listSlots: (provider: string) => Effect.Effect<ReadonlyArray<CredentialSlot>, AuthError>
   /**
    * The provider ids an entry is stored under: what tells a generic provider
    * with a stored key from the rest without one read per provider.
    */
   readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
-  // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
-  readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
-  readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
-  readonly remove: (provider: string) => Effect.Effect<void, AuthError>
+  readonly get: (
+    provider: string,
+    slot?: CredentialSlot,
+    // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
+  ) => Effect.Effect<AuthInfo | undefined, AuthError>
+  readonly set: (
+    provider: string,
+    info: AuthInfo,
+    slot?: CredentialSlot,
+    /** Runs exactly once after successful persistence under the commit mask. */
+    onPersisted?: Effect.Effect<void, never, never>,
+  ) => Effect.Effect<void, AuthError>
+  readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
   /**
    * Read, then maybe write, one provider's credential. `f` receives what the
    * store holds now and returns a result plus the credential to write (none
@@ -218,6 +248,7 @@ export interface AuthService {
     f: (
       current: Option.Option<AuthInfo>,
     ) => Effect.Effect<readonly [A, Option.Option<AuthInfo>], E>,
+    slot?: CredentialSlot,
   ) => Effect.Effect<A, E | AuthError>
 }
 
@@ -256,12 +287,12 @@ export const serializeAuthStore = (
         return crossProcess(provider)(effect).pipe(lock.withPermits(1))
       })
   // Runs under the provider's lock only: no writer can be mid-write here.
-  const getOrDiscard = (provider: string) =>
-    store.get(provider).pipe(
+  const getOrDiscard = (provider: string, slot?: CredentialSlot) =>
+    store.get(provider, slot).pipe(
       Effect.catchTag("AuthEntryInvalid", (invalid) =>
         Effect.logWarning("discarded invalid auth info").pipe(
           Effect.annotateLogs({ provider, cause: String(invalid.cause) }),
-          Effect.andThen(store.remove(provider)),
+          Effect.andThen(store.remove(provider, slot)),
           Effect.catchTag("AuthError", (deleteCause) =>
             Effect.logWarning("failed to discard invalid auth info").pipe(
               Effect.annotateLogs({ provider, deleteCause: String(deleteCause) }),
@@ -274,20 +305,40 @@ export const serializeAuthStore = (
     )
   return {
     list: store.list,
-    get: (provider) =>
-      store
-        .get(provider)
-        .pipe(
-          Effect.catchTag("AuthEntryInvalid", () => exclusive(provider)(getOrDiscard(provider))),
+    listSlots: (provider) =>
+      store.listSlots?.(provider) ??
+      store.get(provider).pipe(
+        Effect.map((info) =>
+          Option.match(Option.fromUndefinedOr(info), {
+            onNone: () => [],
+            onSome: () => [DEFAULT_CREDENTIAL_SLOT],
+          }),
         ),
-    set: (provider, info) => exclusive(provider)(store.set(provider, info)),
-    remove: (provider) => exclusive(provider)(store.remove(provider)),
-    update: (provider, f) =>
+        Effect.catchTag("AuthEntryInvalid", () => Effect.succeed([DEFAULT_CREDENTIAL_SLOT])),
+      ),
+    get: (provider, slot) =>
+      store
+        .get(provider, slot)
+        .pipe(
+          Effect.catchTag("AuthEntryInvalid", () =>
+            exclusive(provider)(getOrDiscard(provider, slot)),
+          ),
+        ),
+    set: (provider, info, slot, onPersisted) => {
+      let write = store.set(provider, info, slot)
+      if (Predicate.isNotUndefined(onPersisted)) {
+        write = write.pipe(Effect.andThen(onPersisted), Effect.uninterruptible)
+      }
+      // Acquisition retains caller interruptibility; only the committed write is masked.
+      return exclusive(provider)(write)
+    },
+    remove: (provider, slot) => exclusive(provider)(store.remove(provider, slot)),
+    update: (provider, f, slot) =>
       exclusive(provider)(
         Effect.gen(function* () {
-          const current = Option.fromUndefinedOr(yield* getOrDiscard(provider))
+          const current = Option.fromUndefinedOr(yield* getOrDiscard(provider, slot))
           const [result, next] = yield* f(current)
-          if (Option.isSome(next)) yield* store.set(provider, next.value)
+          if (Option.isSome(next)) yield* store.set(provider, next.value, slot)
           return result
         }),
       ),
@@ -393,16 +444,55 @@ export class Auth extends Context.Service<Auth, AuthService>()(
         const decode = Schema.decodeEffect(codec)
         const encode = Schema.encodeEffect(codec)
         const wrap = (message: string) => (cause: unknown) => new AuthError({ message, cause })
-        const fileOf = (provider: string) =>
-          pathService.join(directory, encodeURIComponent(provider))
+        const slotsDirectory = pathService.join(directory, ".slots")
+        const providerDirectory = (provider: string) => {
+          const encoded = encodeURIComponent(provider)
+          // URI encoding leaves dot segments bare; they must not move a named entry.
+          if (encoded === "." || encoded === "..") {
+            return pathService.join(slotsDirectory, encoded.replaceAll(".", "%2E"))
+          }
+          return pathService.join(slotsDirectory, encoded)
+        }
+        const fileOf = (provider: string, slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT) => {
+          if (slot === DEFAULT_CREDENTIAL_SLOT)
+            return pathService.join(directory, encodeURIComponent(provider))
+          return pathService.join(providerDirectory(provider), encodeURIComponent(slot))
+        }
+        const namesIn = (dir: string) =>
+          fs.readDirectory(dir).pipe(
+            Effect.catchIf(
+              (error) => error.reason._tag === "NotFound",
+              () => Effect.succeed([]),
+            ),
+            Effect.mapError(wrap("Failed to list auth info")),
+          )
+        const listSlots = (provider: string) =>
+          Effect.gen(function* () {
+            const named = yield* namesIn(providerDirectory(provider))
+            const slots = named
+              .flatMap((name) => Option.toArray(Schema.decodeOption(CredentialSlot)(name)))
+              .filter((slot) => slot !== DEFAULT_CREDENTIAL_SLOT)
+            const legacy = yield* fs.stat(fileOf(provider)).pipe(
+              Effect.asSome,
+              Effect.catchIf(
+                (error) => error.reason._tag === "NotFound",
+                () => Effect.succeedNone,
+              ),
+              Effect.mapError(wrap("Failed to list auth info")),
+            )
+            const hasDefault = Option.exists(legacy, (info) => info.type === "File")
+            if (hasDefault) return [DEFAULT_CREDENTIAL_SLOT, ...slots.sort()]
+            return slots.sort()
+          })
         // A dot directory inside the store: no provider id starts with a dot,
         // so it never reads as a credential, and it goes with the store.
         const lockDirectory = pathService.join(directory, ".locks")
         return serializeAuthStore(
           {
-            get: (provider) =>
+            listSlots,
+            get: (provider, slot) =>
               Effect.gen(function* () {
-                const text = yield* fs.readFileString(fileOf(provider)).pipe(
+                const text = yield* fs.readFileString(fileOf(provider, slot)).pipe(
                   Effect.asSome,
                   Effect.catchIf(
                     (error) => error.reason._tag === "NotFound",
@@ -419,29 +509,35 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             // A staged file renamed over the entry: a reader in another
             // process sees the old credential or the new one, never an
             // empty file.
-            set: (provider, info) =>
+            set: (provider, info, slot) =>
               encode(info).pipe(
-                Effect.tap(() => fs.makeDirectory(directory, { recursive: true })),
-                Effect.flatMap((text) => writeFileAtomic(fileOf(provider), text, { mode: 0o600 })),
+                Effect.tap(() =>
+                  fs.makeDirectory(pathService.dirname(fileOf(provider, slot)), {
+                    recursive: true,
+                  }),
+                ),
+                Effect.flatMap((text) =>
+                  writeFileAtomic(fileOf(provider, slot), text, { mode: 0o600 }),
+                ),
                 Effect.mapError(wrap("Failed to persist auth info")),
                 Effect.provideService(FileSystem.FileSystem, fs),
                 Effect.provideService(Path.Path, pathService),
               ),
-            remove: (provider) =>
+            remove: (provider, slot) =>
               fs
-                .remove(fileOf(provider), { force: true })
+                .remove(fileOf(provider, slot), { force: true })
                 .pipe(Effect.mapError(wrap("Failed to remove auth info"))),
             // A dot file (the lock directory, a staged write) is no entry.
-            list: fs.readDirectory(directory).pipe(
-              Effect.map((names) =>
-                names.filter((name) => !name.startsWith(".")).map(decodeURIComponent),
-              ),
-              Effect.catchIf(
-                (error) => error.reason._tag === "NotFound",
-                () => Effect.succeed([]),
-              ),
-              Effect.mapError(wrap("Failed to list auth info")),
-            ),
+            list: Effect.gen(function* () {
+              const legacy = (yield* namesIn(directory))
+                .filter((name) => !name.startsWith("."))
+                .map(decodeURIComponent)
+              const named = yield* Effect.filter(
+                (yield* namesIn(slotsDirectory)).map(decodeURIComponent),
+                (provider) => listSlots(provider).pipe(Effect.map((slots) => slots.length > 0)),
+              )
+              return [...new Set([...legacy, ...named])]
+            }),
           },
           fileProviderLock(lockDirectory, pathService, fs),
         )
@@ -453,17 +549,30 @@ export class Auth extends Context.Service<Auth, AuthService>()(
    */
   static Test = (initial: Record<string, AuthInfo> = {}): Layer.Layer<Auth> =>
     Layer.sync(Auth)(() => {
-      const map = new Map(Object.entries(initial))
+      const map = new Map(
+        Object.entries(initial).map(([provider, info]) => [
+          provider,
+          new Map([[DEFAULT_CREDENTIAL_SLOT, info]]),
+        ]),
+      )
       return serializeAuthStore({
-        list: Effect.sync(() => [...map.keys()]),
-        get: (provider) => Effect.sync(() => map.get(provider)),
-        set: (provider, info) =>
+        list: Effect.sync(() => {
+          const providers: string[] = []
+          for (const [provider, slots] of map) if (slots.size > 0) providers.push(provider)
+          return providers
+        }),
+        listSlots: (provider) => Effect.sync(() => [...(map.get(provider)?.keys() ?? [])]),
+        get: (provider, slot = DEFAULT_CREDENTIAL_SLOT) =>
+          Effect.sync(() => map.get(provider)?.get(slot)),
+        set: (provider, info, slot = DEFAULT_CREDENTIAL_SLOT) =>
           Effect.sync(() => {
-            map.set(provider, info)
+            const slots = map.get(provider) ?? new Map<CredentialSlot, AuthInfo>()
+            slots.set(slot, info)
+            map.set(provider, slots)
           }),
-        remove: (provider) =>
+        remove: (provider, slot = DEFAULT_CREDENTIAL_SLOT) =>
           Effect.sync(() => {
-            map.delete(provider)
+            map.get(provider)?.delete(slot)
           }),
       })
     })
@@ -506,9 +615,34 @@ const credentialKeys = (drivers: ModelDrivers, driverId: string): ReadonlyArray<
   return [owner, ...sharers]
 }
 
+/** Alias entries may name one order, never competing orders for one owner. */
+const validateCredentialOrders = Effect.fn("CredentialOrder.validate")(function* (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+) {
+  const orders = new Map<string, ReadonlyArray<CredentialSlot>>()
+  for (const [id, entry] of Object.entries(config.providers ?? {})) {
+    if (Predicate.isUndefined(entry.authOrder)) continue
+    const owner = credentialOwner(drivers, id)
+    const prior = orders.get(owner)
+    if (
+      Predicate.isNotUndefined(prior) &&
+      (prior.length !== entry.authOrder.length ||
+        prior.some((slot, index) => slot !== entry.authOrder?.[index]))
+    ) {
+      return yield* new ProviderAuthError({
+        message: `Conflicting credential orders for provider "${owner}"`,
+      })
+    }
+    orders.set(owner, entry.authOrder)
+  }
+  return orders
+})
+
 interface StoredCredential {
   /** The store key the credential sits under. */
   readonly key: string
+  readonly slot: CredentialSlot
   readonly info: AuthInfo
 }
 
@@ -517,10 +651,11 @@ const storedCredential = Effect.fn("storedCredential")(function* (
   auth: AuthService,
   drivers: ModelDrivers,
   driverId: string,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
 ) {
   for (const key of credentialKeys(drivers, driverId)) {
-    const info = yield* auth.get(key)
-    if (Predicate.isNotUndefined(info)) return Option.some<StoredCredential>({ key, info })
+    const info = yield* auth.get(key, slot)
+    if (Predicate.isNotUndefined(info)) return Option.some<StoredCredential>({ key, slot, info })
   }
   return Option.none<StoredCredential>()
 })
@@ -530,19 +665,23 @@ const driverAuthInfo = (
   auth: AuthService,
   drivers: ModelDrivers,
   driverId: string,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
 ): Effect.Effect<Option.Option<ProviderAuthInfo>, AuthError> =>
-  storedCredential(auth, drivers, driverId).pipe(
-    Effect.map(Option.map((found) => toProviderAuthInfo(auth, found.key, found.info))),
+  storedCredential(auth, drivers, driverId, slot).pipe(
+    Effect.map(Option.map((found) => toProviderAuthInfo(auth, found.key, found.info, found.slot))),
   )
 
 /**
  * Sign out of `provider`'s sign-in: remove every credential it reads, in the
  * profile of the `ExtensionRegistry` in context.
  */
-export const removeSignIn = Effect.fn("removeSignIn")(function* (provider: string) {
+export const removeSignIn = Effect.fn("removeSignIn")(function* (
+  provider: string,
+  slot?: CredentialSlot,
+) {
   const auth = yield* Auth
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  for (const key of credentialKeys(modelDrivers, provider)) yield* auth.remove(key)
+  for (const key of credentialKeys(modelDrivers, provider)) yield* auth.remove(key, slot)
 })
 
 /**
@@ -552,13 +691,17 @@ export const removeSignIn = Effect.fn("removeSignIn")(function* (provider: strin
  * key for a generic provider is stored only when its base URL answers pass
  * the rule a turn applies (`checkBaseUrlAnswers`).
  */
-export const storeSignIn = Effect.fn("storeSignIn")(function* (provider: string, info: AuthInfo) {
+export const storeSignIn = Effect.fn("storeSignIn")(function* (
+  provider: string,
+  info: AuthInfo,
+  slot?: CredentialSlot,
+) {
   const auth = yield* Auth
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
   if (info.type === "api" && !modelDrivers.has(provider)) {
     yield* checkBaseUrlAnswers(provider, info)
   }
-  yield* auth.set(credentialOwner(modelDrivers, provider), info)
+  yield* auth.set(credentialOwner(modelDrivers, provider), info, slot)
 })
 
 // ── auth guard ──────────────────────────────────────────────────────────────
@@ -648,7 +791,44 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
       ...readiness(missing),
     })
   }
-  return providers
+  return yield* Effect.forEach(providers, (row) =>
+    Effect.gen(function* () {
+      const driver = drivers.get(row.provider)
+      if (Predicate.isUndefined(driver)) return row
+      const slots = new Set<CredentialSlot>([DEFAULT_CREDENTIAL_SLOT])
+      for (const key of credentialKeys(drivers, row.provider)) {
+        for (const slot of yield* auth.listSlots(key)) slots.add(slot)
+      }
+      if (slots.size === 1) return row
+      const credentials = yield* Effect.forEach([...slots], (slot) =>
+        Effect.gen(function* () {
+          if (slot === DEFAULT_CREDENTIAL_SLOT)
+            return {
+              slot,
+              hasKey: row.hasKey,
+              source: row.source ?? "none",
+              ...omitUndefined({ authType: row.authType, missing: row.missing }),
+            }
+          const stored = yield* storedCredential(auth, drivers, row.provider, slot)
+          if (Option.isNone(stored)) return { slot, hasKey: false, source: "none" as const }
+          let missing: ReadonlyArray<string> = []
+          if (stored.value.info.type === "api") {
+            missing = yield* unansweredPrompts(
+              driver,
+              Option.fromUndefinedOr(stored.value.info.metadata),
+            )
+          }
+          return {
+            slot,
+            source: "stored" as const,
+            authType: stored.value.info.type,
+            ...readiness(missing),
+          }
+        }),
+      )
+      return { ...row, credentials }
+    }),
+  )
 })
 
 /**
@@ -751,9 +931,9 @@ const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {
 
 /** Build a PersistAuth callback for a provider — writes credentials to Auth. */
 const persistAuthTo =
-  (authStore: AuthService, providerId: string): PersistAuth =>
-  (auth) =>
-    authStore.set(providerId, authValue(auth)).pipe(
+  (authStore: AuthService, providerId: string, slot?: CredentialSlot): PersistAuth =>
+  (auth, onPersisted) =>
+    authStore.set(providerId, authValue(auth), slot, onPersisted).pipe(
       Effect.mapError(
         (e) =>
           new ProviderAuthError({
@@ -772,28 +952,33 @@ const toProviderAuthInfo = (
   authStore: AuthService,
   providerId: string,
   info: AuthInfo,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
 ): ProviderAuthInfo => {
   if (info.type === "api") {
     if (Predicate.isUndefined(info.metadata)) {
-      return ProviderAuthInfo.cases.Api.make({ key: info.key })
+      return ProviderAuthInfo.cases.Api.make({ key: info.key, slot })
     }
-    return ProviderAuthInfo.cases.Api.make({ key: info.key, metadata: info.metadata })
+    return ProviderAuthInfo.cases.Api.make({ key: info.key, metadata: info.metadata, slot })
   }
   return ProviderAuthInfo.cases.Oauth.make({
+    slot,
     update: <A, E>(
       f: (
         stored: Option.Option<StoredOAuthCredentials>,
       ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
     ) =>
       authStore
-        .update(providerId, (current) =>
-          Effect.map(
-            f(Option.flatMap(current, storedOAuthFields)),
-            (pair): readonly [A, Option.Option<AuthInfo>] => [
-              pair[0],
-              Option.map(pair[1], (fields) => authValue({ type: "oauth", ...fields })),
-            ],
-          ),
+        .update(
+          providerId,
+          (current) =>
+            Effect.map(
+              f(Option.flatMap(current, storedOAuthFields)),
+              (pair): readonly [A, Option.Option<AuthInfo>] => [
+                pair[0],
+                Option.map(pair[1], (fields) => authValue({ type: "oauth", ...fields })),
+              ],
+            ),
+          slot,
         )
         .pipe(
           Effect.catchIf(Schema.is(AuthError), (cause) =>
@@ -846,28 +1031,68 @@ export const listAuthMethods = Effect.fn("ProviderLogin.listMethods")(function* 
   return result
 })
 
+/** Immutable login address and original answers, held by the RPC lease. */
+export interface ProviderLoginTarget {
+  readonly owner: string
+  readonly provider: string
+  readonly method: number
+  readonly slot: CredentialSlot
+  readonly inputs?: AuthMetadata
+  readonly persist: PersistAuth
+}
+
+export const captureProviderLogin = Effect.fn("ProviderLogin.capture")(function* (
+  provider: string,
+  method: number,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
+  inputs?: AuthMetadata,
+) {
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  yield* validateCredentialOrders(modelDrivers, yield* (yield* ExtensionRegistry).providerConfig)
+  const owner = credentialOwner(modelDrivers, provider)
+  const auth = yield* Auth
+  const target: ProviderLoginTarget = {
+    provider,
+    owner,
+    method,
+    slot,
+    persist: persistAuthTo(auth, owner, slot),
+  }
+  if (Predicate.isNotUndefined(inputs)) return { ...target, inputs: { ...inputs } }
+  return target
+})
+
 /** Start a driver's login; none when the method completed without a link. */
 export const authorizeProvider = Effect.fn("ProviderLogin.authorize")(function* (
   sessionId: SessionId,
   provider: string,
   method: number,
+  target?: ProviderLoginTarget,
 ) {
+  const binding = target ?? (yield* captureProviderLogin(provider, method))
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  const authStore = yield* Auth
   const platform = yield* GentPlatform
-  const extProvider = modelDrivers.get(provider)
+  const extProvider = modelDrivers.get(binding.provider)
   if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
     return yield* new ProviderAuthError({
       message: `Provider "${provider}" does not support authorize`,
+    })
+  }
+  const selectedMethod = extProvider.auth.methods[binding.method]
+  if (Predicate.isUndefined(selectedMethod) || !authMethodAppliesTo(selectedMethod, binding.slot)) {
+    return yield* new ProviderAuthError({
+      message: "Sign-in method unavailable for this credential target",
     })
   }
   const authorizationId = yield* platform.randomId
   const extResult = yield* extProvider.auth
     .authorize({
       sessionId,
-      methodIndex: method,
+      methodIndex: binding.method,
       authorizationId,
-      persist: persistAuthTo(authStore, credentialOwner(modelDrivers, provider)),
+      slot: binding.slot,
+      inputs: binding.inputs,
+      persist: binding.persist,
     })
     .pipe(
       Effect.catchDefect((e) =>
@@ -897,18 +1122,21 @@ export const completeProviderAuth = Effect.fn("ProviderLogin.callback")(function
   method: number,
   authorizationId: string,
   code?: string,
+  target?: ProviderLoginTarget,
 ) {
+  const binding = target ?? (yield* captureProviderLogin(provider, method))
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  const authStore = yield* Auth
-  const extProvider = modelDrivers.get(provider)
+  const extProvider = modelDrivers.get(binding.provider)
   // A driver without a callback finished its login in authorize (a "done" method).
   if (Predicate.isUndefined(extProvider?.auth?.callback)) return
   yield* extProvider.auth
     .callback({
       sessionId,
-      methodIndex: method,
+      methodIndex: binding.method,
       authorizationId,
-      persist: persistAuthTo(authStore, credentialOwner(modelDrivers, provider)),
+      slot: binding.slot,
+      inputs: binding.inputs,
+      persist: binding.persist,
       code,
     })
     .pipe(
@@ -2022,6 +2250,7 @@ const checkBaseUrlAnswers = Effect.fn("GenericProvider.checkBaseUrlAnswers")(fun
 ) {
   const registry = yield* ExtensionRegistry
   const config = yield* registry.providerConfig
+  yield* validateCredentialOrders(registry.getResolved().modelDrivers, config)
   const source = yield* (yield* ModelCatalogSource).read
   const provider = configuredCatalog(source, config, registry.getResolved().apiClasses).provider(
     providerId,
@@ -2084,6 +2313,16 @@ const genericDriver = Effect.fn("GenericProvider.driver")(function* (
     endpoint: (modelName, authInfo) =>
       Effect.gen(function* () {
         const auth = Option.fromUndefinedOr(authInfo)
+        if (
+          Option.isSome(auth) &&
+          auth.value._tag !== "Api" &&
+          Predicate.isNotUndefined(auth.value.slot) &&
+          auth.value.slot !== DEFAULT_CREDENTIAL_SLOT
+        ) {
+          return yield* new ProviderAuthError({
+            message: "Named credential unavailable for an API-only provider; sign in with /auth",
+          })
+        }
         const stored = Option.flatMap(auth, (each) => {
           if (each._tag !== "Api") return Option.none<string>()
           return Option.some(each.key)
@@ -2198,6 +2437,7 @@ const servedProfile = Effect.fn("GenericProvider.servedProfile")(function* (
   const registry = yield* ExtensionRegistry
   const resolved = registry.getResolved()
   const config = yield* registry.providerConfig
+  yield* validateCredentialOrders(resolved.modelDrivers, config)
   const source = yield* (yield* ModelCatalogSource).read
   const catalog = configuredCatalog(source, config, resolved.apiClasses)
   const stored = new Set(
@@ -2260,6 +2500,7 @@ export interface ResolveModelRequest {
   readonly hints?: ProviderHints
   /** Per-agent model driver override from `agent.driver`. */
   readonly driverId?: string
+  readonly credentialSlot?: CredentialSlot
 }
 
 interface ModelResolverService {
@@ -2377,6 +2618,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   // A registered driver, else the generic driver of a servable catalog
   // provider, active or not: one with no key fails and names /auth.
   const config = yield* extensionRegistry.providerConfig
+  yield* validateCredentialOrders(resolved.modelDrivers, config)
   const catalog = configuredCatalog(source, config, resolved.apiClasses)
   const extensionProvider = yield* Option.match(
     Option.fromUndefinedOr(resolved.modelDrivers.get(providerName)),
@@ -2397,7 +2639,12 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     })
   }
 
-  const authParam = yield* driverAuthInfo(authStore, resolved.modelDrivers, providerName).pipe(
+  const authParam = yield* driverAuthInfo(
+    authStore,
+    resolved.modelDrivers,
+    providerName,
+    request.credentialSlot,
+  ).pipe(
     Effect.mapError(
       (e) =>
         new ProviderError({
@@ -2407,6 +2654,16 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
         }),
     ),
   )
+
+  if (
+    Predicate.isNotUndefined(request.credentialSlot) &&
+    request.credentialSlot !== DEFAULT_CREDENTIAL_SLOT &&
+    Option.isNone(authParam)
+  ) {
+    return yield* new ProviderAuthError({
+      message: `Credential "${request.credentialSlot}" unavailable for provider "${providerName}"; sign in again`,
+    })
+  }
 
   // A model the chat catalog lacks can be a classifier: the decision source tells.
   const driver = extensionProvider.value

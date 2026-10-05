@@ -22,6 +22,7 @@ import {
   type ApiClassContribution,
   type ApiClassRequest,
   AuthMethod,
+  CredentialSlot,
   catalogModelEntry,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
@@ -84,11 +85,11 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   createRpcHarness,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
   type ModelCatalogFixtureRequest,
@@ -817,6 +818,311 @@ describe("Auth", () => {
   })
 
   describe("Auth.Live", () => {
+    it.scopedLive("successful persistence publishes exactly once and failure never publishes", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const slot = CredentialSlot.make("personal")
+        const published = yield* Ref.make(0)
+        yield* auth.set(
+          "publish",
+          AuthApi.make({ type: "api", key: "fake-written" }),
+          slot,
+          Ref.update(published, (count) => count + 1),
+        )
+        expect(yield* Ref.get(published)).toBe(1)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("publish", slot)),
+            (stored) => stored.type === "api" && stored.key === "fake-written",
+          ),
+        ).toBe(true)
+        yield* fs.makeDirectory(dir + "/.slots/publish/blocked")
+        const failed = yield* Effect.exit(
+          auth.set(
+            "publish",
+            AuthApi.make({ type: "api", key: "fake-failed" }),
+            CredentialSlot.make("blocked"),
+            Ref.update(published, (count) => count + 1),
+          ),
+        )
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect(yield* Ref.get(published)).toBe(1)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "publication writes remain cancellable while provider or SQLite acquisition waits",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          for (const separateStore of [false, true]) {
+            const dir = yield* fs.makeTempDirectoryScoped()
+            const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+            let waiter = holder
+            if (separateStore) waiter = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+            const slot = CredentialSlot.make("personal")
+            yield* holder.set("publish", AuthApi.make({ type: "api", key: "fake-old" }), slot)
+            const inside = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            const holding = yield* holder
+              .update(
+                "publish",
+                () =>
+                  Effect.gen(function* () {
+                    yield* Deferred.completeWith(inside, Effect.void)
+                    yield* Deferred.await(release)
+                    return [true, Option.none<AuthInfo>()] as const
+                  }),
+                slot,
+              )
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(inside)
+            const published = yield* Ref.make(0)
+            const waiting = yield* waiter
+              .set(
+                "publish",
+                AuthApi.make({ type: "api", key: "fake-new" }),
+                slot,
+                Ref.update(published, (count) => count + 1),
+              )
+              .pipe(Effect.forkScoped)
+            yield* Effect.yieldNow
+            const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
+            yield* Deferred.completeWith(release, Effect.void)
+            yield* Fiber.join(holding)
+            expect(Option.isSome(ended)).toBe(true)
+            expect(yield* Ref.get(published)).toBe(0)
+            expect(
+              Option.exists(
+                Option.fromUndefinedOr(yield* holder.get("publish", slot)),
+                (stored) => stored.type === "api" && stored.key === "fake-old",
+              ),
+            ).toBe(true)
+          }
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive("dot-segment slot discovery returns only its credential labels", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const personal = CredentialSlot.make("personal")
+        yield* auth.set("unrelated", AuthApi.make({ type: "api", key: "fake-default" }))
+        const original = yield* fs.readFileString(dir + "/unrelated")
+        for (const provider of [".", ".."]) {
+          yield* auth.set(provider, AuthApi.make({ type: "api", key: "fake-named" }), personal)
+          expect(yield* auth.listSlots(provider)).toEqual([personal])
+        }
+        expect(yield* auth.listSlots("unrelated")).toEqual([CredentialSlot.make("default")])
+        expect((yield* auth.list).slice().sort()).toEqual([".", "..", "unrelated"])
+        expect((yield* fs.readFileString(dir + "/unrelated")) === original).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive("named provider addresses cannot escape the slots directory", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const slot = CredentialSlot.make("personal")
+        const info = AuthApi.make({ type: "api", key: "fake-named" })
+        for (const [provider, encoded] of [
+          ["..", "%2E%2E"],
+          ["vendor/team", "vendor%2Fteam"],
+        ] as const) {
+          yield* auth.set(provider, info, slot)
+          expect(yield* fs.exists(dir + "/.slots/" + encoded + "/personal")).toBe(true)
+          expect(
+            Option.exists(
+              Option.fromUndefinedOr(yield* auth.get(provider, slot)),
+              (stored) => stored.type === "api" && stored.key === info.key,
+            ),
+          ).toBe(true)
+        }
+        expect(yield* fs.exists(dir + "/personal")).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "a failed named rotation write leaves the default unchanged and the old entry recoverable",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const slot = CredentialSlot.make("personal")
+          const old = AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            access: "fake-old",
+            refresh: "fake-old-refresh",
+            expires: 1,
+          })
+          const next = AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            access: "fake-next",
+            refresh: "fake-next-refresh",
+            expires: 2,
+          })
+          yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "fake-default" }))
+          yield* auth.set("anthropic", old, slot)
+          const original = yield* fs.readFileString(dir + "/anthropic")
+          const file = dir + "/.slots/anthropic/personal"
+          const failed = yield* Effect.exit(
+            auth.update(
+              "anthropic",
+              () =>
+                Effect.gen(function* () {
+                  // Keep the old entry, and make the atomic rename fail against a directory.
+                  yield* fs.rename(file, file + ".old")
+                  yield* fs.makeDirectory(file)
+                  return [true, Option.some(next)] as const
+                }),
+              slot,
+            ),
+          )
+          expect(Exit.isFailure(failed)).toBe(true)
+          yield* fs.rename(file, file + ".blocked")
+          yield* fs.rename(file + ".old", file)
+          expect(
+            Option.exists(
+              Option.fromUndefinedOr(yield* auth.get("anthropic", slot)),
+              (stored) => stored.type === "oauth" && stored.refresh === old.refresh,
+            ),
+          ).toBe(true)
+          expect((yield* fs.readFileString(dir + "/anthropic")) === original).toBe(true)
+          yield* auth.update(
+            "anthropic",
+            () => Effect.succeed([true, Option.some(next)] as const),
+            slot,
+          )
+          expect(
+            Option.exists(
+              Option.fromUndefinedOr(yield* auth.get("anthropic", slot)),
+              (stored) => stored.type === "oauth" && stored.refresh === next.refresh,
+            ),
+          ).toBe(true)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "named updates share the legacy provider lock across stores and remain interruptible",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const waiter = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const personal = CredentialSlot.make("personal")
+          const entered = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          let namedEntered = false
+          const holding = yield* holder
+            .update("openai", () =>
+              Effect.gen(function* () {
+                yield* Deferred.completeWith(entered, Effect.void)
+                yield* Deferred.await(release)
+                return [true, Option.none<AuthInfo>()] as const
+              }),
+            )
+            .pipe(Effect.forkScoped)
+          yield* Deferred.await(entered)
+          const blocked = yield* waiter
+            .update(
+              "openai",
+              () =>
+                Effect.sync(() => {
+                  namedEntered = true
+                  return [true, Option.none<AuthInfo>()] as const
+                }),
+              personal,
+            )
+            .pipe(Effect.timeout("200 millis"), Effect.exit)
+          expect(Exit.isFailure(blocked)).toBe(true)
+          expect(namedEntered).toBe(false)
+          yield* Deferred.completeWith(release, Effect.void)
+          yield* Fiber.join(holding)
+          const next = AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            access: "fake-rotated",
+            refresh: "fake-next",
+            expires: 123,
+          })
+          yield* waiter.update(
+            "openai",
+            () => Effect.succeed([true, Option.some(next)] as const),
+            personal,
+          )
+          expect(
+            Option.exists(
+              Option.fromUndefinedOr(yield* holder.get("openai", personal)),
+              (stored) => stored.type === "oauth" && stored.refresh === next.refresh,
+            ),
+          ).toBe(true)
+          expect(Predicate.isUndefined(yield* holder.get("openai"))).toBe(true)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive("keeps named credentials independent of the unchanged default file", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const personal = CredentialSlot.make("personal")
+        const legacy = AuthInfo.cases.Api.make({ type: "api", key: "fake-legacy" })
+        const named = AuthInfo.cases.Api.make({ type: "api", key: "fake-personal" })
+        yield* auth.set("openai", legacy)
+        const original = yield* fs.readFileString(dir + "/openai")
+        yield* auth.set("openai", named, personal)
+        expect(
+          (yield* auth.get("openai"))?.type === "api" &&
+            Option.exists(
+              Option.fromUndefinedOr(yield* auth.get("openai")),
+              (info) => info.type === "api" && info.key === legacy.key,
+            ),
+        ).toBe(true)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("openai", personal)),
+            (info) => info.type === "api" && info.key === named.key,
+          ),
+        ).toBe(true)
+        expect((yield* fs.readFileString(dir + "/openai")) === original).toBe(true)
+        expect(
+          (yield* fs.readFileString(dir + "/.slots/openai/personal")) ===
+            (yield* Schema.encodeEffect(Schema.fromJsonString(Schema.toCodecJson(AuthInfo)))(
+              named,
+            )),
+        ).toBe(true)
+        expect((yield* fs.stat(dir + "/.slots/openai/personal")).mode & 0o777).toBe(0o600)
+        yield* auth.remove("openai", personal)
+        expect(
+          Option.exists(
+            Option.fromUndefinedOr(yield* auth.get("openai")),
+            (info) => info.type === "api" && info.key === legacy.key,
+          ),
+        ).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive("discovers providers stored only in named slots", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        yield* auth.set(
+          "named-only",
+          AuthInfo.cases.Api.make({ type: "api", key: "fake" }),
+          CredentialSlot.make("work"),
+        )
+        expect(yield* auth.list).toEqual(["named-only"])
+        expect(yield* auth.listSlots("named-only")).toEqual([CredentialSlot.make("work")])
+        expect(Predicate.isUndefined(yield* auth.get("named-only"))).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
     it.scopedLive("persists round-trip to disk", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1462,6 +1768,7 @@ interface ModelRequest {
   readonly maxTokens?: number
   readonly temperature?: number
   readonly driverId?: string
+  readonly credentialSlot?: CredentialSlot
 }
 
 const buildProviderLayer = (
@@ -1487,6 +1794,7 @@ const resolveModel = (request: ModelRequest) =>
         temperature: request.temperature,
       },
       driverId: request.driverId,
+      credentialSlot: request.credentialSlot,
     })
   })
 /** A tool whose parameters encode without services, as `streamText` requires with `disableToolCallResolution`. */
@@ -3310,6 +3618,44 @@ describe("generic providers", () => {
       Effect.map((error) => error.message),
     )
 
+  it.scopedLive(
+    "present unsupported named OAuth cannot dispatch a generic API request with ambient authority",
+    () =>
+      Effect.gen(function* () {
+        const seenUnsupported: Array<ApiClassRequest> = []
+        return yield* Effect.gen(function* () {
+          const auth = yield* Auth
+          const resolver = yield* ModelResolver
+          const personal = CredentialSlot.make("personal")
+          const oauth = AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            access: "fake-access",
+            refresh: "fake-refresh",
+            expires: 1,
+          })
+          yield* auth.set("open", oauth, personal)
+          const blocked = yield* Effect.exit(
+            resolver.resolve({ modelId: "open/big", credentialSlot: personal }),
+          )
+          expect(Exit.isFailure(blocked)).toBe(true)
+          expect(seenUnsupported.length).toBe(0)
+          if (Exit.isFailure(blocked))
+            expect(
+              Option.exists(Cause.findErrorOption(blocked.cause), Schema.is(ProviderAuthError)),
+            ).toBe(true)
+          // Omitted/default authority keeps its existing environment behavior, even for old OAuth markers.
+          yield* auth.set("open", oauth)
+          yield* resolver.resolve({ modelId: "open/big" })
+          yield* resolver.resolve({
+            modelId: "open/big",
+            credentialSlot: CredentialSlot.make("default"),
+          })
+          yield* auth.set("open", AuthApi.make({ type: "api", key: "fake-personal-api" }), personal)
+          yield* resolver.resolve({ modelId: "open/big", credentialSlot: personal })
+          expect(seenUnsupported.length).toBe(3)
+        }).pipe(inProfile({ env: { OPEN_API_KEY: "fake-ambient" }, seen: seenUnsupported }))
+      }).pipe(Effect.timeout("5 seconds")),
+  )
   it.live(
     "a provider is active with a key variable set, a stored key or a config entry; the search finds the rest a class speaks",
     () =>
@@ -3647,5 +3993,146 @@ describe("generic providers", () => {
         )
         expect(decisionReads).toEqual(["decisions"])
       }),
+  )
+})
+
+describe("named provider resolution", () => {
+  it.scopedLive("named OAuth refresh retains its physical legacy alias and label", () =>
+    Effect.gen(function* () {
+      const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+      const slot = CredentialSlot.make("personal")
+      const legacy = AuthApi.make({ type: "api", key: "fake-default" })
+      yield* auth.set("alias-slot", legacy)
+      yield* auth.set(
+        "alias-slot",
+        AuthInfo.cases.Oauth.make({
+          type: "oauth",
+          access: "fake-old",
+          refresh: "fake-refresh",
+          expires: 1,
+        }),
+        slot,
+      )
+      const owner: ModelDriverContribution = {
+        id: "owner-slot",
+        name: "Owner",
+        resolveModel: () => Effect.succeed(fakeResolution()),
+      }
+      const alias: ModelDriverContribution = {
+        id: "alias-slot",
+        name: "Alias",
+        credentialFrom: owner.id,
+        resolveModel: (_model, info) =>
+          Effect.gen(function* () {
+            expect(info?.slot).toBe(slot)
+            if (info?._tag !== "Oauth") return yield* Effect.die("expected named OAuth")
+            yield* info.update((current) =>
+              Effect.succeed([
+                true,
+                Option.map(current, (stored) => ({
+                  ...stored,
+                  access: "fake-new",
+                  refresh: "fake-rotated",
+                })),
+              ] as const),
+            )
+            return fakeResolution()
+          }),
+      }
+      yield* resolveModel({ model: "alias-slot/model", credentialSlot: slot }).pipe(
+        Effect.provide(buildProviderLayer([makeExt("named-alias", [owner, alias])], auth)),
+      )
+      expect(Predicate.isUndefined(yield* auth.get(owner.id, slot))).toBe(true)
+      expect(
+        Option.exists(
+          Option.fromUndefinedOr(yield* auth.get(alias.id, slot)),
+          (stored) => stored.type === "oauth" && stored.refresh === "fake-rotated",
+        ),
+      ).toBe(true)
+      expect(
+        Option.exists(
+          Option.fromUndefinedOr(yield* auth.get(alias.id)),
+          (stored) => stored.type === "api" && stored.key === legacy.key,
+        ),
+      ).toBe(true)
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("conflicting canonical alias orders fail instead of choosing by iteration", () =>
+    Effect.gen(function* () {
+      const owner = makeProvider("order-owner")
+      const alias = { ...makeProvider("order-alias"), credentialFrom: owner.id }
+      const resolved = resolveExtensions([makeExt("order-alias", [owner, alias])])
+      const first = CredentialSlot.make("default")
+      const second = CredentialSlot.make("personal")
+      for (const providers of [
+        {
+          "order-owner": { authOrder: [first, second] },
+          "order-alias": { authOrder: [second, first] },
+        },
+        {
+          "order-alias": { authOrder: [second, first] },
+          "order-owner": { authOrder: [first, second] },
+        },
+      ]) {
+        const registry = Layer.succeed(
+          ExtensionRegistry,
+          ExtensionRegistry.of({
+            getResolved: () => resolved,
+            providerConfig: Effect.succeed({ providers }),
+          }),
+        )
+        const result = yield* Effect.exit(
+          listAuthProviders([]).pipe(
+            Effect.provide(Layer.mergeAll(Auth.Test(), registry, fixtureModelCatalogSource)),
+          ),
+        )
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result))
+          expect(
+            Option.exists(
+              Cause.findErrorOption(result.cause),
+              (error) =>
+                Schema.is(ProviderAuthError)(error) &&
+                error.message.includes("Conflicting credential orders"),
+            ),
+          ).toBe(true)
+      }
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("a missing named slot cannot impersonate a default environment credential", () =>
+    Effect.gen(function* () {
+      const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+      let dispatched = false
+      const driver: ModelDriverContribution = {
+        id: "slot-env",
+        name: "Slot Env",
+        envCredential: "SLOT_ENV_KEY",
+        resolveModel: () =>
+          Effect.sync(() => {
+            dispatched = true
+            return fakeResolution()
+          }),
+      }
+      const layer = buildProviderLayer([makeExt("slot-env", [driver])], auth)
+      const result = yield* Effect.exit(
+        resolveModel({
+          model: "slot-env/model",
+          credentialSlot: CredentialSlot.make("missing"),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              layer,
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: { SLOT_ENV_KEY: "fake-env" } })),
+            ),
+          ),
+        ),
+      )
+      expect(Exit.isFailure(result)).toBe(true)
+      expect(dispatched).toBe(false)
+      yield* resolveModel({ model: "slot-env/model" }).pipe(Effect.provide(layer))
+      expect(dispatched).toBe(true)
+    }).pipe(Effect.timeout("5 seconds")),
   )
 })

@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Ref,
   Redacted,
   Schema,
   Stream,
@@ -16,6 +17,8 @@ import {
 } from "effect"
 import {
   acceptedEfforts,
+  type CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   type ApiClassContribution,
   type ApiClassRequest,
   type CatalogModel,
@@ -132,6 +135,20 @@ export const CredentialCacheCell = <C>(credentials: Schema.Schema<C>) =>
 export type CredentialCacheCell<C> = ReturnType<typeof CredentialCacheCell<C>>["Type"]
 export type CredentialCacheCellRef<C> = SynchronizedRef.SynchronizedRef<CredentialCacheCell<C>>
 
+/** Profile-owned cells. A warm credential can only serve its own slot. */
+export const credentialCells = <C>(defaultCell: CredentialCacheCellRef<C>) => {
+  const cells = new Map<CredentialSlot, CredentialCacheCellRef<C>>([
+    [DEFAULT_CREDENTIAL_SLOT, defaultCell],
+  ])
+  return (slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT): CredentialCacheCellRef<C> => {
+    const held = cells.get(slot)
+    if (Predicate.isNotUndefined(held)) return held
+    const cell = SynchronizedRef.makeUnsafe<CredentialCacheCell<C>>(EMPTY_CREDENTIAL_CELL)
+    cells.set(slot, cell)
+    return cell
+  }
+}
+
 export const EMPTY_CREDENTIAL_CELL = Schema.TaggedStruct("Empty", {}).make({})
 
 /**
@@ -147,15 +164,19 @@ export const replaceHeldCredential = <C, E>(
   credentials: Schema.Schema<C>,
   cellRef: CredentialCacheCellRef<C>,
   creds: C,
-  write: Effect.Effect<void, E>,
+  write: (onPersisted: Effect.Effect<void, never, never>) => Effect.Effect<void, E>,
 ): Effect.Effect<void, E> =>
-  SynchronizedRef.updateEffect(cellRef, () =>
-    Effect.gen(function* () {
-      yield* write
-      const at = yield* Clock.currentTimeMillis
-      return CredentialCacheCell(credentials).cases.Durable.make({ creds, at, invalidated: false })
-    }),
-  )
+  Effect.suspend(() =>
+    write(
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis
+        yield* Ref.set(
+          cellRef.backing,
+          CredentialCacheCell(credentials).cases.Durable.make({ creds, at, invalidated: false }),
+        )
+      }),
+    ),
+  ).pipe(cellRef.semaphore.withPermits(1))
 
 // ── Cache ──
 
@@ -1347,10 +1368,12 @@ export const apiKeyFrom = (
   authInfo: Option.Option<ProviderAuthInfo>,
   envApiKey: Option.Option<string>,
 ): Option.Option<string> =>
-  authInfo.pipe(
-    Option.flatMap((auth) => {
+  Option.match(authInfo, {
+    onNone: () => envApiKey,
+    onSome: (auth) => {
       if (auth._tag === "Api") return Option.some(auth.key)
-      return Option.none()
-    }),
-    Option.orElse(() => envApiKey),
-  )
+      if (Predicate.isNotUndefined(auth.slot) && auth.slot !== DEFAULT_CREDENTIAL_SLOT)
+        return Option.none()
+      return envApiKey
+    },
+  })

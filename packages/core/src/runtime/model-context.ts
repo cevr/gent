@@ -404,7 +404,7 @@ const toolImageName = (entry: PromptToolImage): string =>
 /**
  * The line above an image the model sees. A scaled image's line names the
  * size the tool saved and the factors from the stored image to it, in pi's
- * and Claude Code's words (`PRIOR_ARTS.md`), so the model can map a
+ * and Claude Code's words (`PRIOR_ART.md`), so the model can map a
  * coordinate back. Whole-pixel sides leave the two factors apart, by a lot
  * in a thin image (1x6000 stored as 1x2000): the line names one factor only
  * when both read the same. Three decimals keep a mapped coordinate within one

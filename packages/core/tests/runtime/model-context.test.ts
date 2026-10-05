@@ -82,12 +82,6 @@ import {
   tool,
 } from "../../src/extensions/api"
 import { rangeCompactorLayer } from "../helpers/test-preset"
-import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  type SequenceStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
 import { finishPart, textDeltaPart, textStep, toolCallPart } from "../../src/runtime/provider"
 import { SessionRuntime } from "../../src/runtime/session"
 import { getSessionSnapshot } from "../../src/server/server"
@@ -100,8 +94,12 @@ import {
 import {
   baseLocalLayerWithProvider,
   createRpcHarness,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  type SequenceStep,
   testLeafContext,
   testToolContext,
+  waitFor,
 } from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import * as Response from "effect/ai/Response"
