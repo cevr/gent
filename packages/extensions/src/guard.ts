@@ -55,31 +55,43 @@ const ConfigFile = Schema.fromJsonString(Schema.Struct({ guard: Schema.optional(
 
 const decodeGuardConfig = Schema.decodeUnknownResult(GuardConfig)
 
-/** One file's `guard` entry: none, the entry, or why it does not decode. */
+/** One file's `guard` entry: none, the entry, or why the guard cannot use it. */
 type GuardEntry = Option.Option<Result.Result<GuardConfig, string>>
 
+const decodeConfigFile = Schema.decodeUnknownResult(ConfigFile)
+
 /**
- * The `guard` entry of one config file. A missing file has none; one that is
- * not JSON is logged and has none (the config service reports it).
+ * The `guard` entry of one config file. Only a missing file, or a file with
+ * no `guard` key, has none. A file the guard cannot read, or that is not a
+ * JSON object, cannot tell that there is none: it reads as an entry the guard
+ * cannot use, so the guard asks (fail closed).
  */
 const readGuardEntry = Effect.fn("Guard.readEntry")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem
-  const none: GuardEntry = Option.none()
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return none
-  return yield* fs.readFileString(file).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(ConfigFile)),
-    Effect.map((config): GuardEntry =>
-      Option.map(Option.fromUndefinedOr(config.guard), (raw) =>
-        Result.mapError(decodeGuardConfig(raw), (error) => error.message.replace(/\n/g, "; ")),
-      ),
+  const text = yield* fs.readFileString(file).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeedNone,
     ),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("guard.config.unreadable").pipe(
-        Effect.annotateLogs({ file, error: String(cause) }),
-        Effect.as(none),
-      ),
-    ),
+    Effect.result,
   )
+  if (Result.isFailure(text)) {
+    const reason = `the guard config cannot be read from ${file}: ${text.failure.message}`
+    yield* Effect.logWarning("guard.config.unreadable").pipe(Effect.annotateLogs({ file, reason }))
+    return Option.some(Result.fail(reason))
+  }
+  if (Option.isNone(text.success)) return Option.none()
+  const decodeReason = (message: string) =>
+    `the guard config does not decode: ${message.replace(/\n/g, "; ")}`
+  return Result.match(decodeConfigFile(text.success.value), {
+    onFailure: (error): GuardEntry =>
+      Option.some(Result.fail(decodeReason(`${file} is not a JSON object (${error.message})`))),
+    onSuccess: (config): GuardEntry =>
+      Option.map(Option.fromUndefinedOr(config.guard), (raw) =>
+        Result.mapError(decodeGuardConfig(raw), (error) => decodeReason(error.message)),
+      ),
+  })
 })
 
 /** What the guard runs on: the merged config, or why a `guard` entry cannot serve. */
@@ -410,7 +422,7 @@ export const makeGuardExtension = (deadlineMs: number) =>
       const setting = yield* readGuardSetting(host.home, host.cwd)
       if (Option.isNone(setting)) return
       if (Result.isFailure(setting.value)) {
-        const reason = `the guard config does not decode: ${setting.value.failure}`
+        const reason = setting.value.failure
         yield* Effect.logWarning("guard.config.invalid").pipe(
           Effect.annotateLogs({ reason: setting.value.failure }),
         )

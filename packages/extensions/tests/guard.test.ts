@@ -11,6 +11,7 @@ import {
   Layer,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Result,
   Schema,
@@ -32,6 +33,7 @@ import { type AgentEvent, messagePartsText } from "@gent/core/protocol"
 import { BunPlatformLive } from "@gent/core/host"
 import {
   ApprovalService,
+  collectTestContributions,
   ConfigService,
   createRpcHarness,
   LanguageModelLayers,
@@ -210,6 +212,10 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
   readonly answers: ReadonlyArray<JudgeAnswer>
   readonly steps: ReadonlyArray<SequenceStep>
   readonly deadlineMs?: number
+  /** Extensions set up before the guard. */
+  readonly before?: Parameters<typeof createRpcHarness>[0]["extensionInputs"]
+  /** Extensions set up after the guard. */
+  readonly after?: Parameters<typeof createRpcHarness>[0]["extensionInputs"]
 }) {
   const { home, cwd } = yield* writeHome(params.guard)
   const fs = yield* FileSystem.FileSystem
@@ -226,7 +232,9 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
       testTurnExtension,
       toolsExtension(ran),
       judgeExtension(params.answers, calls),
+      ...(params.before ?? []),
       makeGuardExtension(params.deadlineMs ?? 5_000),
+      ...(params.after ?? []),
     ],
     providerLayer,
     approvalLayer: ApprovalService.Live,
@@ -272,6 +280,27 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
     })
   return { ran, calls, controls, run, setGuard }
 })
+
+/**
+ * An extension set up before the guard. Its first setup runs `edit` on the
+ * user config file, as an owner's edit that lands while a profile builds,
+ * after core read the config and before the guard reads it.
+ */
+const editAtFirstSetup = (
+  edit: (file: string) => Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem>,
+  id = "@gent/a-config-editor",
+) => {
+  let edited = false
+  return defineExtension({
+    id,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      if (edited) return
+      edited = true
+      yield* edit((yield* Path.Path).join(host.home, ".gent", "config.json")).pipe(Effect.orDie)
+    }),
+  })
+}
 
 const presentedTexts = (events: ReadonlyArray<AgentEvent>) =>
   events.flatMap((event) => {
@@ -422,6 +451,103 @@ describe("@gent/guard", () => {
         expect(session.ran).toEqual(["rm -rf build"])
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10_000,
+  )
+
+  it.scopedLive(
+    "a config edit that lands while a profile builds does not reach it: the profile runs the config its key names",
+    () =>
+      Effect.gen(function* () {
+        const deny = { rules: [{ tool: "run", match: "rm -rf *", effect: "deny" }] }
+        const session = yield* guardedSession({
+          guard: Option.some(deny),
+          answers: [],
+          // The edit allows every call, and it is undone before any other
+          // read: only the guard's setup could see it.
+          before: [
+            editAtFirstSetup((file) =>
+              Effect.gen(function* () {
+                yield* (yield* FileSystem.FileSystem).writeFileString(
+                  file,
+                  encodeExternalJson({ guard: { rules: [{ tool: "run", effect: "allow" }] } }),
+                )
+              }),
+            ),
+          ],
+          after: [
+            editAtFirstSetup(
+              (file) =>
+                Effect.gen(function* () {
+                  yield* (yield* FileSystem.FileSystem).writeFileString(
+                    file,
+                    encodeExternalJson({ guard: deny }),
+                  )
+                }),
+              "@gent/z-config-restorer",
+            ),
+          ],
+          steps: [runCall("rm -rf build"), textStep("finished")],
+        })
+        const { results } = yield* session.run("Clean.", true)
+        expect(outcomes(results)[0]).toContain('the guard rule "run" matching "rm -rf *" denies it')
+        expect(session.ran).toEqual([])
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a config file that cannot be read after core read it does not turn the guard off",
+    () =>
+      Effect.gen(function* () {
+        const deny = { rules: [{ tool: "run", match: "rm -rf *", effect: "deny" }] }
+        const session = yield* guardedSession({
+          guard: Option.some(deny),
+          answers: [],
+          // The file becomes a directory: a read of it fails, and it is not missing.
+          before: [
+            editAtFirstSetup((file) =>
+              Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem
+                yield* fs.remove(file)
+                yield* fs.makeDirectory(file)
+              }),
+            ),
+          ],
+          // The file is back before any other read: only the guard's setup could see it broken.
+          after: [
+            editAtFirstSetup(
+              (file) =>
+                Effect.gen(function* () {
+                  const fs = yield* FileSystem.FileSystem
+                  yield* fs.remove(file, { recursive: true })
+                  yield* fs.writeFileString(file, encodeExternalJson({ guard: deny }))
+                }),
+              "@gent/z-config-restorer",
+            ),
+          ],
+          steps: [runCall("rm -rf build"), textStep("finished")],
+        })
+        const { results } = yield* session.run("Clean.", true)
+        expect(outcomes(results)[0]).toContain('the guard rule "run" matching "rm -rf *" denies it')
+        expect(session.ran).toEqual([])
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive("a config file the guard cannot read sets up a hook that judges each call", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const { home, cwd } = yield* writeHome(Option.none())
+      // The file is a directory: a read of it fails, and it is not missing.
+      const file = path.join(home, ".gent", "config.json")
+      yield* fs.remove(file)
+      yield* fs.makeDirectory(file)
+      const contributions = yield* collectTestContributions(makeGuardExtension(5_000).setup, {
+        home,
+        cwd,
+      })
+      expect((contributions.hooks ?? []).map((entry) => entry.kind)).toEqual(["toolCall"])
+    }).pipe(Effect.provide(platform)),
   )
 
   it.scopedLive(
