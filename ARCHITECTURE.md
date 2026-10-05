@@ -1286,9 +1286,11 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   addresses "the orchestrator" reaches children too, and a child does bounded
   work for its parent, not unrelated work of its own. A child's session name,
   which the tray, the sessions pane and its completion row head with, is the
-  start's optional `name` (as `thread.start` takes one), else the first clause
+  start's optional `name` on one line (at most 80 units), else the first clause
   of its todo's title in whole words, at most 32 units (`Check the greeting
-files`); never the agent's name, since every child runs as `delegate`. Parents read child output through `read_session` on the
+files`); never the agent's name, since every child runs as `delegate`. A
+  thread takes its name by the same rule (`childSessionName` in
+  `session-tools.ts`), with `thread` when neither has words. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
 - Snapshot children: `delegate.start` takes `isolation` (`shared`, the
