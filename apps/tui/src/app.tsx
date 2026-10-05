@@ -579,6 +579,9 @@ function ActivityRow(props: { children: JSX.Element }) {
   )
 }
 
+/** The status row's model label for a session nobody named a model for. */
+export const NO_MODEL_LABEL = "no model · /model"
+
 /**
  * The model as the status row names it: its name, and its provider's label
  * (`providerLabel`) when another provider's model has the same name, so the
@@ -714,6 +717,10 @@ export function Session(props: SessionProps) {
         color: theme.textMuted,
         short: { text: Option.getOrElse(short, () => full.value), rank: STATUS_YIELD.model },
       })
+    // Gent ships no default model: once the snapshot names the agent, a
+    // session nobody named a model for says so, and where to name one.
+    if (Option.isSome(client.agent()) && Option.isNone(client.model()))
+      items.push({ text: NO_MODEL_LABEL, color: theme.warning })
     return items.concat(
       buildModelLabels({
         // The level the turn asks for, after the clamp of the model that runs

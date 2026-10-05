@@ -78,6 +78,7 @@ import {
   resolveInteractiveBootstrap,
   activityLine,
   statusModelName,
+  NO_MODEL_LABEL,
 } from "../src/app"
 import {
   applySnapshotAgent,
@@ -144,6 +145,11 @@ const idleTag = "Idle" satisfies "Idle"
 const refusedInA = Schema.decodeSync(GentRpcError)({
   _tag: "InvalidStateError",
   message: "send refused in A",
+})
+const noModel = Schema.decodeSync(GentRpcError)({
+  _tag: "NoModelError",
+  message: 'No model is set for agent "main". Pick one with /model',
+  agent: "main",
 })
 const noAuthSource = "none" satisfies "none"
 
@@ -2194,6 +2200,60 @@ describe("App status and activity rows", () => {
         "the provider in the status row",
       )
     }).pipe(Effect.timeout("4 seconds")),
+  )
+  // Gent ships no default model: a session nobody named one for says so, and
+  // a send it refuses opens the model picker, with the draft kept.
+  it.scopedLive("a session with no model says so, and a refused send opens the model picker", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-no-model")
+      const branchId = BranchId.make("branch-no-model")
+      const opus = new Model({
+        id: ModelId.make("anthropic/claude-opus-5-5"),
+        name: "Claude Opus 5.5",
+        provider: ProviderId.make("anthropic"),
+      })
+      const { setup } = yield* mountApp({
+        client: {
+          model: { list: () => Effect.succeed([opus]) },
+          message: { send: () => Effect.fail(noModel) },
+          session: {
+            updateSettings: () => Effect.succeed({ modelId: opus.id, reasoningLevel: absent }),
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                agent: AgentName.make("main"),
+                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+              }),
+          },
+        },
+        width: 120,
+        initialSession: sessionNamed(sessionId, branchId, "No model"),
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes(NO_MODEL_LABEL), "the no-model label")
+      yield* Effect.promise(() => setup.mockInput.typeText("hello there"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("Model · 1") && next.includes("Claude Opus 5.5"),
+        "the model picker",
+      )
+      expect(frame).toContain("hello there")
+      expect(frame).toContain("No model is set")
+      // The pick answers the refusal: its hint goes, and the draft stays to send.
+      setup.mockInput.pressEnter()
+      const picked = yield* waitForFrame(
+        setup,
+        (next) => !next.includes("Model · 1") && !next.includes("No model is set"),
+        "the picker and the hint gone",
+      )
+      expect(picked).toContain("hello there")
+    }).pipe(Effect.timeout("10 seconds")),
   )
   test("a model name no other provider shares stays bare", () => {
     const model = new Model({
