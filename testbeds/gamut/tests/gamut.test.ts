@@ -605,7 +605,7 @@ describe("gamut CLI cleanup", () => {
               work: root,
               data: root,
               pane: "wTest:closed",
-              binary: "/unused/gent",
+              binary: path.join(path.resolve(path.dirname(driver), "../.."), "apps/tui/bin/gent"),
               preset: "offline",
               sendMark: 0,
               awaitsTurn: false,
@@ -632,6 +632,77 @@ describe("gamut CLI cleanup", () => {
           Effect.timeout("25 seconds"),
         ),
       30_000,
+    )
+  }
+})
+
+describe("gamut CLI ownership", () => {
+  for (const command of ["down", "restart", "send"]) {
+    it.scopedLive(
+      `a foreign ${command} leaves the pane, state and tree untouched`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const platform = yield* GentPlatform
+          const scratch = yield* makeTempDirectoryScoped("gent-gamut-owner-")
+          const driver = yield* path.fromFileUrl(new URL("../gamut.ts", import.meta.url))
+          const checkout = path.resolve(path.dirname(driver), "../..")
+          const owner = path.join(scratch, "first", "gent")
+          const current = path.join(scratch, "second", "gent")
+          const copiedDriver = path.join(current, "testbeds", "gamut", "gamut.ts")
+          yield* fs.makeDirectory(path.dirname(copiedDriver), { recursive: true })
+          yield* fs.makeDirectory(path.join(owner, "apps", "tui", "bin"), { recursive: true })
+          yield* fs.copyFile(driver, copiedDriver)
+          yield* fs.symlink(path.join(checkout, "node_modules"), path.join(current, "node_modules"))
+          const root = path.join(scratch, "run")
+          yield* fs.makeDirectory(root)
+          const marker = path.join(root, "keep")
+          yield* fs.writeFileString(marker, "foreign scratch tree")
+          const statePath = path.join(scratch, "gent-gamut-gent.json")
+          const state = encodeState({
+            root,
+            work: root,
+            data: root,
+            pane: "wTest:foreign",
+            binary: path.join(owner, "apps", "tui", "bin", "gent"),
+            preset: "offline",
+            sendMark: 0,
+            awaitsTurn: false,
+          })
+          yield* fs.writeFileString(statePath, state)
+          const calls = path.join(scratch, "calls")
+          const herdr = path.join(scratch, "herdr")
+          yield* fs.writeFileString(
+            herdr,
+            '#!/usr/bin/env bun\nrequire(\'node:fs\').appendFileSync(process.env.HERDR_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + \'\\n\')\nif (process.argv.includes(\'process-info\')) { console.log(\'{"error":{"code":"pane_not_found","message":"pane not found"}}\'); process.exit(1) }\n',
+          )
+          yield* fs.chmod(herdr, 0o755)
+          const result = yield* runProcess(
+            yield* platform.execPath,
+            [copiedDriver, command, "hello"],
+            {
+              env: {
+                PATH: scratch + ":" + (yield* Config.String("PATH")),
+                TMPDIR: scratch,
+                HOME: scratch,
+                GENT_DATA_DIR: root,
+                GENT_AUTH_DIRECTORY: path.join(scratch, "auth"),
+                HERDR_TEST_CALLS: calls,
+              },
+              extendEnv: true,
+            },
+          )
+          expect(result.exitCode).toBe(1)
+          expect(result.stderr).toContain("belongs to another checkout")
+          expect(yield* fs.exists(calls)).toBe(false)
+          expect(yield* fs.readFileString(statePath)).toBe(state)
+          expect(yield* fs.readFileString(marker)).toBe("foreign scratch tree")
+        }).pipe(
+          Effect.provide(Layer.mergeAll(BunGentPlatformLive, BunServices.layer)),
+          Effect.timeout("8 seconds"),
+        ),
+      10_000,
     )
   }
 })

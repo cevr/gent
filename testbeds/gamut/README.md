@@ -39,7 +39,11 @@ roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
 launches it in a fresh pane. The run is recorded in
-`$TMPDIR/gent-gamut-<checkout name>.json`, one file per checkout, so two rifts can run at once.
+`$TMPDIR/gent-gamut-<checkout name>.json`. Rifts with different names can run at
+once. Each command checks the recorded binary's canonical checkout path before
+using the run. A checkout with the same name refuses a foreign run without
+changing its pane, state file or scratch tree. An existing owned run remains
+discoverable at the same path.
 
 ## What `status` proves
 

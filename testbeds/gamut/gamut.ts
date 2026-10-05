@@ -26,7 +26,7 @@
 
 import { $ } from "bun"
 import { Database } from "bun:sqlite"
-import { mkdirSync, cpSync, renameSync, existsSync, rmSync } from "node:fs"
+import { mkdirSync, cpSync, renameSync, existsSync, rmSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
@@ -292,9 +292,9 @@ export const decodeState = (text: string): GamutState => Schema.decodeSync(State
 // ── State file ──────────────────────────────────────────────────────────
 
 /**
- * One run per checkout. Two rifts run the gamut at the same time, so the
- * state file carries the checkout name; a shared file let one rift's `down`
- * close the other rift's pane.
+ * The filename carries the checkout name. `readState` also checks the
+ * canonical checkout path: two checkouts with the same name must refuse
+ * each other's run, not close its pane or remove its scratch tree.
  */
 export const stateFileFor = (checkoutRoot: string): string =>
   join(tmpdir(), `gent-gamut-${basename(checkoutRoot)}.json`)
@@ -306,7 +306,12 @@ const readState = async (): Promise<GamutState> => {
   if (!(await file.exists())) {
     throw new Error(`no gamut run is up (${STATE_FILE} is missing). Run: bun run gamut up <preset>`)
   }
-  return decodeState(await file.text())
+  const state = decodeState(await file.text())
+  const owner = realpathSync(resolve(dirname(state.binary), "../../.."))
+  if (owner !== realpathSync(CHECKOUT)) {
+    throw new Error(`gamut run belongs to another checkout (${owner}); refusing ${STATE_FILE}`)
+  }
+  return state
 }
 
 // ── The default prompt ──────────────────────────────────────────────────
