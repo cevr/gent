@@ -2539,7 +2539,11 @@ export function useSessionFeed(
       ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
 
-  /** The transcript row that closes a turn: an interruption or a duration. */
+  /**
+   * The transcript row that closes a turn: an interruption or a duration.
+   * Every turn gets one, however short: it takes the rows the activity row
+   * gives back, so the live tail never shrinks under history (`watchGap`).
+   */
   const appendTurnEndRow = (
     event: Extract<AgentEvent, { _tag: "TurnCompleted" }>,
     stampedAt: number,
@@ -2549,12 +2553,9 @@ export function useSessionFeed(
       appendSessionEvent(setStore, { _tag: "interruption", createdAt: stampedAt, seq: eventSeq++ })
       return
     }
-    const durationSeconds = Math.round(event.durationMs / 1000)
-    // A turn shorter than a second gets no row.
-    if (durationSeconds <= 0) return
     appendSessionEvent(setStore, {
       _tag: "turn-ended",
-      durationSeconds,
+      durationSeconds: Math.round(event.durationMs / 1000),
       steps,
       createdAt: stampedAt,
       seq: eventSeq++,

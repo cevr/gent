@@ -20,7 +20,6 @@ import {
   parseBashOutput,
   plural,
   repliesInView,
-  type ReplyWriter,
   toolRunFrame,
   truncate,
 } from "./utils"
@@ -286,7 +285,15 @@ export const formatTurnLine = (
   if (tokens.length > 0) parts.push(tokens)
   if (steps.costUsd > 0) parts.push(formatCost(steps.costUsd))
   if (options.steps && steps.count > 0) parts.push(plural(steps.count, "step"))
-  const head = `Worked for ${formatDuration(event.durationSeconds * 1000, "compact")}`
+  // A turn under half a second rounds to no whole second.
+  const time = Option.match(
+    Option.liftPredicate(event.durationSeconds, (seconds) => seconds > 0),
+    {
+      onNone: () => "<1s",
+      onSome: (seconds) => formatDuration(seconds * 1000, "compact"),
+    },
+  )
+  const head = `Worked for ${time}`
   const join = (kept: number) => [head, ...parts.slice(0, kept)].join(" · ")
   const width = options.width ?? Number.POSITIVE_INFINITY
   let kept = parts.length
@@ -2005,12 +2012,11 @@ const SETTLE_TRIES = 3
 const PLAIN_SETTLE_MS = 100
 
 /**
- * How one commit ended: its rows reached history (`landed`); the screen
- * changed hands or the display was cleared (`refused`); its highlights missed
- * the budget (`unsettled`); or an item before it came back, so it waits for
- * the next pass (`stale`).
+ * How many offers of one pass draw and settle at once. A settle mostly waits
+ * for highlights, so a replay's latency is its waves, each as slow as its
+ * slowest item; each surface holds a renderer tree until its rows land.
  */
-type CommitOutcome = "landed" | "refused" | "unsettled" | "stale"
+const SURFACES_AT_ONCE = 16
 
 /** How long exit waits for the live view's last commits. */
 const EXIT_FLUSH_MS = 1500
@@ -2026,6 +2032,19 @@ const GAP_SETTLE_MS = 300
 interface RowRange {
   readonly from: number
   readonly to: Option.Option<number>
+}
+
+/** Rows of one item a pass offers to native history. */
+interface Offer {
+  readonly item: SessionItem
+  readonly fingerprint: string
+  readonly range: RowRange
+}
+
+/** An offer drawn and settled, on its surface; none for an item of no row. */
+interface Drawn {
+  readonly offer: Offer
+  readonly surface: Option.Option<ScrollbackSurface>
 }
 
 /** Where the split region sits: the terminal rows above it (`top`) and its height (`rows`). */
@@ -2227,6 +2246,25 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /** Rows offered to history whose commit has not landed. The live view still shows them. */
   let pendingRows = 0
   /**
+   * The live tail's top row in its last frame (the viewport's scroll), with
+   * the head it was drawn for (`headKey`). Rows offered to history land a
+   * few frames after the offer (their surface settles first), and the rows
+   * a growing tail pushes over the canvas are offered in the frame that
+   * grows it. A tail that scrolled then would show them in neither history
+   * nor the region, so the screen's top rows would read stale. While final
+   * rows show at the tail's top, it keeps the top it drew (`topLimit`): the
+   * rows the tail grows by wait under the footer until the rows above land.
+   */
+  const [drawn, setDrawn] = createSignal(
+    Option.none<{ readonly top: number; readonly head: string }>(),
+  )
+  /**
+   * A replay's reset waits for the replay's rows: it goes out with them
+   * (`writeOffers`), or alone when there are none (`resetAlone`), so the
+   * screen is cleared and written again in one frame.
+   */
+  let historyResetPending = false
+  /**
    * The canvas the last pass offered rows for, since the transcript was last
    * laid out from the start. A taller canvas gives back rows still in flight.
    */
@@ -2234,7 +2272,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /**
    * The fingerprints history was last checked against as a prefix. A commit
    * lands only while the item it drew still has the fingerprint these hold at
-   * its place (`stillOffered`), so a landed commit keeps the proof true.
+   * its place (`writeOffers`), so a landed commit keeps the proof true.
    */
   let prefixCheckedFor: ReadonlyArray<string> = []
   /** The tries each item's highlights missed, by fingerprint, until it lands. */
@@ -2244,6 +2282,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /** The tool runs across the displayed items: each item draws alone, so its run comes from here. */
   const toolRuns = createMemo(() => projectToolRuns(displayedItems(), true, props.streaming))
   let viewport = Option.none<ScrollBoxRenderable>()
+  /** The box that holds the live items: its laid-out height is `liveHeight`. */
+  let tail = Option.none<BoxRenderable>()
   let settlingNative = false
   /** The split region's height as the alternate screen took over. */
   let leftRows = Option.none<number>()
@@ -2369,6 +2409,15 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   const drawSurface = (items: SessionItem[], plain: boolean) =>
     Effect.acquireRelease(
       Effect.sync(() => {
+        // Each surface listens on the renderer until it is destroyed, and a
+        // pass holds one for each offer until they land. Past the emitter's
+        // limit the runtime warns on stderr, outside any frame, into the screen.
+        const listening = Math.max(
+          renderer.listenerCount("destroy"),
+          renderer.listenerCount("capabilities"),
+        )
+        const limit = renderer.getMaxListeners()
+        if (limit > 0 && listening >= limit) renderer.setMaxListeners(listening + 1)
         const surface: ScrollbackSurface = renderer.createScrollbackSurface()
         const surfaceRenderer = Object.create(surface.renderContext)
         Object.defineProperties(surfaceRenderer, {
@@ -2404,106 +2453,43 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     ).pipe(Effect.map(({ surface }) => surface))
 
   /**
-   * Renders one item onto a scrollback surface, settles it, and commits its
-   * rows. Reports whether the rows reached scrollback: an overlay that opens
-   * while the surface settles takes the screen back, and scrollback rejects a
-   * commit from the alternate screen. An item that did not commit stays in the
-   * live view, so closing the overlay still shows it.
+   * Draws one offer on a scrollback surface and settles it, in the scope
+   * of the pass it belongs to: the surface lives until its rows land. `None`
+   * when its highlights missed their budget.
    *
    * A highlight that misses its budget is tried again: scrollback keeps
-   * forever what it is given. The last try, and every commit once the
-   * reader leaves, draws the item plain, unless history holds its top rows:
-   * those were drawn, so the rest is drawn too.
-   *
-   * The rows move in place. `handOver` takes the item out of the live view
-   * and shrinks the split region by its rows before the rows are queued, so
-   * the region's top stays where it was and the commit writes the rows into
-   * the space the item left, moving the region back down to the last row.
-   * In the other order the commit would scroll the screen first and the
-   * shrink would then leave the item's rows empty under the status row.
-   * A write that scrollback refuses gives it all back (`handOver`'s undo).
-   *
-   * `rows` picks the item's rows to commit: its top rows while the rest still
-   * shows, or the rest. Rows the live view had already scrolled out of sight
-   * leave the region as it was: they are written above it.
+   * forever what it is given. The last try, and every draw once the reader
+   * leaves, draws the item plain, unless history holds its top rows: those
+   * were drawn, so the rest is drawn too. The plain layout has other rows
+   * than the live view, so only a whole item draws plain. Rows of an item
+   * the live view shows in part (its top rows, or the rest once history
+   * holds them) come from the drawn layout, so they start and end at the
+   * rows the live view cuts. They wait no longer than a plain draw.
    */
-  const commitItems = (
-    items: SessionItem[],
-    rows: RowRange,
-    commit: ReplyWriter,
-    lastTry: boolean,
-    handOver: (rows: number) => () => void,
-    stillOffered: () => boolean,
-  ): Effect.Effect<CommitOutcome> =>
-    Effect.suspend(() => {
-      // An item queued behind one that came back waits for the next pass.
-      if (!commit.live()) return Effect.succeed("stale")
-      // The item may also have changed while it settled (its text replaced, a
-      // call's result in): rows drawn from the old item never land.
-      const stillCurrent = () => commit.live() && canCommitNatively() && stillOffered()
-      if (!stillCurrent()) return Effect.succeed("refused")
-      // The rows are the whole item, not its top rows or the rest of them.
-      const whole = rows.from === 0 && Option.isNone(rows.to) // A whole item the live view drew with no row (a step whose call its
+  const drawOffer = (offer: Offer, lastTry: boolean) =>
+    Effect.gen(function* () {
+      const whole = offer.range.from === 0 && Option.isNone(offer.range.to)
+      // A whole item the live view drew with no row (a step whose call its
       // run's head took) lands with none. OpenTUI draws a surface at least
       // one row high, so its commit would put a blank row in history.
-      if (whole && items.every((item) => itemHeights.get(item) === 0)) {
-        handOver(0)
-        return Effect.succeed("landed")
+      if (whole && itemHeights.get(offer.item) === 0) {
+        return Option.some<Drawn>({ offer, surface: Option.none() })
       }
-      // Settling is asynchronous. The screen may have changed hands and the
-      // reader may have cleared the display while it ran, so both are
-      // checked again before the rows are handed over.
-      const commitDrawn = (surface: ScrollbackSurface): Effect.Effect<CommitOutcome> =>
-        Effect.suspend(() => {
-          if (surface.isDestroyed || !stillCurrent()) return Effect.succeed("refused")
-          // Drawn at the screen's size now: the rows commit at the width they show.
-          surface.render()
-          const end = Option.match(rows.to, {
-            onNone: () => surface.height,
-            onSome: (to) => Math.min(to, surface.height),
-          })
-          const start = Math.min(rows.from, end)
-          const undo = handOver(end - start)
-          // The rows end on their last row. A trailing newline would leave the
-          // terminal on an empty row that OpenTUI counts as history, so on a
-          // short screen the region would start a row under the rows: a blank
-          // row between them. The next commit starts on a new row itself.
-          return Effect.try(() => surface.commitRows(start, end, { trailingNewline: false })).pipe(
-            Effect.as<CommitOutcome>("landed"),
-            Effect.catch(() =>
-              Effect.sync((): CommitOutcome => {
-                undo()
-                return "refused"
-              }),
-            ),
-          )
-        })
-      // The plain layout has other rows than the live view, so only a whole
-      // item draws plain. Rows of an item the live view shows in part (its
-      // top rows, or the rest once history holds them) come from the drawn
-      // layout, so they start and end at the rows the live view cuts. They
-      // wait no longer than a plain draw.
-      const commitLast = Effect.scoped(
-        Effect.gen(function* () {
-          const surface = yield* drawSurface(items, whole)
-          yield* Effect.tryPromise(() => surface.settle(PLAIN_SETTLE_MS)).pipe(Effect.ignore)
-          return yield* commitDrawn(surface)
-        }),
+      const drawLast = Effect.gen(function* () {
+        const surface = yield* drawSurface([offer.item], whole)
+        yield* Effect.tryPromise(() => surface.settle(PLAIN_SETTLE_MS)).pipe(Effect.ignore)
+        return Option.some<Drawn>({ offer, surface: Option.some(surface) })
+      })
+      if (lastTry || isLeaving()) return yield* drawLast
+      const surface = yield* drawSurface([offer.item], false)
+      const settled = yield* Effect.tryPromise(() => surface.settle(SETTLE_BUDGET_MS)).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+        Effect.raceFirst(Deferred.await(leaving).pipe(Effect.as(false))),
       )
-      if (lastTry || isLeaving()) return commitLast
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const surface = yield* drawSurface(items, false)
-          const settled = yield* Effect.tryPromise(() => surface.settle(SETTLE_BUDGET_MS)).pipe(
-            Effect.as(true),
-            Effect.orElseSucceed(() => false),
-            Effect.raceFirst(Deferred.await(leaving).pipe(Effect.as(false))),
-          )
-          if (settled) return yield* commitDrawn(surface)
-          if (isLeaving()) return yield* commitLast
-          return "unsettled"
-        }),
-      )
+      if (settled) return Option.some<Drawn>({ offer, surface: Option.some(surface) })
+      if (isLeaving()) return yield* drawLast
+      return Option.none<Drawn>()
     })
 
   /**
@@ -2521,72 +2507,175 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   }
 
   /**
-   * Hands rows of one item to native history and, only as they land, drops
-   * them from the live view: the whole item, or its top rows (`partialRows`).
-   * A commit that could not happen leaves the counters untouched, so the rows
-   * stay visible and a later pass retries them.
+   * Takes the offer's rows out of the live view: the whole item, or its top
+   * rows (`partialRows`). The live tail gives up the rows in the same update
+   * that drops them, so the region shrinks before the rows are queued, not
+   * a layout later. Returns the undo for a write scrollback refuses.
    */
-  const write = (item: SessionItem, fingerprintValue: string, range: RowRange) => {
-    const tries = unsettledTries.get(fingerprintValue) ?? 0
-    const commit = commits.newest()
+  const handOver = (offer: Offer, rows: number) => {
+    const { item, fingerprint: fingerprintValue, range } = offer
     const completes = Option.isNone(range.to)
-    // The live tail gives up the rows in the same update that drops them, so
-    // the region shrinks before the rows are queued, not a layout later.
-    const handOver = (rows: number) => {
-      const liveRowsGiven = Option.match(range.to, {
-        onNone: () => (itemHeights.get(item) ?? range.from + rows) - range.from,
-        onSome: (to) => to - range.from,
-      })
-      releasedRows += rows
-      unflushedRows += rows
-      pendingRows = Math.max(0, pendingRows - liveRowsGiven)
+    const liveRowsGiven = Option.match(range.to, {
+      onNone: () => (itemHeights.get(item) ?? range.from + rows) - range.from,
+      onSome: (to) => to - range.from,
+    })
+    releasedRows += rows
+    unflushedRows += rows
+    pendingRows = Math.max(0, pendingRows - liveRowsGiven)
+    batch(() => {
+      if (completes) {
+        setCommitted((values) => [...values, fingerprintValue])
+        setPartialRows(0)
+      } else {
+        partialFingerprint = fingerprintValue
+        setPartialRows(range.from + liveRowsGiven)
+      }
+      setLiveHeight((height) => Math.max(0, height - liveRowsGiven))
+    })
+    // The drawn top moves up with the rows that left the tail's top.
+    setDrawn((last) =>
+      Option.map(last, ({ top }) => ({
+        top: Math.max(0, top - liveRowsGiven),
+        head: untrack(headKey),
+      })),
+    )
+    // Sized here as well as by the effect: the commit is queued next, and
+    // a commit queued before the shrink would scroll the screen first.
+    untrack(() => sizeRegion(false))
+    // The write did not happen: the rows and the region come back.
+    return () => {
+      releasedRows = Math.max(0, releasedRows - rows)
+      unflushedRows = Math.max(0, unflushedRows - rows)
       batch(() => {
         if (completes) {
-          setCommitted((values) => [...values, fingerprintValue])
-          setPartialRows(0)
-        } else {
-          partialFingerprint = fingerprintValue
-          setPartialRows(range.from + liveRowsGiven)
+          setCommitted((values) => values.filter((value) => value !== fingerprintValue))
         }
-        setLiveHeight((height) => Math.max(0, height - liveRowsGiven))
+        setPartialRows(range.from)
+        setLiveHeight((height) => height + liveRowsGiven)
       })
-      // Sized here as well as by the effect: the commit is queued next, and
-      // a commit queued before the shrink would scroll the screen first.
       untrack(() => sizeRegion(false))
-      // The write did not happen: the rows and the region come back.
-      return () => {
-        releasedRows = Math.max(0, releasedRows - rows)
-        unflushedRows = Math.max(0, unflushedRows - rows)
-        batch(() => {
-          if (completes) {
-            setCommitted((values) => values.filter((value) => value !== fingerprintValue))
-          }
-          setPartialRows(range.from)
-          setLiveHeight((height) => height + liveRowsGiven)
-        })
-        untrack(() => sizeRegion(false))
-      }
     }
+  }
+
+  /**
+   * Commits one drawn offer's rows. The rows move in place: `handOver`
+   * takes them out of the live view and shrinks the split region by them
+   * before they are queued, so the region's top stays where it was and the
+   * commit writes the rows into the space they left, moving the region back
+   * down to the last row. In the other order the commit would scroll the
+   * screen first and the shrink would then leave the rows empty under the
+   * status row. Rows the live view had already scrolled out of sight leave
+   * the region as it was: they are written above it.
+   */
+  const landDrawn = ({ offer, surface }: Drawn): boolean => {
+    if (Option.isNone(surface)) {
+      handOver(offer, 0)
+      return true
+    }
+    if (surface.value.isDestroyed) return false
+    // Drawn at the screen's size now: the rows commit at the width they show.
+    surface.value.render()
+    const height = surface.value.height
+    const end = Option.match(offer.range.to, {
+      onNone: () => height,
+      onSome: (to) => Math.min(to, height),
+    })
+    const start = Math.min(offer.range.from, end)
+    const undo = handOver(offer, end - start)
+    // The rows end on their last row. A trailing newline would leave the
+    // terminal on an empty row that OpenTUI counts as history, so on a
+    // short screen the region would start a row under the rows: a blank
+    // row between them. The next commit starts on a new row itself.
+    const written = Effect.runSyncExit(
+      Effect.try(() => surface.value.commitRows(start, end, { trailingNewline: false })),
+    )
+    if (Exit.isSuccess(written)) return true
+    undo()
+    return false
+  }
+
+  /**
+   * Starts history again for a replay that has nothing to write: the clear
+   * goes out with the next frame of the region alone.
+   */
+  const resetAlone = Effect.sync(() => {
+    if (!historyResetPending) return
+    historyResetPending = false
+    resetHistory()
+    renderer.requestRender()
+  })
+
+  /**
+   * Writes one pass's offers to native history together. Each offer draws
+   * on its own surface and settles; then they land in one update, in
+   * transcript order, so the next frame writes all their rows at once.
+   * A replay's reset (`historyResetPending`) lands with them: OpenTUI
+   * (patched) writes the clear in the same synchronized frame as the rows
+   * and the region, so the screen never shows history half written, and
+   * until then it keeps the frame it had.
+   *
+   * An offer lands only while it is still the next after history: rows
+   * coming back to the live view, a replay or a clear take a newer commit
+   * stamp, and an item may change while it settles (its text replaced, a
+   * call's result in). Rows drawn from the old item never land. An offer
+   * whose highlights missed their budget lands with none behind it; the
+   * offers before it land. Every offer that does not land goes back to the
+   * live view (`rewind`), so closing an overlay still shows it.
+   */
+  const writeOffers = (offers: ReadonlyArray<Offer>) => {
+    if (offers.length === 0) return
+    const commit = commits.newest()
+    const tries = (offer: Offer) => unsettledTries.get(offer.fingerprint) ?? 0
+    // Commits land in transcript order: an offer is the next after history.
+    const next = (offer: Offer) =>
+      commit.live() &&
+      canCommitNatively() &&
+      untrack(fingerprints)[untrack(committedCount)] === offer.fingerprint
     enqueueNative(
-      commitItems(
-        [item],
-        range,
-        commit,
-        tries + 1 >= SETTLE_TRIES,
-        handOver,
-        // Commits land in transcript order, so this item is the next after history.
-        () => untrack(fingerprints)[untrack(committedCount)] === fingerprintValue,
-      ).pipe(
-        Effect.andThen((outcome) =>
-          Effect.sync(() => {
-            if (outcome === "stale") return
-            if (outcome === "unsettled") unsettledTries.set(fingerprintValue, tries + 1)
-            if (outcome !== "landed") return rewind()
-            unsettledTries.delete(fingerprintValue)
-          }),
-        ),
-        Effect.onError(() => Effect.sync(rewind)),
-      ),
+      Effect.scoped(
+        Effect.gen(function* () {
+          // Offers queued behind ones that came back wait for the next pass.
+          if (!commit.live()) return
+          // The offers draw and settle side by side (`SURFACES_AT_ONCE`): a
+          // replay waits for its slowest, not for the sum. They land in
+          // order, up to the first that missed its budget.
+          const results = yield* Effect.forEach(
+            offers,
+            (offer) => drawOffer(offer, tries(offer) + 1 >= SETTLE_TRIES),
+            { concurrency: SURFACES_AT_ONCE },
+          )
+          const drawn: Drawn[] = []
+          let missed = Option.none<Offer>()
+          for (const [index, result] of results.entries()) {
+            if (Option.isNone(result)) {
+              missed = Option.fromUndefinedOr(offers[index])
+              break
+            }
+            drawn.push(result.value)
+          }
+          // Settling is asynchronous. The screen may have changed hands and
+          // the reader may have cleared the display meanwhile: each offer is
+          // checked again as it lands. They land in one synchronous step, so
+          // no frame comes between them.
+          yield* Effect.sync(() => {
+            let landed = 0
+            for (const item of drawn) {
+              if (!next(item.offer)) break
+              if (historyResetPending) {
+                historyResetPending = false
+                resetHistory()
+              }
+              if (!landDrawn(item)) break
+              unsettledTries.delete(item.offer.fingerprint)
+              landed++
+            }
+            if (Option.isSome(missed)) {
+              unsettledTries.set(missed.value.fingerprint, tries(missed.value) + 1)
+            }
+            if (landed < offers.length) rewind()
+          })
+        }),
+      ).pipe(Effect.onError(() => Effect.sync(rewind))),
     )
   }
 
@@ -2594,9 +2683,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * Offers the rows of `items[queued]` from the last offered row up to `to`,
    * or to its end (`None`), and moves the offer mark past them.
    */
-  const offer = (item: SessionItem, fingerprintValue: string, to: Option.Option<number>) => {
+  const offer = (
+    offers: Offer[],
+    item: SessionItem,
+    fingerprintValue: string,
+    to: Option.Option<number>,
+  ) => {
     const from = queuedRows
-    write(item, fingerprintValue, { from, to })
+    offers.push({ item, fingerprint: fingerprintValue, range: { from, to } })
     pendingRows += Option.match(to, {
       onNone: () => Math.max(0, (itemHeights.get(item) ?? from) - from),
       onSome: (end) => end - from,
@@ -2649,18 +2743,21 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       renderer.footerHeight = away.value
       enterRegion()
       // A resize while away left history for the old width: it starts again.
-      if (replayPending()) enqueueNative(Effect.sync(resetHistory))
+      if (replayPending()) historyResetPending = true
     }
     if (!canCommitNatively()) return Effect.void
     const items = displayedItems()
     const next = historyFingerprints(items, toolRuns())
     if (!untrack(committed).every((value, index) => next[index] === value)) return Effect.void
+    const offers: Offer[] = []
     while (queued < items.length) {
       const item = items[queued]
       const value = next[queued]
       if (!item || !Predicate.isString(value)) break
-      offer(item, value, Option.none())
+      offer(offers, item, value, Option.none())
     }
+    writeOffers(offers)
+    enqueueNative(resetAlone)
     return Effect.gen(function* () {
       const drained = yield* Deferred.make<void>()
       enqueueNative(Deferred.done(drained, Exit.void))
@@ -2680,6 +2777,8 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     renderer.useMouse = false
     // A new transcript must not inherit the previous screen's cursor origin.
     // A later one writes its own history, which may share rows with the last.
+    // Its region starts on the screen's top row, so the reset comes before
+    // the region's first frame; its clear goes out with that frame.
     if (later) resetHistory()
     else renderer.resetSplitFooterForReplay()
     renderer.on("frame", afterCommitFrame)
@@ -2747,14 +2846,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       settlingNative = true
       renderer.once("frame", finishNativeReturn)
       // A resize, a disclosure change or an item that changed in history
-      // replays all of history (`resetHistory`). Clear before the layout
-      // frame; replay only after its measurements arrive.
-      enqueueNative(
-        Effect.sync(() => {
-          resetHistory()
-          renderer.requestRender()
-        }),
-      )
+      // replays all of history (`resetHistory`). The replay starts after the
+      // layout frame's measurements arrive, and the reset goes out with its
+      // rows (`writeOffers`): the screen keeps its frame until then.
+      historyResetPending = true
+      renderer.requestRender()
     }
     if (!settlingNative) setNativeOutputReady(true)
   })
@@ -2859,12 +2955,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       if (Option.exists(offeredCanvas, (rows) => canvas > rows) && pendingRows > 0) rewind()
       offeredCanvas = Option.some(canvas)
       // The rows the tail holds above the canvas, less those already offered.
-      offerRows(items, next, {
+      const offers: Offer[] = []
+      const measured = offerRows(offers, items, next, {
         excess: tailRows - canvas - pendingRows,
         unfinished,
         turnRunning,
         runs,
       })
+      writeOffers(offers)
+      // A replay with no rows for history (they all fit the tail) still
+      // clears the screen: once nothing is in flight and nothing waits for a
+      // measurement.
+      if (historyResetPending && measured && pendingRows <= 0) enqueueNative(resetAlone)
       // A pass that offers nothing can still leave a gap: a taller canvas
       // gave back the rows in flight, and no commit sizes the region again.
       watchGap()
@@ -2896,9 +2998,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   /**
    * Offers the transcript's rows above the canvas to history, in order: a
    * final item whole, or its top rows when the rest still fits. An item that
-   * is not final stops the offer, with every item after it.
+   * is not final stops the offer, with every item after it. False when the
+   * offer stopped at an item the live view has not measured yet.
    */
   const offerRows = (
+    offers: Offer[],
     items: ReadonlyArray<SessionItem>,
     next: ReadonlyArray<string>,
     plan: {
@@ -2907,26 +3011,28 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       readonly turnRunning: boolean
       readonly runs: ToolRuns
     },
-  ) => {
+  ): boolean => {
     let excess = plan.excess
     while (excess > 0 && queued < items.length) {
       const item = items[queued]
       if (!item || !isFinalItem(item, plan.turnRunning, plan.runs) || plan.unfinished.has(item))
-        return
+        return true
       const value = next[queued]
       const height = itemHeights.get(item)
-      if (!Predicate.isString(value) || Predicate.isUndefined(height)) return
+      if (!Predicate.isString(value)) return true
+      if (Predicate.isUndefined(height)) return false
       // A row has one owner: native history or the live view. The live view
       // keeps it until the queued commit reports that it landed.
       const rest = height - queuedRows
       if (rest <= excess) {
-        offer(item, value, Option.none())
+        offer(offers, item, value, Option.none())
         excess -= rest
         continue
       }
-      offer(item, value, Option.some(queuedRows + excess))
-      return
+      offer(offers, item, value, Option.some(queuedRows + excess))
+      return true
     }
+    return true
   }
 
   const liveItems = createMemo(() => {
@@ -3108,13 +3214,6 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     untrack(() => sizeRegion(false))
   }
 
-  // A footer that takes the whole split region (a docked pane, its blank rows
-  // given way) leaves the live tail no row. The scrollbox keeps its set height
-  // and would draw its last row over the footer's first, so the tail reads its
-  // laid-out rows before each draw and, at none, draws nothing.
-  const [rowsShown, setRowsShown] = createSignal(Option.none<number>())
-  const hasRows = () => !Option.contains(rowsShown(), 0)
-
   /**
    * The top rows of the first live item that history holds: the live view
    * cuts them off. The expanded transcript shows every item whole.
@@ -3136,6 +3235,67 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return Math.max(1, (itemHeights.get(item) ?? cut + 1) - cut)
   }
 
+  /**
+   * What the tail's top is drawn from: the items history holds, the rows
+   * of the first live item it holds, and that item. Rows that come back to
+   * the top of the tail (a replay, a clear, a write refused) change it.
+   */
+  const headKey = () => {
+    const count = committedCount()
+    return `${count}:${partialRows()}:${fingerprints()[count] ?? ""}`
+  }
+  /**
+   * The tail's rows from its top through its last leading final item: the
+   * rows history takes next. A row under them belongs to an item still
+   * running, which history cannot take yet.
+   */
+  const finalHeadRows = () => {
+    measurementVersion()
+    const runs = toolRuns()
+    const unfinished = undrawn()
+    let rows = 0
+    for (const [index, item] of liveItems().entries()) {
+      if (!isFinalItem(item, props.streaming, runs) || unfinished.has(item)) break
+      rows += Math.max(0, (itemHeights.get(item) ?? 0) - cutRows(index))
+    }
+    return rows
+  }
+  /**
+   * The lowest top row the tail may scroll to: the one it drew, while final
+   * rows show from there. Rows a final row could leave by scrolling would be
+   * in neither history nor the region until history takes them; a row of a
+   * running item may leave. None over a new head: rows came back above.
+   */
+  const topLimit = createMemo(() => {
+    if (props.expanded || replayPending()) return Option.none<number>()
+    const head = headKey()
+    return Option.flatMap(drawn(), ({ top, head: drawnHead }) =>
+      Option.liftPredicate(top, (row) => drawnHead === head && row < finalHeadRows()),
+    )
+  })
+
+  // A footer that takes the whole split region (a docked pane, its blank rows
+  // given way) leaves the live tail no row. The scrollbox keeps its set height
+  // and would draw its last row over the footer's first, so the tail reads its
+  // laid-out rows before each draw and, at none, draws nothing.
+  const [rowsShown, setRowsShown] = createSignal(Option.none<number>())
+  const hasRows = () => !Option.contains(rowsShown(), 0)
+
+  // The tail's laid-out rows (`liveHeight`) follow its size changes. A
+  // hand-over takes rows off ahead of layout, and a layout that lands back on
+  // the height last reported (an item joined as rows left) sends no size
+  // change: the draw finds them stale and corrects them after the frame. A
+  // correction inside the draw would resize the region under it, and the
+  // frame would go out blank.
+  let tailCheckPending = false
+  const tailHeightStale = () =>
+    Option.isSome(tail) && !props.expanded && hasRows() && tail.value.height !== untrack(liveHeight)
+  const checkTailHeight = () => {
+    tailCheckPending = false
+    if (disposed || Option.isNone(tail) || !tailHeightStale()) return
+    setLiveHeight(tail.value.height)
+  }
+
   return (
     <box
       flexDirection="column"
@@ -3150,6 +3310,18 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       renderBefore={function () {
         const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
         if (!Option.contains(rowsShown(), rows)) setRowsShown(Option.some(rows))
+        if (!tailCheckPending && tailHeightStale()) {
+          tailCheckPending = true
+          renderer.once("frame", checkTailHeight)
+        }
+        if (Option.isNone(viewport)) return
+        // A sticky scroll over content shorter than a viewport that grew reads
+        // below zero; the tail still shows from its first row.
+        const top = Math.max(0, viewport.value.scrollTop)
+        const head = untrack(headKey)
+        const last = untrack(drawn)
+        if (Option.exists(last, (frame) => frame.top === top && frame.head === head)) return
+        setDrawn(Option.some({ top, head }))
       }}
     >
       {/* Rows the region holds beyond the tail's own sit above it, under
@@ -3176,46 +3348,58 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         focusable={false}
         verticalScrollbarOptions={{ visible: false }}
       >
+        {/* The scrollbox scrolls this box: at most to the top row the tail
+          may take (`topLimit`); the rows under it wait below the viewport. */}
         <box
           flexDirection="column"
           flexShrink={0}
-          paddingRight={FREE_LAST_COLUMN}
-          onSizeChange={function () {
-            if (props.expanded || !hasRows()) return
-            setLiveHeight(this.height)
-          }}
+          overflow="hidden"
+          maxHeight={Option.getOrUndefined(Option.map(topLimit(), (top) => viewportHeight() + top))}
         >
-          {/* The transcript view turns the mouse on: there its frames take clicks. */}
-          <FrameClicks on={props.expanded}>
-            <ToolRunsContext.Provider value={Option.some(toolRuns)}>
-              <For each={liveItems()}>
-                {(item, index) => (
-                  <box
-                    flexDirection="column"
-                    flexShrink={0}
-                    overflow={cutOverflow(index())}
-                    height={cutHeight(item, index())}
-                  >
+          <box
+            flexDirection="column"
+            flexShrink={0}
+            paddingRight={FREE_LAST_COLUMN}
+            ref={(value) => {
+              tail = Option.some(value)
+            }}
+            onSizeChange={function () {
+              if (props.expanded || !hasRows()) return
+              setLiveHeight(this.height)
+            }}
+          >
+            {/* The transcript view turns the mouse on: there its frames take clicks. */}
+            <FrameClicks on={props.expanded}>
+              <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+                <For each={liveItems()}>
+                  {(item, index) => (
                     <box
                       flexDirection="column"
                       flexShrink={0}
-                      marginTop={-cutRows(index())}
-                      onSizeChange={function () {
-                        measureItem(item, this)
-                      }}
-                      // A change between no row and one sends no size change.
-                      renderBefore={function () {
-                        measureItem(item, this)
-                      }}
+                      overflow={cutOverflow(index())}
+                      height={cutHeight(item, index())}
                     >
-                      {props.renderItems([item])}
+                      <box
+                        flexDirection="column"
+                        flexShrink={0}
+                        marginTop={-cutRows(index())}
+                        onSizeChange={function () {
+                          measureItem(item, this)
+                        }}
+                        // A change between no row and one sends no size change.
+                        renderBefore={function () {
+                          measureItem(item, this)
+                        }}
+                      >
+                        {props.renderItems([item])}
+                      </box>
                     </box>
-                  </box>
-                )}
-              </For>
-            </ToolRunsContext.Provider>
-          </FrameClicks>
-          {props.children}
+                  )}
+                </For>
+              </ToolRunsContext.Provider>
+            </FrameClicks>
+            {props.children}
+          </box>
         </box>
       </scrollbox>
     </box>
