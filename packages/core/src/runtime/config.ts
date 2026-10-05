@@ -6,6 +6,7 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
   Ref,
   Result,
   Schema,
@@ -20,6 +21,7 @@ import {
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
+import { canonicalJsonString } from "effect-encore"
 import { writeFileAtomic } from "./gent-platform.js"
 
 // ── runtime-environment ─────────────────────────────────────────────────────
@@ -346,11 +348,37 @@ interface ConfigServiceService {
   ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
 }
 
-/** A fresh config read: the merged config and every file that did not load. */
+/**
+ * A fresh config read: the merged config, every file that did not load, and
+ * what the files hold (`fingerprint`). `config` holds only the fields core
+ * decodes, and an extension reads its own keys from the same files at setup
+ * (`guard`, `routers`): the fingerprint names every key of both files, so a
+ * session profile keyed by it is built again when one of them changes. It
+ * leaves out `disabledExtensions`, which the profile key holds as its effect
+ * (the extensions that run), and is the same for a missing file and `{}`.
+ */
 export interface FreshConfig {
   readonly config: UserConfig
   readonly failures: ReadonlyArray<ConfigLoadError>
+  readonly fingerprint: string
 }
+
+const ConfigJson = Schema.fromJsonString(Schema.Json)
+
+const isJsonRecord = (json: Schema.Json): json is { readonly [key: string]: Schema.Json } =>
+  Predicate.isObject(json) && !Array.isArray(json)
+
+/** A config text's keys as canonical JSON, the disabled list left out; `invalid` when it is not JSON. */
+const configFingerprint = (content: string): string =>
+  Result.match(Schema.decodeResult(ConfigJson)(content), {
+    onFailure: () => "invalid",
+    onSuccess: (json) => {
+      if (!isJsonRecord(json)) return canonicalJsonString(json)
+      return canonicalJsonString(
+        Object.fromEntries(Object.entries(json).filter(([key]) => key !== "disabledExtensions")),
+      )
+    },
+  })
 
 export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
   path: Schema.String,
@@ -473,8 +501,15 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // back) is tried again on the next call, since the stat need not change.
       const decodedFiles = new Map<
         string,
-        { readonly stamp: string; readonly read: Result.Result<UserConfig, ConfigLoadError> }
+        {
+          readonly stamp: string
+          readonly read: Result.Result<UserConfig, ConfigLoadError>
+          readonly fingerprint: string
+        }
       >()
+      /** The fingerprint of the file's last read; `unread` when no read of it was kept. */
+      const fingerprintOf = (filePath: string) =>
+        decodedFiles.get(filePath)?.fingerprint ?? "unread"
       const fileStamp = (filePath: string) =>
         fs.stat(filePath).pipe(
           Effect.map(fileVersion),
@@ -492,7 +527,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           }
           const content = yield* readConfigText(filePath).pipe(Effect.mapError(loadError(filePath)))
           const read = yield* Effect.result(decodeConfigText(filePath, content))
-          decodedFiles.set(filePath, { stamp, read })
+          decodedFiles.set(filePath, { stamp, read, fingerprint: configFingerprint(content) })
           return yield* Result.match(read, { onSuccess: Effect.succeed, onFailure: Effect.fail })
         })
 
@@ -596,6 +631,10 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
         const failures: Array<ConfigLoadError> = []
         const userRead = yield* readUserConfig
+        // Read at once after the file's read, and before any extension setup
+        // reads the file: a setup never reads an older file than the
+        // fingerprint its profile is keyed by.
+        const userFingerprint = fingerprintOf(userConfigPath)
         let user: UserConfig
         if (Result.isSuccess(userRead)) {
           user = userRead.success
@@ -604,18 +643,23 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           user = yield* SynchronizedRef.get(userConfigRef)
         }
         let project = new UserConfig({})
+        let projectFingerprint = configFingerprint("{}")
         const projectScope = yield* hasProjectScope({ user: home, project: cwd }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
         )
         if (projectScope) {
-          const projectRead = yield* Effect.result(
-            readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
-          )
+          const projectPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+          const projectRead = yield* Effect.result(readConfigFresh(projectPath))
+          projectFingerprint = fingerprintOf(projectPath)
           if (Result.isSuccess(projectRead)) project = projectRead.success
           else failures.push(projectRead.failure)
         }
-        return { config: mergeConfigs(user, project), failures }
+        return {
+          config: mergeConfigs(user, project),
+          failures,
+          fingerprint: `user:${userFingerprint}\u0000project:${projectFingerprint}`,
+        }
       })
 
       const service: ConfigServiceService = {
@@ -670,7 +714,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           getFresh: () =>
             Effect.gen(function* () {
               const user = yield* Ref.get(userConfigRef)
-              return { config: mergeConfigs(user, emptyProjectConfig), failures: [] }
+              return {
+                config: mergeConfigs(user, emptyProjectConfig),
+                failures: [],
+                // It reads no file, so no file an extension reads can change.
+                fingerprint: "test",
+              }
             }),
           setDriverOverride: (agent, driver) =>
             Ref.update(userConfigRef, (current) =>

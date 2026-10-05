@@ -1659,6 +1659,39 @@ export default defineExtension({
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // An extension reads its own config keys at setup, which core does not
+  // decode: an edit to any key builds a new profile, and a write that
+  // changes nothing keeps the profile.
+  it.scopedLive(
+    "a config edit core does not decode builds a new profile for the next resolve",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const kept = markerExtension("@gent/test-session-profile/config-reader", "live")
+        const projectConfig = path.join(launch, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const before = yield* cache.resolve(launch)
+          yield* fs.writeFileString(projectConfig, '{"guard":{"policy":"Deny deleting files."}}')
+          const edited = yield* cache.resolve(launch)
+          expect(edited).not.toBe(before)
+          // The same keys written again with other spacing: the same profile.
+          yield* writeFileAtomic(projectConfig, '{ "guard": { "policy": "Deny deleting files." } }')
+          expect(yield* cache.resolve(launch)).toBe(edited)
+          yield* fs.writeFileString(projectConfig, "{}")
+          expect(yield* cache.resolve(launch)).toBe(before)
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   // Each edit to the list derives a new profile. The one it replaces holds
   // process resources, so it closes when its last user lets go.
   it.scopedLive("an edited disabledExtensions list retires the profile it replaced", () =>

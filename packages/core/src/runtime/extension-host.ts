@@ -2713,9 +2713,9 @@ const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
 
 /**
- * The raw disabled list as the config names it, and the extension files on
- * disk (`extensionScanStamp`). It only finds a profile the same inputs
- * resolved before; the profile itself is keyed by `profileKey`.
+ * The raw disabled list as the config names it, the config files' version
+ * and the extension files on disk (`filesStamp`). It only finds a profile the
+ * same inputs resolved before; the profile itself is keyed by `profileKey`.
  */
 const listKey = (
   place: string,
@@ -2728,6 +2728,8 @@ const listKey = (
  * up, and the files they load from, so the key holds the active and the
  * failed extension ids and the file versions, not the disabled list: an id
  * no extension has builds no second profile, and an edited file builds one.
+ * The config files are among those files: an extension reads its own config
+ * keys at setup, so an edited config builds a new profile too.
  * An extension that runs its last good version names that version too.
  */
 const profileKey = (
@@ -2929,7 +2931,16 @@ export class SessionProfileCache extends Context.Service<
             .map(([key, version]) => [key, version].join("\u0000"))
             .toSorted()
             .join("\u0002")
-        const filesStamp = (place: string, scan: ExtensionScan): ReadonlyArray<string> => [
+        // The config files are in the stamp too: an extension reads its own
+        // config keys at setup (`@gent/guard`, `@gent/router`), so an edit
+        // to them builds a new profile for the next turn, while a turn that
+        // holds the old one keeps its lease.
+        const filesStamp = (
+          place: string,
+          scan: ExtensionScan,
+          fresh: FreshConfig,
+        ): ReadonlyArray<string> => [
+          `config:${platform.hash("sha256", fresh.fingerprint)}`,
           ...extensionScanStamp(scan),
           ...Array.from(reloads.get(place) ?? new Map<string, number>())
             .map(([id, count]) => `reload:${id}#${count}`)
@@ -3172,7 +3183,7 @@ export class SessionProfileCache extends Context.Service<
               Option.fromNullishOr(entries.get(key)),
             ).pipe(Option.filter(runsCurrentLastGood))
             if (Option.isSome(aliased)) return aliased.value
-            const files = filesStamp(place, scan)
+            const files = filesStamp(place, scan, fresh)
             const declarations = yield* restore(
               loadRuntimeProfileDeclarations(
                 effectiveInputs(inputsFor(cwd), fresh.config),
@@ -3283,7 +3294,7 @@ export class SessionProfileCache extends Context.Service<
                   const list = listKey(
                     place,
                     effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                    filesStamp(place, scan),
+                    filesStamp(place, scan, fresh),
                   )
                   const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
                   recordLastGood(place, entry.profile.resolved)

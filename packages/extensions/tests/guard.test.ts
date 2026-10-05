@@ -29,12 +29,15 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { type AgentEvent, messagePartsText } from "@gent/core/protocol"
+import { BunPlatformLive } from "@gent/core/host"
 import {
   ApprovalService,
+  ConfigService,
   createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   type SequenceStep,
+  RuntimeEnvironment,
   testAgent,
   testTurnExtension,
   textStep,
@@ -209,6 +212,11 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
   readonly deadlineMs?: number
 }) {
   const { home, cwd } = yield* writeHome(params.guard)
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  /** Replace the user config's `guard` entry, as an owner's edit does. */
+  const setGuard = (guard: Schema.Json) =>
+    fs.writeFileString(path.join(home, ".gent", "config.json"), encodeExternalJson({ guard }))
   const ran: Array<string> = []
   const calls: Array<JudgeCall> = []
   const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(params.steps)
@@ -224,12 +232,19 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
     approvalLayer: ApprovalService.Live,
     home,
     cwd,
+    // The server reads the config files as they are, as the guard does.
+    configServiceLayer: ConfigService.Live.pipe(
+      Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+      Layer.provide(BunPlatformLive),
+    ),
   })
   const { client, sessionId, branchId } = harness
   yield* client.auth.setKey({ provider: "guard-judge", key: "test-key", sessionId })
   const run = (content: string, approved: boolean) =>
     Effect.gen(function* () {
-      const turn = yield* client.session.events({ sessionId, branchId }).pipe(
+      // Only this turn's events: a session's next turn waits for its own end.
+      const after = (yield* client.session.getSnapshot({ sessionId, branchId })).lastEventId ?? 0
+      const turn = yield* client.session.events({ sessionId, branchId, after }).pipe(
         Stream.map((envelope) => envelope.event),
         Stream.tap((event) => {
           if (event._tag !== "InteractionPresented") return Effect.void
@@ -255,7 +270,7 @@ const guardedSession = Effect.fn("test.guardedSession")(function* (params: {
       )
       return { events, results, answered }
     })
-  return { ran, calls, controls, run }
+  return { ran, calls, controls, run, setGuard }
 })
 
 const presentedTexts = (events: ReadonlyArray<AgentEvent>) =>
@@ -381,6 +396,30 @@ describe("@gent/guard", () => {
         expect(home).toContain("the guard policy forbids it")
         expect(session.ran).toEqual(["cp a b -> /tmp/b"])
         expect(session.calls).toHaveLength(1)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a guard enabled while gent runs gates the next turn's calls",
+    () =>
+      Effect.gen(function* () {
+        const session = yield* guardedSession({
+          guard: Option.none(),
+          answers: [],
+          steps: [
+            runCall("rm -rf build"),
+            textStep("finished"),
+            runCall("rm -rf dist"),
+            textStep("finished"),
+          ],
+        })
+        yield* session.run("Clean build.", true)
+        expect(session.ran).toEqual(["rm -rf build"])
+        yield* session.setGuard({ rules: [{ tool: "run", match: "rm -rf *", effect: "deny" }] })
+        const { results } = yield* session.run("Clean dist.", true)
+        expect(outcomes(results)[1]).toContain('the guard rule "run" matching "rm -rf *" denies it')
+        expect(session.ran).toEqual(["rm -rf build"])
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
     10_000,
   )
