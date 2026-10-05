@@ -725,7 +725,12 @@ describe("user configuration", () => {
           yield* Effect.gen(function* () {
             const cfg = yield* ConfigService
             yield* fs.writeFileString(userConfigPath, encodeJson(written))
-            yield* cfg.setAuthOrder("owner", [work, DEFAULT_CREDENTIAL_SLOT], ["owner", "alias"])
+            yield* cfg.setAuthOrder(
+              "owner",
+              [work, DEFAULT_CREDENTIAL_SLOT],
+              ["owner", "alias"],
+              cwd,
+            )
             expect(yield* readRaw).toEqual({
               providers: {
                 owner: { name: "Owner", futureKey: { kept: true }, authOrder: ["work", "default"] },
@@ -737,11 +742,36 @@ describe("user configuration", () => {
               DEFAULT_CREDENTIAL_SLOT,
             ])
             // An empty order clears the field: the default credential serves alone.
-            yield* cfg.setAuthOrder("owner", [], [])
-            expect(yield* readRaw).toEqual({
+            yield* cfg.setAuthOrder("owner", [], [], cwd)
+            const cleared = {
               providers: { owner: { name: "Owner", futureKey: { kept: true } } },
               futureKey: { kept: true },
+            }
+            expect(yield* readRaw).toEqual(cleared)
+            // A rename relabels only an order this file holds.
+            const team = CredentialSlot.make("team")
+            yield* cfg.renameAuthSlot("owner", ["owner", "alias"], work, team)
+            expect(yield* readRaw).toEqual(cleared)
+            yield* fs.writeFileString(userConfigPath, encodeJson(written))
+            yield* cfg.renameAuthSlot("owner", ["owner", "alias"], work, team)
+            expect(yield* readRaw).toEqual({
+              providers: {
+                owner: { name: "Owner", futureKey: { kept: true }, authOrder: ["default", "team"] },
+              },
+              futureKey: { kept: true },
             })
+            // A project entry for the owner wins over the user's order: the
+            // write is refused, named, and the user file stays as it was.
+            const before = yield* fs.readFileString(userConfigPath)
+            yield* fs.makeDirectory(path.join(cwd, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(cwd, ConfigService.CONFIG_RELATIVE),
+              encodeJson({ providers: { owner: { name: "Project owner" } } }),
+            )
+            expect(yield* cfg.setAuthOrder("owner", [team], ["owner", "alias"], cwd)).toEqual([
+              "owner",
+            ])
+            expect(yield* fs.readFileString(userConfigPath)).toBe(before)
           }).pipe(Effect.provide(liveConfigAt(cwd, home)))
         }).pipe(Effect.provide(BunServices.layer)),
     )

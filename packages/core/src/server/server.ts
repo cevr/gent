@@ -141,7 +141,7 @@ import {
   makeExtensionModels,
   removeSignIn,
   renameSignIn,
-  signInOrder,
+  signInEntries,
   storeSignIn,
   type ModelCatalogFailure,
   ModelCatalogRecord,
@@ -1906,7 +1906,8 @@ const RpcHandlers = GentRpcs.toLayer(
         ),
 
       // The order follows the label: a turn walks the renamed credential
-      // where it walked the old one.
+      // where it walked the old one. Only the user file's own order is
+      // relabeled; a project order is never copied into it.
       "auth.renameKey": ({ provider, from, to, sessionId }: RenameAuthKeyInput) =>
         inSessionProfile(
           sessionId,
@@ -1916,35 +1917,24 @@ const RpcHandlers = GentRpcs.toLayer(
                 (error) => new ProviderAuthError({ message: error.message, cause: error }),
               ),
             )
-            const held = yield* signInOrder(provider)
-            if (!held.order.includes(from)) return
-            yield* configService.setAuthOrder(
-              held.owner,
-              held.order.map((slot) => {
-                if (slot === from) return to
-                return slot
-              }),
-              held.entries,
-            )
+            const held = yield* signInEntries(provider)
+            yield* configService.renameAuthSlot(held.owner, held.keys, from, to)
           }),
         ),
 
       // One entry holds a sign-in's order: the owner's in the user config.
-      // A project entry shadows it key by key, so the call reads the order
-      // back and names the entries that still win.
+      // A project entry shadows it key by key: the write is refused, with
+      // the entries that win named, before the user file changes.
       "auth.setOrder": ({ provider, order, sessionId }: SetAuthOrderInput) =>
         inSessionProfile(
           sessionId,
           Effect.gen(function* () {
-            const held = yield* signInOrder(provider)
-            yield* configService.setAuthOrder(held.owner, order, held.entries)
-            const now = yield* signInOrder(provider)
-            const written =
-              now.order.length === order.length &&
-              order.every((slot, index) => now.order[index] === slot)
-            if (written) return
+            const held = yield* signInEntries(provider)
+            const cwd = Option.getOrElse(yield* sessionCwd(sessionId), () => runtimeEnvironment.cwd)
+            const shadowing = yield* configService.setAuthOrder(held.owner, order, held.keys, cwd)
+            if (shadowing.length === 0) return
             return yield* new ProviderAuthError({
-              message: `The project config (.gent/config.json) sets authOrder for ${now.entries.map((id) => `"${id}"`).join(", ")}, which wins over the user config: edit it there`,
+              message: `The project config (.gent/config.json) has an entry for ${shadowing.map((id) => `"${id}"`).join(", ")}, which wins over the user config's authOrder: edit it there`,
             })
           }),
         ),

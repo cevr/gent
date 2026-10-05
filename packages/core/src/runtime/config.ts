@@ -250,6 +250,48 @@ const configUpdates = {
     if (!changed) return Option.none()
     return Option.some(new UserConfig({ ...current, providers: nonEmptyRecord(providers) }))
   },
+  /**
+   * The sign-in's order in this file with `from` relabeled `to`, written as
+   * `setAuthOrder` writes it (into `owner`'s entry). The order is the first
+   * one `owner` or an entry in `aliases` names here. `None` when this file
+   * names no order that holds `from`: an order another file holds is never
+   * copied into this one.
+   */
+  renameAuthSlot: (
+    current: UserConfig,
+    owner: string,
+    aliases: ReadonlyArray<string>,
+    from: CredentialSlot,
+    to: CredentialSlot,
+  ): Option.Option<UserConfig> => {
+    const held = [owner, ...aliases]
+      .map((id) => current.providers?.[id]?.authOrder)
+      .find(Predicate.isNotUndefined)
+    if (Predicate.isUndefined(held) || !held.includes(from)) return Option.none()
+    const order = held.map((slot) => {
+      if (slot === from) return to
+      return slot
+    })
+    return configUpdates.setAuthOrder(current, owner, order, aliases)
+  },
+}
+
+/**
+ * The entries of `project` that win over a user-file order of `owner`'s
+ * sign-in: an entry for `owner` replaces the user's whole entry, and an
+ * alias entry that names an order is read before the user's.
+ */
+const shadowingOrderEntries = (
+  project: UserConfig,
+  owner: string,
+  aliases: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const entries = project.providers ?? {}
+  return [owner, ...aliases.filter((alias) => alias !== owner)].filter((id) => {
+    const entry = entries[id]
+    if (Predicate.isUndefined(entry)) return false
+    return id === owner || Predicate.isNotUndefined(entry.authOrder)
+  })
 }
 
 /** User then project `agents` entries: a project entry replaces only the fields it names. */
@@ -412,13 +454,29 @@ interface ConfigServiceService {
    * Write a sign-in's credential order into the user config: `owner`'s
    * `providers` entry gets `order` (empty: the field goes, and the default
    * credential serves alone), and each entry in `aliases` (a driver that
-   * shares the sign-in) loses its own, so no two entries can conflict. A
-   * project entry still shadows the user's. Fails as `setDriverOverride` does.
+   * shares the sign-in) loses its own, so no two entries can conflict.
+   * Where the project config of `cwd` holds an entry that wins over it, the
+   * call writes nothing and returns those entries: an order the user was
+   * refused never lands in a file every other project reads. Fails as
+   * `setDriverOverride` does.
    */
   readonly setAuthOrder: (
     owner: string,
     order: ReadonlyArray<CredentialSlot>,
     aliases: ReadonlyArray<string>,
+    cwd: string,
+  ) => Effect.Effect<ReadonlyArray<string>, ConfigLoadError | ConfigWriteError>
+  /**
+   * Relabel `from` as `to` in the order the user config holds for the
+   * sign-in (`owner` and its `aliases`); no-op when it holds none with
+   * `from`. A project order is never copied into the user file. Fails as
+   * `setDriverOverride` does.
+   */
+  readonly renameAuthSlot: (
+    owner: string,
+    aliases: ReadonlyArray<string>,
+    from: CredentialSlot,
+    to: CredentialSlot,
   ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
 }
 
@@ -840,23 +898,11 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           }),
         )
 
-      // The user and project files as they are now, merged. A user file that
-      // does not decode reads as the last one that did; a project file that
-      // does not decode sets nothing. Both are in `failures`, and a turn
-      // refuses to run on either: the stand-in can grant more than the file.
-      const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
+      // The project file of `cwd` as it is now: empty outside a project
+      // scope, and empty (with its failure) when it does not decode.
+      const readProject = Effect.fn("ConfigService.readProject")(function* (cwd: string) {
         const failures: Array<ConfigLoadError> = []
         const files: Array<ConfigFileRead> = []
-        const userRead = yield* readUserConfig
-        let user = yield* SynchronizedRef.get(userConfigRef)
-        if (Result.isFailure(userRead)) {
-          failures.push(userRead.failure)
-          files.push(unreadable(userRead.failure))
-        } else {
-          files.push(userRead.success.file)
-          if (Result.isSuccess(userRead.success.read)) user = userRead.success.read.success
-          else failures.push(userRead.success.read.failure)
-        }
         let project = new UserConfig({})
         const projectScope = yield* hasProjectScope({ user: home, project: cwd }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
@@ -876,6 +922,30 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             else failures.push(projectRead.success.read.failure)
           }
         }
+        return { project, failures, files }
+      })
+
+      // The user and project files as they are now, merged. A user file that
+      // does not decode reads as the last one that did; a project file that
+      // does not decode sets nothing. Both are in `failures`, and a turn
+      // refuses to run on either: the stand-in can grant more than the file.
+      const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
+        const failures: Array<ConfigLoadError> = []
+        const files: Array<ConfigFileRead> = []
+        const userRead = yield* readUserConfig
+        let user = yield* SynchronizedRef.get(userConfigRef)
+        if (Result.isFailure(userRead)) {
+          failures.push(userRead.failure)
+          files.push(unreadable(userRead.failure))
+        } else {
+          files.push(userRead.success.file)
+          if (Result.isSuccess(userRead.success.read)) user = userRead.success.read.success
+          else failures.push(userRead.success.read.failure)
+        }
+        const projectRead = yield* readProject(cwd)
+        failures.push(...projectRead.failures)
+        files.push(...projectRead.files)
+        const project = projectRead.project
         return {
           config: mergeConfigs(user, project),
           failures,
@@ -919,14 +989,31 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           )
         }),
 
-        setAuthOrder: Effect.fn("ConfigService.setAuthOrder")(function* (owner, order, aliases) {
-          yield* mutateUserConfig((current) =>
-            Option.match(configUpdates.setAuthOrder(current, owner, order, aliases), {
-              onNone: () => ({ updated: current, save: false }),
-              onSome: (updated) => ({ updated, save: true }),
-            }),
-          )
-        }),
+        setAuthOrder: Effect.fn("ConfigService.setAuthOrder")(
+          function* (owner, order, aliases, cwd) {
+            const { project } = yield* readProject(cwd)
+            const shadowing = shadowingOrderEntries(project, owner, aliases)
+            if (shadowing.length > 0) return shadowing
+            yield* mutateUserConfig((current) =>
+              Option.match(configUpdates.setAuthOrder(current, owner, order, aliases), {
+                onNone: () => ({ updated: current, save: false }),
+                onSome: (updated) => ({ updated, save: true }),
+              }),
+            )
+            return []
+          },
+        ),
+
+        renameAuthSlot: Effect.fn("ConfigService.renameAuthSlot")(
+          function* (owner, aliases, from, to) {
+            yield* mutateUserConfig((current) =>
+              Option.match(configUpdates.renameAuthSlot(current, owner, aliases, from, to), {
+                onNone: () => ({ updated: current, save: false }),
+                onSome: (updated) => ({ updated, save: true }),
+              }),
+            )
+          },
+        ),
       }
 
       return service
@@ -974,10 +1061,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             Ref.update(userConfigRef, (current) =>
               Option.getOrElse(configUpdates.setModelIfUnset(current, model), () => current),
             ),
+          // No project config to shadow the write.
           setAuthOrder: (owner, order, aliases) =>
             Ref.update(userConfigRef, (current) =>
               Option.getOrElse(
                 configUpdates.setAuthOrder(current, owner, order, aliases),
+                () => current,
+              ),
+            ).pipe(Effect.as([])),
+          renameAuthSlot: (owner, aliases, from, to) =>
+            Ref.update(userConfigRef, (current) =>
+              Option.getOrElse(
+                configUpdates.renameAuthSlot(current, owner, aliases, from, to),
                 () => current,
               ),
             ),

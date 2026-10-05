@@ -1578,12 +1578,22 @@ describe("provider login", () => {
             projectConfig,
             encodeJson({ providers: { "order-slots": { authOrder: ["work"] } } }),
           )
+          const userFile = fs.readFileString(userConfig)
+          const before = yield* userFile
           const shadowed = yield* Effect.exit(
             client.auth.setOrder({ sessionId, provider: "order-slots", order: [home_, fallback] }),
           )
           expect(Exit.isFailure(shadowed)).toBe(true)
           expect(String(shadowed)).toContain("project config")
           expect(yield* orderOf).toEqual([work])
+          // A refused write leaves the user file as it was: the order it
+          // names applies in every other project.
+          expect(yield* userFile).toBe(before)
+          // A rename under the project's order never copies that order into
+          // the user file, where it would enrol the label in every project.
+          const team = CredentialSlot.make("team")
+          yield* client.auth.renameKey({ sessionId, provider: "order-slots", from: work, to: team })
+          expect(yield* userFile).toBe(before)
         }).pipe(Effect.timeout("8 seconds")),
       ).pipe(Effect.provide(BunServices.layer)),
   )

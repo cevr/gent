@@ -825,24 +825,16 @@ export const renameSignIn = Effect.fn("renameSignIn")(function* (
 })
 
 /**
- * The config entries that hold `provider`'s credential order, in the profile
- * of the `ExtensionRegistry` in context: the owner its order is written
- * under, each entry that names an order for the sign-in (an alias's too),
- * and the order a turn walks now (none when no entry names one, or they
- * conflict).
+ * The config entries of `provider`'s sign-in, in the profile of the
+ * `ExtensionRegistry` in context: the owner its credential order is written
+ * under, and every driver id that shares the sign-in (`keys`, the owner's
+ * first), each of which can name an order.
  */
-export const signInOrder = Effect.fn("CredentialOrder.signIn")(function* (provider: string) {
-  const registry = yield* ExtensionRegistry
-  const drivers = registry.getResolved().modelDrivers
-  const config = yield* registry.providerConfig
-  const named = configuredOrders(drivers, config, provider)
-  let order: ReadonlyArray<CredentialSlot> = []
-  if (orderConflict(drivers, config, provider).length === 0) order = named[0]?.[1] ?? []
-  return {
-    owner: credentialOwner(drivers, provider),
-    entries: named.map(([id]) => id),
-    order,
-  }
+export const signInEntries = Effect.fn("CredentialOrder.signInEntries")(function* (
+  provider: string,
+) {
+  const drivers = (yield* ExtensionRegistry).getResolved().modelDrivers
+  return { owner: credentialOwner(drivers, provider), keys: credentialKeys(drivers, provider) }
 })
 
 /**

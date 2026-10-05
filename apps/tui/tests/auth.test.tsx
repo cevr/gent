@@ -2404,7 +2404,7 @@ describe("Auth credentials", () => {
   it.scopedLive("an order the project config overrides says so and keeps the screen", () =>
     Effect.gen(function* () {
       const shadowed =
-        'The project config (.gent/config.json) sets authOrder for "anthropic", which wins over the user config: edit it there'
+        'The project config (.gent/config.json) has an entry for "anthropic", which wins over the user config\'s authOrder: edit it there'
       const client = createMockClient({
         auth: {
           listProviders: () => Effect.succeed([withCredentials]),
@@ -2421,7 +2421,7 @@ describe("Auth credentials", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, (frame) => frame.includes("1 personal"))
       setup.mockInput.pressArrow("down", { shift: true })
-      const refused = yield* waitForFrame(setup, (frame) => frame.includes("sets authOrder for"))
+      const refused = yield* waitForFrame(setup, (frame) => frame.includes("has an entry for"))
       expect(refused).toContain("1 personal")
       expect(refused).toContain("esc back")
     }).pipe(Effect.timeout("10 seconds")),
