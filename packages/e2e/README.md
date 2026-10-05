@@ -1,15 +1,15 @@
 # @gent/e2e
 
-Each file in `tests/` is one area:
+Each file in `packages/e2e/tests/` is one area:
 
-- `tests/e2e.test.ts` and `tests/scrollback.test.ts`: the TUI on a real pty.
-- `tests/server-lifecycle.test.ts`: the server process lifecycle.
-- `tests/drive.test.ts`: the drive-script runner below.
-- `tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
+- `packages/e2e/tests/e2e.test.ts` and `packages/e2e/tests/scrollback.test.ts`: the TUI on a real pty.
+- `packages/e2e/tests/server-lifecycle.test.ts`: the server process lifecycle.
+- `packages/e2e/tests/drive.test.ts`: the drive-script runner below.
+- `packages/e2e/tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
 
-`bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only `tests/pty-fixture.test.ts`, the one that spawns nothing.
+`bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only the fixture test, the one that spawns nothing.
 
-`src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
+`packages/e2e/src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
 
 ## Drive scripts
 

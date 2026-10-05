@@ -2159,6 +2159,7 @@ describe("steering file paths", () => {
       "docs/extensions.md",
       "testbeds/gamut/README.md",
       "patches/README.md",
+      "packages/e2e/README.md",
       "packages/extensions/src/skills/bundled/principles/SKILL.md",
       "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
     ]) {
@@ -2169,6 +2170,8 @@ describe("steering file paths", () => {
       "plans/some-plan.md",
       "docs/research/2026-09-06-x.md",
       "README.md",
+      "CONTRIBUTING.md",
+      "packages/e2e/src/README.md",
       "testbeds/gamut/fixture/README.md",
       "packages/extensions/src/skills/bundled/principles/notes.txt",
     ]) {
