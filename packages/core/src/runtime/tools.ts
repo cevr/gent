@@ -18,7 +18,6 @@ import {
 } from "effect"
 import { encodeToolOutput, stringifyOutput, ToolResultFailure } from "../domain/message.js"
 import {
-  type ExtraRepositories,
   type InteractionStorage,
   type MessageStorage,
   type OwnedToolCallAddress,
@@ -51,8 +50,6 @@ import {
 import {
   ApprovalService,
   CurrentExtensionHostContext,
-  emptyErasedResourceLayer,
-  type ErasedResourceLayer,
   ExtensionRegistry,
   type ExtensionRegistryService,
   provideCurrentHostCtx,
@@ -61,7 +58,6 @@ import {
 import { canonicalJsonString } from "effect-encore"
 import * as AiTool from "effect/ai/Tool"
 import { GentPlatform } from "./gent-platform.js"
-import type { FeatureMigrations } from "../storage/schema.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { EventStore, ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../domain/event.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
@@ -74,20 +70,17 @@ import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agen
 /*
  * Whether the turn now running has been interrupted.
  *
- * The loop, the turn executor and the branch's tools all need this one bit,
- * but they need different halves of it: the worker interrupts a turn and
- * begins the next one, while a running turn and the tools it dispatches only
- * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
- * fresh turn starts uninterrupted.
+ * The loop and the turn executor both need this one bit, but they need
+ * different halves of it: the worker interrupts a turn and begins the next
+ * one, while a running turn only asks. A tool call reads it through its
+ * `CurrentTurnStop`. `interrupt` stops the turn now running, and `beginTurn`
+ * declares that a fresh turn starts uninterrupted.
  */
 
-/** Asks whether the turn now running has been interrupted. */
-interface TurnInterruptionStatus {
+/** The control surface: the read side plus the two transitions. */
+export interface TurnInterruption {
+  /** Whether the turn now running has been interrupted. */
   readonly interrupted: Effect.Effect<boolean>
-}
-
-/** The full control surface: the read side plus the two transitions. */
-export interface TurnInterruption extends TurnInterruptionStatus {
   /** Stop the turn now running. Work that checks `interrupted` will see it. */
   readonly interrupt: Effect.Effect<void>
   /** `interrupt`; when it is the turn's first, `by` is recorded as the stop's requester. */
@@ -127,16 +120,6 @@ export const makeTurnInterruption: Effect.Effect<TurnInterruption> = Effect.gen(
     awaitInterrupt: current.pipe(Effect.flatMap((turn) => Deferred.await(turn.stop))),
   }
 })
-
-/**
- * A status that is never interrupted.
- *
- * Branch work built outside a running loop -- a test that exercises a tool on
- * its own -- has no turn to be interrupted.
- */
-export const neverInterrupted: TurnInterruptionStatus = {
-  interrupted: Effect.succeed(false),
-}
 
 /** The stop of the turn a tool call runs in, as the call sees it. */
 export interface TurnStop {
@@ -581,80 +564,7 @@ export class ProcessLocalToolReplay extends Context.Service<
   )
 }
 
-// ── branch-tool-feature ─────────────────────────────────────────────────────
-
-/**
- * Everything a branch-tool feature contributes to the runtime it plugs into.
- *
- * A feature whose tools hold branch-scoped state — a worker process, a
- * namespace, a dispatch log — installs three things that only work together:
- * the migrations creating its tables, the storage tags reading them, and the
- * factory building its per-branch services. Install one without the others and
- * the failure is silent until first use: tables with no migrations fail on
- * read, storage with no branch layer leaves the tools unbuilt.
- *
- * Binding them into one value makes that impossible to get half-right, and
- * gives composition roots a single thing to name. Core takes the feature as
- * input and never looks inside it; `noBranchTools` is the honest value for a
- * deployment whose tools are all stateless.
- */
-
-interface BranchToolLayerInput {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  /** The session's working directory, where branch work such as a worker process runs. */
-  readonly cwd: string
-  /** Lets branch work notice that the turn was interrupted, and stop. */
-  readonly turnInterruption: TurnInterruptionStatus
-}
-
-/**
- * Per-branch services a tool needs built with the loop and torn down with it:
- * a worker process, a session, a namespace. What the layer provides is erased
- * on purpose: the loop merges it into the branch context and reads only what
- * it knows to look for, such as `BranchToolWork`.
- */
-type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedResourceLayer
-
-interface BranchToolWorkApi {
-  /** Cancel in-flight work. Must be safe to call when nothing is running. */
-  readonly cancel: Effect.Effect<void>
-  /**
-   * The loop is closing, as when the server stops. End in-flight work and
-   * record no outcome for it, so that after a restart recovery finds the work
-   * as a crash leaves it. Must be safe to call when nothing is running.
-   */
-  readonly stop: Effect.Effect<void>
-}
-
-/**
- * Cancellation for tool work that outlives a single call. A tool holding a
- * branch-scoped process must be told when the loop is interrupted; the turn's
- * fiber interrupt alone does not reach it. A tool with nothing to cancel does
- * not provide this, and interruption is a no-op.
- */
-export class BranchToolWork extends Context.Service<BranchToolWork, BranchToolWorkApi>()(
-  "@gent/core/src/runtime/tools/BranchToolWork",
-) {}
-
-export interface BranchToolFeature<A> {
-  /**
-   * Names the feature where a load failure reports it: a tool or request
-   * that declares this feature (`branchTools`) in a root that installs
-   * another fails its extension's load, naming both.
-   */
-  readonly id: string
-  /** Migrations creating the feature's tables, merged into core's chain. */
-  readonly migrations: FeatureMigrations
-  /**
-   * The feature's storage tags, built over core's SQL client and interaction
-   * storage, which the storage entry provides once beneath it; the live,
-   * memory and test storage entries take the same layer.
-   */
-  readonly storage: ExtraRepositories<A>
-  /** Per-branch services, built with the loop and torn down with it. */
-  readonly branchLayer: BranchToolLayerFactory
-}
+// ── leaf host services ───────────────────────────────────────────────────────
 
 /**
  * The core services every root gives a tool body, which the branch-tools entry
@@ -663,26 +573,6 @@ export interface BranchToolFeature<A> {
  * may yield them in a tool.
  */
 export type BranchToolHostServices = EventStore | MessageStorage | InteractionStorage | ToolRunner
-
-/** The feature a deployment installs when its tools hold no branch state. */
-export const noBranchTools: BranchToolFeature<never> = {
-  id: "none",
-  migrations: {},
-  storage: Layer.empty,
-  branchLayer: () => emptyErasedResourceLayer,
-}
-
-/**
- * The branch-tool feature this runtime installs.
- *
- * A `Context.Reference`, not a required service: `noBranchTools` is a real
- * deployment (all tools stateless), not a stub that dies when used. A root
- * shipping a feature binds it; core reads it and merges what it gets.
- */
-export const CurrentBranchToolFeature = Context.Reference<BranchToolFeature<never>>(
-  "@gent/core/src/runtime/tools/CurrentBranchToolFeature",
-  { defaultValue: () => noBranchTools },
-)
 
 // ── model toolkit ───────────────────────────────────────────────────────────
 

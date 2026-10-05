@@ -356,11 +356,6 @@ export default defineExtension({
   grants no services.
   The same extension must register each one, or the extension fails to load
   with `tools[i] (id): names resource "…", which this extension does not register`.
-- `branchTools` — the branch-tool feature whose storage the body yields (see
-  `@gent/core/extensions/branch-tools`). The composition root installs one
-  feature (`createDependencies({ branchTools })`); in a root that installs
-  another, the extension fails to load with
-  `tools[i] (id): runs on the branch-tool feature "…", which this root does not install (it installs "…")`.
 - Optional: `readonly`, `destructive`, `interactive`, `dispatches`,
   `promptSnippet`, `promptGuidelines`, `summary` (the one-line result summary
   a client shows for a call), `recover` (settles a call of this tool that a
@@ -370,13 +365,21 @@ export default defineExtension({
   `@gent/core/extensions/branch-tools`; a tool without it is reported to the
   model as interrupted)
 
+A tool whose work outlives a fiber interrupt (a worker process, or a body that
+runs uninterruptibly so it can report a cancel) reads `CurrentTurnStop` from
+`@gent/core/extensions/branch-tools`: `stopped` completes when the turn is
+interrupted or its loop closes, `isStopped` reads that now, and `closing` says
+which. The cell races its run against `stopped`: a cancel ends the run and
+reports it, a close ends it and records nothing, so a restart finds the call
+as a crash leaves it.
+
 The body may yield only the services every root gives a tool: `ExtensionContext`,
 the platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`,
 `HttpClient`, and the `GentPlatform` that helpers such as `saveToolImage` read),
 the core services the branch-tools entry exports (`BranchToolHostServices`:
-`EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), the
-services of its `resources`, and the storage of its `branchTools`. A body that
-requires any other service does not compile. The bound is on the services
+`EventStore`, `MessageStorage`, `InteractionStorage`, `ToolRunner`), and the
+services of its `resources`. A body that requires any other service does not
+compile. The bound is on the services
 the body requires (its `R`), not on the runtime context:
 `Effect.serviceOption` still reads a service the root holds. A tool that
 keeps state names the
@@ -554,12 +557,10 @@ Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect
 services; authors import the smallest service Tag they need rather than
 declaring capability labels. A handler yields the same services a tool body
-does, with the same two declarations: `resources` names the `defineResource`
-values whose services it yields, and `branchTools` the feature whose storage
-it yields. A handler that requires any other service does not compile (the
-same type bound), and the
-loader checks both declarations as it checks a tool's, reporting
-`requests[i] (id): …`. The loader binds every registered request to the
+does, with the same declaration: `resources` names the `defineResource`
+values whose services it yields. A handler that requires any other service
+does not compile (the same type bound), and the loader checks the
+declaration as it checks a tool's, reporting `requests[i] (id): …`. The loader binds every registered request to the
 enclosing `defineExtension({ id })`, so the extension id is written once. Client-only protocol modules that export refs before server setup can use
 `defineRequests(extensionId, { ...requests })` to bind a whole request map with
 one id.
@@ -631,7 +632,10 @@ the session database (`SqlClient` from `effect/sql`, and `InteractionStorage`
 from `@gent/core/extensions/branch-tools`). So an extension can own tables in
 the session database, with foreign keys to core tables and their delete
 cascades, and write an interaction request and its own row in one
-transaction. A `branch` Resource also gets its `BranchAddress` (session id,
+transaction. A process Resource that owns tables creates and migrates them in
+its layer, under a migration table of its own: the cell runs `effect/sql`'s
+`Migrator` over `cell_migrations` with `CREATE TABLE IF NOT EXISTS`
+migrations. A `branch` Resource also gets its `BranchAddress` (session id,
 branch id, cwd, home) and the services of the `process` Resources of its own
 extension that it names in `resources`. A layer that reads any other service
 does not compile. Process Resources build in extension resolution order, so a
@@ -908,7 +912,6 @@ The framework validates all loaded extensions before creating the registry:
 - **Duplicate IDs** in same scope degrade the conflicting extension
 - **Model-callable tools** require a non-empty `description`
 - **A tool's or request's `resources`** must be registered by the same extension
-- **A tool's or request's `branchTools`** must be the feature the root installs
 - Same-name tools/agents/drivers in same scope degrade
 
 Cross-scope: higher scope wins silently (project overrides user overrides

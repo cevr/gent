@@ -103,7 +103,6 @@ import type {
   ModelRouterContribution,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { type BranchToolFeature, CurrentBranchToolFeature } from "./tools.js"
 import {
   type ExtensionPlatformServices,
   GentPlatform,
@@ -271,7 +270,7 @@ const exitErasedEffect = <A>(
 }
 
 // oxlint-disable-next-line typescript/no-explicit-any -- The resource membrane erases heterogeneous service outputs.
-export type ErasedResourceLayer = Layer.Layer<any, never, never>
+type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
  * Resource layers erase to `Layer.Layer<any>` so their heterogeneous error and
@@ -284,7 +283,7 @@ const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourc
 }
 
 // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- The empty layer is the erased identity for heterogeneous resource composition.
-export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
+const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as ErasedResourceLayer
 
 /** Per-leaf facts layered over the current run's host context. */
 interface ExtensionLeafFrame {
@@ -2162,37 +2161,8 @@ const collectDuplicateExtensionIds = (
   }
 }
 
-/**
- * The leaves of one extension that name a branch-tool feature other than the
- * one the root installs. Such a leaf's storage and per-branch services exist
- * in no other root, so it would fail on its first call.
- */
-const branchToolFeatureErrors = (
-  contribs: ExtensionContributions,
-  installed: BranchToolFeature<never>,
-): ReadonlyArray<string> => {
-  const leaves = [
-    ...(contribs.tools ?? []).flatMap((capability, i) => {
-      if (!isToolCapability(capability)) return []
-      const metadata = getToolMetadata(capability)
-      return [{ label: `tools[${i}] (${metadata.id})`, feature: metadata.branchTools }]
-    }),
-    ...(contribs.requests ?? []).map((capability, i) => ({
-      label: `requests[${i}] (${capability.id})`,
-      feature: capability.branchTools,
-    })),
-  ]
-  return leaves.flatMap(({ label, feature }) => {
-    if (Predicate.isUndefined(feature) || feature === installed) return []
-    return [
-      `${label}: runs on the branch-tool feature "${feature.id}", which this root does not install (it installs "${installed.id}")`,
-    ]
-  })
-}
-
 const collectValidationFailures = (
   extensions: ReadonlyArray<LoadedExtension>,
-  installedBranchTools: BranchToolFeature<never>,
 ): ReadonlyMap<string, { ext: LoadedExtension; errors: ReadonlyArray<string> }> => {
   const failures = new Map<string, { ext: LoadedExtension; errors: string[] }>()
 
@@ -2207,12 +2177,6 @@ const collectValidationFailures = (
   }
 
   collectDuplicateExtensionIds(extensions, addFailure)
-
-  for (const ext of extensions) {
-    for (const error of branchToolFeatureErrors(ext.contributions, installedBranchTools)) {
-      addFailure(ext, error)
-    }
-  }
 
   const collectScopedCollisions = <T>(
     pickItems: (contribs: ExtensionContributions) => ReadonlyArray<T>,
@@ -2280,29 +2244,27 @@ const collectValidationFailures = (
 }
 
 /**
- * Fail each extension whose declarations conflict with another's or with the
- * root: a leaf that names a branch-tool feature fails unless it is the one
- * `CurrentBranchToolFeature` holds, the feature the root installs.
+ * Fail each extension whose declarations conflict with another's: a duplicate
+ * id, or a same-scope capability, agent, driver, API class or router key.
  */
 export const validateLoadedExtensions = (
   extensions: ReadonlyArray<LoadedExtension>,
-): Effect.Effect<ExtensionActivationResult> =>
-  Effect.gen(function* () {
-    const failures = collectValidationFailures(extensions, yield* CurrentBranchToolFeature)
-    if (failures.size === 0) return { active: [...extensions], failed: [] }
+): ExtensionActivationResult => {
+  const failures = collectValidationFailures(extensions)
+  if (failures.size === 0) return { active: [...extensions], failed: [] }
 
-    const active: LoadedExtension[] = []
-    const failed: FailedExtension[] = []
-    for (const ext of extensions) {
-      const failure = failures.get(extensionKey(ext))
-      if (Predicate.isUndefined(failure)) {
-        active.push(ext)
-        continue
-      }
-      failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
+  const active: LoadedExtension[] = []
+  const failed: FailedExtension[] = []
+  for (const ext of extensions) {
+    const failure = failures.get(extensionKey(ext))
+    if (Predicate.isUndefined(failure)) {
+      active.push(ext)
+      continue
     }
-    return { active, failed }
-  })
+    failed.push(toFailedExtension(ext, "validation", failure.errors.join("; ")))
+  }
+  return { active, failed }
+}
 
 // ── profile ─────────────────────────────────────────────────────────────────
 
@@ -2468,7 +2430,7 @@ export const loadRuntimeProfileDeclarations = (
     // 5. Validate declarations without acquiring process resources. The new
     // versions validate among themselves first. One that fails runs its last
     // good version, if that is another version.
-    const fresh = yield* validateLoadedExtensions(setup.active)
+    const fresh = validateLoadedExtensions(setup.active)
     const replaced = new Map<LoadedExtension, LoadedExtension>()
     for (const failure of fresh.failed) {
       const failedFresh = Option.fromNullishOr(
@@ -2488,7 +2450,7 @@ export const loadRuntimeProfileDeclarations = (
       ...setup.active.map((extension) => replaced.get(extension) ?? extension),
       ...kept,
     ]
-    let extensionDeclarations = yield* validateLoadedExtensions(candidates)
+    let extensionDeclarations = validateLoadedExtensions(candidates)
     const rejected: FailedExtension[] = []
     for (;;) {
       const colliding = candidates.filter(
@@ -2502,7 +2464,7 @@ export const loadRuntimeProfileDeclarations = (
         if (!Predicate.isUndefined(failure)) rejected.push(failure)
       }
       candidates = candidates.filter((extension) => !colliding.includes(extension))
-      extensionDeclarations = yield* validateLoadedExtensions(candidates)
+      extensionDeclarations = validateLoadedExtensions(candidates)
     }
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
@@ -2748,9 +2710,6 @@ export class SessionProfileCache extends Context.Service<
         const platform = yield* GentPlatform
         const sql = yield* SqlClient.SqlClient
         const interactions = yield* InteractionStorage
-        // The feature the root installs, read once where the root builds this
-        // cache: each profile validates its extensions' leaves against it.
-        const installedBranchTools = yield* CurrentBranchToolFeature
         // Every profile's resources close with this server scope.
         const serverScope = yield* Scope.Scope
         const generationId = ProcessGenerationId.make(yield* platform.randomId)
@@ -2769,7 +2728,6 @@ export class SessionProfileCache extends Context.Service<
           Context.add(GentPlatform, platform),
           Context.add(SqlClient.SqlClient, sql),
           Context.add(InteractionStorage, interactions),
-          Context.add(CurrentBranchToolFeature, installedBranchTools),
         )
 
         interface ProfileEntry {
@@ -3018,8 +2976,7 @@ export class SessionProfileCache extends Context.Service<
                       if (sameSource(other, extension)) return previous
                       return other
                     })
-                    if (collectValidationFailures(substituted, installedBranchTools).size > 0)
-                      return false
+                    if (collectValidationFailures(substituted).size > 0) return false
                     effective = substituted
                     return true
                   }),

@@ -912,8 +912,6 @@ const StringOutput = Schema.String
 type NoParams = typeof NoInput
 type StringOut = typeof StringOutput
 type Readers = readonly [ReturnType<typeof defineResource<ReadOnlyService, "process">>]
-type None = ReadonlyArray<never>
-type Reader = ReadOnlyService
 type Failure = CapabilityError
 
 /** A tool that reads `ReadOnlyService` from the resource it names. */
@@ -1130,14 +1128,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
       output: StringOutput,
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     }
-    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
-    const typedFeature: ToolInput<NoParams, StringOut, never, ReadOnlyService, None, Reader> = {
-      id: "typed-feature",
-      description: "x",
-      params: NoInput,
-      output: StringOutput,
-      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
-    }
     // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
     tool<NoParams, StringOut, never, ReadOnlyService, Readers>({
       id: "explicit-resources",
@@ -1146,16 +1136,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       output: StringOutput,
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     })
-    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
-    tool<NoParams, StringOut, never, ReadOnlyService, None, Reader>({
-      id: "explicit-feature",
-      description: "x",
-      params: NoInput,
-      output: StringOutput,
-      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
-    })
     void typedResources
-    void typedFeature
     expect(true).toBe(true)
   })
 
@@ -1167,13 +1148,6 @@ describe("Capability factory-shape locks (compile-time)", () => {
       output: StringOutput,
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     }
-    // @ts-expect-error -- the type grants the feature's storage, so `branchTools` is required
-    const typedFeature: RequestInput<{}, string, ReadOnlyService, Failure, None, Reader> = {
-      id: "typed-feature",
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
-    }
     // @ts-expect-error -- the type arguments grant the reader's services, so `resources` is required
     request<{}, string, ReadOnlyService, Failure, Readers>({
       id: "explicit-resources",
@@ -1181,15 +1155,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       output: StringOutput,
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     })
-    // @ts-expect-error -- the type arguments grant the feature's storage, so `branchTools` is required
-    request<{}, string, ReadOnlyService, Failure, None, Reader>({
-      id: "explicit-feature",
-      input: NoInput,
-      output: StringOutput,
-      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
-    })
     void typedResources
-    void typedFeature
     expect(true).toBe(true)
   })
 

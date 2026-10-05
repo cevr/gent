@@ -173,7 +173,6 @@ import {
 } from "../../src/runtime/extension-host"
 import {
   CurrentTurnStop,
-  noBranchTools,
   ProcessLocalToolReplay,
   ToolRunner,
   makeTurnInterruption,
@@ -1473,7 +1472,6 @@ const makeHarness = (
       residency: yield* makeHoldCount(options.keepAlive ?? (() => Effect.void)),
       activeStreamRef: yield* Ref.make(Option.none<ActiveStreamHandle>()),
       turnInterruption,
-      interruptToolWork: Effect.void,
       inbox,
       admissionGateRef: gateRef,
       recordTurnFailure: (cause, messageId) =>
@@ -1642,7 +1640,7 @@ describe("a loop whose session cannot be read", () => {
               }),
           }),
         ),
-      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      ).pipe(Layer.provideMerge(testSqliteStorage))
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       yield* Effect.gen(function* () {
         const now = dateFromMillis(1_767_225_600_000)
@@ -2391,7 +2389,7 @@ describe("a usage limit's reset time", () => {
               ),
           }),
         ),
-      ).pipe(Layer.provideMerge(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)))
+      ).pipe(Layer.provideMerge(testSqliteStorage))
       const inputs = yield* Ref.make<ReadonlyArray<TurnAfterInput>>([])
       const resolved = resolveExtensions([
         {
@@ -4197,7 +4195,7 @@ describe("agent-loop recovery race", () => {
           ),
         )
 
-        const baseStorage = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+        const baseStorage = testSqliteStorage
         const wrappedQueueStorage = gatedQueueStorageLayer(
           reopenGate,
           reopenEntered,
@@ -4543,7 +4541,7 @@ const makeTestExtensions = (
   ])
 }
 
-const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof testSqliteStorage<A>>) =>
+const makeClusterRunnerLayer = (storageLayer: typeof testSqliteStorage) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -4556,7 +4554,7 @@ const makeRuntimeLayer = (
 ) => {
   const registry = ExtensionRegistry.fromResolved(makeTestExtensions(tools, requests))
   const eventStoreLayer = EventStore.Memory
-  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage
   let toolRunnerLayer = ToolRunner.Test()
   if (tools.length > 0) toolRunnerLayer = ToolRunner.Live.pipe(Layer.provide(BunServices.layer))
   const baseDeps = Layer.mergeAll(
@@ -5408,7 +5406,7 @@ describe("queued follow-ups drain", () => {
         // already holds the interjection at that instant says which of the two
         // writes went first, without failing either.
         const transcriptHeldAtDrop = yield* Ref.make(Option.none<boolean>())
-        const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+        const storageLayer = testSqliteStorage
         const queueStorageLayer = Layer.provide(
           Layer.effect(
             AgentLoopQueueStorage,
@@ -6606,7 +6604,7 @@ describe("turn scheduling", () => {
         { ...textStep("ok"), gated: true },
         textStep("ok"),
       ])
-      const baseStorageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+      const baseStorageLayer = testSqliteStorage
       const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -7179,9 +7177,7 @@ describe("queued follow-ups", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             // One database outlives both processes.
-            const storage = yield* Layer.build(
-              testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-            )
+            const storage = yield* Layer.build(testSqliteStorage)
             const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
               actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
             yield* Effect.scoped(

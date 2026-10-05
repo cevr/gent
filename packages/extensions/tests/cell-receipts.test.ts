@@ -1793,7 +1793,7 @@ describe("cell execution storage", () => {
         const dir = yield* fs.makeTempDirectoryScoped()
         const storageLayer = Layer.provideMerge(
           CellStorage.Live,
-          SqliteStorage.LiveWithSql(path.join(dir, "gent.db"), Layer.empty, {}),
+          SqliteStorage.LiveWithSql(path.join(dir, "gent.db")),
         ).pipe(Layer.provide(GentPlatform.Test()))
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2192,7 +2192,7 @@ describe("cell tool operation storage", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const layer = Layer.provideMerge(
           CellStorage.Live,
-          SqliteStorage.LiveWithSql(path.join(directory, "gent.db"), Layer.empty, {}),
+          SqliteStorage.LiveWithSql(path.join(directory, "gent.db")),
         ).pipe(Layer.provide(GentPlatform.Test()))
         yield* Effect.scoped(
           Effect.gen(function* () {

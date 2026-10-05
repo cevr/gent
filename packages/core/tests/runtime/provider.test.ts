@@ -2594,7 +2594,7 @@ const CHAT = "api.json"
 const DECISION = "api.json?type=decision"
 
 /** A storage context that two catalog sources can share, as two processes share one database. */
-const catalogStorage = Layer.build(testSqliteStorage(Layer.empty, {}))
+const catalogStorage = Layer.build(testSqliteStorage)
 
 /** A catalog source over `storage`, fetching through `http`. */
 const catalogSourceOver = (

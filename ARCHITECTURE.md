@@ -303,10 +303,9 @@ updates this list in the same commit.
 18. **A leaf requires only the services it is given.** `tool` and `request`
     bound the services their `execute` may require (`LeafServices`):
     `ExtensionContext`, `ExtensionPlatformServices`, the core services the
-    branch-tools entry exports (`BranchToolHostServices`), the services of the
-    resources the leaf names in `resources`, and the storage of the feature it
-    names in `branchTools`. A body that requires any other service does not
-    compile. A type argument that grants services makes its declaration
+    branch-tools entry exports (`BranchToolHostServices`), and the services
+    of the resources the leaf names in `resources`. A body that requires any
+    other service does not compile. A type argument that grants services makes its declaration
     required, so a typed input cannot grant a service without the value that
     provides it. Only a tuple type proves which resources a value holds, so
     an array type (`ReadonlyArray<typeof Counter>`) grants nothing; the
@@ -323,17 +322,18 @@ updates this list in the same commit.
     register the resource definition a leaf or a branch Resource names; the
     check is by identity, so another definition under the same id fails too.
     A process Resource names none, and a branch Resource names only process
-    Resources. Profile validation
-    fails an extension whose leaf names a branch-tool feature other than the
-    one the root installs (`CurrentBranchToolFeature`, which the session
-    profile cache reads once when the root builds it). The feature stays a
-    root input, not an extension resource: its tables join core's migration
-    chain and its storage builds over core's SQL client before any profile
-    loads. Receipts: `packages/core/src/domain/capability.ts` (`tool`,
-    `request`, `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
-    (`validateLeafResources`), `packages/core/src/runtime/extension-host.ts`
-    (`branchToolFeatureErrors`), `packages/core/tests/extensions/api.test.ts`,
-    `packages/core/tests/runtime/extension-host.test.ts`.
+    Resources. An extension that owns tables creates and migrates them in a
+    process Resource over the host's `SqlClient`, under a migration table of
+    its own; core's migration chain builds only the kernel's tables, and the
+    root takes no feature input. The cell is the shipped case
+    (`CellStorageResource`, `CellKernelResource`), and a user extension has
+    the same two declarations. Receipts:
+    `packages/core/src/domain/capability.ts` (`tool`, `request`,
+    `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
+    (`validateLeafResources`), `packages/extensions/src/cell.ts`,
+    `packages/core/tests/extensions/api.test.ts`,
+    `packages/core/tests/runtime/extension-host.test.ts`,
+    `packages/extensions/tests/cell-receipts.test.ts` (cell tables).
 
 ### Known gaps
 
@@ -352,15 +352,6 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
-- **Open: a user extension cannot get a branch-tool feature.** This breaks
-  the owner rule that a shipped extension is never more privileged than a
-  user extension (`NORTH_STAR.md`), and nothing here waives it. A root
-  installs one feature (`createDependencies({ branchTools })`) and the
-  shipped cell declares it. A user extension cannot bring a feature of its
-  own, and the loader does not bind `@gent/extensions` for user files, so a
-  user leaf cannot name `CellBranchTools` either. Binding that value would
-  only let a user leaf share the cell's private storage. The repair is
-  queued as its own design batch (pass 30 orchestrator queue).
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
@@ -451,7 +442,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, the cell feature, in-memory state) reaches a leaf layer 138 times, memo hits included, counted on 2026-10-01 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository, and a branch-tool feature's storage is a layer over that client and the interaction storage (`ExtraRepositories`). A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -1548,7 +1539,8 @@ worker's disabled bunfig and dotenv autoload, so a project preload or `.env`
 never runs inside the worker. The worker starts in its session's working
 directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 (the stored session cwd, else the host's, the same rule as
-`ExtensionContext.cwd`) and gives it to the branch-tool layer as `cwd`. The TUI
+`ExtensionContext.cwd`) and puts it in the branch's `BranchAddress`, which
+the cell kernel Resource reads. The TUI
 build names itself with one define, `__GENT_BUILD__` (`{ id, version }`: a
 fresh id per build and the version of `apps/tui/package.json`). It has two
 readers: `GentPlatform.build` (`Compiled` with the id and version, else

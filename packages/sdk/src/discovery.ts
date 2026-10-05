@@ -16,7 +16,6 @@ import {
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient } from "effect/http"
-import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { buildOwnedServer, startOwnedServer } from "./server.js"
 
 /**
@@ -512,13 +511,6 @@ export interface GentServerOptions {
   readonly cwd: string
   /** Extension declarations for this server. Defaults to the builtins. */
   readonly extensions?: ReadonlyArray<GentExtension>
-  /**
-   * The branch-tool feature these extensions run on -- storage plus the
-   * per-branch kernel. A server naming its own `extensions` names this too;
-   * an extension whose tool declares a feature the server does not install
-   * fails to load.
-   */
-  readonly branchTools?: BranchToolFeature<never>
   readonly state?: StateSpec
   readonly provider?: ProviderSpec
   readonly authDirectory?: string

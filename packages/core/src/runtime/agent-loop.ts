@@ -62,6 +62,7 @@ import {
   type EventStorageError,
   type InteractionStorage,
   MessageStorage,
+  type RelationshipStorage,
   SessionOperationStorage,
   type SessionStorage,
   ToolCallBindingStorage,
@@ -114,8 +115,6 @@ import {
   type TurnOutcome,
 } from "./turn.js"
 import {
-  BranchToolWork,
-  CurrentBranchToolFeature,
   makeTurnInterruption,
   type TurnStop,
   ProcessLocalToolReplay,
@@ -123,7 +122,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ModelContextLedger } from "./model-context.js"
-import { withWideEvent } from "effect-wide-event"
+import { type WideEvent, withWideEvent } from "effect-wide-event"
 import { Entity, Sharding, ShardingConfig } from "effect/cluster"
 import type { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
@@ -1049,6 +1048,9 @@ export interface TurnWork {
   readonly resident: Scope.Closeable
 }
 
+/** What a turn's `WideEvent.set` needs: the boundary the worker opens. */
+type WideEventServices = Effect.Services<ReturnType<typeof WideEvent.set>>
+
 type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -1059,8 +1061,6 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly residency: AgentLoopResidencyService
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnInterruption: TurnInterruption
-  /** Cancel whatever tool work this loop has in flight. Idempotent. */
-  readonly interruptToolWork: Effect.Effect<void>
   readonly inbox: LoopInbox
   readonly admissionGateRef: Ref.Ref<AdmissionGate>
   readonly recordTurnFailure: (
@@ -1070,7 +1070,10 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   /** Append the receipt of a turn a phase failure stopped and run its hooks; never fails. */
   readonly completeFailedTurn: (state: RunningState) => Effect.Effect<void>
-  readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
+  /** The worker opens the turn's wide event around it. */
+  readonly runTurn: (
+    state: RunningState,
+  ) => Effect.Effect<TurnOutcome, AgentLoopError | E, R | WideEventServices>
   /** The agent the session runs as; it names the actor of each turn's wide event. */
   readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
   /** True when this request already has an answer waiting for its owner. */
@@ -1344,7 +1347,6 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       }
       if (snap._tag === "WaitingForInteraction") return { latched: true, waiting: true }
       yield* interruptActiveStream(scope.activeStreamRef)
-      yield* scope.interruptToolWork
       return { latched: true, waiting: false }
     }).pipe(scope.interruptSemaphore.withPermits(1))
     if (!reached.waiting) return reached.latched
@@ -1610,6 +1612,12 @@ export const closeBranchGenerations = (retired: ReadonlyArray<BranchGeneration>)
 
 type AgentLoopRuntimeServices =
   | SessionStorage
+  | RelationshipStorage
+  | ToolCallBindingStorage
+  | GentPlatform
+  | RuntimeEnvironment
+  | FileSystem.FileSystem
+  | Path.Path
   | SessionOperationStorage
   | MessageStorage
   | EventStorage
@@ -1665,13 +1673,13 @@ type AgentLoopBehavior = {
     run: RunOpener,
   ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   /**
-   * Branch-lifetime services: the cell kernel and the model context ledger.
-   * A run outside a turn (an `extension.request` RPC, say) must be given this
-   * context as a turn is. Extension Resources declared with `scope: "branch"`
-   * are not here: they follow the profile, so `resolveTurnProfile` puts them
-   * in the run's capability context.
+   * Branch-lifetime services: the model context ledger. A run outside a turn
+   * (an `extension.request` RPC, say) must be given this context as a turn
+   * is. Extension Resources declared with `scope: "branch"`, such as the cell
+   * kernel, are not here: they follow the profile, so `resolveTurnProfile`
+   * puts them in the run's capability context.
    */
-  branchContext: Context.Context<never>
+  branchContext: Context.Context<ModelContextLedger>
   /** Start the turn a restart cut short; only an opening loop calls it. */
   startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
@@ -1844,6 +1852,7 @@ const makeAgentLoopBehavior = (
   | Scope.Scope
   | Entity.CurrentAddress
   | SessionStorage
+  | RelationshipStorage
   | MessageStorage
   | AgentLoopQueueStorage
   | EventStorage
@@ -1963,23 +1972,19 @@ const makeAgentLoopBehavior = (
       )
 
     const turnInterruption = yield* makeTurnInterruption
-    // Branch-owned turn services: the cell kernel, the model context ledger,
-    // and every extension Resource declared with `scope: "branch"`. All live
-    // under `loopScope`, so they are built per loop and interrupted when the
-    // branch closes. Process-scope Resources are not collected here — they
-    // belong to the profile cache and outlive this scope.
-    const branchTools = yield* CurrentBranchToolFeature
+    // Branch-owned turn services: the model context ledger and every
+    // extension Resource declared with `scope: "branch"`, such as the cell
+    // kernel. All live under `loopScope`, so they are built per loop and
+    // interrupted when the branch closes. Process-scope Resources are not
+    // collected here — they belong to the profile cache and outlive this scope.
     // A failed read fails the open; the next op opens again.
     const branchCwd = yield* sessionWorkingDirectory(sessionId).pipe(
       asAgentLoopError(`Cannot read session ${sessionId} for its working directory`),
     )
-    const branchToolContext = yield* Layer.build(
-      branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
-    ).pipe(Scope.provide(loopScope))
     // The branch's model context ledger: a dispatching tool schedules a
     // directive into it, and each step of a turn reads it.
     const ledger = yield* ModelContextLedger.make
-    const branchContext = Context.add(branchToolContext, ModelContextLedger, ledger)
+    const branchContext = Context.make(ModelContextLedger, ledger)
     const branchAddress = Context.make(
       BranchAddress,
       BranchAddress.of({ sessionId, branchId, cwd: branchCwd, home: runtimeEnvironment.home }),
@@ -2306,17 +2311,6 @@ const makeAgentLoopBehavior = (
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
-    // A tool holding branch-scoped work exposes how to cancel it. A branch
-    // whose tools are all stateless has nothing to cancel.
-    const branchWork = Context.getOption(branchToolContext, BranchToolWork)
-    const interruptToolWork = Option.match(branchWork, {
-      onNone: () => Effect.void,
-      onSome: (work) => work.cancel,
-    })
-    const stopToolWork = Option.match(branchWork, {
-      onNone: () => Effect.void,
-      onSome: (work) => work.stop,
-    })
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
@@ -2411,7 +2405,6 @@ const makeAgentLoopBehavior = (
       residency,
       activeStreamRef,
       turnInterruption,
-      interruptToolWork,
       inbox,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
@@ -2544,15 +2537,15 @@ const makeAgentLoopBehavior = (
         // before anything that can stop the turn.
         yield* markStopping
         yield* worker.interruptActiveStream
-        // Branch tool work can hold the turn past a fiber interrupt
-        // (a cell runs uninterruptibly so a cancel can report), so the turn is
-        // interrupted first and its tool work is then stopped; without the
-        // stop, closing the scope would wait for that work forever.
+        // A tool call can hold the turn past a fiber interrupt (a cell runs
+        // uninterruptibly so a cancel can report), so the turn is interrupted
+        // first and `closingTools` then tells each call's `CurrentTurnStop`
+        // that the loop closes; the call stops its own work, else closing the
+        // scope would wait for that work forever.
         const turn = yield* Ref.get(turnWorkerFiber)
         if (Option.isSome(turn))
           yield* Effect.forkDetach(Fiber.interrupt(turn.value), { startImmediately: true })
         yield* Deferred.succeed(closingTools, void 0)
-        yield* stopToolWork
         yield* Deferred.succeed(closed, void 0).pipe(Effect.ignore)
         yield* Scope.close(loopScope, Exit.void)
       }),
@@ -3683,8 +3676,8 @@ const agentLoopActorHandlers = Effect.gen(function* () {
             environment,
             rpcRegistry.run(operation.extensionId, capabilityId, input),
           ).pipe(
-            // The cell kernel and the model context ledger live on the loop
-            // scope, not on the profile.
+            // The model context ledger lives on the loop scope, not on the
+            // profile.
             Effect.provideContext(handle.branchContext),
           )
           // Reads, extension-owned writes and independently serialized queue

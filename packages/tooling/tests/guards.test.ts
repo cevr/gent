@@ -187,7 +187,7 @@ describe("core feature independence guard", () => {
       "    CREATE TABLE cell_executions (",
     )
     expect(findings).toHaveLength(1)
-    expect(findings[0]!.message).toContain("feature-migrations seam")
+    expect(findings[0]!.message).toContain("migrates its own tables in a process Resource")
   })
 
   test("lets the cell extension name its own tables", () => {
@@ -2888,11 +2888,8 @@ void Orphan
   test("the branch-tool entry point declares every name it exposes", () => {
     expect(declaredNames(BRANCH_TOOLS_FILE, `export const tool = 1\n`)).toEqual(["tool"])
     expect(
-      declaredNames(
-        BRANCH_TOOLS_FILE,
-        `export { ToolRunner, type BranchToolWork } from "../x.js"\n`,
-      ),
-    ).toEqual(["ToolRunner", "BranchToolWork"])
+      declaredNames(BRANCH_TOOLS_FILE, `export { ToolRunner, type TurnStop } from "../x.js"\n`),
+    ).toEqual(["ToolRunner", "TurnStop"])
   })
 })
 

@@ -132,14 +132,13 @@ export const withCellStorage = <A, E, R>(server: Layer.Layer<A, E, R>) =>
   CellStorage.Live.pipe(Layer.provideMerge(server))
 
 /** The cell's storage over an in-memory session database, for a focused storage test. */
-export const cellTestStorage = Layer.provideMerge(
-  CellStorage.Live,
-  testSqliteStorage(Layer.empty, {}),
-).pipe(Layer.provide(GentPlatform.Test()))
+export const cellTestStorage = Layer.provideMerge(CellStorage.Live, testSqliteStorage).pipe(
+  Layer.provide(GentPlatform.Test()),
+)
 
 export const testLayer = Layer.provideMerge(
   Layer.effect(ExtensionContext, storedSessionContext()),
-  Layer.provideMerge(CellStorage.Live, SqliteStorage.MemoryWithSql(Layer.empty, {})),
+  Layer.provideMerge(CellStorage.Live, SqliteStorage.MemoryWithSql),
 ).pipe(Layer.provideMerge(platform))
 
 /** A catalog that selects the named host tools, hashed by their names. */
