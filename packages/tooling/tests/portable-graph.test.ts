@@ -68,6 +68,8 @@ describe("the portable import graph", () => {
             },
           ]),
         )
+        // Each entry is a key the walk reads: a key form it does not read would walk nothing.
+        expect(PORTABLE_ENTRIES.filter((entry) => !(entry in inputs))).toEqual([])
         expect(Object.keys(inputs).length).toBeGreaterThan(PORTABLE_ENTRIES.length)
         expect(hostOnlyEdges(inputs, PORTABLE_ENTRIES)).toEqual([])
       }).pipe(Effect.timeout("25 seconds")),

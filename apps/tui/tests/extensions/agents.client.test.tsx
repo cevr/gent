@@ -25,6 +25,8 @@ import {
   type ExtensionAgentDetail,
 } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame } from "../../src/ui"
+import { useTheme } from "../../src/theme"
+import { RGBA } from "@opentui/core"
 import {
   createMockClient,
   createMockRuntime,
@@ -34,6 +36,8 @@ import {
 import { useCommand } from "../../src/commands"
 import { useScopedKeyboard } from "../../src/terminal"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
+// oxlint-disable-next-line gent/declared-workspace-imports -- the gamut live-check driver is in no workspace; its pane predicate is checked on this renderer's frames
+import { paneShowsWorkingChild } from "../../../../testbeds/gamut/gamut"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -2134,12 +2138,67 @@ describe("Subagent tray", () => {
         runningCall: { tool: "read", input: { path: "/work/ARCHITECTURE.md" } },
       }
       for (const width of [100, 60, 40]) {
+        let names = () => RGBA.fromInts(0, 0, 0, 0)
         const setup = yield* renderScoped(
+          () => {
+            const { theme } = useTheme()
+            names = () => theme.info
+            return (
+              <SubagentTray
+                place={PLACE}
+                controller={{
+                  rows: () => [root("root", "idle"), busy],
+                  current: () => ({
+                    sessionId: SessionId.make("root"),
+                    branchId: BranchId.make("root-branch"),
+                  }),
+                  error: () => Option.none(),
+                  loading: () => false,
+                  refresh: () => {},
+                  reload: () => {},
+                  detail: () => Option.none(),
+                  select: () => {},
+                  done: () => [],
+                  open: () => false,
+                }}
+              />
+            )
+          },
+          { width, height: 6 },
+        )
+        const frame = yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "tray")
+        const line = frame.split("\n").find((value) => value.includes("ctrl+t sessions")) ?? ""
+        expect(line).toMatch(/^ ?[◇◈◆] dele/)
+        // The child's name takes the names' colour, as Codex draws a nickname; the call stays muted.
+        const spans = setup.captureSpans().lines.flatMap((spans) => spans.spans)
+        // A span is a run of one colour: the pulse may share the names' colour, and its span.
+        const name = spans.find((span) => span.text.includes("dele"))
+        expect(name?.fg.equals(names())).toBe(true)
+        expect(name?.text).not.toContain("Reading")
+        const call = spans.find((span) => span.text.includes("Reading"))
+        expect(call?.fg.equals(names())).toBe(false)
+        // The call keeps up to half the row; the name is cut to the rest.
+        expect(line).toContain("· Reading")
+        if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")
+        expect(line).toContain("ctrl+t sessions")
+        expect(line).not.toContain("working")
+        expect(line.trimEnd().length).toBeLessThanOrEqual(width)
+      }
+    }),
+  )
+
+  // `bun run gamut wait` reads the pane tail: a working child's row must read
+  // busy, and a done thread's row idle. The rows come from this renderer, so
+  // a change to the tray turns this red rather than the live check hanging.
+  it.scopedLive("the gamut wait reads a running child's row as busy and a done row as idle", () =>
+    Effect.gen(function* () {
+      const tray = (running: ReadonlyArray<AgentRowEntry>, done: ReadonlyArray<AgentRowEntry>) =>
+        renderScoped(
           () => (
             <SubagentTray
               place={PLACE}
               controller={{
-                rows: () => [root("root", "idle"), busy],
+                rows: () => [root("root", "idle"), ...running],
                 current: () => ({
                   sessionId: SessionId.make("root"),
                   branchId: BranchId.make("root-branch"),
@@ -2150,23 +2209,32 @@ describe("Subagent tray", () => {
                 reload: () => {},
                 detail: () => Option.none(),
                 select: () => {},
-                done: () => [],
+                done: () => done,
                 open: () => false,
               }}
             />
           ),
-          { width, height: 6 },
+          { width: 80, height: 6 },
         )
-        const frame = yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "tray")
-        const line = frame.split("\n").find((value) => value.includes("ctrl+t sessions")) ?? ""
-        expect(line).toMatch(/^ ?[◇◈◆] dele/)
-        // The call keeps up to half the row; the name is cut to the rest.
-        expect(line).toContain("· Reading")
-        if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")
-        expect(line).toContain("ctrl+t sessions")
-        expect(line).not.toContain("working")
-        expect(line.trimEnd().length).toBeLessThanOrEqual(width)
+      const busy = yield* tray([child("busy", "running", "root")], [])
+      // `◆` is a pulse frame and the done glyph alike, so the wait reads it as idle.
+      for (const pulse of ["◇", "◈"]) {
+        const frame = yield* waitForFrame(
+          busy,
+          (next) => next.includes(`${pulse} delegate: busy task`),
+          `pulse ${pulse}`,
+        )
+        expect(paneShowsWorkingChild(frame)).toBe(true)
       }
+      const thread: AgentRowEntry = {
+        ...root("release", "idle"),
+        name: "release notes",
+        sideThread: true,
+        parentSessionId: SessionId.make("root"),
+      }
+      const done = yield* tray([], [thread])
+      const frame = yield* waitForFrame(done, (next) => next.includes("◆ release notes"), "done")
+      expect(paneShowsWorkingChild(frame)).toBe(false)
     }),
   )
 

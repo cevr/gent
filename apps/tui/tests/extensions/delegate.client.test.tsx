@@ -23,6 +23,7 @@ import { useExtensionUI } from "../../src/extensions/host"
 import { createMockClient, renderScoped } from "../render-harness-boundary"
 import { untilExtensionsLoaded, waitForFrame } from "../helpers-boundary"
 import { delegateSubtitle } from "../../src/extensions/delegate.client"
+import { useTheme } from "../../src/theme"
 
 /**
  * A child never blocks its parent: `delegate.start` settles at admission, and
@@ -502,6 +503,52 @@ describe("child-completion row on the ctrl+o ladder", () => {
       )
     }),
   )
+
+  // Codex draws an agent's nickname in its accent: the name takes the names'
+  // colour, a child that ended badly its `✕` in the error colour, the rest muted.
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `the head colours the child's name and a bad end's mark at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const failed = { ...ladderDetails, outcome: { streamFailed: true } }
+          for (const details of [ladderDetails, failed]) {
+            let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+            const setup = yield* renderScoped(
+              () => {
+                colors = Option.some(useTheme().theme)
+                return (
+                  <MessageList
+                    items={[completion(details, envelope(answer))]}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                  />
+                )
+              },
+              { initialSession: parentSession, width, height: 30 },
+            )
+            yield* waitForFrame(setup, (text) => /[◆✕] delegate/.test(text), "completion row")
+            const theme = Option.getOrThrow(colors)
+            const colored = setup
+              .captureSpans()
+              .lines.flatMap((line) => line.spans.filter((span) => span.text.trim().length > 0))
+              .filter((span) => !span.fg.equals(theme.textMuted))
+            const name = colored.at(-1)
+            expect(name?.text.startsWith("delegate: lo")).toBe(true)
+            expect(name?.fg.equals(theme.info)).toBe(true)
+            if (details === failed) {
+              expect(colored.map((span) => span.text.trim())).toEqual([
+                "✕",
+                name?.text.trim() ?? "",
+              ])
+              expect(colored[0]?.fg.equals(theme.error)).toBe(true)
+            } else {
+              expect(colored).toHaveLength(1)
+            }
+          }
+        }),
+    )
+  }
 
   it.scopedLive("preview adds the last five calls as run rows and a five-line answer head", () =>
     Effect.gen(function* () {

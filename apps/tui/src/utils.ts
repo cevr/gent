@@ -80,6 +80,59 @@ export function truncate(value: string, width: number): string {
   return `${text}…`
 }
 
+/** A piece of one line drawn in its own colour: `tone` names the colour, the drawer maps it. */
+export interface TextRun<Tone> {
+  readonly text: string
+  readonly tone: Tone
+}
+
+/** Neighbouring runs of one tone joined into one: one span each. */
+function mergeRuns<Tone>(runs: ReadonlyArray<TextRun<Tone>>): ReadonlyArray<TextRun<Tone>> {
+  const out: Array<TextRun<Tone>> = []
+  for (const run of runs) {
+    if (run.text.length === 0) continue
+    const last = out.at(-1)
+    if (Predicate.isNotUndefined(last) && last.tone === run.tone)
+      out[out.length - 1] = { text: last.text + run.text, tone: run.tone }
+    else out.push(run)
+  }
+  return out
+}
+
+/**
+ * `truncate` over a line drawn in runs: the runs' joined text cut as one
+ * line, each run keeping its tone. The `…` takes the tone of the run it cuts
+ * into; runs past the cut drop.
+ */
+export function truncateRuns<Tone>(
+  runs: ReadonlyArray<TextRun<Tone>>,
+  width: number,
+): ReadonlyArray<TextRun<Tone>> {
+  if (width <= 0) return []
+  const line = runs.map((run) => oneLine(run.text)).join("")
+  const cut = truncate(line, width)
+  // `truncate` keeps a prefix of the one-line text, so code-unit offsets map back to the runs.
+  let kept = cut.length
+  let ellipsis = ""
+  if (cut !== line) {
+    kept = cut.length - 1
+    ellipsis = "…"
+  }
+  const out: Array<TextRun<Tone>> = []
+  let start = 0
+  for (const run of runs) {
+    const text = oneLine(run.text)
+    const end = start + text.length
+    if (kept >= end) out.push({ text, tone: run.tone })
+    else {
+      out.push({ text: `${text.slice(0, Math.max(0, kept - start))}${ellipsis}`, tone: run.tone })
+      break
+    }
+    start = end
+  }
+  return out.filter((piece) => piece.text.length > 0)
+}
+
 /**
  * The text less its last character as the reader sees it: one grapheme, so a
  * backspace takes a toned emoji, a flag or a ZWJ family whole.
@@ -795,7 +848,7 @@ export function truncatePath(path: string, maxLen = 40): string {
  * How a tool ended. `cancelled`: the turn's interrupt or the cell's cancel
  * cut it; that is one event, not a failure.
  */
-export type ActivityOutcome = "succeeded" | "failed" | "cancelled" | "incomplete" | "running"
+type ActivityOutcome = "succeeded" | "failed" | "cancelled" | "incomplete" | "running"
 
 /**
  * The inner-call receipts a saved cell result carries under `operations`.
@@ -1245,7 +1298,31 @@ export function formatActivityHeader(
   calls: ReadonlyArray<ActivityCall>,
   width = Number.POSITIVE_INFINITY,
 ): string {
-  if (calls.length === 0) return ""
+  return activityHeaderRuns(calls, width)
+    .map((run) => run.text)
+    .join("")
+}
+
+/**
+ * Where a run row's hue goes: only to what the reader must look at. A
+ * failure (`2 failed`, `exit 2`, `failed`) is `failed`; a cancel or a call
+ * cut short (`1 cancelled`, `incomplete`) is `stopped`; the rest is `muted`.
+ */
+export type ActivityTone = "muted" | "failed" | "stopped"
+
+/** The tone of a row's or an op's outcome word. */
+const outcomeTone = (outcome: ActivityOutcome): ActivityTone => {
+  if (outcome === "failed") return "failed"
+  if (outcome === "cancelled" || outcome === "incomplete") return "stopped"
+  return "muted"
+}
+
+/** `formatActivityHeader` in runs: the work muted, `N failed` and `N cancelled` in their tones. */
+export function activityHeaderRuns(
+  calls: ReadonlyArray<ActivityCall>,
+  width = Number.POSITIVE_INFINITY,
+): ReadonlyArray<TextRun<ActivityTone>> {
+  if (calls.length === 0) return []
   const entries = activityEntries(calls)
   const ended = new Map<string, KindCount>()
   const running = new Map<string, KindCount>()
@@ -1269,13 +1346,25 @@ export function formatActivityHeader(
   })
   const failed = entries.filter((entry) => isFailedOp(entry.operation)).length
   const cancelled = entries.filter((entry) => isCancelledOp(entry.operation)).length
-  const tail: string[] = []
-  if (failed > 0) tail.push(`${failed} failed`)
-  if (cancelled > 0) tail.push(`${cancelled} cancelled`)
-  const join = (kept: number) => [...phrases.slice(0, kept), ...tail].join(" · ")
+  const tail: Array<TextRun<ActivityTone>> = []
+  if (failed > 0) tail.push({ text: `${failed} failed`, tone: "failed" })
+  if (cancelled > 0) tail.push({ text: `${cancelled} cancelled`, tone: "stopped" })
+  const parts = (kept: number): ReadonlyArray<TextRun<ActivityTone>> => [
+    ...phrases.slice(0, kept).map((text) => ({ text, tone: "muted" as const })),
+    ...tail,
+  ]
+  const textOf = (kept: number) =>
+    parts(kept)
+      .map((part) => part.text)
+      .join(" · ")
   let kept = phrases.length
-  while (kept > 1 && textWidth(join(kept)) > width) kept -= 1
-  return join(kept)
+  while (kept > 1 && textWidth(textOf(kept)) > width) kept -= 1
+  return mergeRuns(
+    parts(kept).flatMap((part, index) => {
+      if (index === 0) return [part]
+      return [{ text: " · ", tone: "muted" as const }, part]
+    }),
+  )
 }
 
 /** Past and running tense of each tool's verb; a tool not named here shows its id. */
@@ -1452,11 +1541,15 @@ const failureWord = (operation: ActivityOperation): string => {
   })
 }
 
-/** A row as text, in parts: the diff counts draw in their own colours between head and tail. */
+/**
+ * A row as text, in parts: the diff counts draw in their own colours after
+ * the head, and the outcome word (`exit 1`, `failed`, `cancelled`,
+ * `incomplete`) after ` · ` in its tone, none for a row that ran or runs.
+ */
 interface ActivityRowText {
   readonly head: string
   readonly diff: Option.Option<DiffCount>
-  readonly tail: string
+  readonly ending: Option.Option<TextRun<ActivityTone>>
 }
 
 /**
@@ -1471,19 +1564,24 @@ export function formatActivityRow(
   const tense = toolVerbs(row.tool)
   let verb = tense[0]
   if (row.outcome === "running") verb = tense[1]
-  let tail = ""
+  let word = ""
   // A failed row holds one op: the row ends with its exit status, or `failed`.
-  if (row.outcome === "failed") {
-    const words = row.operations.map(failureWord)
-    tail = ` · ${words[0] ?? "failed"}`
-  }
-  if (row.outcome === "cancelled") tail = " · cancelled"
-  if (row.outcome === "incomplete") tail = " · incomplete"
+  if (row.outcome === "failed") word = row.operations.map(failureWord)[0] ?? "failed"
+  if (row.outcome === "cancelled") word = "cancelled"
+  if (row.outcome === "incomplete") word = "incomplete"
+  const ending = Option.map(
+    Option.liftPredicate(word, (text) => text.length > 0),
+    (text) => ({ text, tone: outcomeTone(row.outcome) }),
+  )
   const diffWidth = Option.match(row.diff, {
     onNone: () => 0,
     onSome: (diff) => textWidth(formatDiffCount(diff)) + 1,
   })
-  const room = width - textWidth(verb) - 1 - diffWidth - textWidth(tail)
+  const tailWidth = Option.match(ending, {
+    onNone: () => 0,
+    onSome: (run) => 3 + textWidth(run.text),
+  })
+  const room = width - textWidth(verb) - 1 - diffWidth - tailWidth
   const subjects = row.subjects
   const listed = (kept: number) => {
     const text = subjects.slice(0, kept).join(", ")
@@ -1492,8 +1590,8 @@ export function formatActivityRow(
   }
   let kept = subjects.length
   while (kept > 1 && textWidth(listed(kept)) > room) kept -= 1
-  if (subjects.length === 0) return { head: verb, diff: row.diff, tail }
-  return { head: `${verb} ${listed(kept)}`, diff: row.diff, tail }
+  if (subjects.length === 0) return { head: verb, diff: row.diff, ending }
+  return { head: `${verb} ${listed(kept)}`, diff: row.diff, ending }
 }
 
 /** The narrowest reason a failure row still draws: a word start and the ellipsis. */
@@ -1509,17 +1607,39 @@ export function formatFailureRow(
   operation: ActivityOperation,
   width = Number.POSITIVE_INFINITY,
 ): string {
+  return failureRowRuns(operation, width)
+    .map((run) => run.text)
+    .join("")
+}
+
+/** `formatFailureRow` in runs: the outcome word in its tone, the head and the reason muted. */
+export function failureRowRuns(
+  operation: ActivityOperation,
+  width = Number.POSITIVE_INFINITY,
+): ReadonlyArray<TextRun<ActivityTone>> {
   const verb = toolVerbs(operation.tool)[0]
-  const outcome = ` · ${failureWord(operation)}`
+  const word = failureWord(operation)
+  const outcome = ` · ${word}`
+  const ending: ReadonlyArray<TextRun<ActivityTone>> = [
+    { text: " · ", tone: "muted" },
+    { text: word, tone: outcomeTone(operation.outcome) },
+  ]
   const subject = operationSubject(operation)
   let head = verb
   if (subject.length > 0) head = `${verb} ${subject}`
   const reason = oneLine(operation.reason ?? "").trim()
   const room = width - textWidth(head + outcome) - 3
   if (reason.length > 0 && room >= Math.min(MIN_REASON_COLUMNS, textWidth(reason)))
-    return `${head}${outcome} · ${truncate(reason, room)}`
-  if (textWidth(head + outcome) <= width) return `${head}${outcome}`
-  return `${truncate(head, Math.max(textWidth(verb), width - textWidth(outcome)))}${outcome}`
+    return [
+      { text: head, tone: "muted" },
+      ...ending,
+      { text: ` · ${truncate(reason, room)}`, tone: "muted" },
+    ]
+  if (textWidth(head + outcome) <= width) return [{ text: head, tone: "muted" }, ...ending]
+  return [
+    { text: truncate(head, Math.max(textWidth(verb), width - textWidth(outcome))), tone: "muted" },
+    ...ending,
+  ]
 }
 
 /** `+12 / -3` */

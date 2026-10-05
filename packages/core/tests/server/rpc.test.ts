@@ -16,6 +16,7 @@ import {
   Ref,
   Result,
   Schema,
+  SchemaAST,
   Scope,
   Stream,
 } from "effect"
@@ -4293,6 +4294,36 @@ describe("session profile lookup", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+
+  // Owner rule: every session-scoped RPC names its session. A new RPC is
+  // read here without a list to update; one that names no session is either
+  // on this list, with its reason, or red.
+  test("every RPC payload requires sessionId, unless it names why not", () => {
+    const exempt = {
+      "session.create": "it makes the session",
+      "session.list": "it lists every session",
+      "steer.command": "the session is inside the command",
+      "extension.listStatus": "its scope names the session or the launch",
+      "driver.clear": "it writes the user config, which no session owns",
+      // Owner question: a required `sessionId` here is a wire change that is not additive.
+      "message.list": "it reads a branch by its id; owner question",
+    }
+    const requiresSession = (payload: Schema.Top): boolean => {
+      const ast = payload.ast
+      if (!SchemaAST.isObjects(ast)) return false
+      return ast.propertySignatures.some(
+        (field) => field.name === "sessionId" && !SchemaAST.isOptional(field.type),
+      )
+    }
+    const unnamed = GentRpcs.requests
+      .entries()
+      .filter(([, rpc]) => !requiresSession(rpc.payloadSchema))
+      .map(([tag]) => tag)
+      .toArray()
+    expect(unnamed.toSorted()).toEqual(Object.keys(exempt).toSorted())
+    // The table reads the payloads: most RPCs pass it.
+    expect(GentRpcs.requests.size).toBeGreaterThan(unnamed.length * 4)
+  })
 
   test("a session-scoped payload that names no session is a type error", () => {
     type Client = GentNamespacedClient
