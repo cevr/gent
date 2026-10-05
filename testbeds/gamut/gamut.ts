@@ -35,6 +35,9 @@ import {
   rmSync,
   realpathSync,
   mkdtempSync,
+  readdirSync,
+  symlinkSync,
+  copyFileSync,
 } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -526,6 +529,38 @@ const removeTree = async (path: string): Promise<void> => {
   if (trashed.exitCode !== 0) rmSync(path, { recursive: true, force: true })
 }
 
+/**
+ * The owner's `~/.gent` entries a pane never shares: the user config, which
+ * five writers in a pane can reach (the first `/model` pick, a driver
+ * override set or cleared, the auth order, a renamed auth slot), and the
+ * database files, which `GENT_DATA_DIR` moves to the run's own directory.
+ */
+const isUnsharedGentEntry = (name: string): boolean =>
+  name === "config.json" || name.startsWith("data.db")
+
+/**
+ * Build the pane's home at `paneHome` from the owner's `ownerHome`. Each
+ * top-level entry links to the owner's, so the login, the skills, the
+ * shell and git read as they do outside the run. `.gent` is the run's own
+ * directory: its entries link to the owner's too, except the user config,
+ * which is a copy the run's writers change, and the database files.
+ * A link is removed as a link, so `down` never reaches the owner's files.
+ */
+const buildPaneHome = (ownerHome: string, paneHome: string): void => {
+  mkdirSync(join(paneHome, ".gent"), { recursive: true })
+  for (const entry of readdirSync(ownerHome)) {
+    if (entry !== ".gent") symlinkSync(join(ownerHome, entry), join(paneHome, entry))
+  }
+  const ownerGent = join(ownerHome, ".gent")
+  if (!existsSync(ownerGent)) return
+  for (const entry of readdirSync(ownerGent)) {
+    if (!isUnsharedGentEntry(entry))
+      symlinkSync(join(ownerGent, entry), join(paneHome, ".gent", entry))
+  }
+  const config = join(ownerGent, "config.json")
+  if (existsSync(config)) copyFileSync(config, join(paneHome, ".gent", "config.json"))
+}
+
 const prepareAndLaunch = async (
   presetName: string,
   preset: Preset,
@@ -576,13 +611,15 @@ const prepareAndLaunch = async (
 
   const prompt = promptArg === undefined ? DEFAULT_PROMPT : await resolvePrompt(promptArg)
 
-  // GENT_DATA_DIR redirects `data.db`. Auth does NOT follow it: the auth store
-  // resolves from `${home}/.gent/auth` (server/server.ts), so the real
-  // provider credentials keep working while the database stays isolated.
+  // GENT_DATA_DIR redirects `data.db`, and HOME gives the pane a home of its
+  // own (`buildPaneHome`): the run writes a copy of the user config, while
+  // the login and the other tools' files stay the owner's.
   // Split down, not right: a right split of an already split pane leaves the
   // TUI about 55 columns wide and the status line drops its leading items.
+  const home = join(root, "home")
+  buildPaneHome(homedir(), home)
   const split =
-    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
+    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data} --env HOME=${home}`.text()
   const pane = paneIdFromSplit(split)
 
   const state: GamutState = {

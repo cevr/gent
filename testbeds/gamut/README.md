@@ -68,7 +68,7 @@ It reads the run's own `data.db` read-only and prints:
 - **`bun test` in the work dir**, pass and fail counts — the red app is the
   only real measure of whether the run did the work.
 
-## The three traps it removes
+## The four traps it removes
 
 1. **The real database.** A binary built anywhere opens `~/.gent/data.db` and
    runs its migrations there, which breaks every older binary. `up` exports
@@ -89,6 +89,14 @@ It reads the run's own `data.db` read-only and prints:
    owns the PTY, with a 15-second deadline. Another run of the same binary
    cannot delay the quit. Each press checks that the binary still owns the
    foreground; a different foreground process is left alone.
+4. **The real user config.** Five writers can reach `~/.gent/config.json` from
+   a pane: the first `/model` pick, a driver override set or cleared, the
+   auth order, and a renamed auth slot. `up` exports `HOME` at the pane as
+   `<scratch>/home`. Each top-level entry of the owner's home is a link
+   there, and so is each entry of `~/.gent` except `config.json` (a copy) and
+   the `data.db` files. The login, the skills and the shell read as before;
+   a write to the user config changes the run's copy. `down` removes the
+   links with the scratch tree, never what they point to.
 
 ## The fixture
 
