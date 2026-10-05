@@ -4699,7 +4699,7 @@ describe("App docked panes at short heights", () => {
     {
       name: "agents pane",
       open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
-      shown: "Sessions ·",
+      shown: "Sessions",
       rowClean: () => true,
     },
   ]
@@ -4843,7 +4843,7 @@ describe("App docked panes at short heights", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions"), "the agents pane")
       view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
@@ -4892,12 +4892,12 @@ describe("App docked panes at short heights", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions"), "the agents pane")
       const width = view.setup.renderer.terminalWidth
       view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions ·"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions"),
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
@@ -4909,7 +4909,7 @@ describe("App docked panes at short heights", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("✻ "),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Sessions ·")
+      expect(renderFrame(view.setup)).not.toContain("Sessions")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
