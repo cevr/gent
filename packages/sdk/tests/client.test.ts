@@ -1,8 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
-import { ConfigProvider, Crypto, Effect, FileSystem, Option, Schema } from "effect"
+import { ConfigProvider, Crypto, Effect, FileSystem, Option, Predicate, Schema } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { BunServices } from "@effect/platform-bun"
-import { defineExtension, ExtensionHost, request } from "@gent/core/extensions/api"
+import {
+  AuthMethod,
+  defineExtension,
+  ExtensionHost,
+  ProviderAuthError,
+  request,
+} from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
   freePort,
@@ -349,4 +355,98 @@ describe("Gent.provider.mock tool scenario", () => {
       ),
     16_000,
   )
+})
+
+// ── transports ──────────────────────────────────────────────────────────────
+
+/**
+ * A driver whose pending login lives on the instance that authorized it: a
+ * callback that reaches another instance of it fails.
+ */
+const pendingLoginExtension = defineExtension({
+  id: "@test/pending-login",
+  setup: Effect.gen(function* () {
+    const pending = new Set<string>()
+    yield* (yield* ExtensionHost).register("modelDriver", {
+      id: "pending-oauth",
+      name: "Pending OAuth",
+      resolveModel: () => Effect.die("pending-oauth serves no model"),
+      auth: {
+        methods: [AuthMethod.make({ type: "oauth", label: "OAuth" })],
+        authorize: (ctx) =>
+          Effect.sync(() => {
+            pending.add(ctx.authorizationId)
+            return Option.some({ url: "http://example.com/auth", method: "code" as const })
+          }),
+        callback: (ctx) =>
+          Effect.gen(function* () {
+            if (!pending.delete(ctx.authorizationId)) {
+              return yield* new ProviderAuthError({ message: "login state missing" })
+            }
+            yield* ctx.persist({ type: "api", key: ctx.code ?? "" })
+          }),
+      },
+    })
+  }),
+})
+
+/** Disabling it in the project config supersedes the session's profile. */
+const loginToggleExtension = defineExtension({ id: "@test/login-toggle", setup: Effect.void })
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+// An owned server serves in-process clients and WebSocket clients from one
+// set of handlers, so state a call leaves on the server is the same for both.
+describe("Gent.server transports", () => {
+  const transportPairs = [
+    ["in-process", "WebSocket"],
+    ["WebSocket", "in-process"],
+  ] as const
+  for (const [begins, finishes] of transportPairs) {
+    it.live(
+      `a login begun ${begins} finishes ${finishes} on the profile that began it`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem
+            const project = yield* makeTempDirectoryScoped("gent-transport-login-")
+            const home = yield* makeTempDirectoryScoped("gent-transport-login-home-")
+            const server = yield* Gent.server({
+              cwd: project,
+              state: Gent.state.sqlite({ home }),
+              provider: Gent.provider.mock(),
+              extensions: [...BuiltinExtensions, pendingLoginExtension, loginToggleExtension],
+            })
+            const clients = {
+              "in-process": (yield* Gent.client(server, { cwd: project })).client,
+              WebSocket: (yield* Gent.client(server.url, { cwd: project })).client,
+            }
+            const { sessionId } = yield* clients[begins].session.create({ cwd: project })
+            const authorization = yield* clients[begins].auth.authorize({
+              sessionId,
+              provider: "pending-oauth",
+              method: 0,
+            })
+            if (Predicate.isNull(authorization)) return yield* Effect.die("authorize gave no link")
+            // The edit supersedes the session's profile: only the login's lease
+            // still holds the driver instance with the pending login.
+            yield* fs.makeDirectory(`${project}/.gent`, { recursive: true })
+            yield* fs.writeFileString(
+              `${project}/.gent/config.json`,
+              encodeJson({ disabledExtensions: ["@test/login-toggle"] }),
+            )
+            yield* clients[finishes].auth.callback({
+              sessionId,
+              provider: "pending-oauth",
+              method: 0,
+              authorizationId: authorization.authorizationId,
+              code: "sk-transport",
+            })
+            const providers = yield* clients[finishes].auth.listProviders({ sessionId })
+            expect(providers.find((entry) => entry.provider === "pending-oauth")?.hasKey).toBe(true)
+          }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+        ),
+      30_000,
+    )
+  }
 })

@@ -2302,21 +2302,19 @@ interface ServerRoutesConfig {
  * path (`Gent.server`) serves it from its in-process HTTP listener.
  *
  * Includes: RPC-over-WS, identity route, CORS.
- * Caller provides `coreServicesLive` containing all service dependencies.
+ * The caller passes the handlers it built once, the same ones its
+ * in-process clients call: the request dedupers and login leases they hold
+ * are one per server, whichever transport a call comes on.
  */
-export const buildServerRoutes = <A>(
-  coreServicesLive: Layer.Layer<A>,
+export const buildServerRoutes = (
+  handlers: Context.Context<Layer.Success<typeof RpcHandlersLive>>,
   config: ServerRoutesConfig,
 ) => {
   // RPC-over-WebSocket route
   const RpcRoutes = RpcServer.layerHttp({
     group: GentRpcs,
     path: "/rpc",
-  }).pipe(
-    Layer.provide(RpcSerialization.layerJson),
-    Layer.provide(RpcHandlersLive),
-    Layer.provide(coreServicesLive),
-  )
+  }).pipe(Layer.provide(RpcSerialization.layerJson), Layer.provide(Layer.succeedContext(handlers)))
 
   // Identity route — used by registry validation
   const IdentityRoute = HttpRouter.add(
@@ -2326,7 +2324,7 @@ export const buildServerRoutes = <A>(
   )
 
   return Layer.mergeAll(RpcRoutes, IdentityRoute).pipe(
-    Layer.provide(wsTracingLayer.pipe(Layer.provide(coreServicesLive))),
+    Layer.provide(wsTracingLayer),
     Layer.provide(HttpRouter.cors()),
   )
 }

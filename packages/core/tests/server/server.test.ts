@@ -19,6 +19,7 @@ import {
 } from "effect"
 import {
   buildExtensionHealthSnapshot,
+  buildServerRoutes,
   getSessionSnapshot,
   SessionMutationsLive,
   RpcHandlersLive,
@@ -96,11 +97,13 @@ import {
   SessionStarted,
   EventStoreError,
 } from "../../src/domain/event"
-import { BunServices } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
+import { HttpRouter, HttpServer } from "effect/http"
+import { Socket } from "effect/socket"
 import { SqlClient } from "effect/sql"
 import { Auth, ModelResolver, textStep } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
-import { RpcClient, RpcTest } from "effect/rpc"
+import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -3555,6 +3558,45 @@ describe("message.send", () => {
   )
 })
 
+// ── served root ─────────────────────────────────────────────────────────────
+
+const servedIdentity = {
+  serverId: "served-root",
+  pid: 0,
+  hostname: "127.0.0.1",
+  dbPath: ":memory:",
+  buildFingerprint: "test",
+}
+
+type HandlerContext = Context.Context<Layer.Success<typeof RpcHandlersLive>>
+
+/**
+ * A root served as `Gent.server` serves it: an in-process client calls the
+ * built handlers, and a WebSocket client reaches the server routes on a
+ * local listener.
+ */
+const serveBothTransports = (handlers: HandlerContext) =>
+  Effect.gen(function* () {
+    const listener = yield* Layer.build(
+      HttpRouter.serve(buildServerRoutes(handlers, { identity: servedIdentity })).pipe(
+        Layer.provideMerge(BunHttpServer.layer({ port: 0, hostname: "127.0.0.1" })),
+      ),
+    )
+    const address = Context.get(listener, HttpServer.HttpServer).address
+    if (address._tag === "UnixPathAddress") return yield* Effect.die("a TCP listener has no path")
+    const socket = yield* Layer.build(
+      RpcClient.layerProtocolSocket().pipe(
+        Layer.provide(Socket.layerWebSocket(`ws://127.0.0.1:${address.port}/rpc`)),
+        Layer.provide(Socket.layerWebSocketConstructorGlobal),
+        Layer.provide(RpcSerialization.layerJson),
+      ),
+    )
+    return {
+      "in-process": yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(handlers)),
+      WebSocket: yield* RpcClient.make(GentRpcs).pipe(Effect.provide(socket)),
+    }
+  })
+
 describe("server root composition", () => {
   it.live("builds each layer a root passes in once, however many services read it", () =>
     Effect.scoped(
@@ -3572,7 +3614,7 @@ describe("server root composition", () => {
             ),
           )
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
-        yield* Layer.build(
+        const root = yield* Layer.build(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -3582,13 +3624,80 @@ describe("server root composition", () => {
             extraLayers: [counted("extra", Layer.empty)],
           }),
         )
+        // Each build of the RPC handlers reads the root once: the root's count
+        // under the handlers is their build count.
+        const handlerRoot = counted("handlers", Layer.succeedContext(root))
+        const handlers = yield* Layer.build(Layer.provide(RpcHandlersLive, handlerRoot))
+        const clients = yield* serveBothTransports(handlers)
+        for (const client of [clients["in-process"], clients.WebSocket]) {
+          yield* client["session.list"]().pipe(
+            RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId }),
+          )
+        }
         expect(yield* Ref.get(builds)).toEqual({
           auth: 1,
           config: 1,
           approval: 1,
           extra: 1,
+          handlers: 1,
         })
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  // `message.send` runs one dispatch for the calls with one `requestId` in
+  // flight together, whichever transport each call comes on.
+  const transportOrders = [
+    ["in-process", "WebSocket"],
+    ["WebSocket", "in-process"],
+  ] as const
+  for (const [first, second] of transportOrders) {
+    it.live(`a message.send ${first} and its duplicate ${second} run one dispatch`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dispatches = yield* Ref.make<ReadonlyArray<string>>([])
+          const firstDispatched = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const root = yield* Layer.build(
+            Layer.mergeAll(
+              createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
+              sessionRuntimeLayer({
+                // The shared request stays in flight until the test releases it.
+                sendUserMessage: (input) =>
+                  Effect.gen(function* () {
+                    yield* Ref.update(dispatches, (all) => [...all, input.content])
+                    yield* Deferred.succeed(firstDispatched, void 0)
+                    if (input.requestId === "req-shared") yield* Deferred.await(release)
+                  }),
+              }),
+            ),
+          )
+          const handlers = yield* Layer.build(
+            Layer.provide(RpcHandlersLive, Layer.succeedContext(root)),
+          )
+          const clients = yield* serveBothTransports(handlers)
+          const send = (transport: keyof typeof clients, content: string, requestId: string) => {
+            const sendMessage = clients[transport]["message.send"]
+            return sendMessage({
+              sessionId: SessionId.make("served-session"),
+              branchId: BranchId.make("served-branch"),
+              content,
+              requestId,
+            }).pipe(RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId }))
+          }
+
+          const original = yield* send(first, "original", "req-shared").pipe(Effect.forkScoped)
+          yield* Deferred.await(firstDispatched)
+          const duplicate = yield* send(second, "duplicate", "req-shared").pipe(Effect.forkScoped)
+          // A call forked after the duplicate, on its transport, reaches the
+          // handlers after it: the duplicate is in flight once this one ends.
+          yield* Fiber.join(yield* send(second, "probe", "req-probe").pipe(Effect.forkScoped))
+          yield* Deferred.succeed(release, void 0)
+          yield* Fiber.join(original)
+          yield* Fiber.join(duplicate)
+          expect(yield* Ref.get(dispatches)).toEqual(["original", "probe"])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    )
+  }
 })
