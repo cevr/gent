@@ -1243,31 +1243,62 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   owns the copies and uses only the public extension API, `runProcess` and
   the platform services. Core has no workspace concept: the seam is
   `Session.create({ cwd })`, and the child's profile is the copy's.
-  - A copy holds the parent's working tree as the child starts. The parent's
-    tree is first written as one base commit (`HEAD` when it is clean) on a
-    private index. `rift rpc` makes the copy as a process (`copyAll` on btrfs;
-    a filtered copy and the `.rift.toml` `postcreate` hooks elsewhere). Any
-    rift failure but a committed `postcreate` failure falls back to a detached
-    `git worktree` under `<data dir>/workspaces/worktrees/` with the base tree
-    checked out unstaged and the same hooks run; the start result notes why.
-  - One record per copy, `<data dir>/workspaces/<name>.json`, under the
-    extension file lock. The name is `child-<hash of the start's requestId>`,
-    so a repeated start adopts its copy; a record with another requestId is a
-    collision. The delegate binds the child's session id to the record after
-    `Session.create`; a failed create releases the copy (`acquireRelease` on
-    the admission scope).
-  - Merge-back is a branch, never a merge. The workspaces `turnAfter` hook
-    commits the copy's tree (private index, parent = base) and puts it on
-    `refs/heads/gent/<name>` of the origin: `update-ref` for a worktree, a
-    `git fetch` from the copy for a rift copy. The same work keeps the same
-    commit; no work deletes the branch. The delegate's completion collects
-    once more, then names the branch and a diffstat in its text and in
-    `details.workspace`. No model call.
-  - Lifetime is the child session's. `sessionDeleted` collects and releases;
-    `loopOpen` prunes copies idle for two days whose child is not running. The
-    branch outlives the copy.
-  - Refusals: a cwd outside git, and under 2 GB free where the copy goes. The
-    four-child cap is checked before a copy is made.
+  - The backend: `rift rpc` with `copyAll` (one snapshot, an exact copy) only
+    when the origin is a rift workspace on btrfs. Everywhere else, and for any
+    rift failure, a detached `git worktree` under `<data dir>/workspaces/worktrees/`
+    with the origin's working tree checked out unstaged. gent never asks rift
+    for a filtered copy: rift's filter drops names such as `build` even when
+    git tracks them. The start result notes why a copy is a worktree.
+  - Hooks: gent sends `hooks: false`, so rift runs no `precreate` in the
+    origin. gent reads `.rift.toml` with `Bun.TOML.parse`, checks it as rift
+    does (`version = 1`, only the four hook lists, a non-empty `run`), and runs
+    the `postcreate` steps in the copy with the `RIFT_*` variables. Every git
+    command gent runs sets `core.hooksPath=/dev/null` and turns automatic
+    maintenance off, so gent's plumbing runs no hook in the origin. rift itself
+    still adds `/.rift` to the origin's `.git/info/exclude`.
+  - Identity: the name is `child-<12 hex>` of a SHA-256 over the parent
+    session, the parent branch, the start's request id and the resolved
+    origin. A repeated start with all four adopts its copy; any other start
+    gets its own. A copy bound to one child session is never bound to another.
+  - Records: `<data dir>/workspaces/<name>.json`, under the extension file
+    lock, written as `creating` before gent makes anything. After the copy
+    exists gent writes an ownership marker (`gent-workspace`, the identity
+    digest) into the copy's git directory, runs the hooks, captures the base
+    (the copy after its hooks, as one commit on a private index, held by
+    `refs/gent/base/<name>` in the origin for a worktree and `refs/gent/base`
+    in a rift copy), and then writes `ready`. gent adopts or removes a copy
+    only when the record and the marker agree, and never a path that is, holds
+    or lies in the origin, or a worktree outside its directory. A directory it
+    cannot prove is kept, and the call says so. A crash recovers by phase:
+    `creating` with nothing there is made again, a marked half-made copy is
+    removed and made again.
+  - Merge-back is a branch, never a merge. At each child turn end the copy's
+    tree goes on `refs/heads/gent/<name>` of the origin as one commit over the
+    base: `update-ref` for a worktree, a fetch to `refs/gent/incoming/<name>`
+    and then `update-ref` for a rift copy. gent moves or deletes the branch
+    only with compare-and-swap from the commit it last wrote (the record keeps
+    `tip`, and `nextTip` for a write in flight). A branch someone else moved,
+    or one a worktree has checked out, stays as it is: the completion says so,
+    and the work stays in the copy. A turn is collected once: the delegate's
+    completion reads the collect of the child's start turn. The completion
+    names the branch and a diffstat in its text and in `details.workspace`. No
+    model call.
+  - Lifetime is the child session's. The delegate's admission scope closes
+    after the registry write; it removes the copy only when the admission
+    failed before `Session.create` returned. After that the session owns the
+    copy. `sessionDeleted` collects and removes the copy under one lock; a
+    collect that fails or leaves the work in the copy keeps the copy and its
+    record. A `git worktree remove` that fails keeps the copy (no recursive
+    delete). A rift copy with rift descendants, or whose descendants rift
+    cannot list, stays. gent prunes nothing by age; a copy of a session that is
+    not deleted stays. The branch outlives the copy.
+  - The session index (`<data dir>/workspaces/sessions/<session id>`) holds
+    the bound copy's name, so a turn end of a session with no copy reads one
+    missing file. A delete whose index was lost reads every record.
+  - Refusals: a cwd outside git or with no commit, under 2 GB free where the
+    copy goes, and free space that `df` does not report. The four-child cap is
+    checked before a copy is made. Making a copy can be interrupted; only the
+    record and marker writes are masked.
   - A copy is not a sandbox: the child's `bash` and cell still reach every
     path. Project trust (`trustedProjects`, `isProjectExtensionDirectoryTrusted`)
     is keyed by directory and does not follow the copy: the child's profile

@@ -879,23 +879,34 @@ every tool of the child works there.
 
 - The copy holds your working tree as the child starts: your commits, your
   uncommitted changes and your untracked files that git does not ignore.
-- `rift` makes the copy when it can (`rift rpc`, a whole-tree copy on btrfs,
-  else a filtered copy and the `.rift.toml` `postcreate` hooks). Else gent
-  makes a detached `git worktree` under `<data dir>/workspaces/worktrees/`,
-  puts your uncommitted state in it, and runs the same `postcreate` hooks. The
-  start result says which, in `workspace.note`.
+- On btrfs, when your repository is a rift workspace, `rift` makes the copy
+  (`rift rpc`, one whole-tree snapshot, dependencies and build included).
+  Everywhere else gent makes a detached `git worktree` under
+  `<data dir>/workspaces/worktrees/` and puts your uncommitted state in it.
+  gent never makes a filtered copy. The start result says why a copy is a
+  worktree, in `workspace.note`.
+- gent runs the `postcreate` steps of your `.rift.toml` in the copy, for both
+  kinds, with the `RIFT_*` variables. rift runs no hook of its own for these
+  copies, so no `precreate` runs in your repository. A `.rift.toml` that rift
+  would refuse runs no step, and the note says why. gent's own git commands
+  run no hook of your repository.
 - When each child turn ends, the child's work goes back as one commit over
-  your working tree as the child started, on the branch `gent/<name>` of your
-  repository. The completion names the branch and its diffstat. Nothing
+  the copy as it started (after its hooks), on the branch `gent/<name>` of
+  your repository. The completion names the branch and its diffstat. Nothing
   merges it: read it with `git show gent/<name>`, and merge, cherry-pick or
-  delete it yourself.
+  delete it yourself. gent moves the branch only from the commit it last
+  wrote. If you move the branch or check it out, gent leaves it, the
+  completion says so, and the work stays in the copy.
 - The copy lives as long as the child's session. A session delete collects
   the copy's last work to the branch and removes the copy; the branch stays.
-  A copy nobody used for two days is removed when a loop opens. A repeated
-  start of the same call uses the copy the first one made. A start whose
-  session cannot be created removes its copy.
+  When that collect fails, or the work cannot go on the branch, the copy
+  stays. A rift copy that has rift copies of its own stays. gent removes no
+  copy by age. A repeated start of the same call from the same session uses
+  the copy the first one made. A start whose session cannot be created
+  removes its copy.
 - A start is refused outside a git repository, and when less than 2 GB is
-  free where the copy goes; start the child with `isolation: "shared"` then.
+  free where the copy goes or `df` cannot say; start the child with
+  `isolation: "shared"` then.
 
 A copy is not a sandbox. The child's `bash`, the cell and every other tool can
 still reach your repository and every other path, as with `paths`. A snapshot
