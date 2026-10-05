@@ -59,7 +59,6 @@ import {
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
   textStep,
 } from "../../src/runtime/provider"
-import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
 import {
   baseLocalLayerWithProvider,
   createE2ELayer,
@@ -68,8 +67,10 @@ import {
   fixedSessionProfiles,
   fixtureModelCatalogSource,
   hostProfileRegistry,
+  LanguageModelLayers,
   runtimeHostContext,
   testSqliteStorage,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   defineExtension,

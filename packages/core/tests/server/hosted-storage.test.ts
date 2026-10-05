@@ -45,12 +45,14 @@ import {
   SqliteStorage,
 } from "../../src/storage/storage"
 import { StorageInitLive } from "../../src/storage/schema"
-import { createE2ELayer, createRpcClient, testAgent } from "../../src/test-utils/harness"
 import {
+  createE2ELayer,
+  createRpcClient,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  testAgent,
   waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/test-utils/harness"
 import { finishPart, textDeltaPart, textStep, toolCallStep } from "../../src/runtime/provider"
 import {
   asDurableObjectStorage,

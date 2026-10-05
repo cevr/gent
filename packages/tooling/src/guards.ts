@@ -2448,7 +2448,7 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 /**
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, the root
- * `NORTH_STAR.md` and `PRIOR_ARTS.md` the architecture loop reads, a package's
+ * `NORTH_STAR.md` and `PRIOR_ART.md` the architecture loop reads, a package's
  * own `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
  * dependency patch notes in `patches/README.md`, and the skills gent ships to its own model under
@@ -2457,7 +2457,7 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ARTS)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ART)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 

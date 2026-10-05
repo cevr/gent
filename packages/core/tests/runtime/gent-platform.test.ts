@@ -12,7 +12,7 @@ import {
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner"
 import { homedir, tmpdir } from "node:os"
-import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
+import { makeTempDirectoryScoped } from "../../src/test-utils/harness"
 
 /**
  * Locks the GentPlatform service contract end-to-end.

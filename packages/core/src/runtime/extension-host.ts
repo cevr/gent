@@ -1,7 +1,6 @@
 import { chainCompactors, ModelContextCompactor } from "./model-context.js"
 import {
   Cause,
-  Clock,
   Context,
   Crypto,
   DateTime,
@@ -42,14 +41,13 @@ import {
   type ExtensionSetupServices,
   type ExtensionExtensionsService,
   type ExtensionStateFacet,
-  type ExtensionStatusInfo,
   type DisabledExtension,
   ExtensionStatus,
   type TurnNotice,
   type TurnProjection,
   type TurnProjectionInput,
   type FailedExtension,
-  type FailedExtensionPhase,
+  type ExtensionStatusPhase,
   FileLockService,
   type GentExtension,
   isClientFile,
@@ -127,7 +125,8 @@ import {
   type ConfigLoadError,
   ConfigService,
   configSnapshotFileSystem,
-  fileVersion,
+  fileStamp,
+  RACY_STAMP,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   hasProjectScope,
@@ -745,7 +744,7 @@ interface ResolvedExtensions {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly disabledExtensions: ReadonlyArray<DisabledExtension>
-  readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
+  readonly extensionStatuses: ReadonlyArray<ExtensionStatus>
 }
 
 interface RegisteredToolEntry {
@@ -941,38 +940,28 @@ const compileRpcRegistry = (
   }),
 })
 
-const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatusInfo => ({
-  manifest: extension.manifest,
+/** An extension's identity as its status names it. */
+const statusIdentity = (extension: DisabledExtension) => ({
+  id: extension.manifest.id,
   scope: extension.scope,
   sourcePath: extension.sourcePath,
-  ...omitUndefined({ version: extension.version, reloadFailed: extension.reloadFailed }),
-  status: "active",
 })
 
-const failedExtensionStatus = (failure: FailedExtension): ExtensionStatusInfo => ({
-  ...failure,
-  status: "failed",
-})
-
-const disabledExtensionStatus = (disabled: DisabledExtension): ExtensionStatusInfo => ({
-  manifest: disabled.manifest,
-  scope: disabled.scope,
-  sourcePath: disabled.sourcePath,
-  status: "disabled",
-})
-
-/** A health status as the `Extensions` facet reports it. */
-const extensionStatusOf = (info: ExtensionStatusInfo): ExtensionStatus => {
-  const identity = { id: info.manifest.id, scope: info.scope, sourcePath: info.sourcePath }
-  if (info.status === "failed") {
-    return ExtensionStatus.cases.Failed.make({ ...identity, phase: info.phase, error: info.error })
-  }
-  if (info.status === "disabled") return ExtensionStatus.cases.Disabled.make(identity)
-  return ExtensionStatus.cases.Active.make({
-    ...identity,
-    ...omitUndefined({ version: info.version, reloadFailed: info.reloadFailed }),
+const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Active.make({
+    ...statusIdentity(extension),
+    ...omitUndefined({ version: extension.version, reloadFailed: extension.reloadFailed }),
   })
-}
+
+const failedExtensionStatus = (failure: FailedExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Failed.make({
+    ...statusIdentity(failure),
+    phase: failure.phase,
+    error: failure.error,
+  })
+
+const disabledExtensionStatus = (disabled: DisabledExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Disabled.make(statusIdentity(disabled))
 
 const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = Option.fromUndefinedOr(cap.slash)
@@ -1058,7 +1047,7 @@ export const resolveExtensions = (
   const slashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionHooks = compileExtensionHooks(sorted)
-  const extensionStatuses: ExtensionStatusInfo[] = [
+  const extensionStatuses: ExtensionStatus[] = [
     ...sorted.map(activeExtensionStatus),
     ...mergedFailures.map(failedExtensionStatus),
     ...disabledExtensions.map(disabledExtensionStatus),
@@ -1515,45 +1504,21 @@ interface ModuleBuilder<R> {
 }
 
 /**
- * How old a file's mtime must be before its stat stamp is trusted: the
- * racy-git rule (git's `Documentation/technical/racy-git.adoc`), where an
- * entry not older than the index that recorded it is compared by content.
- *
- * A file's clock ticks coarser than the millisecond of its stamp, and an
- * in-place save sets the mtime before it copies the bytes. A stat in that
- * tick can see the new stamp over the old bytes, and a save that ends in the
- * same tick keeps that stamp. So a stamp whose mtime is within one tick of
- * the stat is kept as `RACY_STAMP`, which no stat matches, and the bytes
- * decide. The tick is the coarsest clock a user's extensions can sit on:
- * the kernel's coarse clock on Linux before multigrain timestamps (4 ms at
- * `HZ=250`, 10 ms at `HZ=100`), one second on HFS+ and two on FAT. Two
- * seconds covers all of them; an mtime in the future (a skewed network
- * clock) is always racy. A save costs a hash of its entry's inputs on each
- * load within those two seconds, never a build.
- */
-const RACY_STAMP_MILLIS = 2_000
-const RACY_STAMP = "racy"
-
-/**
- * Each file's stat stamp (`fileVersion`, or `missing` when it is gone):
- * `seen` to compare with a kept stamp, `kept` to keep, with each stamp too
- * recent to trust as `RACY_STAMP`.
+ * Each file's stat stamp (`fileStamp`): `seen` to compare with a kept
+ * stamp, `kept` to keep, with each stamp too recent to trust as
+ * `RACY_STAMP`. A save costs a hash of its entry's inputs on each load
+ * within one tick of the file clock, never a build.
  */
 const statAll = Effect.fn("ExtensionLoader.statInputs")(function* (
   fs: FileSystem.FileSystem,
   files: Iterable<string>,
 ) {
-  const now = yield* Clock.currentTimeMillis
   const seen = new Map<string, string>()
   const kept = new Map<string, string>()
   for (const input of files) {
-    const info = yield* fs.stat(input).pipe(Effect.option)
-    const stamp = Option.match(info, { onNone: () => "missing", onSome: fileVersion })
-    const racy = Option.flatMap(info, (found) => found.mtime).pipe(
-      Option.filter((mtime) => mtime.getTime() > now - RACY_STAMP_MILLIS),
-    )
-    seen.set(input, stamp)
-    kept.set(input, Option.match(racy, { onNone: () => stamp, onSome: () => RACY_STAMP }))
+    const stamp = yield* fileStamp(fs, input)
+    seen.set(input, stamp.seen)
+    kept.set(input, stamp.kept)
   }
   return { seen, kept }
 })
@@ -2182,7 +2147,7 @@ const toFailedExtension = (
     scope: LoadedExtension["scope"]
     sourcePath: string
   },
-  phase: FailedExtensionPhase,
+  phase: ExtensionStatusPhase,
   error: string,
 ): FailedExtension => ({
   manifest: ext.manifest,
@@ -3909,9 +3874,7 @@ export const makeExtensionHostContextProvider = (
                 Effect.provideService(Path.Path, path),
                 Effect.provideService(RuntimeEnvironment, environment),
               )
-              return [...profile.resolved.extensionStatuses, ...configStatuses].map(
-                extensionStatusOf,
-              )
+              return [...profile.resolved.extensionStatuses, ...configStatuses]
             }).pipe(Effect.scoped),
           ),
         ),

@@ -97,7 +97,7 @@ updates this list in the same commit.
     its EXIF orientation turns is stored turned), and a colour profile an
     encode carries at more than a quarter of the byte limit is left out of
     that encode, so only undecodable bytes fail
-    (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    (the prior art's settled entry "Tool image scaling" holds why). Receipts:
     A cell result carries the images its code shows, through the same
     projection (see the cell section). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
@@ -515,7 +515,10 @@ an edit builds again (about 10 ms; the first build of a process about 70 ms).
 An in-place save sets the mtime before it copies the bytes, so a stamp whose
 mtime is within one tick of the file clock (`RACY_STAMP_MILLIS`, two seconds
 for FAT and HFS+) is kept as racy and the bytes decide, in a load and in the
-client's stale check alike (git's racy-git rule).
+client's stale check alike (git's racy-git rule). The config read cache keeps
+its stamps the same way: one owner, `fileStamp` in
+`packages/core/src/runtime/config.ts`, so a config file saved within that tick
+is read again until the save ages.
 A build is kept only when it is coherent: it read the inputs whose stats and
 bytes were taken before it, and their stats and bytes after it are the same, so
 a save during a build is never kept as the new version, even one that puts the
@@ -2025,7 +2028,7 @@ oldest images, so one cell never makes a request drop the images it just
 sent. A failed cell carries none. Prime Agent and Codex's `exec` code mode
 take an explicit helper (`attach_image`, `image(...)`) because their display
 is text; opencode's code mode sends every image a nested call returns
-(`PRIOR_ARTS.md`).
+(`PRIOR_ART.md`).
 
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
@@ -2813,6 +2816,8 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 - **Generic providers** — a models.dev provider that no driver covers (by id or `catalogProvider`), that `disabledProviders` does not name, and whose models some class speaks with tool calling is served with no driver (`runtime/provider.ts`, generic providers section). It is active when it has a stored key, a key env variable from its `env` list, or a config entry; only active providers list their models and show in `/auth`, and the `/auth` search (`auth.listCatalogProviders`) finds the rest. Its sign-in is one API key method; each `${VAR}` in its base URL becomes a prompt, answered from the stored metadata, else the env variable, else a `ProviderAuthError` naming the variable. A variable that begins the URL (Neon's `${NEON_AI_GATEWAY_BASE_URL}/v1`) holds the origin: an absolute https URL with no user, password, query or fragment (no `?` or `#` at all, since URL parsing reads a bare one as empty), kept as typed. Any other variable fills one host label or path segment, percent-encoded and never `.` or `..`, so its value cannot move the key to a host or path the catalog and the user did not type; a filled URL that does not parse, or names a user, fails. The sign-in (`storeSignIn`) applies the same rule (`filledBaseUrl`) to the answers it would store and refuses them with the turn's message; a variable with no answer and no env variable is left to the listing's `missing`. Config `providers.<id>` patches or adds a catalog provider: `name`, `api`, `env`, `headers` (sent on every request), `class` (forces the class) and `models.<id>` (merged field by field into the entry). The registry reads the config fresh on each call (`ExtensionRegistryService.providerConfig`). A generic provider is not a driver: `driver.set` does not take it, and its failures have no owning extension in health.
 - **Driver** — the `modelDriver` domain takes a `ModelDriverContribution`: the adapter of one models.dev provider (`catalogProvider`, else its id), naming only what models.dev lacks — auth, an `endpoint`, `overrides` where models.dev is wrong (each with a receipt: Claude Sonnet 4.5's window is 200k, `anthropic.ts`; `gpt-6.1-sol` accepts the `none` effort, `openai.ts`), `aliases` for model names it shipped before models.dev named the model (core resolves one, for a turn's model metadata and its dispatch alike and for `models.decide`, as the name it stands for, through one function, `currentModelName` in `runtime/provider.ts`; lists show only the current names; an alias that equals a name the driver's catalog view lists is ignored, so the real model wins) — and keeping `listModels` or `resolveModel` only when its requests need more than an endpoint (an OAuth reply rewrite, or a model its catalog provider does not list). With no `listModels`, core lists the provider's models a class speaks; with an `endpoint` and no `resolveModel`, core composes the entry, the class and the endpoint. A decision model of the catalog provider runs no turn on either path. The OpenCode driver (`packages/extensions/src/opencode.ts`, ids `opencode` for Zen and `opencode-go` for Go) serves each model on the class its entry names (OpenAI Responses, Anthropic Messages or Chat Completions). The Cloudflare driver (`packages/extensions/src/cloudflare.ts`, id `cloudflare`) sends Chat Completions to Cloudflare's REST API at `https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1` with one Cloudflare API token (`CLOUDFLARE_API_TOKEN` or the stored key); its sign-in asks the account id and an optional AI Gateway id (prompts, env `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_GATEWAY_ID`), and a set gateway id goes on every request as `cf-aig-gateway-id`. It takes a model id as given (`@cf/...` Workers AI models, `author/model` gateway models), reading the models.dev `cloudflare-workers-ai` entry, else the `cloudflare-ai-gateway` entry, for the model's facts, and lists the models.dev `cloudflare-workers-ai` models under its own id, then its Clef classifier models from the models.dev decision list (`cloudflare/@cf/cloudflare/clef`, `cloudflare/@cf/cloudflare/clef-flash`, decision only: chat refuses them; the ids it shipped before, `cloudflare/clef` and `cloudflare/clef-flash`, are aliases of them); a missing account id fails naming `CLOUDFLARE_ACCOUNT_ID` and `/auth`. Every Responses request (the OpenAI driver on both sign-ins, and OpenCode's Responses models) asks for low text verbosity on a model that takes one, as Codex and opencode do (`takesLowVerbosity`, `packages/extensions/src/providers.ts`). A driver may use another driver's sign-in (`credentialFrom`, one hop): core hands it the owner's stored credential, `/auth` lists one row for both and hides the sharer's own methods, and signing out removes the owner's key and any key stored under the sharing driver's own id, which also serves both while the owner has none. A driver naming a sharing driver (a chain or a cycle), or one the profile lacks, keeps its own sign-in. Each driver still falls back to its own env variable, and a row is ready from env only when every driver that needs it has its variable set (`runtime/provider.ts`, shared sign-in section). OpenCode is one sign-in, "OpenCode", stored under `opencode`: one key serves Zen, Go and Go Plus, so the Go driver names `credentialFrom: "opencode"`, keeping its own key method for a profile without Zen; the two catalogs and their model ids stay apart. An API sign-in method may ask `prompts` after the key (`AuthPrompt`: `key`, `label`, `placeholder`, `env`, `optional`), such as an account id: `/auth` asks each in turn on the key line (Esc steps back one field) and `auth.setKey` stores the answers with the key in one record (`metadata`, an additive optional field of the stored `Api` credential and of `ProviderAuthInfo.Api`). `auth.listMethods` leaves out a prompt whose `env` variable is set, and the driver reads the variable when the stored key has no answer. A driver's API methods are alternatives, and a stored key does not name its method: a credential (stored or from env) is ready when one API method has an answer or a set variable for each prompt that is not `optional`. Otherwise it is not ready: `auth.listProviders` reports `hasKey: false` with the unanswered prompt labels of the closest method in `missing`, and `/auth` draws the row as `[api] needs Account ID` (Cloudflare's gateway prompt is `optional`). An agent's `driver` (or a `driverOverrides` config entry) names a model driver; a stored override that names a removed external (ACP) driver decodes as no override and logs one warning per config file. See `packages/core/src/domain/driver.ts`, `domain/agent.ts`, and `runtime/extension-host.ts`.
 
+- **Credential slots** — auth keeps the legacy default file/body unchanged and stores named labels under `.slots/<encoded-provider>/<label>` (runtime/provider.ts). CredentialSlot is a constrained nonsecret label (domain/driver.ts); omitted slots mean default. All labels share the existing provider semaphore and cross-process lock. One-hop credential owners and legacy aliases are looked up per label; a refresh closes over the physical key and label, and sign-out removes only that label through aliases. providers.<id>.authOrder is optional, nonempty and distinct; conflicting alias orders fail at the provider boundary. This checkpoint validates orders but does not activate automatic recovery. RPC authorization holds its original method-provider, credential owner, label, inputs and persistence closure through its profile lease; missing leases fail closed. OAuth methods can ask provider-owned prompts. AuthMethod.credentialTarget optionally limits a method to default or named credentials; omission preserves either target. The authorization owner checks the immutable label, and the current default /auth picker filters indexed choices without changing their original RPC positions. Anthropic's named directory import reads only the explicit absolute directory's .credentials.json and stores a one-time Gent-owned copy; later Claude Code rotation can require reimport. Its named refresh uses the selected store entry and direct OAuth only, never a primary keychain/source reread or the legacy paid CLI refresh. The default Claude Code path retains that legacy behavior. Existing profile-local Anthropic/OpenAI credential cells and OpenAI account-bound reasoning state are partitioned by label. Same-label replacement publishes the owned cell exactly once after successful persistence, under the same raw-write commit mask; source and cell/provider/SQLite acquisition retain caller interruption status. The optional publication effect is bounded cell state only, never I/O or reentrant auth. Unsupported named OAuth cannot become an ambient API key in an API-only owner; default/omitted environment behavior remains. Auth summaries expose labels, auth type, source and availability, never token or directory data. Receipts: core/tests/runtime/provider.test.ts, core/tests/server/rpc.test.ts and extensions/tests/{anthropic,openai}.test.ts.
+
 Other notes:
 
 - Each tool call reads the stop of its turn (`CurrentTurnStop`, exported by
@@ -3006,9 +3011,9 @@ tests/
 ├── extensions/    # api
 ├── helpers/       # agent-loop (the actor test root), test-preset
 ├── runtime/       # agent-loop, config, extension-host, model-context, provider, session, tools, turn, ...
-├── server/        # rpc, server, workspace-rpc
+├── server/        # interaction, rpc, server, workspace-rpc
 ├── storage/       # schema, storage
-└── test-utils/    # index, language-model
+└── test-utils/    # index (the harness entry and its scripted models)
 ```
 
 One test file per source file. No god tests. Names match source owners.
@@ -3030,8 +3035,10 @@ One test file per source file. No god tests. Names match source owners.
   `createRpcHarness`, the thin RPC acceptance helper that chains
   `createE2ELayer` → `createRpcClient` (the in-process RPC client,
   `makeInProcessClient` in `packages/core/src/server/server.ts`) → seeded
-  `session.create`
-- `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
+  `session.create`. The same file holds `LanguageModelLayers` (`debug`, `sequence`,
+  `signal`, `failing`), `waitFor` and the temp-directory, port and
+  worker-environment fixtures; the step and stream-part helpers live in
+  `packages/core/src/runtime/provider.ts`.
 - `apps/tui/tests/render-harness-boundary.tsx` — TUI render test harness
 
 ## Interaction Tools Extension
