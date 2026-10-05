@@ -24,8 +24,15 @@ import {
   InteractionDecisionConflictError,
   InteractionRequestMismatchError,
 } from "../domain/interaction.js"
-import { AuthMetadata, AuthMethod, DriverError, ProviderAuthError } from "../domain/driver.js"
+import {
+  AuthMetadata,
+  AuthMethod,
+  CredentialSlot,
+  DriverError,
+  ProviderAuthError,
+} from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
+import { ExtensionScope, ExtensionStatusPhase } from "../domain/extension.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
@@ -264,6 +271,7 @@ export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
  * nothing. `metadata` holds the answers to the method's prompts, kept beside the key.
  */
 export const SetAuthKeyInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
   provider: Schema.String,
   key: Schema.String,
   metadata: Schema.optional(AuthMetadata),
@@ -276,6 +284,7 @@ export type SetAuthKeyInput = typeof SetAuthKeyInput.Type
  * not exist fails and removes nothing.
  */
 export const DeleteAuthKeyInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
   provider: Schema.String,
   sessionId: SessionId,
 })
@@ -298,6 +307,8 @@ const ListCatalogProvidersSuccess = Schema.Struct({
 })
 
 export const AuthorizeAuthInput = Schema.Struct({
+  slot: Schema.optional(CredentialSlot),
+  inputs: Schema.optional(AuthMetadata),
   sessionId: SessionId,
   provider: Schema.String,
   method: Schema.Finite,
@@ -363,12 +374,7 @@ export const ExtensionStatusScope = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionStatusScope = typeof ExtensionStatusScope.Type
 
-const ExtensionActivationPhase = Schema.Literals(["load", "setup", "validation", "startup"])
-
-const ExtensionManifestInfo = Schema.Struct({
-  id: Schema.String,
-  version: Schema.optional(Schema.String),
-})
+const ExtensionManifestInfo = Schema.Struct({ id: Schema.String })
 
 export const ExtensionHealthIssue = Schema.Union([
   /**
@@ -378,7 +384,7 @@ export const ExtensionHealthIssue = Schema.Union([
    * failed activation, which is true of the new version.
    */
   Schema.TaggedStruct("ActivationFailed", {
-    phase: ExtensionActivationPhase,
+    phase: ExtensionStatusPhase,
     error: Schema.String,
     runningVersion: Schema.optional(Schema.String),
   }),
@@ -392,7 +398,7 @@ export type ExtensionHealthIssue = Schema.Schema.Type<typeof ExtensionHealthIssu
 
 const ExtensionHealthIdentityFields = {
   manifest: ExtensionManifestInfo,
-  scope: Schema.Literals(["builtin", "user", "project"]),
+  scope: ExtensionScope,
   sourcePath: Schema.String,
 }
 

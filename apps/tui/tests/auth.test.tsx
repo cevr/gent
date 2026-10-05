@@ -7,6 +7,7 @@ import {
   type AuthAuthorization,
   type AuthMethod,
   type AuthProviderInfo,
+  type GentNamespacedClient,
   ProviderId,
   SessionId,
 } from "@gent/core/protocol"
@@ -715,6 +716,76 @@ describe("Auth route", () => {
       const searched = yield* waitForFrame(setup, (frame) => frame.includes("No matches"))
       expect(searched).not.toContain("Loading…")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "default method choices hide named imports and Up wrap still selects the API key",
+    () =>
+      Effect.gen(function* () {
+        const client = createMockClient({
+          auth: {
+            listProviders: () => Effect.succeed([provider]),
+            listMethods: () =>
+              Effect.succeed({
+                anthropic: [
+                  { type: "oauth", label: "Primary login", credentialTarget: "default" },
+                  { type: "api", label: "Manual API key" },
+                  { type: "oauth", label: "Named import", credentialTarget: "named" },
+                ],
+              }),
+          },
+        })
+        const setup = yield* renderScoped(
+          () => <Auth sessionId={activeSessionId} enforceAuth={true} />,
+          { client },
+        )
+        const frame = yield* waitForFrame(
+          setup,
+          (frame) => frame.includes("Primary login") && frame.includes("Manual API key"),
+        )
+        expect(frame).not.toContain("Named import")
+        setup.mockInput.pressArrow("up")
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        const key = yield* waitForFrame(setup, (frame) =>
+          frame.includes("Sign in · anthropic · API key"),
+        )
+        expect(key).toContain("API key")
+      }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("filtered method choices authorize with the original provider index", () =>
+    Effect.gen(function* () {
+      const called: number[] = []
+      let ready = false
+      const client = createMockClient({
+        auth: {
+          listProviders: () => Effect.succeed([{ ...provider, hasKey: ready }]),
+          listMethods: () =>
+            Effect.succeed({
+              anthropic: [
+                { type: "oauth", label: "Hidden named login", credentialTarget: "named" },
+                { type: "oauth", label: "Default login", credentialTarget: "default" },
+              ],
+            }),
+          authorize: (input: Parameters<GentNamespacedClient["auth"]["authorize"]>[0]) =>
+            Effect.sync(() => {
+              called.push(input.method)
+              ready = true
+              return { authorizationId: "indexed-login", url: "", method: "done" as const }
+            }),
+        },
+      })
+      const setup = yield* renderScoped(
+        () => <Auth sessionId={activeSessionId} enforceAuth={true} />,
+        { client },
+      )
+      const frame = yield* waitForFrame(setup, (frame) => frame.includes("Default login"))
+      expect(frame).not.toContain("Hidden named login")
+      setup.mockInput.pressEnter()
+      yield* waitUntil(() => called.length > 0, "the default login starts")
+      expect(called).toEqual([1])
+    }).pipe(Effect.timeout("8 seconds")),
   )
   it.scopedLive("the key field ignores super and hyper keys and erases as the composer does", () =>
     Effect.gen(function* () {

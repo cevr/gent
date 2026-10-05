@@ -34,6 +34,9 @@ import {
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
+  DEFAULT_CREDENTIAL_SLOT,
+  type UpdateStoredOAuth,
+  type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
   acceptedEfforts,
@@ -51,6 +54,8 @@ import {
   catalogModels,
   type CredentialCache,
   CredentialCacheCell,
+  credentialCells,
+  replaceHeldCredential,
   type CredentialCacheCellRef,
   type CredentialFailure,
   checkCredentials,
@@ -879,9 +884,9 @@ const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
  * `ProviderAuthError`. The caller falls back to `claude -p . --model haiku`
  * (which triggers the CLI's own refresh logic) when the direct refresh fails.
  */
-const refreshViaOAuth = (
+const refreshViaOAuthClient = (
   refreshToken: string,
-): Effect.Effect<ClaudeCredentials, CredentialFailure> =>
+): Effect.Effect<ClaudeCredentials, CredentialFailure, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const response = yield* postOAuthForm(OAUTH_TOKEN_URL, {
       grant_type: "refresh_token",
@@ -914,7 +919,13 @@ const refreshViaOAuth = (
       })
     }
     return creds.value
-  }).pipe(
+  })
+
+/** Legacy primary source retains its existing HTTP boundary. */
+const refreshViaOAuth = (
+  refreshToken: string,
+): Effect.Effect<ClaudeCredentials, CredentialFailure> =>
+  refreshViaOAuthClient(refreshToken).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.
     Effect.provide(FetchHttpClient.layer),
   )
@@ -1173,6 +1184,107 @@ export const makeAnthropicCredentialCache = (
     })
     return cache
   })
+
+/** Named imports belong to Gent, never to the primary external source. */
+const buildNamedCredentialCache = (
+  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  update: UpdateStoredOAuth,
+  services: AnthropicDriverServices,
+) =>
+  makeCredentialCache<ClaudeCredentials>({
+    label: "Imported Claude Code",
+    credentials: ClaudeCredentials,
+    cellRef,
+    expiresAt: (creds) => creds.expiresAt,
+    refresh: (held) =>
+      Effect.gen(function* () {
+        if (Option.isNone(held) || held.value.refreshToken === "") {
+          return yield* new ProviderAuthError({
+            message: "Imported Claude Code credential unavailable; import it again",
+          })
+        }
+        const client = Context.getOption(services, HttpClient.HttpClient)
+        return yield* Option.match(client, {
+          onNone: () => refreshViaOAuth(held.value.refreshToken),
+          onSome: (http) =>
+            refreshViaOAuthClient(held.value.refreshToken).pipe(
+              Effect.provideService(HttpClient.HttpClient, http),
+            ),
+        }).pipe(
+          Effect.catchTags({
+            ProviderAuthError: () =>
+              Effect.fail(
+                new ProviderAuthError({
+                  message: "Imported Claude Code credential rejected; import it again",
+                }),
+              ),
+            CredentialRefreshUnavailable: () =>
+              Effect.fail(
+                new CredentialRefreshUnavailable({
+                  message: "Imported Claude Code credential refresh unavailable; retry later",
+                }),
+              ),
+          }),
+        )
+      }),
+    read: Option.none(),
+    store: Option.some({
+      update: <A, E>(
+        f: (
+          stored: Option.Option<ClaudeCredentials>,
+        ) => Effect.Effect<readonly [A, Option.Option<ClaudeCredentials>], E>,
+      ) =>
+        update((stored) =>
+          Effect.map(
+            f(
+              Option.map(stored, (value) => ({
+                accessToken: value.access,
+                refreshToken: value.refresh,
+                expiresAt: value.expires,
+              })),
+            ),
+            (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+              pair[0],
+              Option.map(pair[1], (value) => ({
+                access: value.accessToken,
+                refresh: value.refreshToken,
+                expires: value.expiresAt,
+              })),
+            ],
+          ),
+        ),
+      same: (a, b) => a.refreshToken === b.refreshToken,
+    }),
+  })
+
+/** Explicit directory import never falls back to a keychain or another home. */
+const readImportedCredentials = (
+  directory: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    if (!path.isAbsolute(directory))
+      return yield* new ProviderAuthError({
+        message: "Claude Code import needs an absolute directory",
+      })
+    const fs = yield* FileSystem.FileSystem
+    const raw = yield* fs.readFileString(path.join(directory, ".credentials.json")).pipe(
+      Effect.mapError(
+        () =>
+          new ProviderAuthError({
+            message: "Claude Code import source unavailable; choose a directory with a login",
+          }),
+      ),
+    )
+    return yield* decodeCredentials(raw).pipe(
+      Effect.mapError(
+        () =>
+          new ProviderAuthError({
+            message: "Claude Code import source invalid; sign in there again",
+          }),
+      ),
+    )
+  }).pipe(credentialFileDeadline)
 
 // ── keychain client ─────────────────────────────────────────────────────────
 
@@ -2859,155 +2971,214 @@ export const buildAnthropicModelDriver = (
   envApiKey: Option.Option<string>,
   services: AnthropicDriverServices,
   promptCacheTtl: PromptCacheTtl,
-): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => ({
-  id: "anthropic",
-  name: "Anthropic",
-  envCredential: "ANTHROPIC_API_KEY",
-  overrides: ANTHROPIC_OVERRIDES,
-  // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
-  listModels: (catalog) =>
-    Effect.succeed(
-      catalogModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl], MESSAGES_CLASS),
-    ).pipe(
-      Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
-      Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
-    ),
-  cacheWritesByLifetime: anthropicCacheWritesByLifetime,
-  // A model the Claude API takes effort markers on carries a change of level
-  // inside the conversation, where every run of the history plans the same thinking.
-  // The request must keep the previous one's prefix: the same top-level
-  // effort, and the same markers up to the reply it asks for.
-  carriesEffort: (modelName, hints, catalog) => {
-    const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
-    const carrier = (planned: Option.Option<ProviderHints>) =>
-      messagesEffortCarrier(entry, planned, anthropicRequestPlan(entry, planned), "claude-api")
-    return keepsEffortPrefix(hints, (planned) => ({
-      current: messagesEffort(entry, planned),
-      carrier: carrier(planned),
-    }))
-  },
-  retry: {
-    ...DEFAULT_RETRY_POLICY,
-    transientStreamEvent: MessagesTransientStreamEvent,
-    retryAt: anthropicRetryAt,
-  },
-  resolveModel: (modelName, authInfo, hints, catalog) =>
-    Effect.gen(function* () {
-      const auth = Option.fromNullishOr(authInfo)
-      const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
-      const request = anthropicRequest(
-        entry,
-        Option.fromNullishOr(hints),
-        promptCacheTtl,
-        "claude-api",
-      )
-
-      // Precedence, the same as OpenAI: stored Claude Code sign-in, then
-      // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
-      // Code in /auth is not billed on a shell API key.
-      if (Option.isSome(auth) && auth.value._tag === "Oauth") {
-        // The credential cache is built over the extension-closure-owned
-        // cell, so credential reuse survives. The credentials are checked before the
-        // layer exists, so an expired sign-in fails with its own message.
-        const creds = yield* buildLiveCredentialCache(credentialCellRef, services)
-        yield* checkCredentials(creds)
-        return AiModel.make(
-          "anthropic",
-          modelName,
-          makeOauthAnthropicLayer(yield* loadAnthropicSdk, modelName, request, creds, services),
-        )
-      }
-
-      const apiKey = apiKeyFrom(auth, envApiKey)
-      if (Option.isSome(apiKey)) {
-        return AiModel.make(
-          "anthropic",
-          modelName,
-          makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, {
-            apiKey,
-            baseUrl: Option.none(),
-            transformClient: Option.none(),
-          }),
-        )
-      }
-
-      // Fail closed: no stored sign-in, no stored API key, no env var.
-      return yield* new ProviderAuthError({
-        message:
-          "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
-      })
-    }),
-  auth: {
-    methods: [
-      AuthMethod.make({ type: "oauth", label: "Claude Code" }),
-      AuthMethod.make({ type: "api", label: "Manually enter API key" }),
-    ],
-    authorize: (ctx) =>
-      Effect.gen(function* () {
-        if (ctx.methodIndex !== 0) return Option.none()
-        // The cell owns sign-in and refresh together. A spent token's rotation
-        // reaches the cell before cancellation or a persistence failure surfaces.
-        return yield* Effect.uninterruptibleMask((restore) =>
-          SynchronizedRef.modifyEffect(credentialCellRef, () =>
-            Effect.gen(function* () {
-              let creds = yield* restore(readClaudeCodeCredentials)
-              const now = yield* Clock.currentTimeMillis
-              if (!freshEnoughAt(creds.expiresAt, now)) {
-                creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
-                  Effect.mapError((cause) => {
-                    if (cause._tag === "ProviderAuthError") return cause
-                    return new ProviderAuthError({ message: cause.message, cause })
-                  }),
-                )
-              }
-              const persisted = yield* Effect.exit(
-                ctx
-                  .persist({
-                    type: "oauth",
-                    access: creds.accessToken,
-                    refresh: creds.refreshToken,
-                    expires: creds.expiresAt,
-                  })
-                  .pipe(
-                    Effect.timeoutOrElse({
-                      duration: Duration.seconds(5),
-                      orElse: () =>
-                        new ProviderAuthError({ message: "Anthropic auth persistence timed out" }),
-                    }),
-                  ),
-              )
-              const at = yield* Clock.currentTimeMillis
-              return [
-                persisted.pipe(
-                  Effect.as(
-                    Option.some({ url: "", method: "done" } satisfies ProviderAuthorizationResult),
-                  ),
-                ),
-                CredentialCacheCell(ClaudeCredentials).cases.Durable.make({
-                  creds,
-                  at,
-                  invalidated: false,
-                }),
-              ] as const
-            }),
-          ),
-        ).pipe(Effect.flatten)
-      }).pipe(
-        Effect.catchDefect((cause) =>
-          Effect.fail(
-            new ProviderAuthError({
-              message: `Anthropic authorization failed: ${Option.match(
-                Schema.decodeUnknownOption(Schema.instanceOf(Error))(cause),
-                { onNone: () => String(cause), onSome: (error) => error.message },
-              )}`,
-              cause,
-            }),
-          ),
-        ),
-        Effect.provideContext(services),
+): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
+  const cellFor = credentialCells(credentialCellRef)
+  return {
+    id: "anthropic",
+    name: "Anthropic",
+    envCredential: "ANTHROPIC_API_KEY",
+    overrides: ANTHROPIC_OVERRIDES,
+    // The lifetimes the markers ask for, a root's and a child's, and the write price; see `PromptCacheTtl`.
+    listModels: (catalog) =>
+      Effect.succeed(
+        catalogModels(catalog, "anthropic", PROMPT_CACHE_LIFETIME[promptCacheTtl], MESSAGES_CLASS),
+      ).pipe(
+        Effect.map(withChildPromptCacheLifetime(promptCacheTtl)),
+        Effect.map(withPromptCacheWritePrice(promptCacheTtl)),
       ),
-  },
-})
+    cacheWritesByLifetime: anthropicCacheWritesByLifetime,
+    // A model the Claude API takes effort markers on carries a change of level
+    // inside the conversation, where every run of the history plans the same thinking.
+    // The request must keep the previous one's prefix: the same top-level
+    // effort, and the same markers up to the reply it asks for.
+    carriesEffort: (modelName, hints, catalog) => {
+      const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
+      const carrier = (planned: Option.Option<ProviderHints>) =>
+        messagesEffortCarrier(entry, planned, anthropicRequestPlan(entry, planned), "claude-api")
+      return keepsEffortPrefix(hints, (planned) => ({
+        current: messagesEffort(entry, planned),
+        carrier: carrier(planned),
+      }))
+    },
+    retry: {
+      ...DEFAULT_RETRY_POLICY,
+      transientStreamEvent: MessagesTransientStreamEvent,
+      retryAt: anthropicRetryAt,
+    },
+    resolveModel: (modelName, authInfo, hints, catalog) =>
+      Effect.gen(function* () {
+        const auth = Option.fromNullishOr(authInfo)
+        const entry = adapterEntry(Option.fromUndefinedOr(catalog), "anthropic", modelName)
+        const request = anthropicRequest(
+          entry,
+          Option.fromNullishOr(hints),
+          promptCacheTtl,
+          "claude-api",
+        )
+
+        // Precedence, the same as OpenAI: stored Claude Code sign-in, then
+        // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
+        // Code in /auth is not billed on a shell API key.
+        if (Option.isSome(auth) && auth.value._tag === "Oauth") {
+          // The credential cache is built over the extension-closure-owned
+          // cell, so credential reuse survives. The credentials are checked before the
+          // layer exists, so an expired sign-in fails with its own message.
+          const slot = auth.value.slot ?? DEFAULT_CREDENTIAL_SLOT
+          let cacheEffect = buildLiveCredentialCache(cellFor(slot), services)
+          if (slot !== DEFAULT_CREDENTIAL_SLOT) {
+            cacheEffect = buildNamedCredentialCache(cellFor(slot), auth.value.update, services)
+          }
+          const creds = yield* cacheEffect
+          yield* checkCredentials(creds)
+          return AiModel.make(
+            "anthropic",
+            modelName,
+            makeOauthAnthropicLayer(yield* loadAnthropicSdk, modelName, request, creds, services),
+          )
+        }
+
+        const apiKey = apiKeyFrom(auth, envApiKey)
+        if (Option.isSome(apiKey)) {
+          return AiModel.make(
+            "anthropic",
+            modelName,
+            makeApiKeyAnthropicLayer(yield* loadAnthropicSdk, modelName, request, {
+              apiKey,
+              baseUrl: Option.none(),
+              transformClient: Option.none(),
+            }),
+          )
+        }
+
+        // Fail closed: no stored sign-in, no stored API key, no env var.
+        return yield* new ProviderAuthError({
+          message:
+            "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+        })
+      }),
+    auth: {
+      methods: [
+        AuthMethod.make({ type: "oauth", label: "Claude Code", credentialTarget: "default" }),
+        AuthMethod.make({ type: "api", label: "Manually enter API key" }),
+        AuthMethod.make({
+          type: "oauth",
+          label: "Claude Code directory import",
+          credentialTarget: "named",
+          prompts: [{ key: "directory", label: "Absolute Claude Code directory" }],
+        }),
+      ],
+      authorize: (ctx) =>
+        Effect.gen(function* () {
+          const slot = ctx.slot ?? DEFAULT_CREDENTIAL_SLOT
+          if (ctx.methodIndex === 2) {
+            if (slot === DEFAULT_CREDENTIAL_SLOT)
+              return yield* new ProviderAuthError({
+                message: "Directory import needs a named credential slot",
+              })
+            const directory = ctx.inputs?.["directory"]
+            if (Predicate.isUndefined(directory))
+              return yield* new ProviderAuthError({
+                message: "Claude Code import needs an absolute directory",
+              })
+            const creds = yield* readImportedCredentials(directory).pipe(
+              Effect.provideContext(services),
+            )
+            if (!freshEnoughAt(creds.expiresAt, yield* Clock.currentTimeMillis))
+              return yield* new ProviderAuthError({
+                message: "Claude Code import source expired; sign in there again",
+              })
+            yield* replaceHeldCredential(ClaudeCredentials, cellFor(slot), creds, (onPersisted) =>
+              ctx.persist(
+                {
+                  type: "oauth",
+                  access: creds.accessToken,
+                  refresh: creds.refreshToken,
+                  expires: creds.expiresAt,
+                },
+                onPersisted,
+              ),
+            )
+            return Option.some({
+              url: "",
+              method: "done" as const,
+              instructions:
+                "Imported once into Gent. Later Claude Code rotation may require reimport.",
+            })
+          }
+          if (ctx.methodIndex !== 0) return Option.none()
+          if (slot !== DEFAULT_CREDENTIAL_SLOT)
+            return yield* new ProviderAuthError({
+              message: "Named Claude Code credentials require directory import",
+            })
+          // The cell owns sign-in and refresh together. A spent token's rotation
+          // reaches the cell before cancellation or a persistence failure surfaces.
+          return yield* Effect.uninterruptibleMask((restore) =>
+            SynchronizedRef.modifyEffect(credentialCellRef, () =>
+              Effect.gen(function* () {
+                let creds = yield* restore(readClaudeCodeCredentials)
+                const now = yield* Clock.currentTimeMillis
+                if (!freshEnoughAt(creds.expiresAt, now)) {
+                  creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
+                    Effect.mapError((cause) => {
+                      if (cause._tag === "ProviderAuthError") return cause
+                      return new ProviderAuthError({ message: cause.message, cause })
+                    }),
+                  )
+                }
+                const persisted = yield* Effect.exit(
+                  ctx
+                    .persist({
+                      type: "oauth",
+                      access: creds.accessToken,
+                      refresh: creds.refreshToken,
+                      expires: creds.expiresAt,
+                    })
+                    .pipe(
+                      Effect.timeoutOrElse({
+                        duration: Duration.seconds(5),
+                        orElse: () =>
+                          new ProviderAuthError({
+                            message: "Anthropic auth persistence timed out",
+                          }),
+                      }),
+                    ),
+                )
+                const at = yield* Clock.currentTimeMillis
+                return [
+                  persisted.pipe(
+                    Effect.as(
+                      Option.some({
+                        url: "",
+                        method: "done",
+                      } satisfies ProviderAuthorizationResult),
+                    ),
+                  ),
+                  CredentialCacheCell(ClaudeCredentials).cases.Durable.make({
+                    creds,
+                    at,
+                    invalidated: false,
+                  }),
+                ] as const
+              }),
+            ),
+          ).pipe(Effect.flatten)
+        }).pipe(
+          Effect.catchDefect((cause) =>
+            Effect.fail(
+              new ProviderAuthError({
+                message: `Anthropic authorization failed: ${Option.match(
+                  Schema.decodeUnknownOption(Schema.instanceOf(Error))(cause),
+                  { onNone: () => String(cause), onSome: (error) => error.message },
+                )}`,
+                cause,
+              }),
+            ),
+          ),
+          Effect.provideContext(services),
+        ),
+    },
+  }
+}
 
 export const AnthropicExtension = defineExtension({
   id: "@gent/provider-anthropic",
@@ -3036,6 +3207,12 @@ export const AnthropicExtension = defineExtension({
       Context.add(AnthropicPlatform, AnthropicPlatform.fromSetup(ctx, env)),
     )
 
+    const http = yield* Effect.serviceOption(HttpClient.HttpClient)
+    const driverServices = Option.match(http, {
+      onNone: () => services,
+      onSome: (client) => Context.add(services, HttpClient.HttpClient, client),
+    })
+
     // One credential cell per extension instance, allocated at setup, so it
     // survives across `resolveModel` calls until the runtime tears the
     // extension down.
@@ -3044,7 +3221,12 @@ export const AnthropicExtension = defineExtension({
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, envApiKey, services, yield* readPromptCacheTtl),
+      buildAnthropicModelDriver(
+        credentialCellRef,
+        envApiKey,
+        driverServices,
+        yield* readPromptCacheTtl,
+      ),
     )
     yield* ctx.register("apiClass", MESSAGES_CLASS)
   }),

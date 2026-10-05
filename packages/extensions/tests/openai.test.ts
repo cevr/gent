@@ -34,6 +34,7 @@ import {
   ExtensionHost,
   ModelId,
   ProviderAuthError,
+  CredentialSlot,
   ProviderAuthInfo,
   type ProviderHints,
   type ReasoningEffort,
@@ -65,6 +66,7 @@ import {
 } from "./helpers/fake-http-client.js"
 import {
   createRpcHarness,
+  storedCredentialModel,
   fixtureModelCatalog,
   freePort,
   turnNoticesText,
@@ -3589,5 +3591,48 @@ describe("OpenAI reset time", () => {
       })
       expect(retryAt(error, NOW)).toEqual(Option.none())
     }),
+  )
+})
+
+describe("named OpenAI credential cache", () => {
+  it.scopedLive("a warm named slot never serves an expired or missing slot", () =>
+    Effect.gen(function* () {
+      // The builder, its credential cells and reasoning state live across all resolutions.
+      const { driver } = yield* makeDriver()
+      const work = CredentialSlot.make("work")
+      const personal = CredentialSlot.make("personal")
+      const oauth = [
+        {
+          provider: "openai",
+          slot: work,
+          credential: {
+            access: "fake-work",
+            refresh: "fake-work-refresh",
+            expires: (yield* Clock.currentTimeMillis) + 3600000,
+          },
+        },
+        {
+          provider: "openai",
+          slot: personal,
+          credential: { access: "fake-expired", refresh: "", expires: 0 },
+        },
+      ]
+      for (const [slot, success] of [
+        [work, true],
+        [personal, false],
+        [CredentialSlot.make("missing"), false],
+      ] as const) {
+        const model = storedCredentialModel({
+          modelDrivers: [driver],
+          stored: {},
+          oauth,
+          modelId: "openai/gpt-5.4",
+          catalog: fixtureModelCatalog(),
+          credentialSlot: slot,
+        })
+        const result = yield* Effect.exit(Layer.build(model))
+        expect(Exit.isSuccess(result)).toBe(success)
+      }
+    }).pipe(Effect.timeout("8 seconds")),
   )
 })

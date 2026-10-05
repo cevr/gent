@@ -1,6 +1,6 @@
 import type { LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Clock, Duration, Effect, Layer, Option, type Ref, Schema } from "effect"
+import { Duration, Effect, Layer, type Ref } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import {
   AgentLoop as AgentLoopActor,
@@ -24,7 +24,6 @@ import {
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { ToolRunner } from "../../src/runtime/tools"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   dateFromMillis,
   Message,
@@ -42,8 +41,10 @@ import {
   ensureStorageParents,
   fixedSessionProfiles,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
   recordingEventStore,
   testSqliteStorage,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   type BranchId,
@@ -331,64 +332,20 @@ export const makeLayerWithEventStore = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventStoreLayer: Layer.Layer<EventStore>,
 ) => actorTestRoot({ provider: providerLayer, eventStore: eventStoreLayer })
-/** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */
-class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
-  "@gent/core/tests/runtime/agent-loop/AgentLoopTestTimeout",
-  { description: Schema.String, timeoutMs: Schema.Finite },
-) {}
-
-/**
- * Poll `check` until it yields a value, or the deadline passes.
- *
- * Bounded by wall clock rather than a fixed number of attempts: an attempt
- * budget is not a timeout. Under load each iteration takes far longer than the
- * sleep between them, so a 50-attempt budget expires in milliseconds on an idle
- * machine and in seconds on a busy one — which made this helper give up early
- * whenever the suite ran alongside a build.
- *
- * Fails rather than dies, so a timeout surfaces as the failing test's own error
- * instead of escaping as an unhandled defect if the fiber outlives the test.
- */
-export const waitFor = <A, E, R>(
-  check: () => Effect.Effect<Option.Option<A>, E, R>,
-  description: string,
-  timeout: Duration.Input = "5 seconds",
-) =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(timeout)
-    for (;;) {
-      const result = yield* check()
-      if (Option.isSome(result)) return result.value
-      if ((yield* Clock.currentTimeMillis) >= deadline) {
-        return yield* new AgentLoopTestTimeout({
-          description,
-          timeoutMs: Duration.toMillis(timeout),
-        })
-      }
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- polling primitive — this IS the waitFor helper other tests use instead of sleep
-      yield* Effect.sleep("1 millis")
-    }
-  })
-
+/** Poll the loop's state until its phase is `runtimeTag`. */
 export const waitForPhase = (
   agentLoop: AgentLoopService,
   params: {
     sessionId: SessionId
     branchId: BranchId
   },
-  runtimeTag: string,
+  runtimeTag: SessionRuntimeState["_tag"],
   timeout: Duration.Input = "5 seconds",
 ) =>
   waitFor(
-    () =>
-      Effect.gen(function* () {
-        const state = yield* agentLoop.getState(params)
-        if (state._tag === runtimeTag) {
-          return Option.some(state)
-        }
-        return Option.none()
-      }),
+    agentLoop.getState(params),
+    (state) => state._tag === runtimeTag,
+    Duration.toMillis(timeout),
     `runtime state "${runtimeTag}"`,
-    timeout,
   )
 // ============================================================================

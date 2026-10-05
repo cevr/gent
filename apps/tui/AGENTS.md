@@ -136,10 +136,34 @@ extensions): lowercase keys, one `·` separator, Enter `select` on a row and
 narrow row drops the move hint first, then hints from the right, and keeps the
 way out. An ask's footer uses the same line.
 
+The live line (`ActivityRow` in `app.tsx`) reads
+`✻ <phase> (<elapsed>) · esc cancel`; the `✻` pulses on the spinner clock.
+The phase is `Thinking` until answer text streams, then `Generating`; the
+running call's words while one runs (a `cell` reads in its source's verbs,
+`Reading 3 files`, never its code: `runningCallLabel` in `utils.ts`); and
+`Waiting for your answer` while the turn waits on an ask. The count runs from
+the runtime's `startedAtMs` (`SessionControllerState.turn` in `session.tsx`),
+the start the turn's `Worked for` total counts from: a new step, a tool call or
+an ask changes the word, not the count, and the next turn counts from its own
+start. A `!cmd` outside a turn counts from its own start.
+
+Under it sit the reader's waiting entries (`QueueWidget` in `app.tsx`, drawn
+from the controller's `queue`, their one owner), in the reader's lane: one dim
+row each, `┊ next step · <first line>` for a steer and `┊ next turn · <first
+line>` for a follow-up (or the type's `queueLabel`), cut to the width and ending
+` +N lines` for more lines; at most three, then `┊ +N more`; then
+`alt+up edit`, which takes them back into the draft. Only the reader's own
+messages draw (`metadata.fromClient`, the server's client origin): one another
+agent or an extension queued (a child's `Session.send`, a wake) draws nowhere
+while it waits, and `alt+up` (the `queue.drain` RPC) leaves it queued to be
+delivered. None is a transcript row: an entry leaves when it is delivered,
+and the transcript shows it where it lands.
+
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open
-the trays hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame`
-adds to), so the pane the reader opened gets the rows. The footer's blank
+the trays and the waiting entries hide (`TrayFrame` and `QueueWidget` read the
+`DockProvider` count each `PickerFrame` adds to), so the pane the reader
+opened gets the rows. The footer's blank
 rows (above the activity row, above the input, above the status row) and the
 composer's ghost line are dock spacers (`useDockSpacer`): they give way when a
 docked frame is squeezed, and come back only once the footer's free rows
@@ -181,7 +205,7 @@ passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
 not under it.
 
 The split region is a canvas: the footer's base (composer, status row, the
-activity row while it carries content) and the live tail, the transcript's
+activity row and the waiting entries while they carry content) and the live tail, the transcript's
 last rows. OpenTUI draws only the region, and a region that grows at the
 terminal's bottom pushes rows into scrollback that cannot come back, so
 growing UI never grows it: the suggestions and the docked panes cover the
@@ -337,7 +361,7 @@ A group is one run of tool calls across the steps of a turn, as in fx
 (`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
 calls do not end it; answer text, a user message, a session row, or a call
 that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
-does. A queued follow-up and a pending retry end nothing. The run draws at its
+does. A pending retry ends nothing. The run draws at its
 first tool-call segment (its head); the later steps skip the segments it took.
 The reasoning it took draws where it came at the full level only; a closing
 thought from a streamed answer keeps the head waiting for the stored answer. The
@@ -365,7 +389,7 @@ it is, from the metadata alone: a custom type whose
 the reader sent but whose text the model reads is ids), or else a user message
 with the server's client origin (`fromClient`: typed, or a steer that joined
 the running turn). A message another agent or an extension sent (a parent's
-`Session.send`, a wake, a delegate start), a queued follow-up, a hidden message
+`Session.send`, a wake, a delegate start), a hidden message
 and a row stored before the client origin existed are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
 it. The expanded transcript and overlays pin nothing, and the terminal owns

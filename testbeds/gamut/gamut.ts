@@ -878,7 +878,8 @@ const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestE
  */
 const isIdle = (paneText: string, record: RunRecord): boolean => {
   const lines = paneText.split("\n").map((line) => line.trim())
-  const busy = lines.some((line) => / working · /.test(line) || /^Generating\b/.test(line))
+  // The live line (`✻ Thinking`, `✻ Running …`) shows while a turn runs.
+  const busy = lines.some((line) => / working · /.test(line) || /^✻ /.test(line))
   return record.open.length === 0 && !busy
 }
 

@@ -24,6 +24,8 @@ import {
   type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
+  ProviderAuthInfo,
+  CredentialSlot,
   type RunEffort,
 } from "@gent/core/extensions/api"
 import {
@@ -45,6 +47,7 @@ import { TestClock } from "effect/testing"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   catalogModels,
+  apiKeyFrom,
   CHAT_COMPLETIONS_CLASS,
   type CredentialCacheCell,
   type CredentialFailure,
@@ -764,3 +767,32 @@ for (const kind of SOURCES) {
     )
   })
 }
+
+describe("API-only credential selection", () => {
+  test("unsupported named OAuth cannot impersonate the ambient API key", () => {
+    const update = () => Effect.die("the pure API selector must not read OAuth")
+    const named = ProviderAuthInfo.cases.Oauth.make({
+      slot: CredentialSlot.make("personal"),
+      update,
+    })
+    const omitted = ProviderAuthInfo.cases.Oauth.make({ update })
+    const legacy = ProviderAuthInfo.cases.Oauth.make({
+      slot: CredentialSlot.make("default"),
+      update,
+    })
+    const ambient = Option.some("fake-ambient")
+    expect(Option.isNone(apiKeyFrom(Option.some(named), ambient))).toBe(true)
+    for (const auth of [
+      Option.none<ProviderAuthInfo>(),
+      Option.some(omitted),
+      Option.some(legacy),
+    ]) {
+      expect(Option.contains(apiKeyFrom(auth, ambient), "fake-ambient")).toBe(true)
+    }
+    const api = ProviderAuthInfo.cases.Api.make({
+      key: "fake-named",
+      slot: CredentialSlot.make("personal"),
+    })
+    expect(Option.contains(apiKeyFrom(Option.some(api), ambient), "fake-named")).toBe(true)
+  })
+})

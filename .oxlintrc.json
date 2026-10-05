@@ -445,10 +445,7 @@
     {
       // The scripted model numbers the ids of the stream parts and tool calls
       // it builds, so each id is unique in the process; only uniqueness counts.
-      "files": [
-        "packages/core/src/runtime/provider.ts",
-        "packages/core/src/test-utils/language-model.ts"
-      ],
+      "files": ["packages/core/src/runtime/provider.ts"],
       "rules": {
         "effect/noModuleLevelMutableState": "off"
       }

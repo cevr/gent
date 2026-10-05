@@ -11,6 +11,7 @@ gent is a minimal, opinionated agent harness: a lean Effect-native core, one act
 | **Lean core, maximal expressiveness**                 | Core owns only what every extension needs; a feature is an extension in `packages/extensions/` built on `@gent/core/extensions/api`; core names no feature built on it.                                                                                   | Core grows a feature one extension could own, or an extension reaches core internals instead of a public entry.                                                               |
 | **Cheap per task**: maximum efficiency and cache rate | The price-weighted token cost of a task (a parent turn and its children) falls with no measured drop in quality: the cached prefix is byte-stable and large output spills to storage. The cache rate (the cached share of input per task) rises or holds. | It sends bytes the model does not need, puts volatile content in the cached prefix, trims a request but adds steps, or lowers the cache rate.                                 |
 | **One interaction model**                             | The same key does the same thing on every TUI surface, every state shows its way out, and nothing gent draws is worse than a prior-art TUI draws for the same moment.                                                                                     | A surface gives a key a second meaning, or a state has no visible exit.                                                                                                       |
+| **A clear transcript**                                | At a glance, a user message, an agent reply, a child agent, a queued message and a tool call each look different; finished work shows as a one-line summary with its detail on demand. Claude Code is the reference.                                      | Two kinds of message share one look, or finished work shows more than its summary by default.                                                                                 |
 
 ## Tiebreaks
 
@@ -48,10 +49,10 @@ Project safety, beside `~/.claude/skills/architecture-loop/safety.md`:
 
 ## Sweeps
 
-| Sweep      | Serves                | Scope                                                      | Method                                                             | Done when                                                                                       |
-| ---------- | --------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| efficiency | Cheap per task        | what the harness sends to the model, per task              | [docs/architecture/efficiency.md](docs/architecture/efficiency.md) | no measured saving left that it can change directly; the ledger has the efficiency baseline row |
-| ui         | One interaction model | the rendered TUI beside the prior-art TUIs, in herdr panes | [docs/architecture/ui.md](docs/architecture/ui.md)                 | a matrix row per checklist moment, gent × each reference; the ledger has the UI matrix row      |
+| Sweep      | Serves                                    | Scope                                                      | Method                                                             | Done when                                                                                       |
+| ---------- | ----------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| efficiency | Cheap per task                            | what the harness sends to the model, per task              | [docs/architecture/efficiency.md](docs/architecture/efficiency.md) | no measured saving left that it can change directly; the ledger has the efficiency baseline row |
+| ui         | One interaction model, a clear transcript | the rendered TUI beside the prior-art TUIs, in herdr panes | [docs/architecture/ui.md](docs/architecture/ui.md)                 | a matrix row per checklist moment, gent × each reference; the ledger has the UI matrix row      |
 
 ## Live check
 

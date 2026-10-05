@@ -327,7 +327,9 @@ describe("a waiting answer in the queue", () => {
                 id: MessageId.make("answer-1"),
                 content,
                 createdAt: 0,
+                // The reader's answer: only the reader's waiting messages draw.
                 metadata: {
+                  fromClient: true,
                   customType: QUESTION_ANSWER_TYPE,
                   details: {
                     answers: [
@@ -348,10 +350,10 @@ describe("a waiting answer in the queue", () => {
         ),
         { width: 120, height: 6 },
       )
-      const frame = yield* waitForFrame(setup, (f) => f.includes("[steer 1]"), "the queue")
-      expect(frame).toContain(`┋ [steer 1] ↳ answer · ${cache.question}`)
+      const frame = yield* waitForFrame(setup, (f) => f.includes("┊ next step"), "the queue")
+      expect(frame).toContain(`┊ next step · ↳ answer · ${cache.question}`)
       expect(frame).not.toContain("Answer to your background question")
-      expect(frame).toContain("alt+up restore")
+      expect(frame).toContain("alt+up edit")
     }).pipe(Effect.timeout("6 seconds")),
   )
 })
