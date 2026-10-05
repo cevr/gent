@@ -4,7 +4,6 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
-  headTailChars,
   isProjectTrusted,
   ModelId,
   omitUndefined,
@@ -244,8 +243,11 @@ const ruleVerdict = (
 /** The classifier's own deadline. */
 const GUARD_DEADLINE_MS = 8_000
 
-/** The most of a call the classifier reads. */
-const CALL_CHARS = 4_000
+/**
+ * The most of a call the classifier reads. A longer call is never cut to fit:
+ * the part left out could hold what the policy forbids, so it asks.
+ */
+const CALL_CHARS = 8_000
 
 /** The confidence below which the classifier's answer asks instead. */
 const MINIMUM_CONFIDENCE = 0.5
@@ -284,23 +286,32 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 /**
  * What the classifier reads about a call: the tool, then each input field,
- * a string raw (a cell's code, a command) and any other value as JSON, head
- * and tail within a bound.
+ * a string raw (a cell's code, a command) and any other value as JSON. It is
+ * the whole call or nothing: a call over `CALL_CHARS`, or one whose input
+ * is not JSON, fails with why, and the guard asks instead of judging a part.
  */
-export const callText = (call: Pick<ToolCallInput, "toolName" | "input">): string => {
-  const fields = Option.match(decodeCallInput(call.input), {
-    onNone: () => ["(an input that is not JSON)"],
+export const callText = (
+  call: Pick<ToolCallInput, "toolName" | "input">,
+): Result.Result<string, string> =>
+  Option.match(decodeCallInput(call.input), {
+    onNone: () =>
+      Result.fail("the call's input is not JSON, so the guard classifier cannot read it"),
     onSome: (input) => {
-      if (Predicate.isString(input)) return [input]
-      if (!isJsonObject(input)) return [encodeJson(input)]
-      return Object.entries(input).map(([key, value]) => {
-        if (Predicate.isString(value)) return `${key}:\n${value}`
-        return `${key}: ${encodeJson(value)}`
-      })
+      let fields = [encodeJson(input)]
+      if (Predicate.isString(input)) fields = [input]
+      if (isJsonObject(input))
+        fields = Object.entries(input).map(([key, value]) => {
+          if (Predicate.isString(value)) return `${key}:\n${value}`
+          return `${key}: ${encodeJson(value)}`
+        })
+      const text = [`Tool: ${call.toolName}`, ...fields].join("\n\n")
+      if (text.length > CALL_CHARS)
+        return Result.fail(
+          `the call is ${text.length} characters, more than the ${CALL_CHARS} the guard classifier reads`,
+        )
+      return Result.succeed(text)
     },
   })
-  return headTailChars([`Tool: ${call.toolName}`, ...fields].join("\n\n"), CALL_CHARS).text
-}
 
 const asked = (reason: string) => ToolCallVerdict.cases.Ask.make({ reason })
 
@@ -333,6 +344,8 @@ const classifyCall = (params: {
   readonly call: ToolCallInput
 }) =>
   Effect.gen(function* () {
+    const text = callText(params.call)
+    if (Result.isFailure(text)) return asked(text.failure)
     const ctx = yield* ExtensionContext
     const model = yield* Option.match(params.model, {
       onSome: (id) => Effect.succeedSome(String(id)),
@@ -346,7 +359,7 @@ const classifyCall = (params: {
     if (Option.isNone(model)) return asked("no guard classifier model has a credential")
     const reply = yield* ctx.Models.decide({
       definition: params.decision,
-      input: callText(params.call),
+      input: text.success,
       model: model.value,
     })
     return answerVerdict(Option.fromUndefinedOr(reply.answers.verdict), model.value)

@@ -4,7 +4,18 @@
  * behind a test driver: no test reaches a provider.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Layer, Option, Path, Predicate, Schema, Stream } from "effect"
+import {
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Predicate,
+  Result,
+  Schema,
+  Stream,
+} from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { DecisionModel } from "effect/ai"
 import type * as Prompt from "effect/ai/Prompt"
@@ -464,6 +475,36 @@ describe("@gent/guard", () => {
   )
 
   it.scopedLive(
+    "a call too long for the classifier asks with its size, and is never judged on a part",
+    () =>
+      Effect.gen(function* () {
+        // Two commands of one length; only the middle of the second deletes,
+        // so a head and tail of each would read the same.
+        const filler = "x".repeat(5_000)
+        const harmless = `echo ${filler}; ls -la build; ${filler}`
+        const harmful = `echo ${filler}; rm -rf build; ${filler}`
+        expect(harmful.length).toBe(harmless.length)
+        const session = yield* guardedSession({
+          guard: Option.some({ policy: POLICY }),
+          answers: [label("allow")],
+          steps: [runCall(harmless), runCall(harmful), textStep("finished")],
+        })
+        const { events, results } = yield* session.run("Echo.", false)
+        expect(outcomes(results).map((outcome) => outcome.includes("was not approved"))).toEqual([
+          true,
+          true,
+        ])
+        const asked = presentedTexts(events)
+        expect(asked).toHaveLength(2)
+        for (const text of asked)
+          expect(text).toContain("more than the 8000 the guard classifier reads")
+        expect(session.calls).toEqual([])
+        expect(session.ran).toEqual([])
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platform)),
+    10_000,
+  )
+
+  it.scopedLive(
     "the classifier's prefix is the same bytes for every call; only the call differs",
     () =>
       Effect.gen(function* () {
@@ -522,17 +563,22 @@ describe("guard call text", () => {
     }),
   )
 
-  it.effect("the classifier reads the tool and each field, a string raw and others as JSON", () =>
-    Effect.sync(() => {
-      expect(callText({ toolName: "cell", input: { code: "const a = 1\nawait run(a)" } })).toBe(
-        "Tool: cell\n\ncode:\nconst a = 1\nawait run(a)",
-      )
-      expect(callText({ toolName: "run", input: { command: "ls", flags: ["-a"] } })).toBe(
-        'Tool: run\n\ncommand:\nls\n\nflags: ["-a"]',
-      )
-      const long = callText({ toolName: "run", input: { command: "x".repeat(10_000) } })
-      expect(long.length).toBeLessThanOrEqual(4_000)
-      expect(long).toContain("characters truncated")
-    }),
+  it.effect(
+    "the classifier reads the whole call: the tool and each field, a string raw and others as JSON",
+    () =>
+      Effect.sync(() => {
+        expect(
+          callText({ toolName: "cell", input: { code: "const a = 1\nawait run(a)" } }),
+        ).toEqual(Result.succeed("Tool: cell\n\ncode:\nconst a = 1\nawait run(a)"))
+        expect(callText({ toolName: "run", input: { command: "ls", flags: ["-a"] } })).toEqual(
+          Result.succeed('Tool: run\n\ncommand:\nls\n\nflags: ["-a"]'),
+        )
+        const long = callText({ toolName: "run", input: { command: "x".repeat(10_000) } })
+        expect(long).toEqual(
+          Result.fail(
+            "the call is 10020 characters, more than the 8000 the guard classifier reads",
+          ),
+        )
+      }),
   )
 })
