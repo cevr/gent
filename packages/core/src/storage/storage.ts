@@ -86,6 +86,19 @@ import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
+// ── bound lists ─────────────────────────────────────────────────────────────
+
+const encodeIdListJson = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)))
+
+/**
+ * The `IN` operand for a list of any length, bound as one JSON parameter.
+ * `sql.in` binds one parameter per item, and a hosted SQLite refuses a
+ * statement with more than 100 (a Durable Object's limit); a session tree or a
+ * branch list has no such bound.
+ */
+const inIdList = (sql: SqlClient.SqlClient, ids: ReadonlyArray<string>) =>
+  sql`(SELECT value FROM json_each(${encodeIdListJson(ids)}))`
+
 // ── owned tool call ─────────────────────────────────────────────────────────
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
@@ -368,12 +381,13 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               // A root thread's handoff that stays is detached from the parent it no longer has.
               const cascadedIds = yield* deletionSetOf(id)
               if (cascadedIds.length === 0) return []
+              const cascaded = inIdList(sql, cascadedIds)
               const branchRows = yield* sql<{ id: BranchId; session_id: SessionId }>`
-                SELECT id, session_id FROM branches WHERE session_id IN ${sql.in(cascadedIds)}`
+                SELECT id, session_id FROM branches WHERE session_id IN ${cascaded}`
               yield* sql`UPDATE sessions SET parent_session_id = NULL, parent_branch_id = NULL
-                WHERE parent_session_id IN ${sql.in(cascadedIds)} AND id NOT IN ${sql.in(cascadedIds)}`
+                WHERE parent_session_id IN ${cascaded} AND id NOT IN ${cascaded}`
               // Queues, branches, messages and their chunk links cascade by foreign key.
-              yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
+              yield* sql`DELETE FROM sessions WHERE id IN ${cascaded}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
               return cascadedIds.map((sessionId): DeletedSession => ({
                 sessionId,
@@ -489,7 +503,7 @@ export class BranchStorage extends Context.Service<BranchStorage, BranchStorageS
             }>`SELECT m.branch_id, COUNT(*) as count
               FROM messages m
               JOIN sessions s ON s.id = m.session_id
-              WHERE m.branch_id IN ${sql.in(branchIds)}
+              WHERE m.branch_id IN ${inIdList(sql, branchIds)}
                 AND s.workspace_id = ${workspaceId}
               GROUP BY m.branch_id`
             const result = new Map<BranchId, number>()
@@ -1117,7 +1131,7 @@ export class RelationshipStorage extends Context.Service<
 
             const branchIds = branches.map((b) => b.id)
             const allMsgRawRows = yield* sql`${sql.literal(MESSAGE_CHUNK_SELECT)}
-            WHERE m.branch_id IN ${sql.in(branchIds)}
+            WHERE m.branch_id IN ${inIdList(sql, branchIds)}
               AND s.workspace_id = ${workspaceId}
             ORDER BY m.created_at ASC, m.insertion_order ASC, mc.ordinal ASC`
             const allMsgRows = yield* Effect.forEach(allMsgRawRows, (row) =>
@@ -2125,9 +2139,6 @@ export const makeStorageTransaction: Effect.Effect<StorageTransaction, never, Sq
         )
   })
 
-const memorySqliteClientLayer: Layer.Layer<SqliteClient.SqliteClient | SqlClient.SqlClient, never> =
-  Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))
-
 type FocusedStorage =
   | SqlClient.SqlClient
   | InteractionStorage
@@ -2180,6 +2191,27 @@ const ensureDbDirectory = (dbPath: string) =>
     }),
   )
 
+/**
+ * The PRAGMAs of a connection gent opens itself. They configure the
+ * connection, not the schema, so they belong to the client layer that opens
+ * it: a hosted client's platform owns its durability and refuses them.
+ */
+const configureLocalConnection: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(`PRAGMA journal_mode = WAL`)
+      yield* sql.unsafe(`PRAGMA synchronous = NORMAL`)
+      yield* sql.unsafe(`PRAGMA busy_timeout = 5000`)
+      yield* sql.unsafe(`PRAGMA wal_autocheckpoint = 1000`)
+      yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
+    }).pipe(Effect.mapError(storageError("Storage pragma initialization failed"))),
+  )
+
+/** A Bun SQLite connection gent opens and configures: a file, or `:memory:`. */
+const localSqliteClient = (filename: string): Layer.Layer<SqlClient.SqlClient, StorageError> =>
+  configureLocalConnection.pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename }))))
+
 const makeLiveSqliteLayer = (
   dbPath: string,
 ): Layer.Layer<
@@ -2188,12 +2220,12 @@ const makeLiveSqliteLayer = (
   FileSystem.FileSystem | Path.Path
 > =>
   StorageInitLive.pipe(
-    Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename: dbPath }))),
+    Layer.provideMerge(localSqliteClient(dbPath)),
     Layer.provideMerge(ensureDbDirectory(dbPath)),
   )
 
 const memorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = StorageInitLive.pipe(
-  Layer.provideMerge(memorySqliteClientLayer),
+  Layer.provideMerge(localSqliteClient(":memory:")),
 )
 
 export const SqliteStorage = {
@@ -2214,4 +2246,15 @@ export const SqliteStorage = {
     StorageError,
     GentPlatform | Crypto.Crypto
   >,
+
+  /**
+   * The repositories over a host's own SQLite client (a Durable Object's, for
+   * one). The host owns the connection and its PRAGMAs; init runs the portable
+   * DDL only. `deleteSession` stays atomic: the host's transaction is the one
+   * writer's (a Durable Object runs one at a time).
+   */
+  HostedWithSql: (
+    sql: Layer.Layer<SqlClient.SqlClient>,
+  ): Layer.Layer<FocusedStorage, StorageError, GentPlatform | Crypto.Crypto> =>
+    provideFocusedRepositories(StorageInitLive.pipe(Layer.provideMerge(sql))),
 }

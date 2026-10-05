@@ -14,6 +14,7 @@ import {
   Stream,
   TxRef,
 } from "effect"
+import type { SqlClient } from "effect/sql"
 import {
   type AnyExtensionHook,
   ExtensionContext,
@@ -1663,6 +1664,21 @@ type E2EExtensionSource =
       readonly extensionInputs?: never
     }
 
+/**
+ * Where a test root keeps its state: in-memory SQLite (neither), a SQLite file
+ * for restart and recovery tests (`storagePath`), or a host's own SQLite client
+ * (`hostedSql`, `StateLocation.Hosted`). One or neither.
+ */
+type E2EStateSource =
+  | {
+      readonly storagePath?: string
+      readonly hostedSql?: never
+    }
+  | {
+      readonly hostedSql: Layer.Layer<SqlClient.SqlClient>
+      readonly storagePath?: never
+    }
+
 interface E2ELayerOptions {
   /** Language model layer — typically from `LanguageModelLayers.sequence` */
   readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
@@ -1680,8 +1696,6 @@ interface E2ELayerOptions {
     never,
     EventStore | GentPlatform | InteractionStorage
   >
-  /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
-  readonly storagePath?: string
   /**
    * The runtime's working directory: the launch workspace and the client's
    * workspace, as a host's launch directory is. Defaults to a temp directory
@@ -1734,7 +1748,7 @@ interface E2ELayerOptions {
   readonly configServiceLayer?: Layer.Layer<ConfigService>
 }
 
-export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource
+export type E2ELayerConfig = E2ELayerOptions & E2EExtensionSource & E2EStateSource
 
 /** Re-registers one compiled slot; the switch restores the kind/handler correlation. */
 const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.Effect<void> => {
@@ -1841,6 +1855,14 @@ const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "sign
   return LanguageModelLayers.resolver(config.providerLayer)
 }
 
+const stateLocationOf = (config: E2EStateSource): StateLocation => {
+  if (!Predicate.isUndefined(config.hostedSql))
+    return StateLocation.cases.Hosted.make({ sql: config.hostedSql })
+  if (!Predicate.isUndefined(config.storagePath))
+    return StateLocation.cases.Disk.make({ dbPath: config.storagePath })
+  return StateLocation.cases.Memory.make({})
+}
+
 const e2eDependencies = (
   config: E2ELayerConfig,
   directories: { readonly cwd: string; readonly home: string },
@@ -1848,10 +1870,7 @@ const e2eDependencies = (
   const options = {
     ...directories,
     platform: "test",
-    state: Option.match(Option.fromUndefinedOr(config.storagePath), {
-      onNone: () => StateLocation.cases.Memory.make({}),
-      onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
-    }),
+    state: stateLocationOf(config),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,
@@ -1922,7 +1941,8 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 // fragments callers already pass to `createE2ELayer`.
 
 type RpcHarnessConfig = Omit<E2ELayerOptions, "toolRunner"> &
-  E2EExtensionSource & {
+  E2EExtensionSource &
+  E2EStateSource & {
     /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
     readonly admission?: SessionAdmission
   }

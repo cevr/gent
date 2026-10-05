@@ -357,6 +357,14 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **A hosted root loses cluster request ids.** Effect's `SqlMessageStorage`
+  reads its 64-bit snowflake ids under `SqlClient.SafeIntegers`, which
+  `@effect/sql-sqlite-do` cannot honour: a Durable Object's SQL API returns
+  each integer as a JavaScript number. A reply then names its request by the
+  id's nearest double, so most keep-alives stay unprocessed and an awaited
+  persisted request does not return to its caller (the loop still runs it).
+  `hosted-storage.test.ts` states this behaviour. The fix is upstream (read
+  the ids as text); gent does not fork the message storage.
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
@@ -447,7 +455,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. The root's `StateLocation` names the client: `Disk` (a SQLite file) and `Memory` open a Bun SQLite connection and set its PRAGMAs in that client layer; `Hosted` takes a `Layer<SqlClient>` that the host opens and owns (a Durable Object's storage through `@effect/sql-sqlite-do`), and the root sets no PRAGMA on it. Storage init is portable DDL under the generic `Migrator` for all three. A SQL list binds as one JSON parameter (`IN (SELECT value FROM json_each(...))`), never as one parameter per item through `sql.in` (a guard), because a hosted SQLite refuses more than 100 bound parameters. One runner owns a root's storage on every host (the SDK server holds the database's kernel lock), so the cluster's shard locks live in memory (`SingleRunner` with `runnerStorage: "memory"`) and a boot writes no lock row. `packages/core/tests/server/hosted-storage.test.ts` runs the root on Durable-Object-shaped storage. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 

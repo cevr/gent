@@ -6,15 +6,11 @@
  * rules a SQLite-backed Durable Object keeps. `@effect/sql-sqlite-do` turns it
  * into the `SqlClient` the root's storage runs on.
  *
- * The root has no seam that takes a host `SqlClient` yet (H1). Until it has, the
- * test swaps `@effect/sql-sqlite-bun`'s `SqliteClient.layer` for the file path
- * of a hosted object only: every other path, in this file or any other, keeps
- * the Bun driver. Each rule a statement breaks is recorded with the statement,
+ * The root takes that client as its state (`StateLocation.Hosted`), as a host
+ * passes its own. Each rule a statement breaks is recorded with the statement,
  * so one run lists every wall the root meets.
  */
-import { mock } from "bun:test"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
-import * as BunSqlite from "@effect/sql-sqlite-bun"
 import { SqliteClient as DoSqliteClient } from "@effect/sql-sqlite-do"
 import { describe, expect, it } from "effect-bun-test"
 import {
@@ -32,6 +28,7 @@ import {
   Scope,
 } from "effect"
 import { Sharding } from "effect/cluster"
+import type { SqlClient } from "effect/sql"
 import type * as LanguageModel from "effect/ai/LanguageModel"
 import { ExtensionContext, tool } from "../../src/extensions/api"
 import { type LoadedExtension, LoadedArtifactIdentity } from "../../src/domain/extension"
@@ -39,9 +36,14 @@ import { ApprovalService } from "../../src/runtime/extension-host"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { makeInProcessClient, RpcHandlersLive } from "../../src/server/server"
 import { workspaceHeadersForCwd } from "../../src/server/workspace-rpc"
-import { ExtensionId, InteractionRequestId, SessionId } from "../../src/domain/ids"
-import { dateFromMillis, Session } from "../../src/domain/message"
-import { SessionStorage, SqliteStorage } from "../../src/storage/storage"
+import { BranchId, ExtensionId, InteractionRequestId, SessionId } from "../../src/domain/ids"
+import { Branch, dateFromMillis, Session } from "../../src/domain/message"
+import {
+  BranchStorage,
+  RelationshipStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import { StorageInitLive } from "../../src/storage/schema"
 import { createE2ELayer, createRpcClient, testAgent } from "../../src/test-utils/harness"
 import {
@@ -60,23 +62,9 @@ import {
 
 // ── hosted root ─────────────────────────────────────────────────────────────
 
-// The hosted objects of this file by database path. Every other path keeps
-// the Bun driver, so a module swap that outlives this file changes nothing.
-const hostedStorages = new Map<string, FakeDurableObjectStorage>()
-const bunSqliteClient = { ...BunSqlite.SqliteClient }
-const bunSqliteModule = { ...BunSqlite }
-// oxlint-disable-next-line effect/noModuleMocks -- the root has no host SqlClient seam (H1); this swap is the one test-only override, scoped to the hosted paths
-void mock.module("@effect/sql-sqlite-bun", () => ({
-  ...bunSqliteModule,
-  SqliteClient: {
-    ...bunSqliteClient,
-    layer: (config: BunSqlite.SqliteClient.SqliteClientConfig) => {
-      const storage = Option.fromUndefinedOr(hostedStorages.get(config.filename))
-      if (Option.isNone(storage)) return bunSqliteClient.layer(config)
-      return DoSqliteClient.layer({ storage: asDurableObjectStorage(storage.value) })
-    },
-  },
-}))
+/** The `SqlClient` a Durable Object host builds over its storage. */
+const hostedSqlOf = (storage: FakeDurableObjectStorage): Layer.Layer<SqlClient.SqlClient> =>
+  DoSqliteClient.layer({ storage: asDurableObjectStorage(storage) })
 
 /**
  * Tools that count their runs, loaded with an artifact identity as a shipped
@@ -117,7 +105,7 @@ const echoExtension = (runs: Ref.Ref<number>): LoadedExtension => ({
 })
 
 interface HostedRootInput {
-  readonly dbPath: string
+  readonly sql: Layer.Layer<SqlClient.SqlClient>
   readonly cwd: string
   readonly home: string
   readonly runs: Ref.Ref<number>
@@ -128,7 +116,7 @@ const hostedRootInput = (input: HostedRootInput) => ({
   agents: [testAgent],
   extensions: [echoExtension(input.runs)],
   providerLayer: input.providerLayer,
-  storagePath: input.dbPath,
+  hostedSql: input.sql,
   cwd: input.cwd,
   home: input.home,
 })
@@ -246,14 +234,6 @@ const elapsedSince = (start: number) => Effect.map(Clock.currentTimeMillis, (now
 
 const KEEP_ALIVE = "Cluster/Entity/keepAlive"
 
-const CONNECTION_PRAGMA_WALLS = [
-  "pragma: journal_mode",
-  "pragma: synchronous",
-  "pragma: busy_timeout",
-  "pragma: wal_autocheckpoint",
-  "pragma: foreign_keys",
-]
-
 /** The keep-alive messages and their replies, ids read as exact text. */
 const keepAliveRows = (disk: DurableObjectDisk) => ({
   messages: disk.rowsOf(
@@ -268,24 +248,23 @@ const keepAliveRows = (disk: DurableObjectDisk) => ({
 })
 
 /**
- * One activation of the object: a fresh storage handle, a root built on it in
- * a scope of its own, and the eviction that kills the handle, then closes the
- * scope. Writes the old activation tries after the eviction are refused.
+ * One activation of the object: a fresh storage handle, a root built on its
+ * client in a scope of its own, and the eviction that kills the handle, then
+ * closes the scope. Writes the old activation tries after the eviction are
+ * refused.
  */
 const activate = <A, E>(
   disk: DurableObjectDisk,
-  dbPath: string,
   phase: string,
-  build: (scope: Scope.Scope) => Effect.Effect<A, E>,
+  build: (sql: Layer.Layer<SqlClient.SqlClient>, scope: Scope.Scope) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
     const handle = disk.activate("record")
-    hostedStorages.set(dbPath, handle.storage)
     const scope = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
     disk.setPhase(phase)
     const start = yield* Clock.currentTimeMillis
-    const built = yield* build(scope)
+    const built = yield* build(hostedSqlOf(handle.storage), scope)
     const buildMs = yield* elapsedSince(start)
     let evictedAt = 0
     const evict = Effect.gen(function* () {
@@ -298,7 +277,7 @@ const activate = <A, E>(
   })
 
 /** Builds the root with the RPC handlers and a client in the activation's scope. */
-const clientOver = (root: ReturnType<typeof hostedRoot>, cwd: string) => (scope: Scope.Scope) =>
+const clientOver = (root: ReturnType<typeof hostedRoot>, cwd: string, scope: Scope.Scope) =>
   Effect.gen(function* () {
     const context = yield* Layer.buildWithScope(Layer.provideMerge(RpcHandlersLive, root), scope)
     const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(cwd)).pipe(
@@ -342,32 +321,15 @@ describe("Durable-Object-shaped storage", () => {
     }),
   )
 
-  it.scopedLive("gent's storage init stops at its journal_mode pragma on DO storage", () =>
+  it.scopedLive("gent's storage init runs on DO storage under its rules", () =>
     Effect.gen(function* () {
       const dir = yield* makeTempDirectoryScoped("gent-do-init-")
       const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
       const { storage } = disk.activate("enforce")
-      const exit = yield* Layer.build(
-        StorageInitLive.pipe(
-          Layer.provide(DoSqliteClient.layer({ storage: asDurableObjectStorage(storage) })),
-        ),
-      ).pipe(Effect.exit)
-      expect(Exit.isFailure(exit)).toBe(true)
-      expect(wallsOf(disk)).toEqual(["pragma: journal_mode"])
-    }),
-  )
-
-  it.scopedLive("gent's storage init on DO storage meets only its connection PRAGMAs", () =>
-    Effect.gen(function* () {
-      const dir = yield* makeTempDirectoryScoped("gent-do-init-audit-")
-      const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
-      const { storage } = disk.activate("record")
-      yield* Layer.build(
-        StorageInitLive.pipe(
-          Layer.provide(DoSqliteClient.layer({ storage: asDurableObjectStorage(storage) })),
-        ),
-      )
-      expect(wallsOf(disk)).toEqual(CONNECTION_PRAGMA_WALLS)
+      // Init is portable DDL and the generic migrator: no PRAGMA of the
+      // connection's, which the host owns.
+      yield* Layer.build(StorageInitLive.pipe(Layer.provide(hostedSqlOf(storage))))
+      expect(wallsOf(disk)).toEqual([])
       yield* writeReport("init", {
         walls: disk.violations,
         transactions: disk.transactions,
@@ -383,12 +345,12 @@ describe("Durable-Object-shaped storage", () => {
         const dir = yield* makeTempDirectoryScoped("gent-do-evict-")
         const cwd = yield* makeTempDirectoryScoped("gent-do-evict-cwd-")
         const home = yield* makeTempDirectoryScoped("gent-do-evict-home-")
-        const dbPath = `${dir}/object.db`
-        const disk = yield* makeDurableObjectDisk(dbPath)
-        yield* Effect.addFinalizer(() => Effect.sync(() => hostedStorages.delete(dbPath)))
+        const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
         const runs = yield* Ref.make(0)
-        const root = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
-          hostedRoot({ dbPath, cwd, home, runs, providerLayer })
+        const root = (
+          sql: Layer.Layer<SqlClient.SqlClient>,
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+        ) => hostedRoot({ sql, cwd, home, runs, providerLayer })
 
         // Activation 1: the turn runs its tool, and the object is evicted
         // while step 2 waits on the model.
@@ -396,8 +358,8 @@ describe("Durable-Object-shaped storage", () => {
           toolCallStep("echo", { text: "hello" }),
           { ...textStep("never emitted"), gated: true },
         ])
-        const activation1 = yield* activate(disk, dbPath, "boot-1", (scope) =>
-          createRpcClient(root(first.layer)).pipe(Effect.provideService(Scope.Scope, scope)),
+        const activation1 = yield* activate(disk, "boot-1", (sql, scope) =>
+          createRpcClient(root(sql, first.layer)).pipe(Effect.provideService(Scope.Scope, scope)),
         )
         const { client } = activation1.built
         disk.setPhase("session")
@@ -421,8 +383,8 @@ describe("Durable-Object-shaped storage", () => {
         // Activation 2, the alarm: build the root and poll the cluster's
         // storage. Nothing is sent.
         const second = yield* LanguageModelLayers.sequence([streamedTextStep(20)])
-        const activation2 = yield* activate(disk, dbPath, "boot-2", (scope) =>
-          Layer.buildWithScope(root(second.layer), scope),
+        const activation2 = yield* activate(disk, "boot-2", (sql, scope) =>
+          Layer.buildWithScope(root(sql, second.layer), scope),
         )
         disk.setPhase("resume")
         const resumeStart = yield* Clock.currentTimeMillis
@@ -447,8 +409,8 @@ describe("Durable-Object-shaped storage", () => {
         // Activation 3, an alarm with nothing to do: the stale keep-alives
         // come back and wake the loop.
         const third = yield* LanguageModelLayers.sequence([])
-        const activation3 = yield* activate(disk, dbPath, "boot-3", (scope) =>
-          Layer.buildWithScope(root(third.layer), scope),
+        const activation3 = yield* activate(disk, "boot-3", (sql, scope) =>
+          Layer.buildWithScope(root(sql, third.layer), scope),
         )
         disk.setPhase("idle-wake")
         const sharding = Context.get(activation3.built, Sharding.Sharding)
@@ -493,12 +455,21 @@ describe("Durable-Object-shaped storage", () => {
         expect(yield* second.controls.callCount).toBe(1)
         expect(yield* third.controls.callCount).toBe(0)
         expect(heldAtEviction).toEqual([KEEP_ALIVE])
-        // The walls: the connection PRAGMAs, and a 64-bit request id read
-        // back as a double. Each reply names its request by the id's nearest
-        // double, so a keep-alive is marked processed only when that double
-        // prints as the id itself; every other one stays unprocessed, wakes
-        // the next activation's loop, and keeps the alarm set.
-        expect(wallsOf(disk)).toEqual(CONNECTION_PRAGMA_WALLS)
+        // No statement breaks a Durable Object rule.
+        expect(wallsOf(disk)).toEqual([])
+        // A boot writes no runner or shard-lock row: one runner owns the
+        // storage, so its shard locks live in memory.
+        for (const boot of ["boot-1", "boot-2", "boot-3"]) {
+          const written = [...(disk.ledgers.get(boot)?.rowsWritten.keys() ?? [])]
+          expect(written).not.toContain("cluster_locks")
+          expect(written).not.toContain("cluster_runners")
+        }
+        // What stays: a 64-bit request id read back as a double. The driver
+        // has no safe-integer read, so each reply names its request by the
+        // id's nearest double, and a keep-alive is marked processed only when
+        // that double prints as the id itself; every other one stays
+        // unprocessed, wakes the next activation's loop, and keeps the alarm
+        // set.
         expect(keepAlives.messages.length).toBe(2)
         expect(keepAlives.replies.map((row) => row.request_id).toSorted()).toEqual(
           keepAlives.messages.map((row) => String(Number(row.id))).toSorted(),
@@ -522,23 +493,20 @@ describe("Durable-Object-shaped storage", () => {
         const dir = yield* makeTempDirectoryScoped("gent-do-ask-")
         const cwd = yield* makeTempDirectoryScoped("gent-do-ask-cwd-")
         const home = yield* makeTempDirectoryScoped("gent-do-ask-home-")
-        const dbPath = `${dir}/object.db`
-        const disk = yield* makeDurableObjectDisk(dbPath)
-        yield* Effect.addFinalizer(() => Effect.sync(() => hostedStorages.delete(dbPath)))
+        const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
         const runs = yield* Ref.make(0)
-        const root = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
-          hostedAskingRoot({ dbPath, cwd, home, runs, providerLayer })
+        const root = (
+          sql: Layer.Layer<SqlClient.SqlClient>,
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+        ) => hostedAskingRoot({ sql, cwd, home, runs, providerLayer })
 
         // Activation 1: the tool asks, and the turn parks on the ask.
         const first = yield* LanguageModelLayers.sequence([
           toolCallStep("asked_echo", { text: "hello" }),
           { ...textStep("never reached"), gated: true },
         ])
-        const activation1 = yield* activate(
-          disk,
-          dbPath,
-          "boot-1",
-          clientOver(root(first.layer), cwd),
+        const activation1 = yield* activate(disk, "boot-1", (sql, scope) =>
+          clientOver(root(sql, first.layer), cwd, scope),
         )
         const { client } = activation1.built
         const { sessionId, branchId } = yield* client.session.create({ cwd })
@@ -571,11 +539,8 @@ describe("Durable-Object-shaped storage", () => {
 
         // Activation 2, the alarm, while the ask still waits on its human.
         const second = yield* LanguageModelLayers.sequence([textStep("done")])
-        const activation2 = yield* activate(
-          disk,
-          dbPath,
-          "boot-2",
-          clientOver(root(second.layer), cwd),
+        const activation2 = yield* activate(disk, "boot-2", (sql, scope) =>
+          clientOver(root(sql, second.layer), cwd, scope),
         )
         disk.setPhase("parked-after-alarm")
         const sharding = Context.get(activation2.built.context, Sharding.Sharding)
@@ -653,7 +618,7 @@ describe("Durable-Object-shaped storage", () => {
         expect(yield* Ref.get(runs)).toBe(1)
         expect(yield* first.controls.callCount).toBe(1)
         expect(yield* second.controls.callCount).toBe(1)
-        expect(wallsOf(disk)).toEqual(CONNECTION_PRAGMA_WALLS)
+        expect(wallsOf(disk)).toEqual([])
         // The answer reaches the loop, which finishes the turn. The RPC that
         // sent it can return only when its 64-bit request id survives the
         // double the reply is read through; a reply that names another request
@@ -672,18 +637,19 @@ describe("Durable-Object-shaped storage", () => {
     45_000,
   )
 
-  it.scopedLive("deleting a session tree of over 100 sessions passes the bound-parameter cap", () =>
+  it.scopedLive("a session tree and a branch list of over 100 pass the bound-parameter cap", () =>
     Effect.gen(function* () {
       const dir = yield* makeTempDirectoryScoped("gent-do-tree-")
-      const dbPath = `${dir}/object.db`
-      const disk = yield* makeDurableObjectDisk(dbPath)
-      yield* Effect.addFinalizer(() => Effect.sync(() => hostedStorages.delete(dbPath)))
-      hostedStorages.set(dbPath, disk.activate("record").storage)
-      const storage = SqliteStorage.LiveWithSql(dbPath).pipe(
-        Layer.provide(Layer.mergeAll(GentPlatform.Test(), BunCrypto.layer, BunServices.layer)),
-      )
+      const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
+      // Enforce: a statement over 100 bound parameters fails as on a Durable Object.
+      const storage = SqliteStorage.HostedWithSql(
+        hostedSqlOf(disk.activate("enforce").storage),
+      ).pipe(Layer.provide(Layer.mergeAll(GentPlatform.Test(), BunCrypto.layer)))
+      const at = dateFromMillis(1_767_225_600_000)
       yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const relationships = yield* RelationshipStorage
         const session = (id: string, parent: Option.Option<string>) =>
           sessions.createSession(
             new Session({
@@ -693,8 +659,8 @@ describe("Durable-Object-shaped storage", () => {
                 onNone: () => ({}),
                 onSome: (parentId) => ({ parentSessionId: SessionId.make(parentId) }),
               }),
-              createdAt: dateFromMillis(1_767_225_600_000),
-              updatedAt: dateFromMillis(1_767_225_600_000),
+              createdAt: at,
+              updatedAt: at,
             }),
           )
         yield* session("tree-root", Option.none())
@@ -702,14 +668,26 @@ describe("Durable-Object-shaped storage", () => {
           Array.from({ length: 100 }, (_, index) => `tree-child-${index}`),
           (id) => session(id, Option.some("tree-root")),
         )
+        const branchIds = Array.from({ length: 101 }, (_, index) =>
+          BranchId.make(`tree-branch-${index}`),
+        )
+        yield* Effect.forEach(branchIds, (id) =>
+          branches.createBranch(
+            new Branch({ id, sessionId: SessionId.make("tree-root"), createdAt: at }),
+          ),
+        )
+
+        const counts = yield* branches.countMessagesByBranches(branchIds)
+        expect(counts.size).toBe(0)
+        const detail = yield* relationships.getSessionDetail(SessionId.make("tree-root"))
+        expect(detail.branches.length).toBe(101)
         const deleted = yield* sessions.deleteSession(SessionId.make("tree-root"))
         expect(deleted.length).toBe(101)
+        expect(deleted.flatMap((entry) => entry.branchIds).length).toBe(101)
       }).pipe(Effect.provide(storage))
-      expect(wallsOf(disk)).toEqual([
-        ...CONNECTION_PRAGMA_WALLS,
-        "bound-parameters: 101 bound",
-        "bound-parameters: 202 bound",
-      ])
+      expect(wallsOf(disk)).toEqual([])
+      // The branches went with their sessions, by the foreign keys the host enforces.
+      expect(countOf(disk.rowsOf(CountRow, "SELECT COUNT(*) AS n FROM branches"))).toBe(0)
     }),
   )
 })

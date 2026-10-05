@@ -2006,13 +2006,22 @@ interface DependencyOverrides {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
 }
 
+/** A host's own SQLite client, as a layer the root builds once. */
+const HostedSqlClient = Schema.declare<Layer.Layer<SqlClient.SqlClient>>(
+  (value): value is Layer.Layer<SqlClient.SqlClient> => Layer.isLayer(value),
+)
+
 /**
  * Where a composition root keeps its state. `Disk` names the SQLite file it
  * writes, so choosing disk persistence and naming the file are one decision.
+ * `Hosted` is a SQLite client the host opens and owns (a Durable Object's
+ * storage): the root runs its migrations and repositories over it and sets no
+ * connection PRAGMA.
  */
 export const StateLocation = Schema.TaggedUnion({
   Disk: { dbPath: Schema.String },
   Memory: {},
+  Hosted: { sql: HostedSqlClient },
 })
 export type StateLocation = typeof StateLocation.Type
 
@@ -2041,16 +2050,21 @@ interface DependenciesConfig {
   overrides?: DependencyOverrides
 }
 
-const makeStorageLayer = (state: StateLocation) => {
-  if (state._tag === "Memory") return SqliteStorage.MemoryWithSql
-  return SqliteStorage.LiveWithSql(state.dbPath)
-}
+const makeStorageLayer = (state: StateLocation) =>
+  StateLocation.match(state, {
+    Disk: ({ dbPath }) => SqliteStorage.LiveWithSql(dbPath),
+    Memory: () => SqliteStorage.MemoryWithSql,
+    Hosted: ({ sql }) => SqliteStorage.HostedWithSql(sql),
+  })
 
-const makeClusterRunnerLayer = (state: StateLocation) => {
-  let runnerStorage: "memory" | "sql" = "sql"
-  if (state._tag === "Memory") runnerStorage = "memory"
-  return SingleRunner.layer({ runnerStorage })
-}
+/**
+ * One runner owns a root's storage on every host: the SDK server holds the
+ * database's kernel lock for its life, a test root builds its own, and a
+ * Durable Object runs one instance. So shard locks live in memory: SQL runner
+ * storage would write 300 lock rows at each boot and refresh them while the
+ * root runs, to guard against a second runner that cannot exist.
+ */
+const clusterRunnerLive = SingleRunner.layer({ runnerStorage: "memory" })
 
 export const createDependencies = (config: DependenciesConfig) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
@@ -2059,7 +2073,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   })
 
   const storageLive = makeStorageLayer(config.state)
-  const clusterRunnerLive = makeClusterRunnerLayer(config.state)
 
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only
