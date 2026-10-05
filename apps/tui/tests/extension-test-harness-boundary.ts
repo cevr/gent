@@ -58,6 +58,8 @@ interface ClientExtensionHarnessOptions {
   readonly lifecycle?: ClientContextDeps["lifecycle"]
   /** Stand-ins for `gh` and `hunk`; by default the setup finds neither. */
   readonly tools?: TestTools
+  /** What the session in view does; idle by default. */
+  readonly activity?: ClientContextDeps["activity"]
 }
 
 type TestWorkspace = Omit<ClientContextDeps["workspace"], "sessionCwd"> &
