@@ -601,6 +601,12 @@ const REFUSED: ReadonlyArray<{
     input: { todo: "milk" },
     names: ["Tool 'todo' input failed", "done"],
   },
+  {
+    label: "a tool no extension registers",
+    name: "nowhere",
+    input: { todo: "milk" },
+    names: ["Unknown tool: nowhere"],
+  },
 ]
 
 describe("refused tool calls on the wire", () => {

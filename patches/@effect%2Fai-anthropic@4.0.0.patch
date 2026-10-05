@@ -1,5 +1,5 @@
 diff --git a/dist/AnthropicLanguageModel.js b/dist/AnthropicLanguageModel.js
-index f6ca03d6bda8eb138eed149b68e42f6e00934362..3bc0a1866332b15e6a59704499bbf8fce689d155 100644
+index f6ca03d6bda8eb138eed149b68e42f6e00934362..4654b9a20eaafca2b1143fe73b307fa8881c1615 100644
 --- a/dist/AnthropicLanguageModel.js
 +++ b/dist/AnthropicLanguageModel.js
 @@ -279,6 +279,17 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
@@ -20,3 +20,22 @@ index f6ca03d6bda8eb138eed149b68e42f6e00934362..3bc0a1866332b15e6a59704499bbf8fc
            system = group.messages.map(message => ({
              type: "text",
              text: message.content,
+@@ -2167,15 +2178,10 @@ const getOutputFormat = /*#__PURE__*/Effect.fnUntraced(function* ({
+ });
+ const transformToolCallParams = /*#__PURE__*/Effect.fnUntraced(function* (tools, toolName, toolParams) {
+   const tool = tools.find(tool => tool.name === toolName);
++  // A call to a tool the request did not declare goes on as the model wrote
++  // it: the caller answers it.
+   if (Predicate.isUndefined(tool)) {
+-    return yield* AiError.make({
+-      module: "AnthropicLanguageModel",
+-      method: "makeResponse",
+-      reason: new AiError.ToolNotFoundError({
+-        toolName,
+-        availableTools: tools.map(tool => tool.name)
+-      })
+-    });
++    return toolParams;
+   }
+   const {
+     codec

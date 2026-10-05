@@ -948,7 +948,7 @@ Shape:
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
-- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call's input. The reply decodes each call's parameters as opaque (`patches/README.md`, `effect@4.0.0`), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), which the model reads on the next step; the stream does not fail and the step is not retried. The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes).
+- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call. The drivers pass each call on as the model wrote it and the reply decodes its parameters as opaque (`patches/README.md`: `effect@4.0.0` and the three driver SDKs), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), and a call to a name no extension registers as `Unknown tool: <id>`. The model reads the result on the next step; the stream does not fail and the step is not retried. The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes).
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
   receipt commits with turn duration. This flag reports a failed turn only (a
@@ -1644,8 +1644,9 @@ calls such a tool, or any other tool its profile registers but the turn did not
 advertise (a denied one), reads a failed result (`Unknown tool: <id>`) and the
 turn goes on: the reply decodes against every registered tool, while the
 request's `toolChoice` (`oneOf`, the advertised names) keeps its declarations
-as they were (`runtime/turn.ts`). A name no extension registers still fails the
-step's stream, as Effect AI cannot decode it. Tool discovery
+as they were (`runtime/turn.ts`). A name no extension registers reads the same
+failed result: the drivers pass a call to an undeclared name on, and the reply
+decodes it with opaque parameters (`patches/README.md`). Tool discovery
 returns the selected declaration's input schema and usage guidelines. External
 drivers and turns that do not select `cell` keep their existing tool surface.
 Cancellation saves a failed outer receipt without replaying source. An active

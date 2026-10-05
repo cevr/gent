@@ -1042,11 +1042,11 @@ describe("extension model surface over RPC", () => {
     ),
   )
 
-  // A model calls a tool with input its parameters refuse: a wrong type, a
-  // missing key. The tool runner is the one place that checks a call: each
-  // call fails as a tool result that names the fault, the tool body does not
-  // run, and the turn goes on to the next step. The stream does not fail and
-  // the step is not retried.
+  // A model calls a tool with input its parameters refuse (a wrong type, a
+  // missing key), or names a tool no extension registers. The tool runner is
+  // the one place that checks a call: each call fails as a tool result that
+  // names the fault, the tool body does not run, and the turn goes on to the
+  // next step. The stream does not fail and the step is not retried.
   it.scopedLive("a call the tool runner refuses fails as its result and the turn goes on", () =>
     Effect.gen(function* () {
       const ran: Array<unknown> = []
@@ -1074,6 +1074,7 @@ describe("extension model surface over RPC", () => {
         multiToolCallStep(
           { toolName: "todo", input: { todo: 42, done: false } },
           { toolName: "todo", input: { todo: "milk" } },
+          { toolName: "nowhere", input: { todo: "milk" } },
         ),
         textStep("finished"),
       ])
@@ -1097,12 +1098,14 @@ describe("extension model surface over RPC", () => {
       expect(results.map((part) => [part.name, part.isFailure])).toEqual([
         ["todo", true],
         ["todo", true],
+        ["nowhere", true],
       ])
       const errors = results.map((part) => Schema.decodeUnknownSync(ErrorResult)(part.result).error)
       expect(errors[0]).toContain("Tool 'todo' input failed")
       expect(errors[0]).toContain("todo")
       expect(errors[1]).toContain("Tool 'todo' input failed")
       expect(errors[1]).toContain("done")
+      expect(errors[2]).toBe("Unknown tool: nowhere")
       expect(ran).toEqual([])
       expect(events.filter(Predicate.isTagged("ProviderRetrying"))).toEqual([])
       expect(events.filter(Predicate.isTagged("TurnCompleted"))).toMatchObject([
