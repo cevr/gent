@@ -6,6 +6,7 @@ import { createSignal, Show } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
   type AgentRowEntry,
+  BTW_EXTENSION_ID,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
@@ -2186,6 +2187,7 @@ describe("Descendant activity", () => {
     here: () => typeof parent = () => parent,
     pane = makePaneSlot(),
     clock?: Clock.Clock,
+    transport = makeClientTestTransport({ currentSession: here }),
   ) =>
     Effect.gen(function* () {
       const controllerClock = yield* Clock.Clock
@@ -2195,7 +2197,7 @@ describe("Descendant activity", () => {
       const context = yield* Layer.buildWithScope(
         makeClientContextLayer(
           testClientContextDeps({
-            transport: makeClientTestTransport({ currentSession: here }),
+            transport,
             activity: () => ({ sessionId: here().sessionId, state: "idle" }),
             shell: {
               pane,
@@ -2226,6 +2228,68 @@ describe("Descendant activity", () => {
     })
   const settle = (controller: { readonly loading: () => boolean }) =>
     waitUntil(() => !controller.loading(), "listing settled")
+
+  it.scopedLive(
+    "BTW activity discovers new work after an empty or inactive tree stopped polling",
+    () =>
+      Effect.gen(function* () {
+        for (const initial of [
+          [],
+          [{ ...row("stored", false), parentSessionId: parent.sessionId, section: "inactive" }],
+        ] satisfies ReadonlyArray<ReadonlyArray<AgentRowEntry>>) {
+          const clock = yield* TestClock.make()
+          const pane = makePaneSlot()
+          const pulses = new Set<
+            Parameters<ReturnType<typeof makeClientTestTransport>["onExtensionStateChanged"]>[0]
+          >()
+          let listed: ReadonlyArray<AgentRowEntry> = initial
+          const asked: Array<ListAgentsInput> = []
+          const { controller, activity } = yield* over(
+            (input) => {
+              asked.push(input)
+              return Effect.succeed(listed)
+            },
+            () => parent,
+            pane,
+            clock,
+            {
+              ...makeClientTestTransport({ currentSession: () => parent }),
+              onExtensionStateChanged: (cb) => {
+                pulses.add(cb)
+                return () => {
+                  pulses.delete(cb)
+                }
+              },
+            },
+          )
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("idle")
+          expect(pane.isOpen("agents.pane")).toBe(false)
+          yield* clock.adjust("6 seconds")
+          expect(asked).toEqual([{ query: "", root: parent.sessionId }])
+          listed = [working("btw-child"), working("unrelated", SessionId.make("elsewhere"))]
+          for (const cb of pulses) cb({ ...parent, extensionId: "@gent/unrelated" })
+          expect(asked).toHaveLength(1)
+          for (const cb of pulses) cb({ ...parent, extensionId: BTW_EXTENSION_ID })
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("working")
+          expect(asked).toEqual([
+            { query: "", root: parent.sessionId },
+            { query: "", root: parent.sessionId },
+          ])
+          // Stream pulses do not duplicate reads once the same child clock is active.
+          for (let pulse = 0; pulse < 5; pulse++) {
+            for (const cb of pulses) cb({ ...parent, extensionId: BTW_EXTENSION_ID })
+          }
+          expect(asked).toHaveLength(2)
+          listed = [...listed, { ...working("asking-child"), status: "WaitingForInteraction" }]
+          yield* clock.adjust("2 seconds")
+          yield* settle(controller)
+          expect(activity.snapshot().state).toBe("blocked")
+          expect(asked).toHaveLength(3)
+        }
+      }).pipe(Effect.timeout("5 seconds")),
+  )
 
   it.scopedLive(
     "without a tray, setup and identity changes read activity without user action",

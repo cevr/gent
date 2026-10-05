@@ -4,6 +4,7 @@ import { createEffect, createRoot, createSignal, For, on, Show } from "solid-js"
 import {
   type AgentRowEntry,
   AgentsViewRpc,
+  BTW_EXTENSION_ID,
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
@@ -526,12 +527,18 @@ export const makeAgentsController = (
     })
 
     // A delegate pulse in the current session means its subtree changed; so
-    // does a session-tools pulse, which `thread.start` sends.
+    // does a session-tools pulse, which `thread.start` sends. A BTW pulse
+    // discovers a new fork when complete empty/inactive knowledge stopped
+    // polling; once a child is live, its stream pulses leave the clock in charge.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
         if (
           pulse.extensionId === DELEGATE_EXTENSION_ID ||
-          pulse.extensionId === SESSION_TOOLS_EXTENSION_ID
+          pulse.extensionId === SESSION_TOOLS_EXTENSION_ID ||
+          (pulse.extensionId === BTW_EXTENSION_ID &&
+            Option.exists(descendants(), (children) =>
+              children.every((row) => row.section === "inactive"),
+            ))
         ) {
           tick()
         }
