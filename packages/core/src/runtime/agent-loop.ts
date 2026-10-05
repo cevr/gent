@@ -62,6 +62,7 @@ import {
   type EventStorageError,
   type InteractionStorage,
   MessageStorage,
+  type RelationshipStorage,
   SessionOperationStorage,
   type SessionStorage,
   ToolCallBindingStorage,
@@ -100,7 +101,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
-import type { FailedExtension } from "../domain/extension.js"
+import { BranchAddress, type FailedExtension } from "../domain/extension.js"
 import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
@@ -114,22 +115,23 @@ import {
   type TurnOutcome,
 } from "./turn.js"
 import {
-  BranchToolWork,
-  CurrentBranchToolFeature,
   makeTurnInterruption,
+  type TurnStop,
   ProcessLocalToolReplay,
   ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
-import { withWideEvent } from "effect-wide-event"
+import { ModelContextLedger } from "./model-context.js"
+import { type WideEvent, withWideEvent } from "effect-wide-event"
 import { Entity, Sharding, ShardingConfig } from "effect/cluster"
 import type { SqlClient } from "effect/sql"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
 import {
   ApprovalService,
+  branchBuildContext,
+  branchResourceKeys,
   buildScopeResources,
   type CurrentExtensionHostContext,
-  resourceBuildKeys,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
@@ -1046,6 +1048,9 @@ export interface TurnWork {
   readonly resident: Scope.Closeable
 }
 
+/** What a turn's `WideEvent.set` needs: the boundary the worker opens. */
+type WideEventServices = Effect.Services<ReturnType<typeof WideEvent.set>>
+
 type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -1056,8 +1061,6 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly residency: AgentLoopResidencyService
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnInterruption: TurnInterruption
-  /** Cancel whatever tool work this loop has in flight. Idempotent. */
-  readonly interruptToolWork: Effect.Effect<void>
   readonly inbox: LoopInbox
   readonly admissionGateRef: Ref.Ref<AdmissionGate>
   readonly recordTurnFailure: (
@@ -1067,7 +1070,10 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   /** Append the receipt of a turn a phase failure stopped and run its hooks; never fails. */
   readonly completeFailedTurn: (state: RunningState) => Effect.Effect<void>
-  readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
+  /** The worker opens the turn's wide event around it. */
+  readonly runTurn: (
+    state: RunningState,
+  ) => Effect.Effect<TurnOutcome, AgentLoopError | E, R | WideEventServices>
   /** The agent the session runs as; it names the actor of each turn's wide event. */
   readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
   /** True when this request already has an answer waiting for its owner. */
@@ -1341,7 +1347,6 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       }
       if (snap._tag === "WaitingForInteraction") return { latched: true, waiting: true }
       yield* interruptActiveStream(scope.activeStreamRef)
-      yield* scope.interruptToolWork
       return { latched: true, waiting: false }
     }).pipe(scope.interruptSemaphore.withPermits(1))
     if (!reached.waiting) return reached.latched
@@ -1542,7 +1547,13 @@ interface BranchGeneration {
   readonly scope: Scope.Closeable
   /** The services this extension's branch Resources built, and only those. */
   readonly context: Context.Context<unknown>
-  readonly lease: ProfileLease
+  /**
+   * The newest profile that uses it. A later run that keeps it moves it to
+   * its own profile, which holds every service its build read (its key says
+   * so): the profile before can retire, with another extension's old
+   * process services.
+   */
+  lease: ProfileLease
   users: number
   /** The extension whose Resources these are. */
   readonly extensionId: ExtensionId
@@ -1601,6 +1612,12 @@ export const closeBranchGenerations = (retired: ReadonlyArray<BranchGeneration>)
 
 type AgentLoopRuntimeServices =
   | SessionStorage
+  | RelationshipStorage
+  | ToolCallBindingStorage
+  | GentPlatform
+  | RuntimeEnvironment
+  | FileSystem.FileSystem
+  | Path.Path
   | SessionOperationStorage
   | MessageStorage
   | EventStorage
@@ -1656,13 +1673,13 @@ type AgentLoopBehavior = {
     run: RunOpener,
   ) => Effect.Effect<AgentLoopTurnProfile, AgentLoopError, Scope.Scope>
   /**
-   * Branch-lifetime services: the cell kernel and the model context ledger.
-   * A run outside a turn (an `extension.request` RPC, say) must be given this
-   * context as a turn is. Extension Resources declared with `scope: "branch"`
-   * are not here: they follow the profile, so `resolveTurnProfile` puts them
-   * in the run's capability context.
+   * Branch-lifetime services: the model context ledger. A run outside a turn
+   * (an `extension.request` RPC, say) must be given this context as a turn
+   * is. Extension Resources declared with `scope: "branch"`, such as the cell
+   * kernel, are not here: they follow the profile, so `resolveTurnProfile`
+   * puts them in the run's capability context.
    */
-  branchContext: Context.Context<never>
+  branchContext: Context.Context<ModelContextLedger>
   /** Start the turn a restart cut short; only an opening loop calls it. */
   startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
@@ -1835,6 +1852,7 @@ const makeAgentLoopBehavior = (
   | Scope.Scope
   | Entity.CurrentAddress
   | SessionStorage
+  | RelationshipStorage
   | MessageStorage
   | AgentLoopQueueStorage
   | EventStorage
@@ -1954,20 +1972,23 @@ const makeAgentLoopBehavior = (
       )
 
     const turnInterruption = yield* makeTurnInterruption
-    // Branch-owned turn services: the cell kernel, the model context ledger,
-    // and every extension Resource declared with `scope: "branch"`. All live
-    // under `loopScope`, so they are built per loop and interrupted when the
-    // branch closes. Process-scope Resources are not collected here — they
-    // belong to the profile cache and outlive this scope.
-    const branchTools = yield* CurrentBranchToolFeature
+    // Branch-owned turn services: the model context ledger and every
+    // extension Resource declared with `scope: "branch"`, such as the cell
+    // kernel. All live under `loopScope`, so they are built per loop and
+    // interrupted when the branch closes. Process-scope Resources are not
+    // collected here — they belong to the profile cache and outlive this scope.
     // A failed read fails the open; the next op opens again.
     const branchCwd = yield* sessionWorkingDirectory(sessionId).pipe(
       asAgentLoopError(`Cannot read session ${sessionId} for its working directory`),
     )
-    const branchToolContext = yield* Layer.build(
-      branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
-    ).pipe(Scope.provide(loopScope))
-    const branchContext = branchToolContext
+    // The branch's model context ledger: a dispatching tool schedules a
+    // directive into it, and each step of a turn reads it.
+    const ledger = yield* ModelContextLedger.make
+    const branchContext = Context.make(ModelContextLedger, ledger)
+    const branchAddress = Context.make(
+      BranchAddress,
+      BranchAddress.of({ sessionId, branchId, cwd: branchCwd, home: runtimeEnvironment.home }),
+    )
     // The branch's Resources follow the session's profile, the same one its
     // turns and requests resolve: the extensions set up for the session's
     // cwd, over that profile's process services. The host cwd's profile
@@ -1977,14 +1998,14 @@ const makeAgentLoopBehavior = (
     // resolves a profile.
     //
     // A build of one extension's branch Resources is a generation, named by
-    // its build key (`resourceBuildKeys`): an edit to the extension or to
-    // one it builds over gives a new key, and so a new generation; an edit
-    // elsewhere keeps it. A run holds the generations of the profile it
-    // resolved until it ends, so a turn that started before an edit ends on
-    // the old services while the next run reads the new ones. A generation
-    // the newest profile does not use closes when its last run ends, in
-    // reverse build order. It keeps a lease on the profile it was built
-    // over, so the process services it reads close after it.
+    // its build key (`branchResourceKeys`): an edit to the extension gives a
+    // new key, and so a new generation; an edit elsewhere keeps it. A run
+    // holds the generations of the profile it resolved until it ends, so a
+    // turn that started before an edit ends on the old services while the
+    // next run reads the new ones. A generation the newest profile does not
+    // use closes when its last run ends, in reverse build order. It keeps a
+    // lease on the newest profile that uses it, so the process services it
+    // reads close after it.
     //
     // `branchResourceLock` orders the resolves of this loop, so the newest
     // profile is the last one resolved. The place's lock in the profile
@@ -2144,128 +2165,140 @@ const makeAgentLoopBehavior = (
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* restore(branchResourceLock.take(1))
-            const { profile, retired, resolveNumber, lease } = yield* Effect.gen(function* () {
-              const lease: ProfileLease = {
-                scope: yield* Scope.fork(loopScope),
-                holds: 1,
-                owner: loopScope,
-              }
-              const resolved = yield* restore(resolveProfile(opener, lease.scope)).pipe(
-                Effect.onError(() => Scope.close(lease.scope, Exit.void)),
-              )
-              const extensions = turnRegistry(resolved).getResolved().extensions
-              const keys = resourceBuildKeys(extensions, "branch", "branch")
-              const used: Array<string> = []
-              const suspended: Array<FailedExtension> = []
-              // Each extension's branch Resources build on their own, as its
-              // process Resources do. One that fails, or that needs a service
-              // a failed one would have built, is named once in the log and in
-              // the transcript and is suspended for this loop, as a failed
-              // process Resource suspends its extension for the profile;
-              // every other extension and the branch's turns go on.
-              const started = yield* buildScopeResources({
-                extensions: extensions.filter((extension) => {
-                  const failure = failedBuilds.get(keys.get(extension) ?? "")
-                  if (Predicate.isUndefined(failure)) return true
+            const { profile, retired, moved, resolveNumber, lease } = yield* Effect.gen(
+              function* () {
+                const lease: ProfileLease = {
+                  scope: yield* Scope.fork(loopScope),
+                  holds: 1,
+                  owner: loopScope,
+                }
+                const resolved = yield* restore(resolveProfile(opener, lease.scope)).pipe(
+                  Effect.onError(() => Scope.close(lease.scope, Exit.void)),
+                )
+                const extensions = turnRegistry(resolved).getResolved().extensions
+                const builds = resolved.turnResourceBuilds
+                const keys = branchResourceKeys(extensions, builds)
+                const used: Array<string> = []
+                // The leases of the profiles before that kept generations held.
+                const moved: Array<ProfileLease> = []
+                const suspended: Array<FailedExtension> = []
+                // Each extension's branch Resources build on their own, as its
+                // process Resources do. One that fails, or that needs a service
+                // a failed one would have built, is named once in the log and in
+                // the transcript and is suspended for this loop, as a failed
+                // process Resource suspends its extension for the profile;
+                // every other extension and the branch's turns go on.
+                const started = yield* buildScopeResources({
+                  extensions: extensions.filter((extension) => {
+                    const failure = failedBuilds.get(keys.get(extension) ?? "")
+                    if (Predicate.isUndefined(failure)) return true
+                    suspended.push(failure)
+                    return false
+                  }),
+                  scope: "branch",
+                  context: Context.merge(
+                    Context.makeUnsafe<unknown>(new Map()),
+                    resolved.turnCapabilityContext,
+                  ),
+                  buildContext: (extension) => branchBuildContext(extension, builds, branchAddress),
+                  parent: loopScope,
+                  restore: (effect) => effect,
+                  reuse: (extension) => {
+                    const key = keys.get(extension)
+                    if (Predicate.isUndefined(key)) return Option.none()
+                    const generation = generations.get(key)
+                    if (Predicate.isUndefined(generation)) return Option.none()
+                    generation.users += 1
+                    if (generation.lease !== lease) {
+                      lease.holds += 1
+                      moved.push(generation.lease)
+                      generation.lease = lease
+                    }
+                    used.push(key)
+                    return Option.some(generation.context)
+                  },
+                  built: (extension, scope, context) => {
+                    const key = keys.get(extension)
+                    if (Predicate.isUndefined(key)) return
+                    lease.holds += 1
+                    nextGenerationId += 1
+                    generations.set(key, {
+                      id: nextGenerationId,
+                      scope,
+                      context,
+                      lease,
+                      users: 1,
+                      extensionId: extension.manifest.id,
+                      activated: false,
+                    })
+                    used.push(key)
+                  },
+                })
+                for (const { extension, failure } of started.failed) {
+                  const key = keys.get(extension)
+                  if (!Predicate.isUndefined(key)) failedBuilds.set(key, failure)
                   suspended.push(failure)
-                  return false
-                }),
-                scope: "branch",
-                context: Context.merge(
-                  Context.makeUnsafe<unknown>(new Map()),
-                  resolved.turnCapabilityContext,
-                ),
-                parent: loopScope,
-                restore: (effect) => effect,
-                reuse: (extension) => {
-                  const key = keys.get(extension)
-                  if (Predicate.isUndefined(key)) return Option.none()
-                  const generation = generations.get(key)
-                  if (Predicate.isUndefined(generation)) return Option.none()
-                  generation.users += 1
-                  used.push(key)
-                  return Option.some(generation.context)
-                },
-                built: (extension, scope, context) => {
-                  const key = keys.get(extension)
-                  if (Predicate.isUndefined(key)) return
-                  lease.holds += 1
-                  nextGenerationId += 1
-                  generations.set(key, {
-                    id: nextGenerationId,
-                    scope,
-                    context,
-                    lease,
-                    users: 1,
-                    extensionId: extension.manifest.id,
-                    activated: false,
-                  })
-                  used.push(key)
-                },
-              })
-              for (const { extension, failure } of started.failed) {
-                const key = keys.get(extension)
-                if (!Predicate.isUndefined(key)) failedBuilds.set(key, failure)
-                suspended.push(failure)
-              }
-              yield* Effect.forEach(
-                started.failed,
-                ({ failure, message }) =>
-                  publishEvent(
-                    ErrorOccurred.make({
-                      sessionId,
-                      branchId,
-                      error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
-                      notice: true,
-                    }),
-                  ).pipe(
-                    Effect.catchEager((error) =>
-                      Effect.logWarning("failed to publish ErrorOccurred").pipe(
-                        Effect.annotateLogs({ error: String(error) }),
+                }
+                yield* Effect.forEach(
+                  started.failed,
+                  ({ failure, message }) =>
+                    publishEvent(
+                      ErrorOccurred.make({
+                        sessionId,
+                        branchId,
+                        error: `Extension "${failure.manifest.id}" branch resource failed to start: ${message}`,
+                        notice: true,
+                      }),
+                    ).pipe(
+                      Effect.catchEager((error) =>
+                        Effect.logWarning("failed to publish ErrorOccurred").pipe(
+                          Effect.annotateLogs({ error: String(error) }),
+                        ),
                       ),
                     ),
+                  { discard: true },
+                )
+                // The run lets go of its generations, then of its lease, when it
+                // ends: a generation built over this profile closes before the
+                // profile can retire.
+                yield* Scope.addFinalizer(
+                  runScope,
+                  releaseGenerations(used).pipe(
+                    Effect.ensuring(releaseProfileLease(lease)),
+                    Effect.annotateLogs({ sessionId, branchId }),
                   ),
-                { discard: true },
-              )
-              // The run lets go of its generations, then of its lease, when it
-              // ends: a generation built over this profile closes before the
-              // profile can retire.
-              yield* Scope.addFinalizer(
-                runScope,
-                releaseGenerations(used).pipe(
-                  Effect.ensuring(releaseProfileLease(lease)),
-                  Effect.annotateLogs({ sessionId, branchId }),
-                ),
-              )
-              // This profile is now the newest: a generation it does not use
-              // closes once no run holds it.
-              currentKeys = new Set(used)
-              const retired: Array<BranchGeneration> = []
-              for (const [key, generation] of generations) {
-                if (generation.users > 0 || currentKeys.has(key)) continue
-                retire(key, generation, retired)
-              }
-              const context = runContext(resolved, used, suspended)
-              const profile = { ...resolved, turnCapabilityContext: context }
-              // The openers of the newest profile, as the run reads it: a
-              // suspended extension's hooks are not in its registry.
-              const registry = turnRegistry(profile).getResolved()
-              newestOpeners = registry.extensions.flatMap((extension) => {
-                if (!registry.extensionHooks.loopOpenExtensions.has(extension.manifest.id)) {
-                  return []
+                )
+                // This profile is now the newest: a generation it does not use
+                // closes once no run holds it.
+                currentKeys = new Set(used)
+                const retired: Array<BranchGeneration> = []
+                for (const [key, generation] of generations) {
+                  if (generation.users > 0 || currentKeys.has(key)) continue
+                  retire(key, generation, retired)
                 }
-                const key = Option.fromUndefinedOr(keys.get(extension))
-                return [{ extensionId: extension.manifest.id, key }]
-              })
-              const present = new Set(newestOpeners.map((opener) => opener.extensionId))
-              for (const id of openedWithoutResources) {
-                if (!present.has(id)) openedWithoutResources.delete(id)
-              }
-              resolveCount += 1
-              return { profile, retired, resolveNumber: resolveCount, lease }
-            }).pipe(Effect.ensuring(branchResourceLock.release(1)))
+                const context = runContext(resolved, used, suspended)
+                const profile = { ...resolved, turnCapabilityContext: context }
+                // The openers of the newest profile, as the run reads it: a
+                // suspended extension's hooks are not in its registry.
+                const registry = turnRegistry(profile).getResolved()
+                newestOpeners = registry.extensions.flatMap((extension) => {
+                  if (!registry.extensionHooks.loopOpenExtensions.has(extension.manifest.id)) {
+                    return []
+                  }
+                  const key = Option.fromUndefinedOr(keys.get(extension))
+                  return [{ extensionId: extension.manifest.id, key }]
+                })
+                const present = new Set(newestOpeners.map((opener) => opener.extensionId))
+                for (const id of openedWithoutResources) {
+                  if (!present.has(id)) openedWithoutResources.delete(id)
+                }
+                resolveCount += 1
+                return { profile, retired, moved, resolveNumber: resolveCount, lease }
+              },
+            ).pipe(Effect.ensuring(branchResourceLock.release(1)))
             // An extension finalizer never runs under the lock.
             yield* closeGenerations(retired)
+            yield* Effect.forEach(moved, releaseProfileLease, { discard: true })
             return { profile, lease, newest: () => resolveNumber === resolveCount }
           }),
         )
@@ -2278,17 +2311,6 @@ const makeAgentLoopBehavior = (
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
-    // A tool holding branch-scoped work exposes how to cancel it. A branch
-    // whose tools are all stateless has nothing to cancel.
-    const branchWork = Context.getOption(branchToolContext, BranchToolWork)
-    const interruptToolWork = Option.match(branchWork, {
-      onNone: () => Effect.void,
-      onSome: (work) => work.cancel,
-    })
-    const stopToolWork = Option.match(branchWork, {
-      onNone: () => Effect.void,
-      onSome: (work) => work.stop,
-    })
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
@@ -2303,6 +2325,17 @@ const makeAgentLoopBehavior = (
     // teardown), and never by a user's cancel: a turn the loop stops has not
     // ended, so what it owns stays for the restart.
     const stopping = yield* Deferred.make<void>()
+    // Completed by the close once it interrupted the turn: a tool that runs
+    // uninterruptibly then stops its own work and records nothing.
+    const closingTools = yield* Deferred.make<void>()
+    const turnStop: TurnStop = {
+      stopped: Effect.raceFirst(turnInterruption.awaitInterrupt, Deferred.await(closingTools)),
+      isStopped: Effect.map(
+        Effect.all([turnInterruption.interrupted, Deferred.isDone(stopping)]),
+        ([interrupted, closing]) => interrupted || closing,
+      ),
+      closing: Deferred.isDone(stopping),
+    }
     const startedRef = yield* Ref.make(false)
 
     const inbox = yield* makeLoopInbox({
@@ -2356,6 +2389,8 @@ const makeAgentLoopBehavior = (
       activeStreamRef,
       turnLedger,
       turnInterruption,
+      turnStop,
+      ledger,
       inbox,
       branchContext,
       loopStopping: Deferred.isDone(stopping),
@@ -2370,7 +2405,6 @@ const makeAgentLoopBehavior = (
       residency,
       activeStreamRef,
       turnInterruption,
-      interruptToolWork,
       inbox,
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
@@ -2503,14 +2537,15 @@ const makeAgentLoopBehavior = (
         // before anything that can stop the turn.
         yield* markStopping
         yield* worker.interruptActiveStream
-        // Branch tool work can hold the turn past a fiber interrupt
-        // (a cell runs uninterruptibly so a cancel can report), so the turn is
-        // interrupted first and its tool work is then stopped; without the
-        // stop, closing the scope would wait for that work forever.
+        // A tool call can hold the turn past a fiber interrupt (a cell runs
+        // uninterruptibly so a cancel can report), so the turn is interrupted
+        // first and `closingTools` then tells each call's `CurrentTurnStop`
+        // that the loop closes; the call stops its own work, else closing the
+        // scope would wait for that work forever.
         const turn = yield* Ref.get(turnWorkerFiber)
         if (Option.isSome(turn))
           yield* Effect.forkDetach(Fiber.interrupt(turn.value), { startImmediately: true })
-        yield* stopToolWork
+        yield* Deferred.succeed(closingTools, void 0)
         yield* Deferred.succeed(closed, void 0).pipe(Effect.ignore)
         yield* Scope.close(loopScope, Exit.void)
       }),
@@ -3641,8 +3676,8 @@ const agentLoopActorHandlers = Effect.gen(function* () {
             environment,
             rpcRegistry.run(operation.extensionId, capabilityId, input),
           ).pipe(
-            // The cell kernel and the model context ledger live on the loop
-            // scope, not on the profile.
+            // The model context ledger lives on the loop scope, not on the
+            // profile.
             Effect.provideContext(handle.branchContext),
           )
           // Reads, extension-owned writes and independently serialized queue

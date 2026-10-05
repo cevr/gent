@@ -16,9 +16,7 @@ BunRuntime.runMain(
     const storagePath = yield* Config.String("BG_STORAGE_PATH")
     const home = yield* Config.String("BG_HOME")
     const command = yield* Config.String("BG_COMMAND")
-    const storage = SqliteStorage.LiveWithSql(storagePath, Layer.empty, {}).pipe(
-      Layer.provide(BunPlatformLive),
-    )
+    const storage = SqliteStorage.LiveWithSql(storagePath).pipe(Layer.provide(BunPlatformLive))
     const ctx = testToolContext({
       toolCallId: ToolCallId.make("crashed-host-job"),
       cwd: home,

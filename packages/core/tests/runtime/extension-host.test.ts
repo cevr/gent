@@ -183,12 +183,7 @@ import {
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
-import {
-  attachToolBindingIdentity,
-  CurrentBranchToolFeature,
-  noBranchTools,
-  ToolRunner,
-} from "../../src/runtime/tools"
+import { attachToolBindingIdentity, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
@@ -303,14 +298,7 @@ describe("ambient extension host context", () => {
       ])
       const envelopes = yield* Fiber.join(delivered)
       expect(envelopes.map((envelope) => envelope.event._tag)).toStrictEqual(["MessageReceived"])
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-          EventStore.Memory,
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(Layer.mergeAll(testSqliteStorage, EventStore.Memory))),
   )
 
   it.live("a session read lands in the workspace the run was built under, not the caller's", () =>
@@ -342,7 +330,7 @@ describe("ambient extension host context", () => {
         Effect.provideService(CurrentWorkspaceId, otherWorkspace),
       )
       expect(found?.name).toBe("pinned")
-    }).pipe(Effect.provide(testSqliteStorage(noBranchTools.storage, noBranchTools.migrations))),
+    }).pipe(Effect.provide(testSqliteStorage)),
   )
 
   it.scopedLive(
@@ -377,12 +365,7 @@ describe("ambient extension host context", () => {
       }).pipe(
         // The storage-backed store validates the session and loads the rows
         // under the workspace in scope at pull time; the memory store reads none.
-        Effect.provide(
-          Layer.provideMerge(
-            EventStoreLive,
-            testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-          ),
-        ),
+        Effect.provide(Layer.provideMerge(EventStoreLive, testSqliteStorage)),
       ),
   )
 
@@ -420,14 +403,7 @@ describe("ambient extension host context", () => {
       yield* publish(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }))
       const [delivered] = yield* Fiber.join(next).pipe(Effect.timeout("4 seconds"))
       expect(delivered?._tag).toBe("TurnCompleted")
-    }).pipe(
-      Effect.provide(
-        Layer.provideMerge(
-          EventStoreLive,
-          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
-        ),
-      ),
-    ),
+    }).pipe(Effect.provide(Layer.provideMerge(EventStoreLive, testSqliteStorage))),
   )
 })
 
@@ -494,7 +470,7 @@ const makeCacheLayer = (params: {
     Layer.provide(
       Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
         // A later layer's service wins: the wrapped file system, when given.
         Option.match(Option.fromUndefinedOr(params.wrapFileSystem), {
           onNone: () => Layer.empty,
@@ -2183,13 +2159,13 @@ describe("resolveTurnProfile", () => {
           Layer.mergeAll(
             BunServices.layer,
             configServiceLive,
-            SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
       )
       const testLayer = Layer.mergeAll(
         BunServices.layer,
-        SqliteStorage.MemoryWithSql(Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
         emptyRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
@@ -2228,7 +2204,7 @@ describe("resolveTurnProfile", () => {
         home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(Layer.empty, {}),
+        testSqliteStorage,
         fixedSessionProfiles(),
         runtimeEnvironmentLayer,
       )
@@ -2264,7 +2240,7 @@ describe("resolveTurnProfile", () => {
         home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(Layer.empty, {}),
+        testSqliteStorage,
         fixedSessionProfiles(),
         runtimeEnvironmentLayer,
       )
@@ -2320,7 +2296,7 @@ describe("resolveTurnProfile", () => {
         home: "/nonexistent/runtime-context-home",
       })
       const testLayer = Layer.mergeAll(
-        testSqliteStorage(Layer.empty, {}),
+        testSqliteStorage,
         emptyRegistryLayer,
         runtimeEnvironmentLayer,
       )
@@ -2347,6 +2323,7 @@ describe("resolveTurnProfile", () => {
           layerContext: Context.make(ExtensionRegistry, profileRegistry),
           registryService: profileRegistry,
           baseSections: [],
+          resourceBuilds: { host: Context.makeUnsafe(new Map()), process: new Map() },
           generationId: ProcessGenerationId.make("test"),
         }
         const fakeProfileCache: Pick<SessionProfileCacheService, "resolve"> = {
@@ -2661,6 +2638,9 @@ const fsLayer = Layer.provideMerge(
   childProcessSpawnerLive,
 )
 
+/** The session database every Resource build reads, in memory. */
+const profileStorageLayer = SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive))
+
 /**
  * The extensions a profile for `home` and `cwd` activates: the scan, load,
  * setup and validation `SessionProfileCache` runs, with no builtins. User
@@ -2797,58 +2777,52 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live(
-    "validation collisions fail the conflicting extensions instead of crashing host activation",
-    () =>
-      Effect.gen(function* () {
-        const result = yield* validateLoadedExtensions([
-          makeLoaded("healthy-ext", {
-            tools: [
-              tool({
-                id: "healthy_tool",
-                description: "healthy",
-                params: Schema.Struct({}),
-                output: Schema.Void,
-                execute: () => Effect.void,
-              }),
-            ],
+  test("validation collisions fail the conflicting extensions instead of crashing host activation", () => {
+    const result = validateLoadedExtensions([
+      makeLoaded("healthy-ext", {
+        tools: [
+          tool({
+            id: "healthy_tool",
+            description: "healthy",
+            params: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () => Effect.void,
           }),
-          makeLoaded("collider-a", {
-            tools: [
-              tool({
-                id: "shared_tool",
-                description: "a",
-                params: Schema.Struct({}),
-                output: Schema.Void,
-                execute: () => Effect.void,
-              }),
-            ],
-          }),
-          makeLoaded("collider-b", {
-            tools: [
-              tool({
-                id: "shared_tool",
-                description: "b",
-                params: Schema.Struct({}),
-                output: Schema.Void,
-                execute: () => Effect.void,
-              }),
-            ],
-          }),
-        ])
-
-        expect(result.active.map((ext) => ext.manifest.id)).toEqual([
-          ExtensionId.make("healthy-ext"),
-        ])
-        expect(result.failed).toHaveLength(2)
-        expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
-          ExtensionId.make("collider-a"),
-          ExtensionId.make("collider-b"),
-        ])
-        expect(result.failed.every((ext) => ext.phase === "validation")).toBe(true)
-        expect(result.failed.every((ext) => ext.error.includes("shared_tool"))).toBe(true)
+        ],
       }),
-  )
+      makeLoaded("collider-a", {
+        tools: [
+          tool({
+            id: "shared_tool",
+            description: "a",
+            params: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () => Effect.void,
+          }),
+        ],
+      }),
+      makeLoaded("collider-b", {
+        tools: [
+          tool({
+            id: "shared_tool",
+            description: "b",
+            params: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () => Effect.void,
+          }),
+        ],
+      }),
+    ])
+
+    expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
+    expect(result.failed).toHaveLength(2)
+    expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
+      ExtensionId.make("collider-a"),
+      ExtensionId.make("collider-b"),
+    ])
+    expect(result.failed.every((ext) => ext.phase === "validation")).toBe(true)
+    expect(result.failed.every((ext) => ext.error.includes("shared_tool"))).toBe(true)
+  })
 
   // Activation must catch cross-bucket capability collisions in addition to
   // tool/tool. The resolver overwrites silently in last-write-wins order
@@ -2894,35 +2868,31 @@ describe("extension activation isolation", () => {
       effect: () => Effect.void,
     }) as never
 
-  it.live("validation fails a tool and a request that share an id in one scope", () =>
-    Effect.gen(function* () {
-      // Tools and requests share one id namespace: resolution keeps one
-      // winner per id, so a passing pair would silently drop the tool.
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("model-tool", {
-          tools: [
-            tool({
-              id: "shared_name",
-              description: "model",
-              params: Schema.Struct({}),
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
-        }),
-        makeLoaded("rpc-only", { requests: [rawRpcLeaf("shared_name")] }),
-      ])
+  test("validation fails a tool and a request that share an id in one scope", () => {
+    // Tools and requests share one id namespace: resolution keeps one
+    // winner per id, so a passing pair would silently drop the tool.
+    const result = validateLoadedExtensions([
+      makeLoaded("model-tool", {
+        tools: [
+          tool({
+            id: "shared_name",
+            description: "model",
+            params: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () => Effect.void,
+          }),
+        ],
+      }),
+      makeLoaded("rpc-only", { requests: [rawRpcLeaf("shared_name")] }),
+    ])
 
-      expect(result.active).toEqual([])
-      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
-        ExtensionId.make("model-tool"),
-        ExtensionId.make("rpc-only"),
-      ])
-      expect(result.failed.every((ext) => ext.error.includes('capability "shared_name"'))).toBe(
-        true,
-      )
-    }),
-  )
+    expect(result.active).toEqual([])
+    expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
+      ExtensionId.make("model-tool"),
+      ExtensionId.make("rpc-only"),
+    ])
+    expect(result.failed.every((ext) => ext.error.includes('capability "shared_name"'))).toBe(true)
+  })
 
   it.live("validation fails one extension whose own tool and request share an id", () =>
     Effect.gen(function* () {
@@ -3106,7 +3076,7 @@ describe("extension activation isolation", () => {
       })
       expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
       expect(profile.resolved.extensionStatuses[0]).toMatchObject({ status: "active" })
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
   it.scopedLive("a failed resource layer suspends only its extension and keeps siblings live", () =>
@@ -3170,7 +3140,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions[0]?.error).toContain("resource layer boom")
       // The healthy resource stays acquired until the server scope closes.
       expect(released).toBe(0)
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
   // Only an interrupt of the resolve stops the build. An extension whose
@@ -3207,7 +3177,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions).toMatchObject([
         { manifest: { id: ExtensionId.make("self-interrupting") }, phase: "startup" },
       ])
-    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+    }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 })
 
@@ -3903,7 +3873,7 @@ describe("host session facet", () => {
     }).pipe(
       Effect.provide(
         Layer.merge(
-          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage,
           RuntimeEnvironment.Live({
             cwd: "/nonexistent/gent-test-cwd",
             home: "/nonexistent/gent-test-home",
@@ -3988,7 +3958,7 @@ describe("client request origin", () => {
       Effect.timeout("5 seconds"),
       Effect.provide(
         Layer.merge(
-          testSqliteStorage(noBranchTools.storage, noBranchTools.migrations),
+          testSqliteStorage,
           RuntimeEnvironment.Live({
             cwd: "/nonexistent/gent-test-cwd",
             home: "/nonexistent/gent-test-home",
@@ -4873,6 +4843,7 @@ const buildProcessResources = (extensions: ReadonlyArray<LoadedExtension>) =>
       extensions,
       scope: "process",
       context: Context.makeUnsafe<unknown>(new Map()),
+      buildContext: (_extension, before) => before,
       parent: yield* Effect.scope,
       restore: (effect) => effect,
     })
@@ -5257,10 +5228,11 @@ const makeMutationsLayer = (
     layerContext: Context.make(ExtensionRegistry, launchRegistry),
     registryService: launchRegistry,
     baseSections: [],
+    resourceBuilds: { host: Context.makeUnsafe(new Map()), process: new Map() },
     generationId: ProcessGenerationId.make("test"),
   }
   const eventStoreLayer = recordingEventStore(events)
-  const storageLayer = testSqliteStorage(noBranchTools.storage, noBranchTools.migrations)
+  const storageLayer = testSqliteStorage
   const clusterRunnerLayer = Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
     Layer.merge(storageLayer, BunCrypto.layer),
@@ -6278,11 +6250,7 @@ describe("turn projection hooks", () => {
 
 /** Profile behavior through the production live cache and child adapter. */
 
-const sharedLayer = Layer.mergeAll(
-  fsLayer,
-  ConfigService.Test(),
-  testSqliteStorage(Layer.empty, {}),
-)
+const sharedLayer = Layer.mergeAll(fsLayer, ConfigService.Test(), testSqliteStorage)
 
 // Build a fresh production cache in the test's owning scope.
 const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
@@ -6475,111 +6443,6 @@ describe("live Profile", () => {
         expect(strict._tag).toBe("Failure")
       }),
     ).pipe(Effect.provide(sharedLayer)))
-
-  test("a leaf on a branch-tool feature the root does not install fails its extension load", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const home = yield* fs.makeTempDirectoryScoped()
-        const feature = { ...noBranchTools, id: "probe-feature" }
-        const extension = defineExtension({
-          id: "@gent/test-runtime-profile/feature",
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register(
-              "tool",
-              tool({
-                id: "rp-feature-tool",
-                description: "feature fixture",
-                params: S.Struct({}),
-                output: S.String,
-                branchTools: feature,
-                execute: () => Effect.succeed("ok"),
-              }),
-            )
-            yield* host.register(
-              "request",
-              request({
-                id: "rp-feature-request",
-                input: S.Struct({}),
-                output: S.String,
-                branchTools: feature,
-                execute: () => Effect.succeed("ok"),
-              }),
-            )
-          }),
-        })
-        const inputs = { cwd: home, home, platform: "darwin", extensions: [extension] }
-        const scan = yield* scanRuntimeProfileExtensions(inputs, makeModuleGraphs())
-
-        const missing = yield* loadRuntimeProfileDeclarations(inputs, scan)
-        expect(missing.extensionDeclarations.failed).toEqual([
-          expect.objectContaining({
-            manifest: { id: "@gent/test-runtime-profile/feature" },
-            phase: "validation",
-            error:
-              'tools[0] (rp-feature-tool): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none"); ' +
-              'requests[0] (rp-feature-request): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none")',
-          }),
-        ])
-
-        const installed = yield* loadRuntimeProfileDeclarations(inputs, scan).pipe(
-          Effect.provideService(CurrentBranchToolFeature, feature),
-        )
-        expect(installed.extensionDeclarations.failed).toEqual([])
-        expect(
-          installed.extensionDeclarations.active.map((ext) => String(ext.manifest.id)),
-        ).toEqual(["@gent/test-runtime-profile/feature"])
-      }),
-    ).pipe(Effect.provide(sharedLayer)))
-
-  test("a root that does not install a leaf's branch-tool feature stops at load with the reason", () =>
-    Effect.gen(function* () {
-      const feature = { ...noBranchTools, id: "probe-feature" }
-      const extension = defineExtension({
-        id: "@gent/test-root/feature",
-        setup: Effect.gen(function* () {
-          const host = yield* ExtensionHost
-          yield* host.register(
-            "tool",
-            tool({
-              id: "root-feature-tool",
-              description: "feature fixture",
-              params: S.Struct({}),
-              output: S.String,
-              branchTools: feature,
-              execute: () => Effect.succeed("ok"),
-            }),
-          )
-        }),
-      })
-      const missing = yield* Effect.exit(
-        Effect.scoped(
-          createRpcHarness({
-            agents: [testAgent],
-            extensionInputs: [extension],
-            providerLayer: LanguageModelLayers.debug(),
-          }),
-        ),
-      )
-      expect(missing._tag).toBe("Failure")
-      if (missing._tag === "Failure") {
-        expect(Cause.pretty(missing.cause)).toContain(
-          'tools[0] (root-feature-tool): runs on the branch-tool feature "probe-feature", which this root does not install (it installs "none")',
-        )
-      }
-      const installed = yield* Effect.exit(
-        Effect.scoped(
-          createRpcHarness({
-            agents: [testAgent],
-            extensionInputs: [extension],
-            providerLayer: LanguageModelLayers.debug(),
-            branchTools: feature,
-          }),
-        ),
-      )
-      expect(installed._tag).toBe("Success")
-    }).pipe(Effect.timeout("20 seconds")))
 
   test("live Profile builds a process resource layer once", () =>
     Effect.scoped(

@@ -303,10 +303,9 @@ updates this list in the same commit.
 18. **A leaf requires only the services it is given.** `tool` and `request`
     bound the services their `execute` may require (`LeafServices`):
     `ExtensionContext`, `ExtensionPlatformServices`, the core services the
-    branch-tools entry exports (`BranchToolHostServices`), the services of the
-    resources the leaf names in `resources`, and the storage of the feature it
-    names in `branchTools`. A body that requires any other service does not
-    compile. A type argument that grants services makes its declaration
+    branch-tools entry exports (`BranchToolHostServices`), and the services
+    of the resources the leaf names in `resources`. A body that requires any
+    other service does not compile. A type argument that grants services makes its declaration
     required, so a typed input cannot grant a service without the value that
     provides it. Only a tuple type proves which resources a value holds, so
     an array type (`ReadonlyArray<typeof Counter>`) grants nothing; the
@@ -315,19 +314,27 @@ updates this list in the same commit.
     `Effect.serviceOption` still reads a service the root holds
     (`registry_probe` in `packages/core/tests/server/rpc.test.ts`). The
     resource services derive from each `defineResource` value; there is no
-    hand-written list. Package validation fails an extension that does not
-    register the resource definition a leaf names; the check is by identity,
-    so another definition under the same id fails too. Profile validation
-    fails an extension whose leaf names a branch-tool feature other than the
-    one the root installs (`CurrentBranchToolFeature`, which the session
-    profile cache reads once when the root builds it). The feature stays a
-    root input, not an extension resource: its tables join core's migration
-    chain and its storage builds over core's SQL client before any profile
-    loads. Receipts: `packages/core/src/domain/capability.ts` (`tool`,
-    `request`, `RequiredDeclarations`), `packages/core/src/domain/extension.ts`
-    (`validateLeafResources`), `packages/core/src/runtime/extension-host.ts`
-    (`branchToolFeatureErrors`), `packages/core/tests/extensions/api.test.ts`,
-    `packages/core/tests/runtime/extension-host.test.ts`.
+    hand-written list. `defineResource` bounds its layer the same way: the
+    host's services every build gets (`ResourceHostServices`: the platform,
+    `SqlClient`, `InteractionStorage`), and for a branch Resource its
+    `BranchAddress` and the services of the process Resources it names in
+    `resources`; a type argument that grants a branch Resource services
+    makes its `resources` required, as for a leaf. Package validation fails an extension that does not
+    register the resource definition a leaf or a branch Resource names; the
+    check is by identity, so another definition under the same id fails too.
+    A process Resource names none, and a branch Resource names only process
+    Resources. An extension that owns tables creates and migrates them in a
+    process Resource over the host's `SqlClient`, under a migration table of
+    its own; core's migration chain builds only the kernel's tables, and the
+    root takes no feature input. The cell is the shipped case
+    (`CellStorageResource`, `CellKernelResource`), and a user extension has
+    the same two declarations. Receipts:
+    `packages/core/src/domain/capability.ts` (`tool`, `request`),
+    `packages/core/src/domain/extension.ts` (`defineResource`,
+    `RequiredDeclarations`, `validateLeafResources`), `packages/extensions/src/cell.ts`,
+    `packages/core/tests/extensions/api.test.ts`,
+    `packages/core/tests/runtime/extension-host.test.ts`,
+    `packages/extensions/tests/cell-receipts.test.ts` (cell tables).
 
 ### Known gaps
 
@@ -346,15 +353,6 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
-- **Open: a user extension cannot get a branch-tool feature.** This breaks
-  the owner rule that a shipped extension is never more privileged than a
-  user extension (`NORTH_STAR.md`), and nothing here waives it. A root
-  installs one feature (`createDependencies({ branchTools })`) and the
-  shipped cell declares it. A user extension cannot bring a feature of its
-  own, and the loader does not bind `@gent/extensions` for user files, so a
-  user leaf cannot name `CellBranchTools` either. Binding that value would
-  only let a user leaf share the cell's private storage. The repair is
-  queued as its own design batch (pass 30 orchestrator queue).
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
@@ -445,7 +443,7 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, the cell feature, in-memory state) reaches a leaf layer 138 times, memo hits included, counted on 2026-10-01 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository, and a branch-tool feature's storage is a layer over that client and the interaction storage (`ExtraRepositories`). A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
+The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. It is one stack of levels, each provided once to every level above it (host, storage, kernel, launch profile, models, tools, sessions, actor), so each layer in it builds once: Effect memoizes only leaf layers, and a composite named on several paths built once per path. One build of the production root (the shipped extensions, in-memory state) reaches a leaf layer 154 times, memo hits included, counted on 2026-10-05 as the calls to the memo map's `getOrElseMemoize`. The storage entry builds its SQL client once under every repository; the root takes no other storage, and an extension's tables belong to its own process Resource. A test in `packages/core/tests/server/server.test.ts` counts the builds. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -525,8 +523,8 @@ from `LoadedExtension.version`) of each resource-bearing extension that
 started before it, then its own (`startProcessResources`). A last good
 version that runs in place of a version that failed to start is named by its
 own version, in its key and in the key of each build over it, so a Resource
-built over one version is never shared by a profile that runs another. Branch
-Resources key on what the profile declares (`resourceBuildKeys`). A reload (`SessionProfileCacheService.reload`, which the
+built over one version is never shared by a profile that runs another. A
+branch Resource keys on what its build reads (`branchResourceKeys`). A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
@@ -879,9 +877,15 @@ Shape:
   before a restart is taken; the mark clears before the call runs again. A mark
   or a clear that cannot be written fails the step. Any other pending call was cut
   short while it ran; the model reads a failed result with reason
-  `Interrupted` and the call does not run again (a cell with a receipt still
-  settles from it first). The binding replay rules then decide whether a
-  parked call can run again or fails.
+  `Interrupted` and the call does not run again. A tool that keeps durable
+  receipts settles its own pending calls first: `tool({ recover })` runs once
+  per pending call of that tool that has no result (stored, or kept by the
+  process beside a parked sibling), as a leaf of its extension under the turn
+  profile, and answers `Settled` (the result its receipt gives), `Suspended`
+  (the turn parks on that request), or `NotRecovered` (the rules above). Each
+  tool answers only for its own calls, so tools of several extensions settle
+  in one step. The binding replay rules then decide whether a parked call can
+  run again or fails.
 - Narrow retry: `retryProviderCall` retries transient provider failures with
   bounded exponential backoff plus jitter, and only before observable output.
   The policy lives on the `ModelDriverContribution` (`retry: RetryPolicy`),
@@ -1420,10 +1424,11 @@ client responds via respondInteraction RPC
 cancel while an owned call waits: the cell cancels, its call ends, the turn
   ends and dismisses the dialog (InteractionResolved dismissed: true)
 loop close (server stop) while an owned call waits: the turn is interrupted,
-  then BranchToolWork.stop ends the cell and records nothing, as a crash
-  would; after a restart the request is rehydrated, the turn resumes on it
-  (cell recovery suspends), and an answer runs the waiting operation once;
-  the cell then reports its worker state as lost
+  then the cell's turn-stop watcher sees the close and ends the cell, which
+  records nothing, as a crash would; after a restart the request is
+  rehydrated, the turn resumes on it (the cell's recover suspends), and an
+  answer runs the waiting operation once; the cell then reports its worker
+  state as lost
 ```
 
 **Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. The source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
@@ -1591,7 +1596,8 @@ worker's disabled bunfig and dotenv autoload, so a project preload or `.env`
 never runs inside the worker. The worker starts in its session's working
 directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 (the stored session cwd, else the host's, the same rule as
-`ExtensionContext.cwd`) and gives it to the branch-tool layer as `cwd`. The TUI
+`ExtensionContext.cwd`) and puts it in the branch's `BranchAddress`, which
+the cell kernel Resource reads. The TUI
 build names itself with one define, `__GENT_BUILD__` (`{ id, version }`: a
 fresh id per build and the version of `apps/tui/package.json`). It has two
 readers: `GentPlatform.build` (`Compiled` with the id and version, else
@@ -1613,17 +1619,32 @@ A terminated session opens no loop: each operation that would start one
 termination marker first and fails with `Session terminated`, and an actor
 built for a terminated session skips its eager open. So a send after a delete
 or a terminate runs no `loopOpen` hook and builds no branch Resources.
-The loop behavior in `runtime/agent-loop.ts` uses this supplied scope to build `CellExecution.Branch`
-and supplies the service to turn execution. Each branch owns a separate service and lazy
-worker. Closing the loop scope closes that worker. Source runs have no
+The cell owns its state through two Resources it registers, as any extension
+can. `CellStorageResource` (process scope) builds `CellStorage` and the
+`RetainedBindings` projection over the session database: it runs the cell's
+own migrations, recorded in `cell_migrations`, so its ids never meet core's
+chain. Migration `1_cell_tables` creates `cell_executions`,
+`cell_tool_operations` and `cell_namespaces` only where they are missing, with
+the columns, keys and checks they had as migrations 012-014 of core's chain; a
+database from that time keeps those three ids in `gent_storage_migrations`,
+and core never reuses them. A database opened earlier without the cell gets
+the tables when the cell first loads. `CellKernelResource` (branch scope)
+names the storage and reads `BranchAddress`; it builds `CellExecution`, so
+each branch owns a separate service and lazy worker, and closing the branch's
+generation closes that worker. Its build key holds only the cell's own process
+key (`branchResourceKeys`), so an edit to an extension the cell does not read
+keeps the worker and its function bindings. The `cell` tool names both, and
+its `recover` settles a cell a crash left in flight. Source runs have no
 build artifact, so builtin tools carry no durable identity there; cells record a
 `ProcessLocal` binding that names the live resource generation instead. Such an
 operation resumes only inside that generation and is rejected with
 `SourceMismatch` after a restart or replacement. Compiled hosts keep durable
-artifact identities. The existing interrupt
-command now also calls the branch cell service's cancellation operation. It
-signals active evaluation and waits for cleanup. Cells queued before cancellation
-cannot evaluate; the branch interrupt flag also stops later calls in that turn.
+artifact identities. The cell body runs uninterruptibly and forks one watcher
+per call on `CurrentTurnStop`: an interrupt cancels the cell, which signals
+active evaluation and waits for cleanup, so the result reports what the cancel
+cost; a close stops it and records nothing. Cells queued before cancellation
+cannot evaluate, and a cell whose turn already stopped (`isStopped`) does not
+start.
 
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
@@ -2362,10 +2383,29 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 Other notes:
 
+- Each tool call reads the stop of its turn (`CurrentTurnStop`, exported by
+  the branch-tools entry): `stopped` completes on the turn's interrupt or the
+  loop's close, `isStopped` polls it, and `closing` says which. The loop's
+  close completes it after it interrupted the turn, as the close stopped
+  branch work before. A tool that runs uninterruptibly stops its own work
+  there: it cancels and reports what that cost on an interrupt, and records
+  nothing on a close, as a crash would, so a restart recovers it. Any other
+  tool is interrupted on an interrupt (`stopWithTurn`) and ends with the
+  turn on a close. The loop builds one `ModelContextLedger` per branch and
+  puts it in the branch's services, so a directive any dispatching tool
+  schedules reaches the next step; there is no inert ledger.
 - Process and branch Resources build through one builder,
   `buildScopeResources` in `runtime/extension-host.ts`: extension by
-  extension in resolution order, each in its own child scope, over the
-  services the extensions before it built. A layer that fails to build closes
+  extension in resolution order, each in its own child scope. Every build
+  reads the host's services (`ResourceHostServices`: the extension
+  platform, the session database's `SqlClient` and `InteractionStorage`),
+  given by value in the profile cache's build context. A process build runs
+  over the process Resources the extensions before it built too. A branch
+  build reads only its `BranchAddress` (session, branch, cwd, home) and the
+  process Resources of its own extension it names
+  (`defineResource({ resources })`, `branchBuildContext`); `defineResource`
+  bounds the layer's requirements to these, so a build that reads anything
+  else does not compile. A layer that fails to build closes
   what it acquired, is logged naming its extension
   (`extension.resource.failed`), and leaves every other extension's Resources
   live. A process Resource that fails rejects its extension: the profile
@@ -2376,15 +2416,20 @@ Other notes:
   Resources the profile needs and the loop does not have yet, so a
   control-plane write never resolves a profile. One build of one extension's
   branch Resources is a generation, named by its build key
-  (`resourceBuildKeys`): a branch key names every extension with process
-  Resources, since a branch build reads the whole process context, then the
-  extensions with branch Resources up to its own. An edit to the extension,
-  or to one it builds over, gives a new generation, and an edit elsewhere
-  keeps it. A run holds the generations of its profile until it
-  ends, so a turn that started before an edit ends on the old services and
-  the next run reads the new ones; a generation the newest profile does not
-  use closes when its last run ends, outside the lock, newest first, and then
-  lets go of the profile lease it was built over. That close
+  (`branchResourceKeys`): what the build reads, that is its extension's
+  identity, or, when it names process Resources, the key those were built
+  under. An edit to the extension, or to a process-bearing one before it
+  that its named process Resources build over, gives a new generation; an
+  edit elsewhere keeps it, with its state. A run holds the generations of
+  its profile until it ends, so a turn that started before an edit ends on
+  the old services and the next run reads the new ones. A generation holds
+  the lease of the newest profile that uses it: a run that keeps a
+  generation moves it to its own profile's lease, which holds every service
+  the build read (its key says so), and lets go of the old one after the
+  lock, so the profile before retires with another extension's old process
+  Resources. A generation the newest profile does not use closes when its
+  last run ends, outside the lock, newest first, and then lets go of its
+  profile lease. That close
   (`closeBranchGenerations`) is the generation's only one, so it cannot stop
   part way: it is uninterruptible, it closes every retired scope though one
   before it fails, and it lets go of each lease whatever the close ends in.

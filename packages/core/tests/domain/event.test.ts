@@ -261,7 +261,7 @@ const ids = (envelopes: ReadonlyArray<EventEnvelope>) => envelopes.map((env) => 
 const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, index) => from + index)
 
-const durableLayer = EventStoreLive.pipe(Layer.provideMerge(testSqliteStorage(Layer.empty, {})))
+const durableLayer = EventStoreLive.pipe(Layer.provideMerge(testSqliteStorage))
 
 /** The durable store validates the session and branch rows before it appends. */
 const ensureSession = Effect.gen(function* () {

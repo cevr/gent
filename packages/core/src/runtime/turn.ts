@@ -92,6 +92,7 @@ import {
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   provideExtensionLeaf,
+  type ResourceBuildInputs,
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
@@ -156,9 +157,9 @@ import {
   staticToolEntries,
   ToolBindingReplayError,
   ToolCallRecoveryOutcome,
-  ToolCallRecoveryService,
   ToolInteractionPending,
   type TurnInterruption,
+  type TurnStop,
 } from "./tools.js"
 import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
@@ -188,7 +189,7 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
-  ModelContextLedger,
+  type ModelContextLedger,
   announcedModel,
   assistantRunEfforts,
   modelChangeNotice,
@@ -319,6 +320,8 @@ export interface AgentLoopTurnProfile {
    * extension (a failed branch Resource) writes the narrowed registry here.
    */
   readonly turnCapabilityContext: Context.Context<ExtensionRegistry>
+  /** What the profile's branch Resources build over (`SessionProfile.resourceBuilds`). */
+  readonly turnResourceBuilds: ResourceBuildInputs
   /** Identity of the process that built the profile; a process-local tool binding replays only inside it. */
   readonly turnGenerationId: ProcessGenerationId
   /** The profile's revision (`SessionProfile.revision`), named on each request of the turn. */
@@ -2533,6 +2536,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
    * hands the window off first, and a second refusal ends the turn.
    */
   overflowed: boolean
+  /** The branch's model context ledger (`AgentLoopTurnExecutionContext.ledger`). */
+  ledger: ModelContextLedger["Service"]
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
@@ -2691,12 +2696,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
   // The model can ask, from inside a dispatching tool, for a fresh window or a
-  // focused summary. A branch with no such tool has no ledger and no
-  // directives, so the read falls back to an inert one.
-  const ledger = Option.getOrElse(
-    yield* Effect.serviceOption(ModelContextLedger),
-    () => ModelContextLedger.inert,
-  )
+  // focused summary, through the branch's ledger.
+  const ledger = params.ledger
   // A directive belongs to the turn whose tool call scheduled it: the first
   // projection of a new turn drops whatever an earlier turn left behind.
   if (params.step <= 1) yield* ledger.discardDirective
@@ -3136,6 +3137,10 @@ type AgentLoopTurnExecutionContext = {
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
+  /** The stop each tool call of a turn reads (`CurrentTurnStop`). */
+  readonly turnStop: TurnStop
+  /** The branch's model context ledger; the loop builds one for every branch. */
+  readonly ledger: ModelContextLedger["Service"]
   readonly inbox: LoopInbox
   /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
   readonly branchContext: Context.Context<never>
@@ -3604,7 +3609,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             markLock.withPermits(1),
           )
         const executedResults = yield* executeToolCalls({
-          interruption: scope.turnInterruption.awaitInterrupt,
+          stop: scope.turnStop,
           hostToolBindings: params.hostToolBindings,
           assistantMessageId: address.assistant,
           toolCalls: pendingToolCalls,
@@ -3709,6 +3714,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastCallModel: params.lastCallModel,
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
+        ledger: scope.ledger,
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
@@ -4310,30 +4316,57 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const pendingToolCalls = position.pendingToolCalls
 
       yield* Effect.logInfo("turn.resume-tools")
+      // A call whose result is already known (stored, or kept by this
+      // process beside a parked sibling) will not run again: it needs no
+      // recovery and no binding. Only the calls still owed a result go on, so
+      // one missing binding cannot turn a stored success into a failure.
+      const known = yield* readKnownStepResults({
+        messageId: params.messageId,
+        step: pendingStep,
+        toolCalls: pendingToolCalls,
+        recoveredResults: [],
+      })
+      // The step's results are already stored: this is the step boundary.
+      if (Option.isNone(known)) {
+        yield* deliverSteeringAtStepBoundary({ finalStep: false })
+        return { step: pendingStep, interaction: Option.none() }
+      }
+      const owedCalls = pendingToolCalls.filter(
+        (toolCall) => !known.value.knownResults.has(toolCall.id),
+      )
       const recoveredResults: Array<Prompt.ToolResultPart> = []
-      const nativeToolCalls: Array<Prompt.ToolCallPart> = []
-      // A tool that keeps durable receipts can settle a call the crash left in
-      // flight. Which tools those are is not the loop's business; every other
-      // call is decided below by the parked mark.
-      const recovery = yield* Effect.serviceOption(ToolCallRecoveryService)
-      for (const toolCall of pendingToolCalls) {
-        const outcome: ToolCallRecoveryOutcome = yield* Option.match(recovery, {
+      const unsettledCalls: Array<Prompt.ToolCallPart> = []
+      // A tool that keeps durable receipts can settle a call the crash left
+      // with no result: its own `recover` answers, as a leaf of its extension.
+      // Every other owed call is decided below by the parked mark.
+      const recoverers = new Map(
+        staticToolEntries(turnRegistry(params.turnProfile)).flatMap((entry) => {
+          const recover = getToolMetadata(entry.capability).recover
+          if (Predicate.isUndefined(recover)) return []
+          return [
+            [String(getToolId(entry.capability)), { extensionId: entry.extensionId, recover }],
+          ]
+        }),
+      )
+      for (const toolCall of owedCalls) {
+        const call = {
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          assistantMessageId: pendingAssistant.value.id,
+          toolCall,
+        }
+        const owned = Option.fromUndefinedOr(recoverers.get(toolCall.name))
+        const outcome: ToolCallRecoveryOutcome = yield* Option.match(owned, {
+          onSome: ({ extensionId, recover }) =>
+            recover(call).pipe(
+              provideExtensionLeaf({ extensionId, toolCallId: ToolCallId.make(toolCall.id) }),
+              runAgentLoopTurnProfile(params.turnProfile),
+              asAgentLoopError("Tool call recovery failed"),
+            ),
           onNone: () =>
             Effect.succeed<ToolCallRecoveryOutcome>(
               ToolCallRecoveryOutcome.cases.NotRecovered.make({}),
             ),
-          onSome: (service) =>
-            service
-              .recover({
-                sessionId: scope.sessionId,
-                branchId: scope.branchId,
-                assistantMessageId: pendingAssistant.value.id,
-                toolCall,
-              })
-              .pipe(
-                runAgentLoopTurnProfile(params.turnProfile),
-                asAgentLoopError("Tool call recovery failed"),
-              ),
         })
         if (outcome._tag === "Suspended") {
           return {
@@ -4349,25 +4382,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           recoveredResults.push(outcome.result)
           continue
         }
-        nativeToolCalls.push(toolCall)
+        unsettledCalls.push(toolCall)
       }
-      // A call whose result is already known needs no binding: it will not
-      // run again. Only the calls still owed a result are captured, so one
-      // missing binding cannot turn a stored success into a failure.
-      const known = yield* readKnownStepResults({
-        messageId: params.messageId,
-        step: pendingStep,
-        toolCalls: pendingToolCalls,
-        recoveredResults,
-      })
-      // The step's results are already stored: this is the step boundary.
-      if (Option.isNone(known)) {
-        yield* deliverSteeringAtStepBoundary({ finalStep: false })
-        return { step: pendingStep, interaction: Option.none() }
-      }
-      const unsettledCalls = nativeToolCalls.filter(
-        (toolCall) => !known.value.knownResults.has(toolCall.id),
-      )
       // Only a call that parked on an interaction runs again: its last run
       // stopped at the ask. Any other unsettled call has no recorded result:
       // it was cut short while it ran, it finished beside a parked sibling
@@ -4428,7 +4444,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       )
       const hostToolBindings = yield* resolveReplayHostBindings({
         turnProfile: params.turnProfile,
-        nativeToolCalls: nativeToolCalls.filter((toolCall) => !cutShortIds.has(toolCall.id)),
+        nativeToolCalls: rerunCalls,
         toolBindings,
       })
       if (rerunCalls.length > 0) yield* clearParkedCalls(params.messageId)

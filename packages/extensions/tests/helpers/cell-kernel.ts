@@ -8,6 +8,7 @@ import {
   testLeafContext,
   BunGentPlatformLive,
   SqliteStorage,
+  testSqliteStorage,
   waitFor,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
@@ -24,7 +25,7 @@ import {
 } from "@gent/core/protocol"
 import { ExtensionContext, type ExtensionContextService } from "@gent/core/extensions/api"
 import type { CellOperationHost } from "../../src/cell.js"
-import { CellBranchTools, CellExecution, CellStorage, CellWorker } from "../../src/cell.js"
+import { CellExecution, CellStorage, CellWorker } from "../../src/cell.js"
 import type { CellResponse } from "../../src/cell-protocol.js"
 import type { OwnedToolCallAddress } from "@gent/core/extensions/branch-tools"
 
@@ -122,9 +123,22 @@ export const storedSessionContext = Effect.fn("test.storedSessionContext")(funct
     }),
   )
 })
+/**
+ * A test server's layer with the cell's storage over that server's database,
+ * as the cell's process resource builds it, for a test that reads the
+ * storage outside a cell.
+ */
+export const withCellStorage = <A, E, R>(server: Layer.Layer<A, E, R>) =>
+  CellStorage.Live.pipe(Layer.provideMerge(server))
+
+/** The cell's storage over an in-memory session database, for a focused storage test. */
+export const cellTestStorage = Layer.provideMerge(CellStorage.Live, testSqliteStorage).pipe(
+  Layer.provide(GentPlatform.Test()),
+)
+
 export const testLayer = Layer.provideMerge(
   Layer.effect(ExtensionContext, storedSessionContext()),
-  SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+  Layer.provideMerge(CellStorage.Live, SqliteStorage.MemoryWithSql),
 ).pipe(Layer.provideMerge(platform))
 
 /** A catalog that selects the named host tools, hashed by their names. */

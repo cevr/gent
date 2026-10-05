@@ -26,7 +26,6 @@ import {
   type ResolvedToolCapability,
   ToolRunner,
   makeTurnInterruption,
-  neverInterrupted,
 } from "../../src/runtime/tools"
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import {
@@ -256,7 +255,11 @@ describe("tool execution", () => {
         const hiddenTurn = yield* run("replacement-hidden", Option.none<ResolvedToolCapability>())
         const hostEntry = yield* Effect.fromOption(currentEntry)
         const hiddenOuterTurn = yield* executeToolCalls({
-          interruption: Effect.never,
+          stop: {
+            stopped: Effect.never,
+            isStopped: Effect.succeed(false),
+            closing: Effect.succeed(false),
+          },
           onParked: () => Effect.void,
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,
@@ -696,12 +699,6 @@ describe("turn interruption", () => {
       expect(yield* turn.stoppedFor).toEqual(Option.some("parent"))
       yield* turn.beginTurn
       expect(yield* turn.stoppedFor).toEqual(Option.none())
-    }),
-  )
-
-  it.live("branch work with no turn behind it is never interrupted", () =>
-    Effect.gen(function* () {
-      expect(yield* neverInterrupted.interrupted).toBe(false)
     }),
   )
 })
