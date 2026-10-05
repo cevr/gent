@@ -103,12 +103,10 @@ const exists = (file: string) =>
 const worktreeCount = (origin: string) =>
   sh(origin, "git worktree list --porcelain | grep -c '^worktree '")
 
-const PathList = Schema.fromJsonString(Schema.Array(Schema.String))
-
 /**
- * The stub's program: it reads its mode from `mode` and the descendants it
- * reports from `descendants` beside it, copies under `into` (or `copies/`
- * beside it), and appends each request to `requests.log`. A copy without
+ * The stub's program: it reads its mode from `mode` beside it, copies under
+ * `into` (or `copies/` beside it) and gives the copy its own `.rift` id, as
+ * rift does, and appends each request to `requests.log`. A copy without
  * `copyAll` drops `build` and `node_modules`, as rift's filter does.
  */
 const RIFT_STUB = [
@@ -122,10 +120,7 @@ const RIFT_STUB = [
   "const request = JSON.parse(input)",
   "const answer = (value) => process.stdout.write(JSON.stringify(value))",
   'if (request.command === "ancestors") answer({ status: "ok", value: [] })',
-  'else if (request.command === "descendants") {',
-  '  const file = dir + "/descendants"',
-  '  answer({ status: "ok", value: fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [] })',
-  '} else if (request.command === "create") {',
+  'else if (request.command === "create") {',
   '  if (mode === "cow") {',
   '    answer({ status: "error", error: { code: "cow_unavailable", message: "copy-on-write is not available here" } })',
   "  } else {",
@@ -134,11 +129,9 @@ const RIFT_STUB = [
   "    fs.mkdirSync(into, { recursive: true })",
   '    execFileSync("cp", ["-a", request.from, dest])',
   '    if (request.copyAll !== true) for (const name of ["build", "node_modules"]) fs.rmSync(dest + "/" + name, { recursive: true, force: true })',
+  '    fs.writeFileSync(dest + "/.rift", "rift-" + request.name + "\\n")',
   '    answer({ status: "ok", value: dest })',
   "  }",
-  '} else if (request.command === "remove") {',
-  "  fs.rmSync(request.at, { recursive: true, force: true })",
-  '  answer({ status: "ok", value: null })',
   "} else {",
   '  answer({ status: "error", error: { code: "invalid_request", message: "unknown" } })',
   "}",
@@ -167,12 +160,7 @@ const riftStub = (mode: "ok" | "cow") =>
       ),
       Effect.orDie,
     )
-    const descendants = (paths: ReadonlyArray<string>) =>
-      Schema.encodeEffect(PathList)(paths).pipe(
-        Effect.flatMap((text) => fs.writeFileString(`${dir}/descendants`, text)),
-        Effect.orDie,
-      )
-    return { program, requests, descendants }
+    return { program, requests }
   })
 
 /**
@@ -285,6 +273,13 @@ const editRecord = (
     yield* fs.writeFileString(file, yield* Schema.encodeEffect(RecordJson)(next))
   }).pipe(Effect.orDie)
 
+/** The record on disk, as JSON. */
+const recordOf = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* Schema.decodeEffect(RecordJson)(yield* fs.readFileString(file))
+  }).pipe(Effect.orDie)
+
 const live = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("20 seconds"))
 
@@ -390,6 +385,38 @@ describe("a worktree copy", () => {
         expect(place.notes.join("\n")).toContain(".rift.toml is not valid")
       }),
     ),
+  )
+
+  it.live(
+    "a .rift.toml whose version is not a TOML integer runs no hook, and the start says why",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const origin = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const { start } = yield* installed(home, { rift: NO_RIFT })
+          // rift reads `version` as a u32: a float or a string is refused, whatever its value.
+          for (const [id, version] of [
+            ["call-float", "1.0"],
+            ["call-exponent", "1e0"],
+            ["call-string", '"1"'],
+          ] as const) {
+            yield* sh(
+              origin,
+              `printf 'version = ${version}\\n[[hooks.postcreate]]\\nrun = "touch ran"\\n' > .rift.toml`,
+            )
+            const place = yield* start(id, origin)
+            expect(yield* exists(`${place.path}/ran`)).toBe(false)
+            expect(place.notes.join("\n")).toContain(".rift.toml is not valid")
+          }
+          yield* sh(
+            origin,
+            `printf 'version = 1\\n[[hooks.postcreate]]\\nrun = "touch ran"\\n' > .rift.toml`,
+          )
+          const integer = yield* start("call-integer", origin)
+          expect(yield* exists(`${integer.path}/ran`)).toBe(true)
+        }),
+      ),
   )
 
   it.live(
@@ -612,6 +639,30 @@ describe("a record gent cannot prove", () => {
     ),
   )
 
+  it.live("whose worktree names another git directory is kept, and so is that directory", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const before = yield* treeState(origin)
+        const { places, within, start, deleted, recordFile } = yield* installed(home, {
+          rift: NO_RIFT,
+        })
+        const place = yield* start("call-1", origin)
+        yield* within(places.bind(place.name, childSession))
+        // The copy's `.git` now names the origin's own git directory.
+        yield* sh(place.path, `printf 'gitdir: ${origin}/.git\\n' > .git`)
+        const refused = yield* within(places.collect(childSession)).pipe(Effect.flip)
+        expect(refused.message).toContain("not one of the origin's worktrees")
+        yield* deleted(childSession)
+        expect(yield* exists(place.path)).toBe(true)
+        expect(yield* exists(recordFile(place.name))).toBe(true)
+        expect(yield* exists(`${origin}/.git/gent-workspace`)).toBe(false)
+        expect(yield* treeState(origin)).toEqual(before)
+      }),
+    ),
+  )
+
   it.live("left creating with nothing at its path makes the copy again", () =>
     live(
       Effect.gen(function* () {
@@ -619,11 +670,13 @@ describe("a record gent cannot prove", () => {
         const home = yield* makeTempDirectoryScoped("ws-home-")
         const { start, recordFile } = yield* installed(home, { rift: NO_RIFT })
         const place = yield* start("call-1", origin)
+        // A crash after the base ref was made: the record holds the base, the ref names it.
         yield* sh(origin, `git worktree remove --force ${place.path}`)
-        yield* editRecord(recordFile(place.name), { set: { phase: "creating" }, drop: ["base"] })
+        yield* editRecord(recordFile(place.name), { set: { phase: "creating" } })
         const again = yield* start("call-1", origin)
         expect(again.path).toBe(place.path)
         expect(yield* sh(again.path, "cat changed.txt")).toBe("two parent")
+        expect(yield* recordOf(recordFile(place.name))).toMatchObject({ phase: "ready" })
       }),
     ),
   )
@@ -669,6 +722,57 @@ describe("a record gent cannot prove", () => {
       ),
   )
 
+  it.live(
+    "a base ref that already exists, or that someone moved, is left alone, and the copy stays",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const origin = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const { places, within, start, deleted, recordFile } = yield* installed(home, {
+            rift: NO_RIFT,
+          })
+          const head = yield* sh(origin, "git rev-parse HEAD")
+          // Someone holds the base ref's name before the start.
+          const taken = yield* within(places.locate({ key: key("call-1"), cwd: origin }))
+          yield* sh(origin, `git update-ref refs/gent/base/${taken.name} HEAD`)
+          const refused = yield* start("call-1", origin).pipe(Effect.flip)
+          expect(refused.message).toContain(`refs/gent/base/${taken.name}`)
+          expect(yield* sh(origin, `git rev-parse refs/gent/base/${taken.name}`)).toBe(head)
+          expect(yield* recordOf(recordFile(taken.name))).toMatchObject({ phase: "retained" })
+          yield* within(places.release(taken.name))
+          expect(yield* exists(`${home}/.gent/workspaces/worktrees/${taken.name}`)).toBe(true)
+          expect(yield* sh(origin, `git rev-parse refs/gent/base/${taken.name}`)).toBe(head)
+          // Someone moves the base ref of a live copy: its release keeps the copy and the ref.
+          const place = yield* start("call-2", origin)
+          yield* within(places.bind(place.name, childSession))
+          yield* sh(origin, `git update-ref refs/gent/base/${place.name} HEAD`)
+          yield* deleted(childSession)
+          expect(yield* exists(place.path)).toBe(true)
+          expect(yield* exists(recordFile(place.name))).toBe(true)
+          expect(yield* sh(origin, `git rev-parse refs/gent/base/${place.name}`)).toBe(head)
+        }),
+      ),
+  )
+
+  it.live("a session bound to one copy is not bound to another", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const { places, within, start } = yield* installed(home, { rift: NO_RIFT })
+        const first = yield* start("call-1", origin)
+        const second = yield* start("call-2", origin)
+        yield* within(places.bind(first.name, childSession))
+        const refused = yield* within(places.bind(second.name, childSession)).pipe(Effect.flip)
+        expect(refused.message).toContain(first.name)
+        expect(Option.map(yield* within(places.find(childSession)), (found) => found.path)).toEqual(
+          Option.some(first.path),
+        )
+      }),
+    ),
+  )
+
   it.live("bound to one child is not bound to another", () =>
     live(
       Effect.gen(function* () {
@@ -693,7 +797,7 @@ describe("a record gent cannot prove", () => {
 
 describe("a rift copy", () => {
   it.live(
-    "is one whole-tree copy on btrfs, made without rift's hooks; its work is fetched, and rift removes it",
+    "is one whole-tree copy on btrfs, made without rift's hooks; its work is fetched into no ref, and the copy stays after its session",
     () =>
       live(
         Effect.gen(function* () {
@@ -701,7 +805,7 @@ describe("a rift copy", () => {
           const home = yield* makeTempDirectoryScoped("ws-home-")
           const rift = yield* riftStub("ok")
           const before = yield* treeState(origin)
-          const { places, within, start, deleted } = yield* installed(home, {
+          const { places, within, start, deleted, recordFile } = yield* installed(home, {
             rift: rift.program,
           })
           const place = yield* start("call-1", origin)
@@ -729,36 +833,114 @@ describe("a rift copy", () => {
           expect(yield* sh(origin, `git show --name-only --format= ${place.branch}`)).toBe(
             "child.txt",
           )
+          // The fetch wrote no ref of the origin but the branch, and no FETCH_HEAD.
+          expect(yield* sh(origin, "git for-each-ref --format='%(refname)'")).toBe(
+            `refs/heads/${place.branch}\nrefs/heads/main`,
+          )
+          expect(yield* exists(`${origin}/.git/FETCH_HEAD`)).toBe(false)
           expect(yield* treeState(origin)).toEqual(before)
+          // The session goes; its last work is collected, and the copy stays, retained.
+          yield* sh(place.path, "printf 'late\\n' > late.txt")
           yield* deleted(childSession)
-          expect(yield* exists(place.path)).toBe(false)
-          expect((yield* rift.requests).slice(-2)).toEqual([
-            { command: "descendants", of: place.path },
-            { command: "remove", at: place.path },
-          ])
-          expect(yield* sh(origin, "git for-each-ref refs/gent")).toBe("")
+          expect(yield* sh(origin, `git show ${place.branch}:late.txt`)).toBe("late")
+          expect(yield* exists(`${place.path}/late.txt`)).toBe(true)
+          expect(yield* recordOf(recordFile(place.name))).toMatchObject({
+            phase: "retained",
+            retained: "rift removal cannot refuse a copy with descendants atomically",
+          })
+          expect(Predicate.hasProperty(yield* recordOf(recordFile(place.name)), "sessionId")).toBe(
+            true,
+          )
+          expect(yield* within(places.find(childSession))).toEqual(Option.none())
+          // gent never asks rift to remove a copy.
+          expect(
+            (yield* rift.requests).filter(
+              (request) =>
+                !Predicate.hasProperty(request, "command") ||
+                (request.command !== "ancestors" && request.command !== "create"),
+            ),
+          ).toEqual([])
+          // A repeated start does not adopt a retained copy.
+          const refused = yield* start("call-1", origin).pipe(Effect.flip)
+          expect(refused.message).toContain("retained")
         }).pipe(Effect.provide(platformWith({ btrfs: true }))),
       ),
   )
 
-  it.live("with rift copies made from it stays", () =>
+  it.live(
+    "whose marker path or git directory is a link is refused, and the file behind the link stays",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const outside = yield* makeTempDirectoryScoped("ws-outside-")
+          yield* sh(outside, "printf 'valuable\\n' > valuable.txt")
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const rift = yield* riftStub("ok")
+          const { places, within, start, recordFile } = yield* installed(home, {
+            rift: rift.program,
+          })
+          // A link at the marker's place in the origin: copyAll copies the link.
+          const linked = yield* dirtyRepository
+          yield* sh(linked, `ln -s ${outside}/valuable.txt .git/gent-workspace`)
+          const atMarker = yield* start("call-1", linked).pipe(Effect.flip)
+          expect(atMarker.message).toContain("gent keeps")
+          expect(yield* sh(outside, "cat valuable.txt")).toBe("valuable")
+          // A link for the git directory: the copy's `.git` names the origin's real one.
+          const moved = yield* dirtyRepository
+          yield* sh(moved, `mv .git ${outside}/real.git && ln -s ${outside}/real.git .git`)
+          const atGitDir = yield* start("call-2", moved).pipe(Effect.flip)
+          expect(atGitDir.message).toContain("gent keeps")
+          expect(yield* exists(`${outside}/real.git/gent-workspace`)).toBe(false)
+          // Both copies stay, retained: gent never removes a rift copy.
+          for (const [id, origin] of [
+            ["call-1", linked],
+            ["call-2", moved],
+          ] as const) {
+            const located = yield* within(places.locate({ key: key(id), cwd: origin }))
+            expect(yield* recordOf(recordFile(located.name))).toMatchObject({ phase: "retained" })
+            yield* within(places.release(located.name))
+            expect(yield* exists(recordFile(located.name))).toBe(true)
+          }
+        }).pipe(Effect.provide(platformWith({ btrfs: true }))),
+      ),
+  )
+
+  it.live("a second copy that inherits the marker is not adopted, collected or removed", () =>
     live(
       Effect.gen(function* () {
         const origin = yield* dirtyRepository
         const home = yield* makeTempDirectoryScoped("ws-home-")
+        const elsewhere = yield* sh(yield* makeTempDirectoryScoped("ws-elsewhere-"), "pwd -P")
         const rift = yield* riftStub("ok")
         const { places, within, start, deleted, recordFile } = yield* installed(home, {
           rift: rift.program,
         })
         const place = yield* start("call-1", origin)
         yield* within(places.bind(place.name, childSession))
-        yield* rift.descendants([`${place.path}-review`])
-        yield* deleted(childSession)
-        expect(yield* exists(place.path)).toBe(true)
-        expect(yield* exists(recordFile(place.name))).toBe(true)
-        expect((yield* rift.requests).some((request) => Predicate.hasProperty(request, "at"))).toBe(
-          false,
+        // A copy of the copy, with the same name, the marker and the rift id in it.
+        const second = `${elsewhere}/${place.name}`
+        yield* sh(
+          elsewhere,
+          `cp -a ${place.path} ${second} && printf 'second\\n' > ${second}/second.txt`,
         )
+        // The record names it by path and cwd: it is not in the directory the record names.
+        yield* editRecord(recordFile(place.name), { set: { path: second, cwd: second } })
+        const outside = yield* within(places.collect(childSession)).pipe(Effect.flip)
+        expect(outside.message).toContain("not in the directory its record names")
+        // The record names its directory too: the marker holds the first copy's real path.
+        yield* editRecord(recordFile(place.name), { set: { root: elsewhere } })
+        const collected = yield* within(places.collect(childSession)).pipe(Effect.flip)
+        expect(collected.message).toContain("it holds no marker of this start")
+        const adopted = yield* start("call-1", origin).pipe(Effect.flip)
+        expect(adopted.message).toContain("gent keeps")
+        yield* deleted(childSession)
+        expect(yield* sh(second, "cat second.txt")).toBe("second")
+        expect(yield* exists(place.path)).toBe(true)
+        expect(yield* recordOf(recordFile(place.name))).toMatchObject({
+          phase: "ready",
+          path: second,
+        })
+        expect(yield* sh(origin, "git branch --list 'gent/*'")).toBe("")
       }).pipe(Effect.provide(platformWith({ btrfs: true }))),
     ),
   )

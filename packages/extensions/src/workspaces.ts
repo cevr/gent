@@ -16,13 +16,17 @@
  * uncommitted work, as one commit over the copy's state after its hooks
  * (`base`), on `refs/heads/gent/<name>` of the origin. gent moves that branch
  * only from the commit it last wrote (compare and swap), and never while a
- * worktree has it checked out. Nothing is merged. A place lives as long as its
- * child session.
+ * worktree has it checked out. Nothing is merged. A worktree copy lives as
+ * long as its child session. gent never removes a rift copy: rift cannot
+ * refuse, in one step, to remove a copy that has copies of its own, so a rift
+ * copy is kept (`retained`) when its session goes.
  *
  * One record per place under `<data directory>/workspaces/<name>.json`,
  * written before gent makes the copy, and an ownership marker in the copy's
- * git directory written after. gent adopts or removes a copy only when the
- * two agree; any other directory it keeps.
+ * git directory written after. The marker binds the start, the copy's real
+ * path, its backend and its rift id. gent adopts or removes a copy only when
+ * the two agree and the copy lies where its backend puts copies; any other
+ * directory it keeps.
  */
 import {
   Clock,
@@ -82,13 +86,22 @@ const WorkspaceRecord = Schema.Struct({
   requestId: RequestId,
   /** The origin repository's top level, resolved. */
   origin: Schema.String,
-  /** The copy's root, decided before gent makes it. */
+  /** The real directory that holds the copy: gent's worktrees directory, or rift's storage. */
+  root: Schema.String,
+  /** The copy's root, `<root>/<name>`, decided before gent makes it. */
   path: Schema.String,
   /** The child's working directory: the parent's place in the origin, inside the copy. */
   cwd: Schema.String,
   backend: WorkspaceBackend,
-  /** `creating` until the copy, its marker, its hooks and its base are all in place. */
-  phase: Schema.Literals(["creating", "ready"]),
+  /** A rift copy's id, from its `.rift` file. */
+  copyId: Schema.optionalKey(Schema.String),
+  /**
+   * `creating` until the copy, its marker, its hooks and its base are all in
+   * place. `retained`: gent keeps the copy and never adopts or removes it;
+   * `retained` says why.
+   */
+  phase: Schema.Literals(["creating", "ready", "retained"]),
+  retained: Schema.optionalKey(Schema.String),
   /** The commit that holds the copy as its hooks left it; the child's work is the diff from it. */
   base: Schema.optionalKey(Schema.String),
   /** What the copy did not do as asked, one line each. */
@@ -135,8 +148,11 @@ const GIT_TIMEOUT = Duration.minutes(2)
 const RIFT_TIMEOUT = Duration.minutes(10)
 const HOOK_TIMEOUT = Duration.minutes(10)
 
-/** The ownership marker in a copy's git directory: the digest of the record's identity. */
+/** The ownership marker in a copy's git directory: the digest of the record's identity and place. */
 const MARKER_FILE = "gent-workspace"
+
+/** Why gent keeps every rift copy. Manual removal of a rift copy comes with the copy list (W2). */
+const RIFT_RETAINED = "rift removal cannot refuse a copy with descendants atomically"
 
 // ── git ─────────────────────────────────────────────────────────────────────
 
@@ -278,10 +294,40 @@ const RiftConfig = Schema.Struct({
 })
 const decodeRiftConfig = Schema.decodeUnknownResult(RiftConfig)
 
+/** A TOML integer as written: decimal, hex, octal or binary, an underscore only between digits. */
+const TOML_INTEGER =
+  /^(?:[+-]?(?:0|[1-9](?:_?\d)*)|0x[\da-fA-F](?:_?[\da-fA-F])*|0o[0-7](?:_?[0-7])*|0b[01](?:_?[01])*)$/
+/** A root-table line that sets `version`: the key bare or quoted, its value, a comment. */
+const VERSION_LINE = /^\s*(?:version|"version"|'version')\s*=\s*([^#]*?)\s*(?:#.*)?$/
+
+/**
+ * The value token of the one line that sets `version` in the root table
+ * (before the first table header). None when no line or more than one line
+ * sets it: gent does not guess which one a TOML reader takes.
+ */
+const versionToken = (text: string) => {
+  const lines = text.split(/\r?\n/)
+  const header = lines.findIndex((line) => /^\s*\[/.test(line))
+  let root = lines
+  if (header !== -1) root = lines.slice(0, header)
+  const tokens = root.flatMap((line) =>
+    Option.toArray(
+      Option.flatMap(Option.fromNullishOr(VERSION_LINE.exec(line)), (match) =>
+        Option.fromUndefinedOr(match[1]),
+      ),
+    ),
+  )
+  return Option.liftPredicate(tokens, (found) => found.length === 1).pipe(
+    Option.flatMap((found) => Option.fromUndefinedOr(found[0])),
+  )
+}
+
 /**
  * The `postcreate` commands of a `.rift.toml`, checked as rift checks the
- * file: TOML, `version = 1`, only the four hook lists, each step one
- * non-empty `run`.
+ * file: TOML, `version = 1` as a TOML integer (rift reads a `u32`; a float or
+ * a string with the same value is refused), only the four hook lists, each
+ * step one non-empty `run`. `Bun.TOML.parse` reads `1.0` as the number 1, so
+ * the integer check reads the `version` token as written.
  */
 const riftPostcreateHooks = (text: string): Result.Result<ReadonlyArray<string>, string> => {
   // oxlint-disable-next-line effect/noGlobals -- Pure TOML parse with no Effect platform service; gent ships as a Bun binary.
@@ -289,6 +335,9 @@ const riftPostcreateHooks = (text: string): Result.Result<ReadonlyArray<string>,
   if (Result.isFailure(parsed)) return Result.fail(`it is not TOML: ${String(parsed.failure)}`)
   const config = decodeRiftConfig(parsed.success, { onExcessProperty: "error" })
   if (Result.isFailure(config)) return Result.fail(config.failure.message)
+  if (!Option.exists(versionToken(text), (token) => TOML_INTEGER.test(token))) {
+    return Result.fail("version is not written as a TOML integer")
+  }
   if (config.success.version !== 1) {
     return Result.fail(`version ${config.success.version} is not one gent reads`)
   }
@@ -361,18 +410,15 @@ const RiftAnswer = Schema.Union([
     error: Schema.Struct({
       code: Schema.String,
       message: Schema.String,
-      hook: Schema.optionalKey(Schema.String),
-      committed: Schema.optionalKey(Schema.Boolean),
     }),
   }),
 ])
 const decodeRiftAnswer = Schema.decodeUnknownOption(Schema.fromJsonString(RiftAnswer))
 const decodePaths = Schema.decodeUnknownOption(Schema.Array(Schema.String))
 
-/** The `rift rpc` requests gent sends. */
+/** The `rift rpc` requests gent sends. gent never sends `remove`: it keeps every rift copy. */
 const RiftRequest = Schema.Union([
   Schema.Struct({ command: Schema.Literal("ancestors"), of: Schema.String }),
-  Schema.Struct({ command: Schema.Literal("descendants"), of: Schema.String }),
   Schema.Struct({
     command: Schema.Literal("create"),
     from: Schema.String,
@@ -382,7 +428,6 @@ const RiftRequest = Schema.Union([
     /** False: rift runs no hook; gent runs `postcreate` in the copy itself. */
     hooks: Schema.Boolean,
   }),
-  Schema.Struct({ command: Schema.Literal("remove"), at: Schema.String }),
 ])
 type RiftRequest = typeof RiftRequest.Type
 const encodeRiftRequest = Schema.encodeSync(Schema.fromJsonString(RiftRequest))
@@ -435,16 +480,66 @@ const fileSystemType = (directory: string) =>
     Effect.orElseSucceed(() => Option.none<string>()),
   )
 
-/** A rift workspace's id, from the marker rift keeps at its root. */
-const riftId = (directory: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    return yield* fs.readFileString(path.join(directory, ".rift")).pipe(
-      Effect.map((text) => text.trim()),
-      Effect.option,
-    )
-  })
+/** What is at a path, without following a link there: `stat` follows links, `readLink` tells them. */
+type EntryKind = "absent" | "link" | "file" | "directory" | "other"
+
+const entryKind = Effect.fn("Workspaces.entryKind")(function* (at: string) {
+  const fs = yield* FileSystem.FileSystem
+  if (Option.isSome(yield* fs.readLink(at).pipe(Effect.option))) return "link" satisfies EntryKind
+  const info = yield* fs.stat(at).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeedNone,
+    ),
+    Effect.mapError((error) => new WorkspaceError({ message: error.message })),
+  )
+  if (Option.isNone(info)) return "absent" satisfies EntryKind
+  if (info.value.type === "File") return "file" satisfies EntryKind
+  if (info.value.type === "Directory") return "directory" satisfies EntryKind
+  return "other" satisfies EntryKind
+})
+
+/** A small file's text when a regular file (not a link) is at `at`. */
+const readRegularFile = Effect.fn("Workspaces.readRegularFile")(function* (at: string) {
+  const fs = yield* FileSystem.FileSystem
+  if ((yield* entryKind(at)) !== "file") return Option.none<string>()
+  return yield* fs.readFileString(at).pipe(
+    Effect.map((text) => text.trim()),
+    Effect.option,
+  )
+})
+
+/** A rift workspace's id, from the `.rift` file rift keeps at its root. */
+const riftId = Effect.fn("Workspaces.riftId")(function* (directory: string) {
+  const path = yield* Path.Path
+  return yield* readRegularFile(path.join(directory, ".rift"))
+})
+
+/**
+ * The real path of `at`, or of the nearest directory above it that exists,
+ * with the rest joined on: the real path a directory will have once made.
+ */
+const canonical: (
+  at: string,
+) => Effect.Effect<string, WorkspaceError, FileSystem.FileSystem | Path.Path> = Effect.fn(
+  "Workspaces.canonical",
+)(function* (at: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const real = yield* fs.realPath(at).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeedNone,
+    ),
+    Effect.mapError((error) => new WorkspaceError({ message: error.message })),
+  )
+  if (Option.isSome(real)) return real.value
+  const parent = path.dirname(at)
+  if (parent === at) return at
+  return path.join(yield* canonical(parent), path.basename(at))
+})
 
 // ── places ──────────────────────────────────────────────────────────────────
 
@@ -506,7 +601,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   const recordFile = (name: string) => inDirectory(`${name}.json`)
   /** The session index: one small file per bound session, so a turn of a session with no copy reads one missing file. */
   const linkFile = (sessionId: SessionId) => inDirectory("sessions", encodeURIComponent(sessionId))
-  const worktreePath = (name: string) => inDirectory("worktrees", name)
+  const worktreesDirectory = inDirectory("worktrees")
 
   const asError = Effect.mapError(
     (error: { readonly message: string }) => new WorkspaceError({ message: error.message }),
@@ -549,22 +644,24 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       return yield* ctx.FileLock.withLock(yield* recordFile(name), effect)
     })
 
-  const digestOf = Effect.fn("Workspaces.digestOf")(function* (identity: {
+  const sha256 = Effect.fn("Workspaces.sha256")(function* (text: string) {
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(asError)
+    return Hex.encode(digest)
+  })
+
+  /** The digest of a start's identity: its parent session and branch, its tool call, its origin. */
+  const digestOf = (identity: {
     readonly parentSessionId: string
     readonly parentBranchId: string
     readonly requestId: string
     readonly origin: string
-  }) {
-    const crypto = yield* Crypto.Crypto
-    const text = [
-      identity.parentSessionId,
-      identity.parentBranchId,
-      identity.requestId,
-      identity.origin,
-    ].join("\n")
-    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(asError)
-    return Hex.encode(digest)
-  })
+  }) =>
+    sha256(
+      [identity.parentSessionId, identity.parentBranchId, identity.requestId, identity.origin].join(
+        "\n",
+      ),
+    )
   const nameOfDigest = (digest: string) => `child-${digest.slice(0, 12)}`
 
   const placeOf = (record: WorkspaceRecord, notes: ReadonlyArray<string>): WorkspacePlace => ({
@@ -595,7 +692,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   // ── ownership ──
 
-  /** Why gent may not touch the record's path, if it may not. */
+  /** Why gent may not touch the record's path, by the record alone, if it may not. */
   const unsafePath = Effect.fn("Workspaces.unsafePath")(function* (record: WorkspaceRecord) {
     const path = yield* Path.Path
     const copy = record.path
@@ -604,66 +701,176 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       return Option.some("it overlaps the origin")
     }
     if (path.basename(copy) !== record.name) return Option.some("its name is not the record's")
-    if (record.backend === "worktree" && copy !== (yield* worktreePath(record.name))) {
+    if (copy !== path.join(record.root, record.name)) {
+      return Option.some("it is not in the directory its record names")
+    }
+    if (inside(path, record.origin, record.root) || inside(path, record.root, record.origin)) {
+      return Option.some("its directory overlaps the origin")
+    }
+    if (
+      record.backend === "worktree" &&
+      record.root !== (yield* canonical(yield* worktreesDirectory))
+    ) {
       return Option.some("it is not in gent's worktrees directory")
+    }
+    if ((yield* canonical(record.root)) !== record.root) {
+      return Option.some("its directory is not a real path")
     }
     return Option.none<string>()
   })
 
-  /** The copy's git directory, when `copy` is the top level of a repository. */
-  const gitDirectory = Effect.fn("Workspaces.gitDirectory")(function* (copy: string) {
+  /**
+   * The copy's own git directory, proven without following a link: the copy
+   * is a real directory at its recorded path; a rift copy's `.git` is a
+   * directory in it; a worktree's `.git` is a file whose `gitdir` resolves
+   * to an entry of the origin's `.git/worktrees/`. git must agree on both.
+   * Else why not.
+   */
+  const copyGitDirectory = Effect.fn("Workspaces.copyGitDirectory")(function* (
+    record: WorkspaceRecord,
+  ) {
     const fs = yield* FileSystem.FileSystem
-    const real = yield* fs.realPath(copy).pipe(Effect.option)
-    const lines = yield* gitOption(copy, ["rev-parse", "--show-toplevel", "--absolute-git-dir"])
-    return Option.flatMap(lines, (text) => {
-      const [top, gitDir] = text.split("\n")
-      if (Predicate.isUndefined(top) || Predicate.isUndefined(gitDir)) return Option.none<string>()
-      return Option.liftPredicate(gitDir, () => Option.contains(real, top))
+    const path = yield* Path.Path
+    const real = yield* fs.realPath(record.path).pipe(Effect.option)
+    if (!Option.contains(real, record.path)) return Result.fail("its real path is not the record's")
+    const dotGit = path.join(record.path, ".git")
+    const kind = yield* entryKind(dotGit)
+    let gitDir = dotGit
+    if (record.backend === "rift") {
+      if (kind !== "directory") return Result.fail(`its .git is a ${kind}, not a directory`)
+    } else {
+      if (kind !== "file") return Result.fail(`its .git is a ${kind}, not a worktree's file`)
+      const text = yield* readRegularFile(dotGit)
+      const named = Option.flatMap(text, (found) =>
+        Option.fromNullishOr(/^gitdir: (.+)$/m.exec(found)?.[1]),
+      )
+      if (Option.isNone(named)) return Result.fail("its .git names no git directory")
+      const resolved = yield* fs
+        .realPath(path.resolve(record.path, named.value.trim()))
+        .pipe(Effect.option)
+      const common = yield* gitOption(record.origin, ["rev-parse", "--git-common-dir"])
+      if (Option.isNone(resolved) || Option.isNone(common)) {
+        return Result.fail("its git directory cannot be found")
+      }
+      const worktrees = path.join(
+        yield* canonical(path.resolve(record.origin, common.value)),
+        "worktrees",
+      )
+      if (path.dirname(resolved.value) !== worktrees) {
+        return Result.fail("its git directory is not one of the origin's worktrees")
+      }
+      gitDir = resolved.value
+    }
+    const told = yield* gitOption(record.path, [
+      "rev-parse",
+      "--show-toplevel",
+      "--absolute-git-dir",
+    ])
+    const [top, absolute] = Option.getOrElse(
+      Option.map(told, (text) => text.split("\n")),
+      () => [],
+    )
+    const gitReal = yield* Option.match(Option.fromUndefinedOr(absolute), {
+      onNone: () => Effect.succeedNone,
+      onSome: (found) => fs.realPath(found).pipe(Effect.option),
     })
+    if (top !== record.path || !Option.contains(gitReal, gitDir)) {
+      return Result.fail("git does not name it as its own repository")
+    }
+    return Result.succeed(gitDir)
   })
 
-  const markerFile = Effect.fn("Workspaces.markerFile")(function* (copy: string) {
-    const path = yield* Path.Path
-    return Option.map(yield* gitDirectory(copy), (gitDir) => path.join(gitDir, MARKER_FILE))
+  /** What the marker holds: the start, the copy's real path, its backend and its rift id. */
+  const markerDigest = Effect.fn("Workspaces.markerDigest")(function* (record: WorkspaceRecord) {
+    return yield* sha256(
+      [yield* digestOf(record), record.path, record.backend, record.copyId ?? ""].join("\n"),
+    )
   })
 
   /**
    * Whether the record's copy is gent's: `absent` when nothing is at its
-   * path, `owned` when the copy's marker holds the record's identity. Any
-   * other path or directory is kept, and the call fails with why.
+   * path, `owned` when the copy lies where its record says, in the directory
+   * its backend owns, is its own repository, carries the record's rift id,
+   * and its marker holds the record's digest. Any other path or directory is
+   * kept, and the call fails with why.
    */
   const ownership = Effect.fn("Workspaces.ownership")(function* (record: WorkspaceRecord) {
-    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
     const kept = (why: string) =>
       new WorkspaceError({ message: `gent keeps ${record.path} (${record.name}): ${why}` })
-    const digest = yield* digestOf(record)
-    if (nameOfDigest(digest) !== record.name) return yield* kept("the record's identity changed")
+    if (nameOfDigest(yield* digestOf(record)) !== record.name) {
+      return yield* kept("the record's identity changed")
+    }
     const unsafe = yield* unsafePath(record)
     if (Option.isSome(unsafe)) return yield* kept(unsafe.value)
-    if (!(yield* fs.exists(record.path).pipe(asError))) return "absent" as const
-    const marker = yield* markerFile(record.path)
-    if (Option.isNone(marker)) return yield* kept("it is not a git repository's top level")
-    const text = yield* fs.readFileString(marker.value).pipe(Effect.option)
-    if (
-      !Option.contains(
-        Option.map(text, (value) => value.trim()),
-        digest,
-      )
-    ) {
+    const kind = yield* entryKind(record.path)
+    if (kind === "absent") return "absent" as const
+    if (kind !== "directory") return yield* kept(`it is a ${kind}`)
+    const gitDir = yield* copyGitDirectory(record)
+    if (Result.isFailure(gitDir)) return yield* kept(gitDir.failure)
+    if (record.backend === "rift") {
+      const id = yield* riftId(record.path)
+      if (Predicate.isUndefined(record.copyId) || !Option.contains(id, record.copyId)) {
+        return yield* kept("its rift id is not the record's")
+      }
+    }
+    const marker = yield* readRegularFile(path.join(gitDir.success, MARKER_FILE))
+    if (!Option.contains(marker, yield* markerDigest(record))) {
       return yield* kept("it holds no marker of this start")
     }
     return "owned" as const
   })
 
-  /** Writes the ownership marker into the new copy's git directory. */
+  /**
+   * Writes the ownership marker into the new copy's git directory. The
+   * marker's place must be empty or a regular file: a link there (one a copy
+   * of the origin brought along) is refused, never written through. The text
+   * goes to a new file beside it, then a rename puts it in place: a rename
+   * replaces a directory entry, never the file a link names.
+   */
   const writeMarker = Effect.fn("Workspaces.writeMarker")(function* (record: WorkspaceRecord) {
-    const marker = yield* markerFile(record.path)
-    if (Option.isNone(marker)) {
-      return yield* new WorkspaceError({ message: `${record.path} is not a git repository` })
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const crypto = yield* Crypto.Crypto
+    const gitDir = yield* copyGitDirectory(record)
+    if (Result.isFailure(gitDir)) {
+      return yield* new WorkspaceError({
+        message: `gent keeps ${record.path} (${record.name}): ${gitDir.failure}`,
+      })
     }
-    yield* writeFileAtomic(marker.value, `${yield* digestOf(record)}\n`).pipe(
+    const marker = path.join(gitDir.success, MARKER_FILE)
+    const kind = yield* entryKind(marker)
+    if (kind !== "absent" && kind !== "file") {
+      return yield* new WorkspaceError({
+        message: `gent keeps ${record.path} (${record.name}): its marker's place ${marker} is a ${kind}`,
+      })
+    }
+    const digest = yield* markerDigest(record)
+    const staged = path.join(
+      gitDir.success,
+      `${MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
+    )
+    yield* fs.writeFileString(staged, `${digest}\n`, { flag: "wx" }).pipe(
+      Effect.andThen(fs.rename(staged, marker)),
+      Effect.tapError(() => fs.remove(staged, { force: true }).pipe(Effect.ignore)),
       asError,
       Effect.uninterruptible,
+    )
+  })
+
+  /**
+   * Keeps a copy for good: the record stays, as `retained` with why, and the
+   * session index goes. gent never adopts, collects or removes a retained
+   * copy; the owner removes it.
+   */
+  const retain = Effect.fn("Workspaces.retain")(function* (record: WorkspaceRecord, why: string) {
+    const fs = yield* FileSystem.FileSystem
+    yield* publish({ ...record, phase: "retained", retained: why })
+    if (Predicate.isNotUndefined(record.sessionId)) {
+      yield* fs.remove(yield* linkFile(record.sessionId), { force: true }).pipe(asError)
+    }
+    yield* Effect.logInfo("workspaces.retained").pipe(
+      Effect.annotateLogs({ name: record.name, path: record.path, why }),
     )
   })
 
@@ -696,12 +903,11 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   /** A rift copy at `record.path`, without rift's hooks. */
   const riftCopy = Effect.fn("Workspaces.riftCopy")(function* (record: WorkspaceRecord) {
-    const path = yield* Path.Path
     const answer = yield* riftCall(riftProgram, {
       command: "create",
       from: record.origin,
       name: record.name,
-      into: path.dirname(record.path),
+      into: record.root,
       copyAll: true,
       hooks: false,
     })
@@ -740,127 +946,194 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     yield* git(record.path, ["reset", "-q"])
   })
 
-  /** The base commit stays reachable while the copy lives: a private ref in the repository that holds it. */
+  /**
+   * The base commit stays reachable while the copy lives: a private ref,
+   * `refs/gent/base/<name>`, in the repository that holds it (the origin for
+   * a worktree, the copy for rift).
+   */
   const baseRef = (record: WorkspaceRecord) => {
-    if (record.backend === "worktree") {
-      return { repo: record.origin, ref: `refs/gent/base/${record.name}` }
-    }
-    return { repo: record.path, ref: "refs/gent/base" }
+    const ref = `refs/gent/base/${record.name}`
+    if (record.backend === "worktree") return { repo: record.origin, ref }
+    return { repo: record.path, ref }
   }
 
   /**
-   * Makes the copy for a start whose record is `creating`: the record is
-   * written first, so a crash at any later step leaves a record that names
-   * the path. Then the copy, its marker, its hooks and its base; `ready` last.
+   * The rest of a copy that exists: its marker, its files (a worktree), its
+   * hooks, its base and the base ref, then `ready`. The base is in the record
+   * before the ref is made, so a crash leaves a ref gent can prove its own.
+   * The base ref is made only where none is (compare and swap): one that is
+   * there already is someone else's, and gent keeps the copy and says so.
    */
-  const create = Effect.fn("Workspaces.create")(function* (start: WorkspaceStart) {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const now = yield* Clock.currentTimeMillis
-    const storage = yield* riftStorage(start.origin)
-    const worktrees = yield* inDirectory("worktrees")
-    const atPath = (backend: typeof WorkspaceBackend.Type, copy: string): WorkspaceRecord => ({
-      name: start.name,
-      parentSessionId: start.parentSessionId,
-      parentBranchId: start.parentBranchId,
-      requestId: start.requestId,
-      origin: start.origin,
-      path: copy,
-      cwd: path.join(copy, start.relative),
-      backend,
-      phase: "creating",
-      notes: [],
-      createdAt: now,
-    })
-    let notes: ReadonlyArray<string> = []
-    let record = atPath("worktree", path.join(worktrees, start.name))
-    if (Result.isSuccess(storage)) {
-      yield* requireSpace(start.origin)
-      record = atPath("rift", path.join(storage.success, start.name))
-      yield* publish(record)
-      const made = yield* riftCopy(record).pipe(Effect.result)
-      if (Result.isFailure(made)) {
-        // A failed rift that still left a directory there: gent keeps it.
-        if (yield* fs.exists(record.path).pipe(asError)) return yield* made.failure
-        notes = [`a git worktree, because ${made.failure.message}`]
-        record = atPath("worktree", path.join(worktrees, start.name))
-      }
-    } else {
-      notes = [`a git worktree, because ${storage.failure}`]
-    }
-    if (record.backend === "worktree") {
-      yield* fs.makeDirectory(worktrees, { recursive: true }).pipe(asError)
-      yield* requireSpace(worktrees)
-      yield* publish(record)
-      yield* addWorktree(record)
-    }
-    // The marker goes in first, so a failure or a crash after it leaves a copy gent can remove.
+  const finish = Effect.fn("Workspaces.finish")(function* (
+    record: WorkspaceRecord,
+    notes: ReadonlyArray<string>,
+  ) {
+    // The marker goes in first, so a failure or a crash after it leaves a copy gent can prove.
     yield* writeMarker(record)
     if (record.backend === "worktree") yield* fillWorktree(record)
     const ids: HookIds = {
-      id: Option.getOrElse(yield* riftId(record.path), () => record.name),
+      id: record.copyId ?? record.name,
       parentId: Option.getOrElse(yield* riftId(record.origin), () => ""),
     }
     const hookNote = yield* runPostcreate(record.origin, record.path, ids)
-    const base = yield* captureBase(record.path, record.name)
-    const held = baseRef(record)
-    yield* git(held.repo, ["update-ref", held.ref, base])
+    const based: WorkspaceRecord = { ...record, base: yield* captureBase(record.path, record.name) }
+    yield* publish(based)
+    const held = baseRef(based)
+    const made = yield* git(held.repo, ["update-ref", held.ref, based.base ?? "", ""]).pipe(
+      Effect.result,
+    )
+    if (Result.isFailure(made)) {
+      const why = `${held.ref} in ${held.repo} could not be made where none was (${made.failure.message}); gent left it`
+      yield* retain(based, why)
+      return yield* new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` })
+    }
     const ready: WorkspaceRecord = {
-      ...record,
+      ...based,
       phase: "ready",
-      base,
       notes: [...notes, ...Option.toArray(hookNote)],
     }
     yield* publish(ready)
     return ready
   })
 
-  // ── removing a copy ──
-
-  /** Removes an owned copy. Any failure keeps the copy: gent never deletes a copy git or rift would not. */
-  const removeCopy = Effect.fn("Workspaces.removeCopy")(function* (record: WorkspaceRecord) {
-    const kept = (why: string) =>
-      new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` })
-    if (record.backend === "worktree") {
-      return yield* git(record.origin, [
-        "worktree",
-        "remove",
-        "--force",
-        "--force",
-        record.path,
-      ]).pipe(
-        Effect.asVoid,
-        Effect.mapError((error) => kept(error.message)),
-      )
+  /**
+   * Makes the copy for a start: the record is written as `creating` first,
+   * so a crash at any later step leaves a record that names the path. A rift
+   * copy that exists is gent's to keep from then on: a step after it that
+   * fails retains it.
+   */
+  const create = Effect.fn("Workspaces.create")(function* (start: WorkspaceStart) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const now = yield* Clock.currentTimeMillis
+    const storage = yield* riftStorage(start.origin)
+    const inRoot = (backend: typeof WorkspaceBackend.Type, root: string): WorkspaceRecord => ({
+      name: start.name,
+      parentSessionId: start.parentSessionId,
+      parentBranchId: start.parentBranchId,
+      requestId: start.requestId,
+      origin: start.origin,
+      root,
+      path: path.join(root, start.name),
+      cwd: path.join(root, start.name, start.relative),
+      backend,
+      phase: "creating",
+      notes: [],
+      createdAt: now,
+    })
+    let notes: ReadonlyArray<string> = []
+    if (Result.isSuccess(storage)) {
+      yield* requireSpace(start.origin)
+      const record = inRoot("rift", yield* canonical(storage.success))
+      yield* publish(record)
+      const made = yield* riftCopy(record).pipe(Effect.result)
+      if (Result.isSuccess(made)) {
+        const kept = (latest: WorkspaceRecord, why: string) =>
+          retain(latest, why).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` }),
+              ),
+            ),
+          )
+        const copyId = yield* riftId(record.path)
+        if (Option.isNone(copyId)) return yield* kept(record, "it has no rift id")
+        const identified: WorkspaceRecord = { ...record, copyId: copyId.value }
+        yield* publish(identified)
+        return yield* finish(identified, notes).pipe(
+          Effect.catchTag("WorkspaceError", (error) =>
+            Effect.gen(function* () {
+              // A step that already retained the copy said why; any other is why now.
+              const latest = Option.getOrElse(yield* readRecord(record.name), () => identified)
+              if (latest.phase === "retained") return yield* error
+              return yield* kept(latest, error.message)
+            }),
+          ),
+        )
+      }
+      // A failed rift that still left something there: gent keeps it.
+      if ((yield* entryKind(record.path)) !== "absent") {
+        yield* retain(record, made.failure.message)
+        return yield* made.failure
+      }
+      notes = [`a git worktree, because ${made.failure.message}`]
+    } else {
+      notes = [`a git worktree, because ${storage.failure}`]
     }
-    const descendants = yield* riftPaths(riftProgram, {
-      command: "descendants",
-      of: record.path,
-    }).pipe(Effect.mapError((error) => kept(error.message)))
-    if (descendants.length > 0) {
-      return yield* kept(`rift copies were made from it: ${descendants.join(", ")}`)
-    }
-    const answer = yield* riftCall(riftProgram, { command: "remove", at: record.path }).pipe(
-      Effect.mapError((error) => kept(error.message)),
-    )
-    if (answer.status === "ok") return
-    // A failed `postremove` runs after the copy went to rift's trash.
-    if (answer.error.committed === true && answer.error.hook === "postremove") return
-    return yield* kept(`rift could not remove it (${answer.error.code}): ${answer.error.message}`)
+    const worktrees = yield* worktreesDirectory
+    yield* fs.makeDirectory(worktrees, { recursive: true }).pipe(asError)
+    yield* requireSpace(worktrees)
+    const record = inRoot("worktree", yield* canonical(worktrees))
+    yield* publish(record)
+    yield* addWorktree(record)
+    return yield* finish(record, notes)
   })
 
-  /** Drops what gent keeps for a copy that is gone: the base ref, the session index, the record. */
+  // ── removing a copy ──
+
+  /** Removes an owned worktree copy. A failure keeps the copy: gent never deletes what git would not. */
+  const removeWorktree = Effect.fn("Workspaces.removeWorktree")(function* (
+    record: WorkspaceRecord,
+  ) {
+    yield* git(record.origin, ["worktree", "remove", "--force", "--force", record.path]).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${error.message}` }),
+      ),
+    )
+  })
+
+  /** A worktree's base ref, where it is now. */
+  const currentBase = (record: WorkspaceRecord) => {
+    const held = baseRef(record)
+    return gitOption(held.repo, ["rev-parse", "--verify", "-q", held.ref])
+  }
+
+  /** Drops what gent keeps for a copy that is gone: the session index, the record. */
   const forget = Effect.fn("Workspaces.forget")(function* (record: WorkspaceRecord) {
     const fs = yield* FileSystem.FileSystem
-    if (record.backend === "worktree" && Predicate.isNotUndefined(record.base)) {
-      const held = baseRef(record)
-      yield* git(held.repo, ["update-ref", "-d", held.ref, record.base]).pipe(Effect.ignore)
-    }
     if (Predicate.isNotUndefined(record.sessionId)) {
       yield* fs.remove(yield* linkFile(record.sessionId), { force: true }).pipe(asError)
     }
     yield* fs.remove(yield* recordFile(record.name), { force: true }).pipe(asError)
   }, Effect.uninterruptible)
+
+  /**
+   * Ends a copy gent owns, or forgets one that is gone. A rift copy is kept
+   * and retained. A worktree goes only while its base ref is where gent put
+   * it (or gone); the ref goes after the copy, and only from gent's commit.
+   * Anything gent cannot prove stays, and the call fails with why.
+   */
+  const discard = Effect.fn("Workspaces.discard")(function* (
+    record: WorkspaceRecord,
+    state: "absent" | "owned",
+  ) {
+    if (record.backend === "rift") {
+      if (state === "owned") return yield* retain(record, RIFT_RETAINED)
+      return yield* forget(record)
+    }
+    const held = baseRef(record)
+    const base = Option.fromUndefinedOr(record.base)
+    let current = Option.none<string>()
+    if (Option.isSome(base)) current = yield* currentBase(record)
+    const moved = Option.isSome(current) && !Option.contains(base, current.value)
+    if (moved) {
+      return yield* new WorkspaceError({
+        message: `gent keeps the copy ${record.path}: ${held.ref} was moved since gent made it`,
+      })
+    }
+    if (state === "owned") yield* removeWorktree(record)
+    if (Option.isSome(current)) {
+      yield* git(held.repo, ["update-ref", "-d", held.ref, current.value]).pipe(
+        Effect.catchTag("WorkspaceError", (error) =>
+          Effect.logWarning("workspaces.base-ref.kept").pipe(
+            Effect.annotateLogs({ ref: held.ref, error: error.message }),
+          ),
+        ),
+      )
+    }
+    yield* forget(record)
+  })
 
   // ── acquire and bind ──
 
@@ -910,9 +1183,10 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * The place for a start. The same start (parent session, parent branch,
    * tool call, origin) adopts the copy it made before, so a repeated start
    * gets one copy. A record left by a crash recovers by its phase: a
-   * `creating` record with nothing at its path is made again, one whose copy
-   * holds the marker is removed and made again, and any other directory is
-   * kept and the start fails.
+   * `creating` record with nothing at its path is made again; a worktree
+   * whose copy holds the marker is removed and made again; a rift copy is
+   * retained and the start fails; any other directory is kept and the start
+   * fails. A retained copy is never adopted.
    */
   const acquire = Effect.fn("Workspaces.acquire")(function* (start: WorkspaceStart) {
     return yield* locked(
@@ -929,6 +1203,11 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
             message: `Workspace ${start.name} belongs to another start; gent keeps it`,
           })
         }
+        if (record.phase === "retained") {
+          return yield* new WorkspaceError({
+            message: `gent keeps the copy ${record.path} (retained: ${record.retained ?? "no reason recorded"}); it makes no other for this start`,
+          })
+        }
         const state = yield* ownership(record)
         if (record.phase === "ready" && state === "owned") return placeOf(record, record.notes)
         if (record.phase === "ready" && Predicate.isNotUndefined(record.sessionId)) {
@@ -936,17 +1215,31 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
             message: `the copy at ${record.path} of this start is gone`,
           })
         }
-        if (state === "owned") yield* removeCopy(record)
-        if (record.phase === "ready") yield* forget(record)
+        yield* discard(record, state)
+        if (record.backend === "rift" && state === "owned") {
+          return yield* new WorkspaceError({
+            message: `gent keeps the copy ${record.path}, which a start that did not finish made: ${RIFT_RETAINED}`,
+          })
+        }
         const made = yield* create(start)
         return placeOf(made, made.notes)
       }),
     )
   })
 
+  /** The name of the place a session is bound to, by the session index: one read. */
+  const linkedName = Effect.fn("Workspaces.linkedName")(function* (sessionId: SessionId) {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.readFileString(yield* linkFile(sessionId)).pipe(
+      Effect.map((text) => text.trim()),
+      Effect.option,
+    )
+  })
+
   /**
    * Names the child session that works in the place, so its turns collect
-   * and its delete releases it. A place bound to another session stays its.
+   * and its delete releases it. A place bound to another session stays its,
+   * and a session whose index names another place stays with that one.
    */
   const bind = Effect.fn("Workspaces.bind")(function* (name: string, sessionId: SessionId) {
     yield* locked(
@@ -963,6 +1256,12 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
             message: `Workspace ${name} belongs to session ${owner.value}`,
           })
         }
+        const linked = yield* linkedName(sessionId)
+        if (Option.isSome(linked) && linked.value !== name) {
+          return yield* new WorkspaceError({
+            message: `Session ${sessionId} works in the copy ${linked.value}; gent does not bind it to ${name}`,
+          })
+        }
         // The record is the binding; the session index after it only finds it faster.
         if (Option.isNone(owner)) yield* publish({ ...record.value, sessionId })
         yield* fs.makeDirectory(yield* inDirectory("sessions"), { recursive: true }).pipe(asError)
@@ -971,15 +1270,6 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
           Effect.uninterruptible,
         )
       }),
-    )
-  })
-
-  /** The name of the place a session is bound to, by the session index: one read. */
-  const linkedName = Effect.fn("Workspaces.linkedName")(function* (sessionId: SessionId) {
-    const fs = yield* FileSystem.FileSystem
-    return yield* fs.readFileString(yield* linkFile(sessionId)).pipe(
-      Effect.map((text) => text.trim()),
-      Effect.option,
     )
   })
 
@@ -1010,8 +1300,8 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * in the origin. The branch moves only from the commit gent last wrote: a
    * branch someone else moved, or one a worktree has checked out, stays as it
    * is, and the work stays in the copy. A rift copy is a repository of its
-   * own, so its commit is fetched to a private ref first. A copy that matches
-   * `base` holds no work: gent's branch goes.
+   * own, so its commit's objects are fetched first, by id, into no ref. A
+   * copy that matches `base` holds no work: gent's branch goes.
    */
   const collectRecord = Effect.fn("Workspaces.collectRecord")(function* (input: WorkspaceRecord) {
     let record = input
@@ -1062,22 +1352,21 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       record = { ...record, nextTip: commit }
       yield* publish(record)
       const expected = Option.getOrElse(current, () => "")
-      if (record.backend === "worktree") {
-        yield* git(record.origin, ["update-ref", ref, commit, expected])
-      } else {
-        const incoming = `refs/gent/incoming/${record.name}`
-        yield* git(record.path, ["update-ref", "refs/gent/collected", commit])
+      if (record.backend === "rift") {
+        // The commit's objects only: a fetch by id into no ref, and no FETCH_HEAD.
         yield* git(record.origin, [
+          "-c",
+          "uploadpack.allowAnySHA1InWant=true",
           "fetch",
           "--no-tags",
           "--quiet",
           "--no-write-fetch-head",
           record.path,
-          `+refs/gent/collected:${incoming}`,
+          commit,
         ])
-        yield* git(record.origin, ["update-ref", ref, commit, expected])
-        yield* git(record.origin, ["update-ref", "-d", incoming]).pipe(Effect.ignore)
+        yield* git(record.origin, ["cat-file", "-e", `${commit}^{commit}`])
       }
+      yield* git(record.origin, ["update-ref", ref, commit, expected])
     }
     const { nextTip: _next, ...settled } = record
     record = { ...settled, tip: commit }
@@ -1120,30 +1409,35 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   // ── release ──
 
   /**
-   * Removes a copy and what gent keeps for it. A bound copy's last work is
-   * collected first, under the same lock; a collect that fails, or that
-   * leaves the work in the copy, keeps everything.
+   * Ends a copy: a worktree is removed with what gent keeps for it, a rift
+   * copy is retained. A bound copy's last work is collected first, under the
+   * same lock; a collect that fails, or that leaves the work in the copy,
+   * keeps everything.
    */
   const retire = Effect.fn("Workspaces.retire")(function* (record: WorkspaceRecord) {
     const state = yield* ownership(record)
-    if (state === "owned") {
-      if (record.phase === "ready" && Predicate.isNotUndefined(record.sessionId)) {
-        const { work, record: collected } = yield* collectRecord(record)
-        if (collected !== record) yield* publish(collected)
-        if (Predicate.isNotUndefined(work.problem)) {
-          return yield* new WorkspaceError({
-            message: `gent keeps the copy ${record.path}: ${work.problem}`,
-          })
-        }
+    let current = record
+    if (
+      state === "owned" &&
+      record.phase === "ready" &&
+      Predicate.isNotUndefined(record.sessionId)
+    ) {
+      const { work, record: collected } = yield* collectRecord(record)
+      if (collected !== record) yield* publish(collected)
+      current = collected
+      if (Predicate.isNotUndefined(work.problem)) {
+        return yield* new WorkspaceError({
+          message: `gent keeps the copy ${record.path}: ${work.problem}`,
+        })
       }
-      yield* removeCopy(record)
     }
-    yield* forget(record)
+    yield* discard(current, state)
   })
 
   /**
-   * Removes the place of a start whose session was never bound to it (the
-   * session create failed). A bound place stays: its session owns it.
+   * Ends the place of a start whose session was never bound to it (the
+   * session create failed). A bound place stays: its session owns it. A
+   * retained place stays as it is.
    */
   const release = Effect.fn("Workspaces.release")(function* (name: string) {
     yield* locked(
@@ -1151,6 +1445,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       Effect.gen(function* () {
         const record = yield* readRecord(name)
         if (Option.isNone(record) || Predicate.isNotUndefined(record.value.sessionId)) return
+        if (record.value.phase === "retained") return
         yield* retire(record.value)
       }),
     )
