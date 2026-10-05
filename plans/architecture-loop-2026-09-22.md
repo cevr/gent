@@ -1462,3 +1462,11 @@ Opening HEAD `59517a2bc`. Sweeps and triage in `~/.cache/architecture-loop/gent/
 - Offline catalog: offline, gamut reads the stored models.dev chat snapshot from a `/bin/cp` copy of the selected gent database and its WAL, opened read-only (the obsolete `~/.gent/models.json` fallback is gone: nothing writes it). A missing or invalid snapshot keeps the fetch error.
 - Validation: gent: 61 focused tests (8 new, red and breakfix probes), gate and E2E green. Orchestrator: line review, main merged, gate under the shared check lock EXIT 1 on one TUI timing test ("a pane that opens over a previewing prompt search gives the draft back"), which passes 3/3 alone; the batch touches only `testbeds/gamut`. Merged `f98e37f82`, pushed.
 - Carried: two concurrent `up` runs can both pass the absent-state check (admission is not atomic); the WAL copy is best effort, not an atomic snapshot; a state file whose checkout was removed is refused with a raw ENOENT instead of a clear message; the prompt-search App test fails under load (also seen in guard runs).
+
+### Pass 31 (gent dogfood loop) PTY test safety, 2026-10-05
+
+- gent batch (Sol high implementor, Sol max reviewer R1: approve, no findings). Report `~/.cache/architecture-loop/gent/pass31-gent/apply-pty-safety.md`.
+- Drive scripts: `sh` steps get the same minimal environment as the pty program (`PATH`, `COLORTERM`, `LANG` + the script's `env`); before, they inherited the caller's whole environment, credentials included.
+- PTY e2e tests: each body has an `Effect.timeout` 5 s shorter than bun's, so scope finalizers run on a timeout (project rule).
+- Validation: gent: 11 changed PTY + 3 drive cases green, gate and E2E red only on the two named main flakes. Orchestrator: line review, main merged, locked gate EXIT 1 only on the App prompt-search test (main flake, in flight as gent's flakes-under-load task), locked E2E EXIT 0. Merged `86b2e6db3`, pushed.
+- Carried: the two main flakes (App "a pane that opens over a previewing prompt search gives the draft back"; e2e 45x15 retried multiline prompt) are gent's flakes-under-load task.
