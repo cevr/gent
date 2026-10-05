@@ -470,10 +470,17 @@ sandbox boundary.
 
 `SessionProfileCache` builds one profile per (workspace, cwd, set of
 extensions the config leaves active or failed, versions of the extension files
-on disk). Each resolve reads the config and lists the user and project
-extension directories as they are now, under the place's lock, so an edit to
-`disabledExtensions` and an added, fixed or edited extension file reach the
-next turn and the next session without a restart. Each extension entry (a file,
+on disk, what the config files hold). Each resolve reads the config and lists
+the user and project extension directories as they are now, under the place's
+lock, so an edit to `disabledExtensions` and an added, fixed or edited
+extension file reach the next turn and the next session without a restart.
+An extension reads its own config keys at setup (`@gent/guard`,
+`@gent/router`), and `UserConfig` decodes only core's keys, so the key holds
+the hash of `FreshConfig.fingerprint` too: every key of the user and project
+config files as canonical JSON, the disabled list left out (the key holds its
+effect, the set of extensions), a missing file the same as `{}`. An edit to
+any other key builds a new profile for the next turn, a turn that holds the
+old one keeps its lease, and a write of the same keys keeps the profile. Each extension entry (a file,
 or a directory's index) is built with every module it imports by a relative
 path into one module (`GentPlatform.bundleModule`, `Bun.build` with package
 imports external), and its version is the built module's hash. The platform
@@ -1459,7 +1466,7 @@ Key properties:
   reading an assistant-message binding row. Native replay uses this same check.
   Inner-operation storage can use it without synthetic transcript tool calls.
   Its caller must verify receipt ownership.
-- **No permission rules in core; one hook.** A tool call that asks the user asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC. It has the `toolCall` hook: before a call runs (a call of the model, or one the cell's code makes, since both go through `ToolRunner.runBound`), every extension's hook gives a `ToolCallVerdict` (`Allow`, `Ask { reason }`, `Deny { reason }`; `domain/capability.ts`). The strictest verdict wins (deny over ask over allow), and a hook that fails answers `Ask`. `Ask` is one approval request through the same `ApprovalService`, so a turn with no answerer (headless without `--approve-all`) declines. A denied or declined call does not run: the model reads a failed tool result that names the reason, and the turn goes on. With no hook the gate reads nothing and the call runs as before: the requests keep their bytes. A call is judged once. A top-level call that parks keeps its verdict in its turn record (`PendingToolCall.verdict`, optional); a cell operation keeps it in its operation record. A resumed call applies the kept verdict, and a parked `Ask` asks the same question again and takes the stored answer. A call that was allowed and ran is never run again. The shipped `@gent/guard` (`packages/extensions/src/guard.ts`) holds the rules, and it registers no hook until a config holds a `guard` entry.
+- **No permission rules in core; one hook.** A tool call that asks the user asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC. It has the `toolCall` hook: before a call runs (a call of the model, or one the cell's code makes, since both go through `ToolRunner.runBound`), every extension's hook gives a `ToolCallVerdict` (`Allow`, `Ask { reason }`, `Deny { reason }`; `domain/capability.ts`). The strictest verdict wins (deny over ask over allow), and a hook that fails answers `Ask`. `Ask` is one approval request through the same `ApprovalService`, so a turn with no answerer (headless without `--approve-all`) declines. A denied or declined call does not run: the model reads a failed tool result that names the reason, and the turn goes on. With no hook the gate reads nothing and the call runs as before: the requests keep their bytes. The gate runs inside the tool's handler, after the input decodes and before the body, so a hook reads the input the body runs with (a field the parameters drop is not there), and a call whose input does not decode fails as before with no judgement. A call is judged once. A top-level call that parks keeps its verdict in its turn record (`PendingToolCall.verdict` and `gate`, both optional); a cell operation keeps them in its operation record. The verdict is stored with its gate `pending` before the call asks or runs, and an approved `Ask` is stored `passed` before the call goes on (and before the tool's own approval asks); a store that fails fails the call, which does not run. A resumed call applies the kept verdict: a `passed` gate does not ask again (the skipped ask keeps its place in the call's count, so the tool's own approval takes its stored answer), and a `pending` `Ask` asks the same question again and takes the stored answer. An absent gate reads as `pending`. A call that was allowed and ran is never run again. The shipped `@gent/guard` (`packages/extensions/src/guard.ts`) holds the rules, and it registers no hook until a config holds a `guard` entry.
 
 Files: `domain/interaction.ts` (InteractionPendingError, makeInteractionService), `runtime/extension-host.ts` (ApprovalService), `storage/storage.ts` (InteractionStorage, the pending read seam), `domain/agent-loop.ts` (WaitingForInteraction), `runtime/agent-loop.ts` (respond orchestration).
 

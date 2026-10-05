@@ -631,7 +631,9 @@ A `toolCall` hook gives each tool call a verdict before the call runs:
 runs for each call the model makes and for each call the cell's code makes
 (that input names the cell call in `parentToolCallId`). The input also
 carries `sessionId`, `branchId`, the turn's opening `messageId`, `toolCallId`,
-`agentName`, `toolName`, `readonly` and the call's `input`.
+`agentName`, `toolName`, `readonly` and the call's `input`: the input the tool
+runs with, decoded by its parameters, so a field the tool drops is not there.
+A call whose input does not decode fails as before, and no hook judges it.
 
 - Every extension's hook runs, at once; the strictest verdict wins: deny,
   then ask, then allow. A hook that fails answers `Ask`.
@@ -639,8 +641,12 @@ carries `sessionId`, `branchId`, the turn's opening `messageId`, `toolCallId`,
   headless run without `--approve-all`) declines it.
 - A denied or declined call does not run. The model reads a failed tool
   result that names the reason, and the turn goes on.
-- A call is judged once. A call that waits for its answer across a restart
-  keeps its verdict and is not judged again.
+- A call is judged once. The verdict is stored before the call asks or runs,
+  and an approved `Ask` is stored as passed before the call goes on; a store
+  that fails fails the call, which does not run. A call that waits for its
+  answer across a restart keeps its verdict and is not judged again: a
+  passed `Ask` is not asked again, and one not yet answered asks the same
+  question.
 - With no `toolCall` hook nothing runs before a call, and the requests keep
   their bytes. A hook that asks a model adds that cost to every call it
   judges, so keep it off unless the owner asks for it.
@@ -677,31 +683,37 @@ hook until `~/.gent/config.json` (or a trusted project's
       { "tool": "bash", "match": "git push *", "effect": "ask" },
       { "tool": "bash", "match": "rm -rf *", "effect": "deny" }
     ],
-    "model": "anthropic/claude-haiku-4-5"
+    "model": "typesafe/jev-latest"
   }
 }
 ```
 
 It judges a call in this order, and the first answer wins:
 
-1. `rules`. `tool` is a glob over the tool id, and `match` a glob over the
-   call's subject: a string input, or the one field of `command`, `code`,
-   `path`, `url` and `query` the input holds (an input with two of them has
-   no subject, and a `match` rule does not decide it). `*` is any run of
-   characters, `?` one, and a trailing ` *` is optional (`git push *` also
-   matches `git push`). The last rule that matches decides.
+1. `rules`. `tool` is a glob over the tool id, and `match` a glob over each
+   of the call's subjects: a string input, or each of the fields `command`,
+   `code`, `path`, `url` and `query` the input holds as a string. `*` is any
+   run of characters, `?` one, and a trailing ` *` is optional (`git push *`
+   also matches `git push`). The last rule that matches a subject decides
+   that subject, and the strictest answer wins: a deny or an ask on any
+   subject decides the call, and an allow decides only when every subject is
+   allowed. A subject no rule matches leaves the call to the next step.
 2. A `readonly` tool runs.
 3. With a `policy`, a classifier (`ExtensionContext.Models.decide`) reads the
-   policy and the call and answers allow, ask or deny. `model` names it;
-   absent, the cheapest classifier with a credential. The instructions and
-   the policy are the same bytes for every call, and the call is the input.
-   A failure, no answer in 8 s, or an answer the classifier is not sure of
-   asks. With no policy, the call runs.
+   policy and the call and answers allow, ask or deny. `model` names one of
+   the catalog's classifiers; absent, the cheapest classifier with a
+   credential. The instructions and the policy are the same bytes for every
+   call, and the whole call is the input: a call longer than the classifier
+   reads (8,000 characters) asks, with its size as the reason, and is never
+   judged on a part. A failure, no answer in 8 s, or an answer the
+   classifier is not sure of asks. With no policy, the call runs.
 
 A `guard` entry that does not decode asks about each call that is not
 read-only. Both files' entries apply: the policies join, the project's
-rules come after the user's, and the project's `model` wins. Set
-`disabledExtensions: ["@gent/guard"]` to turn it off.
+rules come after the user's, and the project's `model` wins. The guard reads
+its config when a session profile is built, and an edit to a config file
+builds a new profile for the next turn, so a change applies from the next
+turn on. Set `disabledExtensions: ["@gent/guard"]` to turn it off.
 
 The guard is not a sandbox. The classifier reads a call's input as text: a
 cell's code is judged as written, and each tool call the code makes is judged
