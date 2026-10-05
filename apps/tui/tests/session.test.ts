@@ -648,14 +648,14 @@ describe("session controller state", () => {
     expect(queuedDraftText(cleared.queue)).toEqual(Option.none())
   })
 
-  test("the turn's start is the runtime's, kept through the turn and cleared when idle", () => {
+  test("the turn is the runtime's: its start kept through an ask, cleared when idle", () => {
     const queue = { steering: [], followUp: [queueEntry("FollowUp", "m1", "next")] }
     const running = applyRuntime(initialSessionControllerState(), {
       _tag: "Running",
       startedAtMs: 1_000,
       queue,
     })
-    expect(running.turnStartedAt).toEqual(Option.some(1_000))
+    expect(running.turn).toEqual(Option.some({ startedAt: 1_000, waitingForAnswer: false }))
     expect(running.queue).toEqual(queue)
     // An ask inside the turn is the same turn: the start stays.
     const waiting = applyRuntime(running, {
@@ -663,9 +663,9 @@ describe("session controller state", () => {
       startedAtMs: 1_000,
       queue,
     })
-    expect(waiting.turnStartedAt).toEqual(Option.some(1_000))
+    expect(waiting.turn).toEqual(Option.some({ startedAt: 1_000, waitingForAnswer: true }))
     const idle = applyRuntime(waiting, { _tag: "Idle", queue: { steering: [], followUp: [] } })
-    expect(idle.turnStartedAt).toEqual(Option.none())
+    expect(idle.turn).toEqual(Option.none())
     expect(queuedDraftText(idle.queue)).toEqual(Option.none())
   })
 })

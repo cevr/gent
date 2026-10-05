@@ -68,8 +68,7 @@ import {
   formatError,
   formatTokens,
   type PathPlace,
-  formatRunningCall,
-  toolArgSummary,
+  runningCallLabel,
   lostRequest,
   randomId,
   SEND_RETRY,
@@ -1136,12 +1135,16 @@ interface SessionControllerState {
   readonly validatedAgent: Option.Option<string>
   readonly authCheckVersion: number
   readonly queue: QueueState
-  /**
-   * When the running turn began: the runtime's `startedAtMs`, the start the
-   * turn's "Worked for" total counts from. None while the session is idle.
-   */
-  readonly turnStartedAt: Option.Option<number>
+  /** The running turn as the runtime reports it; None while the session is idle. */
+  readonly turn: Option.Option<RunningTurn>
   readonly elapsed: number
+}
+
+interface RunningTurn {
+  /** The runtime's `startedAtMs`: the start the turn's "Worked for" total counts from. */
+  readonly startedAt: number
+  /** The turn waits on the reader: an ask or an approval is open. */
+  readonly waitingForAnswer: boolean
 }
 
 const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
@@ -1155,7 +1158,7 @@ export const initialSessionControllerState = (): SessionControllerState => ({
   validatedAgent: Option.none(),
   authCheckVersion: 0,
   queue: emptyQueueState(),
-  turnStartedAt: Option.none(),
+  turn: Option.none(),
   elapsed: 0,
 })
 
@@ -1212,14 +1215,19 @@ export const setQueue = (
 export const clearQueue = (state: SessionControllerState): SessionControllerState =>
   setQueue(state, emptyQueueState())
 
-/** The runtime the server reports: its waiting entries and the running turn's start. */
+/** The runtime the server reports: its waiting entries and the running turn. */
 export const applyRuntime = (
   state: SessionControllerState,
   runtime: SessionSnapshot["runtime"],
 ): SessionControllerState => {
-  let turnStartedAt = Option.none<number>()
-  if (runtime._tag !== "Idle") turnStartedAt = Option.some(runtime.startedAtMs)
-  return { ...setQueue(state, runtime.queue), turnStartedAt }
+  let turn = Option.none<RunningTurn>()
+  if (runtime._tag !== "Idle") {
+    turn = Option.some({
+      startedAt: runtime.startedAtMs,
+      waitingForAnswer: runtime._tag === "WaitingForInteraction",
+    })
+  }
+  return { ...setQueue(state, runtime.queue), turn }
 }
 
 const setControllerElapsed = (
@@ -2229,9 +2237,9 @@ const isToolResultEvent = Predicate.or(
 
 type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
 
-/** The status-line label for a running tool: its name plus a short input. */
+/** The live line's label for a running tool: its running verb and what it works on. */
 const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string =>
-  formatRunningCall(event.toolName, toolArgSummary(event.toolName, event.input, place))
+  runningCallLabel(event.toolName, event.input, place)
 
 /** A call that started and has no result yet; an op names the cell that admitted it. */
 interface RunningCall {
@@ -2882,7 +2890,11 @@ export interface SessionController {
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
   activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
-  /** The phase word: `idle`/`ready` for the status row, `Generating` or the tool for the activity row. */
+  /**
+   * The phase word: `idle`/`ready` for the status row; for the live line
+   * `Thinking`, `Generating`, the running op (`Reading 3 files`) or
+   * `Waiting for your answer`.
+   */
   phaseLabel: () => string
   /** The status row's cue while a key's second press is armed (`esc again to clear`). */
   armedCue: () => Option.Option<string>
@@ -3054,6 +3066,8 @@ export function createSessionController(props: {
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
+  const waitingForAnswer = () =>
+    Option.exists(controllerState().turn, (turn) => turn.waitingForAnswer)
   const elapsed = () => controllerState().elapsed
   const updateControllerState = (
     update: (state: ReturnType<typeof controllerState>) => ReturnType<typeof controllerState>,
@@ -3374,7 +3388,7 @@ export function createSessionController(props: {
   // a turn whose runtime has not arrived yet) shows no count.
   const timerStart = createMemo(
     (): Option.Option<number> => {
-      if (client.isStreaming()) return controllerState().turnStartedAt
+      if (client.isStreaming()) return Option.map(controllerState().turn, (turn) => turn.startedAt)
       return Option.map(Option.fromUndefinedOr(runningShells().at(-1)), (shell) => shell.startedAt)
     },
     Option.none(),
@@ -3402,17 +3416,27 @@ export function createSessionController(props: {
     })
   })
 
-  // The status row reads the label while idle, the activity row while a tool runs.
+  // The open step streams answer text: its draft is the newest message.
+  const answering = createMemo(() => {
+    const last = feed.items().findLast((item): item is Message => isMessageItem(item))
+    return Predicate.isNotUndefined(last) && last.role === "assistant" && last.draft === true
+  })
+
+  // The status row reads the label while idle, the live line while a turn
+  // runs: an open ask, then the running op, then whether answer text streams.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
-      case "thinking":
-        return "Generating"
       case "tool":
+        if (runningShells().length === 0 && waitingForAnswer()) return "Waiting for your answer"
         return nextActivity.toolInfo
+      case "thinking":
+        if (waitingForAnswer()) return "Waiting for your answer"
+        if (answering()) return "Generating"
+        return "Thinking"
     }
   })
 

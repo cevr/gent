@@ -844,22 +844,54 @@ export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string 
 // ── Cell intent ──
 // A cell with no inner calls still did something; its source says what.
 
-const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
+/**
+ * A call a cell's source spells out: the tool it stands for, its argument
+ * when the source names one, and the label a row shows for it.
+ */
+interface CellCall {
+  readonly tool: string
+  readonly detail: string
+  readonly label: string
+}
+
+const hostCall = (id: string): CellCall => ({ tool: id, detail: "", label: id })
+
+const shellCall = (command: string): CellCall => {
+  const head = shellHead(command)
+  return { tool: "bash", detail: head, label: `$ ${head}` }
+}
+
+const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => CellCall]> = [
   [
     /\btools((?:\.[A-Za-z_$][\w$]*|\[\s*["'`][^"'`]+["'`]\s*\])+)\s*\(/g,
-    (m) => hostToolId(m[1] ?? ""),
+    (m) => hostCall(hostToolId(m[1] ?? "")),
   ],
   // `tools("read.then")(input)` calls by id; a bare `tools(id)` only reads the catalog.
-  [/\btools\(\s*["'`]([^"'`]+)["'`]\s*\)\s*\(/g, (m) => m[1] ?? ""],
-  [/Bun\.\$`([^`]*)`/g, (m) => `$ ${shellHead(m[1] ?? "")}`],
+  [/\btools\(\s*["'`]([^"'`]+)["'`]\s*\)\s*\(/g, (m) => hostCall(m[1] ?? "")],
+  [/Bun\.\$`([^`]*)`/g, (m) => shellCall(m[1] ?? "")],
   [
     /Bun\.spawn\(\s*(?:\{\s*cmd:\s*)?\[\s*((?:["'`][^"'`]*["'`]\s*,?\s*)+)\]/g,
-    (m) => `$ ${shellHead(argv(m[1] ?? ""))}`,
+    (m) => shellCall(argv(m[1] ?? "")),
   ],
-  [/Bun\.file\(\s*["'`]([^"'`]+)["'`]/g, (m) => `read ${m[1]}`],
-  [/Bun\.write\(\s*["'`]([^"'`]+)["'`]/g, (m) => `write ${m[1]}`],
-  [/new Bun\.Glob\(\s*["'`]([^"'`]+)["'`]/g, (m) => `glob ${m[1]}`],
-  [/\bfetch\(\s*["'`]([^"'`]+)["'`]/g, (m) => `fetch ${urlHost(m[1] ?? "")}`],
+  [
+    /Bun\.file\(\s*["'`]([^"'`]+)["'`]/g,
+    (m) => ({ tool: "read", detail: m[1] ?? "", label: `read ${m[1]}` }),
+  ],
+  [
+    /Bun\.write\(\s*["'`]([^"'`]+)["'`]/g,
+    (m) => ({ tool: "write", detail: m[1] ?? "", label: `write ${m[1]}` }),
+  ],
+  [
+    /new Bun\.Glob\(\s*["'`]([^"'`]+)["'`]/g,
+    (m) => ({ tool: "glob", detail: m[1] ?? "", label: `glob ${m[1]}` }),
+  ],
+  [
+    /\bfetch\(\s*["'`]([^"'`]+)["'`]/g,
+    (m) => {
+      const host = urlHost(m[1] ?? "")
+      return { tool: "webfetch", detail: host, label: `fetch ${host}` }
+    },
+  ],
 ]
 
 /** `.delegate.start` and `["must-not-run"]` name the host tool ids `delegate.start` and `must-not-run`. */
@@ -904,17 +936,22 @@ const collapseRepeats = (labels: ReadonlyArray<string>): string[] => {
   return out
 }
 
-/** The verbs a cell's source spells out, in source order: host tools, shell, files, globs, fetches. */
-export function describeCellCode(code: string): ReadonlyArray<string> {
-  const found: Array<{ readonly index: number; readonly label: string }> = []
-  for (const [pattern, label] of CELL_VERB_PATTERNS) {
+/** The calls a cell's source spells out, in source order: host tools, shell, files, globs, fetches. */
+const cellCalls = (code: string): ReadonlyArray<CellCall> => {
+  const found: Array<{ readonly index: number; readonly call: CellCall }> = []
+  for (const [pattern, toCall] of CELL_VERB_PATTERNS) {
     for (const match of code.matchAll(pattern)) {
-      const text = label(match)
-      if (text.trim().length > 0) found.push({ index: match.index, label: text })
+      const call = toCall(match)
+      if (call.label.trim().length > 0) found.push({ index: match.index, call })
     }
   }
   found.sort((left, right) => left.index - right.index)
-  return collapseRepeats(found.map((entry) => entry.label))
+  return found.map((entry) => entry.call)
+}
+
+/** The verbs a cell's source spells out, in source order: host tools, shell, files, globs, fetches. */
+export function describeCellCode(code: string): ReadonlyArray<string> {
+  return collapseRepeats(cellCalls(code).map((call) => call.label))
 }
 
 /**
@@ -1153,15 +1190,74 @@ const operationSubject = (operation: ActivityOperation): string =>
     onSome: ({ call }) => [call, operation.detail].filter((part) => part.length > 0).join(" "),
   })
 
+/** The unit a running phrase counts a tool's calls in: `Reading 3 files`. */
+const RUNNING_UNITS: ReadonlyMap<string, readonly [string, string]> = new Map([
+  ["read", ["file", "files"]],
+  ["read_session", ["session", "sessions"]],
+  ["grep", ["pattern", "patterns"]],
+  ["glob", ["pattern", "patterns"]],
+  ["websearch", ["search", "searches"]],
+  ["webfetch", ["page", "pages"]],
+  ["edit", ["file", "files"]],
+  ["write", ["file", "files"]],
+  ["bash", ["command", "commands"]],
+  ["delegate.start", ["agent", "agents"]],
+  ["ask_user", ["question", "questions"]],
+  ["ask_user_async", ["question", "questions"]],
+])
+
+/**
+ * A cell with no op yet, in the running words of the calls its source spells
+ * out, one phrase a tool in source order: `Reading 3 files · Running 2
+ * commands`, or the call itself when it is the tool's one call and names its
+ * argument (`Running mkdir -p out`). Never the code: a source with no call
+ * it can name reads `Running code`.
+ */
+const runningCellPhrase = (code: string): string => {
+  const byTool = new Map<string, ReadonlyArray<CellCall>>()
+  for (const call of cellCalls(code)) {
+    const earlier = Option.getOrElse(Option.fromUndefinedOr(byTool.get(call.tool)), () => [])
+    byTool.set(call.tool, [...earlier, call])
+  }
+  const phrases = Array.from(byTool, ([tool, calls]) => {
+    const [only] = calls
+    if (calls.length === 1 && Predicate.isNotUndefined(only) && only.detail.length > 0)
+      return formatRunningCall(tool, only.detail)
+    const [one, many] = Option.getOrElse(
+      Option.fromUndefinedOr(RUNNING_UNITS.get(tool)),
+      () => ["call", "calls"] as const,
+    )
+    return `${toolVerbs(tool)[1]} ${plural(calls.length, one, many)}`
+  })
+  if (phrases.length === 0) return "Running code"
+  return phrases.join(" · ")
+}
+
 /**
  * A running call as the activity row names it, in the words its group row
  * will use once it ends: `Running mkdir -p x`, `Reading src/app.tsx`,
- * `Calling linear.list_issues team=core`.
+ * `Calling linear.list_issues team=core`. A cell's detail is its source,
+ * read as the calls it spells out (`Reading 3 files`).
  */
-export const formatRunningCall = (tool: string, detail: string): string =>
-  [toolVerbs(tool)[1], operationSubject({ tool, detail, outcome: "running" })]
+export const formatRunningCall = (tool: string, detail: string): string => {
+  if (tool === "cell") return runningCellPhrase(detail)
+  return [toolVerbs(tool)[1], operationSubject({ tool, detail, outcome: "running" })]
     .filter((part) => part.length > 0)
     .join(" ")
+}
+
+/**
+ * The live line's label for a running call: a cell reads its whole source,
+ * any other tool the label of its arguments. Paths read from `place`.
+ */
+export const runningCallLabel = (tool: string, input: ToolInput, place: PathPlace): string => {
+  if (tool !== "cell") return formatRunningCall(tool, toolArgSummary(tool, input, place))
+  const code = Option.match(decodeToolArgs(input), {
+    onNone: () => "",
+    onSome: (args) => getStringArg(args, "code"),
+  })
+  return formatRunningCall(tool, code)
+}
 
 /** One row of a group at the preview level: a run of ops of one tool and one outcome. */
 interface ActivityRow {

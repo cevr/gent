@@ -5,6 +5,7 @@ import {
   Clock,
   ConfigProvider,
   Context,
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -584,6 +585,13 @@ const countShutdowns = (setup: TestSetup) =>
     return { shutdowns: () => shutdowns, destroy }
   })
 
+/** A turn that started now, on the real clock, with nothing waiting. */
+const runningNow = () => ({
+  _tag: "Running" satisfies "Running",
+  startedAtMs: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+  queue: emptyQueueSnapshot(),
+})
+
 /**
  * The session view over a turn that runs, on a terminal `height` rows tall.
  * The runtime stream says Running once and then stays quiet, as it does
@@ -597,7 +605,7 @@ const mountRunningTurn = (
   Effect.gen(function* () {
     const sessionId = SessionId.make("session-running")
     const branchId = BranchId.make("branch-running")
-    const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+    const running = runningNow()
     const steers: Array<string> = []
     const sent: Array<string> = []
     let readActivity = () => "unmounted"
@@ -816,7 +824,7 @@ const mountShortTerminalWithTrays = (
       if (n <= 4) return row
       return { ...row, activity: "bash" }
     }
-    const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+    const running = runningNow()
     const { setup, client } = yield* mountApp({
       client: {
         session: {
@@ -883,7 +891,7 @@ const mountShortTerminalWithTrays = (
     options.onClient?.(client)
     yield* waitForFrame(
       setup,
-      (frame) => frame.includes("Generating") && frame.includes("delegate: task 3"),
+      (frame) => frame.includes("✻ ") && frame.includes("delegate: task 3"),
       "a running turn over the trays",
     )
     return setup
@@ -1380,7 +1388,7 @@ describe("App session view and fatal screen", () => {
       case "interaction renderer":
         return Option.some("plain breaks question")
       case "message queue label":
-        return Option.some("↳ steer · plain breaks queued")
+        return Option.some("┊ next step · plain breaks queued")
       default:
         return Option.none<string>()
     }
@@ -1395,12 +1403,13 @@ describe("App session view and fatal screen", () => {
           id: MessageId.make("breaks-queued"),
           content: "plain breaks queued",
           createdAt: 1,
-          metadata: { customType: "breaks-row" },
+          // The reader's own: only the reader's waiting messages draw.
+          metadata: { customType: "breaks-row", fromClient: true },
         },
       ],
       followUp: [],
     })
-    return Stream.concat(Stream.make({ _tag: "Running" satisfies "Running", queue }), Stream.never)
+    return Stream.concat(Stream.make({ ...runningNow(), queue }), Stream.never)
   }
   for (const surface of Object.values(renderThrowCoverage).flat()) {
     it.scopedLive(
@@ -2120,12 +2129,13 @@ describe("App status and activity rows", () => {
       expect(view.activity()).toBe("working")
     }).pipe(Effect.timeout("10 seconds")),
   )
-  it.scopedLive("a running turn's activity row shows esc cancel", () =>
+  it.scopedLive("a running turn's live line leads with its glyph and shows esc cancel", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
-      const frame = yield* waitForFrame(view.setup, (next) => next.includes("Generating"), "busy")
-      const row = frame.split("\n").find((line) => line.includes("Generating")) ?? ""
-      expect(row.trim()).toMatch(/^Generating( \(\d+s\))? · esc cancel$/)
+      const frame = yield* waitForFrame(view.setup, (next) => next.includes("✻ "), "busy")
+      const row = frame.split("\n").find((line) => line.includes("✻ ")) ?? ""
+      // Col 2, the glyph, the phase: no answer text has streamed, so the model thinks.
+      expect(row.trimEnd()).toMatch(/^ {2}✻ Thinking( \(\d+s\))? · esc cancel$/)
     }).pipe(Effect.timeout("4 seconds")),
   )
   test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
@@ -3748,7 +3758,7 @@ describe("App cancel and quit keys during a turn", () => {
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-cancel")
       const branchId = BranchId.make("branch-cancel")
-      const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+      const running = runningNow()
       const idle = { _tag: idleTag, queue: emptyQueueSnapshot() }
       const runtime = yield* Queue.unbounded<typeof running | typeof idle>()
       yield* Queue.offer(runtime, running)
@@ -4460,7 +4470,7 @@ describe("App docked panes at short heights", () => {
     )
   }
   // Under 9 rows, with a turn running and the blank footer rows given way,
-  // the "Generating" row, the input and the status row leave a pane two rows,
+  // the live line, the input and the status row leave a pane two rows,
   // one or none (8 rows: 3, 7: 2, 6: 1, 5: none). Under three rows the frame
   // drops its rules and note row, so its rows go to the cursor row; at none it
   // draws nothing. Either way no row is drawn over a rule or over the status row.
@@ -4558,7 +4568,7 @@ describe("App docked panes at short heights", () => {
               frame.includes("┃") &&
               // The activity row is whole: the transcript tail, left no row,
               // draws nothing over it.
-              frame.split("\n").some((line) => line.startsWith("  Generating")),
+              frame.split("\n").some((line) => line.startsWith("  ✻ ")),
             `the cursor row at ${height} rows`,
           )
         }
@@ -4587,7 +4597,7 @@ describe("App docked panes at short heights", () => {
   const withoutClock = (frame: string) => frame.replace(/\(\d+s\)/g, "")
   const blankRowsGiven = (frame: string) => {
     const lines = frame.split("\n")
-    const generating = lines.findIndex((line) => line.includes("Generating"))
+    const generating = lines.findIndex((line) => line.includes("✻ "))
     return generating >= 0 && lines[generating + 1]?.startsWith("┃") === true
   }
   for (const height of [12, 11, 10]) {
@@ -4714,7 +4724,7 @@ describe("App docked panes at short heights", () => {
       view.setup.resize(width, 24)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("Generating"),
+        (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("✻ "),
         "the full terminal",
       )
       expect(renderFrame(view.setup)).not.toContain("Sessions ·")
@@ -6271,7 +6281,7 @@ describe("TUI renderer surfaces", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
-    "waiting entries sit dim above the composer, apart from the transcript, until delivered or restored",
+    "waiting entries sit dim in the reader's lane above the composer until delivered or restored",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("session-queue")
@@ -6283,6 +6293,7 @@ describe("TUI renderer surfaces", () => {
               id: MessageId.make("steer-queue"),
               content: "STEER-WAIT",
               createdAt: 0,
+              metadata: { fromClient: true },
             },
           ],
           followUp: [
@@ -6291,6 +6302,7 @@ describe("TUI renderer surfaces", () => {
               id: MessageId.make("follow-queue"),
               content: "FOLLOW-WAIT",
               createdAt: 1,
+              metadata: { fromClient: true },
             },
           ],
         })
@@ -6347,23 +6359,24 @@ describe("TUI renderer surfaces", () => {
           setup.resize(width, height)
           const frame = yield* waitForFrame(
             setup,
-            (next) => next.includes("↳ queued · FOLLOW-WAIT") && next.includes("COMPOSER-DRAFT"),
+            (next) => next.includes("┊ next turn · FOLLOW-WAIT") && next.includes("COMPOSER-DRAFT"),
             "pinned queue",
           )
-          // Between the activity row and the composer, steers first.
+          // Between the live line and the composer, the steer (read at the next step) first.
           const order = [
-            "Generating",
-            "↳ steer · STEER-WAIT",
-            "↳ queued · FOLLOW-WAIT",
-            "alt+up restore",
+            "✻ Thinking",
+            "┊ next step · STEER-WAIT",
+            "┊ next turn · FOLLOW-WAIT",
+            "alt+up edit",
             "COMPOSER-DRAFT",
           ].map((text) => frame.indexOf(text))
           expect(order.every((at) => at >= 0)).toBe(true)
           expect(order).toEqual(order.toSorted((a, b) => a - b))
           expect(frame.match(/STEER-WAIT/g)).toHaveLength(1)
           expect(frame.match(/FOLLOW-WAIT/g)).toHaveLength(1)
-          // Not a user message: no rail on the entry's row.
+          // The reader's lane, dashed: not a delivered message's rail.
           const row = frame.split("\n").find((line) => line.includes("FOLLOW-WAIT")) ?? ""
+          expect(row.startsWith("┊ next turn · ")).toBe(true)
           expect(row).not.toContain("┃")
         }
         yield* Queue.offer(runtimes, {
@@ -6391,25 +6404,122 @@ describe("TUI renderer surfaces", () => {
         // Delivered: it leaves the pinned rows and lands in the transcript as a user message.
         const delivered = yield* waitForFrame(
           setup,
-          (next) => !next.includes("↳ steer") && next.includes("STEER-WAIT"),
+          (next) => !next.includes("┊ next step") && next.includes("STEER-WAIT"),
           "delivered steer",
         )
         expect(delivered.match(/STEER-WAIT/g)).toHaveLength(1)
-        expect(delivered.indexOf("STEER-WAIT")).toBeLessThan(delivered.indexOf("Generating"))
+        expect(delivered.indexOf("STEER-WAIT")).toBeLessThan(delivered.indexOf("✻"))
         const landed = delivered.split("\n").find((line) => line.includes("STEER-WAIT")) ?? ""
         expect(landed).toContain("┃")
-        expect(delivered).toContain("↳ queued · FOLLOW-WAIT")
+        expect(delivered).toContain("┊ next turn · FOLLOW-WAIT")
         setup.mockInput.pressArrow("up", { meta: true })
         const restored = yield* waitForFrame(
           setup,
-          (next) => !next.includes("↳ queued") && next.includes("FOLLOW-WAIT"),
+          (next) => !next.includes("┊ next turn") && next.includes("FOLLOW-WAIT"),
           "restored queue",
         )
         expect(restored.match(/FOLLOW-WAIT/g)).toHaveLength(1)
         expect(restored).toContain("COMPOSER-DRAFT")
-        expect(restored).not.toContain("alt+up restore")
+        expect(restored).not.toContain("alt+up edit")
         expect(sent).toEqual([])
         expect(steers).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a message another agent queued draws nowhere until delivered, then once in the transcript",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-agent-queue")
+        const branchId = BranchId.make("branch-agent-queue")
+        const reader: QueueEntryInfo = {
+          _tag: "FollowUp",
+          id: MessageId.make("reader-queue"),
+          content: "READER-WAIT",
+          createdAt: 1,
+          metadata: { fromClient: true },
+        }
+        // A child's `Session.send` with delivery `queue`: no client origin.
+        const agent: QueueEntryInfo = {
+          _tag: "FollowUp",
+          id: MessageId.make("agent-queue"),
+          content: "AGENT-WAIT",
+          createdAt: 0,
+          metadata: { extensionId: "@gent/delegate" },
+        }
+        const running = {
+          _tag: "Running" satisfies "Running",
+          startedAtMs: 0,
+          queue: new QueueSnapshot({ steering: [], followUp: [agent, reader] }),
+        }
+        const runtimes = yield* Queue.unbounded<typeof running>()
+        const events = yield* Queue.unbounded<EventEnvelope>()
+        const { setup } = yield* mountApp({
+          client: {
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId,
+                  branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  agent: AgentName.make("main"),
+                  runtime: running,
+                  metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                }),
+              watchRuntime: () => Stream.concat(Stream.make(running), Stream.fromQueue(runtimes)),
+              events: () => Stream.fromQueue(events),
+            },
+          },
+          initialSession: sessionNamed(sessionId, branchId, "Agent queue"),
+        })
+        for (const [width, height] of [
+          [100, 30],
+          [60, 20],
+        ] as const) {
+          setup.resize(width, height)
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("┊ next turn · READER-WAIT"),
+            "the reader's entry",
+          )
+          // Only the reader's own entry: the agent's is neither pinned, counted nor in the transcript.
+          expect(frame).not.toContain("AGENT-WAIT")
+          expect(frame).not.toContain("more")
+          expect(frame.match(/┊/g)).toHaveLength(1)
+        }
+        // Delivered: the agent's message lands in the transcript, once.
+        yield* Queue.offer(runtimes, {
+          ...running,
+          queue: new QueueSnapshot({ steering: [], followUp: [reader] }),
+        })
+        yield* Queue.offer(
+          events,
+          EventEnvelope.make({
+            id: EventId.make(1),
+            createdAt: 1,
+            event: AgentEvent.cases.MessageReceived.make({
+              message: StoredMessage.cases.regular.make({
+                id: MessageId.make("agent-queue"),
+                sessionId,
+                branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text: "AGENT-WAIT" })],
+                createdAt: dateFromMillis(1),
+                metadata: { extensionId: "@gent/delegate" },
+              }),
+            }),
+          }),
+        )
+        const delivered = yield* waitForFrame(
+          setup,
+          (next) => next.includes("AGENT-WAIT"),
+          "the agent's message delivered",
+        )
+        expect(delivered.match(/AGENT-WAIT/g)).toHaveLength(1)
+        expect(delivered.indexOf("AGENT-WAIT")).toBeLessThan(delivered.indexOf("✻"))
+        expect(delivered).toContain("┊ next turn · READER-WAIT")
       }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -6428,6 +6538,7 @@ describe("TUI renderer surfaces", () => {
                   id: MessageId.make("long-queue"),
                   content: "QUEUE-START " + "wide text ".repeat(20) + "QUEUE-END",
                   createdAt: 0,
+                  metadata: { fromClient: true },
                 },
               ]}
               messageRenderers={new Map()}
@@ -6445,26 +6556,72 @@ describe("TUI renderer surfaces", () => {
         yield* Effect.promise(() => setup.renderOnce())
         const lines = renderFrame(setup)
           .split("\n")
-          .filter((line) => line.trim().length > 0)
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0)
         expect(lines).toHaveLength(2)
-        expect(lines[0]).toContain("↳ queued · QUEUE-START")
+        expect(lines[0]?.startsWith("┊ next turn · QUEUE-START")).toBe(true)
         expect(lines[0]).toContain("…")
-        expect(lines[1]).toContain("alt+up restore")
+        expect(lines[1]).toBe("  alt+up edit")
         expect(renderFrame(setup)).not.toContain("QUEUE-END")
-        // Dim, apart from a user message's text color.
-        const entry = setup
+        // The whole row is dim, the dashed rail too: not a message's text color.
+        const row = setup
           .captureSpans()
-          .lines.flatMap((line) => line.spans)
-          .filter((span) => span.text.includes("QUEUE-START"))
-        expect(entry).toHaveLength(1)
-        expect(entry[0]?.fg.equals(theme.textMuted)).toBe(true)
-        expect(entry[0]?.fg.equals(theme.text)).toBe(false)
+          .lines.find((line) => line.spans.some((span) => span.text.includes("QUEUE-START")))
+        const drawn = (row?.spans ?? []).filter((span) => span.text.trim().length > 0)
+        expect(drawn.length).toBeGreaterThan(0)
+        expect(drawn.every((span) => span.fg.equals(theme.textMuted))).toBe(true)
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive(
-    "the activity count runs from the turn's start through its tool calls, and the next turn starts again",
+    "a waiting entry names its other lines, and past three entries the rest count",
+    () =>
+      Effect.gen(function* () {
+        const entry = (id: string, content: string): QueueEntryInfo => ({
+          _tag: "FollowUp",
+          id: MessageId.make(id),
+          content,
+          createdAt: 0,
+          metadata: { fromClient: true },
+        })
+        const setup = yield* renderScoped(
+          () => (
+            <QueueWidget
+              steerMessages={[]}
+              queuedMessages={[
+                entry("q1", "MULTI-HEAD " + "long ".repeat(20) + "\nsecond line\nthird line"),
+                entry("q2", "SECOND-ENTRY"),
+                entry("q3", "THIRD-ENTRY"),
+                entry("q4", "FOURTH-ENTRY"),
+                entry("q5", "FIFTH-ENTRY"),
+              ]}
+              messageRenderers={new Map()}
+            />
+          ),
+          { width: 60, height: 12 },
+        )
+        for (const width of [60, 40]) {
+          setup.resize(width, 12)
+          yield* Effect.promise(() => setup.renderOnce())
+          const lines = renderFrame(setup)
+            .split("\n")
+            .map((line) => line.trimEnd())
+            .filter((line) => line.length > 0)
+          expect(lines).toEqual([
+            expect.stringMatching(/^┊ next turn · MULTI-HEAD .*… \+2 lines$/),
+            "┊ next turn · SECOND-ENTRY",
+            "┊ next turn · THIRD-ENTRY",
+            "┊ +2 more",
+            "  alt+up edit",
+          ])
+          expect(lines[0]?.length).toBeLessThan(width)
+        }
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "the live line counts the whole turn through its tool calls and an ask, and the next turn starts again",
     () =>
       Effect.gen(function* () {
         const clock = yield* TestClock.make()
@@ -6476,7 +6633,11 @@ describe("TUI renderer surfaces", () => {
           startedAtMs: 0,
           queue: emptyQueueSnapshot(),
         }
-        const runtimes = yield* Queue.unbounded<typeof running>()
+        const runtimes = yield* Queue.unbounded<{
+          readonly _tag: "Running" | "WaitingForInteraction"
+          readonly startedAtMs: number
+          readonly queue: typeof running.queue
+        }>()
         const events = yield* Queue.unbounded<EventEnvelope>()
         const { setup } = yield* mountApp({
           runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
@@ -6504,9 +6665,10 @@ describe("TUI renderer surfaces", () => {
             events,
             EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
           )
-        yield* waitForFrame(setup, (next) => next.includes("Generating ·"), "the turn")
+        // No answer text yet: the model thinks.
+        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
         yield* clock.adjust(Duration.seconds(4))
-        yield* waitForFrame(setup, (next) => next.includes("Generating (4s)"), "4s in")
+        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (4s)"), "4s in")
         // A tool call changes the phase word, not the count.
         yield* event(
           1,
@@ -6520,11 +6682,11 @@ describe("TUI renderer surfaces", () => {
         )
         yield* waitForFrame(
           setup,
-          (next) => next.includes("TIMER-TOOL (4s)") && !next.includes("Generating"),
+          (next) => next.includes("✻ Running TIMER-TOOL (4s)") && !next.includes("Thinking"),
           "the tool keeps the count",
         )
         yield* clock.adjust(Duration.seconds(3))
-        yield* waitForFrame(setup, (next) => next.includes("TIMER-TOOL (7s)"), "7s in")
+        yield* waitForFrame(setup, (next) => next.includes("✻ Running TIMER-TOOL (7s)"), "7s in")
         yield* event(
           2,
           AgentEvent.cases.ToolCallSucceeded.make({
@@ -6536,16 +6698,33 @@ describe("TUI renderer surfaces", () => {
             output: "{}",
           }),
         )
-        yield* waitForFrame(setup, (next) => next.includes("Generating (7s)"), "back to the turn")
-        // The next turn counts from its own start.
-        yield* Queue.offer(runtimes, { ...running, startedAtMs: clock.currentTimeMillisUnsafe() })
+        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking (7s)"), "back to the turn")
+        // Answer text streams: the model generates.
+        yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
+        yield* waitForFrame(setup, (next) => next.includes("✻ Generating (7s)"), "the answer")
+        // An ask inside the turn: the same turn, the same count.
+        yield* Queue.offer(runtimes, {
+          ...running,
+          _tag: "WaitingForInteraction" satisfies "WaitingForInteraction",
+        })
         yield* waitForFrame(
           setup,
-          (next) => next.includes("Generating ·") && !next.includes("(7s)"),
+          (next) => next.includes("✻ Waiting for your answer (7s)"),
+          "the ask",
+        )
+        // The next turn counts from its own start.
+        yield* Queue.offer(runtimes, {
+          ...running,
+          _tag: "Running" satisfies "Running",
+          startedAtMs: clock.currentTimeMillisUnsafe(),
+        })
+        yield* waitForFrame(
+          setup,
+          (next) => next.includes("✻ Generating ·") && !next.includes("(7s)"),
           "the next turn",
         )
         yield* clock.adjust(Duration.seconds(2))
-        yield* waitForFrame(setup, (next) => next.includes("Generating (2s)"), "2s into the next")
+        yield* waitForFrame(setup, (next) => next.includes("✻ Generating (2s)"), "2s into the next")
       }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -6557,6 +6736,7 @@ describe("TUI renderer surfaces", () => {
           id: MessageId.make("m1"),
           content: "switch to secondary",
           createdAt: 0,
+          metadata: { fromClient: true },
         },
       ]
       const queuedMessages: QueueEntryInfo[] = [
@@ -6565,6 +6745,7 @@ describe("TUI renderer surfaces", () => {
           id: MessageId.make("m2"),
           content: "line one\nline two\nline three",
           createdAt: 0,
+          metadata: { fromClient: true },
         },
       ]
       const setup = yield* renderScoped(() => (
@@ -6575,9 +6756,9 @@ describe("TUI renderer surfaces", () => {
         />
       ))
       const frame = renderFrame(setup)
-      expect(frame).toContain("↳ steer · switch to secondary")
-      expect(frame).toContain("↳ queued · line one +2 lines")
-      expect(frame).toContain("alt+up restore")
+      expect(frame).toContain("┊ next step · switch to secondary")
+      expect(frame).toContain("┊ next turn · line one +2 lines")
+      expect(frame).toContain("alt+up edit")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ConnectionWidget renders nothing when no connection issue", () =>

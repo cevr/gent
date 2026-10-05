@@ -17,16 +17,7 @@ import { type Session as ClientSession, useClient, useRuntime } from "./client"
 import { formatCost, formatDuration, isConversation, plural, randomId, truncate } from "./utils"
 import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  ErrorBoundary,
-  For,
-  type JSX,
-  on,
-  Show,
-} from "solid-js"
+import { createEffect, createMemo, createSignal, ErrorBoundary, For, on, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import {
   KeyboardScopeProvider,
@@ -46,6 +37,7 @@ import {
   keyHintsLine,
   useDockPaneOpen,
   useDockSpacer,
+  useSpinnerClock,
 } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
@@ -452,64 +444,88 @@ interface QueueWidgetProps {
   messageRenderers: ReadonlyMap<string, MessageRendererEntry>
 }
 
-function summaryText(text: string): string {
-  const lines = text.split("\n")
-  const first = lines[0] ?? ""
-  if (lines.length <= 1) return first
-  return `${first} +${lines.length - 1} lines`
-}
+/** Waiting rows past this many fold into one `┊ +N more` row. */
+const QUEUE_ROWS = 3
+
+/** The reader's lane for a message not yet delivered: col 0, dashed. */
+const WAITING_RAIL = "┊"
 
 /**
- * The line a waiting message shows: its type's `queueLabel` (a background
- * answer as `↳ answer · <question>`), else its kind and the first line of its
- * text (`↳ queued · <text>`).
+ * One waiting row: `┊ <when> · <first line>`, its type's `queueLabel` in
+ * place of the text when it has one (a background answer as `↳ answer ·
+ * <question>`). The text cuts to `width` columns and keeps ` +N lines` for
+ * the lines it leaves out.
  */
-const queueEntryLine = (
+const queueRow = (
   entry: QueueEntryInfo,
-  kind: "steer" | "queued",
+  when: "next step" | "next turn",
   renderers: ReadonlyMap<string, MessageRendererEntry>,
+  width: number,
 ): string => {
+  const head = `${WAITING_RAIL} ${when} · `
   const metadata = Option.fromUndefinedOr(entry.metadata)
-  return metadata.pipe(
+  const label = metadata.pipe(
     Option.flatMap((value) => Option.fromUndefinedOr(value.customType)),
     Option.flatMap((type) => Option.fromUndefinedOr(renderers.get(type))),
     Option.flatMap((renderer) => Option.fromUndefinedOr(renderer.queueLabel)),
-    Option.match({
-      onNone: () => `↳ ${kind} · ${summaryText(entry.content)}`,
-      onSome: (label) =>
-        label({
-          content: entry.content,
-          details: Option.getOrUndefined(Option.map(metadata, (value) => value.details)),
-        }),
-    }),
+    Option.map((queueLabel) =>
+      queueLabel({
+        content: entry.content,
+        details: Option.getOrUndefined(Option.map(metadata, (value) => value.details)),
+      }),
+    ),
   )
+  if (Option.isSome(label)) return truncate(head + label.value, width)
+  const [first = "", ...rest] = entry.content.split("\n")
+  let more = ""
+  if (rest.length > 0) more = ` +${plural(rest.length, "line")}`
+  const room = Math.max(1, width - textWidth(head) - textWidth(more))
+  return truncate(head + truncate(first, room), width - textWidth(more)) + more
 }
 
+/** The reader's own message: the server's client origin, never its text. */
+const fromReader = (entry: QueueEntryInfo): boolean => entry.metadata?.fromClient === true
+
 /**
- * The waiting entries, pinned above the composer: one dim line each, marked
- * `↳` with its kind, cut to the width, then the way to take them back. Not a
+ * The reader's waiting entries, pinned between the live line and the
+ * composer, in the reader's lane: one dim row each (`next step` for a steer,
+ * which the model reads at its next step; `next turn` for a follow-up), at
+ * most three, then `┊ +N more`, then the way back to the draft. Not a
  * transcript row: an entry leaves here when it is delivered, and the
- * transcript shows it where it lands. A docked pane takes the rows, as it
- * takes the trays'.
+ * transcript shows it where it lands. A message another agent or an
+ * extension queued (a child's `Session.send`, a wake) draws nowhere until it
+ * is delivered. A docked pane takes the rows, as it takes the trays'.
  */
 export function QueueWidget(props: QueueWidgetProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const paneOpen = useDockPaneOpen()
   const spacer = useDockSpacer()
-  const lines = () => [
-    ...props.steerMessages.map((entry) => queueEntryLine(entry, "steer", props.messageRenderers)),
-    ...props.queuedMessages.map((entry) => queueEntryLine(entry, "queued", props.messageRenderers)),
+  // Every column but the last, which each row keeps free.
+  const width = () => Math.max(1, dimensions().width - 1)
+  const entries = () => [
+    ...props.steerMessages
+      .filter(fromReader)
+      .map((entry) => ({ entry, when: "next step" as const })),
+    ...props.queuedMessages
+      .filter(fromReader)
+      .map((entry) => ({ entry, when: "next turn" as const })),
   ]
-  // The columns right of the indent, less the last column every row keeps free.
-  const width = () => Math.max(1, dimensions().width - 2 - 1)
+  const rows = () => {
+    const all = entries()
+    const shown = all
+      .slice(0, QUEUE_ROWS)
+      .map(({ entry, when }) => queueRow(entry, when, props.messageRenderers, width()))
+    if (all.length <= QUEUE_ROWS) return shown
+    return [...shown, `${WAITING_RAIL} +${all.length - QUEUE_ROWS} more`]
+  }
   return (
-    <Show when={lines().length > 0 && !paneOpen()}>
-      <box flexDirection="column" flexShrink={0} paddingLeft={2} marginTop={spacer()}>
-        <For each={lines()}>
-          {(line) => (
+    <Show when={entries().length > 0 && !paneOpen()}>
+      <box flexDirection="column" flexShrink={0} marginTop={spacer()}>
+        <For each={rows()}>
+          {(row) => (
             <text wrapMode="none" style={{ fg: theme.textMuted }}>
-              {truncate(line, width())}
+              {row}
             </text>
           )}
         </For>
@@ -562,12 +578,32 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
   )
 }
 
-/** The "Generating" row. Its blank row above gives way while a docked pane is short. */
-function ActivityRow(props: { children: JSX.Element }) {
+/**
+ * The live line: `✻ <phase> (<turn elapsed>) · esc cancel`, its glyph
+ * pulsing on the spinner clock. Its blank row above gives way while a docked
+ * pane is short.
+ */
+function ActivityRow(props: { label: string; elapsed: number }) {
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const spacer = useDockSpacer()
+  const tick = useSpinnerClock()
+  // Bright, then muted, every half second: the shape stays, so a monochrome theme reads it.
+  const glyphColor = () => {
+    if (Math.floor(tick() / 8) % 2 === 0) return theme.text
+    return theme.textMuted
+  }
+  // Under a second the count says nothing.
+  const elapsed = () => {
+    if (props.elapsed < 1000) return ""
+    return ` (${formatDuration(props.elapsed, "compact")})`
+  }
   return (
     <box height={1} flexShrink={0} paddingLeft={2} marginTop={spacer()} overflow="hidden">
-      {props.children}
+      <text wrapMode="none" style={{ fg: theme.textMuted }}>
+        <span style={{ fg: glyphColor() }}>✻</span>{" "}
+        {activityLine(props.label, elapsed(), Math.max(1, dimensions().width - 4))}
+      </text>
     </box>
   )
 }
@@ -840,17 +876,7 @@ export function Session(props: SessionProps) {
           <ExtensionWidgets slot="above-input" />
 
           <Show when={controller.activity().phase !== "idle"}>
-            <ActivityRow>
-              <text wrapMode="none" style={{ fg: theme.textMuted }}>
-                {(() => {
-                  const label = controller.phaseLabel()
-                  let elapsed = ""
-                  if (controller.elapsed() >= 1000)
-                    elapsed = ` (${formatDuration(controller.elapsed(), "compact")})`
-                  return activityLine(label, elapsed, Math.max(1, dimensions().width - 2))
-                })()}
-              </text>
-            </ActivityRow>
+            <ActivityRow label={controller.phaseLabel()} elapsed={controller.elapsed()} />
           </Show>
 
           {/* The waiting entries sit between the activity row and the

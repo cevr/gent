@@ -136,16 +136,28 @@ extensions): lowercase keys, one `·` separator, Enter `select` on a row and
 narrow row drops the move hint first, then hints from the right, and keeps the
 way out. An ask's footer uses the same line.
 
-The activity row counts the running turn from the runtime's `startedAtMs`
-(`SessionControllerState.turnStartedAt` in `session.tsx`), the start the
-turn's `Worked for` total counts from: a new step or a tool call changes its
-word, not its count, and the next turn counts from its own start. A `!cmd`
-outside a turn counts from its own start. Under it, the waiting entries
-(`QueueWidget` in `app.tsx`, drawn from the controller's `queue`, their one
-owner) sit above the composer: one dim row each, `↳ steer · <first line>` or
-`↳ queued · <first line>` (or the type's `queueLabel`), cut to the width, then
-`alt+up restore`. They are not transcript rows: an entry leaves when it is
-delivered, and the transcript shows it where it lands.
+The live line (`ActivityRow` in `app.tsx`) reads
+`✻ <phase> (<elapsed>) · esc cancel`; the `✻` pulses on the spinner clock.
+The phase is `Thinking` until answer text streams, then `Generating`; the
+running call's words while one runs (a `cell` reads in its source's verbs,
+`Reading 3 files`, never its code: `runningCallLabel` in `utils.ts`); and
+`Waiting for your answer` while the turn waits on an ask. The count runs from
+the runtime's `startedAtMs` (`SessionControllerState.turn` in `session.tsx`),
+the start the turn's `Worked for` total counts from: a new step, a tool call or
+an ask changes the word, not the count, and the next turn counts from its own
+start. A `!cmd` outside a turn counts from its own start.
+
+Under it sit the reader's waiting entries (`QueueWidget` in `app.tsx`, drawn
+from the controller's `queue`, their one owner), in the reader's lane: one dim
+row each, `┊ next step · <first line>` for a steer and `┊ next turn · <first
+line>` for a follow-up (or the type's `queueLabel`), cut to the width and ending
+` +N lines` for more lines; at most three, then `┊ +N more`; then
+`alt+up edit`, which takes them back into the draft. Only the reader's own
+messages draw (`metadata.fromClient`, the server's client origin): one another
+agent or an extension queued (a child's `Session.send`, a wake) draws nowhere
+while it waits, and `alt+up` (the `queue.drain` RPC) leaves it queued to be
+delivered. None is a transcript row: an entry leaves when it is delivered,
+and the transcript shows it where it lands.
 
 The footer (composer, trays, docked panes) never outgrows the split-footer
 region (`DockFooter`'s `maxHeight` in `app.tsx`). While a docked pane is open

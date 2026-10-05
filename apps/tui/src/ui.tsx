@@ -539,7 +539,8 @@ export const KeyHints = {
   /** Stops what runs: a turn, an ask. */
   cancel: { key: "esc", verb: "cancel" },
   // OpenTUI reads Alt/Option as meta; cmd (super) reaches only a kitty-protocol terminal.
-  restoreQueue: { key: "alt+up", verb: "restore" },
+  /** Takes every waiting message back into the draft to edit. */
+  restoreQueue: { key: "alt+up", verb: "edit" },
   /** Arms the row; a second press deletes it. */
   delete: { key: "ctrl+x", verb: "delete" },
   exit: { key: "ctrl+c", verb: "exit" },
