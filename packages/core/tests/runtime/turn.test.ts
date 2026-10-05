@@ -3935,44 +3935,63 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
-    "a route after a move to another account reads the branch's model as cold",
+    "a route reads the branch's model as cold only where its last account certainly moved",
     () =>
       Effect.gen(function* () {
-        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("first"),
-          textStep("second"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: e2ePreset.agents,
-          providerLayer,
-          extensionInputs: [
-            routingExtension({
-              route: (input) =>
-                Ref.update(inputs, (all) => [...all, input]).pipe(
-                  Effect.as({ choice: 1, reason: "strong" }),
-                ),
-            }),
-          ],
-        })
-        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
-        yield* selectAuto(client, sessionId)
-        yield* client.auth.setKey({ provider: "custom", key: "sk-fake-a", sessionId })
-        yield* client.message.send({ sessionId, branchId, content: "first" })
-        yield* afterTurns(1)
         const work = CredentialSlot.make("work")
-        yield* client.auth.setKey({ provider: "custom", slot: work, key: "sk-fake-b", sessionId })
-        yield* client.auth.setOrder({ provider: "custom", order: [work], sessionId })
-        yield* client.message.send({ sessionId, branchId, content: "second" })
-        yield* afterTurns(2)
-        const second = (yield* Ref.get(inputs))[1]
-        expect(Option.map(second?.current ?? Option.none(), (current) => current.model.id)).toEqual(
-          Option.some(STRONG_MODEL),
-        )
-        // The cache the strong model holds is the other account's.
-        expect(Option.exists(second?.current ?? Option.none(), (current) => current.warm)).toBe(
-          false,
-        )
+        // The order before each turn. A new sign-in on the same slot is the
+        // other certain move; the effort test shows it on the live registry,
+        // whose receipts carry sign-in stamps. Route and effort read one answer.
+        const cases: ReadonlyArray<{
+          readonly name: string
+          readonly first: ReadonlyArray<CredentialSlot>
+          readonly second: ReadonlyArray<CredentialSlot>
+          readonly warm: boolean
+        }> = [
+          // The slot the last request used left the order.
+          { name: "left", first: [DEFAULT_CREDENTIAL_SLOT], second: [work], warm: false },
+          // A first credential the turn may again move past (a spent quota):
+          // where the next request goes out is not known, so it is no move.
+          { name: "steady", first: [work], second: [DEFAULT_CREDENTIAL_SLOT, work], warm: true },
+        ]
+        for (const { name, first, second: order, warm } of cases) {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [
+              routingExtension({
+                route: (input) =>
+                  Ref.update(inputs, (all) => [...all, input]).pipe(
+                    Effect.as({ choice: 1, reason: "strong" }),
+                  ),
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectAuto(client, sessionId)
+          yield* client.auth.setKey({ provider: "custom", key: "sk-fake-a", sessionId })
+          yield* client.auth.setKey({ provider: "custom", slot: work, key: "sk-fake-b", sessionId })
+          yield* client.auth.setOrder({ provider: "custom", order: first, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          yield* client.auth.setOrder({ provider: "custom", order, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          yield* afterTurns(2)
+          const next = (yield* Ref.get(inputs))[1]
+          expect([
+            name,
+            Option.map(next?.current ?? Option.none(), (current) => current.model.id),
+          ]).toEqual([name, Option.some(STRONG_MODEL)])
+          expect([
+            name,
+            Option.exists(next?.current ?? Option.none(), (current) => current.warm),
+          ]).toEqual([name, warm])
+        }
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )
@@ -5038,42 +5057,98 @@ describe("effort auto", () => {
   )
 
   it.scopedLive(
-    "a turn that goes out on another account than the last request holds no effort for a warm cache",
+    "an effort is held for a warm cache unless its last account certainly moved",
     () =>
       Effect.gen(function* () {
-        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        const work = CredentialSlot.make("work")
+        const cases: ReadonlyArray<{
+          readonly name: string
+          readonly first: ReadonlyArray<CredentialSlot>
+          readonly second: ReadonlyArray<CredentialSlot>
+          readonly slots: ReadonlyArray<CredentialSlot>
+          readonly levels: ReadonlyArray<ReasoningEffort>
+          readonly asked: number
+          /** The default slot is signed in again before the second turn. */
+          readonly signInAgain?: true
+        }> = [
+          // The slot the last request used left the order: the router is asked again.
+          {
+            name: "left",
+            first: [DEFAULT_CREDENTIAL_SLOT],
+            second: [work],
+            slots: [DEFAULT_CREDENTIAL_SLOT, work],
+            levels: ["high", "low"],
+            asked: 2,
+          },
+          // The slot holds another sign-in than the one the request used.
+          {
+            name: "relogin",
+            first: [DEFAULT_CREDENTIAL_SLOT],
+            second: [DEFAULT_CREDENTIAL_SLOT],
+            slots: [DEFAULT_CREDENTIAL_SLOT, DEFAULT_CREDENTIAL_SLOT],
+            levels: ["high", "low"],
+            asked: 2,
+            signInAgain: true,
+          },
+          // A first credential the next turn may move past again is no move:
+          // the cache the last request wrote holds its effort.
+          {
+            name: "steady",
+            first: [work],
+            second: [DEFAULT_CREDENTIAL_SLOT, work],
+            slots: [work, DEFAULT_CREDENTIAL_SLOT],
+            levels: ["high", "high"],
+            asked: 1,
+          },
+        ]
         // No lifetime: only the account can make the cache cold.
         const model = plainModel(Option.none())
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("first"),
-          textStep("second"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: agentOn(model),
-          providerLayer,
-          models: [model],
-          extensionInputs: [
-            routingExtension({ effort: effortRouter, route: pickEfforts(inputs, [2, 0]) }),
-          ],
-        })
-        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
-        yield* selectEffortAuto(client, sessionId)
-        yield* client.auth.setKey({ provider: "plain", key: "sk-fake-a", sessionId })
-        yield* client.message.send({ sessionId, branchId, content: "first" })
-        yield* afterTurns(1)
-        const work = CredentialSlot.make("work")
-        yield* client.auth.setKey({ provider: "plain", slot: work, key: "sk-fake-b", sessionId })
-        yield* client.auth.setOrder({ provider: "plain", order: [work], sessionId })
-        yield* client.message.send({ sessionId, branchId, content: "second" })
-        const events = yield* afterTurns(2)
-        const slots = events.flatMap((event) => {
-          if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
-          return [event.credential.slot]
-        })
-        expect(slots).toEqual([DEFAULT_CREDENTIAL_SLOT, work])
-        // The move leaves the cache cold: the router is asked again.
-        expect(stepLevels(events)).toEqual([Option.some("high"), Option.some("low")])
-        expect((yield* Ref.get(inputs)).length).toBe(2)
+        // The live registry knows the model through its driver, and stamps
+        // each receipt with its sign-in, as production does.
+        const plainDriver: ModelDriverContribution = {
+          id: "plain",
+          name: "Plain",
+          resolveModel: () => Effect.die("the scripted model answers every request"),
+          listModels: () => Effect.succeed([model]),
+        }
+        for (const { name, first, second, slots, levels, asked, signInAgain } of cases) {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: agentOn(model),
+            providerLayer,
+            models: "catalog",
+            extensionInputs: [
+              routingExtension({
+                effort: effortRouter,
+                route: pickEfforts(inputs, [2, 0]),
+                drivers: [plainDriver],
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectEffortAuto(client, sessionId)
+          yield* client.auth.setKey({ provider: "plain", key: "sk-fake-a", sessionId })
+          yield* client.auth.setKey({ provider: "plain", slot: work, key: "sk-fake-b", sessionId })
+          yield* client.auth.setOrder({ provider: "plain", order: first, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          if (signInAgain === true)
+            yield* client.auth.setKey({ provider: "plain", key: "sk-fake-c", sessionId })
+          yield* client.auth.setOrder({ provider: "plain", order: second, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const events = yield* afterTurns(2)
+          const sent = events.flatMap((event) => {
+            if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+            return [event.credential.slot]
+          })
+          expect({ name, sent }).toEqual({ name, sent: [...slots] })
+          expect([name, stepLevels(events)]).toEqual([name, levels.map(Option.some)])
+          expect([name, (yield* Ref.get(inputs)).length]).toEqual([name, asked])
+        }
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )

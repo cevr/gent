@@ -1801,33 +1801,39 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
 })
 
 /**
- * Whether a request on `next` reads the cache a request on `last` wrote: the
- * same credential, by its sign-in stamp or else its label. A credential
- * either side does not know (a row before receipts, a model no sign-in
- * serves) counts as the same.
+ * Whether the account the branch's last request went out on can still read
+ * its cache: that credential's slot is still in its sign-in's order, and the
+ * slot still holds the sign-in the request used. False only on a certain
+ * move: the slot left the order, or it was signed in again (another stamp).
+ * Which slot the next request takes is not known before it goes out (the
+ * order may refuse its first slots, as a spent quota does each turn), so it
+ * is never a reason. A request with no receipt, or an order that cannot be
+ * read, keeps the model's own rule.
  */
-const sameAccount = (
-  last: Option.Option<CredentialReceipt>,
-  next: Option.Option<CredentialReceipt>,
-): boolean =>
-  Option.match(Option.all([last, next]), {
-    onNone: () => true,
-    onSome: ([before, now]) => sameCredential(before, now),
-  })
-
-/**
- * Whose cache a request reads: the credential the branch's last request went
- * out with, and the one the next request on a model takes (none where the
- * order cannot choose one).
- */
-interface RequestAccount {
-  readonly last: Option.Option<CredentialReceipt>
-  readonly next: (request: ResolveModelRequest) => Effect.Effect<Option.Option<CredentialReceipt>>
-}
-
-/** Whether the next request on `request`'s model goes out on the branch's last account. */
-const onLastAccount = (account: RequestAccount, request: ResolveModelRequest) =>
-  Effect.map(account.next(request), (next) => sameAccount(account.last, next))
+const lastAccountStands = Effect.fn("TurnHelpers.lastAccountStands")(
+  function* (params: {
+    readonly lastCall: Option.Option<RequestCall>
+    readonly extensionRegistry: ExtensionRegistryService
+    readonly modelRegistry: ModelRegistry["Service"]
+  }) {
+    if (Option.isNone(params.lastCall)) return true
+    const { model, credential } = params.lastCall.value
+    if (Option.isNone(credential)) return true
+    const last = credential.value
+    const order = yield* requestCredentialOrder(
+      { modelId: model, driverId: last.provider },
+      params.extensionRegistry,
+    )
+    if (Option.isNone(order)) return true
+    if (!order.value.slots.includes(last.slot)) return false
+    const now = yield* params.modelRegistry.stamp(
+      { provider: last.provider, slot: last.slot },
+      params.extensionRegistry,
+    )
+    return sameCredential(last, now)
+  },
+  Effect.orElseSucceed(() => true),
+)
 
 /** What routing reads from the branch's log. */
 interface RoutingLog {
@@ -1835,8 +1841,8 @@ interface RoutingLog {
   readonly current: Option.Option<ModelIdType>
   readonly lastCallModel: Option.Option<ModelIdType>
   readonly lastCallAtMillis: Option.Option<number>
-  /** A cache is warm only for a request on the account that wrote it. */
-  readonly account: RequestAccount
+  /** A cache is warm only while its account stands (`lastAccountStands`). */
+  readonly accountStands: Effect.Effect<boolean>
   readonly measure: Option.Option<StepMeasure>
   /** The branch's newest `ModelRouted`. */
   readonly routed: Option.Option<ModelRouted>
@@ -2086,7 +2092,7 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
               onSome: (ttlMs) => now < at + ttlMs,
             }),
           ) &&
-          (yield* onLastAccount(log.account, { modelId: model.id }))
+          (yield* log.accountStands)
         return Option.some<ModelRouteCurrent>({
           model,
           warm,
@@ -2266,8 +2272,8 @@ interface EffortRoutingLog {
   readonly routed: Option.Option<ModelRouted>
   readonly lastCallModel: Option.Option<ModelIdType>
   readonly lastCallAtMillis: Option.Option<number>
-  /** A cache is warm only for a request on the account that wrote it. */
-  readonly account: RequestAccount
+  /** A cache is warm only while its account stands (`lastAccountStands`). */
+  readonly accountStands: Effect.Effect<boolean>
   readonly measure: Option.Option<StepMeasure>
   /** The newest step's receipt: its model, and the effort its request was sent at. */
   readonly lastEffort: Option.Option<StepEffort>
@@ -2342,10 +2348,7 @@ const admitEfforts = Effect.fn("TurnHelpers.admitEfforts")(function* (params: {
         onSome: (ttlMs) => now < at + ttlMs,
       }),
     ) &&
-    (yield* onLastAccount(log.account, {
-      modelId: turn.modelId,
-      driverId: Option.getOrUndefined(turn.modelDriver.driverId),
-    }))
+    (yield* log.accountStands)
   const held = Option.flatMap(
     Option.filter(log.lastEffort, (receipt) => receipt.model === turn.modelId),
     (receipt) => receipt.level,
@@ -2741,8 +2744,6 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   lastCallAtMillis: Option.Option<number>
   /** The model the branch's last model request ran on. */
   lastCallModel: Option.Option<ModelIdType>
-  /** The credential that request went out with; none when its row names none. */
-  lastCallCredential: Option.Option<CredentialReceipt>
   /** The branch's step receipts, by the id of the assistant message each step wrote. */
   stepEfforts: ReadonlyMap<string, StepEffort>
   /**
@@ -2864,15 +2865,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     })
   }
   // A model whose catalog entry names no cache lifetime never goes cold. A
-  // cache belongs to the model and the credential that wrote it: a turn on
-  // another model, another account or a new sign-in than the last request
-  // reads no cache either way, and handing its window off for that would
-  // surprise the reader who only switched.
+  // cache belongs to the model that wrote it: a turn on another model than
+  // the last request reads no cache either way, and handing its window off
+  // for that would surprise the reader who only switched models. The
+  // account does not gate it: the handoff waits for the lifetime to lapse,
+  // and then every account's cache is cold, so a move that the order makes
+  // (a first credential that keeps refusing) hands off as any cold turn does.
   const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
-  const onAccount = sameAccount(params.lastCallCredential, nextCredential)
   const promptCache = Option.map(
     Option.all([
-      Option.filter(params.lastCallAtMillis, () => sameModel && onAccount),
+      Option.filter(params.lastCallAtMillis, () => sameModel),
       promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
     ([lastCallAtMillis, ttlMs]): PromptCache => ({
@@ -3634,8 +3636,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly lastCallAtMillis: Option.Option<number>
       readonly lastCall: Option.Option<RequestCall>
       readonly lastCallModel: Option.Option<ModelIdType>
-      /** The credential of the last request; none when its row names none (unknown). */
-      readonly lastCallCredential: Option.Option<CredentialReceipt>
       readonly stepEfforts: ReadonlyMap<string, StepEffort>
       readonly lastEffort: Option.Option<StepEffort>
       readonly routed: Option.Option<ModelRouted>
@@ -3648,7 +3648,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       lastCallAtMillis: Option.none<number>(),
       lastCall: Option.none<RequestCall>(),
       lastCallModel: Option.none<ModelIdType>(),
-      lastCallCredential: Option.none<CredentialReceipt>(),
       stepEfforts: new Map<string, StepEffort>(),
       lastEffort: Option.none<StepEffort>(),
       routed: Option.none<ModelRouted>(),
@@ -3685,7 +3684,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
         lastCall,
         lastCallModel: Option.map(lastCall, (call) => call.model),
-        lastCallCredential: Option.flatMap(lastCall, (call) => call.credential),
         stepEfforts: withStepEfforts(known.stepEfforts, events),
         lastEffort: newest(events, knownLastEffort, known.lastEffort),
         routed: newest(events, knownRoute, known.routed),
@@ -4073,7 +4071,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       measure: Option.Option<StepMeasure>
       lastCallAtMillis: Option.Option<number>
       lastCallModel: Option.Option<ModelIdType>
-      lastCallCredential: Option.Option<CredentialReceipt>
       stepEfforts: ReadonlyMap<string, StepEffort>
       overflowed: boolean
       /** The turn profile's revision, named on `StreamStarted`. */
@@ -4126,7 +4123,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: params.measure,
         lastCallAtMillis: params.lastCallAtMillis,
         lastCallModel: params.lastCallModel,
-        lastCallCredential: params.lastCallCredential,
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
         ledger: scope.ledger,
@@ -5040,23 +5036,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const profile = extensionRegistry.getResolved()
       const virtual = servedVirtualModel(profile, resolved.modelId)
       const modelRegistry = yield* ModelRegistry
-      // The order chooses as the step's request would; where it cannot, the
-      // request's resolution reports why, and the cache reads by model alone.
-      const account: RequestAccount = {
-        last: knownSteps.lastCallCredential,
-        next: (request) =>
-          nextRequestCredential({
-            request,
-            turnLedger: scope.turnLedger,
-            extensionRegistry,
-            modelRegistry,
-          }).pipe(Effect.orElseSucceed(() => Option.none<CredentialReceipt>())),
-      }
+      // Read only where a warm check reaches it, after the model and lifetime.
+      const accountStands = lastAccountStands({
+        lastCall: knownSteps.lastCall,
+        extensionRegistry,
+        modelRegistry,
+      })
       const effortLog: EffortRoutingLog = {
         routed: knownSteps.effortRouted,
         lastCallModel: knownSteps.lastCallModel,
         lastCallAtMillis: knownSteps.lastCallAtMillis,
-        account,
+        accountStands,
         measure: knownSteps.measure,
         lastEffort: knownSteps.lastEffort,
         stepEfforts: knownSteps.stepEfforts,
@@ -5091,7 +5081,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             current: knownSteps.model,
             lastCallModel: knownSteps.lastCallModel,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
-            account,
+            accountStands,
             measure: knownSteps.measure,
             routed: knownSteps.routed,
           },
@@ -5203,7 +5193,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             measure: knownSteps.measure,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
             lastCallModel: knownSteps.lastCallModel,
-            lastCallCredential: knownSteps.lastCallCredential,
             stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
             profileRevision: Option.fromUndefinedOr(params.turnProfile.turnProfileRevision),
