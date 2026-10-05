@@ -3,6 +3,8 @@ import { Database } from "bun:sqlite"
 import {
   ByteSize,
   ConfigProvider,
+  Deferred,
+  Cause,
   Effect,
   FileSystem,
   Layer,
@@ -16,11 +18,13 @@ import {
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/process/ChildProcessSpawner"
 import { FetchHttpClient, HttpClient } from "effect/http"
-import { dateFromMillis } from "@gent/core/protocol"
+import { dateFromMillis, type GentConnectionError } from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
   interruptAtEachStep,
+  freePort,
   makeTempDirectoryScoped,
+  serveModelCatalogFixture,
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import {
@@ -29,6 +33,7 @@ import {
   serverLock,
   serverLockFile,
   ServerLockEntry,
+  type GentServer,
 } from "../src/discovery"
 import { BunServices } from "@effect/platform-bun"
 import { homedir, hostname, networkInterfaces } from "node:os"
@@ -367,6 +372,216 @@ describe("Server Lock", () => {
         expect(client.url).toBe(owner.url)
       }),
     ),
+  )
+
+  it.scopedLive(
+    "a failed construction releases its database and port before the caller closes",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const port = yield* freePort
+          const catalogOrigin = yield* serveModelCatalogFixture
+          const options = {
+            cwd: home,
+            port,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }
+          // The listener and kernel lock are acquired before the log setting is read.
+          const error = yield* Gent.server(options).pipe(
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: { GENT_LOG_LEVEL: "verbose" } })),
+            ),
+            Effect.flip,
+          )
+          expect(error._tag).toBe("@gent/core/GentConnectionError")
+          expect(error.message).toContain("invalid GENT_LOG_LEVEL")
+          // No Effect.scoped around the failed call: its caller is still alive.
+          expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(true)
+          const owner = yield* Gent.server(options).pipe(
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: { GENT_LOG_LEVEL: "info", GENT_MODEL_CATALOG_URL: catalogOrigin },
+                }),
+              ),
+            ),
+          )
+          expect(owner._tag).toBe("Owned")
+          expect(new URL(owner.url).port).toBe(String(port))
+          const { client } = yield* Gent.client(owner)
+          const created = yield* client.session.create({ cwd: home })
+          expect(
+            (yield* client.session.list()).some((session) => session.id === created.sessionId),
+          ).toBe(true)
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
+  )
+
+  it.scopedLive("an interrupted construction releases ownership before the caller closes", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const port = yield* freePort
+        const entered = yield* Deferred.make<boolean>()
+        const release = yield* Deferred.make<void>()
+        const options = {
+          cwd: home,
+          port,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }
+        // Seed runs after the root and routes are live, before the entry is published.
+        const starting = yield* Gent.server({
+          ...options,
+          seed: Deferred.succeed(entered, true).pipe(Effect.andThen(Deferred.await(release))),
+        }).pipe(Effect.forkScoped)
+        yield* Deferred.await(entered)
+        expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(false)
+        expect(
+          yield* HttpClient.get("http://127.0.0.1:" + port + "/_gent/identity").pipe(
+            Effect.map((response) => response.status),
+            Effect.provide(FetchHttpClient.layer),
+          ),
+        ).toBe(200)
+        yield* Fiber.interrupt(starting)
+        const interrupted = yield* Fiber.await(starting)
+        expect(Exit.isFailure(interrupted)).toBe(true)
+        if (Exit.isFailure(interrupted))
+          expect(Cause.hasInterruptsOnly(interrupted.cause)).toBe(true)
+        expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(true)
+        expect((yield* Gent.server(options))._tag).toBe("Owned")
+      }).pipe(Effect.timeout("15 seconds")),
+    ),
+  )
+
+  it.scopedLive(
+    "cancellation as construction returns releases ownership in a continuing caller",
+    () =>
+      provideFs(
+        interruptAtEachStep(
+          Effect.gen(function* () {
+            const home = yield* makeTmpHomeScoped
+            const port = yield* freePort
+            let seeded = false
+            let boundaries = 0
+            const options = {
+              cwd: home,
+              port,
+              state: Gent.state.sqlite({ home }),
+              provider: Gent.provider.mock(),
+            }
+            return {
+              program: Gent.server({
+                ...options,
+                seed: Effect.sync(() => {
+                  seeded = true
+                }),
+              }),
+              // Walk from the completed seed through publication, mask restoration
+              // and the public return. No seed fiber is parked or interrupted.
+              at: () => {
+                if (seeded) boundaries += 1
+                return seeded
+              },
+              invariant: (
+                outcome: Exit.Exit<GentServer, GentConnectionError>,
+                interrupted: boolean,
+              ) =>
+                Effect.gen(function* () {
+                  expect(Exit.isFailure(outcome)).toBe(interrupted)
+                  if (Exit.isSuccess(outcome)) {
+                    expect(outcome.value._tag).toBe("Owned")
+                    expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(false)
+                    return
+                  }
+                  expect(Cause.hasInterruptsOnly(outcome.cause)).toBe(true)
+                  expect(
+                    yield* serverLock.hold(home).pipe(Effect.scoped),
+                    "lock released at return boundary " + boundaries,
+                  ).toBe(true)
+                  expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+                  // Reuse both resources before the trial's caller scope closes.
+                  yield* Effect.scoped(
+                    Effect.gen(function* () {
+                      const retry = yield* Gent.server(options)
+                      expect(retry._tag).toBe("Owned")
+                      expect(new URL(retry.url).port).toBe(String(port))
+                    }),
+                  )
+                }),
+            }
+          }),
+          128,
+        ).pipe(
+          Effect.tap((runs) => Effect.sync(() => expect(runs).toBeGreaterThan(1))),
+          Effect.timeout("60 seconds"),
+        ),
+      ),
+    90_000,
+  )
+
+  it.scopedLive(
+    "a defect during memory construction releases its port and preserves the cause",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const port = yield* freePort
+          const defect = "seed failed"
+          const options = {
+            cwd: home,
+            port,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          }
+          const failed = yield* Gent.server({ ...options, seed: Effect.die(defect) }).pipe(
+            Effect.exit,
+          )
+          expect(Exit.isFailure(failed)).toBe(true)
+          if (Exit.isFailure(failed)) expect(Cause.squash(failed.cause)).toBe(defect)
+          expect((yield* Gent.server(options))._tag).toBe("Owned")
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
+  )
+
+  it.scopedLive(
+    "closing an attached client leaves its owner serving until the owner's scope closes",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const options = {
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const owner = yield* Gent.server(options)
+              expect(owner._tag).toBe("Owned")
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const attached = yield* Gent.server(options)
+                  expect(attached._tag).toBe("Attached")
+                  expect(attached.url).toBe(owner.url)
+                  const { client } = yield* Gent.client(attached)
+                  yield* client.session.create({ cwd: home, name: "still served" })
+                }),
+              )
+              // A fresh socket connection proves the listener and root survived client close.
+              const { client } = yield* Gent.client(owner.url, { cwd: home })
+              expect((yield* client.session.list()).map((session) => session.name)).toContain(
+                "still served",
+              )
+              expect((yield* serverLock.status(home))._tag).toBe("Alive")
+            }),
+          )
+          expect(Option.isNone(yield* serverLockFile.read(home))).toBe(true)
+          expect(yield* serverLock.hold(home).pipe(Effect.scoped)).toBe(true)
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
   )
 
   it.scopedLive("a start that cannot write its lock entry fails instead of hiding", () =>
