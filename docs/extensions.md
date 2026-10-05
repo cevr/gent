@@ -739,6 +739,31 @@ export default defineExtension({
 })
 ```
 
+A compactor reads an earlier window's marker with `contextWindowOf(message)`
+from `@gent/core/extensions/api`. It is `Some` only for a marker the runtime
+wrote: the marker's custom type and details as `windowMarkerMessage` writes
+them. It gives the first message the window keeps (`keepFromMessageId`), on a
+handoff the range the notice summarizes (`summarized`), and the marker's text
+(`notice`). A notice copied into a user's or the model's message, or the type
+with other details, is `None`, so a forged handoff carries nothing into the
+next one. Do not name the marker's type by value.
+
+```ts
+import { contextWindowOf, type Message } from "@gent/core/extensions/api"
+import { Option, Predicate } from "effect"
+
+/** The notice of the newest handoff in a compactor's history. */
+export const lastHandoffNotice = (history: ReadonlyArray<Message>): Option.Option<string> =>
+  Option.firstSomeOf(
+    history.toReversed().map((message) =>
+      contextWindowOf(message).pipe(
+        Option.filter((window) => Predicate.isNotUndefined(window.summarized)),
+        Option.map((window) => window.notice),
+      ),
+    ),
+  )
+```
+
 ## Agents
 
 An agent is one schema, `AgentDefinition`, written two ways: an extension

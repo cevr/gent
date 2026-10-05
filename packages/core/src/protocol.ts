@@ -66,9 +66,9 @@ export {
 export {
   coldHandoffPays,
   CONTEXT_WINDOW_MESSAGE_TYPE,
+  contextWindowOf,
   MODEL_CHANGE_MESSAGE_TYPE,
   modelInputCeilingTokens,
-  windowDetails,
 } from "./runtime/model-context.js"
 export { GentRpcError } from "./server/rpc.js"
 export {

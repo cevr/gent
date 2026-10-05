@@ -976,7 +976,11 @@ Shape:
   and with no `ModelContextCompactor` process resource installed it truncates
   and reports the omission. The `@gent/compaction` extension installs the
   summariser; core keeps only the window marker shape (`context-window`,
-  optional `summarized` range) that status and the TUI read. A window that
+  optional `summarized` range) that status and the TUI read. Core owns its
+  one recogniser, `contextWindowOf` (`@gent/core/extensions/api` and
+  `protocol`): a marker the runtime wrote, its type and its decoded details,
+  reads as its anchor, summary and notice; the type alone or a copied notice
+  reads as nothing. No compactor names the type by value. A window that
   every compactor fails degrades to truncation with a visible notice. The request names the
   agent whose window it compacts (`agentName`), so a project compactor can
   serve one agent and fail with `ModelCompactionError` for the others.

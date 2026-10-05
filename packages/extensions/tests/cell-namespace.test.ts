@@ -22,7 +22,7 @@ import {
   DEFAULT_AGENT_NAME,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   messagePartsText,
-  windowDetails,
+  contextWindowOf,
 } from "@gent/core/protocol"
 import {
   RequestId,
@@ -486,10 +486,10 @@ describe("model context directives from a cell", () => {
         )
         const handoff = Option.getOrThrow(
           Option.fromUndefinedOr(
-            windowMarkers(compacted).find((m) => Option.isSome(windowDetails(m))),
+            windowMarkers(compacted).find((m) => Option.isSome(contextWindowOf(m))),
           ),
         )
-        const details = Option.getOrThrow(windowDetails(handoff))
+        const details = Option.getOrThrow(contextWindowOf(handoff))
         expect(details.summarized?.count).toBeGreaterThan(0)
         const afterCompaction = yield* client.session.getSnapshot({ sessionId, branchId })
         expect(afterCompaction.metrics.context).toMatchObject({
