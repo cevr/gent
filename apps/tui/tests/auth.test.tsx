@@ -2442,4 +2442,30 @@ describe("Auth credentials", () => {
       expect(screen).toContain("1 default")
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  it.scopedLive("a conflict on a sign-in with its default alone opens the order that ends it", () =>
+    Effect.gen(function* () {
+      const { client, writes } = credentialServer({
+        ...single,
+        hasKey: false,
+        orderConflict: ["anthropic", "claude-code"],
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={sessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 100,
+      })
+      yield* waitForFrame(setup, (frame) => frame.includes("authOrder conflict"))
+      setup.mockInput.pressEnter()
+      const screen = yield* waitForFrame(setup, (frame) => frame.includes("writes one order"))
+      expect(screen).toContain("1 default")
+      // The default is first already: the move writes the order the screen shows.
+      setup.mockInput.pressArrow("up", { shift: true })
+      yield* waitForFrame(setup, (frame) => frame.includes("Order: default"), "the written order")
+      expect(writes).toEqual(["order default"])
+      // Back from the screen returns to the list, not to the methods.
+      setup.mockInput.pressEscape()
+      yield* waitForFrame(setup, (frame) => frame.includes("type to search"), "the list")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })

@@ -318,11 +318,21 @@ const credentials = (state: AuthState, provider: string): AuthState => ({
   error: Option.none(),
 })
 
-/** Whether the catalog lists `provider`'s credentials: it has more than its default. */
+/** Whether a sign-in names config entries with conflicting orders. */
+const hasOrderConflict = (entry: AuthProviderInfo): boolean =>
+  Option.exists(Option.fromUndefinedOr(entry.orderConflict), (ids) => ids.length > 0)
+
+/**
+ * Whether a sign-in opens on its credentials: it has more than its default,
+ * or its config names conflicting orders, which only a written order ends.
+ */
+const opensCredentials = (entry: AuthProviderInfo): boolean =>
+  Predicate.isNotUndefined(entry.credentials) || hasOrderConflict(entry)
+
 const listsCredentials = (state: AuthState, provider: string): boolean =>
   Option.exists(
     Option.flatMap(state.catalog, (catalog) => providerFor(catalog, provider)),
-    (entry) => Predicate.isNotUndefined(entry.credentials),
+    opensCredentials,
   )
 
 /** Typing and backspace apply to whichever screen holds text. */
@@ -1051,19 +1061,26 @@ export function Auth(props: AuthProps) {
    */
   const [focus, setFocus] = createSignal(Option.none<CredentialSlot>())
   /** Shift+↑↓: the credential moves one place in the order ({@link movedOrder}). */
+  // A conflicting sign-in takes the order it shows where the move is none:
+  // any one written order ends the conflict.
   const reorder = (provider: AuthProviderInfo, slot: CredentialSlot, direction: "up" | "down") =>
-    Option.map(movedOrder(orderOf(provider), slot, direction), (order) => {
-      setFocus(Option.some(slot))
-      const token = begin()
-      cast(
-        writeOrder(provider.provider, order).pipe(
-          Effect.tap(() =>
-            credentialChanged(token, provider.provider, `Order: ${order.join(", ")}`),
+    Option.map(
+      Option.orElse(movedOrder(orderOf(provider), slot, direction), () =>
+        Option.liftPredicate(orderOf(provider), () => hasOrderConflict(provider)),
+      ),
+      (order) => {
+        setFocus(Option.some(slot))
+        const token = begin()
+        cast(
+          writeOrder(provider.provider, order).pipe(
+            Effect.tap(() =>
+              credentialChanged(token, provider.provider, `Order: ${order.join(", ")}`),
+            ),
+            Effect.catchEager(refused(token)),
           ),
-          Effect.catchEager(refused(token)),
-        ),
-      )
-    })
+        )
+      },
+    )
 
   /** The second ctrl+x: the stored credential goes, and its place in the order with it. */
   const deleteCredential = (provider: AuthProviderInfo, entry: CredentialEntry) => {
@@ -1982,8 +1999,8 @@ export function Auth(props: AuthProps) {
             filter={{ onQueryChange: setQuery }}
             query={query}
             onSelect={(provider) => {
-              // A provider with credentials besides its default opens them.
-              if (Predicate.isNotUndefined(provider.credentials)) {
+              // A provider with credentials besides its default, or a conflicting order, opens them.
+              if (opensCredentials(provider)) {
                 setFocus(Option.none())
                 send(AuthEvent.cases.OpenCredentials.make({ provider: provider.provider }))
                 return
