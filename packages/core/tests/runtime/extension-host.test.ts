@@ -63,6 +63,7 @@ import {
   ExtensionStatus,
   type GentExtension,
   getToolId,
+  ref,
   request,
   tool,
   type ToolCapability,
@@ -169,7 +170,6 @@ import {
   isToolCapability,
 } from "../../src/domain/capability"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
-import { ref } from "../../src/extensions/api.js"
 import {
   type AnyResourceContribution,
   type ExtensionContributions,
