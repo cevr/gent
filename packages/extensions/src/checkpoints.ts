@@ -158,11 +158,14 @@ const RETENTION_INTERVAL = Duration.days(1)
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 /**
- * Settings of every store command: content byte for byte, objects and refs
- * synced to disk (an unclean stop leaves no empty ref), no monitor daemon,
- * and gent's own identity on its commits.
+ * Settings of every store command: content byte for byte (no attribute file,
+ * no line-end conversion), objects and refs synced to disk (an unclean stop
+ * leaves no empty ref), no monitor daemon, and gent's own identity on its
+ * commits.
  */
 const STORE_SETTINGS = [
+  "-c",
+  "core.attributesFile=/dev/null",
   "-c",
   "core.autocrlf=false",
   "-c",
@@ -203,6 +206,19 @@ const CLEAN_ENV = {
   GIT_OPTIONAL_LOCKS: "0",
 }
 
+/**
+ * The environment of a store command: no user or system git config, so no
+ * filter, attribute, hook or alias of the user's runs and no setting of theirs
+ * changes a checkpoint's bytes.
+ */
+const STORE_ENV = {
+  ...CLEAN_ENV,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_PARAMETERS: unset,
+  GIT_CONFIG_COUNT: unset,
+}
+
 /** A work tree and the store that keeps its checkpoints. */
 interface Place {
   readonly top: string
@@ -218,18 +234,22 @@ const storeArgs = (place: Place, args: ReadonlyArray<string>) => [
 
 /** One store command; its trimmed stdout. */
 const inStore = (place: Place, args: ReadonlyArray<string>, options: GitOptions = {}) =>
-  git(place.top, storeArgs(place, args), { ...options, env: { ...CLEAN_ENV, ...options.env } })
+  git(place.top, storeArgs(place, args), { ...options, env: { ...STORE_ENV, ...options.env } })
 
 /** One store command whatever its exit; its raw output. */
 const inStoreRun = (place: Place, args: ReadonlyArray<string>, options: GitOptions = {}) =>
   gitRun(place.top, storeArgs(place, args), {
     ...options,
-    env: { ...CLEAN_ENV, ...options.env },
+    env: { ...STORE_ENV, ...options.env },
   })
 
-/** A read of the user's repository: it writes nothing there. */
+/**
+ * A read of the user's repository: it writes nothing there and runs no
+ * monitor program. The user's own config stays: its excludes file decides
+ * what git ignores.
+ */
 const inRepository = (top: string, args: ReadonlyArray<string>) =>
-  gitRun(top, args, { env: CLEAN_ENV })
+  gitRun(top, ["-c", "core.fsmonitor=false", ...args], { env: CLEAN_ENV })
 
 /** Paths, NUL-separated as git prints them with `-z`. */
 const nulList = (text: string) => text.split("\0").filter((entry) => entry.length > 0)
@@ -353,12 +373,12 @@ const ensureStore = Effect.fn("Checkpoints.ensureStore")(function* (place: Place
   // The work tree's path first: the retention pass removes a store whose
   // work tree is gone, and skips one that names none yet.
   yield* writeFileAtomic(`${place.store}/worktree`, `${place.top}\n`)
-  yield* git(place.top, ["init", "--bare", "-q", place.store], { env: CLEAN_ENV })
+  yield* git(place.top, ["init", "--bare", "-q", place.store], { env: STORE_ENV })
   yield* git(place.top, [`--git-dir=${place.store}`, "config", "index.version", "4"], {
-    env: CLEAN_ENV,
+    env: STORE_ENV,
   })
   yield* git(place.top, [`--git-dir=${place.store}`, "config", "core.untrackedCache", "true"], {
-    env: CLEAN_ENV,
+    env: STORE_ENV,
   })
   yield* Effect.logInfo("checkpoints.store.created").pipe(
     Effect.annotateLogs({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Duration, Effect, FileSystem, Path, Schema } from "effect"
+import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   defineExtension,
@@ -208,6 +208,27 @@ const storeOf = (home: string) =>
 const storeRefs = (store: string) =>
   sh(store, `git --git-dir="${store}" for-each-ref --format='%(refname)'`).pipe(
     Effect.map((text) => text.split("\n").filter((line) => line.length > 0)),
+  )
+
+/**
+ * Set `name` in the process environment to `next` (unset on none); the value
+ * it held. The environment is the boundary under test: gent's git commands
+ * inherit it, as they inherit the user's.
+ */
+const swapEnv = (name: string, next: Option.Option<string>) => {
+  // oxlint-disable-next-line effect/noGlobals -- the process environment is what git inherits, and the only way a global git config reaches it.
+  const env = process.env
+  const previous = Option.fromUndefinedOr(env[name])
+  if (Option.isSome(next)) env[name] = next.value
+  else delete env[name]
+  return previous
+}
+
+/** `name` set in the process environment for the scope. */
+const scopedEnv = (name: string, value: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => swapEnv(name, Option.some(value))),
+    (previous) => Effect.sync(() => swapEnv(name, previous)),
   )
 
 /** What the user's repository holds: its refs, its objects and its index. */
@@ -448,6 +469,62 @@ Gent-At: ${at}")`,
           "# other sessions also wrote this work tree during this turn: other-session",
         )
         expect(patch.patch).toContain("b/a.txt")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "a store command reads no user or system git config: a global clean filter never runs and the bytes stay exact",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* repository
+        const home = yield* makeTempDirectoryScoped("cp-home-")
+        const config = yield* makeTempDirectoryScoped("cp-config-")
+        const marker = `${config}/filter-ran`
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.writeFileString(`${config}/attributes`, "* filter=upper\n")
+        yield* fs.writeFileString(`${config}/upper`, `#!/bin/sh\ntouch "${marker}"\ntr a-z A-Z\n`, {
+          mode: 0o755,
+        })
+        yield* fs.writeFileString(
+          `${config}/gitconfig`,
+          `[core]\n\tattributesFile = ${config}/attributes\n[filter "upper"]\n\tclean = ${config}/upper\n`,
+        )
+        yield* scopedEnv("GIT_CONFIG_GLOBAL", `${config}/gitconfig`)
+        const session = yield* checkpointSession(repo, home, [
+          put("a.txt", "lowercase\n"),
+          textStep("done 1"),
+        ])
+        yield* session.turn("change a", "done 1")
+        const store = (yield* storeOf(home))[0] ?? ""
+        const end = (yield* storeRefs(store)).find((name) => name.endsWith("/end")) ?? ""
+        expect(yield* sh(store, `git --git-dir="${store}" cat-file blob '${end}:a.txt'`)).toBe(
+          "lowercase",
+        )
+        expect(yield* sh(config, `test -e "${marker}" && echo ran || echo none`)).toBe("none")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "a read of the user's repository never runs its fsmonitor",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* repository
+        const home = yield* makeTempDirectoryScoped("cp-home-")
+        const marker = `${home}/fsmonitor-ran`
+        yield* sh(
+          home,
+          `printf '#!/bin/sh\\ntouch "${marker}"\\nexit 1\\n' > fsmonitor && chmod +x fsmonitor`,
+        )
+        yield* sh(repo, `git config core.fsmonitor "${home}/fsmonitor"`)
+        const session = yield* checkpointSession(repo, home, [
+          put("a.txt", "two\n"),
+          textStep("done 1"),
+        ])
+        yield* session.turn("change a", "done 1")
+        expect((yield* session.list).turns.map((row) => row.state)).toEqual(["captured"])
+        expect(yield* sh(home, `test -e "${marker}" && echo ran || echo none`)).toBe("none")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )

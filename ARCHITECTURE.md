@@ -1460,10 +1460,14 @@ section, no notice. Core has no checkpoint concept.
 - Store: one private bare git repository per work tree,
   `<data dir>/checkpoints/<16 hex of sha256(realpath of the git top)>/`, with
   a `worktree` file that names the top. gent writes no ref, object or index
-  entry into the user's repository, and reads it with no optional lock. Every
-  store command runs as `--git-dir=<store> --work-tree=<top>` with the quiet
-  git settings, `core.fsync=objects,reference`, no eol or filter conversion
-  (`--attr-source` is the empty tree), and gent's own identity. A store write
+  entry into the user's repository, and reads it with no optional lock and no
+  `core.fsmonitor` program (the user's config stays for those reads: its
+  excludes file decides what git ignores). Every store command runs as
+  `--git-dir=<store> --work-tree=<top>` with the quiet git settings, no user
+  or system config (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`,
+  and no inherited `-c` values), `core.fsync=objects,reference`, no eol or
+  filter conversion (`--attr-source` is the empty tree,
+  `core.attributesFile=/dev/null`), and gent's own identity. A store write
   holds `FileLock` on `<store>/index`. Captured: tracked and untracked files
   that git does not ignore, and files the user's repository tracks though an
   ignore rule names them; not captured: untracked files over 2 MiB (the commit
