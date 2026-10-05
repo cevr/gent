@@ -1200,7 +1200,16 @@ describe("AgentsViewExtension via RPC", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* openHarness
+          // The shipped extensions, the agents among them, so the turns after the delete run.
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            textStep("spawned ran"),
+            textStep("third ran"),
+          ])
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/nonexistent/agents-view-rpc",
+          })
           // A1 hands off to A2, A2 spawns C and hands off to A3.
           const second = yield* harness.client.session.create({
             cwd: "/nonexistent/agents-view-rpc-second",
@@ -1225,6 +1234,25 @@ describe("AgentsViewExtension via RPC", () => {
             reply.rows.find((row) => row.sessionId === sessionId)
           expect(rowFor(third.sessionId)?.sessions).toEqual([second.sessionId, third.sessionId])
           expect(rowFor(spawned.sessionId)?.parentSessionId).toBe(second.sessionId)
+          // The sessions left still run turns: their bound does not walk the deleted start.
+          const replies = (target: typeof third, text: string) =>
+            Effect.gen(function* () {
+              yield* harness.client.message.send({ ...target, content: "go on" })
+              yield* waitFor(
+                harness.client.message.list({ branchId: target.branchId }),
+                (list) =>
+                  list.some(
+                    (message) =>
+                      message.role === "assistant" &&
+                      message.parts.some((part) => part.type === "text" && part.text === text),
+                  ),
+                4_000,
+                `the reply "${text}"`,
+              )
+            })
+          yield* replies(spawned, "spawned ran")
+          yield* replies(third, "third ran")
+          yield* controls.assertDone
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

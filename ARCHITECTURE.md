@@ -1334,10 +1334,16 @@ session was spawned and no client opened it. A spawned session
 (`isSpawnedSession`) has a parent and starts its own thread: a delegate child
 or a `/btw` fork. A handoff has a parent too, but it joins the parent's
 thread, so it is the user's own conversation; spawn depth counts the same
-rule. Deleting a session deletes the same way (`deleteSession`): the session,
-what it spawned and each spawn's own handoffs go; a handoff that continues the
-deleted session's thread stays, detached from its parent, and its runtime is
-not stopped. Child sessions stored before `bded8dce` carry their parent's
+rule. Session lineage has two edges in one column pair: a spawn edge (a
+parent and a new thread) carries authority, and a handoff edge (a parent and
+the same thread) carries provenance and its predecessor's bound. Deleting a
+session deletes the same way (`deleteSession`, `deletionSet`): the session,
+what it spawned and each spawn's own handoffs go. In a root thread (its first
+session has no parent, or is gone), a handoff that continues the deleted
+session stays, detached from its parent, and its runtime is not stopped: it
+is the conversation the user kept. In a spawned thread it goes too: kept, it
+would lose its parent and so its parent run's bound, and become an unbounded
+root. Child sessions stored before `bded8dce` carry their parent's
 thread, so they read as handoffs: they ask, do not count toward spawn depth,
 and survive a parent delete (accepted in the pass-10 ledger). A top-level or handoff session's user watches every turn there, so its
 wake, monitor, delegate-completion and slash-command turns ask. In a spawned

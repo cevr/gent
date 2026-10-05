@@ -910,7 +910,8 @@ closed with a `ParentBoundError` that names the parent session and agent: its
 create is refused, and its turns and file calls do not run. A handoff
 (`continueThread` on a client's create, as `/handoff` makes) runs under the
 bound of the session it continues: a handoff of a confined child stays
-confined, and one that names wider `paths` is refused.
+confined, and one that names wider `paths` is refused. Deleting a spawned
+child deletes its handoffs too.
 
 The agent `getAgent` returns and the hooks receive is bound to its run:
 `admitsTool` and `pathScopes()` answer for the run, not for the definition. It

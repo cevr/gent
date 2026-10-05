@@ -1479,6 +1479,67 @@ describe("session.delete", () => {
     )
   })
 
+  // A spawned thread is side work its parent started: its handoffs go with
+  // it, so none becomes a root that its parent run no longer bounds.
+  it.live("deleting a spawned child deletes its handoffs; a root keeps its own", () => {
+    const runtimeTerminated: Array<SessionId> = []
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const base = { sessions, branches, now: FIXED_NOW }
+        const ids = (name: string) => ({
+          sessionId: SessionId.make(`lineage-${name}`),
+          branchId: BranchId.make(`lineage-${name}-branch`),
+        })
+        const under = (parent: string) => ({
+          parentSessionId: SessionId.make(`lineage-${parent}`),
+          parentBranchId: BranchId.make(`lineage-${parent}-branch`),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("root-handoff"),
+          ...under("root"),
+          threadId: SessionId.make("lineage-root"),
+        })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("root-handoff-2"),
+          ...under("root-handoff"),
+          threadId: SessionId.make("lineage-root"),
+        })
+        yield* createActiveSessionFixture({ ...base, ...ids("spawn"), ...under("root") })
+        yield* createActiveSessionFixture({
+          ...base,
+          ...ids("spawn-handoff"),
+          ...under("spawn"),
+          threadId: SessionId.make("lineage-spawn"),
+        })
+
+        yield* mutations.deleteSession(SessionId.make("lineage-spawn"))
+        expect(runtimeTerminated.map(String).toSorted()).toEqual([
+          "lineage-spawn",
+          "lineage-spawn-handoff",
+        ])
+        expect(yield* sessions.getSession(SessionId.make("lineage-spawn-handoff"))).toBeUndefined()
+
+        // A root thread is the conversation the user kept: a delete in it
+        // keeps the handoffs that continue it.
+        yield* mutations.deleteSession(SessionId.make("lineage-root-handoff"))
+        const kept = yield* sessions.getSession(SessionId.make("lineage-root-handoff-2"))
+        expect(kept?.parentSessionId).toBeUndefined()
+        expect(kept?.threadId).toBe(SessionId.make("lineage-root"))
+      }).pipe(
+        Effect.provide(
+          sessionMutationsTestLayer({ runtime: sessionRuntimeProbeLayer(runtimeTerminated) }),
+        ),
+        Effect.timeout("4 seconds"),
+      ),
+    )
+  })
+
   it.live("restores runtime tombstones when durable delete fails", () => {
     const runtimeTerminated: Array<SessionId> = []
     const runtimeRestored: Array<SessionId> = []
