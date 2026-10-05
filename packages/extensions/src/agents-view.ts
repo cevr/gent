@@ -220,6 +220,15 @@ const firstBy = (
     return best
   }, seed)
 
+/** A known ask needs attention even while another member works. */
+const attentionOrder = (row: AgentRow): number => {
+  if (row.section === "inactive") return 4
+  if (Option.contains(row.status, "WaitingForInteraction")) return 0
+  if (Option.contains(row.status, "Running")) return 1
+  if (!Option.contains(row.status, "Idle")) return 2
+  return 3
+}
+
 /**
  * One row for the sessions of one thread. The newest session is the thread's
  * current one: the row takes its ids, name, cwd and liveness, so opening the
@@ -235,8 +244,7 @@ const foldThread = (seed: AgentRow, others: ReadonlyArray<AgentRow>): AgentRow =
   const busiest = firstBy(
     seed,
     all,
-    (left, right) =>
-      SECTION_ORDER[left.section] - SECTION_ORDER[right.section] || byStart(right, left),
+    (left, right) => attentionOrder(left) - attentionOrder(right) || byStart(right, left),
   )
   const stamps = all.flatMap((row) => Option.toArray(row.updatedAt))
   return {
