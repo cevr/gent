@@ -847,15 +847,18 @@ describe("threads", () => {
           yield* rig.client.session.delete({ sessionId: rig.starter.sessionId })
           const rows = yield* rig.list(third)
           expect(rows.map((row) => row.thread)).toEqual([child.thread])
-          // The cap counts C: three more run, and a fifth is refused.
+          // The cap counts C: three more run, and one of four is refused.
           const more = yield* rig.act(
             third,
             [1, 2, 3, 4].map((index) =>
               rig.op("thread.start", { task: `${THREAD_TASK} ${index}` }),
             ),
           )
-          expect(more.map((result) => result.ok)).toEqual([true, true, true, false])
-          expect(more.at(-1)?.output).toContain("already runs 4 threads")
+          // The four starts run at once: which one is refused is not fixed.
+          const refused = more.filter((result) => !result.ok)
+          expect(more).toHaveLength(4)
+          expect(refused).toHaveLength(1)
+          expect(refused[0]?.output).toContain("already runs 4 threads")
           const stopped = yield* rig.stop(third, child.thread)
           expect(stopped.stopped).toEqual([
             { sessionId: child.sessionId, branchId: child.branchId },
