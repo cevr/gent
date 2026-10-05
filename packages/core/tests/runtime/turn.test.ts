@@ -26,6 +26,7 @@ import {
   encodeToolOutput,
   isRuntimeUserMessage,
   messagePartsText,
+  Session,
   type SessionAdmission,
 } from "../../src/domain/message"
 import * as Response from "effect/ai/Response"
@@ -103,6 +104,7 @@ import {
   EventStorage,
   MessageStorage,
   makeStorageTransaction,
+  SessionStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
@@ -2105,6 +2107,9 @@ describe("credential order", () => {
   /** Dollars per million tokens an API key pays; a subscription sign-in lists no price. */
   const apiPricing = { input: 3, output: 15 }
   const subscriptionPricing = { input: 0, output: 0 }
+  /** The window each credential lists the model with: the views differ, as an OAuth subset can. */
+  const API_WINDOW = 128_000
+  const SUBSCRIPTION_WINDOW = 200_000
 
   /** What a request with one credential streams, by how many it sent before. */
   type Reply = (call: number) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
@@ -2199,13 +2204,17 @@ describe("credential order", () => {
       },
       listModels: (_catalog, authInfo) => {
         let pricing = apiPricing
-        if (authInfo?._tag === "Oauth") pricing = subscriptionPricing
+        let contextLength = API_WINDOW
+        if (authInfo?._tag === "Oauth") {
+          pricing = subscriptionPricing
+          contextLength = SUBSCRIPTION_WINDOW
+        }
         return Effect.succeed([
           Model.make({
             id: fallbackModel,
             name: "Fallback model",
             provider: ProviderId.make(FALLBACK),
-            contextLength: 128_000,
+            contextLength,
             pricing,
           }),
         ])
@@ -2302,8 +2311,19 @@ describe("credential order", () => {
     }
   }
 
+  /** Each step's credential labels; its sign-in stamp is the store's clock, not the test's. */
+  const labelsOf = (ended: ReadonlyArray<AgentEvent>) =>
+    ended.flatMap((event) => {
+      if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+      return [{ provider: event.credential.provider, slot: event.credential.slot }]
+    })
+
   /** What a run's events say about its steps, its notices and its retries. */
   const credentialReport = (recorded: ReadonlyArray<AgentEvent>) => ({
+    projected: recorded.flatMap((event) => {
+      if (event._tag !== "ModelContextProjected") return []
+      return [event]
+    }),
     ended: recorded.filter((event) => event._tag === "StreamEnded"),
     errors: recorded.flatMap((event) => {
       if (event._tag !== "ErrorOccurred") return []
@@ -2367,7 +2387,7 @@ describe("credential order", () => {
       })
       // A refuses once; B answers the step and the tool step after it.
       expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
-      expect(run.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(run.ended)).toEqual([
         { provider: fallbackProvider, slot: personal },
         { provider: fallbackProvider, slot: personal },
       ])
@@ -2403,7 +2423,7 @@ describe("credential order", () => {
         replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
       })
       expect(stayed.sent).toEqual(["sk-a"])
-      expect(stayed.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(stayed.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
     }),
@@ -2519,7 +2539,7 @@ describe("credential order", () => {
       })
       expect(alone.resolvedWith).toEqual([])
       expect(alone.errors.map((entry) => entry.error)).toEqual([
-        `Credential "work" unavailable for provider "${FALLBACK}"; sign in again`,
+        `Credential "work" of provider "${FALLBACK}" holds no sign-in: it was removed in /auth or never signed in. Sign it in again in /auth, or move another credential into the order`,
       ])
       // First in the order, it moves the turn to the stored default.
       const first = yield* credentialTurn({
@@ -2529,9 +2549,62 @@ describe("credential order", () => {
         replies: { "sk-a": answer("from a"), env: answer("from env") },
       })
       expect(first.resolvedWith).toEqual(["sk-a"])
-      expect(first.ended.map((event) => event.credential)).toEqual([
+      expect(labelsOf(first.ended)).toEqual([
         { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
       ])
+    }),
+  )
+
+  it.live("a step is projected by the window of the credential it goes out with", () =>
+    Effect.gen(function* () {
+      // The API key lists a 128k window, the subscription 200k. The first
+      // step goes out with the key and moves; the second runs on the sign-in.
+      const run = yield* credentialTurn({
+        name: "window",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, oauthLogin],
+        ],
+        replies: {
+          "sk-a": refusal,
+          oauth: (call) => {
+            if (call === 0) {
+              return Stream.fromIterable([
+                toolCallPart("echo", { text: "hi" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return answer("done")(call)
+          },
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "oauth", "oauth"])
+      expect(run.projected.map((event) => event.contextLimitTokens)).toEqual([
+        API_WINDOW,
+        SUBSCRIPTION_WINDOW,
+      ])
+    }),
+  )
+
+  it.live("a step's receipt carries its credential's sign-in; the environment's has none", () =>
+    Effect.gen(function* () {
+      const stored = yield* credentialTurn({
+        name: "stamp-stored",
+        stored: [[DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")]],
+        replies: { "sk-a": answer("from a") },
+      })
+      expect(stored.ended.map((event) => Predicate.isNumber(event.credential?.signedInAt))).toEqual(
+        [true],
+      )
+      const fromEnv = yield* credentialTurn({
+        name: "stamp-env",
+        stored: [],
+        replies: { env: answer("from env") },
+      })
+      expect(
+        fromEnv.ended.map((event) => Predicate.isUndefined(event.credential?.signedInAt)),
+      ).toEqual([true])
     }),
   )
 
@@ -2755,9 +2828,105 @@ describe("credential order", () => {
       const resumed = credentialReport((yield* durableEvents).slice(before))
       expect(second.sent).toEqual(["sk-b"])
       expect(resumed.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
-      expect(resumed.ended.map((event) => event.credential)).toEqual([
-        { provider: fallbackProvider, slot: personal },
-      ])
+      expect(labelsOf(resumed.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a spawned child starts where its parent's turn stands in the order", () =>
+    Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+      const replies = { "sk-a": refusal, "sk-b": answer("from b") }
+      const runOn = (root: ReturnType<typeof credentialRoot>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({
+              sessionId: root.sessionId,
+              branchId: root.branchId,
+              admission: root.admission,
+            })
+            yield* runAgentLoop(makeMessage(root.sessionId, root.branchId, "hello"), root.admission)
+          }),
+        ).pipe(Effect.provide(root.layer))
+      // The parent's turn: A refuses, B answers.
+      const parent = credentialRoot({ name: "parent", order, stored: twoKeys, storage, replies })
+      yield* runOn(parent)
+      expect(parent.sent).toEqual(["sk-a", "sk-b"])
+      // A child the parent's turn spawned goes out with B at once.
+      const child = credentialRoot({ name: "child", order, stored: twoKeys, storage, replies })
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: child.sessionId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+            admission: child.admission,
+          }),
+        )
+      }).pipe(Effect.provide(storage), Effect.orDie)
+      yield* runOn(child)
+      expect(child.sent).toEqual(["sk-b"])
+      // A session of its own starts at the top of the order.
+      const own = credentialRoot({ name: "own", order, stored: twoKeys, storage, replies })
+      yield* runOn(own)
+      expect(own.sent).toEqual(["sk-a", "sk-b"])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a child takes its parent's place in the order on its first turn only", () =>
+    Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+      const bothAnswer = { "sk-a": answer("from a"), "sk-b": answer("from b") }
+      const runOn = (root: ReturnType<typeof credentialRoot>, text: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({
+              sessionId: root.sessionId,
+              branchId: root.branchId,
+              admission: root.admission,
+            })
+            yield* runAgentLoop(makeMessage(root.sessionId, root.branchId, text), root.admission)
+          }),
+        ).pipe(Effect.provide(root.layer))
+      const rootOf = (name: string, replies: Readonly<Record<string, Reply>>) =>
+        credentialRoot({ name, order, stored: twoKeys, storage, replies })
+      // The parent's first turn answers on the default; its child's first
+      // turn starts there too.
+      const parent = rootOf("parent-first", bothAnswer)
+      yield* runOn(parent, "first")
+      const child = rootOf("child-first", bothAnswer)
+      yield* Effect.gen(function* () {
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: child.sessionId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+            admission: child.admission,
+          }),
+        )
+      }).pipe(Effect.provide(storage), Effect.orDie)
+      yield* runOn(child, "child first")
+      expect(child.sent).toEqual(["sk-a"])
+      // The parent's next turn moves past a refusing default. The child's
+      // later turn is its own: it starts at the top of the order, as the
+      // parent's own next turn would, not where that later parent turn ended.
+      const parentAgain = rootOf("parent-first", { "sk-a": refusal, "sk-b": answer("from b") })
+      yield* runOn(parentAgain, "second")
+      expect(parentAgain.sent).toEqual(["sk-a", "sk-b"])
+      const childAgain = rootOf("child-first", bothAnswer)
+      yield* runOn(childAgain, "child second")
+      expect(childAgain.sent).toEqual(["sk-a"])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
@@ -3818,6 +3987,68 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a route reads the branch's model as cold only where its last account certainly moved",
+    () =>
+      Effect.gen(function* () {
+        const work = CredentialSlot.make("work")
+        // The order before each turn. A new sign-in on the same slot is the
+        // other certain move; the effort test shows it on the live registry,
+        // whose receipts carry sign-in stamps. Route and effort read one answer.
+        const cases: ReadonlyArray<{
+          readonly name: string
+          readonly first: ReadonlyArray<CredentialSlot>
+          readonly second: ReadonlyArray<CredentialSlot>
+          readonly warm: boolean
+        }> = [
+          // The slot the last request used left the order.
+          { name: "left", first: [DEFAULT_CREDENTIAL_SLOT], second: [work], warm: false },
+          // A first credential the turn may again move past (a spent quota):
+          // where the next request goes out is not known, so it is no move.
+          { name: "steady", first: [work], second: [DEFAULT_CREDENTIAL_SLOT, work], warm: true },
+        ]
+        for (const { name, first, second: order, warm } of cases) {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [
+              routingExtension({
+                route: (input) =>
+                  Ref.update(inputs, (all) => [...all, input]).pipe(
+                    Effect.as({ choice: 1, reason: "strong" }),
+                  ),
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectAuto(client, sessionId)
+          yield* client.auth.setKey({ provider: "custom", key: "sk-fake-a", sessionId })
+          yield* client.auth.setKey({ provider: "custom", slot: work, key: "sk-fake-b", sessionId })
+          yield* client.auth.setOrder({ provider: "custom", order: first, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          yield* client.auth.setOrder({ provider: "custom", order, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          yield* afterTurns(2)
+          const next = (yield* Ref.get(inputs))[1]
+          expect([
+            name,
+            Option.map(next?.current ?? Option.none(), (current) => current.model.id),
+          ]).toEqual([name, Option.some(STRONG_MODEL)])
+          expect([
+            name,
+            Option.exists(next?.current ?? Option.none(), (current) => current.warm),
+          ]).toEqual([name, warm])
+        }
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a router runs under its own extension id: its state pulse names it and the route stands",
     () =>
       Effect.gen(function* () {
@@ -4872,6 +5103,103 @@ describe("effort auto", () => {
             expect(second?.reason).toContain("warm")
             expect(second?.classifier).toBeUndefined()
           }
+        }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "an effort is held for a warm cache unless its last account certainly moved",
+    () =>
+      Effect.gen(function* () {
+        const work = CredentialSlot.make("work")
+        const cases: ReadonlyArray<{
+          readonly name: string
+          readonly first: ReadonlyArray<CredentialSlot>
+          readonly second: ReadonlyArray<CredentialSlot>
+          readonly slots: ReadonlyArray<CredentialSlot>
+          readonly levels: ReadonlyArray<ReasoningEffort>
+          readonly asked: number
+          /** The default slot is signed in again before the second turn. */
+          readonly signInAgain?: true
+        }> = [
+          // The slot the last request used left the order: the router is asked again.
+          {
+            name: "left",
+            first: [DEFAULT_CREDENTIAL_SLOT],
+            second: [work],
+            slots: [DEFAULT_CREDENTIAL_SLOT, work],
+            levels: ["high", "low"],
+            asked: 2,
+          },
+          // The slot holds another sign-in than the one the request used.
+          {
+            name: "relogin",
+            first: [DEFAULT_CREDENTIAL_SLOT],
+            second: [DEFAULT_CREDENTIAL_SLOT],
+            slots: [DEFAULT_CREDENTIAL_SLOT, DEFAULT_CREDENTIAL_SLOT],
+            levels: ["high", "low"],
+            asked: 2,
+            signInAgain: true,
+          },
+          // A first credential the next turn may move past again is no move:
+          // the cache the last request wrote holds its effort.
+          {
+            name: "steady",
+            first: [work],
+            second: [DEFAULT_CREDENTIAL_SLOT, work],
+            slots: [work, DEFAULT_CREDENTIAL_SLOT],
+            levels: ["high", "high"],
+            asked: 1,
+          },
+        ]
+        // No lifetime: only the account can make the cache cold.
+        const model = plainModel(Option.none())
+        // The live registry knows the model through its driver, and stamps
+        // each receipt with its sign-in, as production does.
+        const plainDriver: ModelDriverContribution = {
+          id: "plain",
+          name: "Plain",
+          resolveModel: () => Effect.die("the scripted model answers every request"),
+          listModels: () => Effect.succeed([model]),
+        }
+        for (const { name, first, second, slots, levels, asked, signInAgain } of cases) {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents: agentOn(model),
+            providerLayer,
+            models: "catalog",
+            extensionInputs: [
+              routingExtension({
+                effort: effortRouter,
+                route: pickEfforts(inputs, [2, 0]),
+                drivers: [plainDriver],
+              }),
+            ],
+          })
+          const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+          yield* selectEffortAuto(client, sessionId)
+          yield* client.auth.setKey({ provider: "plain", key: "sk-fake-a", sessionId })
+          yield* client.auth.setKey({ provider: "plain", slot: work, key: "sk-fake-b", sessionId })
+          yield* client.auth.setOrder({ provider: "plain", order: first, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* afterTurns(1)
+          if (signInAgain === true)
+            yield* client.auth.setKey({ provider: "plain", key: "sk-fake-c", sessionId })
+          yield* client.auth.setOrder({ provider: "plain", order: second, sessionId })
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const events = yield* afterTurns(2)
+          const sent = events.flatMap((event) => {
+            if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+            return [event.credential.slot]
+          })
+          expect({ name, sent }).toEqual({ name, sent: [...slots] })
+          expect([name, stepLevels(events)]).toEqual([name, levels.map(Option.some)])
+          expect([name, (yield* Ref.get(inputs)).length]).toEqual([name, asked])
         }
       }).pipe(Effect.timeout("20 seconds")),
     25_000,

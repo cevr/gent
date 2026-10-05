@@ -73,6 +73,7 @@ import {
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
+import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../../src/domain/driver"
 import {
   contextWindowOf,
   defineExtension,
@@ -1639,7 +1640,10 @@ const measuredReply = (text: string, inputTokens: number): SequenceStep => ({
  * With `switchModel`, the session moves to another model with the same
  * lifetime before the second turn. With `spawned`, the turns run in a child
  * session of the harness session, whose lifetime is `childPromptCacheTtlMs`.
- * With `secondPrompt`, the second turn sends that text.
+ * With `secondPrompt`, the second turn sends that text. `orders` sets the
+ * sign-in's credential order before each turn, and the calls `quotaSpent`
+ * names (by their index among all calls) are refused for an exhausted
+ * quota, which moves the turn to the next credential of the order.
  */
 const runColdCacheTurns = (params: {
   readonly promptCacheTtlMs: Option.Option<number>
@@ -1649,6 +1653,11 @@ const runColdCacheTurns = (params: {
   readonly firstReplyHoldMs?: number
   readonly firstCallRateLimitedMs?: number
   readonly switchModel?: boolean
+  readonly orders?: {
+    readonly first: ReadonlyArray<CredentialSlot>
+    readonly second: ReadonlyArray<CredentialSlot>
+  }
+  readonly quotaSpent?: ReadonlyArray<number>
   readonly childPromptCacheTtlMs?: number
   readonly spawned?: boolean
   readonly secondPrompt?: string
@@ -1657,6 +1666,7 @@ const runColdCacheTurns = (params: {
     const secondPrompt = params.secondPrompt ?? "second prompt"
     const hold = Option.fromUndefinedOr(params.firstReplyHoldMs)
     const rateLimit = Option.fromUndefinedOr(params.firstCallRateLimitedMs)
+    const quotaSpent = params.quotaSpent ?? []
     const requests: Array<string> = []
     const replies = [
       {
@@ -1673,38 +1683,50 @@ const runColdCacheTurns = (params: {
         },
       })),
     )
-    // The rate-limited provider refuses its first call, then plays the replies in order.
+    // The refusing provider refuses the calls it names, then plays the replies in order.
     const played = yield* Ref.make(0)
-    const rateLimitedLayer = (retryAfterMs: number) =>
-      LanguageModelLayers.testStream((options) =>
-        Effect.gen(function* () {
-          const index = yield* Ref.getAndUpdate(played, (count) => count + 1)
-          if (index === 0) {
-            return Stream.fail(
-              AiError.make({
-                module: "Test",
-                method: "streamText",
-                reason: new AiError.RateLimitError({ retryAfter: Duration.millis(retryAfterMs) }),
-              }),
-            )
-          }
-          requests.push(encodeJson(options.prompt.content))
-          return Stream.fromIterable(
-            Option.match(Option.fromUndefinedOr(replies[index - 1]), {
-              onNone: () => [],
-              onSome: (step) => step.parts,
-            }),
+    const refused = yield* Ref.make(0)
+    const refusal = (index: number): Option.Option<AiError.AiError["reason"]> => {
+      if (index === 0 && Option.isSome(rateLimit))
+        return Option.some(
+          new AiError.RateLimitError({ retryAfter: Duration.millis(rateLimit.value) }),
+        )
+      if (quotaSpent.includes(index)) return Option.some(new AiError.QuotaExhaustedError({}))
+      return Option.none()
+    }
+    // A summary call is the compactor's, not a request of the turn: it is never
+    // refused, and the indexes count the turns' requests only.
+    const turnCalls = yield* Ref.make(0)
+    const refusingLayer = LanguageModelLayers.testStream((options) =>
+      Effect.gen(function* () {
+        const index = yield* Ref.getAndUpdate(played, (count) => count + 1)
+        const content = encodeJson(options.prompt.content)
+        let reason = Option.none<AiError.AiError["reason"]>()
+        if (!content.includes("summarize"))
+          reason = refusal(yield* Ref.getAndUpdate(turnCalls, (count) => count + 1))
+        if (Option.isSome(reason)) {
+          yield* Ref.update(refused, (count) => count + 1)
+          return Stream.fail(
+            AiError.make({ module: "Test", method: "streamText", reason: reason.value }),
           )
-        }),
-      )
-    const providerLayer = Option.match(rateLimit, {
-      onNone: () => sequenceLayer,
-      onSome: rateLimitedLayer,
-    })
-    const calls = Option.match(rateLimit, {
-      onNone: () => controls.callCount,
-      onSome: () => Ref.get(played),
-    })
+        }
+        requests.push(content)
+        const answered = index - (yield* Ref.get(refused))
+        return Stream.fromIterable(
+          Option.match(Option.fromUndefinedOr(replies[answered]), {
+            onNone: () => [],
+            onSome: (step) => step.parts,
+          }),
+        )
+      }),
+    )
+    const scripted = Option.isSome(rateLimit) || quotaSpent.length > 0
+    let providerLayer = sequenceLayer
+    let calls = controls.callCount
+    if (scripted) {
+      providerLayer = refusingLayer
+      calls = Ref.get(played)
+    }
     const compactor = [rangeCompactorExtension].filter(() => params.compactor)
     const model = coldCacheModel(
       params.promptCacheTtlMs,
@@ -1727,6 +1749,11 @@ const runColdCacheTurns = (params: {
     }
     const { sessionId, branchId } = target
     for (const content of [`${FIRST_PROMPT_MARK} one`, secondPrompt]) {
+      if (Predicate.isNotUndefined(params.orders)) {
+        let order = params.orders.first
+        if (content === secondPrompt) order = params.orders.second
+        yield* client.auth.setOrder({ sessionId, provider: model.provider, order })
+      }
       if (content === secondPrompt && params.switchModel === true) {
         yield* client.session.updateSettings({
           sessionId,
@@ -1962,6 +1989,34 @@ describe("cold prompt cache", () => {
       expect(result.requests[1]).toContain(FIRST_PROMPT_MARK)
       expect(handoffMarkers(result.durable)).toHaveLength(0)
     }),
+  )
+
+  it.live(
+    "a cold turn on a sign-in whose first credential keeps refusing hands off as any cold turn does",
+    () =>
+      Effect.gen(function* () {
+        // The default's quota is spent: each turn starts on it, is refused,
+        // and moves to personal, whose cache the last turn wrote. Once that
+        // cache lapses, both accounts are cold, and the handoff pays as it
+        // does on one credential.
+        const order = [DEFAULT_CREDENTIAL_SLOT, CredentialSlot.make("personal")]
+        const result = yield* runColdCacheTurns({
+          promptCacheTtlMs: Option.some(0),
+          firstInputTokens: LARGE_WINDOW_TOKENS,
+          compactor: true,
+          steps: [textStep("the summary of the first turn"), textStep("second reply")],
+          orders: { first: order, second: order },
+          quotaSpent: [0, 2],
+        })
+
+        const slots = result.events.flatMap((event) => {
+          if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+          return [event.credential.slot]
+        })
+        expect(slots).toEqual([CredentialSlot.make("personal"), CredentialSlot.make("personal")])
+        expect(handoffMarkers(result.durable)).toHaveLength(1)
+        expect(result.requests.some((request) => request.includes("summarize"))).toBe(true)
+      }),
   )
 
   it.live("a retried request restarts the cache lifetime at the retry", () =>

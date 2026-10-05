@@ -14,7 +14,8 @@ import {
   WorkspaceId,
 } from "../../src/domain/ids"
 import { AgentEvent } from "../../src/domain/event"
-import { ModelId } from "../../src/domain/agent"
+import { ModelId, ProviderId } from "../../src/domain/agent"
+import { CredentialSlot } from "../../src/domain/driver"
 
 // ── entity id ───────────────────────────────────────────────────────────────
 
@@ -135,6 +136,7 @@ describe("session metrics fold", () => {
       durationMs: 1_500,
       costUsd: 0.75,
       lastInputTokens: 40,
+      lastCredential: { model: ModelId.make("test/m") },
       context: {
         estimatedTokens: 90,
         availableInputTokens: 1_000,
@@ -144,6 +146,45 @@ describe("session metrics fold", () => {
         compactions: 1,
       },
     })
+  })
+
+  test("the newest ended step's credential is the last one used; an old row's reads as unknown", () => {
+    const unknown = wrap(
+      AgentEvent.cases.StreamEnded.make({
+        sessionId,
+        branchId,
+        model: ModelId.make("anthropic/claude-sonnet-5-5"),
+        outcome: "Answered",
+      }),
+    )
+    const personal = wrap(
+      AgentEvent.cases.StreamEnded.make({
+        sessionId,
+        branchId,
+        model: ModelId.make("anthropic/claude-sonnet-5-5"),
+        outcome: "Answered",
+        credential: {
+          provider: ProviderId.make("anthropic"),
+          slot: CredentialSlot.make("personal"),
+        },
+      }),
+    )
+    expect(foldSessionMetrics([]).lastCredential).toBeUndefined()
+    expect(foldSessionMetrics([personal]).lastCredential).toEqual({
+      model: ModelId.make("anthropic/claude-sonnet-5-5"),
+      receipt: { provider: ProviderId.make("anthropic"), slot: CredentialSlot.make("personal") },
+    })
+    // A row written before receipts names its model, not its credential.
+    expect(foldSessionMetrics([personal, unknown]).lastCredential).toEqual({
+      model: ModelId.make("anthropic/claude-sonnet-5-5"),
+    })
+    // A step that ended with no model (a failed request) leaves the last one.
+    const failed = wrap(
+      AgentEvent.cases.StreamEnded.make({ sessionId, branchId, interrupted: true }),
+    )
+    expect(foldSessionMetrics([personal, failed]).lastCredential?.receipt?.slot).toBe(
+      CredentialSlot.make("personal"),
+    )
   })
 
   test("a projection's input count waits for its own step, so a model switch never mixes windows", () => {

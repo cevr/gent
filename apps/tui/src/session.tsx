@@ -3123,6 +3123,31 @@ export function createSessionController(props: {
       { defer: false },
     ),
   )
+  // A changed credential renames the sign-ins the status row labels by (a
+  // credential added, renamed or removed): read them again, gate untouched.
+  createEffect(
+    on(
+      () => client.credentialRevision(),
+      () => {
+        if (props.scriptedModel === true) return
+        Option.map(client.agent(), (resolvedAgent) =>
+          client.runtime.cast(
+            client.client.auth
+              .listProviders({ agentName: resolvedAgent, sessionId: props.sessionId })
+              .pipe(
+                Effect.tap((providers) => Effect.sync(() => setAuthProviders(providers))),
+                Effect.catchEager((error) =>
+                  Effect.logWarning("auth.providers-reread-failed").pipe(
+                    Effect.annotateLogs({ error: String(error) }),
+                  ),
+                ),
+              ),
+          ),
+        )
+      },
+      { defer: true },
+    ),
+  )
 
   const authGatePending = () =>
     props.scriptedModel !== true &&

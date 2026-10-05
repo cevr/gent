@@ -641,6 +641,42 @@ export const statusModelName = (
 }
 
 /**
+ * The credential label the status row names beside the model: the one the
+ * newest request on `model` went out with, `unknown` for a request recorded
+ * before receipts. Only a sign-in that holds more than one credential names
+ * it (its row lists `credentials`); a newest request on another model, or
+ * none yet, names nothing.
+ */
+export const statusCredentialLabel = (
+  model: Model,
+  last: Option.Option<{
+    readonly model: string
+    readonly receipt: Option.Option<{ readonly provider: string; readonly slot: string }>
+  }>,
+  providers: ReadonlyArray<AuthProviderInfo>,
+): Option.Option<string> =>
+  Option.flatMap(
+    Option.filter(last, (request) => request.model === model.id),
+    (request) => {
+      const owners = [
+        model.provider,
+        ...Option.toArray(Option.map(request.receipt, (receipt) => receipt.provider)),
+      ]
+      const several = providers.some(
+        (provider) =>
+          owners.includes(provider.provider) && Predicate.isNotUndefined(provider.credentials),
+      )
+      if (!several) return Option.none()
+      return Option.some(
+        Option.match(request.receipt, {
+          onNone: () => "unknown",
+          onSome: (receipt) => receipt.slot,
+        }),
+      )
+    },
+  )
+
+/**
  * The activity row while a turn runs: what it does, how long it has run, and
  * the way out. Too narrow, the elapsed time goes first, then the label cuts;
  * the way out stays.
@@ -755,6 +791,16 @@ export function Session(props: SessionProps) {
         text: full.value,
         color: theme.textMuted,
         short: { text: Option.getOrElse(short, () => full.value), rank: STATUS_YIELD.model },
+      })
+    // The credential the model's newest request went out with, on a sign-in of several.
+    const credential = Option.flatMap(client.turnModel(), (turn) =>
+      statusCredentialLabel(turn, client.lastCredential(), controller.authProviders()),
+    )
+    if (Option.isSome(credential))
+      items.push({
+        text: `via ${credential.value}`,
+        color: theme.textMuted,
+        short: { text: credential.value, rank: STATUS_YIELD.model },
       })
     // Gent ships no default model: once the snapshot names the agent, a
     // session nobody named a model for says so, and where to name one.

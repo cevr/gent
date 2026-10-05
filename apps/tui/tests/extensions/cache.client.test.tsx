@@ -8,6 +8,8 @@ import {
   AgentEvent,
   AgentName,
   BranchId,
+  type CredentialReceipt,
+  CredentialSlot,
   dateFromMillis,
   DEFAULT_AGENT_NAME,
   EventEnvelope,
@@ -166,6 +168,8 @@ const makeHistory = () => {
     readonly retries?: ReadonlyArray<{ readonly at: number; readonly delayMs: number }>
     /** The extension profile the request ran on. */
     readonly profileRevision?: string
+    /** The credential the request went out with. */
+    readonly credential?: CredentialReceipt
   }) => {
     at(
       opts.start,
@@ -191,6 +195,7 @@ const makeHistory = () => {
         costUsd: opts.costUsd ?? 0.05,
         child: opts.child,
         cacheWritesByLifetime: opts.cacheWritesByLifetime,
+        credential: opts.credential,
       }),
     )
   }
@@ -625,6 +630,43 @@ describe("scanCacheMisses", () => {
         profileRevision: "profile-b",
       })
       expect(onlyMiss(scanCacheMisses(history.envelopes)).cause._tag).toBe("PrefixChanged")
+    }),
+  )
+
+  it.live("a step on another account is a cold cache with its cause, not a changed prefix", () =>
+    Effect.sync(() => {
+      const receipt = (slot: string, signedInAt: number): CredentialReceipt => ({
+        provider: ProviderId.make("anthropic"),
+        slot: CredentialSlot.make(slot),
+        signedInAt,
+      })
+      const across = (first: CredentialReceipt, second: CredentialReceipt) => {
+        const history = makeHistory()
+        history.input(0, "t1")
+        history.step({
+          start: 1 * SECOND,
+          end: 10 * SECOND,
+          turn: "t1",
+          usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+          credential: first,
+        })
+        history.input(20 * SECOND, "t2")
+        history.step({
+          start: 21 * SECOND,
+          end: 30 * SECOND,
+          turn: "t2",
+          usage: missedStep,
+          credential: second,
+        })
+        return onlyMiss(scanCacheMisses(history.envelopes))
+      }
+      const moved = across(receipt("default", 1), receipt("personal", 2))
+      expect(moved.cause).toEqual({ _tag: "CredentialMove", from: "default", to: "personal" })
+      expect(missText(moved, 0)).toStartWith("cache miss after a move from default to personal")
+      const again = across(receipt("default", 1), receipt("default", 5))
+      expect(missText(again, 0)).toStartWith("cache miss after default signed in again")
+      // One account, one stamp: the prefix itself changed.
+      expect(across(receipt("default", 1), receipt("default", 1)).cause._tag).toBe("PrefixChanged")
     }),
   )
 
@@ -1608,6 +1650,32 @@ describe("cache scan refresh", () => {
     })
     // Without its StreamEnded the second request is still running.
     expect(refreshAfter(history.envelopes.slice(0, -1))).toEqual(Option.some(MINUTE + SECOND))
+  })
+
+  test("a request on another account restarts the clock: its cache is the one it wrote", () => {
+    const receipt = (slot: string, signedInAt: number): CredentialReceipt => ({
+      provider: ProviderId.make("anthropic"),
+      slot: CredentialSlot.make(slot),
+      signedInAt,
+    })
+    const history = makeHistory()
+    history.input(0, "t1")
+    history.step({
+      start: SECOND,
+      end: 10 * SECOND,
+      turn: "t1",
+      usage: { inputTokens: 30_000, cacheWriteTokens: 30_000 },
+      credential: receipt("default", 1),
+    })
+    history.input(MINUTE, "t2")
+    history.step({
+      start: MINUTE + SECOND,
+      end: 2 * MINUTE,
+      turn: "t2",
+      usage: { inputTokens: 31_000, cacheWriteTokens: 31_000 },
+      credential: receipt("personal", 2),
+    })
+    expect(refreshAfter(history.envelopes)).toEqual(Option.some(MINUTE + SECOND))
   })
 
   test("a compaction clears the clock until the next request goes out", () => {

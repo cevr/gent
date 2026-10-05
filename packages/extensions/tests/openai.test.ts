@@ -1530,6 +1530,29 @@ describe("OpenAI cache routing", () => {
     }),
   )
 
+  it.live("a label that holds another sign-in is never answered by the warm cell of the last", () =>
+    Effect.gen(function* () {
+      const { driver } = yield* makeDriver()
+      const signIn = (access: string, signedInAt: number): ProviderAuthInfo =>
+        ProviderAuthInfo.cases.Oauth.make({
+          update: updateOf(
+            oauthInfo({ access, refresh: `${access}-refresh`, expires: FAR_FUTURE_MS }),
+          ),
+          signedInAt,
+        })
+      const sent = (authInfo: ProviderAuthInfo) =>
+        Effect.gen(function* () {
+          const fetchState = makeFakeFetchState()
+          yield* runOne(yield* driver.resolveModel("gpt-5.4", authInfo), fetchState)
+          return fetchState.captured.at(-1)?.headers["authorization"]
+        })
+      // A request warms the cell with the first account; within the cell's
+      // lifetime another credential is renamed into the label, with its own stamp.
+      expect(yield* sent(signIn("fake-first", 1))).toBe("Bearer fake-first")
+      expect(yield* sent(signIn("fake-second", 2))).toBe("Bearer fake-second")
+    }),
+  )
+
   // An effort change rides as a `configuration_update` item; the top level
   // keeps the effort the conversation ran at before the change.
   it.live(

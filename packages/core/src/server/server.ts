@@ -86,7 +86,9 @@ import {
   type SendMessageInput,
   SessionSnapshot,
   SessionView,
+  type RenameAuthKeyInput,
   type SetAuthKeyInput,
+  type SetAuthOrderInput,
   type SetDriverOverrideInput,
   SlashCommandInfo,
   type SubscribeEventsInput,
@@ -138,6 +140,8 @@ import {
   listCatalogProviders,
   makeExtensionModels,
   removeSignIn,
+  renameSignIn,
+  signInEntries,
   storeSignIn,
   type ModelCatalogFailure,
   ModelCatalogRecord,
@@ -1899,6 +1903,40 @@ const RpcHandlers = GentRpcs.toLayer(
           removeSignIn(provider, slot).pipe(
             Effect.mapError((error) => authPersistenceError("delete", provider, error)),
           ),
+        ),
+
+      // The order follows the label: a turn walks the renamed credential
+      // where it walked the old one. Only the user file's own order is
+      // relabeled; a project order is never copied into it.
+      "auth.renameKey": ({ provider, from, to, sessionId }: RenameAuthKeyInput) =>
+        inSessionProfile(
+          sessionId,
+          Effect.gen(function* () {
+            yield* renameSignIn(provider, from, to).pipe(
+              Effect.mapError(
+                (error) => new ProviderAuthError({ message: error.message, cause: error }),
+              ),
+            )
+            const held = yield* signInEntries(provider)
+            yield* configService.renameAuthSlot(held.owner, held.keys, from, to)
+          }),
+        ),
+
+      // One entry holds a sign-in's order: the owner's in the user config.
+      // A project entry shadows it key by key: the write is refused, with
+      // the entries that win named, before the user file changes.
+      "auth.setOrder": ({ provider, order, sessionId }: SetAuthOrderInput) =>
+        inSessionProfile(
+          sessionId,
+          Effect.gen(function* () {
+            const held = yield* signInEntries(provider)
+            const cwd = Option.getOrElse(yield* sessionCwd(sessionId), () => runtimeEnvironment.cwd)
+            const shadowing = yield* configService.setAuthOrder(held.owner, order, held.keys, cwd)
+            if (shadowing.length === 0) return
+            return yield* new ProviderAuthError({
+              message: `The project config (.gent/config.json) has an entry for ${shadowing.map((id) => `"${id}"`).join(", ")}, which wins over the user config's authOrder: edit it there`,
+            })
+          }),
         ),
 
       "auth.listMethods": ({ sessionId }: ListAuthMethodsInput) =>

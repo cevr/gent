@@ -5,9 +5,11 @@ import {
   AgentEvent,
   cacheWriteRate,
   coldHandoffPays,
+  type CredentialReceipt,
   type EventEnvelope,
   type Model,
   promptCacheTtlMsFor,
+  sameCredential,
 } from "@gent/core/protocol"
 import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import {
@@ -71,6 +73,14 @@ const MISS_GLYPH = "◌"
 export const CacheMissCause = Schema.TaggedUnion({
   /** The step ran on another model; its cache holds nothing of this prefix. */
   ModelSwitch: {},
+  /**
+   * The step went out with another credential of the sign-in (the order
+   * moved past a refused one, or the reader reordered it): another account's
+   * cache holds nothing of this prefix.
+   */
+  CredentialMove: { from: Schema.String, to: Schema.String },
+  /** The credential was signed in again or replaced: the new account's cache starts empty. */
+  SignedInAgain: { slot: Schema.String },
   /** Same model inside the cache lifetime, on a provider that writes its cache: the prefix itself changed. */
   PrefixChanged: {},
   /**
@@ -128,6 +138,13 @@ interface ScannedMiss extends Omit<CacheMiss, "cause"> {
   readonly sinceRefreshMs: number
   /** The step ran on another model than the previous one; its cache holds nothing of the prefix. */
   readonly modelSwitch: boolean
+  /**
+   * The step went out on another account than the previous one: another
+   * credential, or the same one signed in again. None when both requests
+   * name one account, or either names none.
+   */
+  readonly accountMove: Option.Option<CacheMissCause>
+
   /** The model reported cache writes: it holds a written prefix for the lifetime. */
   readonly explicitCache: boolean
   /** Both requests name their extension profile, and the two differ. */
@@ -152,6 +169,7 @@ export const resolveMiss = (
   const {
     sinceRefreshMs,
     modelSwitch,
+    accountMove,
     explicitCache,
     extensionsChanged,
     lapse,
@@ -170,16 +188,38 @@ export const resolveMiss = (
     CacheMissCause.cases.ModelSwitch.make({}),
     () => modelSwitch,
   )
+  // Another account's cache is cold whatever the lifetime: the move is the
+  // cause, never a changed prefix.
   return Option.map(
-    Option.orElse(switched, () => cause),
+    Option.orElse(switched, () => Option.orElse(accountMove, () => cause)),
     (value) => ({ ...miss, cause: value }),
   )
 }
+
+/**
+ * Why a request on `now` cannot read the cache `before` wrote: another
+ * credential, or the same one signed in again (its stamp moved). None for one
+ * account, or when either request names no credential.
+ */
+const accountMoveCause = (
+  before: Option.Option<CredentialReceipt>,
+  now: Option.Option<CredentialReceipt>,
+): Option.Option<CacheMissCause> =>
+  Option.flatMap(Option.all([before, now]), ([prior, next]) => {
+    if (sameCredential(prior, next)) return Option.none()
+    if (prior.provider === next.provider && prior.slot === next.slot)
+      return Option.some(CacheMissCause.cases.SignedInAgain.make({ slot: next.slot }))
+    return Option.some(
+      CacheMissCause.cases.CredentialMove.make({ from: prior.slot, to: next.slot }),
+    )
+  })
 
 /** The last request that reported usage: everything in its prompt should read back. */
 interface CachedRequest {
   readonly promptTokens: number
   readonly model: string
+  /** The credential it went out with; none on a row written before receipts. */
+  readonly credential: Option.Option<CredentialReceipt>
   /** The extension profile it ran on; none on a row written before the field. */
   readonly profileRevision: Option.Option<string>
   /**
@@ -363,6 +403,7 @@ export const makeCacheScan = (): CacheScan => {
     const cacheReadTokens = usage.value.cacheReadTokens ?? 0
     const cacheWriteTokens = usage.value.cacheWriteTokens ?? 0
     const model = event.model ?? ""
+    const credential = Option.fromUndefinedOr(event.credential)
     const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
     if (reported) cacheReported = true
@@ -389,6 +430,7 @@ export const makeCacheScan = (): CacheScan => {
           billed: (event.costUsd ?? 0) > 0,
           sinceRefreshMs,
           modelSwitch: model !== prior.model,
+          accountMove: accountMoveCause(prior.credential, credential),
           explicitCache: writers.has(model),
           extensionsChanged: Option.isSome(
             Option.filter(
@@ -404,6 +446,7 @@ export const makeCacheScan = (): CacheScan => {
     previous = Option.some({
       promptTokens,
       model,
+      credential,
       profileRevision: begun.profileRevision,
       reportedCache: reported || Option.exists(previous, (prior) => prior.reportedCache),
     })
@@ -686,6 +729,8 @@ export const showsMissRow = (miss: CacheMiss, costUsd: number): boolean =>
 
 const causeText = CacheMissCause.match({
   ModelSwitch: () => "cache miss after model switch",
+  CredentialMove: (cause) => `cache miss after a move from ${cause.from} to ${cause.to}`,
+  SignedInAgain: (cause) => `cache miss after ${cause.slot} signed in again`,
   PrefixChanged: () => "cache miss: prefix changed",
   ExtensionsChanged: () => "cache miss after an extension change",
   Response: (cause) => `cache expired during a ${formatAge(cause.ms)} response`,

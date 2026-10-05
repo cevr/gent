@@ -292,6 +292,36 @@ export const DeleteAuthKeyInput = Schema.Struct({
 })
 export type DeleteAuthKeyInput = typeof DeleteAuthKeyInput.Type
 
+/**
+ * A named credential to give another label, read in the session's profile.
+ * The `default` label is fixed; a label in use, or one with no credential,
+ * fails and moves nothing. The sign-in's `authOrder` follows the new label.
+ */
+export const RenameAuthKeyInput = Schema.Struct({
+  provider: Schema.String,
+  from: CredentialSlot,
+  to: CredentialSlot,
+  sessionId: SessionId,
+})
+export type RenameAuthKeyInput = typeof RenameAuthKeyInput.Type
+
+/**
+ * A sign-in's credential order, written to the user config entry of the
+ * driver that owns the sign-in, as the session's profile resolves it. An
+ * empty order clears it: the default credential serves alone. A project
+ * config entry that still names another order fails the call, naming it.
+ */
+export const SetAuthOrderInput = Schema.Struct({
+  provider: Schema.String,
+  order: Schema.Array(CredentialSlot).check(
+    Schema.makeFilter((slots) => new Set(slots).size === slots.length, {
+      message: "credential slots must be distinct",
+    }),
+  ),
+  sessionId: SessionId,
+})
+export type SetAuthOrderInput = typeof SetAuthOrderInput.Type
+
 /** The session whose profile's drivers answer. */
 const ListAuthMethodsInput = Schema.Struct({ sessionId: SessionId })
 export type ListAuthMethodsInput = typeof ListAuthMethodsInput.Type
@@ -611,6 +641,14 @@ class AuthRpcs extends RpcGroup.make(
   }),
   Rpc.make("deleteKey", {
     payload: DeleteAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("renameKey", {
+    payload: RenameAuthKeyInput.fields,
+    error: GentRpcError,
+  }),
+  Rpc.make("setOrder", {
+    payload: SetAuthOrderInput.fields,
     error: GentRpcError,
   }),
   Rpc.make("listMethods", {

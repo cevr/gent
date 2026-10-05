@@ -894,8 +894,10 @@ describe("turn reverts", () => {
     30_000,
   )
 
+  // A delegated child works after its parent's turn ends, in its own session:
+  // the turn's row, its patch and its revert all count the child's edits.
   it.live(
-    "a child's edits made after its parent's turn revert with that turn; another top-level session's edits are kept",
+    "a child's edits made after its parent's turn count in that turn's row and patch and revert with it; another top-level session's edits are kept",
     () =>
       timed(
         Effect.gen(function* () {
@@ -908,6 +910,8 @@ describe("turn reverts", () => {
             textStep("child 1"),
             put("other.txt", "other\n"),
             textStep("other 1"),
+            put("b.txt", "bee\n"),
+            textStep("done 2"),
           ])
           yield* session.turn("change a", "done 1")
           const child = yield* session.client.session.create({
@@ -918,8 +922,31 @@ describe("turn reverts", () => {
           yield* session.at(child).turn("child work", "child 1")
           const other = yield* session.client.session.create({ cwd: repo })
           yield* session.at(other).turn("other work", "other 1")
-          const outcome = yield* session.revert("revert-1", filesOf(1))
-          expect(outcome).toEqual({ _tag: "Reverted", files: ["a.txt", "child.txt"] })
+          const counts = (row: CheckpointList["turns"][number]) => [
+            row.prompt,
+            row.files,
+            row.insertions,
+            row.deletions,
+          ]
+          const alone = yield* session.list
+          expect(alone.turns.map(counts)).toEqual([["change a", 2, 2, 1]])
+          const patch = yield* session.patch(1)
+          expect(patch.patch).toContain("b/a.txt")
+          expect(patch.patch).toContain("b/child.txt")
+          expect(patch.patch).not.toContain("other.txt")
+          // A newer turn ends the older turn's row: each row counts its own share.
+          yield* session.turn("add b", "done 2")
+          const listed = yield* session.list
+          expect(listed.turns.map(counts)).toEqual([
+            ["add b", 1, 1, 0],
+            ["change a", 2, 2, 1],
+          ])
+          expect(yield* session.revert("revert-1", filesOf(1))).toEqual({
+            _tag: "Reverted",
+            files: ["b.txt"],
+          })
+          const older = yield* session.revert("revert-2", filesOf(2))
+          expect(older).toEqual({ _tag: "Reverted", files: ["a.txt", "child.txt"] })
           expect(yield* contentOf(repo, "child.txt")).toBe("<absent>")
           expect(yield* contentOf(repo, "other.txt")).toBe("other")
         }),

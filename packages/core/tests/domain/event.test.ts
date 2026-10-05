@@ -19,7 +19,7 @@ import {
   TurnCompleted,
 } from "../../src/domain/event"
 import { ProviderId } from "../../src/domain/agent"
-import { CredentialSlot } from "../../src/domain/driver"
+import { CredentialSlot, sameCredential } from "../../src/domain/driver"
 import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
@@ -65,6 +65,27 @@ test("a step end from before credential receipts decodes, and a receipt survives
   }
   const received = StreamEnded.make({ ...historical, credential })
   expect(decode(encode(received)).credential).toEqual(credential)
+  const stamped = { ...credential, signedInAt: 1_000 }
+  expect(
+    decode(encode(StreamEnded.make({ ...historical, credential: stamped }))).credential,
+  ).toEqual(stamped)
+})
+
+test("one credential is the same sign-in: a rename keeps it, a new sign-in on the slot does not", () => {
+  const anthropic = ProviderId.make("anthropic")
+  const personal = { provider: anthropic, slot: CredentialSlot.make("personal") }
+  const work = { provider: anthropic, slot: CredentialSlot.make("work") }
+  // A receipt from before the stamp compares by slot.
+  expect(sameCredential(personal, personal)).toBe(true)
+  expect(sameCredential(personal, work)).toBe(false)
+  expect(sameCredential(personal, { ...personal, signedInAt: 1_000 })).toBe(true)
+  expect(
+    sameCredential({ ...personal, signedInAt: 1_000 }, { ...personal, signedInAt: 2_000 }),
+  ).toBe(false)
+  expect(sameCredential({ ...personal, signedInAt: 1_000 }, { ...work, signedInAt: 1_000 })).toBe(
+    true,
+  )
+  expect(sameCredential(personal, { ...personal, provider: ProviderId.make("openai") })).toBe(false)
 })
 
 describe("event session routing", () => {

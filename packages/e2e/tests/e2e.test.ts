@@ -89,7 +89,8 @@ describe("E2E: Auth", () => {
         yield* ptyWaitFor(ctx, "Claude Code", { timeout: 10_000 })
         yield* ptyWaitFor(ctx, "Manually enter API key", { timeout: 10_000 })
         expect(ctx.output).toContain("· method")
-        ctx.pty.write(keys.up)
+        // The rows end in "+ Add credential", so the key entry is one down.
+        ctx.pty.write(keys.down)
         // The selection moves in a repaint; Enter goes to the row it lands on.
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys.enter)

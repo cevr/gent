@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-import { Effect, Fiber, Match, Option, Schema } from "effect"
+import { Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import {
   AuthAuthorization,
   AuthMethod,
   authMethodAppliesTo,
   AuthPrompt,
   AuthProviderInfo,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   type SessionId,
 } from "@gent/core/protocol"
 import {
@@ -25,6 +27,7 @@ import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"
 import {
   ChromePanel,
+  decoration,
   EraseUnit,
   eraseKey,
   eraseText,
@@ -100,28 +103,50 @@ interface AuthCatalog {
 const emptyCatalog: AuthCatalog = { providers: [], others: [], methods: {} }
 
 /**
- * The four screens.
+ * The screens.
  *
  * `List` is the pane at rest — the provider picker, and the screen every
- * failure and every completed action returns to. `Method` names the
- * provider a reader chose. `Key` and `OAuth` are the two ways a provider
- * is authorised, and each holds the text the reader types into it.
+ * failure and every completed action returns to. `Credentials` lists one
+ * provider's credentials in the order a turn walks them. `Label` names a
+ * new credential, or gives one another name (`renaming`). `Method` names
+ * the provider a reader chose. `Key`, `Inputs` and `OAuth` are the ways a
+ * provider is authorised, and each holds the text the reader types into it.
+ *
+ * `slot` is the credential a sign-in screen is for; absent means the
+ * default one.
  *
  * `Key` asks the key, then each of its method's `prompts` in turn, on one
  * line: `entered` holds the fields already answered (the key first), and
- * `value` the one the line shows now.
+ * `value` the one the line shows now. `Inputs` asks an OAuth method's
+ * `prompts` the same way before the sign-in starts.
  */
 const AuthScreen = Schema.TaggedUnion({
   List: {},
-  Method: { provider: Schema.String },
+  Credentials: { provider: Schema.String },
+  Label: {
+    provider: Schema.String,
+    value: Schema.String,
+    renaming: Schema.optional(CredentialSlot),
+  },
+  Method: { provider: Schema.String, slot: Schema.optional(CredentialSlot) },
   Key: {
     provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
     value: Schema.String,
     prompts: Schema.Array(AuthPrompt),
     entered: Schema.Array(Schema.String),
   },
+  Inputs: {
+    provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
+    methodIndex: Schema.Finite,
+    method: AuthMethod,
+    value: Schema.String,
+    entered: Schema.Array(Schema.String),
+  },
   OAuth: {
     provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
     methodIndex: Schema.Finite,
     method: AuthMethod,
     authorization: AuthAuthorization,
@@ -137,6 +162,10 @@ type AuthScreen = Schema.Schema.Type<typeof AuthScreen>
 type OAuthScreen = Extract<AuthScreen, { readonly _tag: "OAuth" }>
 /** The key screen: an API key, then its method's prompts. */
 type KeyScreen = Extract<AuthScreen, { readonly _tag: "Key" }>
+/** The inputs screen: an OAuth method's prompts, before its sign-in starts. */
+type InputsScreen = Extract<AuthScreen, { readonly _tag: "Inputs" }>
+/** The label screen: a new credential's label, or another name for one. */
+type LabelScreen = Extract<AuthScreen, { readonly _tag: "Label" }>
 
 /** The prompt the key line asks now; none while it asks for the key itself. */
 const keyPrompt = (screen: KeyScreen): Option.Option<AuthPrompt> =>
@@ -147,6 +176,22 @@ const keyPrompt = (screen: KeyScreen): Option.Option<AuthPrompt> =>
 
 /** True while a prompt follows the field the line shows. */
 const promptFollows = (screen: KeyScreen): boolean => screen.entered.length < screen.prompts.length
+
+/** The OAuth method's prompts; a method without any has none to ask. */
+const inputPrompts = (screen: InputsScreen): ReadonlyArray<AuthPrompt> =>
+  screen.method.prompts ?? []
+
+/** The prompt the inputs line asks now. */
+const inputPrompt = (screen: InputsScreen): Option.Option<AuthPrompt> =>
+  Option.fromUndefinedOr(inputPrompts(screen)[screen.entered.length])
+
+/** True while a prompt follows the one the inputs line asks. */
+const inputFollows = (screen: InputsScreen): boolean =>
+  screen.entered.length + 1 < inputPrompts(screen).length
+
+/** The slot a sign-in screen is for: its own, else the default. */
+const slotOf = (screen: { readonly slot?: CredentialSlot }): CredentialSlot =>
+  screen.slot ?? DEFAULT_CREDENTIAL_SLOT
 
 export interface AuthState {
   /**
@@ -193,25 +238,47 @@ export const AuthEvent = Schema.TaggedUnion({
   },
   /** A load or an action failed; the pane falls back to the list and says why. */
   Failed: { error: Schema.String },
-  /** A provider was chosen from the list. */
-  OpenMethod: { provider: Schema.String },
-  /** An `api` method was chosen: type a key, then answer its prompts. */
-  OpenKey: { provider: Schema.String, prompts: Schema.Array(AuthPrompt) },
   /**
-   * Enter on the key line while a prompt follows: the text is kept and the
-   * next prompt opens empty. A blank key does not go on.
+   * The server refused a change made on a screen that stays open (a label in
+   * use, an order a project entry overrides): the screen says why.
+   */
+  Refused: { error: Schema.String },
+  /** A provider with credentials besides its default was chosen, or a credential screen ended. */
+  OpenCredentials: { provider: Schema.String },
+  /** A new credential is named, or `renaming` is given another name. */
+  OpenLabel: { provider: Schema.String, renaming: Schema.optional(CredentialSlot) },
+  /** A provider, or one of its credentials, was chosen: its sign-in methods. */
+  OpenMethod: { provider: Schema.String, slot: Schema.optional(CredentialSlot) },
+  /** An `api` method was chosen: type a key, then answer its prompts. */
+  OpenKey: {
+    provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
+    prompts: Schema.Array(AuthPrompt),
+  },
+  /** An `oauth` method with prompts was chosen: answer them, then sign in. */
+  OpenInputs: {
+    provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
+    methodIndex: Schema.Finite,
+    method: AuthMethod,
+  },
+  /**
+   * Enter on the key or inputs line while a prompt follows: the text is kept
+   * and the next prompt opens empty. A blank key, or a blank answer a prompt
+   * needs, does not go on.
    */
   Next: {},
   /** An `oauth` method returned an authorization to complete. */
   OpenOAuth: {
     provider: Schema.String,
+    slot: Schema.optional(CredentialSlot),
     methodIndex: Schema.Finite,
     method: AuthMethod,
     authorization: AuthAuthorization,
   },
-  /** Text typed or pasted into whichever of `Key` / `OAuth` is open. */
+  /** Text typed or pasted into whichever of `Label` / `Key` / `Inputs` / `OAuth` is open. */
   Type: { text: Schema.String },
-  /** Backspace, ctrl+w or ctrl+u in whichever of `Key` / `OAuth` is open. */
+  /** Backspace, ctrl+w or ctrl+u in whichever of `Label` / `Key` / `Inputs` / `OAuth` is open. */
   Erase: { unit: EraseUnit },
   /** The browser leg of an `auto` flow failed; fall back to pasting a code. */
   OAuthAutoFailed: { error: Schema.String },
@@ -224,8 +291,10 @@ export const AuthEvent = Schema.TaggedUnion({
   Close: {},
   /**
    * Escape, one step: a prompt goes to the field before it, with its text; a
-   * sign-in screen goes to its provider's methods, the methods go to the
-   * list. The error clears.
+   * sign-in screen goes to its provider's methods; the methods and a label go
+   * to the provider's credentials when it lists them, else the methods go to
+   * the list and a label to the methods; the credentials go to the list. The
+   * error clears.
    */
   Back: {},
 })
@@ -237,21 +306,54 @@ const list = (state: AuthState, error: Option.Option<string>): AuthState => ({
   error,
 })
 
-const methods = (state: AuthState, provider: string): AuthState => ({
+const methods = (state: AuthState, provider: string, slot?: CredentialSlot): AuthState => ({
   ...state,
-  screen: AuthScreen.cases.Method.make({ provider }),
+  screen: AuthScreen.cases.Method.make({ provider, ...omitUndefined({ slot }) }),
   error: Option.none(),
 })
+
+const credentials = (state: AuthState, provider: string): AuthState => ({
+  ...state,
+  screen: AuthScreen.cases.Credentials.make({ provider }),
+  error: Option.none(),
+})
+
+/** Whether a sign-in names config entries with conflicting orders. */
+const hasOrderConflict = (entry: AuthProviderInfo): boolean =>
+  Option.exists(Option.fromUndefinedOr(entry.orderConflict), (ids) => ids.length > 0)
+
+/**
+ * Whether a sign-in opens on its credentials: it has more than its default,
+ * or its config names conflicting orders, which only a written order ends.
+ */
+const opensCredentials = (entry: AuthProviderInfo): boolean =>
+  Predicate.isNotUndefined(entry.credentials) || hasOrderConflict(entry)
+
+const listsCredentials = (state: AuthState, provider: string): boolean =>
+  Option.exists(
+    Option.flatMap(state.catalog, (catalog) => providerFor(catalog, provider)),
+    opensCredentials,
+  )
 
 /** Typing and backspace apply to whichever screen holds text. */
 const editText = (state: AuthState, edit: (current: string) => string): AuthState =>
   Match.value(state.screen).pipe(
     Match.tagsExhaustive({
       List: () => state,
+      Credentials: () => state,
       Method: () => state,
+      Label: (screen) => ({
+        ...state,
+        screen: AuthScreen.cases.Label.make({ ...screen, value: edit(screen.value) }),
+        error: Option.none(),
+      }),
       Key: (screen) => ({
         ...state,
         screen: AuthScreen.cases.Key.make({ ...screen, value: edit(screen.value) }),
+      }),
+      Inputs: (screen) => ({
+        ...state,
+        screen: AuthScreen.cases.Inputs.make({ ...screen, value: edit(screen.value) }),
       }),
       OAuth: (screen) => ({
         ...state,
@@ -259,6 +361,91 @@ const editText = (state: AuthState, edit: (current: string) => string): AuthStat
       }),
     }),
   )
+
+/** Enter on a line that asks one prompt after another: keep the text, open the next. */
+const nextField = (state: AuthState): AuthState =>
+  Match.value(state.screen).pipe(
+    Match.tags({
+      Key: (screen) => {
+        if (!promptFollows(screen)) return state
+        if (screen.entered.length === 0 && screen.value.trim() === "") return state
+        return {
+          ...state,
+          screen: AuthScreen.cases.Key.make({
+            ...screen,
+            value: "",
+            entered: [...screen.entered, screen.value],
+          }),
+        }
+      },
+      Inputs: (screen) => {
+        if (!inputFollows(screen)) return state
+        const needed = Option.exists(inputPrompt(screen), (prompt) => prompt.optional !== true)
+        if (needed && screen.value.trim() === "") return state
+        return {
+          ...state,
+          screen: AuthScreen.cases.Inputs.make({
+            ...screen,
+            value: "",
+            entered: [...screen.entered, screen.value],
+          }),
+        }
+      },
+    }),
+    Match.orElse(() => state),
+  )
+
+/** Escape on the screen open now: one step back (`AuthEvent.Back`). */
+const backFrom = (state: AuthState): AuthState => {
+  /** The provider's own screen: its credentials when the catalog lists them, else `orElse`. */
+  const home = (provider: string, orElse: () => AuthState) => {
+    if (listsCredentials(state, provider)) return credentials(state, provider)
+    return orElse()
+  }
+  /** The field before the one a line asks now, with its text, or `first` at the first field. */
+  const previousField = (
+    screen: KeyScreen | InputsScreen,
+    rebuild: (fields: {
+      readonly value: string
+      readonly entered: ReadonlyArray<string>
+    }) => AuthScreen,
+    first: () => AuthState,
+  ) =>
+    Option.match(Option.fromUndefinedOr(screen.entered.at(-1)), {
+      onNone: first,
+      onSome: (before) => ({
+        ...state,
+        screen: rebuild({ value: before, entered: screen.entered.slice(0, -1) }),
+        error: Option.none(),
+      }),
+    })
+  return Match.value(state.screen).pipe(
+    Match.tags({
+      Credentials: () => list(state, Option.none()),
+      Label: (screen) => home(screen.provider, () => methods(state, screen.provider)),
+      // A new credential's methods go back to the default's, where it was added.
+      Method: (screen) =>
+        home(screen.provider, () => {
+          if (slotOf(screen) === DEFAULT_CREDENTIAL_SLOT) return list(state, Option.none())
+          return methods(state, screen.provider)
+        }),
+      Key: (screen) =>
+        previousField(
+          screen,
+          (fields) => AuthScreen.cases.Key.make({ ...screen, ...fields }),
+          () => methods(state, screen.provider, screen.slot),
+        ),
+      Inputs: (screen) =>
+        previousField(
+          screen,
+          (fields) => AuthScreen.cases.Inputs.make({ ...screen, ...fields }),
+          () => methods(state, screen.provider, screen.slot),
+        ),
+      OAuth: (screen) => methods(state, screen.provider, screen.slot),
+    }),
+    Match.orElse(() => list(state, Option.none())),
+  )
+}
 
 export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
   const apply: (event: AuthEvent) => AuthState = Match.type<AuthEvent>().pipe(
@@ -281,34 +468,47 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         }),
       }),
       Failed: (event) => list(state, Option.some(event.error)),
-      OpenMethod: (event) => methods(state, event.provider),
+      Refused: (event) => ({ ...state, error: Option.some(event.error) }),
+      OpenCredentials: (event) => credentials(state, event.provider),
+      OpenLabel: (event) => ({
+        ...state,
+        screen: AuthScreen.cases.Label.make({
+          provider: event.provider,
+          value: event.renaming ?? "",
+          ...omitUndefined({ renaming: event.renaming }),
+        }),
+        error: Option.none(),
+      }),
+      OpenMethod: (event) => methods(state, event.provider, event.slot),
       OpenKey: (event) => ({
         ...state,
         screen: AuthScreen.cases.Key.make({
           provider: event.provider,
+          ...omitUndefined({ slot: event.slot }),
           value: "",
           prompts: event.prompts,
           entered: [],
         }),
         error: Option.none(),
       }),
-      Next: () => {
-        const screen = state.screen
-        if (screen._tag !== "Key" || !promptFollows(screen)) return state
-        if (screen.entered.length === 0 && screen.value.trim() === "") return state
-        return {
-          ...state,
-          screen: AuthScreen.cases.Key.make({
-            ...screen,
-            value: "",
-            entered: [...screen.entered, screen.value],
-          }),
-        }
-      },
+      OpenInputs: (event) => ({
+        ...state,
+        screen: AuthScreen.cases.Inputs.make({
+          provider: event.provider,
+          ...omitUndefined({ slot: event.slot }),
+          methodIndex: event.methodIndex,
+          method: event.method,
+          value: "",
+          entered: [],
+        }),
+        error: Option.none(),
+      }),
+      Next: () => nextField(state),
       OpenOAuth: (event) => ({
         ...state,
         screen: AuthScreen.cases.OAuth.make({
           provider: event.provider,
+          ...omitUndefined({ slot: event.slot }),
           methodIndex: event.methodIndex,
           method: event.method,
           authorization: event.authorization,
@@ -336,49 +536,154 @@ export function transitionAuth(state: AuthState, event: AuthEvent): AuthState {
         }
       },
       Close: () => list(state, Option.none()),
-      Back: () =>
-        Match.value(state.screen).pipe(
-          Match.tags({
-            Key: (screen) =>
-              Option.match(Option.fromUndefinedOr(screen.entered.at(-1)), {
-                onNone: () => methods(state, screen.provider),
-                onSome: (before) => ({
-                  ...state,
-                  screen: AuthScreen.cases.Key.make({
-                    ...screen,
-                    value: before,
-                    entered: screen.entered.slice(0, -1),
-                  }),
-                  error: Option.none(),
-                }),
-              }),
-            OAuth: (screen) => methods(state, screen.provider),
-          }),
-          Match.orElse(() => list(state, Option.none())),
-        ),
+      Back: () => backFrom(state),
     }),
   )
   return apply(event)
 }
 
-/** A method keeps its provider position as its RPC address after filtering. */
-interface MethodChoice {
-  readonly index: number
-  readonly method: AuthMethod
-}
+/**
+ * A row of the method screen: a method, which keeps its provider position
+ * as its RPC address after filtering, or the row that names a new credential.
+ */
+const MethodRow = Schema.TaggedUnion({
+  Method: { index: Schema.Finite, method: AuthMethod },
+  Add: {},
+})
+type MethodRow = typeof MethodRow.Type
 
-/** The choices usable by the current default-target picker, in provider order. */
-const methodsFor = (catalog: AuthCatalog, provider: string): ReadonlyArray<MethodChoice> => {
+/** The methods that sign `slot` in, in provider order. */
+const methodsFor = (
+  catalog: AuthCatalog,
+  provider: string,
+  slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT,
+): ReadonlyArray<Extract<MethodRow, { readonly _tag: "Method" }>> => {
   const offered = Option.getOrElse(
     Option.fromNullishOr(catalog.methods[provider]),
     (): ReadonlyArray<AuthMethod> => [],
   )
   return offered.flatMap((method, index) => {
-    const choice = { index, method }
-    if (authMethodAppliesTo(method)) return [choice]
+    if (authMethodAppliesTo(method, slot)) return [MethodRow.cases.Method.make({ index, method })]
     return []
   })
 }
+
+/** Any label but the default's: the methods a named credential can sign in with. */
+const NAMED_PROBE = CredentialSlot.make("named")
+
+/** Whether `provider` can take a credential besides its default. */
+const takesNamed = (catalog: AuthCatalog, provider: string): boolean =>
+  methodsFor(catalog, provider, NAMED_PROBE).length > 0
+
+/** One of a provider's credentials, as the server lists it. */
+type CredentialInfo = NonNullable<AuthProviderInfo["credentials"]>[number]
+
+/**
+ * A row of the credentials screen: a credential, with its place in the
+ * order a turn walks (1 first; absent when the order leaves it out), or the
+ * row that names a new one.
+ */
+const CredentialRow = Schema.TaggedUnion({
+  Credential: {
+    slot: CredentialSlot,
+    hasKey: Schema.Boolean,
+    source: Schema.optional(Schema.String),
+    authType: Schema.optional(Schema.String),
+    missing: Schema.optional(Schema.Array(Schema.String)),
+    position: Schema.optional(Schema.Finite),
+  },
+  Add: {},
+})
+type CredentialRow = typeof CredentialRow.Type
+type CredentialEntry = Extract<CredentialRow, { readonly _tag: "Credential" }>
+
+/** The order a turn walks `provider`'s credentials in: the server's, else the default alone. */
+const orderOf = (provider: AuthProviderInfo): ReadonlyArray<CredentialSlot> =>
+  provider.authOrder ?? [DEFAULT_CREDENTIAL_SLOT]
+
+/**
+ * `provider`'s credentials in the order a turn walks them, then the ones the
+ * order leaves out. A provider the server lists no credentials for has its
+ * default alone, read from its own row.
+ */
+export const credentialEntries = (provider: AuthProviderInfo): ReadonlyArray<CredentialEntry> => {
+  const listed: ReadonlyArray<CredentialInfo> = provider.credentials ?? [
+    {
+      slot: DEFAULT_CREDENTIAL_SLOT,
+      hasKey: provider.hasKey,
+      source: provider.source ?? "none",
+      ...omitUndefined({ authType: provider.authType, missing: provider.missing }),
+    },
+  ]
+  const order = orderOf(provider)
+  const entry = (credential: CredentialInfo, position: Option.Option<number>) =>
+    CredentialRow.cases.Credential.make({
+      ...credential,
+      ...omitUndefined({ position: Option.getOrUndefined(position) }),
+    })
+  const ordered = order.flatMap((slot, index) =>
+    listed.flatMap((credential) => {
+      if (credential.slot !== slot) return []
+      return [entry(credential, Option.some(index + 1))]
+    }),
+  )
+  const rest = listed.flatMap((credential) => {
+    if (order.includes(credential.slot)) return []
+    return [entry(credential, Option.none())]
+  })
+  return [...ordered, ...rest]
+}
+
+/**
+ * The order after `slot` moves one place: up past the credential before it,
+ * down past the one after it. Down from the last place takes it out of the
+ * order, unless it is the only one; up from outside the order puts it last.
+ * None when it cannot move that way.
+ */
+export const movedOrder = (
+  order: ReadonlyArray<CredentialSlot>,
+  slot: CredentialSlot,
+  direction: "up" | "down",
+): Option.Option<ReadonlyArray<CredentialSlot>> => {
+  const index = order.indexOf(slot)
+  if (index < 0) {
+    if (direction === "up") return Option.some([...order, slot])
+    return Option.none()
+  }
+  const next = [...order]
+  if (direction === "up") {
+    if (index === 0) return Option.none()
+    next.splice(index - 1, 2, slot, order[index - 1] ?? slot)
+    return Option.some(next)
+  }
+  if (index === order.length - 1) {
+    if (order.length === 1) return Option.none()
+    return Option.some(order.filter((held) => held !== slot))
+  }
+  next.splice(index, 2, order[index + 1] ?? slot, slot)
+  return Option.some(next)
+}
+
+/**
+ * Why a typed label cannot name a new credential (or the one being renamed):
+ * not a label, the default's, or one `provider` already holds. None when it can.
+ */
+export const labelProblem = (
+  provider: AuthProviderInfo,
+  value: string,
+  renaming: Option.Option<CredentialSlot>,
+): Option.Option<string> => {
+  const label = value.trim()
+  if (Option.isNone(decodeSlot(label)))
+    return Option.some("A label is 1 to 32 of a-z, 0-9, _ and -")
+  if (label === DEFAULT_CREDENTIAL_SLOT) return Option.some("default is the sign-in's own label")
+  if (Option.exists(renaming, (slot) => slot === label)) return Option.none()
+  if (credentialEntries(provider).some((entry) => entry.slot === label))
+    return Option.some(`${label} is in use`)
+  return Option.none()
+}
+
+const decodeSlot = Schema.decodeUnknownOption(CredentialSlot)
 
 /** Every provider the catalog knows: the active ones, then the search's. */
 const allProviders = (catalog: AuthCatalog): ReadonlyArray<AuthProviderInfo> => [
@@ -488,6 +793,11 @@ export function Auth(props: AuthProps) {
   const catalog = () => catalogOf(state())
   /** What the pane calls `provider` ({@link providerLabel}). */
   const label = (provider: string) => providerLabel(allProviders(catalog()), provider)
+  /** A credential as the pane names it: the provider, and its label unless it is the default. */
+  const signInName = (provider: string, slot: CredentialSlot) => {
+    if (slot === DEFAULT_CREDENTIAL_SLOT) return label(provider)
+    return `${label(provider)} · ${slot}`
+  }
   /** The list's typed search: it filters the active providers and finds the rest. */
   const [query, setQuery] = createSignal("")
   /** A provider the search found: no key, env variable or config entry yet. */
@@ -583,6 +893,19 @@ export function Auth(props: AuthProps) {
 
   // ── Loading ───────────────────────────────────────────────────────
 
+  /**
+   * The order the pane wrote last, until a list shows it or the write is
+   * refused: a move made before then (a held key) starts from it.
+   */
+  const [written, setWritten] = createSignal(
+    Option.none<{ readonly provider: string; readonly order: ReadonlyArray<CredentialSlot> }>(),
+  )
+  const currentOrder = (provider: AuthProviderInfo): ReadonlyArray<CredentialSlot> =>
+    Option.match(
+      Option.filter(written(), (held) => held.provider === provider.provider),
+      { onNone: () => orderOf(provider), onSome: (held) => held.order },
+    )
+
   /** `keepScreen`: the answer refreshes the catalog only (`Refreshed`). */
   const loadAuth = (token: ReplyWriter, keepScreen = false) => {
     clientCtx.log.info("auth:load-start")
@@ -599,6 +922,17 @@ export function Auth(props: AuthProps) {
         Effect.tap(([providers, methods, others]) =>
           whileCurrent(token, () => {
             clientCtx.log.info("auth:load-complete", { providers: providers.length })
+            setWritten((held) =>
+              Option.filter(
+                held,
+                (last) =>
+                  !providers.some(
+                    (row) =>
+                      row.provider === last.provider &&
+                      orderOf(row).join("\n") === last.order.join("\n"),
+                  ),
+              ),
+            )
             const catalog = {
               providers: [...providers],
               others: [...others.providers],
@@ -700,6 +1034,153 @@ export function Auth(props: AuthProps) {
     )
   }
 
+  // ── Credentials ───────────────────────────────────────────────────
+
+  /**
+   * A change made on the credentials screen or its label: while it is
+   * current the screen goes back to the provider's credentials, says what
+   * changed, and reads the catalog again with the screen kept. A failure
+   * keeps the screen and says why (`Refused`).
+   */
+  const credentialChanged = (token: ReplyWriter, provider: string, note: string) =>
+    Effect.sync(() => {
+      clientCtx.credentialsChanged()
+      if (!token.live()) {
+        loadAuth(actions.newest(), true)
+        return
+      }
+      send(AuthEvent.cases.OpenCredentials.make({ provider }))
+      flashSuccess(note)
+      loadAuth(token, true)
+    })
+  const refused = (token: ReplyWriter) => (err: UiError) =>
+    Effect.sync(() => setWritten(Option.none())).pipe(
+      Effect.andThen(
+        whileCurrent(token, () => send(AuthEvent.cases.Refused.make({ error: formatError(err) }))),
+      ),
+    )
+
+  /** Write `order` as `provider`'s `authOrder`, the order the next move starts from. */
+  const writeOrder = (provider: string, order: ReadonlyArray<CredentialSlot>) =>
+    Effect.sync(() => setWritten(Option.some({ provider, order }))).pipe(
+      Effect.andThen(clientCtx.client.auth.setOrder({ provider, order: [...order], sessionId })),
+    )
+
+  /**
+   * A credential added in the pane is used: a new label goes last in the
+   * order, after its sign-in. A credential signed in again keeps its place,
+   * or its absence. `isNew` is read before the sign-in, from the catalog.
+   */
+  const newCredential = (provider: string, slot: CredentialSlot): boolean =>
+    slot !== DEFAULT_CREDENTIAL_SLOT &&
+    !Option.exists(providerFor(catalog(), provider), (entry) =>
+      credentialEntries(entry).some((credential) => credential.slot === slot),
+    )
+  const orderAdded = (provider: string, slot: CredentialSlot, isNew: boolean) => {
+    if (!isNew) return Effect.void
+    const order = Option.match(providerFor(catalog(), provider), {
+      onNone: (): ReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
+      onSome: currentOrder,
+    })
+    return writeOrder(provider, [...order, slot])
+  }
+
+  /**
+   * The credential the cursor goes to when the credentials arrive: the one
+   * moved, renamed, or left for its own screen. None opens on the first row.
+   */
+  const [focus, setFocus] = createSignal(Option.none<CredentialSlot>())
+  /** Shift+↑↓: the credential moves one place in the order ({@link movedOrder}). */
+  // A conflicting sign-in takes the order it shows where the move is none:
+  // any one written order ends the conflict.
+  const reorder = (provider: AuthProviderInfo, slot: CredentialSlot, direction: "up" | "down") =>
+    Option.map(
+      Option.orElse(movedOrder(currentOrder(provider), slot, direction), () =>
+        Option.liftPredicate(currentOrder(provider), () => hasOrderConflict(provider)),
+      ),
+      (order) => {
+        setFocus(Option.some(slot))
+        const token = begin()
+        cast(
+          writeOrder(provider.provider, order).pipe(
+            Effect.tap(() =>
+              credentialChanged(token, provider.provider, `Order: ${order.join(", ")}`),
+            ),
+            Effect.catchEager(refused(token)),
+          ),
+        )
+      },
+    )
+
+  /** The second ctrl+x: the stored credential goes, and its place in the order with it. */
+  const deleteCredential = (provider: AuthProviderInfo, entry: CredentialEntry) => {
+    const token = begin()
+    setFocus(Option.none())
+    const order = currentOrder(provider)
+    const keeps = order.filter((slot) => slot !== entry.slot)
+    const inOrder = entry.slot !== DEFAULT_CREDENTIAL_SLOT && keeps.length < order.length
+    // The default keeps its place: with nothing stored it reads the
+    // environment. An order the removal would empty stays as it is: cleared,
+    // it would let the default (which can be a billed environment key) serve
+    // alone, a credential the user left out. Nothing serves until the user
+    // acts, and the notice says so and how.
+    const orderWrite = Option.liftPredicate(keeps, () => inOrder && keeps.length > 0)
+    let removed = `Removed ${entry.slot} from ${label(provider.provider)}`
+    if (inOrder && keeps.length === 0)
+      removed = `${removed}; nothing serves now: shift+↑ on default moves it into the order, or Enter on ${entry.slot} signs it in again`
+    cast(
+      clientCtx.client.auth
+        .deleteKey({ provider: provider.provider, slot: entry.slot, sessionId })
+        .pipe(
+          Effect.andThen(
+            Option.match(orderWrite, {
+              onNone: () => Effect.void,
+              onSome: (next) => writeOrder(provider.provider, next),
+            }),
+          ),
+          Effect.tap(() => credentialChanged(token, provider.provider, removed)),
+          Effect.catchEager(refused(token)),
+        ),
+    )
+  }
+
+  /**
+   * Enter on the label line. A new label opens its sign-in methods; another
+   * name for a credential renames it, its place in the order with it. A
+   * label that cannot be used says why and keeps the line.
+   */
+  const submitLabel = (screen: LabelScreen) => {
+    const entry = providerFor(catalog(), screen.provider)
+    if (Option.isNone(entry)) return
+    const renaming = Option.fromUndefinedOr(screen.renaming)
+    const problem = labelProblem(entry.value, screen.value, renaming)
+    if (Option.isSome(problem)) {
+      send(AuthEvent.cases.Refused.make({ error: problem.value }))
+      return
+    }
+    const slot = CredentialSlot.make(screen.value.trim())
+    if (Option.isNone(renaming)) {
+      begin()
+      send(AuthEvent.cases.OpenMethod.make({ provider: screen.provider, slot }))
+      return
+    }
+    const from = renaming.value
+    if (from === slot) {
+      back()
+      return
+    }
+    const token = begin()
+    setFocus(Option.some(slot))
+    cast(
+      clientCtx.client.auth
+        .renameKey({ provider: screen.provider, from, to: slot, sessionId })
+        .pipe(
+          Effect.tap(() => credentialChanged(token, screen.provider, `Renamed ${from} to ${slot}`)),
+          Effect.catchEager(refused(token)),
+        ),
+    )
+  }
+
   /**
    * Enter on the key line: the next prompt while one follows, else one save
    * of the key and the prompts' answers. An empty answer is no answer: the
@@ -727,19 +1208,56 @@ export function Auth(props: AuthProps) {
       () => screen.prompts.length > 0,
     )
     const token = begin()
-    clientCtx.log.info("auth:submit-key", { provider })
+    const slot = slotOf(screen)
+    const isNew = newCredential(provider, slot)
+    clientCtx.log.info("auth:submit-key", { provider, slot })
     cast(
       clientCtx.client.auth
         .setKey({
           provider,
           key,
           sessionId,
-          ...omitUndefined({ metadata: Option.getOrUndefined(metadata) }),
+          ...omitUndefined({
+            metadata: Option.getOrUndefined(metadata),
+            slot: screen.slot,
+          }),
         })
         .pipe(
-          Effect.tap(() => keyChanged(token, Option.some(`API key saved for ${label(provider)}`))),
+          Effect.andThen(orderAdded(provider, slot, isNew)),
+          Effect.tap(() =>
+            keyChanged(token, Option.some(`API key saved for ${signInName(provider, slot)}`)),
+          ),
           Effect.catchEager(failed(token)),
         ),
+    )
+  }
+
+  /**
+   * Enter on the inputs line: the next prompt while one follows, else the
+   * sign-in starts with the answers. An empty answer is no answer.
+   */
+  const submitInputs = (screen: InputsScreen) => {
+    if (inputFollows(screen)) {
+      send(AuthEvent.cases.Next.make({}))
+      return
+    }
+    const prompts = inputPrompts(screen)
+    const answers = [...screen.entered, screen.value].map((field) => field.trim())
+    const needed = Option.exists(inputPrompt(screen), (prompt) => prompt.optional !== true)
+    if (needed && (answers.at(-1) ?? "").length === 0) return
+    const inputs = Object.fromEntries(
+      prompts.flatMap((prompt, index) => {
+        const answer = answers[index] ?? ""
+        if (answer.length === 0) return []
+        return [[prompt.key, answer] as const]
+      }),
+    )
+    authorizeMethod(
+      screen.provider,
+      Option.fromUndefinedOr(screen.slot),
+      screen.methodIndex,
+      screen.method,
+      inputs,
     )
   }
 
@@ -766,10 +1284,12 @@ export function Auth(props: AuthProps) {
   const awaitBrowserCallback = (
     token: ReplyWriter,
     provider: string,
+    slot: CredentialSlot,
     methodIndex: number,
     authorizationId: string,
   ) => {
     stopBrowserWait()
+    const isNew = newCredential(provider, slot)
     browserWait = Option.some({
       authorizationId,
       fiber: clientCtx.runtime.fork(
@@ -781,7 +1301,10 @@ export function Auth(props: AuthProps) {
             authorizationId,
           })
           .pipe(
-            Effect.tap(() => signedIn(token, `Authenticated ${label(provider)} via OAuth`)),
+            Effect.andThen(orderAdded(provider, slot, isNew)),
+            Effect.tap(() =>
+              signedIn(token, `Authenticated ${signInName(provider, slot)} via OAuth`),
+            ),
             Effect.catchEager((err) =>
               whileCurrent(token, () =>
                 send(AuthEvent.cases.OAuthAutoFailed.make({ error: formatError(err) })),
@@ -792,60 +1315,117 @@ export function Auth(props: AuthProps) {
     })
   }
 
-  const startMethod = (provider: string, methodIndex: number, method: AuthMethod) => {
-    const token = begin()
+  const startMethod = (
+    provider: string,
+    slot: Option.Option<CredentialSlot>,
+    methodIndex: number,
+    method: AuthMethod,
+  ) => {
+    begin()
     clientCtx.log.info("auth:start-method", { provider, method: method.type })
 
     if (method.type === "api") {
-      send(AuthEvent.cases.OpenKey.make({ provider, prompts: method.prompts ?? [] }))
+      send(
+        AuthEvent.cases.OpenKey.make({
+          provider,
+          prompts: method.prompts ?? [],
+          ...omitUndefined({ slot: Option.getOrUndefined(slot) }),
+        }),
+      )
       return
     }
+    // An OAuth method's prompts (a directory to import) come before its sign-in.
+    if ((method.prompts ?? []).length > 0) {
+      send(
+        AuthEvent.cases.OpenInputs.make({
+          provider,
+          methodIndex,
+          method,
+          ...omitUndefined({ slot: Option.getOrUndefined(slot) }),
+        }),
+      )
+      return
+    }
+    authorizeMethod(provider, slot, methodIndex, method, {})
+  }
 
+  const authorizeMethod = (
+    provider: string,
+    slot: Option.Option<CredentialSlot>,
+    methodIndex: number,
+    method: AuthMethod,
+    inputs: Readonly<Record<string, string>>,
+  ) => {
+    const token = begin()
+    const target = Option.getOrElse(slot, () => DEFAULT_CREDENTIAL_SLOT)
+    const isNew = newCredential(provider, target)
+    const answered = Option.liftPredicate(inputs, (given) => Object.keys(given).length > 0)
     cast(
-      clientCtx.client.auth.authorize({ sessionId, provider, method: methodIndex }).pipe(
-        Effect.tap((authorization) =>
-          whileCurrent(token, () => {
-            const result = Option.fromNullishOr(authorization)
-            if (Option.isNone(result)) {
+      clientCtx.client.auth
+        .authorize({
+          sessionId,
+          provider,
+          method: methodIndex,
+          ...omitUndefined({
+            slot: Option.getOrUndefined(slot),
+            inputs: Option.getOrUndefined(answered),
+          }),
+        })
+        .pipe(
+          // "done" means the server finished it during `authorize`: a new label joins the order.
+          Effect.tap((authorization) => {
+            if (authorization?.method !== "done") return Effect.void
+            return orderAdded(provider, target, isNew)
+          }),
+          Effect.tap((authorization) =>
+            whileCurrent(token, () => {
+              const result = Option.fromNullishOr(authorization)
+              if (Option.isNone(result)) {
+                send(
+                  AuthEvent.cases.Failed.make({
+                    error: "No authorization available for this method",
+                  }),
+                )
+                return
+              }
+              if (result.value.method === "done") {
+                clientCtx.credentialsChanged()
+                flashSuccess(`Authenticated ${signInName(provider, target)}`)
+                loadAuth(token)
+                return
+              }
               send(
-                AuthEvent.cases.Failed.make({
-                  error: "No authorization available for this method",
+                AuthEvent.cases.OpenOAuth.make({
+                  provider,
+                  methodIndex,
+                  method,
+                  authorization: result.value,
+                  ...omitUndefined({ slot: Option.getOrUndefined(slot) }),
                 }),
               )
-              return
-            }
-            // "done" means the server finished it during `authorize`.
-            if (result.value.method === "done") {
-              clientCtx.credentialsChanged()
-              flashSuccess(`Authenticated ${label(provider)}`)
-              loadAuth(token)
-              return
-            }
-            send(
-              AuthEvent.cases.OpenOAuth.make({
-                provider,
-                methodIndex,
-                method,
-                authorization: result.value,
-              }),
+            }),
+          ),
+          Effect.tap((authorization) => {
+            if (!token.live()) return Effect.void
+            const result = Option.fromNullishOr(authorization)
+            if (Option.isNone(result) || result.value.method === "done") return Effect.void
+            return openAuthorization(token, result.value.url).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  if (!token.live() || result.value.method !== "auto") return
+                  awaitBrowserCallback(
+                    token,
+                    provider,
+                    target,
+                    methodIndex,
+                    result.value.authorizationId,
+                  )
+                }),
+              ),
             )
           }),
+          Effect.catchEager(failed(token)),
         ),
-        Effect.tap((authorization) => {
-          if (!token.live()) return Effect.void
-          const result = Option.fromNullishOr(authorization)
-          if (Option.isNone(result) || result.value.method === "done") return Effect.void
-          return openAuthorization(token, result.value.url).pipe(
-            Effect.andThen(
-              Effect.sync(() => {
-                if (!token.live() || result.value.method !== "auto") return
-                awaitBrowserCallback(token, provider, methodIndex, result.value.authorizationId)
-              }),
-            ),
-          )
-        }),
-        Effect.catchEager(failed(token)),
-      ),
     )
   }
 
@@ -856,6 +1436,8 @@ export function Auth(props: AuthProps) {
     // a bare retry only once that wait has failed.
     if (trimmed.length === 0 && (screen.authorization.method === "code" || screen.waiting)) return
     const token = begin()
+    const slot = slotOf(screen)
+    const isNew = newCredential(screen.provider, slot)
     clientCtx.log.info("auth:submit-oauth", {
       provider: screen.provider,
       method: screen.authorization.method,
@@ -877,7 +1459,10 @@ export function Auth(props: AuthProps) {
           }),
         )
         .pipe(
-          Effect.tap(() => signedIn(token, `Authenticated ${label(screen.provider)} via OAuth`)),
+          Effect.andThen(orderAdded(screen.provider, slot, isNew)),
+          Effect.tap(() =>
+            signedIn(token, `Authenticated ${signInName(screen.provider, slot)} via OAuth`),
+          ),
           Effect.catchEager(failed(token)),
         ),
     )
@@ -910,6 +1495,25 @@ export function Auth(props: AuthProps) {
     if (current._tag === "Method") return Option.some(current)
     return Option.none()
   }
+  const credentialsScreen = () => {
+    const current = screen()
+    if (current._tag === "Credentials") return Option.some(current)
+    return Option.none()
+  }
+  const labelScreen = () => {
+    const current = screen()
+    if (current._tag === "Label") return Option.some(current)
+    return Option.none()
+  }
+  const inputsScreen = () => {
+    const current = screen()
+    if (current._tag === "Inputs") return Option.some(current)
+    return Option.none()
+  }
+
+  /** The provider the open credentials screen is about, if the catalog still has it. */
+  const credentialsProvider = () =>
+    Option.flatMap(credentialsScreen(), (current) => providerFor(catalog(), current.provider))
 
   // A browser wait lives while its OAuth screen does.
   createEffect(() => {
@@ -983,39 +1587,168 @@ export function Auth(props: AuthProps) {
               </text>
             }
           >
-            <text style={{ fg: rowForeground(isSelected(), theme.text) }}>
+            {/* The gap is layout, not text: a narrow row wraps its state under
+                itself and keeps the gap a wrapped leading space would lose. */}
+            <text flexShrink={0} style={{ fg: rowForeground(isSelected(), theme.text) }}>
               {label(provider.provider)}
             </text>
-            <text style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}>
-              {" "}
+            <text
+              marginLeft={1}
+              flexShrink={1}
+              style={{ fg: rowForeground(isSelected(), statusColor(provider)) }}
+            >
               {authLabel(provider)}
               {requiredLabel(provider)}
+              {credentialCount(provider)}
             </text>
           </Show>
         </box>
       )),
     )
+  /** A provider with credentials besides its default says how many it holds. */
+  const credentialCount = (provider: AuthProviderInfo) =>
+    Option.match(Option.fromUndefinedOr(provider.credentials), {
+      onNone: () => "",
+      onSome: (held) => ` · ${plural(held.length, "credential")}`,
+    })
 
-  const methodRows = (): ReadonlyArray<SelectListRow<MethodChoice>> =>
+  /** The "+ Add credential" row of the method and credentials screens. */
+  const addRow = (isSelected: () => boolean, id: string) => (
+    <box id={id} backgroundColor={rowBackground(isSelected())} paddingLeft={1}>
+      <text wrapMode="none" style={{ fg: rowForeground(isSelected(), theme.textMuted) }}>
+        + Add credential
+      </text>
+    </box>
+  )
+
+  const methodRows = (): ReadonlyArray<SelectListRow<MethodRow>> =>
     Option.match(methodScreen(), {
-      onNone: (): ReadonlyArray<SelectListRow<MethodChoice>> => [],
-      onSome: (current) =>
-        methodsFor(catalog(), current.provider).map(({ method, index }) =>
-          selectable({ index, method }, (isSelected, id) => (
+      onNone: (): ReadonlyArray<SelectListRow<MethodRow>> => [],
+      onSome: (current) => {
+        const rows: Array<SelectListRow<MethodRow>> = methodsFor(
+          catalog(),
+          current.provider,
+          slotOf(current),
+        ).map((choice) =>
+          selectable<MethodRow>(choice, (isSelected, id) => (
             <box
               id={id}
               backgroundColor={rowBackground(isSelected())}
               paddingLeft={1}
               flexDirection="row"
             >
-              <text style={{ fg: rowForeground(isSelected(), theme.text) }}>{method.label}</text>
-              <text style={{ fg: rowForeground(isSelected(), theme.textMuted) }}>
-                {" "}
-                [{method.type}]
+              <text flexShrink={1} style={{ fg: rowForeground(isSelected(), theme.text) }}>
+                {choice.method.label}
+              </text>
+              <text
+                marginLeft={1}
+                flexShrink={0}
+                style={{ fg: rowForeground(isSelected(), theme.textMuted) }}
+              >
+                [{choice.method.type}]
               </text>
             </box>
           )),
-        ),
+        )
+        // The default's methods offer a second credential, where the provider takes one.
+        const offersAdd =
+          Predicate.isUndefined(current.slot) &&
+          !listsCredentials(state(), current.provider) &&
+          !Option.exists(providerFor(catalog(), current.provider), isOther) &&
+          takesNamed(catalog(), current.provider)
+        if (offersAdd) rows.push(selectable<MethodRow>(MethodRow.cases.Add.make({}), addRow))
+        return rows
+      },
+    })
+
+  /** What a credential row says after its label: its kind, or why it is not ready. */
+  const credentialState = (entry: CredentialEntry) => {
+    const missing = Option.filter(
+      Option.fromUndefinedOr(entry.missing),
+      (labels) => labels.length > 0,
+    )
+    let kind = `[${entry.authType ?? "stored"}]`
+    if (entry.source === "env") kind = "[env]"
+    if (!entry.hasKey && Option.isNone(missing)) return "[none]"
+    return Option.match(missing, {
+      onNone: () => kind,
+      onSome: (labels) => `${kind} needs ${labels.join(", ")}`,
+    })
+  }
+  const credentialColor = (entry: CredentialEntry) => {
+    if (entry.hasKey) return theme.primary
+    return theme.textMuted
+  }
+  /** The order column: the place a turn takes it in, or a dash when the order leaves it out. */
+  const positionText = (entry: CredentialEntry) =>
+    Option.match(Option.fromUndefinedOr(entry.position), {
+      onNone: () => "–",
+      onSome: (position) => String(position),
+    })
+  const armedKey = (provider: string, slot: CredentialSlot) => `${provider}/${slot}`
+
+  const credentialRows = (): ReadonlyArray<SelectListRow<CredentialRow>> =>
+    Option.match(credentialsProvider(), {
+      onNone: (): ReadonlyArray<SelectListRow<CredentialRow>> => [],
+      onSome: (provider) => {
+        const conflict = Option.filter(
+          Option.fromUndefinedOr(provider.orderConflict),
+          (ids) => ids.length > 0,
+        )
+        const rows: Array<SelectListRow<CredentialRow>> = []
+        // A conflicting order runs no turn: the row names the entries, and a reorder writes one.
+        if (Option.isSome(conflict))
+          rows.push(
+            decoration(() => (
+              <box paddingLeft={1}>
+                <text wrapMode="none" truncate style={{ fg: theme.error }}>
+                  [authOrder conflict: {conflict.value.join(", ")}] shift+↑↓ writes one order
+                </text>
+              </box>
+            )),
+          )
+        for (const entry of credentialEntries(provider))
+          rows.push(
+            selectable<CredentialRow>(entry, (isSelected, id) => (
+              <box
+                id={id}
+                backgroundColor={rowBackground(isSelected())}
+                paddingLeft={1}
+                flexDirection="row"
+              >
+                <Show
+                  when={!Option.contains(armed(), armedKey(provider.provider, entry.slot))}
+                  fallback={
+                    <text wrapMode="none" style={{ fg: theme.error }}>
+                      ctrl+x again to delete {entry.slot}
+                    </text>
+                  }
+                >
+                  <text
+                    wrapMode="none"
+                    style={{ fg: rowForeground(isSelected(), theme.textMuted) }}
+                  >
+                    {positionText(entry)}{" "}
+                  </text>
+                  <text wrapMode="none" style={{ fg: rowForeground(isSelected(), theme.text) }}>
+                    {entry.slot}
+                  </text>
+                  <text
+                    wrapMode="none"
+                    truncate
+                    style={{ fg: rowForeground(isSelected(), credentialColor(entry)) }}
+                  >
+                    {" "}
+                    {credentialState(entry)}
+                  </text>
+                </Show>
+              </box>
+            )),
+          )
+        if (takesNamed(catalog(), provider.provider))
+          rows.push(selectable<CredentialRow>(CredentialRow.cases.Add.make({}), addRow))
+        return rows
+      },
     })
 
   // ── Frames ────────────────────────────────────────────────────────
@@ -1067,6 +1800,119 @@ export function Auth(props: AuthProps) {
     if (promptFollows(current)) return [keyHint("enter", "next"), KeyHints.back]
     return [KeyHints.submit, KeyHints.back]
   }
+  /** The inputs line names the prompt it asks now. */
+  const inputFieldName = (current: InputsScreen) =>
+    Option.match(inputPrompt(current), {
+      onNone: () => current.method.label,
+      onSome: (prompt) => prompt.label,
+    })
+  const inputFieldKeys = (current: InputsScreen) => {
+    if (inputFollows(current)) return [keyHint("enter", "next"), KeyHints.back]
+    return [keyHint("enter", "sign in"), KeyHints.back]
+  }
+  /** A sign-in screen's title: the provider, and the credential when it is not the default. */
+  const signInTitle = (provider: string, slot: Option.Option<CredentialSlot>, step: string) =>
+    `Sign in · ${signInName(
+      provider,
+      Option.getOrElse(slot, () => DEFAULT_CREDENTIAL_SLOT),
+    )} · ${step}`
+
+  // The credentials screen. Its keys follow the row under the cursor: a
+  // stored credential can go, a named one can take another name, and only a
+  // credential moves in the order.
+  const [credentialCursor, setCredentialCursor] = createSignal(Option.none<CredentialRow>())
+  const cursorEntry = (): Option.Option<CredentialEntry> =>
+    Option.flatMap(credentialCursor(), (row) => {
+      if (row._tag === "Credential") return Option.some(row)
+      return Option.none()
+    })
+  const renameable = (entry: CredentialEntry) =>
+    entry.slot !== DEFAULT_CREDENTIAL_SLOT && entry.source === "stored"
+  const credentialKeys = () => {
+    const keys = [KeyHints.move]
+    const entry = cursorEntry()
+    if (Option.isNone(entry)) return [...keys, keyHint("enter", "add"), KeyHints.back]
+    keys.push(keyHint("enter", "sign in"), keyHint("shift+↑↓", "reorder"))
+    if (renameable(entry.value)) keys.push(keyHint("n", "rename"))
+    if (entry.value.source === "stored") keys.push(KeyHints.delete)
+    return [...keys, KeyHints.back]
+  }
+  const credentialKey = (
+    event: ScopedKeyboardEvent,
+    selected: Option.Option<CredentialRow>,
+  ): boolean => {
+    const provider = credentialsProvider()
+    const entry = Option.flatMap(selected, (row) => {
+      if (row._tag === "Credential") return Option.some(row)
+      return Option.none()
+    })
+    if (Option.isNone(provider) || Option.isNone(entry)) {
+      setArmed(Option.none())
+      return false
+    }
+    const key = armedKey(provider.value.provider, entry.value.slot)
+    if (event.ctrl === true && event.name === "x") {
+      if (entry.value.source !== "stored") return true
+      if (Option.contains(armed(), key)) {
+        setArmed(Option.none())
+        deleteCredential(provider.value, entry.value)
+        return true
+      }
+      setArmed(Option.some(key))
+      return true
+    }
+    // Any other key steps back from an armed row; Esc does only that.
+    const wasArmed = Option.isSome(armed())
+    setArmed(Option.none())
+    if (event.name === "escape" && wasArmed) return true
+    if (event.shift === true && (event.name === "up" || event.name === "down")) {
+      reorder(provider.value, entry.value.slot, event.name)
+      return true
+    }
+    if (event.name === "n" && event.ctrl !== true && event.meta !== true) {
+      if (!renameable(entry.value)) return true
+      begin()
+      setFocus(Option.some(entry.value.slot))
+      send(
+        AuthEvent.cases.OpenLabel.make({
+          provider: provider.value.provider,
+          renaming: entry.value.slot,
+        }),
+      )
+      return true
+    }
+    return false
+  }
+  const selectCredential = (row: CredentialRow) =>
+    Option.map(credentialsProvider(), (provider) => {
+      begin()
+      if (row._tag === "Add") {
+        send(AuthEvent.cases.OpenLabel.make({ provider: provider.provider }))
+        return
+      }
+      setFocus(Option.some(row.slot))
+      send(
+        AuthEvent.cases.OpenMethod.make({
+          provider: provider.provider,
+          ...omitUndefined({
+            slot: Option.getOrUndefined(
+              Option.liftPredicate(row.slot, (slot) => slot !== DEFAULT_CREDENTIAL_SLOT),
+            ),
+          }),
+        }),
+      )
+    })
+  const credentialsTitle = (provider: string) =>
+    Option.match(credentialsProvider(), {
+      onNone: () => `Sign in · ${label(provider)} · credentials`,
+      onSome: (entry) =>
+        `Sign in · ${label(provider)} · ${plural(credentialEntries(entry).length, "credential")}`,
+    })
+  const labelTitle = (current: LabelScreen) =>
+    Option.match(Option.fromUndefinedOr(current.renaming), {
+      onNone: () => `Sign in · ${label(current.provider)} · new credential`,
+      onSome: (from) => `Sign in · ${label(current.provider)} · rename ${from}`,
+    })
   const codeLabel = (method: string) => {
     if (method === "code") return "Paste code:"
     return "Paste code (optional):"
@@ -1189,9 +2035,15 @@ export function Auth(props: AuthProps) {
             rowKey={(provider) => provider.provider}
             filter={{ onQueryChange: setQuery }}
             query={query}
-            onSelect={(provider) =>
+            onSelect={(provider) => {
+              // A provider with credentials besides its default, or a conflicting order, opens them.
+              if (opensCredentials(provider)) {
+                setFocus(Option.none())
+                send(AuthEvent.cases.OpenCredentials.make({ provider: provider.provider }))
+                return
+              }
               send(AuthEvent.cases.OpenMethod.make({ provider: provider.provider }))
-            }
+            }}
             onDismiss={dismissList}
             loading={listLoading}
             empty={retryRow}
@@ -1211,24 +2063,117 @@ export function Auth(props: AuthProps) {
           />
         </PickerFrame>
       </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(credentialsScreen())}>
+        {(current) => (
+          <PickerFrame
+            title={credentialsTitle(current().provider)}
+            keys={credentialKeys()}
+            error={state().error}
+            detail={flashNote()}
+          >
+            <SelectList
+              id="auth-credentials"
+              open={true}
+              rows={credentialRows}
+              rowKey={(row) => {
+                if (row._tag === "Add") return "+add"
+                return row.slot
+              }}
+              onSelect={selectCredential}
+              onDismiss={back}
+              onCursor={setCredentialCursor}
+              sticky={(rows) =>
+                Option.flatMap(focus(), (slot) =>
+                  Option.liftPredicate(
+                    rows.findIndex((row) => row._tag === "Credential" && row.slot === slot),
+                    (index) => index >= 0,
+                  ),
+                )
+              }
+              extraKeys={credentialKey}
+            />
+          </PickerFrame>
+        )}
+      </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(labelScreen())}>
+        {(current) => (
+          <PickerFrame
+            error={state().error}
+            height={pickerHeight(2, dimensions().height)}
+            title={labelTitle(current())}
+            keys={[KeyHints.submit, KeyHints.back]}
+          >
+            <AuthTextLine
+              label="Label ›"
+              text={current().value}
+              placeholder={Option.some("e.g. work, personal")}
+              onEvent={send}
+              onSubmit={() => submitLabel(current())}
+              onCancel={back}
+            />
+          </PickerFrame>
+        )}
+      </SolidMatch>
       <SolidMatch when={Option.getOrUndefined(methodScreen())}>
         {(current) => (
           <PickerFrame
             error={Option.none()}
-            title={`Sign in · ${label(current().provider)} · method`}
+            title={signInTitle(
+              current().provider,
+              Option.fromUndefinedOr(current().slot),
+              "method",
+            )}
             keys={[KeyHints.move, KeyHints.select, KeyHints.back]}
           >
             <SelectList
               id="auth-method"
               open={true}
               rows={methodRows}
-              rowKey={(choice) => String(choice.index)}
-              onSelect={(choice) =>
-                Option.map(methodProvider(), (provider) =>
-                  startMethod(provider.provider, choice.index, choice.method),
-                )
+              rowKey={(row) => {
+                if (row._tag === "Add") return "+add"
+                return String(row.index)
+              }}
+              onSelect={(row) =>
+                Option.map(methodProvider(), (provider) => {
+                  if (row._tag === "Add") {
+                    begin()
+                    send(AuthEvent.cases.OpenLabel.make({ provider: provider.provider }))
+                    return
+                  }
+                  startMethod(
+                    provider.provider,
+                    Option.fromUndefinedOr(current().slot),
+                    row.index,
+                    row.method,
+                  )
+                })
               }
               onDismiss={back}
+            />
+          </PickerFrame>
+        )}
+      </SolidMatch>
+      <SolidMatch when={Option.getOrUndefined(inputsScreen())}>
+        {(current) => (
+          <PickerFrame
+            error={state().error}
+            height={pickerHeight(2, dimensions().height)}
+            title={signInTitle(
+              current().provider,
+              Option.fromUndefinedOr(current().slot),
+              current().method.label,
+            )}
+            keys={inputFieldKeys(current())}
+          >
+            <AuthTextLine
+              label={`${inputFieldName(current())} ›`}
+              text={current().value}
+              placeholder={Option.flatMap(inputPrompt(current()), (prompt) =>
+                Option.fromUndefinedOr(prompt.placeholder),
+              )}
+              onEvent={send}
+              onSubmit={() => submitInputs(current())}
+              onCancel={back}
             />
           </PickerFrame>
         )}
@@ -1238,7 +2183,11 @@ export function Auth(props: AuthProps) {
           <PickerFrame
             error={Option.none()}
             height={pickerHeight(1, dimensions().height)}
-            title={`Sign in · ${label(current().provider)} · ${keyFieldName(current())}`}
+            title={signInTitle(
+              current().provider,
+              Option.fromUndefinedOr(current().slot),
+              keyFieldName(current()),
+            )}
             keys={keyFieldKeys(current())}
           >
             <AuthTextLine
@@ -1258,7 +2207,11 @@ export function Auth(props: AuthProps) {
         {(current) => (
           <PickerFrame
             height={oauthBodyRows(current()) + OAUTH_CHROME_ROWS}
-            title={`Sign in · ${label(current().provider)} · ${current().method.label}`}
+            title={signInTitle(
+              current().provider,
+              Option.fromUndefinedOr(current().slot),
+              current().method.label,
+            )}
             keys={OAUTH_KEYS}
             error={state().error}
             detail={oauthNote(current())}
