@@ -7,6 +7,7 @@ import {
   MIN_GLYPH_CONTRAST,
   MIN_MUTED_STEP,
   MIN_TEXT_CONTRAST,
+  PANEL_TEXT_TOKENS,
   resolveTheme,
   TEXT_TOKENS,
   type Theme,
@@ -143,19 +144,22 @@ describe("system theme", () => {
       expect(
         contrastRatio(theme.theme.selectedListItemText, theme.theme.primary),
       ).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST)
-      expect(contrastRatio(theme.theme.text, theme.theme.backgroundPanel)).toBeGreaterThanOrEqual(
-        MIN_TEXT_CONTRAST,
-      )
+      for (const token of PANEL_TEXT_TOKENS) {
+        expect(
+          contrastRatio(theme.theme[token], theme.theme.backgroundPanel),
+        ).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST)
+      }
     }).pipe(Effect.timeout("10 seconds")),
   )
 
   // fx draws on the terminal's own background, so its panel is made from the
-  // background the terminal reports.
+  // background the terminal reports: Codex's 12% fill (#383a3c on #1d1f21),
+  // faded until fx's muted header reads on it at 4.5:1.
   it.scopedLive("the default theme's panel derives from the terminal's background", () =>
     Effect.gen(function* () {
       const { theme } = yield* renderWithPalette(terminalColors("#c5c8c6", "#1d1f21"))
       expect(theme.selected()).toBe("fx")
-      expect(rgbToHex(theme.theme.backgroundPanel)).toBe("#383a3c")
+      expect(rgbToHex(theme.theme.backgroundPanel)).toBe("#343638")
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -271,13 +275,15 @@ const contrastFailures = (
       MIN_TEXT_CONTRAST,
       `primary ${rgbToHex(theme.primary)}`,
     )
-    check(
-      "text",
-      theme.text,
-      theme.backgroundPanel,
-      MIN_TEXT_CONTRAST,
-      `backgroundPanel ${rgbToHex(theme.backgroundPanel)}`,
-    )
+    for (const token of PANEL_TEXT_TOKENS) {
+      check(
+        token,
+        theme[token],
+        theme.backgroundPanel,
+        MIN_TEXT_CONTRAST,
+        `backgroundPanel ${rgbToHex(theme.backgroundPanel)}`,
+      )
+    }
     check(
       "text",
       theme.text,
@@ -338,7 +344,8 @@ describe("bundled theme catalog", () => {
     () =>
       Effect.sync(() => {
         const onDark = resolveTheme(DEFAULT_THEMES.fx, "dark", Option.some(RGBA.fromHex("#1d1f21")))
-        expect(rgbToHex(onDark.backgroundPanel)).toBe("#383a3c")
+        // Codex's fill, #383a3c, faded until textMuted reads on it.
+        expect(rgbToHex(onDark.backgroundPanel)).toBe("#343638")
         const onLight = resolveTheme(
           DEFAULT_THEMES.fx,
           "light",

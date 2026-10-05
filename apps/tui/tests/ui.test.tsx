@@ -1672,12 +1672,13 @@ describe("message rows outside the reader's lane", () => {
 /**
  * The reader's lane: the `┃` rail, and Codex's prompt surface behind every
  * row of the block (`theme.backgroundPanel`, fx's derived panel: white at
- * 12% over the terminal's dark background). No padding row: the fill marks the block on its own rows.
+ * 12% over the terminal's dark background, faded until its inks read). No padding row: the fill marks the block on its own rows.
  * Unknown terminal background, no fill: the rail alone carries it.
  */
 describe("the reader's message row", () => {
-  // White at 12% over `#1d1f21`, the dark terminal's background.
-  const SURFACE = RGBA.fromHex("#383a3c")
+  // White at 12% over `#1d1f21`, the dark terminal's background (#383a3c),
+  // faded until fx's muted header reads on it at 4.5:1.
+  const SURFACE = RGBA.fromHex("#343638")
   const longLine = Array.from({ length: 24 }, (_, i) => `word${i}`).join(" ")
 
   const drawUserRow = (width: number, answered: boolean) =>

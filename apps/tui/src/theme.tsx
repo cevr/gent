@@ -71,6 +71,14 @@ type JsonToken = (typeof JSON_TOKENS)[number]
 export type Theme = Record<JsonToken | "selectedListItemText" | "backgroundPanel", RGBA>
 
 /**
+ * The tokens `UserRow` draws on `backgroundPanel`: the prompt, its muted
+ * header and an image line. Each reads at `MIN_TEXT_CONTRAST` there.
+ */
+export const PANEL_TEXT_TOKENS = ["text", "textMuted", "info"] as const satisfies ReadonlyArray<
+  keyof Theme
+>
+
+/**
  * The tokens drawn as text on the background: each reads at
  * `MIN_TEXT_CONTRAST` there. The `system` theme is clamped to this rule at
  * runtime; the bundled themes hold it in their JSON (`theme.test.tsx`).
@@ -231,14 +239,23 @@ const readableStep = (text: RGBA, muted: RGBA, background: RGBA): TextPair => {
   return { text: brighter, muted: settled }
 }
 
+/** Codex's prompt fill (`user_message_bg_rgb`): white at 12% on a dark background, black at 4% on a light one. */
+const promptFill = (background: RGBA): RGBA => {
+  if (isLight(background)) return tint(background, BLACK, 0.04)
+  return tint(background, WHITE, 0.12)
+}
+
 /**
- * The reader's message surface on a known background: Codex's prompt fill
- * (`user_message_bg_rgb`: white at 12% on a dark background, black at 4% on
- * a light one), kept readable under `text`.
+ * `panel`, moved toward `background` by the smallest step on which every
+ * ink reads at `MIN_TEXT_CONTRAST`. The inks read on the background itself
+ * (the catalog rule), so the search ends there at worst: the fill only
+ * fades, it never trades the text's contrast for its own mark.
  */
-const panelOn = (background: RGBA, text: RGBA): RGBA => {
-  if (isLight(background)) return readableOn(tint(background, BLACK, 0.04), text)
-  return readableOn(tint(background, WHITE, 0.12), text)
+const readablePanel = (panel: RGBA, background: RGBA, inks: ReadonlyArray<RGBA>): RGBA => {
+  const everyReads = (candidate: RGBA) =>
+    inks.every((ink) => contrastRatio(ink, candidate) >= MIN_TEXT_CONTRAST)
+  if (everyReads(panel)) return panel
+  return firstStep(panel, background, everyReads)
 }
 
 // ── theme resolution ────────────────────────────────────────────────────────
@@ -289,18 +306,26 @@ export function resolveTheme(
     Option.filter(Option.some(resolved.background), (background) => background.a > 0),
     () => terminalBackground,
   )
+  const inks = PANEL_TEXT_TOKENS.map((token) => resolved[token])
+  // The theme's own panel, else Codex's fill on the surface; either fades
+  // toward the surface until the panel's inks read. A transparent panel is
+  // the derived one; with no surface known there is no fill to judge.
+  const named = Option.filter(optional("backgroundPanel"), (panel) => panel.a > 0)
   return {
     ...resolved,
     selectedListItemText: Option.getOrElse(
       optional("selectedListItemText"),
       () => resolved.background,
     ),
-    // A transparent panel is the derived one.
-    backgroundPanel: optional("backgroundPanel").pipe(
-      Option.filter((panel) => panel.a > 0),
-      Option.orElse(() => Option.map(surface, (background) => panelOn(background, resolved.text))),
-      Option.getOrElse(() => TRANSPARENT),
-    ),
+    backgroundPanel: Option.match(surface, {
+      onNone: () => Option.getOrElse(named, () => TRANSPARENT),
+      onSome: (background) =>
+        readablePanel(
+          Option.getOrElse(named, () => promptFill(background)),
+          background,
+          inks,
+        ),
+    }),
   }
 }
 

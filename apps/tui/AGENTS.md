@@ -71,7 +71,7 @@ Ported from opencode: its schema and token names, cut to the tokens gent draws. 
 | `border`                        | frames and elision dots                                                                                                                                                                                      |
 | `diff*`, `markdown*`, `syntax*` | the diff renderer and `buildSyntaxStyle`                                                                                                                                                                     |
 
-Contrast rule (WCAG 2.1, `theme.test.tsx` holds every bundled theme to it in both modes; a transparent background is read against black, `#1d1f21`, `#282c34`, white, `#f5f5f5` and `#fdf6e3`): every text token 4.5:1 on its background, `border` 3:1, `selectedListItemText` 4.5:1 on `primary`, `text` 4.5:1 on `backgroundPanel`, and `text` 1.5:1 from `textMuted`. The `system` theme and the derived panel are clamped at runtime by `readableOn` (Codex's bounded search); a bundled theme's values are fixed in its JSON.
+Contrast rule (WCAG 2.1, `theme.test.tsx` holds every bundled theme to it in both modes; a transparent background is read against black, `#1d1f21`, `#282c34`, white, `#f5f5f5` and `#fdf6e3`): every text token 4.5:1 on its background, `border` 3:1, `selectedListItemText` 4.5:1 on `primary`, each of `PANEL_TEXT_TOKENS` (`text`, `textMuted`, `info`: what `UserRow` draws) 4.5:1 on `backgroundPanel`, and `text` 1.5:1 from `textMuted`. The `system` theme is clamped at runtime by `readableOn` (Codex's bounded search); every panel, named or derived, fades toward the background until its inks read (`readablePanel`); a bundled theme's other values are fixed in its JSON.
 
 ## Command Palette
 
