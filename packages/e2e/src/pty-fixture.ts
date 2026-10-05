@@ -461,11 +461,86 @@ interface LivePtyContext extends TestContext {
 }
 
 /**
+ * The colours the live emulator reports: a dark terminal's, Tomorrow Night's
+ * ground and text over xterm.js's Tango palette. `@xterm/headless` parses a
+ * colour query and answers none, so without these the TUI would draw as on a
+ * terminal that keeps its colours to itself: no surface reads the ground.
+ */
+const LIVE_PALETTE = [
+  "#2e3436",
+  "#cc0000",
+  "#4e9a06",
+  "#c4a000",
+  "#3465a4",
+  "#75507b",
+  "#06989a",
+  "#d3d7cf",
+  "#555753",
+  "#ef2929",
+  "#8ae234",
+  "#fce94f",
+  "#729fcf",
+  "#ad7fa8",
+  "#34e2e2",
+  "#eeeeec",
+] as const
+
+/** OSC 10 to 19 (foreground, background, cursor, mouse, Tek, highlight) and the colour each reports. */
+const LIVE_SPECIAL_COLORS: ReadonlyArray<readonly [number, string]> = [
+  [10, "#c5c8c6"],
+  [11, "#1d1f21"],
+  [12, "#c5c8c6"],
+  [13, "#c5c8c6"],
+  [14, "#1d1f21"],
+  [15, "#c5c8c6"],
+  [16, "#1d1f21"],
+  [17, "#373b41"],
+  [19, "#c5c8c6"],
+]
+
+/** `#1d1f21` as an xterm colour reply spells it: `rgb:1d1d/1f1f/2121`. */
+const xtermColor = (hex: string): string => {
+  const channel = (at: number) => hex.slice(at, at + 2).repeat(2)
+  return `rgb:${channel(1)}/${channel(3)}/${channel(5)}`
+}
+
+/**
+ * Answer the child's colour queries as a terminal does: `OSC 4;<i>;?` with
+ * the palette entry, `OSC <n>;?` with the special colour. A set (not a
+ * query) is left to the emulator.
+ */
+const answerColorQueries = (
+  screen: Terminal,
+  reply: (text: string) => void,
+): ReadonlyArray<{ readonly dispose: () => void }> => [
+  screen.parser.registerOscHandler(4, (data) => {
+    const fields = data.split(";")
+    const answers: string[] = []
+    for (let at = 0; at + 1 < fields.length; at += 2) {
+      const index = Number(fields[at])
+      const hex = Option.fromUndefinedOr(LIVE_PALETTE[index])
+      if (fields[at + 1] !== "?" || Option.isNone(hex)) return false
+      answers.push(`\x1b]4;${index};${xtermColor(hex.value)}\x1b\\`)
+    }
+    reply(answers.join(""))
+    return true
+  }),
+  ...LIVE_SPECIAL_COLORS.map(([ident, hex]) =>
+    screen.parser.registerOscHandler(ident, (data) => {
+      if (data !== "?") return false
+      reply(`\x1b]${ident};${xtermColor(hex)}\x1b\\`)
+      return true
+    }),
+  ),
+]
+
+/**
  * Start `command` on a pty with a live emulator on the other side. Unlike the
  * replay above, which reads all output at the current size, the emulator saw
  * each byte at the size it was written for, so history across a resize reads
  * as a real terminal's would. It also answers the child's terminal queries
- * (device attributes, cursor position).
+ * (device attributes, cursor position) and, as a real terminal does, its
+ * colour queries, from `LIVE_PALETTE`.
  */
 const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtyContext, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -477,6 +552,10 @@ const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtyContext, never, Sco
     yield* Effect.acquireRelease(
       Effect.sync(() => screen.onData((reply) => context.pty.write(reply))),
       (subscription) => ignoreSyncDefect(() => subscription.dispose()),
+    )
+    yield* Effect.acquireRelease(
+      Effect.sync(() => answerColorQueries(screen, (reply) => context.pty.write(reply))),
+      (handlers) => ignoreSyncDefect(() => handlers.forEach((handler) => handler.dispose())),
     )
     const session: LivePtyContext = {
       pty: context.pty,

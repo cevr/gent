@@ -665,6 +665,11 @@ export const DEFAULT_THEMES = {
 
 interface ThemeContextValue {
   theme: Theme
+  /**
+   * The terminal's palette read has ended, answered or not. Native history
+   * waits for it, so a row reaches scrollback with the fill it keeps.
+   */
+  paletteSettled: () => boolean
   selected: () => string
   all: () => Record<string, ThemeJson>
   mode: () => "dark" | "light"
@@ -719,6 +724,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
   // The terminal's own background, once it answers: a transparent theme
   // draws on it, so `backgroundPanel` is derived from it.
   const [terminalBackground, setTerminalBackground] = createSignal(Option.none<RGBA>())
+  const [paletteSettled, setPaletteSettled] = createSignal(false)
   const themes = createMemo((): Record<string, ThemeJson> =>
     Option.match(systemColors(), {
       onNone: () => DEFAULT_THEMES,
@@ -764,6 +770,11 @@ export function ThemeProvider(props: ThemeProviderProps) {
               setSystemColors(Option.some(colors))
             },
           }),
+          Effect.andThen(
+            Effect.sync(() => {
+              setPaletteSettled(true)
+            }),
+          ),
         ),
       ),
     )
@@ -791,6 +802,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
 
   const value: ThemeContextValue = {
     theme,
+    paletteSettled,
     selected: () => store.active,
     all: themes,
     mode: () => store.mode,

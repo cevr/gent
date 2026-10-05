@@ -32,10 +32,15 @@ import {
   SelectListState,
   transitionSelectList,
   usePickerGeometry,
+  UserRow,
 } from "../src/ui"
+import { useRenderer } from "@opentui/solid"
 import { useScopedKeyboard } from "../src/terminal"
 import {
+  answerPalette,
+  columnBackgrounds,
   createMockClient,
+  darkTerminalColors,
   renderFrame,
   renderScoped,
   TerminalOutput,
@@ -1566,31 +1571,46 @@ describe("message rows outside the reader's lane", () => {
         .lines.flatMap((line) => line.spans.filter((span) => span.text.trim().length > 0))
       return {
         lines: frame.split("\n").map((line) => line.trimEnd()),
-        // No span is bold, and every one is the muted gray of a tool row.
+        // No span is bold, and every one is the muted gray of a tool row,
+        // but the sender's name, which takes the names' color.
         bold: drawn.filter((span) => (span.attributes & TextAttributes.BOLD) !== 0),
-        unmuted: drawn.filter((span) => !span.fg.equals(theme.textMuted)),
+        unmuted: drawn.filter(
+          (span) => !span.fg.equals(theme.textMuted) && !span.fg.equals(theme.info),
+        ),
+        names: drawn.filter((span) => span.fg.equals(theme.info)).map((span) => span.text),
       }
     })
 
   const agentRow = (disclosure: DisclosureLevel, width: number, body = twelveLines) =>
     draw(
-      () => <AgentMessageRow head="child explore · 0e493eaf" body={body} disclosure={disclosure} />,
+      () => (
+        <AgentMessageRow
+          head="child"
+          name="explore"
+          id="0e493eaf"
+          body={body}
+          disclosure={disclosure}
+        />
+      ),
       width,
     )
 
   for (const width of [100, 60, 40]) {
-    it.scopedLive(`a message another session sent is one muted line at ${width} columns`, () =>
-      Effect.gen(function* () {
-        const { lines, bold, unmuted } = yield* agentRow("collapsed", width)
-        const drawn = lines.filter((line) => line.length > 0)
-        expect(drawn).toHaveLength(1)
-        expect(drawn[0]?.startsWith("  » child explore")).toBe(true)
-        expect(drawn[0]?.length).toBeLessThanOrEqual(width - 1)
-        if (width >= 60) expect(drawn[0]).toBe("  » child explore · 0e493eaf · BODY-LINE-1")
-        expect(lines.join("\n")).not.toContain("┃")
-        expect(bold).toEqual([])
-        expect(unmuted).toEqual([])
-      }),
+    it.scopedLive(
+      `a message another session sent is one muted line, its sender's name in the names' color, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const { lines, bold, unmuted, names } = yield* agentRow("collapsed", width)
+          const drawn = lines.filter((line) => line.length > 0)
+          expect(drawn).toHaveLength(1)
+          expect(drawn[0]?.startsWith("  » child explore")).toBe(true)
+          expect(drawn[0]?.length).toBeLessThanOrEqual(width - 1)
+          if (width >= 60) expect(drawn[0]).toBe("  » child explore · 0e493eaf · BODY-LINE-1")
+          expect(lines.join("\n")).not.toContain("┃")
+          expect(bold).toEqual([])
+          expect(unmuted).toEqual([])
+          expect(names).toEqual(["explore"])
+        }),
     )
   }
 
@@ -1647,4 +1667,97 @@ describe("message rows outside the reader's lane", () => {
       }),
     )
   }
+})
+
+/**
+ * The reader's lane: the `┃` rail, and Codex's prompt surface behind every
+ * row of the block (`theme.backgroundPanel`, fx's derived panel: white at
+ * 12% over the terminal's dark background). No padding row: the fill marks the block on its own rows.
+ * Unknown terminal background, no fill: the rail alone carries it.
+ */
+describe("the reader's message row", () => {
+  // White at 12% over `#1d1f21`, the dark terminal's background.
+  const SURFACE = RGBA.fromHex("#383a3c")
+  const longLine = Array.from({ length: 24 }, (_, i) => `word${i}`).join(" ")
+
+  const drawUserRow = (width: number, answered: boolean) =>
+    Effect.gen(function* () {
+      let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+      const setup = yield* renderScoped(
+        () => {
+          if (answered) answerPalette(useRenderer(), darkTerminalColors)
+          colors = Option.some(useTheme().theme)
+          return (
+            <UserRow
+              content={`${longLine}\nsecond line`}
+              images={[{ mediaType: "image/png" }]}
+              details={{}}
+              disclosure="collapsed"
+            />
+          )
+        },
+        { width, height: 30 },
+      )
+      const filled = () =>
+        setup
+          .captureSpans()
+          .lines.some((line) => columnBackgrounds(line).some((bg) => bg.equals(SURFACE)))
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("second line") && (!answered || filled()),
+        "the reader's row",
+      )
+      const lines = frame.split("\n")
+      const rail = lines.flatMap((line, index) => {
+        if (line.startsWith("┃")) return [index]
+        return []
+      })
+      return {
+        lines,
+        rail,
+        backgrounds: setup.captureSpans().lines.map(columnBackgrounds),
+        theme: Option.getOrThrow(colors),
+      }
+    })
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `the surface fills every row of the block from column 1 to the edge, wrapped lines too, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const { lines, rail, backgrounds } = yield* drawUserRow(width, true)
+          // The image row, the wrapped first line, the second line: one block.
+          expect(rail.length).toBeGreaterThanOrEqual(3)
+          if (width === 40) expect(rail.length).toBeGreaterThan(4)
+          expect(rail).toEqual(Array.from({ length: rail.length }, (_, i) => (rail[0] ?? 0) + i))
+          for (const row of rail) {
+            const columns = backgrounds[row] ?? []
+            const unfilled = columns.flatMap((bg, column) => {
+              if (column === 0 || bg.equals(SURFACE)) return []
+              return [column]
+            })
+            expect(unfilled).toEqual([])
+            // The rail is the lane's mark, not the surface.
+            expect(columns[0]?.equals(SURFACE)).toBe(false)
+          }
+          // No padding rows: the rows around the block keep the terminal's ground.
+          const outside = backgrounds.filter((_, row) => !rail.includes(row))
+          expect(outside.filter((columns) => columns.some((bg) => bg.equals(SURFACE)))).toEqual([])
+          expect(lines.slice(rail[0], (rail.at(-1) ?? 0) + 1).join("\n")).toContain("[Image: png]")
+        }),
+    )
+  }
+
+  it.scopedLive("with the terminal's background unknown there is no fill and the rail stays", () =>
+    Effect.gen(function* () {
+      const { rail, backgrounds } = yield* drawUserRow(60, false)
+      expect(rail.length).toBeGreaterThanOrEqual(3)
+      // The terminal's ground, as the last row (outside the block) shows it.
+      const ground = Option.getOrThrow(Option.fromUndefinedOr(backgrounds.at(-1)?.[0]))
+      for (const row of rail) {
+        const painted = (backgrounds[row] ?? []).filter((bg) => !bg.equals(ground))
+        expect(painted).toEqual([])
+      }
+    }),
+  )
 })

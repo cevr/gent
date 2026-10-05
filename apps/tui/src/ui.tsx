@@ -14,7 +14,7 @@ import {
 } from "solid-js"
 import { Effect, Fiber, Match, Option, Predicate, Schedule, Schema } from "effect"
 import { splitLines } from "@gent/core/protocol"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {
   KeyboardGate,
@@ -30,7 +30,9 @@ import {
   dropLastGrapheme,
   formatPreviewFooter,
   graphemeBoundaryFrom,
+  type TextRun,
   truncate,
+  truncateRuns,
   truncateStart,
   useRequiredContext,
 } from "./utils"
@@ -1837,37 +1839,64 @@ const FREE_LAST_COLUMN = 1
 /** Body lines a message another session sent shows at the preview level. */
 const AGENT_MESSAGE_PREVIEW_LINES = 5
 
-/** The rail row: images, then the text; `header` is a muted line above it. */
+/**
+ * The rail row: images, then the text; `header` is a muted line above it.
+ * Right of the rail, every row of the block sits on `theme.backgroundPanel`
+ * (Codex's prompt fill unless the theme names one) out to the row's end. No padding row: the surface
+ * marks the block on its own rows, and the rail alone when the terminal's
+ * background is unknown.
+ */
 export function UserRow(props: MessageRowProps & { readonly header?: string }) {
   const { theme } = useTheme()
   return (
     <box
       marginTop={1}
-      paddingLeft={1}
-      paddingRight={1}
       flexDirection="column"
       border={["left"]}
       borderStyle="heavy"
       borderColor={theme.primary}
     >
-      <Show when={props.images.length > 0}>
-        <For each={props.images}>
-          {(img) => (
-            <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
-          )}
-        </For>
-      </Show>
-      <Show when={props.content.length > 0}>
-        <box flexDirection="column">
-          <Show when={props.header}>
-            {(header) => <text style={{ fg: theme.textMuted }}>{header()}</text>}
-          </Show>
-          <text style={{ fg: theme.text }}>
-            <span style={{ bold: true }}>{props.content}</span>
-          </text>
-        </box>
-      </Show>
+      <box
+        flexGrow={1}
+        paddingLeft={1}
+        paddingRight={1}
+        flexDirection="column"
+        backgroundColor={theme.backgroundPanel}
+      >
+        <Show when={props.images.length > 0}>
+          <For each={props.images}>
+            {(img) => (
+              <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
+            )}
+          </For>
+        </Show>
+        <Show when={props.content.length > 0}>
+          <box flexDirection="column">
+            <Show when={props.header}>
+              {(header) => <text style={{ fg: theme.textMuted }}>{header()}</text>}
+            </Show>
+            <text style={{ fg: theme.text }}>
+              <span style={{ bold: true }}>{props.content}</span>
+            </text>
+          </box>
+        </Show>
+      </box>
     </box>
+  )
+}
+
+/**
+ * A line drawn in runs (`truncateRuns`, `activityHeaderRuns`), each run a
+ * span in its tone's colour; it goes inside a `<text>`.
+ */
+export function ToneRuns<Tone>(props: {
+  readonly runs: ReadonlyArray<TextRun<Tone>>
+  readonly color: (tone: Tone) => RGBA
+}) {
+  return (
+    <For each={[...props.runs]}>
+      {(run) => <span style={{ fg: props.color(run.tone) }}>{run.text}</span>}
+    </For>
   )
 }
 
@@ -1895,8 +1924,12 @@ export function CollapsedRow(props: CollapsedRowProps) {
 
 /** A message another session sent, as `AgentMessageRow` draws it. */
 interface AgentMessageRowProps {
-  /** Who wrote it, after the `»`: `child explore · 0e493eaf`. */
+  /** How the writer relates to the reader's session, after the `»`: `child`, `parent`, `task from parent`. */
   readonly head: string
+  /** The writer's name, drawn in the names' colour after the head: `explore`. */
+  readonly name?: string
+  /** The writer's short session id, after the name: `0e493eaf`. */
+  readonly id?: string
   /** The text it says, without the header the model reads. */
   readonly body: string
   readonly images?: ReadonlyArray<{ readonly mediaType: string }>
@@ -1905,10 +1938,11 @@ interface AgentMessageRowProps {
 
 /**
  * A message another session (a child, a parent, a peer) or an agent wrote:
- * never the reader's rail, never bold, the muted gray of a tool row.
- * Collapsed is one line, `» <head> · <first body line>`, cut at the width.
- * Preview adds five body lines behind a `│ ` gutter and counts the rest;
- * full draws the whole body hanging at column 4.
+ * never the reader's rail, never bold, the muted gray of a tool row, but the
+ * writer's name in the names' colour (Codex draws an agent's nickname in its
+ * accent). Collapsed is one line, `» <head> <name> · <id> · <first body
+ * line>`, cut at the width. Preview adds five body lines behind a `│ `
+ * gutter and counts the rest; full draws the whole body hanging at column 4.
  */
 export function AgentMessageRow(props: AgentMessageRowProps) {
   const { theme } = useTheme()
@@ -1924,18 +1958,29 @@ export function AgentMessageRow(props: AgentMessageRowProps) {
   })
   // The columns right of the glyph column, less the free last column.
   const width = () => Math.max(1, dimensions().width - GLYPH_COLUMN - FREE_LAST_COLUMN)
+  const toneColor = (tone: "muted" | "name") => {
+    if (tone === "name") return theme.info
+    return theme.textMuted
+  }
   const headLine = () => {
-    const head = `» ${props.head}`
+    const runs: Array<TextRun<"muted" | "name">> = [{ text: `» ${props.head}`, tone: "muted" }]
+    if (Predicate.isNotUndefined(props.name) && props.name.length > 0) {
+      let space = ""
+      if (props.head.length > 0) space = " "
+      runs.push({ text: space, tone: "muted" }, { text: props.name, tone: "name" })
+    }
+    if (Predicate.isNotUndefined(props.id) && props.id.length > 0)
+      runs.push({ text: ` · ${props.id}`, tone: "muted" })
     const first = lines()[0]
-    if (props.disclosure !== "collapsed" || Predicate.isUndefined(first))
-      return truncate(head, width())
-    return truncate(`${head} · ${first}`, width())
+    if (props.disclosure === "collapsed" && Predicate.isNotUndefined(first))
+      runs.push({ text: ` · ${first}`, tone: "muted" })
+    return truncateRuns(runs, width())
   }
   const preview = () => lines().slice(0, AGENT_MESSAGE_PREVIEW_LINES)
   return (
     <box marginTop={1} paddingLeft={GLYPH_COLUMN} flexDirection="column">
       <text style={{ fg: theme.textMuted }} wrapMode="none">
-        {headLine()}
+        <ToneRuns runs={headLine()} color={toneColor} />
       </text>
       <Show when={props.disclosure === "preview" && preview().length > 0}>
         <box paddingLeft={GLYPH_TEXT_COLUMN - GLYPH_COLUMN} flexDirection="column">

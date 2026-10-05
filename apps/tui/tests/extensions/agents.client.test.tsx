@@ -25,6 +25,8 @@ import {
   type ExtensionAgentDetail,
 } from "../../src/extensions/client-facets"
 import { DockProvider, PickerFrame } from "../../src/ui"
+import { useTheme } from "../../src/theme"
+import { RGBA } from "@opentui/core"
 import {
   createMockClient,
   createMockRuntime,
@@ -2134,32 +2136,45 @@ describe("Subagent tray", () => {
         runningCall: { tool: "read", input: { path: "/work/ARCHITECTURE.md" } },
       }
       for (const width of [100, 60, 40]) {
+        let names = () => RGBA.fromInts(0, 0, 0, 0)
         const setup = yield* renderScoped(
-          () => (
-            <SubagentTray
-              place={PLACE}
-              controller={{
-                rows: () => [root("root", "idle"), busy],
-                current: () => ({
-                  sessionId: SessionId.make("root"),
-                  branchId: BranchId.make("root-branch"),
-                }),
-                error: () => Option.none(),
-                loading: () => false,
-                refresh: () => {},
-                reload: () => {},
-                detail: () => Option.none(),
-                select: () => {},
-                done: () => [],
-                open: () => false,
-              }}
-            />
-          ),
+          () => {
+            const { theme } = useTheme()
+            names = () => theme.info
+            return (
+              <SubagentTray
+                place={PLACE}
+                controller={{
+                  rows: () => [root("root", "idle"), busy],
+                  current: () => ({
+                    sessionId: SessionId.make("root"),
+                    branchId: BranchId.make("root-branch"),
+                  }),
+                  error: () => Option.none(),
+                  loading: () => false,
+                  refresh: () => {},
+                  reload: () => {},
+                  detail: () => Option.none(),
+                  select: () => {},
+                  done: () => [],
+                  open: () => false,
+                }}
+              />
+            )
+          },
           { width, height: 6 },
         )
         const frame = yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "tray")
         const line = frame.split("\n").find((value) => value.includes("ctrl+t sessions")) ?? ""
         expect(line).toMatch(/^ ?[◇◈◆] dele/)
+        // The child's name takes the names' colour, as Codex draws a nickname; the call stays muted.
+        const spans = setup.captureSpans().lines.flatMap((spans) => spans.spans)
+        // A span is a run of one colour: the pulse may share the names' colour, and its span.
+        const name = spans.find((span) => span.text.includes("dele"))
+        expect(name?.fg.equals(names())).toBe(true)
+        expect(name?.text).not.toContain("Reading")
+        const call = spans.find((span) => span.text.includes("Reading"))
+        expect(call?.fg.equals(names())).toBe(false)
         // The call keeps up to half the row; the name is cut to the rest.
         expect(line).toContain("· Reading")
         if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")

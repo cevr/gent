@@ -85,6 +85,8 @@ import {
   useToolRenderers,
 } from "../src/tool-renderers"
 import {
+  answerPalette,
+  darkTerminalColors,
   destroyRenderSetup,
   renderFrame,
   renderScoped,
@@ -2323,11 +2325,16 @@ describe("cell rows", () => {
         { width: 60, height: 30 },
       )
       const theme = Option.getOrThrow(colors)
+      // The glyph is its own colour; the header's words stay muted.
       const glyphs = setup
         .captureSpans()
-        .lines.flatMap((line) =>
-          line.spans.filter((span) => /^\s*[●✗] Ran 1 command/.test(span.text)),
+        .lines.filter((line) =>
+          line.spans
+            .map((span) => span.text)
+            .join("")
+            .includes("Ran 1 command"),
         )
+        .flatMap((line) => line.spans.filter((span) => /^\s*[●✗]/.test(span.text)))
         .map((span) => ({ glyph: span.text.trim().slice(0, 1), fg: span.fg }))
       expect(glyphs.map((entry) => entry.glyph)).toEqual(["●", "●", "✗"])
       expect(glyphs[0]?.fg.equals(theme.textMuted)).toBe(true)
@@ -2897,6 +2904,164 @@ describe("transcript block spacing", () => {
         expect(blankRuns).toEqual(Array.from({ length: history.length - 1 + 2 * cells }, () => 1))
       }),
   )
+})
+
+/**
+ * The agent's answer and a tool run are two blocks, as Codex parts each
+ * history cell: one blank row between an answer segment and the run after
+ * it, and between a run and the answer after it, inside one message as
+ * across two.
+ */
+describe("answers and tool runs", () => {
+  const readCall: ToolCall = {
+    id: "spacing-read",
+    toolName: "read",
+    status: "completed",
+    input: { path: "src/a.ts" },
+    summary: absent,
+    output: "one\ntwo",
+  }
+  const bashCall: ToolCall = {
+    id: "spacing-bash",
+    toolName: "bash",
+    status: "completed",
+    input: { command: "seq 3" },
+    summary: absent,
+    output: encodeJson({ stdout: "1\n2\n3\n", stderr: "", exitCode: 0 }),
+  }
+  const message = (id: string, segments: NonNullable<ListMessage["segments"]>): ListMessage => ({
+    _tag: "regular-message",
+    id,
+    role: "assistant",
+    content: segments
+      .flatMap((segment) => {
+        if (segment._tag === "text") return [segment.content]
+        return []
+      })
+      .join(""),
+    reasoning: "",
+    images: [],
+    createdAt: 0,
+    segments,
+  })
+  const items: SessionItem[] = [
+    message("text-then-run", [
+      { _tag: "text", content: "Inspected the relevant files." },
+      { _tag: "tool-call", toolCall: readCall },
+    ]),
+    message("answer-after-run", [
+      { _tag: "text", content: "The duplicate chrome came from both." },
+    ]),
+    message("run-then-text", [
+      { _tag: "tool-call", toolCall: bashCall },
+      { _tag: "text", content: "Ran it and it passed." },
+    ]),
+  ]
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`one blank row parts each answer from each run at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const setup = yield* renderScoped(
+          () => <MessageList items={items} disclosure="collapsed" syntaxStyle={syntaxStyle} />,
+          { width, height: 30 },
+        )
+        const frame = yield* waitForFrame(
+          setup,
+          (text) => text.includes("Ran it and it passed."),
+          "the last answer",
+        )
+        const lines = frame.split("\n").map((line) => line.trimEnd())
+        const body = lines.slice(
+          lines.findIndex((line) => line.length > 0),
+          lines.findLastIndex((line) => line.length > 0) + 1,
+        )
+        expect(body).toEqual([
+          "  Inspected the relevant files.",
+          "",
+          "  ● Read 1 file",
+          "",
+          "  The duplicate chrome came from both.",
+          "",
+          "  ● Ran 1 command",
+          "",
+          "  Ran it and it passed.",
+        ])
+      }),
+    )
+  }
+})
+
+/**
+ * Hue goes where the reader must look (Codex: errors and failures red): a
+ * failed run's `✗` and its `N failed` take the error colour, and so does the
+ * outcome word of each failure row (`exit 2`, `failed`). The run's words,
+ * its connectors and its reasons stay muted, as fx draws them.
+ */
+describe("failure hue on a tool run", () => {
+  const failedRead = runnerFailure(
+    "hue-read",
+    "read",
+    { path: "src/missing.ts" },
+    "ENOENT: no such file or directory",
+  )
+  const exitedBash: ToolCall = {
+    id: "hue-bash",
+    toolName: "bash",
+    status: "completed",
+    input: { command: "ls d.ts" },
+    summary: absent,
+    output: encodeJson({ stdout: "", stderr: "ls: cannot access 'd.ts'", exitCode: 2 }),
+  }
+  const run: ListMessage = {
+    _tag: "regular-message",
+    id: "hue-run",
+    role: "assistant",
+    content: "",
+    reasoning: "",
+    images: [],
+    createdAt: 0,
+    segments: [
+      { _tag: "tool-call", toolCall: failedRead },
+      { _tag: "tool-call", toolCall: exitedBash },
+    ],
+  }
+  for (const disclosure of ["collapsed", "preview"] as const) {
+    for (const width of [100, 60, 40]) {
+      it.scopedLive(
+        `a failed run colours only its glyph and its failures at ${disclosure}, ${width} columns`,
+        () =>
+          Effect.gen(function* () {
+            let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+            const setup = yield* renderScoped(
+              () => {
+                colors = Option.some(useTheme().theme)
+                return (
+                  <MessageList items={[run]} disclosure={disclosure} syntaxStyle={syntaxStyle} />
+                )
+              },
+              { width, height: 30 },
+            )
+            const frame = yield* waitForFrame(
+              setup,
+              (text) => text.includes("exit 2"),
+              "the failure rows",
+            )
+            const theme = Option.getOrThrow(colors)
+            const spans = setup
+              .captureSpans()
+              .lines.flatMap((line) => line.spans.filter((span) => span.text.trim().length > 0))
+            const colored = spans.filter((span) => !span.fg.equals(theme.textMuted))
+            expect(colored.map((span) => span.text.trim())).toEqual([
+              "✗",
+              "2 failed",
+              "failed",
+              "exit 2",
+            ])
+            for (const span of colored) expect(span.fg.equals(theme.error)).toBe(true)
+            if (width >= 60) expect(frame).toContain("✗ Read 1 file · ran 1 command · 2 failed")
+          }),
+      )
+    }
+  }
 })
 
 const GrepToolRenderer = Option.getOrThrow(
@@ -3715,6 +3880,78 @@ describe("native transcript rows in history", () => {
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
+
+  // White at 12% over the dark terminal's `#1d1f21`.
+  const SURFACE = "56,58,60"
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `the reader's surface reaches history as drawn, and again after a replay, at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          /** One rail row a commit wrote: its width, the columns 1 to the free last one left bare, the free one's fill. */
+          const railRows: Array<{ width: number; bare: number[]; lastFilled: boolean }> = []
+          let extensionsLoaded = () => false
+          const prompt = Array.from(
+            { length: 12 },
+            (_, i) => `prompt line ${i + 1} holds words enough to wrap at forty`,
+          ).join("\n")
+          const items: SessionItem[] = [
+            userMessage("regular-message", "filled-user", prompt),
+            assistant("after-prompt", longBody("AFTER")),
+          ]
+          const setup = yield* renderScoped(
+            () => {
+              const renderer = useRenderer()
+              answerPalette(renderer, darkTerminalColors)
+              extensionsLoaded = useExtensionUI().loaded
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                const { snapshot } = event
+                const { char, bg } = snapshot.buffers
+                const filled = (row: number, column: number) => {
+                  const at = (row * snapshot.width + column) * 4
+                  // The snapshot keeps each channel as a byte.
+                  const ints = [0, 1, 2].map((i) => bg[at + i] ?? 0)
+                  return (bg[at + 3] ?? 0) > 0 && ints.join(",") === SURFACE
+                }
+                for (let row = 0; row < snapshot.height; row++) {
+                  if (char[row * snapshot.width] !== 0x2503) continue
+                  const bare: number[] = []
+                  for (let column = 1; column < snapshot.width - 1; column++)
+                    if (!filled(row, column)) bare.push(column)
+                  railRows.push({
+                    width: snapshot.width,
+                    bare,
+                    lastFilled: filled(row, snapshot.width - 1),
+                  })
+                }
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return <Transcript items={items} />
+            },
+            { width, height: 14 },
+          )
+          yield* untilExtensionsLoaded(setup, () => extensionsLoaded())
+          const committedAt = (at: number) => () =>
+            railRows.filter((row) => row.width === at).length >= 8
+          let otherWidth = 60
+          if (width === 60) otherWidth = 100
+          for (const at of [width, otherWidth]) {
+            if (setup.renderer.terminalWidth !== at) setup.resize(at, 14)
+            yield* Effect.promise(() => setup.flush()).pipe(
+              Effect.repeat({ until: committedAt(at), schedule: Schedule.spaced("10 millis") }),
+              Effect.timeout("4 seconds"),
+              Effect.ignore,
+            )
+            const rows = railRows.filter((row) => row.width === at)
+            expect(rows.length).toBeGreaterThanOrEqual(8)
+            expect(rows.filter((row) => row.bare.length > 0)).toEqual([])
+            expect(rows.filter((row) => row.lastFilled)).toEqual([])
+          }
+        }).pipe(Effect.timeout("12 seconds")),
+      15_000,
+    )
+  }
 })
 
 describe("native transcript rows under the footer", () => {
