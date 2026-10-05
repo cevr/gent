@@ -533,7 +533,7 @@ interface KeyHint {
  * The one vocabulary of the key-hint rows: lowercase keys, one verb per key.
  * Enter picks a row (`select`) or sends typed text (`submit`). Esc closes a
  * pane and goes `back` from a sub-screen. A pane with a key of its own
- * (`tab complete`, `ctrl+t hide`) names it with {@link keyHint}.
+ * (`tab complete`, `ctrl+x delete`) names it with {@link keyHint}.
  */
 export const KeyHints = {
   move: { key: "↑↓", verb: "move" },

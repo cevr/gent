@@ -908,30 +908,35 @@ describe("Agents pane navigation", () => {
     }),
   )
 
-  it.scopedLive("ctrl+t is a command keybind that opens and closes the pane", () =>
+  it.scopedLive("← opens the pane and the pane's own ← closes it; ctrl+t is bound to nothing", () =>
     Effect.gen(function* () {
       const runtime = makeClientExtensionRuntime({ requestReply: { rows: [] } })
       const contributions = yield* runClientExtensionSetup(runtime, agentsExtension)
       const commands = contributions.commands ?? []
-      const toggle = commands.find((command) => command.keybind === "ctrl+t")
-      expect(toggle?.id).toBe("agents.toggle")
+      expect(commands.filter((command) => command.keybind === "left").map(({ id }) => id)).toEqual([
+        "agents.view",
+      ])
+      expect(commands.some((command) => command.keybind === "ctrl+t")).toBe(false)
       const pane = Option.getOrThrow(
         Option.fromUndefinedOr(contributions.widgets?.find((w) => w.id === "agents.pane")),
       )
-      // The session's keybind dispatch, as the session view runs it under every pane.
+      // The session's keybind dispatch over an empty composer, as the session view runs it.
       const Session = () => {
         const command = useCommand()
-        useScopedKeyboard((event) => command.handleKeybind(event, commands, false))
+        useScopedKeyboard((event) => command.handleKeybind(event, commands, true))
         return <pane.component />
       }
       const setup = yield* renderScoped(() => <Session />)
-      expect(renderFrame(setup)).not.toContain("ctrl+t hide")
+      const paneOpen = (frame: string) => frame.includes("esc close")
+      setup.mockInput.pressKey("t", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(paneOpen(renderFrame(setup))).toBe(false)
 
-      setup.mockInput.pressKey("t", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "the pane opened")
-      // The open pane's own keys leave ctrl+t to the dispatch, which closes it.
-      setup.mockInput.pressKey("t", { ctrl: true })
-      yield* waitForFrame(setup, (frame) => !frame.includes("ctrl+t hide"), "the pane closed")
+      setup.mockInput.pressArrow("left")
+      const opened = yield* waitForFrame(setup, paneOpen, "the pane opened by ←")
+      expect(opened).not.toContain("ctrl+t")
+      setup.mockInput.pressArrow("left")
+      yield* waitForFrame(setup, (frame) => !paneOpen(frame), "the pane closed by its own ←")
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
@@ -1094,7 +1099,7 @@ describe("Agents pane framing", () => {
           ),
           { width: 80, height: 40 },
         )
-        yield* waitForFrame(setup, (frame) => frame.includes("ctrl+t hide"), "agents pane")
+        yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "agents pane")
         const lines = renderFrame(setup).split("\n")
 
         // Ruled top and bottom, never the rounded box a docked pane draws.
@@ -1110,9 +1115,7 @@ describe("Agents pane framing", () => {
 
         // One muted footer line, immediately under the bottom rule.
         const bottom = lines.findLastIndex((line) => line.startsWith("────"))
-        expect(lines[bottom + 1]).toContain(
-          "↑↓ move · enter select · ctrl+x delete · ctrl+t hide · esc close",
-        )
+        expect(lines[bottom + 1]).toContain("↑↓ move · enter select · ctrl+x delete · esc close")
 
         // Every capability the pane had inside the bordered box still draws:
         // the section heading, the row, and the detail line, each on its own
@@ -1689,11 +1692,11 @@ describe("the status row names the child the reader watches", () => {
   it.scopedLive("viewing a child session shows ↳ child and its name, then the way back", () =>
     Effect.gen(function* () {
       const labels = yield* childLabels("explore")
-      expect(labels.map((label) => label.text)).toEqual(["↳ child explore", "ctrl+t sessions"])
+      expect(labels.map((label) => label.text)).toEqual(["↳ child explore", "← sessions"])
       expect(labels[0]?.color).toBe("info")
       // On a narrow row the way back gives way after the debug mark, before the cwd.
       expect(labels[1]?.short?.text).toBe("")
-      expect(labels[1]?.key).toBe("ctrl+t")
+      expect(labels[1]?.key).toBe("←")
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1795,10 +1798,10 @@ describe("the status row names the child the reader watches", () => {
         },
         { width: 100, height: 4 },
       )
-      yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "status row")
+      yield* waitForFrame(setup, (next) => next.includes("← sessions"), "status row")
       const theme = Option.getOrThrow(colors)
       const spans = setup.captureSpans().lines.flatMap((line) => line.spans)
-      expect(spans.find((span) => span.text === "ctrl+t")?.fg.equals(theme.text)).toBe(true)
+      expect(spans.find((span) => span.text === "←")?.fg.equals(theme.text)).toBe(true)
       expect(spans.find((span) => span.text.includes("sessions"))?.fg.equals(theme.textMuted)).toBe(
         true,
       )
@@ -1817,12 +1820,12 @@ describe("the status row names the child the reader watches", () => {
           const withChild = yield* statusRowAt(width, host, labels)
           const hintOnly = yield* statusRowAt(width, host, labels.slice(1))
           const bare = yield* statusRowAt(width, host, [])
-          expect(withChild.includes("ctrl+t sessions")).toBe(hintOnly.includes("ctrl+t sessions"))
+          expect(withChild.includes("← sessions")).toBe(hintOnly.includes("← sessions"))
           expect(withChild.includes("repo")).toBe(bare.includes("repo"))
           // At 100 columns a plain row has room for all three, the name cut at a word.
           if (width === 100 && host === "plain") {
             expect(withChild).toContain(
-              "repo · Claude Sonnet 5.5 · ↳ child Check the… · ctrl+t sessions",
+              "repo · Claude Sonnet 5.5 · ↳ child Check the… · ← sessions",
             )
           }
         }).pipe(Effect.timeout("8 seconds")),
@@ -2051,11 +2054,11 @@ describe("thread rows", () => {
         )
         const Session = () => {
           const command = useCommand()
-          useScopedKeyboard((event) => command.handleKeybind(event, commands, false))
+          useScopedKeyboard((event) => command.handleKeybind(event, commands, true))
           return <pane.component />
         }
         const setup = yield* renderScoped(() => <Session />, { width: 120, height: 20 })
-        setup.mockInput.pressKey("t", { ctrl: true })
+        setup.mockInput.pressArrow("left")
         yield* waitForFrame(
           setup,
           (frame) => frame.includes("fix auth"),
@@ -2388,7 +2391,7 @@ describe("done threads", () => {
       const frame = yield* waitForFrame(setup, (next) => next.includes("release notes"), "done row")
       expect(frame).toContain("◆ release notes")
       expect(frame).not.toContain("done ·")
-      expect(frame).toContain("ctrl+t sessions")
+      expect(frame).toContain("← sessions")
       setHere({ sessionId: finished.sessionId, branchId: finished.branchId })
       yield* waitForFrame(setup, (next) => !next.includes("release notes"), "opened thread")
     }),
@@ -2520,7 +2523,7 @@ describe("Subagent tray", () => {
       expect(frame).not.toContain("working")
       expect(frame).not.toContain("child-b")
       expect(frame).not.toContain("idle")
-      expect(frame).toContain("ctrl+t sessions")
+      expect(frame).toContain("← sessions")
       // The controller owns reads; mounting its tray does not duplicate them.
       expect(refreshes).toEqual([])
 
@@ -2565,8 +2568,8 @@ describe("Subagent tray", () => {
           },
           { width, height: 6 },
         )
-        const frame = yield* waitForFrame(setup, (next) => next.includes("ctrl+t sessions"), "tray")
-        const line = frame.split("\n").find((value) => value.includes("ctrl+t sessions")) ?? ""
+        const frame = yield* waitForFrame(setup, (next) => next.includes("← sessions"), "tray")
+        const line = frame.split("\n").find((value) => value.includes("← sessions")) ?? ""
         expect(line).toMatch(/^ ?[◇◈◆] dele/)
         // The child's name takes the names' colour, as Codex draws a nickname; the call stays muted.
         const spans = setup.captureSpans().lines.flatMap((spans) => spans.spans)
@@ -2579,7 +2582,7 @@ describe("Subagent tray", () => {
         // The call keeps up to half the row; the name is cut to the rest.
         expect(line).toContain("· Reading")
         if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")
-        expect(line).toContain("ctrl+t sessions")
+        expect(line).toContain("← sessions")
         expect(line).not.toContain("working")
         expect(line.trimEnd().length).toBeLessThanOrEqual(width)
       }
@@ -2668,7 +2671,7 @@ describe("Subagent tray", () => {
       )
       const frame = yield* waitForFrame(setup, (next) => next.includes("日本語"), "wide tray")
       // Padding counts display columns: each of these characters takes two.
-      expect(frame).toContain("ctrl+t sessions")
+      expect(frame).toContain("← sessions")
     }),
   )
 

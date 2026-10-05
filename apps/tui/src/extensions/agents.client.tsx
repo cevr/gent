@@ -24,7 +24,6 @@ import {
   formatCost,
   formatDuration,
   groupedRows,
-  keyHint,
   KeyHints,
   type PathPlace,
   PickerFrame,
@@ -117,18 +116,19 @@ const subtreeRows = (
   }
 }
 
-const TRAY_KEY = "ctrl+t"
+/** The key that opens the pane: ← on an empty composer (`agents.view`). */
+const TRAY_KEY = "←"
 const TRAY_HINT = `${TRAY_KEY} sessions`
 const TRAY_MAX_ROWS = 3
 /**
  * Columns of a child's name on the status row; a delegate's name is often its
  * whole task. At 100 columns the left group has 71 beside the right group
  * (`cache 5m · ctx 0% · $0.002`). The phase, the cwd, `Claude Sonnet 5.5` and
- * the way back take 49 of them, and ` · ↳ child ` 11 more: 11 are left for
+ * the way back take 44 of them, and ` · ↳ child ` 11 more: 16 are left for
  * the name. At 60 and 40 columns the way back alone does not fit, so the
  * label never shows there.
  */
-const WATCHED_NAME = 11
+const WATCHED_NAME = 16
 
 /** `text` in whole words within `width` columns, ending in `…` when cut; a first word too long is cut in it. */
 const wholeWords = (text: string, width: number): string => {
@@ -1278,13 +1278,7 @@ export function AgentsPane(props: {
           them; from 100 the details column stands beside the list instead. */}
       <PickerFrame
         title={paneTitle(visible())}
-        keys={[
-          KeyHints.move,
-          KeyHints.select,
-          KeyHints.delete,
-          keyHint("ctrl+t", "hide"),
-          KeyHints.close,
-        ]}
+        keys={[KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]}
         height={Option.getOrUndefined(wideHeight())}
         detail={Option.getOrUndefined(
           Option.liftPredicate(
@@ -1431,18 +1425,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         // nothing else is open, so ← in a draft still moves the text cursor.
         keybind: "left",
         onSelect: openPane,
-      }),
-      clientCommandContribution({
-        id: "agents.toggle",
-        title: "Show or hide sessions",
-        category: "Session",
-        // A ctrl key: it fires over a draft and over the open pane, so it
-        // closes the pane as well as opening it.
-        keybind: "ctrl+t",
-        onSelect: () => {
-          if (controller.open()) shell.pane.close(AGENTS_PANE)
-          else openPane()
-        },
       }),
       widgetContribution({
         id: AGENTS_PANE,
