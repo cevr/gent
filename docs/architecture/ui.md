@@ -4,7 +4,7 @@ Every pass sweeps the TUI as a user sees it, next to the prior-art TUIs, run sid
 
 ## Reference TUIs
 
-The references are the `ui` rows of [`PRIOR_ARTS.md`](../../PRIOR_ARTS.md): Claude Code first for the transcript (a clear transcript, a north star), vercel-labs/fx for input and layout, then pi and opencode, each with what to read and how to run it. Never the `curl … | bash` installer. Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
+The references are the `ui` rows of [`PRIOR_ART.md`](../../PRIOR_ART.md): Claude Code first for the transcript (a clear transcript, a north star), vercel-labs/fx for input and layout, then pi and opencode, each with what to read and how to run it. Never the `curl … | bash` installer. Sources live under `okra repo path <slug>`; read the TUI code and e2e captures for any screen the running binary cannot reach without a model.
 
 ## How to run
 

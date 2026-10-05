@@ -97,7 +97,7 @@ updates this list in the same commit.
     its EXIF orientation turns is stored turned), and a colour profile an
     encode carries at more than a quarter of the byte limit is left out of
     that encode, so only undecodable bytes fail
-    (the prior arts' settled entry "Tool image scaling" holds why). Receipts:
+    (the prior art's settled entry "Tool image scaling" holds why). Receipts:
     A cell result carries the images its code shows, through the same
     projection (see the cell section). Receipts:
     `toolImagePrompt`, `toolImagesToDrop` and `toPrompt` in
@@ -2025,7 +2025,7 @@ oldest images, so one cell never makes a request drop the images it just
 sent. A failed cell carries none. Prime Agent and Codex's `exec` code mode
 take an explicit helper (`attach_image`, `image(...)`) because their display
 is text; opencode's code mode sends every image a nested call returns
-(`PRIOR_ARTS.md`).
+(`PRIOR_ART.md`).
 
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
