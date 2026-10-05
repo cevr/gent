@@ -478,9 +478,17 @@ An extension reads its own config keys at setup (`@gent/guard`,
 `@gent/router`), and `UserConfig` decodes only core's keys, so the key holds
 the hash of `FreshConfig.fingerprint` too: every key of the user and project
 config files as canonical JSON, the disabled list left out (the key holds its
-effect, the set of extensions), a missing file the same as `{}`. An edit to
-any other key builds a new profile for the next turn, a turn that holds the
-old one keeps its lease, and a write of the same keys keeps the profile. Each extension entry (a file,
+effect, the set of extensions), a missing file the same as `{}`, and a file
+that cannot be read `unreadable`. An edit to any other key builds a new
+profile for the next turn, a turn that holds the old one keeps its lease, and
+a write of the same keys keeps the profile. A profile is built from one read
+of the config: the extension scan and every setup run over
+`configSnapshotFileSystem` (`runtime/config.ts`), which answers `exists` and
+`readFile` of the two config files from `FreshConfig.files`, the read the key
+was taken from, and sends every other path and operation to the platform. So
+an edit that lands between the read and a setup does not reach the build, and
+a file the read could not read fails again for each setup, never reads as
+missing. Resource builds and leaves read the live files. Each extension entry (a file,
 or a directory's index) is built with every module it imports by a relative
 path into one module (`GentPlatform.bundleModule`, `Bun.build` with package
 imports external), and its version is the built module's hash. The platform

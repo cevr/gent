@@ -41,7 +41,10 @@ edited, added or removed extension file reaches the next turn the same way, with
 no restart. An extension is built with the modules it imports by a relative
 path, so an edit to one of them reaches the next turn too, and a save of the
 same bytes changes nothing. Its top level runs once per version; setup runs
-again on each new profile. An edit that breaks an extension that ran (it does
+again on each new profile. A setup may read its own keys from the config
+files (`~/.gent/config.json`, a project's `.gent/config.json`): it reads them
+as the profile's one read of the config found them, an edit to them builds a
+new profile, and a file that read could not read fails for the setup too. An edit that breaks an extension that ran (it does
 not build or import, its setup fails, it fails validation, or a process
 Resource fails to build) keeps the last good version running, and health
 reports the extension degraded with why the new version failed. A last good
@@ -708,12 +711,14 @@ It judges a call in this order, and the first answer wins:
    judged on a part. A failure, no answer in 8 s, or an answer the
    classifier is not sure of asks. With no policy, the call runs.
 
-A `guard` entry that does not decode asks about each call that is not
-read-only. Both files' entries apply: the policies join, the project's
+A `guard` entry that does not decode, and a config file the guard cannot
+read or that is not a JSON object, ask about each call that is not
+read-only: only a missing file or a file with no `guard` key leaves the
+guard off. Both files' entries apply: the policies join, the project's
 rules come after the user's, and the project's `model` wins. The guard reads
-its config when a session profile is built, and an edit to a config file
-builds a new profile for the next turn, so a change applies from the next
-turn on. Set `disabledExtensions: ["@gent/guard"]` to turn it off.
+its config when a session profile is built, from the same read of the files
+that names the profile, and an edit to a config file builds a new profile
+for the next turn, so a change applies from the next turn on. Set `disabledExtensions: ["@gent/guard"]` to turn it off.
 
 The guard is not a sandbox. The classifier reads a call's input as text: a
 cell's code is judged as written, and each tool call the code makes is judged
