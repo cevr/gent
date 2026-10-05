@@ -1470,3 +1470,10 @@ Opening HEAD `59517a2bc`. Sweeps and triage in `~/.cache/architecture-loop/gent/
 - PTY e2e tests: each body has an `Effect.timeout` 5 s shorter than bun's, so scope finalizers run on a timeout (project rule).
 - Validation: gent: 11 changed PTY + 3 drive cases green, gate and E2E red only on the two named main flakes. Orchestrator: line review, main merged, locked gate EXIT 1 only on the App prompt-search test (main flake, in flight as gent's flakes-under-load task), locked E2E EXIT 0. Merged `86b2e6db3`, pushed.
 - Carried: the two main flakes (App "a pane that opens over a previewing prompt search gives the draft back"; e2e 45x15 retried multiline prompt) are gent's flakes-under-load task.
+
+### Pass 31 (gent dogfood loop) SDK server construction lifecycle, 2026-10-05
+
+- gent batch (Sol high implementor; Sol max reviewer R1 hold: an interruption right after a successful start escaped the cleanup of the server child, and its lock could not be taken again; R2: no findings). Report `~/.cache/architecture-loop/gent/pass31-gent/apply-sdk-lifecycle.md`.
+- `resolveServer` (packages/sdk/src/discovery.ts) builds the server in a child scope it owns until delivery: a failed start closes it with the failure; a cancel stops and awaits the start, then releases what it acquired; a delivered server lives in the caller's scope. Also: a failed server construction releases what it built. Red at the public boundary with a deterministic scheduler (step 58).
+- Validation: gent: SDK 59, gate, hook, one unchanged E2E retry. Orchestrator: line review, main merged, locked gate EXIT 0 (core 1277, extensions 1387, tui 1460, tooling 386, sdk 59, site 9, examples 3), locked E2E EXIT 0. Merged `64a010565`, pushed.
+- Carried: the historical SIGHUP message-loss E2E failure is not reproduced and not claimed fixed.
