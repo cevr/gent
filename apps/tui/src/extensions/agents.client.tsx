@@ -117,8 +117,30 @@ const subtreeRows = (
 
 const TRAY_HINT = "ctrl+t sessions"
 const TRAY_MAX_ROWS = 3
-/** Columns of a child's name on the status row: a delegate's name is often its whole task. */
-const WATCHED_NAME = 32
+/**
+ * Columns of a child's name on the status row; a delegate's name is often its
+ * whole task. At 100 columns the left group has 71 beside the right group
+ * (`cache 5m · ctx 0% · $0.002`). The phase, the cwd, `Claude Sonnet 5.5` and
+ * the way back take 49 of them, and ` · ↳ child ` 11 more: 11 are left for
+ * the name. At 60 and 40 columns the way back alone does not fit, so the
+ * label never shows there.
+ */
+const WATCHED_NAME = 11
+
+/** `text` in whole words within `width` columns, ending in `…` when cut; a first word too long is cut in it. */
+const wholeWords = (text: string, width: number): string => {
+  const line = text.replace(/\s+/gu, " ").trim()
+  if (textWidth(line) <= width) return line
+  let kept = ""
+  for (const word of line.split(" ")) {
+    let next = `${kept} ${word}`
+    if (kept.length === 0) next = word
+    if (textWidth(next) > width - 1) break
+    kept = next
+  }
+  if (kept.length === 0) return truncate(line, width)
+  return `${kept.replace(/[\s,:;]+$/u, "")}…`
+}
 
 /** What a row is called: its session name, else its cwd, else its id. */
 const nameFor = (row: AgentRowEntry): string =>
@@ -1358,14 +1380,20 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
     return clientContributions(
       // A child session in view says so on the status row, and how to get
       // back to the tree: the reader can tell a child from its parent at a
-      // glance. The way back gives way on a narrow row after the debug mark.
+      // glance. On a narrow row the child label gives way first, whole, then
+      // the way back, both before the cwd: the label never costs the reader
+      // the way back or the cwd.
       statusLabelContribution({
         priority: 0,
         produce: () =>
           Option.match(controller.watched(), {
             onNone: () => [],
             onSome: (row) => [
-              { text: `↳ child ${truncate(nameFor(row), WATCHED_NAME)}`, color: "info" },
+              {
+                text: `↳ child ${wholeWords(nameFor(row), WATCHED_NAME)}`,
+                color: "info",
+                short: { text: "", rank: STATUS_YIELD.debug - 1 },
+              },
               {
                 text: TRAY_HINT,
                 color: "textMuted",

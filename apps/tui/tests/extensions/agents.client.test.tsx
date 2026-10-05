@@ -24,9 +24,10 @@ import {
   makeClientContextLayer,
   type ExtensionAgentDetail,
   STATUS_YIELD,
+  type StatusLabelItem,
 } from "../../src/extensions/client-facets"
 import { StatusRow } from "../../src/composer"
-import { useTheme } from "../../src/theme"
+import { resolveThemeColor, useTheme } from "../../src/theme"
 import { DockProvider, PickerFrame } from "../../src/ui"
 import {
   createMockClient,
@@ -1669,21 +1670,37 @@ const truncateTitle = (title: string, width: number): string => {
 }
 
 describe("the status row names the child the reader watches", () => {
-  it.scopedLive("viewing a child session shows ↳ child and its name, then the way back", () =>
+  /** The labels the extension gives the status row while the shell is on a child named `name`. */
+  const childLabels = (name: string) =>
     Effect.gen(function* () {
       const here = { sessionId: SessionId.make("kid"), branchId: BranchId.make("kid-branch") }
       const contributions = yield* provideClientServices(agentsExtension.setup, {
-        requestReply: {
-          rows: [{ ...child("kid", "running", "main"), name: "explore", sideThread: true }],
-        },
+        requestReply: { rows: [{ ...child("kid", "running", "main"), name }] },
         currentSession: () => here,
       })
       const produce = contributions.statusLabels?.[0]?.produce ?? (() => [])
       yield* waitUntil(() => produce().length > 0, "the watched child's label")
-      expect(produce().map((label) => label.text)).toEqual(["↳ child explore", "ctrl+t sessions"])
-      expect(produce()[0]?.color).toBe("info")
+      return produce()
+    })
+
+  it.scopedLive("viewing a child session shows ↳ child and its name, then the way back", () =>
+    Effect.gen(function* () {
+      const labels = yield* childLabels("explore")
+      expect(labels.map((label) => label.text)).toEqual(["↳ child explore", "ctrl+t sessions"])
+      expect(labels[0]?.color).toBe("info")
       // On a narrow row the way back gives way after the debug mark, before the cwd.
-      expect(produce()[1]?.short?.text).toBe("")
+      expect(labels[1]?.short?.text).toBe("")
+    }).pipe(Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a long child name is cut at a whole word", () =>
+    Effect.gen(function* () {
+      const labels = yield* childLabels("Check the greeting files (debug tools) and report back")
+      expect(labels[0]?.text).toBe("↳ child Check the…")
+      // The label gives way whole and first: before the debug mark, the way back and the cwd.
+      expect(labels[0]?.short?.text).toBe("")
+      expect(labels[0]?.short?.rank).toBeLessThan(STATUS_YIELD.debug)
+      expect(labels[0]?.short?.rank).toBeLessThan(labels[1]?.short?.rank ?? -Infinity)
     }).pipe(Effect.timeout("8 seconds")),
   )
 
@@ -1705,49 +1722,82 @@ describe("the status row names the child the reader watches", () => {
     }).pipe(Effect.timeout("8 seconds")),
   )
 
+  type HostRow = "plain" | "crowded"
+
+  /**
+   * The status row the app draws over a child's session: the host labels,
+   * the extension's labels (`extra`), and the right group. A plain row has
+   * the phase, the cwd and the model; a crowded one, as the live check drew
+   * it, adds a provider, the effort and the git labels.
+   */
+  const statusRowAt = (width: number, host: HostRow, extra: ReadonlyArray<StatusLabelItem>) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => {
+          const { theme } = useTheme()
+          const muted = (text: string, short?: { text: string; rank: number }) => ({
+            text,
+            color: theme.textMuted,
+            short,
+          })
+          const ownLabels = extra.map((item) => ({
+            ...item,
+            color: resolveThemeColor(theme, item.color),
+          }))
+          const right = [muted("cache 5m"), muted("ctx 0%"), muted("$0.002")]
+          const plain = [
+            muted("idle", { text: "", rank: STATUS_YIELD.phase }),
+            muted("repo", { text: "", rank: STATUS_YIELD.cwd }),
+            muted("Claude Sonnet 5.5", { text: "Sonnet 5.5", rank: STATUS_YIELD.model }),
+            ...ownLabels,
+            ...right,
+          ]
+          const crowded = [
+            muted("idle", { text: "", rank: STATUS_YIELD.phase }),
+            muted("repo", { text: "", rank: STATUS_YIELD.cwd }),
+            muted("Claude Sonnet 5.5 (anthropic)", {
+              text: "Sonnet 5.5",
+              rank: STATUS_YIELD.model,
+            }),
+            muted("high"),
+            ...ownLabels,
+            muted("main", { text: "", rank: STATUS_YIELD.model + 0.5 }),
+            muted("3 files +5 -0", { text: "+5 -0", rank: STATUS_YIELD.cwd + 0.5 }),
+            ...right,
+          ]
+          let labels = plain
+          if (host === "crowded") labels = crowded
+          return <StatusRow labels={labels} rightLabels={right.length} />
+        },
+        { width, height: 4 },
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("$0.002"), "status row")
+      return frame.split("\n").find((line) => line.includes("$0.002")) ?? ""
+    })
+
+  // The child label never costs the reader the way back or the cwd: at each
+  // width they show as on the same row without it.
   for (const width of [100, 60, 40]) {
-    it.scopedLive(`the label sits on the status row at ${width} columns`, () =>
-      Effect.gen(function* () {
-        const setup = yield* renderScoped(
-          () => {
-            const { theme } = useTheme()
-            return (
-              <StatusRow
-                labels={[
-                  {
-                    text: "idle",
-                    color: theme.textMuted,
-                    short: { text: "", rank: STATUS_YIELD.phase },
-                  },
-                  {
-                    text: "repo",
-                    color: theme.textMuted,
-                    short: { text: "", rank: STATUS_YIELD.cwd },
-                  },
-                  {
-                    text: "Claude Sonnet 5.5",
-                    color: theme.textMuted,
-                    short: { text: "Sonnet 5.5", rank: STATUS_YIELD.model },
-                  },
-                  { text: "↳ child explore", color: theme.info },
-                  {
-                    text: "ctrl+t sessions",
-                    color: theme.textMuted,
-                    short: { text: "", rank: STATUS_YIELD.cwd - 0.5 },
-                  },
-                ]}
-              />
+    for (const host of ["plain", "crowded"] as const) {
+      it.scopedLive(`the child label keeps the way back and the cwd: ${host} row, ${width}`, () =>
+        Effect.gen(function* () {
+          const labels = yield* childLabels(
+            "Check the greeting files (debug tools) and report back",
+          )
+          const withChild = yield* statusRowAt(width, host, labels)
+          const hintOnly = yield* statusRowAt(width, host, labels.slice(1))
+          const bare = yield* statusRowAt(width, host, [])
+          expect(withChild.includes("ctrl+t sessions")).toBe(hintOnly.includes("ctrl+t sessions"))
+          expect(withChild.includes("repo")).toBe(bare.includes("repo"))
+          // At 100 columns a plain row has room for all three, the name cut at a word.
+          if (width === 100 && host === "plain") {
+            expect(withChild).toContain(
+              "repo · Claude Sonnet 5.5 · ↳ child Check the… · ctrl+t sessions",
             )
-          },
-          { width, height: 4 },
-        )
-        const frame = yield* waitForFrame(setup, (next) => next.includes("↳ child"), "status row")
-        const row = frame.split("\n").find((line) => line.includes("↳ child")) ?? ""
-        expect(row).toContain("↳ child explore")
-        if (width >= 100) expect(row).toContain("↳ child explore · ctrl+t sessions")
-        if (width < 60) expect(row).not.toContain("ctrl+t")
-      }).pipe(Effect.timeout("8 seconds")),
-    )
+          }
+        }).pipe(Effect.timeout("8 seconds")),
+      )
+    }
   }
 })
 

@@ -1459,7 +1459,10 @@ effort`, turns · cost · time, cwd, what it does now or the head of its
   (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and `lastAnswer`);
   under 100 columns the one-line detail stays. While the session in view
   is a child (its row names a parent), the extension's status label reads
-  `↳ child <name> · ctrl+t sessions`, derived from the latest listing.
+  `↳ child <name> · ctrl+t sessions`, derived from the latest listing. The
+  name is cut at a whole word to 11 columns (what a 100-column row leaves
+  it), and on a narrow row the child label gives way whole before the way
+  back and the cwd, so it never costs the reader either.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
