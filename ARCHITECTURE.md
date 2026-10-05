@@ -1449,8 +1449,10 @@ section, no notice. Core has no checkpoint concept.
   a turn with a start. A tree capture catches every writer: the file tools,
   bash, the cell, MCP tools. A recovered turn finds its start ref and captures
   no second one.
-- Cost on the gate: a profile whose cwd is outside a git work tree registers
-  no capture hook, so its calls stay unjudged. In a git work tree every call is
+- Cost on the gate: a profile whose cwd is outside a git work tree, or in a
+  gent workspace copy (its git directory holds the `gent-workspace` marker)
+  whose store does not exist, registers no capture hook, so its calls stay
+  unjudged. Elsewhere in a git work tree every call is
   judged: a top-level call keeps its `Allow` in memory (stored only in a park
   write that happens anyway), and a cell operation stores it in its operation
   record (one more SQLite transaction per cell operation).

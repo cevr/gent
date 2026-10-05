@@ -65,6 +65,7 @@ import {
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import { git, type GitOptions, gitFailure, gitRun, parseShortStat } from "./git-plumbing.js"
+import { WORKSPACE_MARKER_FILE } from "./workspaces.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -317,11 +318,7 @@ const turnKey = (ids: {
 const NOT_GIT = (cwd: string) => `checkpoints need a git work tree; ${cwd} is not in one`
 
 /** The work tree's top and its store, for a cwd inside a git work tree. */
-const locate = Effect.fn("Checkpoints.locate")(function* (cwd: string, home: string) {
-  const state = yield* Checkpoints
-  const key = `${home}\0${cwd}`
-  const known = state.places.get(key)
-  if (Predicate.isNotUndefined(known)) return known
+const placeOf = Effect.fn("Checkpoints.placeOf")(function* (cwd: string, home: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const found = yield* inRepository(cwd, ["rev-parse", "--show-toplevel"]).pipe(
@@ -332,19 +329,29 @@ const locate = Effect.fn("Checkpoints.locate")(function* (cwd: string, home: str
     }),
     Effect.catchTag("GitError", () => Effect.succeedNone),
   )
-  const place = yield* Option.match(found, {
+  return yield* Option.match(found, {
     onNone: () => Effect.succeedNone,
     onSome: (top) =>
       Effect.gen(function* () {
         const real = yield* fs.realPath(top).pipe(Effect.orElseSucceed(() => top))
         const digest = yield* sha256(real)
         const dataDir = yield* resolveDataDir(home)
-        return Option.some({
+        const place: Place = {
           top: real,
           store: path.join(dataDir, "checkpoints", digest.slice(0, 16)),
-        })
+        }
+        return Option.some(place)
       }),
   })
+})
+
+/** `placeOf`, read once per cwd. */
+const locate = Effect.fn("Checkpoints.locate")(function* (cwd: string, home: string) {
+  const state = yield* Checkpoints
+  const key = `${home}\0${cwd}`
+  const known = state.places.get(key)
+  if (Predicate.isNotUndefined(known)) return known
+  const place = yield* placeOf(cwd, home)
   state.places.set(key, place)
   return place
 })
@@ -2007,11 +2014,21 @@ const logged =
 
 const ALLOW = ToolCallVerdict.cases.Allow.make({})
 
-const insideWorkTree = (cwd: string) =>
-  inRepository(cwd, ["rev-parse", "--is-inside-work-tree"]).pipe(
-    Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
-    Effect.orElseSucceed(() => false),
-  )
+/**
+ * Whether a profile in `cwd` captures: inside a git work tree, and not in a
+ * gent workspace copy whose store does not exist. Only spawned sessions work
+ * in a copy, and a spawned session captures only where a store exists.
+ */
+const capturesIn = Effect.fn("Checkpoints.capturesIn")(function* (cwd: string, home: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const place = yield* placeOf(cwd, home)
+  if (Option.isNone(place)) return false
+  const gitDir = yield* inRepository(cwd, ["rev-parse", "--absolute-git-dir"])
+  if (gitDir.exitCode !== 0) return false
+  const copy = yield* fs.exists(path.join(gitDir.stdout.trim(), WORKSPACE_MARKER_FILE))
+  return !copy || (yield* storeExists(place.value))
+})
 
 export const CheckpointsExtension = defineExtension({
   id: CHECKPOINTS_EXTENSION_ID,
@@ -2024,9 +2041,11 @@ export const CheckpointsExtension = defineExtension({
       CheckpointsRpc.Patch,
       CheckpointsRpc.Revert,
     )
-    // A profile belongs to one cwd. Outside a git work tree it captures
-    // nothing, so it registers no capture hook: its tool calls stay unjudged.
-    if (yield* insideWorkTree(host.cwd)) {
+    // A profile belongs to one cwd. One that captures nothing there (outside
+    // git, or in a workspace copy with no store) registers no capture hook:
+    // its tool calls stay unjudged.
+    const captures = yield* capturesIn(host.cwd, host.home).pipe(Effect.orElseSucceed(() => false))
+    if (captures) {
       // The hook only captures: it always allows, and a failed capture is
       // logged, never an ask (a failed hook would answer `Ask`).
       yield* host.on("toolCall", (call) => {

@@ -157,7 +157,7 @@ const RIFT_TIMEOUT = Duration.minutes(10)
 const HOOK_TIMEOUT = Duration.minutes(10)
 
 /** The ownership marker in a copy's git directory: the digest of the record's identity and place. */
-const MARKER_FILE = "gent-workspace"
+export const WORKSPACE_MARKER_FILE = "gent-workspace"
 
 /** Why gent keeps every rift copy. Manual removal of a rift copy comes with the copy list (W2). */
 const RIFT_RETAINED = "rift removal cannot refuse a copy with descendants atomically"
@@ -754,7 +754,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
         return yield* kept("its rift id is not the record's")
       }
     }
-    const marker = yield* readRegularFile(path.join(gitDir.success, MARKER_FILE))
+    const marker = yield* readRegularFile(path.join(gitDir.success, WORKSPACE_MARKER_FILE))
     if (!Option.contains(marker, yield* markerDigest(record))) {
       return yield* kept("it holds no marker of this start")
     }
@@ -778,7 +778,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
         message: `gent keeps ${record.path} (${record.name}): ${gitDir.failure}`,
       })
     }
-    const marker = path.join(gitDir.success, MARKER_FILE)
+    const marker = path.join(gitDir.success, WORKSPACE_MARKER_FILE)
     const kind = yield* entryKind(marker)
     if (kind !== "absent" && kind !== "file") {
       return yield* new WorkspaceError({
@@ -788,7 +788,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     const digest = yield* markerDigest(record)
     const staged = path.join(
       gitDir.success,
-      `${MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
+      `${WORKSPACE_MARKER_FILE}.${yield* crypto.randomULID.pipe(asError)}`,
     )
     yield* fs.writeFileString(staged, `${digest}\n`, { flag: "wx" }).pipe(
       Effect.andThen(fs.rename(staged, marker)),

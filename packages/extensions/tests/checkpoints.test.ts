@@ -548,6 +548,24 @@ Gent-At: ${at}")`,
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )
+
+  it.live(
+    "a session in a gent workspace copy with no store records nothing",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* repository
+        const home = yield* makeTempDirectoryScoped("cp-home-")
+        yield* sh(repo, "printf 'copy\\n' > .git/gent-workspace")
+        const session = yield* checkpointSession(repo, home, [
+          put("a.txt", "two\n"),
+          textStep("done 1"),
+        ])
+        yield* session.turn("change a", "done 1")
+        expect((yield* session.list).turns.map((row) => row.state)).toEqual(["none"])
+        expect(yield* storeOf(home)).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
 })
 
 // ── revert ──────────────────────────────────────────────────────────────────
