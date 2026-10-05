@@ -10,6 +10,7 @@ import { CellBranchTools, CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
 import { DelegateExtension } from "./delegate.js"
+import { WorkspacesExtension } from "./workspaces.js"
 import { AgentsExtension } from "./agents.js"
 import { AgentsViewExtension } from "./agents-view.js"
 import { AnthropicExtension } from "./anthropic.js"
@@ -74,6 +75,7 @@ export const BuiltinExtensions: ReadonlyArray<
   NetworkToolsExtension,
   McpExtension,
   RouterExtension,
+  WorkspacesExtension,
   DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,

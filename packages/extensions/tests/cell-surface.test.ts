@@ -2301,7 +2301,7 @@ const bracketed = tool({
 const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     StartChild,
-    '- tools.delegate.start(input: { todo: string; context?: "fresh" | "fork"; overrides?: object }): Promise<{ requestId: string; sessionId: string; branchId: string }> // Start a child agent on a task',
+    '- tools.delegate.start(input: { todo: string; context?: "fresh" | "fork"; overrides?: object; isolation?: "shared" | "snapshot" }): Promise<{ requestId: string; sessionId: string; branchId: string; workspace?: { path: string; branch: string; note?: string } }> // Start a child agent on a task',
   ],
   [
     CancelChild,

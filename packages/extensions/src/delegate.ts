@@ -58,6 +58,13 @@ import {
   type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
+import {
+  type CollectedWork,
+  type WorkspaceError,
+  type WorkspaceRecord,
+  Workspaces,
+  workspaceBranch,
+} from "./workspaces.js"
 
 // Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
 // DelegateEntry name the registry's shapes in assertions. StartChild,
@@ -178,10 +185,14 @@ const replaceEntry = (entries: ReadonlyArray<DelegateEntry>, entry: DelegateEntr
 
 /** Every fault behind the facade is one caller-facing error. */
 const asDelegateError = (message: string) =>
-  Effect.mapError((cause: ExtensionServiceError | PlatformError.PlatformError | DelegateError) => {
-    if (Schema.is(DelegateError)(cause)) return cause
-    return new DelegateError({ message: `${message}: ${cause.message}`, cause })
-  })
+  Effect.mapError(
+    (
+      cause: ExtensionServiceError | PlatformError.PlatformError | DelegateError | WorkspaceError,
+    ) => {
+      if (Schema.is(DelegateError)(cause)) return cause
+      return new DelegateError({ message: `${message}: ${cause.message}`, cause })
+    },
+  )
 
 // ── child turns ─────────────────────────────────────────────────────────────
 
@@ -383,6 +394,8 @@ export const describeChildCompletion = (params: {
   readonly text: string
   /** The bounded line `completionError` made. */
   readonly error?: string
+  /** Where a snapshot child's work is (`workLine`). */
+  readonly work?: string
 }): string => {
   const status = childOutcomeWords(params.outcome)
   const preview = headTailChars(params.text, maximumPreviewChars)
@@ -392,6 +405,7 @@ export const describeChildCompletion = (params: {
       onNone: () => [],
       onSome: (error) => [`Error: ${error}`],
     }),
+    ...Option.toArray(Option.fromUndefinedOr(params.work)),
     "Completion is a turn receipt, not task success. Read the output before relying on it.",
     "",
     preview.text,
@@ -444,6 +458,17 @@ export const ChildCompletionDetails = Schema.Struct({
   /** The child's last calls, oldest first. `toolCount` counts every call. */
   tools: Schema.optionalKey(Schema.Array(ChildToolLine)),
   toolCount: Schema.optionalKey(Schema.Finite),
+  /** A snapshot child's work: its copy, the branch that holds it, and its size. Absent for a shared child. */
+  workspace: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.optionalKey(Schema.String),
+      branch: Schema.optionalKey(Schema.String),
+      files: Schema.optionalKey(Schema.Finite),
+      insertions: Schema.optionalKey(Schema.Finite),
+      deletions: Schema.optionalKey(Schema.Finite),
+      error: Schema.optionalKey(Schema.String),
+    }),
+  ),
 })
 
 /** The completion row shows the child's last calls; the child branch keeps them all. */
@@ -514,6 +539,48 @@ const unclaimed = (row: DelegateEntry): DelegateEntry => ({
   delivered: false,
 })
 
+/** A snapshot child's work as its completion carries it. */
+interface ChildWork {
+  readonly line: string
+  readonly details: NonNullable<(typeof ChildCompletionDetails.Type)["workspace"]>
+}
+
+/** The completion's line for a collected copy, and its details. */
+const workOf = (work: CollectedWork): ChildWork =>
+  Option.match(work.branch, {
+    onNone: () => ({
+      line: `Work: no changes in the child's copy at ${work.path}.`,
+      details: { path: work.path, files: 0, insertions: 0, deletions: 0 },
+    }),
+    onSome: (branch) => ({
+      line: `Work: branch ${branch}, one commit over your working tree as the child started (${work.files} files, +${work.insertions} -${work.deletions}). Nothing is merged; read it with git show ${branch}.`,
+      details: {
+        path: work.path,
+        branch,
+        files: work.files,
+        insertions: work.insertions,
+        deletions: work.deletions,
+      },
+    }),
+  })
+
+/**
+ * A snapshot child's work, brought back to the origin as a branch before its
+ * completion goes out; a shared child has none. A collect that fails is one
+ * line in the completion, which still goes out.
+ */
+const childWork = Effect.fn("Delegate.childWork")(function* (entry: DelegateEntry) {
+  const places = yield* Effect.serviceOption(Workspaces)
+  if (Option.isNone(places)) return Option.none<ChildWork>()
+  const collected = yield* places.value.collect(entry.sessionId).pipe(Effect.result)
+  if (collected._tag === "Success") return Option.map(collected.success, workOf)
+  const message = collected.failure.message
+  return Option.some<ChildWork>({
+    line: `Work: the child's copy was not collected: ${message}`,
+    details: { error: message },
+  })
+})
+
 /**
  * Queue the completion on the parent branch and return the marked entry.
  * Runs under the parent registry's lock; `delivered` is the idempotency key,
@@ -533,6 +600,7 @@ const deliverCompletion = (
     const text = latestAssistantText(messages)
     const tools = childToolLines(messages)
     const error = Option.getOrUndefined(completionError(outcome, turnError))
+    const work = yield* childWork(entry)
     const details: typeof ChildCompletionDetails.Type = {
       requestId: entry.requestId,
       sessionId: entry.sessionId,
@@ -543,6 +611,10 @@ const deliverCompletion = (
       ...Record.filter({ error }, Predicate.isNotUndefined),
       tools: tools.slice(-MAX_COMPLETION_TOOLS),
       toolCount: tools.length,
+      ...Option.match(work, {
+        onNone: () => ({}),
+        onSome: (found) => ({ workspace: found.details }),
+      }),
     }
     yield* ctx.Session.send({
       delivery: "queue",
@@ -557,7 +629,10 @@ const deliverCompletion = (
         branchId: entry.branchId,
         outcome,
         text,
-        ...Record.filter({ error }, Predicate.isNotUndefined),
+        ...Record.filter(
+          { error, work: Option.getOrUndefined(Option.map(work, (found) => found.line)) },
+          Predicate.isNotUndefined,
+        ),
       }),
       metadata: { customType: CHILD_COMPLETION_TYPE, details },
     })
@@ -584,10 +659,20 @@ export const CHILD_TASK_TYPE = "child-task"
  * the child's own session cannot ask; the decline's own notes tell the child
  * how to report the ask.
  */
-export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
+export const childTaskText = (
+  parentSessionId: SessionId,
+  prompt: string,
+  place?: { readonly cwd: string; readonly branch: string },
+): string =>
   [
     `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply in this turn is your result: it returns to the parent as your completion by itself, so do not also send it with session.send. When you are blocked in this turn, end it with your question as that reply.`,
     `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result or question with session.send to "parent".`,
+    ...Option.match(Option.fromUndefinedOr(place), {
+      onNone: () => [],
+      onSome: ({ cwd, branch }) => [
+        `You work in a private copy of your parent's working tree at ${cwd}. When each of your turns ends, your changes go back to the parent as the git branch ${branch}; you do not need to commit or push.`,
+      ],
+    }),
     "",
     prompt,
   ].join("\n")
@@ -603,15 +688,33 @@ export const childTaskBody = (text: string): string =>
     Option.getOrElse(() => text),
   )
 
+/** The place a snapshot child works in; none for a shared child. */
+const childPlace = (sessionId: SessionId) =>
+  Effect.gen(function* () {
+    const places = yield* Effect.serviceOption(Workspaces)
+    if (Option.isNone(places)) return Option.none<WorkspaceRecord>()
+    return yield* places.value.find(sessionId)
+  })
+
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
 const submitStart = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    const place = yield* childPlace(entry.sessionId)
     yield* ctx.Session.send({
       delivery: "turn",
       sessionId: entry.sessionId,
       branchId: entry.branchId,
-      content: childTaskText(ctx.sessionId, entry.prompt),
+      content: childTaskText(
+        ctx.sessionId,
+        entry.prompt,
+        Option.getOrUndefined(
+          Option.map(place, (record) => ({
+            cwd: record.cwd,
+            branch: workspaceBranch(record.name),
+          })),
+        ),
+      ),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       completion: "admission",
       metadata: { customType: CHILD_TASK_TYPE },
@@ -791,7 +894,48 @@ interface AdmitParams {
   readonly toolCallId?: ToolCallId
   /** The child's run overrides; the child's admission keeps them for every turn. */
   readonly runSpec?: RunSpec
+  /** `snapshot` runs the child in its own copy of this session's working tree. */
+  readonly isolation?: Isolation
 }
+
+type Isolation = "shared" | "snapshot"
+
+/**
+ * A snapshot child's place, held for the admission: a failed admission (the
+ * session create, the bind) releases the copy it made, a successful one keeps
+ * it for the child. A shared child gets none.
+ */
+const admissionPlace = Effect.fn("Delegate.admissionPlace")(function* (params: AdmitParams) {
+  if (params.isolation !== "snapshot") return Option.none()
+  const ctx = yield* ExtensionContext
+  const places = yield* Effect.serviceOption(Workspaces)
+  if (Option.isNone(places)) {
+    return yield* new DelegateError({
+      message:
+        'isolation "snapshot" needs the @gent/workspaces extension, which is not active for this session',
+    })
+  }
+  if (Predicate.isUndefined(params.requestId)) {
+    return yield* new DelegateError({ message: 'isolation "snapshot" needs a request id' })
+  }
+  const key = params.requestId
+  const place = yield* Effect.acquireRelease(
+    places.value.acquire({ key, cwd: ctx.cwd }),
+    (acquired, exit) => {
+      if (Exit.isSuccess(exit)) return Effect.void
+      return places.value
+        .release(acquired.name)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("delegate.workspace.release.failed").pipe(
+              Effect.annotateLogs({ name: acquired.name, cause: Cause.pretty(cause) }),
+            ),
+          ),
+        )
+    },
+  )
+  return Option.some({ place, bind: places.value.bind })
+})
 
 const unfinished = (entries: ReadonlyArray<DelegateEntry>) =>
   entries.filter((entry) => Predicate.isUndefined(entry.completed))
@@ -807,60 +951,74 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
   const ctx = yield* ExtensionContext
   const admitted = yield* registry
     .modify((entries) =>
-      Effect.gen(function* () {
-        const requested = Option.fromUndefinedOr(params.requestId)
-        const existing = Option.flatMap(requested, (id) =>
-          Option.fromUndefinedOr(entries.find((entry) => entry.requestId === id)),
-        )
-        if (Option.isSome(existing)) {
-          if (existing.value.prompt !== params.prompt) {
-            return yield* new DelegateError({ message: "Child start request input changed" })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const requested = Option.fromUndefinedOr(params.requestId)
+          const existing = Option.flatMap(requested, (id) =>
+            Option.fromUndefinedOr(entries.find((entry) => entry.requestId === id)),
+          )
+          if (Option.isSome(existing)) {
+            if (existing.value.prompt !== params.prompt) {
+              return yield* new DelegateError({ message: "Child start request input changed" })
+            }
+            const child = yield* ctx.Session.getSession(existing.value.sessionId)
+            if (Predicate.isUndefined(child)) {
+              return yield* new DelegateError({ message: "Child session no longer exists" })
+            }
+            return { next: entries, result: { ...existing.value, notes: [] } }
           }
-          const child = yield* ctx.Session.getSession(existing.value.sessionId)
-          if (Predicate.isUndefined(child)) {
-            return yield* new DelegateError({ message: "Child session no longer exists" })
+          // At the cap, a child deleted since the last reconcile frees its slot.
+          let current = entries
+          if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+            current = yield* Effect.forEach(current, settleIfGone)
           }
-          return { next: entries, result: existing.value }
-        }
-        // At the cap, a child deleted since the last reconcile frees its slot.
-        let current = entries
-        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
-          current = yield* Effect.forEach(current, settleIfGone)
-        }
-        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
-          return yield* new DelegateError({
-            message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
+          if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+            return yield* new DelegateError({
+              message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
+            })
+          }
+          const place = yield* admissionPlace(params)
+          // The child is its agent for every turn it runs, not only this one.
+          const child = yield* ctx.Session.create({
+            name: childName(params.prompt),
+            ...Option.match(place, {
+              onNone: () => ({}),
+              onSome: ({ place }) => ({ cwd: place.cwd }),
+            }),
+            parentSessionId: ctx.sessionId,
+            parentBranchId: ctx.branchId,
+            admission: {
+              agent: DELEGATE_AGENT_NAME,
+              runSpec: childRunSpec(params.runSpec),
+            },
+            ...Record.filter(
+              { requestId: params.requestId, historyBranchId: params.historyBranchId },
+              Predicate.isNotUndefined,
+            ),
           })
-        }
-        // The child is its agent for every turn it runs, not only this one.
-        const child = yield* ctx.Session.create({
-          name: childName(params.prompt),
-          parentSessionId: ctx.sessionId,
-          parentBranchId: ctx.branchId,
-          admission: {
-            agent: DELEGATE_AGENT_NAME,
-            runSpec: childRunSpec(params.runSpec),
-          },
-          ...Record.filter(
-            { requestId: params.requestId, historyBranchId: params.historyBranchId },
-            Predicate.isNotUndefined,
-          ),
-        })
-        const requestId = Option.getOrElse(requested, () =>
-          RequestId.make(`run:${child.sessionId}`),
-        )
-        const entry: DelegateEntry = {
-          requestId,
-          ...child,
-          agentName: DELEGATE_AGENT_NAME,
-          prompt: params.prompt,
-          ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
-          private: false,
-          submitted: false,
-          delivered: false,
-        }
-        return { next: [...current, entry], result: entry }
-      }),
+          if (Option.isSome(place)) yield* place.value.bind(place.value.place.name, child.sessionId)
+          const requestId = Option.getOrElse(requested, () =>
+            RequestId.make(`run:${child.sessionId}`),
+          )
+          const entry: DelegateEntry = {
+            requestId,
+            ...child,
+            agentName: DELEGATE_AGENT_NAME,
+            prompt: params.prompt,
+            ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+            private: false,
+            submitted: false,
+            delivered: false,
+          }
+          return {
+            next: [...current, entry],
+            result: {
+              ...entry,
+              notes: Option.match(place, { onNone: () => [], onSome: ({ place }) => place.notes }),
+            },
+          }
+        }),
+      ),
     )
     .pipe(asDelegateError("Child start failed"))
   if (!admitted.submitted) {
@@ -1187,6 +1345,25 @@ const StartParams = Schema.Struct({
   // The new keys only: an old key (`modelId`, `allowedTools`, `deniedTools`)
   // fails the call and names the key that replaced it.
   overrides: Schema.optionalKey(RunOverrides),
+  isolation: Schema.optionalKey(
+    Schema.Literals(["shared", "snapshot"]).annotate({
+      description:
+        "`shared` (default): the child edits your working tree. `snapshot`: the child works in its own copy of your git working tree, and its work comes back as a branch gent/<name> that nothing merges. A copy is not a sandbox.",
+    }),
+  ),
+})
+
+/** The handle, and for a snapshot child the place it works in. */
+const StartOutput = Schema.Struct({
+  ...ChildAgentHandle.fields,
+  workspace: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.String,
+      branch: Schema.String,
+      /** What the copy did not do as asked, one line each (a worktree in place of rift, a failed hook). */
+      note: Schema.optionalKey(Schema.String),
+    }),
+  ),
 })
 
 export const StartChild = tool({
@@ -1205,7 +1382,7 @@ export const StartChild = tool({
     "Use overrides.model for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
   ],
   params: StartParams,
-  output: ChildAgentHandle,
+  output: StartOutput,
   execute: Effect.fn("StartChild.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     if (Predicate.isUndefined(ctx.toolCallId)) {
@@ -1226,8 +1403,27 @@ export const StartChild = tool({
         onNone: () => ({}),
         onSome: (overrides) => ({ overrides: childOverrides(overrides) }),
       }),
+      ...Record.filter({ isolation: params.isolation }, Predicate.isNotUndefined),
     })
-    return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }
+    const place = yield* childPlace(entry.sessionId).pipe(asDelegateError("Child start failed"))
+    return {
+      requestId: entry.requestId,
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+      ...Option.match(place, {
+        onNone: () => ({}),
+        onSome: (record) => ({
+          workspace: {
+            path: record.cwd,
+            branch: workspaceBranch(record.name),
+            ...Option.match(
+              Option.liftPredicate(entry.notes.join("; "), (note) => note.length > 0),
+              { onNone: () => ({}), onSome: (note) => ({ note }) },
+            ),
+          },
+        }),
+      }),
+    }
   }),
 })
 
