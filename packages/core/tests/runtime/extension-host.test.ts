@@ -40,18 +40,21 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  registerContributions,
-  runToolWithCtx,
-  recordingEventStore,
-  testExtensionHostContext,
-  testHostFacts,
-  testToolContext,
   ensureStorageParents,
   fixedSessionProfiles,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
+  recordingEventStore,
+  registerContributions,
+  runToolWithCtx,
+  testExtensionHostContext,
+  testHostFacts,
   testSqliteStorage,
+  testToolContext,
   testTurnExtension,
+  turnRequestText,
+  waitFor,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -150,7 +153,6 @@ import {
   textStep,
   toolCallStep,
 } from "../../src/runtime/provider"
-import { LanguageModelLayers, turnRequestText, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,
@@ -1185,7 +1187,7 @@ export default defineExtension({
           )
         const status = (profile: SessionProfile) =>
           profile.resolved.extensionStatuses.find(
-            (info) => info.manifest.id === "profile-last-good" || info.sourcePath === entry,
+            (info) => info.id === "profile-last-good" || info.sourcePath === entry,
           )
 
         yield* Effect.gen(function* () {
@@ -1195,7 +1197,7 @@ export default defineExtension({
           const first = yield* resolve
           expect(marker(first)).toEqual(Option.some("first"))
           const firstStatus = status(first)
-          if (firstStatus?.status !== "active") return expect.unreachable()
+          if (firstStatus?._tag !== "Active") return expect.unreachable()
           expect(firstStatus.reloadFailed).toBeUndefined()
 
           for (const phase of ["load", "setup", "startup"] as const) {
@@ -1204,7 +1206,7 @@ export default defineExtension({
             expect(marker(kept)).toEqual(Option.some("first"))
             expect(kept.resolved.failedExtensions).toEqual([])
             expect(status(kept)).toMatchObject({
-              status: "active",
+              _tag: "Active",
               version: firstStatus.version,
               reloadFailed: { phase, error: expect.stringContaining("") },
             })
@@ -1214,14 +1216,14 @@ export default defineExtension({
           const fixed = yield* resolve
           expect(marker(fixed)).toEqual(Option.some("fixed"))
           const fixedStatus = status(fixed)
-          if (fixedStatus?.status !== "active") return expect.unreachable()
+          if (fixedStatus?._tag !== "Active") return expect.unreachable()
           expect(fixedStatus.reloadFailed).toBeUndefined()
 
           // A delete removes it: a broken file written later has nothing to keep.
           yield* fs.remove(entry)
           expect(marker(yield* resolve)).toEqual(Option.none())
           yield* write("load", "")
-          expect(status(yield* resolve)).toMatchObject({ status: "failed", phase: "load" })
+          expect(status(yield* resolve)).toMatchObject({ _tag: "Failed", phase: "load" })
 
           // A disable removes it the same way.
           yield* write("good", "again")
@@ -1230,10 +1232,10 @@ export default defineExtension({
             userConfig,
             encodeJson({ disabledExtensions: ["profile-last-good"] }),
           )
-          expect(status(yield* resolve)).toMatchObject({ status: "disabled" })
+          expect(status(yield* resolve)).toMatchObject({ _tag: "Disabled" })
           yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: [] }))
           yield* write("setup", "")
-          expect(status(yield* resolve)).toMatchObject({ status: "failed", phase: "setup" })
+          expect(status(yield* resolve)).toMatchObject({ _tag: "Failed", phase: "setup" })
         }).pipe(
           Effect.timeout("20 seconds"),
           Effect.provide(
@@ -1326,11 +1328,9 @@ export default defineExtension({
           yield* chain.write("a", chainSource.a("startup"))
           const again = yield* resolve
           expect(value(again)).toBe("third")
-          const status = again.resolved.extensionStatuses.find(
-            (info) => info.manifest.id === "chain-a",
-          )
+          const status = again.resolved.extensionStatuses.find((info) => info.id === "chain-a")
           expect(status).toMatchObject({
-            status: "active",
+            _tag: "Active",
             reloadFailed: { phase: "startup" },
           })
           yield* Scope.close(runningTurn, Exit.void)
@@ -1361,17 +1361,17 @@ export default defineExtension({
           const cache = yield* SessionProfileCache
           const resolve = Effect.scoped(cache.resolve(chain.launch))
           const statusOf = (profile: SessionProfile, id: string) =>
-            profile.resolved.extensionStatuses.find((info) => info.manifest.id === id)
+            profile.resolved.extensionStatuses.find((info) => info.id === id)
           for (const phase of ["setup", "startup"] as const) {
             yield* chain.remove("c")
             yield* chain.write("a", chainSource.a(`good before ${phase}`, "chain.common"))
-            expect(statusOf(yield* resolve, "chain-a")).toMatchObject({ status: "active" })
+            expect(statusOf(yield* resolve, "chain-a")).toMatchObject({ _tag: "Active" })
 
             yield* chain.write("a", chainSource.a(phase, "chain.fresh"))
             yield* chain.write("c", chainSource.c("chain.common"))
             const profile = yield* resolve
-            expect(statusOf(profile, "chain-a")).toMatchObject({ status: "failed", phase })
-            expect(statusOf(profile, "chain-c")).toMatchObject({ status: "active" })
+            expect(statusOf(profile, "chain-a")).toMatchObject({ _tag: "Failed", phase })
+            expect(statusOf(profile, "chain-c")).toMatchObject({ _tag: "Active" })
             expect(Option.isNone(Context.getOption(profile.layerContext, ChainService))).toBe(true)
           }
         }).pipe(
@@ -1401,25 +1401,25 @@ export default defineExtension({
           const cache = yield* SessionProfileCache
           const resolve = Effect.scoped(cache.resolve(chain.launch))
           const statusOf = (profile: SessionProfile) =>
-            profile.resolved.extensionStatuses.find((info) => info.manifest.id === "chain-a")
+            profile.resolved.extensionStatuses.find((info) => info.id === "chain-a")
           yield* chain.write("a", chainSource.a("first", "chain.common"))
-          expect(statusOf(yield* resolve)).toMatchObject({ status: "active" })
+          expect(statusOf(yield* resolve)).toMatchObject({ _tag: "Active" })
 
           // The last good version collides with c, so a fails; a turn holds it.
           const runningTurn = yield* Scope.make()
           yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
           yield* chain.write("c", chainSource.c("chain.common"))
           const failed = yield* cache.resolve(chain.launch).pipe(Scope.provide(runningTurn))
-          expect(statusOf(failed)).toMatchObject({ status: "failed", phase: "startup" })
+          expect(statusOf(failed)).toMatchObject({ _tag: "Failed", phase: "startup" })
 
           yield* chain.write("a", chainSource.a("third", "chain.fresh"))
-          expect(statusOf(yield* resolve)).toMatchObject({ status: "active" })
+          expect(statusOf(yield* resolve)).toMatchObject({ _tag: "Active" })
 
           // The same broken bytes again: the third version runs in their place.
           yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
           const again = yield* resolve
           expect(statusOf(again)).toMatchObject({
-            status: "active",
+            _tag: "Active",
             reloadFailed: { phase: "startup" },
           })
           expect(Context.get(again.layerContext, ChainService).value).toBe("third")
@@ -1600,7 +1600,7 @@ export default defineExtension({
           // failure; the live health read reports the file.
           expect(profile.resolved.failedExtensions).toEqual([])
           expect(yield* configHealthStatuses(project)).toMatchObject([
-            { sourcePath: projectConfig, scope: "project", phase: "load", status: "failed" },
+            { sourcePath: projectConfig, scope: "project", phase: "load", _tag: "Failed" },
           ])
         }).pipe(
           Effect.provide(
@@ -3283,7 +3283,7 @@ describe("extension activation isolation", () => {
         phase: "setup",
       })
       expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
-      expect(profile.resolved.extensionStatuses[0]).toMatchObject({ status: "active" })
+      expect(profile.resolved.extensionStatuses[0]).toMatchObject({ _tag: "Active" })
     }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
@@ -4927,20 +4927,18 @@ describe("contribution resolution", () => {
       },
     ])
     expect(resolved.extensionStatuses).toEqual([
-      {
-        manifest: { id: ExtensionId.make("healthy") },
+      ExtensionStatus.cases.Active.make({
+        id: "healthy",
         scope: "builtin",
         sourcePath: "/test/healthy",
-        status: "active",
-      },
-      {
-        manifest: { id: ExtensionId.make("broken") },
+      }),
+      ExtensionStatus.cases.Failed.make({
+        id: "broken",
         scope: "builtin",
         sourcePath: "builtin",
         phase: "validation",
         error: "duplicate tool read",
-        status: "failed",
-      },
+      }),
     ])
   })
 })

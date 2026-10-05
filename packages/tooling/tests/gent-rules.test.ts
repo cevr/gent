@@ -671,7 +671,7 @@ describe("what is a test", () => {
 
   test("the e2e package and core test-utils are the harness", () => {
     expect(kinds("packages/e2e/src/pty-fixture.ts")).toEqual(harness)
-    expect(kinds("packages/core/src/test-utils/language-model.ts")).toEqual(harness)
+    expect(kinds("packages/core/src/test-utils/harness.ts")).toEqual(harness)
   })
 
   test("testbeds and lint fixtures are support but not test code", () => {

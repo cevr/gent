@@ -24,6 +24,7 @@ import {
   formatActivityRow,
   formatFailureRow,
   formatRunningCall,
+  runningCallLabel,
   formatAge,
   formatCost,
   formatCellRowLabel,
@@ -1027,7 +1028,29 @@ describe("activity rows", () => {
     expect(formatRunningCall("mcp.linear.list_issues", "team=core")).toBe(
       "Calling linear.list_issues team=core",
     )
-    expect(formatRunningCall("cell", "")).toBe("cell")
+  })
+
+  test("a running cell reads in its source's verbs, never its code", () => {
+    const reads = [
+      "await Promise.all([",
+      '  tools.read({ path: "a.ts" }),',
+      '  tools.read({ path: "b.ts" }),',
+      '  tools.read({ path: "c.ts" }),',
+      "])",
+    ].join("\n")
+    expect(formatRunningCall("cell", reads)).toBe("Reading 3 files")
+    expect(formatRunningCall("cell", "await Bun.$`mkdir -p out`")).toBe("Running mkdir -p out")
+    expect(
+      formatRunningCall(
+        "cell",
+        'await tools.grep({ pattern: "x" }); await Bun.$`ls`; await Bun.$`pwd`',
+      ),
+    ).toBe("Searching 1 pattern · Running 2 commands")
+    expect(formatRunningCall("cell", "const x = 1")).toBe("Running code")
+    expect(formatRunningCall("cell", "")).toBe("Running code")
+    // The live line reads the whole source, not the first line a row shows.
+    expect(runningCallLabel("cell", { code: reads }, PLACE)).toBe("Reading 3 files")
+    expect(runningCallLabel("bash", { command: "ls -la" }, PLACE)).toBe("Running ls -la")
   })
 
   test("failed ops never fold, and a command's row ends with its exit status", () => {

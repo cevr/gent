@@ -242,7 +242,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * | `deliverSteering`       | What a step may take, and the final-step hold                         |
  * | `withdraw`              | That only a queued follow-up goes; an in-flight item is a turn        |
  * | `withdrawSteering`      | That a joined or taken steering item stays; only a waiting one goes   |
- * | `drain`                 | That the in-flight item survives a drain; the snapshot the TUI reads  |
+ * | `drain`                 | That the in-flight item and an agent's message survive a drain        |
  * | `holds`                 | The five places one message can sit                                   |
  * | `moveToPhase`           | That a phase move is a memory write, and spends the reservation       |
  * | `writeInitialQueue`     | That a fresh branch has no row until its first open                   |
@@ -349,9 +349,22 @@ const toQueueSnapshot = (
     ),
   })
 
-const drainVisibleQueueItems = (queue: LoopQueueState): LoopQueueState => ({
-  steering: [],
-  followUp: [],
+/** A message a client sent: the server's client origin, never its text. */
+const sentByClient = (item: QueuedTurnItem): boolean => item.message.metadata?.fromClient === true
+
+/**
+ * What a drain gives back: the clients' waiting messages, which a client
+ * shows and takes back into its draft. An agent's or an extension's message
+ * (a child's `Session.send`, a wake) is no reader's to edit, and no client
+ * shows it while it waits.
+ */
+const drainedQueueSnapshot = (queue: LoopQueueState): QueueSnapshot =>
+  toQueueSnapshot(queue.steering.filter(sentByClient), queue.followUp.filter(sentByClient))
+
+/** Drops the clients' waiting messages; the rest and the in-flight item stay to be delivered. */
+const drainClientQueueItems = (queue: LoopQueueState): LoopQueueState => ({
+  steering: queue.steering.filter((item) => !sentByClient(item)),
+  followUp: queue.followUp.filter((item) => !sentByClient(item)),
   inFlight: queue.inFlight,
 })
 
@@ -1001,8 +1014,8 @@ export const makeLoopInbox = (
     }
 
     const drain = commitQueueTransaction("drained queue", (s) => ({
-      value: queueSnapshotFromQueueState(s.queue),
-      next: { ...s, queue: drainVisibleQueueItems(s.queue) },
+      value: drainedQueueSnapshot(s.queue),
+      next: { ...s, queue: drainClientQueueItems(s.queue) },
       persist: true,
     })).pipe(Effect.withSpan("LoopInbox.drain"))
 

@@ -2867,9 +2867,7 @@ void Orphan
   })
 
   test("test-utils declares its own names: the directory is a surface, not an exemption", () => {
-    expect(
-      declaredNames("packages/core/src/test-utils/language-model.ts", `export const tool = 1\n`),
-    ) //
+    expect(declaredNames("packages/core/src/test-utils/harness.ts", `export const tool = 1\n`)) //
       .toEqual(["tool"])
   })
 
@@ -3329,15 +3327,15 @@ export type SessionUpdate = typeof SessionUpdate.Type
 })
 
 describe("core test-utils surface", () => {
-  const TEST_UTILS_FILE = "packages/core/src/test-utils/language-model.ts"
+  const HARNESS_FILE = "packages/core/src/test-utils/harness.ts"
 
   test("a helper a core test imports is live", () => {
     expect(
       findingsFor([
-        { file: TEST_UTILS_FILE, text: `export const LanguageModelLayers = {}\n` },
+        { file: HARNESS_FILE, text: `export const LanguageModelLayers = {}\n` },
         {
           file: "packages/core/tests/runtime/session.test.ts",
-          text: `import { LanguageModelLayers } from "../../src/test-utils/language-model"\n`,
+          text: `import { LanguageModelLayers } from "../../src/test-utils/harness"\n`,
         },
       ]),
     ).toEqual([])
@@ -3352,10 +3350,10 @@ export const signal = () => {
 `
     expect(
       findingsFor([
-        { file: TEST_UTILS_FILE, text: source },
+        { file: HARNESS_FILE, text: source },
         {
           file: "packages/core/tests/runtime/session.test.ts",
-          text: `import { signal } from "../../src/test-utils/language-model"\n`,
+          text: `import { signal } from "../../src/test-utils/harness"\n`,
         },
       ]),
     ).toEqual([])
@@ -3363,14 +3361,13 @@ export const signal = () => {
 
   test("a constant nothing names, not even its own file, is reported", () => {
     const findings = findingsFor([
-      { file: TEST_UTILS_FILE, text: `export const DebugSlowLanguageModelDelayMs = 250\n` },
+      { file: HARNESS_FILE, text: `export const DebugSlowLanguageModelDelayMs = 250\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
     expect(findings[0]?.message).toContain("`DebugSlowLanguageModelDelayMs`")
   })
 
   const TEST_UTILS_ENTRY = "packages/core/src/test-utils/index.ts"
-  const HARNESS_FILE = "packages/core/src/test-utils/harness.ts"
 
   test("an entry import under an alias is a read, with a namesake beside it", () => {
     const findings = findingsFor([

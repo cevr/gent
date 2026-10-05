@@ -52,7 +52,7 @@ import {
 import type { StorageError } from "../domain/errors.js"
 import {
   type ExtensionSetupServices,
-  type ExtensionStatusInfo,
+  type ExtensionStatus,
   FileLockService,
   type GentExtension,
   SessionMutations,
@@ -320,13 +320,18 @@ const catalogFailuresByExtension = (
 }
 
 export const buildExtensionHealthSnapshot = (
-  activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
+  activationStatuses: ReadonlyArray<ExtensionStatus>,
   runtimeIssues: ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> = new Map(),
 ): ExtensionHealthSnapshot => {
+  // The wire names an extension by its manifest, as clients built before read it.
+  const identity = (status: ExtensionStatus) => ({
+    manifest: { id: status.id },
+    scope: status.scope,
+    sourcePath: status.sourcePath,
+  })
   const disabledExtensions = activationStatuses.flatMap((status) => {
-    if (status.status !== "disabled") return []
-    const { manifest, scope, sourcePath } = status
-    return [ExtensionHealth.cases.Disabled.make({ manifest, scope, sourcePath })]
+    if (status._tag !== "Disabled") return []
+    return [ExtensionHealth.cases.Disabled.make(identity(status))]
   })
   // An empty list is left out, so a snapshot with nothing disabled reads as before.
   const disabled = Option.match(Option.fromUndefinedOr(disabledExtensions[0]), {
@@ -334,9 +339,9 @@ export const buildExtensionHealthSnapshot = (
     onSome: () => ({ disabledExtensions }),
   })
   const extensions = activationStatuses.flatMap((status): ReadonlyArray<ExtensionHealth> => {
-    if (status.status === "disabled") return []
+    if (status._tag === "Disabled") return []
     const issues: Array<ExtensionHealthIssue> = []
-    if (status.status === "failed") {
+    if (status._tag === "Failed") {
       issues.push(
         ExtensionHealthIssue.cases.ActivationFailed.make({
           phase: status.phase,
@@ -354,14 +359,10 @@ export const buildExtensionHealthSnapshot = (
           }),
         )
       }
-      issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
+      issues.push(...(runtimeIssues.get(status.id) ?? []))
     }
 
-    const payload = {
-      manifest: status.manifest,
-      scope: status.scope,
-      sourcePath: status.sourcePath,
-    }
+    const payload = identity(status)
 
     const [firstIssue, ...remainingIssues] = issues
     if (Predicate.isUndefined(firstIssue)) {

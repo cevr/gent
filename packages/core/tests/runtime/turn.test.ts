@@ -120,20 +120,18 @@ import {
   ToolRunner,
 } from "../../src/runtime/tools"
 import {
-  ensureStorageParents,
-  testSqliteStorage,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  hostProfileRegistry,
+  ensureStorageParents,
   fixtureModelCatalogSource,
-  recordingEventStore,
-} from "../../src/test-utils/harness"
-import {
+  hostProfileRegistry,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  recordingEventStore,
+  testSqliteStorage,
   waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/test-utils/harness"
 import {
   defineExtension,
   defineResource,
@@ -153,7 +151,6 @@ import {
   steerAgentLoop,
   stopAgentLoopMessage,
   submitAgentLoop,
-  waitFor as waitForOption,
   waitForPhase,
 } from "../helpers/agent-loop"
 import { contextWindowOf } from "../../src/runtime/model-context"
@@ -1335,14 +1332,10 @@ describe("continuation", () => {
         // Wait for the follow-up to complete: the second TurnCompleted, which
         // is what the assertions read. The loop is idle for a moment between
         // the two turns, so the phase alone does not say the follow-up ran.
-        const turnCompleted = yield* waitForOption(
-          () =>
-            Ref.get(eventsRef).pipe(
-              Effect.map((events) => {
-                const completed = events.filter(Schema.is(TurnCompleted))
-                return Option.some(completed).pipe(Option.filter((all) => all.length >= 2))
-              }),
-            ),
+        const turnCompleted = yield* waitFor(
+          Ref.get(eventsRef).pipe(Effect.map((events) => events.filter(Schema.is(TurnCompleted)))),
+          (completed) => completed.length >= 2,
+          5_000,
           "two completed turns",
         )
         // Both turns should have completed
@@ -5344,34 +5337,36 @@ describe("turn record", () => {
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
             yield* agentLoop.getState({ sessionId, branchId })
-            yield* waitForOption(
-              () =>
-                Ref.get(secondRequests).pipe(
-                  Effect.map((seen) => Option.liftPredicate(seen, (all) => all.length > 0)),
-                ),
+            yield* waitFor(
+              Ref.get(secondRequests),
+              (seen) => seen.length > 0,
+              5_000,
               "the recovered turn called the model",
             )
             // The agent picks the model: the child's agent, not the default one.
             const eventStorage = yield* EventStorage
-            const streamModel = yield* waitForOption(
-              () =>
-                eventStorage
-                  .listEvents({ sessionId, branchId })
-                  .pipe(
-                    Effect.map((envelopes) =>
-                      Option.fromUndefinedOr(
-                        envelopes
-                          .map(({ event }) => event)
-                          .find(
-                            (event) =>
-                              event._tag === "StreamEnded" && Predicate.isNotUndefined(event.model),
-                          ),
-                      ),
+            const streamModel = yield* waitFor(
+              eventStorage
+                .listEvents({ sessionId, branchId })
+                .pipe(
+                  Effect.map((envelopes) =>
+                    Option.fromUndefinedOr(
+                      envelopes
+                        .map(({ event }) => event)
+                        .find(
+                          (event) =>
+                            event._tag === "StreamEnded" && Predicate.isNotUndefined(event.model),
+                        ),
                     ),
                   ),
+                ),
+              Option.isSome,
+              5_000,
               "the recovered step ended",
             )
-            expect(streamModel._tag === "StreamEnded" && streamModel.model).toBe(helperAgent.model)
+            expect(streamModel.value._tag === "StreamEnded" && streamModel.value.model).toBe(
+              helperAgent.model,
+            )
           }).pipe(Effect.provide(layerFor(secondProvider)), Effect.timeout("10 seconds")),
         )
 
@@ -5440,16 +5435,12 @@ describe("turn record", () => {
             const agentLoop = yield* makeAgentLoopService
             yield* agentLoop.getState({ sessionId, branchId })
             const eventStorage = yield* EventStorage
-            const events = yield* waitForOption(
-              () =>
-                eventStorage.listEvents({ sessionId, branchId }).pipe(
-                  Effect.map((envelopes) =>
-                    Option.liftPredicate(
-                      envelopes.map(({ event }) => event),
-                      (all) => all.some((event) => event._tag === "TurnCompleted"),
-                    ),
-                  ),
-                ),
+            const events = yield* waitFor(
+              eventStorage
+                .listEvents({ sessionId, branchId })
+                .pipe(Effect.map((envelopes) => envelopes.map(({ event }) => event))),
+              (all) => all.some((event) => event._tag === "TurnCompleted"),
+              5_000,
               "the recovered turn settled",
             )
             const errors = events.flatMap((event) => {
@@ -5517,16 +5508,12 @@ describe("turn record", () => {
             const agentLoop = yield* makeAgentLoopService
             yield* agentLoop.getState({ sessionId, branchId })
             const eventStorage = yield* EventStorage
-            const events = yield* waitForOption(
-              () =>
-                eventStorage.listEvents({ sessionId, branchId }).pipe(
-                  Effect.map((envelopes) =>
-                    Option.liftPredicate(
-                      envelopes.map(({ event }) => event),
-                      (all) => all.some((event) => event._tag === "TurnCompleted"),
-                    ),
-                  ),
-                ),
+            const events = yield* waitFor(
+              eventStorage
+                .listEvents({ sessionId, branchId })
+                .pipe(Effect.map((envelopes) => envelopes.map(({ event }) => event))),
+              (all) => all.some((event) => event._tag === "TurnCompleted"),
+              5_000,
               "the recovered turn settled",
             )
             const errors = events.flatMap((event) => {

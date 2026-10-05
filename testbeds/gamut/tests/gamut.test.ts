@@ -272,7 +272,7 @@ describe("a settled run", () => {
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
     const pane =
-      "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n"
+      "┃ Reply with the word idle · ready\n  ✻ Generating (3s)\nwork (main) · GPT-5.6 Sol\n"
     expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
@@ -290,7 +290,7 @@ describe("a settled run", () => {
     const queued = { started: true, open: ["main"], stored: true }
     const reads = [
       ...repeated(idlePane, nothingYet, 2),
-      ...repeated("  Generating (1s)\n", queued, 2),
+      ...repeated("  ✻ Thinking (1s)\n", queued, 2),
       ...repeated(idlePane, finished, 2),
     ]
     expect(settlesAt(reads, false)).toBe(5)
@@ -309,7 +309,7 @@ describe("a settled run", () => {
     const quiet = { started: false, open: [], stored: false }
     const reads = [
       ...repeated(idlePane, quiet, QUIET_READS - 1),
-      ["  Generating (1s)\n", quiet] as const,
+      ["  ✻ Generating (1s)\n", quiet] as const,
       ...repeated(idlePane, quiet, QUIET_READS),
     ]
     expect(settlesAt(reads, false)).toBe(2 * QUIET_READS - 1)
