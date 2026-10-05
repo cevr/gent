@@ -71,13 +71,38 @@ interface PtySize {
   readonly rows: number
 }
 
-export interface TestContext {
-  readonly pty: IPty
-  /** Everything the child has written so far. It grows whenever the terminal repaints. */
-  readonly output: string
+/**
+ * The key of the raw stream. It stays in this module: a test reads what the
+ * terminal draws (`ptyWaitFor`, `screenWaitFor`, `settleAndCapture`), never
+ * the bytes, which a cell-diff renderer splits wherever a cell already holds
+ * the character it needs.
+ */
+const RAW = Symbol("raw pty output")
+
+/** What the waits read: the size, and the raw stream under this module's key. */
+export interface PtyStream {
   readonly size: PtySize
+  /** Everything the child has written so far. It grows whenever the terminal repaints. */
+  readonly [RAW]: () => string
+}
+
+export interface TestContext extends PtyStream {
+  readonly pty: IPty
+  /** How many characters the child has written so far: a mark to wait past, not text to assert on. */
+  readonly written: () => number
   readonly resize: (size: PtySize) => void
 }
+
+/** A stream a test feeds by hand (`read` returns all of it so far), for a test of the waits themselves. */
+export const fedStream = (read: () => string, size: PtySize): PtyStream => ({
+  size,
+  [RAW]: read,
+})
+
+const encodeRaw = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+/** The raw stream, JSON-escaped, for a failure message only: the assertion reads the screen. */
+export const rawForFailure = (stream: PtyStream): string => encodeRaw(stream[RAW]())
 
 interface PtyCommand {
   readonly command: string
@@ -124,9 +149,8 @@ const openPty = (
 
       const context: TestContext = {
         pty,
-        get output() {
-          return output
-        },
+        [RAW]: () => output,
+        written: () => output.length,
         get size() {
           return currentSize
         },
@@ -254,17 +278,13 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
  * `2 retries`. The stream check still sees text that was on screen only
  * between two polls.
  */
-export const ptyWaitFor = (
-  ctx: Pick<TestContext, "output" | "size">,
-  text: string,
-  opts: { timeout: number },
-) =>
+export const ptyWaitFor = (ctx: PtyStream, text: string, opts: { timeout: number }) =>
   Effect.acquireUseRelease(
     Effect.sync(() => ({ emulator: newEmulator(ctx.size), fed: 0 })),
     (terminal) =>
       waitFor(
         Effect.suspend(() => {
-          const output = ctx.output
+          const output = ctx[RAW]()
           if (Bun.stripANSI(output).includes(text)) return Effect.succeed(true)
           const fresh = output.slice(terminal.fed)
           terminal.fed = output.length
@@ -289,12 +309,12 @@ export const ptyWaitFor = (
  * parsed grid shows only what a reader sees.
  */
 export const screenWaitFor = (
-  ctx: TestContext,
+  ctx: PtyStream,
   predicate: (visible: ReadonlyArray<string>) => boolean,
   opts: { timeout: number; label: string },
 ) =>
   waitFor(
-    Effect.suspend(() => parseTerminal(ctx.output, ctx.size)),
+    Effect.suspend(() => parseTerminal(ctx[RAW](), ctx.size)),
     (grid) => predicate(grid.visible),
     opts.timeout,
     `screen: ${opts.label}`,
@@ -327,7 +347,7 @@ const SETTLE_POLL_MS = 50
  * when the quiet window never opens.
  */
 export const settlePty = (
-  ctx: Pick<TestContext, "output">,
+  ctx: PtyStream,
   options: SettleOptions = {},
 ): Effect.Effect<void, PtySettleError> =>
   Effect.gen(function* () {
@@ -338,7 +358,7 @@ export const settlePty = (
 
     const loop = (lastSeen: number, stablePolls: number): Effect.Effect<void, PtySettleError> =>
       Effect.gen(function* () {
-        const seen = ctx.output.length
+        const seen = ctx[RAW]().length
         let stable = 0
         if (seen === lastSeen) stable = stablePolls + 1
         if (stable >= quietPolls) return
@@ -446,11 +466,11 @@ const parseTerminal = (bytes: string, size: PtySize): Effect.Effect<TerminalGrid
  * read after the quiet window, not when the capture is built.
  */
 export const settleAndCapture = (
-  ctx: Pick<TestContext, "output" | "size">,
+  ctx: PtyStream,
   options: SettleOptions = {},
 ): Effect.Effect<TerminalGrid, PtySettleError> =>
   settlePty(ctx, options).pipe(
-    Effect.andThen(Effect.suspend(() => parseTerminal(ctx.output, ctx.size))),
+    Effect.andThen(Effect.suspend(() => parseTerminal(ctx[RAW](), ctx.size))),
   )
 
 // ── Live screen ──
@@ -480,9 +500,8 @@ const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtyContext, never, Sco
     )
     const session: LivePtyContext = {
       pty: context.pty,
-      get output() {
-        return context.output
-      },
+      [RAW]: context[RAW],
+      written: context.written,
       get size() {
         return context.size
       },
@@ -669,7 +688,7 @@ export const runDriveScript = (
                 Effect.flatMap((text) => save(step[1], "txt", `${text}\n`)),
               )
             case "raw":
-              return Effect.suspend(() => save(step[1], "raw", session.output))
+              return Effect.suspend(() => save(step[1], "raw", session[RAW]()))
             case "sh":
               return Effect.acquireUseRelease(
                 Effect.sync(() =>

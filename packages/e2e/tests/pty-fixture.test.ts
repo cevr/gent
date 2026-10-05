@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { Effect } from "effect"
-import { ptyWaitFor } from "../src/pty-fixture"
+import { fedStream, ptyWaitFor, type TestContext } from "../src/pty-fixture"
 
 const SIZE = { cols: 45, rows: 15 }
 
@@ -22,7 +22,13 @@ describe("pty fixture waits", () => {
         `${at(10, 40)}${" ".repeat(6)}`,
       ].join("")
       expect(Bun.stripANSI(output)).not.toContain("2 retries")
-      const waited = yield* ptyWaitFor({ output, size: SIZE }, "2 retries", { timeout: 200 }).pipe(
+      const waited = yield* ptyWaitFor(
+        fedStream(() => output, SIZE),
+        "2 retries",
+        {
+          timeout: 200,
+        },
+      ).pipe(
         Effect.as("drawn"),
         Effect.catch((error) => Effect.succeed(error.message)),
       )
@@ -33,11 +39,31 @@ describe("pty fixture waits", () => {
   it.live("text the terminal never shows times out", () =>
     Effect.gen(function* () {
       const output = `${at(10, 3)}✻ Worked for 3s · ↑11 ↓42`
-      const waited = yield* ptyWaitFor({ output, size: SIZE }, "2 retries", { timeout: 50 }).pipe(
+      const waited = yield* ptyWaitFor(
+        fedStream(() => output, SIZE),
+        "2 retries",
+        {
+          timeout: 50,
+        },
+      ).pipe(
         Effect.as("drawn"),
         Effect.catch((error) => Effect.succeed(error.message)),
       )
       expect(waited).toBe('timed out waiting for PTY output "2 retries"')
     }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  // An assertion on the raw stream passes only while the renderer writes the
+  // text in one run; the context offers no such read.
+  it.live("a test cannot read the raw stream, only a mark of how much was written", () =>
+    Effect.sync(() => {
+      const read = (ctx: TestContext) => {
+        // @ts-expect-error -- the raw stream stays in the fixture; a test reads the screen
+        const raw: string = ctx.output
+        const mark: number = ctx.written()
+        return [raw, mark]
+      }
+      expect(read).toBeInstanceOf(Function)
+    }),
   )
 })
