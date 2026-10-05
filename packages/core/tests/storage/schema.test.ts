@@ -14,8 +14,7 @@ import { Branch, dateFromMillis, Message, Session } from "../../src/domain/messa
 import { AgentName, ModelId, RunSpecSchema } from "../../src/domain/agent"
 import * as Prompt from "effect/ai/Prompt"
 import { BranchId, MessageId, SessionId, CurrentWorkspaceId } from "../../src/domain/ids"
-import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
-import { testSqliteStorage } from "../../src/test-utils/harness"
+import { makeTempDirectoryScoped, testSqliteStorage } from "../../src/test-utils/harness"
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 

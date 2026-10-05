@@ -33,8 +33,6 @@ export {
   testToolContext,
   type TestToolContext,
   testTurnExtension,
-} from "./harness.js"
-export {
   captureProviderStopReason,
   createWorkerEnv,
   freePort,
@@ -47,7 +45,7 @@ export {
   systemTextOf,
   turnRequestText,
   waitFor,
-} from "./language-model.js"
+} from "./harness.js"
 export {
   finishPart,
   listModelCatalog,

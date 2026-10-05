@@ -704,7 +704,8 @@ describe("ForkMergeRow", () => {
                 id: MessageId.make("merge-1"),
                 content: "The user merged a /btw fork back into this session: …",
                 createdAt: 0,
-                metadata: { customType: BTW_MERGE_TYPE, details: mergeDetails },
+                // The reader's merge: only the reader's waiting messages draw.
+                metadata: { fromClient: true, customType: BTW_MERGE_TYPE, details: mergeDetails },
               },
             ]}
             queuedMessages={[]}
@@ -713,8 +714,8 @@ describe("ForkMergeRow", () => {
         ),
         { width: 120, height: 6 },
       )
-      const frame = yield* waitForFrame(setup, (f) => f.includes("[steer 1]"), "the queue")
-      expect(frame).toContain("[steer 1] ↳ btw merge · What bird is that?")
+      const frame = yield* waitForFrame(setup, (f) => f.includes("┊ next step"), "the queue")
+      expect(frame).toContain("┊ next step · ↳ btw merge · What bird is that?")
       expect(frame).not.toContain("The user merged")
       yield* Effect.promise(() => runtime.dispose())
     }).pipe(Effect.timeout("6 seconds")),

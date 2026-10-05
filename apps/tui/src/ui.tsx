@@ -541,7 +541,8 @@ export const KeyHints = {
   /** Stops what runs: a turn, an ask. */
   cancel: { key: "esc", verb: "cancel" },
   // OpenTUI reads Alt/Option as meta; cmd (super) reaches only a kitty-protocol terminal.
-  restoreQueue: { key: "alt+up", verb: "restore" },
+  /** Takes every waiting message back into the draft to edit. */
+  restoreQueue: { key: "alt+up", verb: "edit" },
   /** Arms the row; a second press deletes it. */
   delete: { key: "ctrl+x", verb: "delete" },
   exit: { key: "ctrl+c", verb: "exit" },
@@ -1819,7 +1820,7 @@ const FREE_LAST_COLUMN = 1
 /** Body lines a message another session sent shows at the preview level. */
 const AGENT_MESSAGE_PREVIEW_LINES = 5
 
-/** The rail row: images, the pending label, then the text; `header` is a muted line above it. */
+/** The rail row: images, then the text; `header` is a muted line above it. */
 export function UserRow(props: MessageRowProps & { readonly header?: string }) {
   const { theme } = useTheme()
   return (
@@ -1843,13 +1844,6 @@ export function UserRow(props: MessageRowProps & { readonly header?: string }) {
         <box flexDirection="column">
           <Show when={props.header}>
             {(header) => <text style={{ fg: theme.textMuted }}>{header()}</text>}
-          </Show>
-          <Show when={props.pendingMode}>
-            {(value) => (
-              <text>
-                <span style={{ fg: theme.textMuted, bold: true }}>[{value()}]</span>
-              </text>
-            )}
           </Show>
           <text style={{ fg: theme.text }}>
             <span style={{ bold: true }}>{props.content}</span>

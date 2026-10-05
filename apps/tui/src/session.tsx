@@ -58,7 +58,7 @@ import {
   type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
-  type QueueSnapshot,
+  type SessionSnapshot,
   type ToolInteraction,
   userMessageIdForRequest,
 } from "@gent/core/protocol"
@@ -68,8 +68,7 @@ import {
   formatError,
   formatTokens,
   type PathPlace,
-  formatRunningCall,
-  toolArgSummary,
+  runningCallLabel,
   lostRequest,
   randomId,
   SEND_RETRY,
@@ -1136,7 +1135,16 @@ interface SessionControllerState {
   readonly validatedAgent: Option.Option<string>
   readonly authCheckVersion: number
   readonly queue: QueueState
+  /** The running turn as the runtime reports it; None while the session is idle. */
+  readonly turn: Option.Option<RunningTurn>
   readonly elapsed: number
+}
+
+interface RunningTurn {
+  /** The runtime's `startedAtMs`: the start the turn's "Worked for" total counts from. */
+  readonly startedAt: number
+  /** The turn waits on the reader: an ask or an approval is open. */
+  readonly waitingForAnswer: boolean
 }
 
 const emptyQueueState = (): QueueState => ({ steering: [], followUp: [] })
@@ -1150,6 +1158,7 @@ export const initialSessionControllerState = (): SessionControllerState => ({
   validatedAgent: Option.none(),
   authCheckVersion: 0,
   queue: emptyQueueState(),
+  turn: Option.none(),
   elapsed: 0,
 })
 
@@ -1205,6 +1214,21 @@ export const setQueue = (
 
 export const clearQueue = (state: SessionControllerState): SessionControllerState =>
   setQueue(state, emptyQueueState())
+
+/** The runtime the server reports: its waiting entries and the running turn. */
+export const applyRuntime = (
+  state: SessionControllerState,
+  runtime: SessionSnapshot["runtime"],
+): SessionControllerState => {
+  let turn = Option.none<RunningTurn>()
+  if (runtime._tag !== "Idle") {
+    turn = Option.some({
+      startedAt: runtime.startedAtMs,
+      waitingForAnswer: runtime._tag === "WaitingForInteraction",
+    })
+  }
+  return { ...setQueue(state, runtime.queue), turn }
+}
 
 const setControllerElapsed = (
   state: SessionControllerState,
@@ -1829,7 +1853,8 @@ interface SessionFeedCallbacks {
   onInteraction: (interaction: InteractionPresented) => void
   onInteractionDismissed: (requestId: string) => void
   onBranchSwitch: (sessionId: SessionId, branchId: BranchId) => void
-  onQueueSnapshot: (queue: QueueSnapshot) => void
+  /** The runtime the server reports, from the snapshot and each watch update. */
+  onRuntime: (runtime: SessionSnapshot["runtime"]) => void
 }
 
 type ToolResultEvent = Extract<AgentEvent, { _tag: "ToolCallSucceeded" | "ToolCallFailed" }>
@@ -2212,9 +2237,9 @@ const isToolResultEvent = Predicate.or(
 
 type ToolStartedEvent = Extract<AgentEvent, { _tag: "ToolCallStarted" }>
 
-/** The status-line label for a running tool: its name plus a short input. */
+/** The live line's label for a running tool: its running verb and what it works on. */
 const activeToolLabel = (event: ToolStartedEvent, place: PathPlace): string =>
-  formatRunningCall(event.toolName, toolArgSummary(event.toolName, event.input, place))
+  runningCallLabel(event.toolName, event.input, place)
 
 /** A call that started and has no result yet; an op names the cell that admitted it. */
 interface RunningCall {
@@ -2621,7 +2646,7 @@ export function useSessionFeed(
 
               yield* Effect.sync(() => {
                 client.applySessionSnapshot(snapshot)
-                callbacks.onQueueSnapshot(snapshot.runtime.queue)
+                callbacks.onRuntime(snapshot.runtime)
                 applySnapshotMessages(snapshot.messages)
               })
 
@@ -2680,7 +2705,7 @@ export function useSessionFeed(
                             branchId: branch,
                             runtime: next,
                           })
-                          callbacks.onQueueSnapshot(next.queue)
+                          callbacks.onRuntime(next)
                         }),
                       ),
                     ),
@@ -2865,7 +2890,11 @@ export interface SessionController {
   /** The `ctrl+r` palette: its state, its entries, and its key handling. */
   promptSearch: PromptSearchController
   activity: () => { phase: "idle" } | { phase: "thinking" } | { phase: "tool"; toolInfo: string }
-  /** The phase word: `idle`/`ready` for the status row, `Generating` or the tool for the activity row. */
+  /**
+   * The phase word: `idle`/`ready` for the status row; for the live line
+   * `Thinking`, `Generating`, the running op (`Reading 3 files`) or
+   * `Waiting for your answer`.
+   */
   phaseLabel: () => string
   /** The status row's cue while a key's second press is armed (`esc again to clear`). */
   armedCue: () => Option.Option<string>
@@ -3037,6 +3066,8 @@ export function createSessionController(props: {
   const authGateState = () => controllerState().authGate
   const validatedAgent = () => controllerState().validatedAgent
   const queueState = () => controllerState().queue
+  const waitingForAnswer = () =>
+    Option.exists(controllerState().turn, (turn) => turn.waitingForAnswer)
   const elapsed = () => controllerState().elapsed
   const updateControllerState = (
     update: (state: ReturnType<typeof controllerState>) => ReturnType<typeof controllerState>,
@@ -3101,8 +3132,6 @@ export function createSessionController(props: {
     ...ComposerInteractionState.initial(),
     ...Option.getOrElse(drafts.get(draftBranchId), ComposerInteractionState.initial),
   })
-  let activityStartTime = currentMillis()
-
   const handleSessionUiEffect = (effect: SessionUiEffect) => {
     if (effect._tag === "RestoreComposer") {
       setInteractionState((current) =>
@@ -3214,7 +3243,7 @@ export function createSessionController(props: {
       onBranchSwitch: (sessionId, branchId) => {
         client.switchSession(sessionId, branchId, currentSessionName())
       },
-      onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
+      onRuntime: (runtime) => updateControllerState((state) => applyRuntime(state, runtime)),
     },
     // The startup prompt is a submission: it takes its place in send order,
     // and a refused one comes back to the draft of its branch with its reason.
@@ -3310,6 +3339,8 @@ export function createSessionController(props: {
   interface RunningShell {
     readonly command: string
     readonly stop: Deferred.Deferred<void>
+    /** When it began, on the runtime's clock: outside a turn the timer counts from it. */
+    readonly startedAt: number
   }
   const [runningShells, setRunningShells] = createSignal<ReadonlyArray<RunningShell>>([])
   const runShell = <A, E, R>(
@@ -3317,7 +3348,11 @@ export function createSessionController(props: {
     run: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | ShellStopped, R> =>
     Effect.gen(function* () {
-      const running: RunningShell = { command, stop: yield* Deferred.make<void>() }
+      const running: RunningShell = {
+        command,
+        stop: yield* Deferred.make<void>(),
+        startedAt: yield* Clock.currentTimeMillis,
+      }
       const stopped = Deferred.await(running.stop).pipe(
         Effect.andThen(Effect.fail(new ShellStopped({ command }))),
       )
@@ -3346,36 +3381,62 @@ export function createSessionController(props: {
     return { phase: "thinking" }
   }
 
+  // The activity row counts from when its work began: a running turn from the
+  // runtime's `startedAtMs`, the start its "Worked for" total counts from, so
+  // a new step or a tool call inside the turn changes the phase word and keeps
+  // the count; a `!cmd` outside a turn from its own start. No start (idle, or
+  // a turn whose runtime has not arrived yet) shows no count.
+  const timerStart = createMemo(
+    (): Option.Option<number> => {
+      if (client.isStreaming()) return Option.map(controllerState().turn, (turn) => turn.startedAt)
+      return Option.map(Option.fromUndefinedOr(runningShells().at(-1)), (shell) => shell.startedAt)
+    },
+    Option.none(),
+    { equals: Equal.equals },
+  )
+
   createEffect(() => {
-    const nextActivity = activity()
-    activityStartTime = currentMillis()
+    const start = timerStart()
     updateControllerState((state) => setControllerElapsed(state, 0))
-
-    if (nextActivity.phase === "idle") return
-
+    if (Option.isNone(start)) return
     const fiber = client.runtime.fork(
-      Effect.sync(() => {
-        updateControllerState((state) =>
-          setControllerElapsed(state, currentMillis() - activityStartTime),
-        )
-      }).pipe(Effect.repeat(Schedule.spaced("1 second"))),
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          Effect.sync(() =>
+            updateControllerState((state) =>
+              setControllerElapsed(state, Math.max(0, now - start.value)),
+            ),
+          ),
+        ),
+        Effect.repeat(Schedule.spaced("1 second")),
+      ),
     )
     onCleanup(() => {
       client.runtime.cast(Fiber.interrupt(fiber))
     })
   })
 
-  // The status row reads the label while idle, the activity row while a tool runs.
+  // The open step streams answer text: its draft is the newest message.
+  const answering = createMemo(() => {
+    const last = feed.items().findLast((item): item is Message => isMessageItem(item))
+    return Predicate.isNotUndefined(last) && last.role === "assistant" && last.draft === true
+  })
+
+  // The status row reads the label while idle, the live line while a turn
+  // runs: an open ask, then the running op, then whether answer text streams.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
       case "idle":
         if (Option.exists(client.turnsStarted(), (turns) => turns > 0)) return "idle"
         return "ready"
-      case "thinking":
-        return "Generating"
       case "tool":
+        if (runningShells().length === 0 && waitingForAnswer()) return "Waiting for your answer"
         return nextActivity.toolInfo
+      case "thinking":
+        if (waitingForAnswer()) return "Waiting for your answer"
+        if (answering()) return "Generating"
+        return "Thinking"
     }
   })
 

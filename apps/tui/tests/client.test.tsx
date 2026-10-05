@@ -1748,6 +1748,44 @@ describe("ClientProvider errors", () => {
       expect(client.error()).toEqual(Option.none())
     }),
   )
+
+  // The runtime stream and the event feed are two streams: the loop can send
+  // its last `Running` before it goes idle, and that update can land after the
+  // turn's `TurnCompleted`. Read as a turn start, it brings the activity row
+  // back for a frame, and the live transcript moves rows into history for it.
+  it.scopedLive("a late Running from the turn that ended starts no turn", () =>
+    Effect.gen(function* () {
+      const { client } = yield* mountClient({
+        initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
+      })
+      const runningSince = (startedAtMs: number): SessionSnapshot["runtime"] => ({
+        _tag: "Running",
+        queue: emptyQueueSnapshot(),
+        startedAtMs,
+      })
+      client.applySessionRuntime({ ...FIRST, runtime: runningSince(40) })
+      expect(client.isStreaming()).toBe(true)
+      client.applySessionEvent(
+        makeEnvelope(
+          1,
+          TurnCompleted.make({
+            sessionId: FIRST.sessionId,
+            branchId: FIRST.branchId,
+            durationMs: 60,
+          }),
+          100,
+        ),
+      )
+      client.setError("the turn failed")
+      client.applySessionRuntime({ ...FIRST, runtime: runningSince(40) })
+      expect(client.isStreaming()).toBe(false)
+      expect(client.error()).toEqual(Option.some("the turn failed"))
+      // The next turn started after the receipt.
+      client.applySessionRuntime({ ...FIRST, runtime: runningSince(120) })
+      expect(client.isStreaming()).toBe(true)
+      expect(client.error()).toEqual(Option.none())
+    }),
+  )
 })
 
 describe("ClientProvider connection", () => {

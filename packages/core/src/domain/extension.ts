@@ -342,8 +342,19 @@ export interface ExtensionContributions {
 
 export interface ExtensionManifest {
   readonly id: ExtensionId
-  readonly version?: string
 }
+
+/** Where an extension was found: shipped with gent, the user's home, or the project. */
+export const ExtensionScope = Schema.Literals(["builtin", "user", "project"])
+export type ExtensionScope = typeof ExtensionScope.Type
+
+/**
+ * The phase that stopped an extension: `load` (the file did not build or
+ * import, or is untrusted), `setup`, `validation` or `startup` (a Resource
+ * did not build).
+ */
+export const ExtensionStatusPhase = Schema.Literals(["load", "setup", "validation", "startup"])
+export type ExtensionStatusPhase = typeof ExtensionStatusPhase.Type
 
 /**
  * Stable identity supplied by the package or loader that produced an
@@ -385,14 +396,11 @@ export interface LoadedExtension {
   readonly contributions: ExtensionContributions
 }
 
-/** `load` is a file that never became an extension: no import, no export, or untrusted. */
-export type FailedExtensionPhase = "load" | "setup" | "validation" | "startup"
-
 export interface FailedExtension {
   readonly manifest: ExtensionManifest
   readonly scope: ExtensionScope
   readonly sourcePath: string
-  readonly phase: FailedExtensionPhase
+  readonly phase: ExtensionStatusPhase
   readonly error: string
 }
 
@@ -401,36 +409,23 @@ export type DisabledExtension = Pick<LoadedExtension, "manifest" | "scope" | "so
 
 /** Why a newer version of a running extension did not replace it. */
 interface ReloadFailure {
-  readonly phase: FailedExtensionPhase
+  readonly phase: ExtensionStatusPhase
   readonly error: string
 }
 
-/**
- * An extension as health reports it: active, failed with its phase and error,
- * or disabled. An active one with `reloadFailed` runs its last good version.
- */
-export type ExtensionStatusInfo =
-  | (Pick<LoadedExtension, "manifest" | "scope" | "sourcePath" | "version" | "reloadFailed"> & {
-      readonly status: "active"
-    })
-  | (FailedExtension & { readonly status: "failed" })
-  | (DisabledExtension & { readonly status: "disabled" })
-
 const ExtensionStatusIdentity = {
   id: Schema.String,
-  scope: Schema.Literals(["builtin", "user", "project"]),
+  scope: ExtensionScope,
   sourcePath: Schema.String,
 }
 
-const ExtensionStatusPhase = Schema.Literals(["load", "setup", "validation", "startup"])
-
 /**
- * One extension of a profile as the `Extensions` facet reports it. `Active`
- * names the version it loaded from (none for a builtin); with `reloadFailed`
- * it is the last good version, still running because a newer version failed
- * at that phase. `Failed` names the phase that stopped it: `load` (the file
- * did not build or import), `setup`, `validation` or `startup` (a Resource did
- * not build); `Disabled` is named by the config's `disabledExtensions`.
+ * One extension of a profile as health (`extension.listStatus`) and the
+ * `Extensions` facet report it. `Active` names the version it loaded from
+ * (none for a builtin); with `reloadFailed` it is the last good version,
+ * still running because a newer version failed at that phase. `Failed` names
+ * the phase that stopped it; `Disabled` is named by the config's
+ * `disabledExtensions`.
  */
 export const ExtensionStatus = Schema.TaggedUnion({
   Active: {
@@ -451,8 +446,11 @@ export const ExtensionStatus = Schema.TaggedUnion({
 export type ExtensionStatus = typeof ExtensionStatus.Type
 
 /** Scope precedence for extension resolution. Higher value = higher priority. */
-export const SCOPE_PRECEDENCE = { builtin: 0, user: 1, project: 2 }
-export type ExtensionScope = keyof typeof SCOPE_PRECEDENCE
+export const SCOPE_PRECEDENCE: Readonly<Record<ExtensionScope, number>> = {
+  builtin: 0,
+  user: 1,
+  project: 2,
+}
 
 /**
  * Whether a discovered file belongs to the client rather than the host.

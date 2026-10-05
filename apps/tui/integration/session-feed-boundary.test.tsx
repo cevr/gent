@@ -67,7 +67,7 @@ describe("session feed boundary", () => {
     10000,
   )
   it.live(
-    "projects queue widget updates while the active turn is running",
+    "a follow-up sent mid-turn waits in the reader's lane above the composer",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -110,19 +110,18 @@ describe("session feed boundary", () => {
             branchId: created.branchId,
             content: "queued follow-up",
           })
-          // waitForFrame polls until the queue widget appears — no need to
-          // pre-sleep for state to propagate.
+          // waitForFrame polls until the waiting entry appears — no need to
+          // pre-sleep for state to propagate. The server gives the message
+          // its client origin, so it is the reader's and draws.
           const frame = yield* waitForFrame(
             setup,
-            (next) =>
-              next.includes("queue") &&
-              next.includes("[queued 1]") &&
-              next.includes("queued follow-up"),
-            "queue widget",
+            (next) => next.includes("┊ next turn · queued follow-up"),
+            "the waiting entry",
             5000,
           )
-          expect(frame).toContain("queue")
-          expect(frame).toContain("[queued 1] queued follow-up")
+          const lines = frame.split("\n")
+          const entry = lines.findIndex((line) => line.startsWith("┊ next turn · queued follow-up"))
+          expect(lines[entry + 1]?.trimEnd()).toBe("  alt+up edit")
           // Emit first turn's chunks to unblock
           yield* controls.emitAll
           // The agent loop will dequeue the follow-up and start a model stream again.
