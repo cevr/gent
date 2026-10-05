@@ -42,14 +42,13 @@ import {
   type ExtensionSetupServices,
   type ExtensionExtensionsService,
   type ExtensionStateFacet,
-  type ExtensionStatusInfo,
   type DisabledExtension,
   ExtensionStatus,
   type TurnNotice,
   type TurnProjection,
   type TurnProjectionInput,
   type FailedExtension,
-  type FailedExtensionPhase,
+  type ExtensionStatusPhase,
   FileLockService,
   type GentExtension,
   isClientFile,
@@ -745,7 +744,7 @@ interface ResolvedExtensions {
   readonly extensions: ReadonlyArray<LoadedExtension>
   readonly failedExtensions: ReadonlyArray<FailedExtension>
   readonly disabledExtensions: ReadonlyArray<DisabledExtension>
-  readonly extensionStatuses: ReadonlyArray<ExtensionStatusInfo>
+  readonly extensionStatuses: ReadonlyArray<ExtensionStatus>
 }
 
 interface RegisteredToolEntry {
@@ -941,38 +940,28 @@ const compileRpcRegistry = (
   }),
 })
 
-const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatusInfo => ({
-  manifest: extension.manifest,
+/** An extension's identity as its status names it. */
+const statusIdentity = (extension: DisabledExtension) => ({
+  id: extension.manifest.id,
   scope: extension.scope,
   sourcePath: extension.sourcePath,
-  ...omitUndefined({ version: extension.version, reloadFailed: extension.reloadFailed }),
-  status: "active",
 })
 
-const failedExtensionStatus = (failure: FailedExtension): ExtensionStatusInfo => ({
-  ...failure,
-  status: "failed",
-})
-
-const disabledExtensionStatus = (disabled: DisabledExtension): ExtensionStatusInfo => ({
-  manifest: disabled.manifest,
-  scope: disabled.scope,
-  sourcePath: disabled.sourcePath,
-  status: "disabled",
-})
-
-/** A health status as the `Extensions` facet reports it. */
-const extensionStatusOf = (info: ExtensionStatusInfo): ExtensionStatus => {
-  const identity = { id: info.manifest.id, scope: info.scope, sourcePath: info.sourcePath }
-  if (info.status === "failed") {
-    return ExtensionStatus.cases.Failed.make({ ...identity, phase: info.phase, error: info.error })
-  }
-  if (info.status === "disabled") return ExtensionStatus.cases.Disabled.make(identity)
-  return ExtensionStatus.cases.Active.make({
-    ...identity,
-    ...omitUndefined({ version: info.version, reloadFailed: info.reloadFailed }),
+const activeExtensionStatus = (extension: LoadedExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Active.make({
+    ...statusIdentity(extension),
+    ...omitUndefined({ version: extension.version, reloadFailed: extension.reloadFailed }),
   })
-}
+
+const failedExtensionStatus = (failure: FailedExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Failed.make({
+    ...statusIdentity(failure),
+    phase: failure.phase,
+    error: failure.error,
+  })
+
+const disabledExtensionStatus = (disabled: DisabledExtension): ExtensionStatus =>
+  ExtensionStatus.cases.Disabled.make(statusIdentity(disabled))
 
 const capabilityToCommand = (extensionId: ExtensionId, cap: RequestCapability): SlashCommand => {
   const slash = Option.fromUndefinedOr(cap.slash)
@@ -1058,7 +1047,7 @@ export const resolveExtensions = (
   const slashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionHooks = compileExtensionHooks(sorted)
-  const extensionStatuses: ExtensionStatusInfo[] = [
+  const extensionStatuses: ExtensionStatus[] = [
     ...sorted.map(activeExtensionStatus),
     ...mergedFailures.map(failedExtensionStatus),
     ...disabledExtensions.map(disabledExtensionStatus),
@@ -2182,7 +2171,7 @@ const toFailedExtension = (
     scope: LoadedExtension["scope"]
     sourcePath: string
   },
-  phase: FailedExtensionPhase,
+  phase: ExtensionStatusPhase,
   error: string,
 ): FailedExtension => ({
   manifest: ext.manifest,
@@ -3909,9 +3898,7 @@ export const makeExtensionHostContextProvider = (
                 Effect.provideService(Path.Path, path),
                 Effect.provideService(RuntimeEnvironment, environment),
               )
-              return [...profile.resolved.extensionStatuses, ...configStatuses].map(
-                extensionStatusOf,
-              )
+              return [...profile.resolved.extensionStatuses, ...configStatuses]
             }).pipe(Effect.scoped),
           ),
         ),
