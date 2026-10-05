@@ -622,4 +622,12 @@ describe("delegate subtitle", () => {
       expect(delegateSubtitle({ todo: "short task" })).toEqual(Option.some("short task"))
     }),
   )
+
+  it.live("a start's own name leads the task", () =>
+    Effect.sync(() => {
+      expect(
+        delegateSubtitle({ todo: "check the greeting files", name: "greeting audit" }),
+      ).toEqual(Option.some("greeting audit · check the greeting files"))
+    }),
+  )
 })

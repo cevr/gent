@@ -2626,7 +2626,8 @@ describe("transcript block spacing", () => {
         toolName: "read",
         status: "completed",
         input: { path: `/workspace/src/file-${index}.ts` },
-        summary: `file-${index}.ts · 3 lines`,
+        // The read tool's own summary: the absolute path, then the count.
+        summary: `/workspace/src/file-${index}.ts · 3 lines`,
         output: encodeJson({ content: "1\ta\n2\tb\n3\tc", lineCount: 3 }),
       }))
       const foldedCell: ToolCall = {
@@ -2649,7 +2650,9 @@ describe("transcript block spacing", () => {
       // Thirty reads draw one frame, its body a tight list; the two commands another.
       expect(frame.match(/● read 30 files/g)).toHaveLength(1)
       expect(frame.match(/● bash 2 commands/g)).toHaveLength(1)
-      expect(frame).toContain("✓ /workspace/src/file-0.ts file-0.ts · 3 lines")
+      // An op row has the shape of the tool's own row: the path once, then its count.
+      expect(frame).toContain("✓ /workspace/src/file-0.ts · 3 lines")
+      expect(frame).not.toContain("file-0.ts /workspace")
       expect(frame).toContain("✓ /workspace/src/file-29.ts")
       // The list has no blank line between its rows.
       const lines = frame.split("\n").map((line) => line.trim())
@@ -2665,6 +2668,52 @@ describe("transcript block spacing", () => {
       )
       expect(opened).toContain("● read /workspace/src/file-29.ts")
     }),
+  )
+
+  it.scopedLive(
+    "a wrapped code line and a wrapped op row hang under their own text, not at the frame's edge",
+    () =>
+      Effect.gen(function* () {
+        const CellToolRenderer = builtinRenderer("cell")
+        const reads: ReadonlyArray<ToolCall> = [0, 1].map((index) => ({
+          id: `hang-read-${index}`,
+          toolName: "read",
+          status: "completed",
+          input: { path: `/workspace/a-rather-long-directory-name/file-${index}.ts` },
+          summary: `/workspace/a-rather-long-directory-name/file-${index}.ts · 3 lines`,
+          output: encodeJson({ content: "1\ta\n2\tb\n3\tc", lineCount: 3 }),
+        }))
+        const cell: ToolCall = {
+          ...twoOpCell,
+          id: "cell-hang",
+          input: {
+            code: "await tools.edit({ path: 'gent-debug-tools/a.ts', oldString: 'hello', newString: 'hello, world' })",
+          },
+          operations: [...reads],
+        }
+        const setup = yield* renderScoped(
+          () => (
+            <ToolRenderersProvider value={builtinRenderers}>
+              <CellToolRenderer expanded={true} toolCall={cell} />
+            </ToolRenderersProvider>
+          ),
+          { width: 44, height: 40 },
+        )
+        const lines = renderFrame(setup).split("\n")
+        const indent = (line: string) => line.length - line.trimStart().length
+        // The code line wraps; each continuation starts where the code starts.
+        const code = lines.findIndex((line) => line.includes("1 │ await"))
+        const codeColumn = (lines[code] ?? "").indexOf("await")
+        expect(code).toBeGreaterThanOrEqual(0)
+        expect(lines[code + 1]?.trim().length).toBeGreaterThan(0)
+        expect(indent(lines[code + 1] ?? "")).toBe(codeColumn)
+        // The op row wraps; its continuation starts past the outcome glyph.
+        const op = lines.findIndex((line) => line.includes("✓ /workspace"))
+        const opColumn = (lines[op] ?? "").indexOf("/workspace")
+        expect(op).toBeGreaterThanOrEqual(0)
+        expect(lines[op + 1]?.includes("✓")).toBe(false)
+        expect(indent(lines[op + 1] ?? "")).toBe(opColumn)
+      }),
   )
 
   it.scopedLive(

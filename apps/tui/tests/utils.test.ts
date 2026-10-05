@@ -38,6 +38,7 @@ import {
   formatUsageStats,
   headGraphemes,
   displayPath,
+  summaryAfterSubject,
   previewOutput,
   toolArgSummary,
   truncate,
@@ -534,6 +535,16 @@ describe("formatCost", () => {
 const CWD = `${HOME}/code/proj`
 const PLACE = { cwd: CWD, home: HOME }
 
+describe("summaryAfterSubject", () => {
+  test("a receipt that leads with its subject's path adds only the rest; other paths are placed", () => {
+    expect(summaryAfterSubject(`${CWD}/src/a.ts · 3 lines`, "src/a.ts", PLACE)).toBe("· 3 lines")
+    expect(summaryAfterSubject(`${CWD}/src/a.ts · 3 lines`, "read", PLACE)).toBe(
+      "src/a.ts · 3 lines",
+    )
+    expect(summaryAfterSubject("exit 2 · no such file", "ls", PLACE)).toBe("exit 2 · no such file")
+  })
+})
+
 describe("displayPath", () => {
   test("a path under the cwd reads from the cwd", () => {
     expect(displayPath(`${CWD}/apps/tui/src/app.tsx`, PLACE)).toBe("apps/tui/src/app.tsx")
@@ -643,6 +654,20 @@ describe("toolArgSummary", () => {
     const result = toolArgSummary("delegate.start", { todo: longTodo }, PLACE)
     expect(result).toBe(`${"a".repeat(39)}…`)
     expect(Bun.stringWidth(result)).toBe(40)
+  })
+
+  // The child's name says who, the task what: `Started greeting audit · check the greeting files`.
+  test("delegate.start: a start's own name leads its task", () => {
+    expect(
+      toolArgSummary(
+        "delegate.start",
+        { todo: "check the greeting files", name: "greeting audit" },
+        PLACE,
+      ),
+    ).toBe("greeting audit · check the greeting files")
+    expect(toolArgSummary("delegate.start", { todo: "find the bug", name: " " }, PLACE)).toBe(
+      "find the bug",
+    )
   })
 
   test("read_session: session id", () => {

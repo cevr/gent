@@ -523,6 +523,8 @@ export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Optio
 interface KeyHint {
   readonly key: string
   readonly verb: string
+  /** A shorter verb a narrow row takes before it drops a key (`all` for `files + conversation`). */
+  readonly short?: string
 }
 
 /**
@@ -548,25 +550,35 @@ export const KeyHints = {
   exit: { key: "ctrl+c", verb: "exit" },
 } satisfies Record<string, KeyHint>
 
-export const keyHint = (key: string, verb: string): KeyHint => ({ key, verb })
+export const keyHint = (key: string, verb: string, short?: string): KeyHint => {
+  if (Predicate.isUndefined(short)) return { key, verb }
+  return { key, verb, short }
+}
 
 export const KEY_HINT_SEPARATOR = " · "
 
 /**
  * The hint row at `width`: the hints joined by one separator. Too wide, it
- * drops hints until it fits: the move hint first (the arrows need no
- * telling), then the others from the right. The last hint, the way out,
- * stays.
+ * first drops the move hint (the arrows need no telling), then takes the
+ * short verbs from the right, then drops hints from the right. The last
+ * hint, the way out, stays.
  */
 export const keyHintsLine = (hints: ReadonlyArray<KeyHint>, width: number): string => {
   const join = (shown: ReadonlyArray<KeyHint>) =>
     shown.map((hint) => `${hint.key} ${hint.verb}`).join(KEY_HINT_SEPARATOR)
+  const fits = (shown: ReadonlyArray<KeyHint>) => textWidth(join(shown)) <= width
   let shown = [...hints]
-  while (shown.length > 1 && textWidth(join(shown)) > width) {
-    const move = shown.findIndex((hint) => hint.key === KeyHints.move.key)
-    let drop = shown.length - 2
-    if (move >= 0 && move < shown.length - 1) drop = move
-    shown = shown.filter((_, index) => index !== drop)
+  const move = shown.findIndex((hint) => hint.key === KeyHints.move.key)
+  if (!fits(shown) && move >= 0 && move < shown.length - 1) {
+    shown = shown.filter((_, index) => index !== move)
+  }
+  for (let index = shown.length - 1; index >= 0 && !fits(shown); index -= 1) {
+    const hint = shown[index]
+    if (Predicate.isUndefined(hint) || Predicate.isUndefined(hint.short)) continue
+    shown[index] = { key: hint.key, verb: hint.short }
+  }
+  while (shown.length > 1 && !fits(shown)) {
+    shown = shown.filter((_, index) => index !== shown.length - 2)
   }
   return join(shown)
 }
@@ -1600,11 +1612,16 @@ export function GutterText(props: GutterTextProps) {
           const lineNum = () => startLine() + index()
           // oxlint-disable-next-line gent/no-code-unit-padding -- lineNum adds numeric line indices; decimal digits and default space padding are ASCII
           const gutter = () => String(lineNum()).padStart(gutterWidth())
+          // The gutter is its own column: a wrapped line hangs under the code.
           return (
-            <text>
-              <span style={{ fg: theme.textMuted }}>{gutter()} │ </span>
-              <span style={{ fg: theme.text }}>{line}</span>
-            </text>
+            <box flexDirection="row">
+              <text width={gutterWidth() + 3} flexShrink={0} style={{ fg: theme.textMuted }}>
+                {gutter()} │{" "}
+              </text>
+              <text flexGrow={1} flexShrink={1} style={{ fg: theme.text }}>
+                {line}
+              </text>
+            </box>
           )
         }}
       </For>

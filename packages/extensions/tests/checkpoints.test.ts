@@ -735,6 +735,45 @@ describe("turn reverts", () => {
     30_000,
   )
 
+  // The list says what the pane may offer: after an undo the newest action is
+  // an undo, so no row offers to undo "the last revert" again.
+  it.live(
+    "an undo leaves nothing to undo: the list offers no undo, a second undo refuses, and a new revert offers it again",
+    () =>
+      timed(
+        Effect.gen(function* () {
+          const repo = yield* repository
+          const home = yield* makeTempDirectoryScoped("cp-home-")
+          const session = yield* checkpointSession(repo, home, [
+            put("a.txt", "two\n"),
+            textStep("done 1"),
+          ])
+          yield* session.turn("change a", "done 1")
+          expect(yield* session.revert("revert-1", filesOf(1))).toEqual({
+            _tag: "Reverted",
+            files: ["a.txt"],
+          })
+          expect((yield* session.list).undo).toEqual({ requestId: "revert-1", files: 1 })
+          expect(yield* session.revert("undo-1", UNDO)).toEqual({
+            _tag: "Reverted",
+            files: ["a.txt"],
+          })
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+          const listed = yield* session.list
+          expect(listed.undo).toBeUndefined()
+          expect(listed.unfinished).toBeUndefined()
+          expect(yield* session.revert("undo-2", UNDO)).toMatchObject({ _tag: "Refused" })
+          expect(yield* contentOf(repo, "a.txt")).toBe("two")
+          expect(yield* session.revert("revert-2", filesOf(1))).toEqual({
+            _tag: "Reverted",
+            files: ["a.txt"],
+          })
+          expect((yield* session.list).undo).toEqual({ requestId: "revert-2", files: 1 })
+        }),
+      ),
+    30_000,
+  )
+
   it.live(
     "a running loop in the same work tree blocks a revert; a running child in another work tree does not",
     () =>

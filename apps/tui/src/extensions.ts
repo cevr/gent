@@ -88,7 +88,7 @@ export {
   type ActivityCall,
   type ActivityOperation,
   activityRows,
-  displayPath,
+  placedSummary,
   fitWidth,
   formatActivityHeader,
   formatActivityRow,

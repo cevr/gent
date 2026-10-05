@@ -133,8 +133,9 @@ row is data: `PickerFrame` takes `keys` and draws them in one vocabulary
 (`KeyHints` and `keyHintsLine` in `ui.tsx`, also exported to client
 extensions): lowercase keys, one `·` separator, Enter `select` on a row and
 `submit` on typed text, Esc `close` on a pane and `back` on a sub-screen. A
-narrow row drops the move hint first, then hints from the right, and keeps the
-way out. An ask's footer uses the same line.
+narrow row drops the move hint first, then takes each hint's short verb from
+the right (`keyHint(key, verb, short)`: `/revert` reads `enter all` for `enter
+files + conversation`), then drops hints from the right, and keeps the way out. An ask's footer uses the same line.
 
 The live line (`ActivityRow` in `app.tsx`) reads
 `✻ <phase> (<elapsed>) · esc cancel`; the `✻` pulses on the spinner clock.
@@ -321,7 +322,11 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   in native scrollback. A failed op has settled, so its head draws at once.
   Full opens a row per call with its renderer body and its line counts; only
   there does a call show its `#id`. Inside a cell's body a run of one tool's
-  ops folds into one frame (`read 30 files`), its body a tight list; the
+  ops folds into one frame (`read 30 files`), its body a tight list, one
+  row an op in its tool row's shape: `✓ src/a.ts · 3 lines`, the path once
+  (`summaryAfterSubject` drops a receipt's lead that repeats the subject and
+  places its other paths). The outcome glyph and a code line's `N │ ` gutter
+  are columns of their own, so a wrapped row hangs under its words. The
   transcript view (full detail) draws every op on its own
   (`FoldOperationsProvider`). An edit's collapsed body draws its hunks only
   (`diffHunkLines`: no `Index:`/`===`/`---`/`+++` preamble).
@@ -339,6 +344,8 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   column 2 and hangs its text at column 4.
 - **Child completion** (`delegate.client.tsx`). Collapsed is one line at
   column 2, `◆ <child's session name> · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
+  the name the start gave, else its task's first clause (`Check the greeting
+files`, never `delegate: …`); the start row reads `Started <name> · <task>`;
   the work in the run header's words (from the details' `toolCounts`, so it
   counts every call), its time and its bill, and no state word. A child that
   ended badly draws `✕`, says how after its name (`· model stream failed`)

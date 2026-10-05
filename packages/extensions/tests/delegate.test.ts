@@ -580,7 +580,7 @@ describe("a child's completion", () => {
             requestId: "start-1",
             agentName: DELEGATE_AGENT_NAME,
             // The child's session name: the row heads with it, as the tray and the `»` row do.
-            name: `${DELEGATE_AGENT_NAME}: ${childTask}`,
+            name: "CHILD-TASK: reply with the…",
             outcome: {},
             tools: [{ name: "read", summary: "", status: "error" }],
             toolCount: 1,
@@ -1320,14 +1320,10 @@ const turnEnd = (harness: Harness, count: number) =>
  */
 
 describe("a start nobody waits for", () => {
-  it.live("a child is named by its task's first line, cut between characters", () =>
+  /** The session name of the child one `delegate.start` with `params` made. */
+  const startedChildName = (params: { readonly todo: string; readonly name?: string }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        // The first line runs past the 80-unit name limit, the emoji fills units 79
-        // and 80, and the task goes on below its first line.
-        const head = `CHILD-NAME ${"a".repeat(67)}`
-        const firstLine = `${head}🙂 then more`
-        const todo = `${firstLine}\n\nContext: the rest of the task.`
         let parentCalls = 0
         const providerLayer = LanguageModelLayers.testStream((options) => {
           if (promptTexts(options.prompt)[0]?.includes("CHILD-NAME") === true) {
@@ -1335,7 +1331,7 @@ describe("a start nobody waits for", () => {
           }
           parentCalls += 1
           if (parentCalls === 1) {
-            return Effect.succeed(toolStep("delegate.start", { todo }, "named-child"))
+            return Effect.succeed(toolStep("delegate.start", params, "named-child"))
           }
           return Effect.succeed(reply("started"))
         })
@@ -1343,12 +1339,40 @@ describe("a start nobody waits for", () => {
         yield* sendPrompt(harness, "delegate a named task")
         const child = yield* childOf(harness)
         const sessions = yield* harness.client.session.list()
-        const name = sessions.find((session) => session.id === child.sessionId)?.name
-        // The cut drops the whole emoji: no half of a surrogate pair stays.
-        expect(head).toHaveLength(78)
-        expect(name).toBe(`${DELEGATE_AGENT_NAME}: ${head}…`)
-      }).pipe(Effect.timeout("10 seconds")),
-    ),
+        return sessions.find((session) => session.id === child.sessionId)?.name
+      }),
+    )
+
+  // The tray, the sessions pane and the result row head with the name: a
+  // short label, never the agent's name again (every child runs as `delegate`).
+  it.live("a child is named by its task's first clause, cut at a whole word", () =>
+    Effect.gen(function* () {
+      const context = "\n\nContext: the rest of the task. CHILD-NAME"
+      expect(
+        yield* startedChildName({ todo: `Check the greeting files (debug tools).${context}` }),
+      ).toBe("Check the greeting files")
+      expect(
+        yield* startedChildName({
+          todo: `## Audit every loader path and report each failure mode${context}`,
+        }),
+      ).toBe("Audit every loader path and…")
+      // A word longer than the name is cut between characters: the emoji
+      // straddling the cut goes whole, no half of a surrogate pair stays.
+      expect(yield* startedChildName({ todo: `${"a".repeat(30)}🙂tail${context}` })).toBe(
+        `${"a".repeat(30)}…`,
+      )
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live("a start's own name names the child, on one line", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* startedChildName({
+          todo: "CHILD-NAME: check the greeting files",
+          name: "  greeting\naudit ",
+        }),
+      ).toBe("greeting audit")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.live("refuses a start without a host-owned tool call", () =>

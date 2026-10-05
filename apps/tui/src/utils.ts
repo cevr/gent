@@ -521,6 +521,36 @@ export function displayPath(p: string, place: PathPlace): string {
   return p
 }
 
+/**
+ * A call's receipt summary with its paths read as the rows read theirs:
+ * each absolute path word through {@link displayPath}.
+ */
+export const placedSummary = (summary: string, place: PathPlace): string =>
+  summary
+    .split(" ")
+    .map((word) =>
+      Option.match(
+        Option.liftPredicate(word, (value) => value.length > 1 && value.startsWith("/")),
+        {
+          onNone: () => word,
+          onSome: (path) => displayPath(path, place),
+        },
+      ),
+    )
+    .join(" ")
+
+/**
+ * What a receipt summary adds to a row that already names its subject: the
+ * placed summary, less a lead that repeats the subject. The read, write and
+ * edit summaries start with their path, so under `a.ts` the row reads
+ * `a.ts · 3 lines`, not `a.ts /abs/a.ts · 3 lines`.
+ */
+export const summaryAfterSubject = (summary: string, subject: string, place: PathPlace): string => {
+  const placed = placedSummary(summary.trim(), place)
+  if (subject.length === 0 || !placed.startsWith(`${subject} `)) return placed
+  return placed.slice(subject.length + 1)
+}
+
 const decodeToolArgs = Schema.decodeUnknownOption(Schema.JsonObject)
 const decodeNumber = Schema.decodeUnknownOption(Schema.Finite)
 
@@ -590,8 +620,12 @@ function summarizeAskAsync(args: Schema.JsonObject): string {
   })
 }
 
+/** `<name> · <task>`: the start's own name says who, the task what; a start with no name shows its task. */
 function summarizeDelegate(args: Schema.JsonObject): string {
-  return truncate(getStringArg(args, "todo"), 40)
+  const todo = truncate(getStringArg(args, "todo"), 40)
+  const name = getStringArg(args, "name").replace(/\s+/g, " ").trim()
+  if (name.length === 0) return todo
+  return `${name} · ${todo}`
 }
 
 type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string

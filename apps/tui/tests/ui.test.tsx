@@ -952,6 +952,18 @@ describe("key hints", () => {
     expect(keyHintsLine(keys, 26)).toBe("enter select · esc close")
     expect(keyHintsLine(keys, 4)).toBe("esc close")
   })
+
+  test("a short verb comes before a dropped key: the move hint goes, then verbs shorten from the right", () => {
+    const own = [
+      KeyHints.move,
+      keyHint("enter", "files + conversation", "all"),
+      keyHint("f", "files only"),
+      KeyHints.close,
+    ]
+    expect(keyHintsLine(own, 60)).toBe("enter files + conversation · f files only · esc close")
+    expect(keyHintsLine(own, 40)).toBe("enter all · f files only · esc close")
+    expect(keyHintsLine(own, 30)).toBe("enter all · esc close")
+  })
 })
 
 describe("docked panes", () => {

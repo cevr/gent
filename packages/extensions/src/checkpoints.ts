@@ -494,6 +494,8 @@ interface Mark {
   readonly requestId: Option.Option<string>
   /** The branch a conversation revert made: on its `target`. */
   readonly resultBranch: Option.Option<BranchId>
+  /** The revert an undo undid: on each mark of an undo. Absent on older stores. */
+  readonly undoes: Option.Option<string>
   readonly at: number
 }
 
@@ -524,6 +526,7 @@ const parseMark = (record: string): Option.Option<Mark> => {
     resultBranch: Option.map(Option.fromUndefinedOr(trailers.get("Gent-Result-Branch")), (id) =>
       BranchId.make(id),
     ),
+    undoes: Option.fromUndefinedOr(trailers.get("Gent-Undoes")),
     at,
   })
 }
@@ -961,7 +964,8 @@ const listTurns = Effect.gen(function* () {
     onNone: () => Effect.succeedNone,
     onSome: ({ place: found, revert }) =>
       Effect.gen(function* () {
-        if (Option.isNone(revert.done)) return Option.none()
+        // A done undo leaves nothing to undo: its own undo would redo the revert.
+        if (Option.isNone(revert.done) || Option.isSome(revert.undoes)) return Option.none()
         const files = yield* revertFiles(found, revert)
         return Option.some({ requestId: revert.requestId, files: files.length })
       }),
@@ -1077,6 +1081,8 @@ interface Revert {
   readonly done: Option.Option<Mark>
   /** The branch a conversation revert made. */
   readonly resultBranch: Option.Option<BranchId>
+  /** The revert this one undid: it is an undo. A done undo leaves nothing to undo. */
+  readonly undoes: Option.Option<string>
 }
 
 const revertRef = (requestId: string, kind: "before" | "target" | "done") =>
@@ -1099,11 +1105,13 @@ const revertsOf = (marks: ReadonlyArray<Mark>) => {
       target: Option.none(),
       done: Option.none(),
       resultBranch: Option.none(),
+      undoes: Option.none(),
     }
     reverts.set(requestId, {
       ...known,
       [mark.kind]: Option.some(mark),
       resultBranch: Option.orElse(mark.resultBranch, () => known.resultBranch),
+      undoes: Option.orElse(mark.undoes, () => known.undoes),
     })
   }
   return reverts
@@ -1763,7 +1771,12 @@ const writeTarget = Effect.fn("Checkpoints.writeTarget")(function* (
   }
 })
 
-const revertTrailers = (requestId: string, kind: "before" | "target" | "done") =>
+/** A revert mark's trailers; an undo's also name the revert it undid (`Gent-Undoes`). */
+const revertTrailers = (
+  requestId: string,
+  kind: "before" | "target" | "done",
+  undoes: Option.Option<string>,
+) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const trailers: ReadonlyArray<readonly [string, string]> = [
@@ -1771,6 +1784,7 @@ const revertTrailers = (requestId: string, kind: "before" | "target" | "done") =
       ["Gent-Session", ctx.sessionId],
       ["Gent-Branch", ctx.branchId],
       ["Gent-Request", requestId],
+      ...Option.toArray(undoes).map((undone) => ["Gent-Undoes", undone] as const),
     ]
     return trailers
   })
@@ -1810,6 +1824,8 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
     readonly fork: Option.Option<{ readonly atMessageId: MessageId; readonly name: string }>
     /** The branch an earlier run made, when this run finishes it. */
     readonly made: Option.Option<BranchId>
+    /** The revert this run undoes, when it is an undo. */
+    readonly undoes: Option.Option<string>
   },
 ) {
   const ctx = yield* ExtensionContext
@@ -1829,7 +1845,7 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
     ref: beforeRef,
     tree: beforeTree,
     parent: Option.none(),
-    trailers: yield* revertTrailers(params.requestId, "before"),
+    trailers: yield* revertTrailers(params.requestId, "before", params.undoes),
   })
   const made = yield* Option.match(params.fork, {
     onNone: () => Effect.succeed(params.made),
@@ -1846,7 +1862,7 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
     tree,
     parent: Option.some(before),
     trailers: [
-      ...(yield* revertTrailers(params.requestId, "target")),
+      ...(yield* revertTrailers(params.requestId, "target", params.undoes)),
       ...Option.toArray(made).map((branchId) => ["Gent-Result-Branch", branchId] as const),
     ],
   })
@@ -1862,7 +1878,7 @@ const applyPlan = Effect.fn("Checkpoints.applyPlan")(function* (
     ref: yield* revertRef(params.requestId, "done"),
     tree,
     parent: Option.some(target),
-    trailers: yield* revertTrailers(params.requestId, "done"),
+    trailers: yield* revertTrailers(params.requestId, "done", params.undoes),
   })
   return reverted(pending, made, written.kept)
 })
@@ -1908,6 +1924,7 @@ const finishRevert = Effect.fn("Checkpoints.finishRevert")(function* (
       ["Gent-Session", revert.sessionId],
       ["Gent-Branch", revert.branchId],
       ["Gent-Request", revert.requestId],
+      ...Option.toArray(revert.undoes).map((undone) => ["Gent-Undoes", undone] as const),
     ],
   })
   return reverted(recorded.paths, revert.resultBranch, written.kept)
@@ -1950,6 +1967,7 @@ const revertTurn = Effect.fn("Checkpoints.revertTurn")(function* (
       () => action.conversation,
     ),
     made: Option.none(),
+    undoes: Option.none(),
   })
 })
 
@@ -1971,6 +1989,10 @@ const revertRevert = Effect.fn("Checkpoints.revertRevert")(function* (
   const ctx = yield* ExtensionContext
   const undone = newestRevert(marks, ctx.sessionId, ctx.branchId)
   if (Option.isNone(undone)) return refused("there is no revert to undo")
+  // The list offers no undo after a done undo, and the action agrees: undoing
+  // it would redo the revert, which a turn row does by name.
+  if (Option.isSome(undone.value.done) && Option.isSome(undone.value.undoes))
+    return refused("the last revert is undone already; revert a turn to take it back again")
   const recorded = Option.getOrThrow(undone.value.before)
   // A stop may have left asides; their bytes go into `before`, which the
   // undo writes back.
@@ -2000,6 +2022,7 @@ const revertRevert = Effect.fn("Checkpoints.revertRevert")(function* (
     plan,
     fork: Option.none(),
     made: Option.none(),
+    undoes: Option.some(undone.value.requestId),
   })
 })
 
