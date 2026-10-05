@@ -1766,13 +1766,17 @@ const measuredUnits = (
 
 /**
  * Why a summary was not produced. The window goes to the next compactor of
- * the chain; when none is left, the loop truncates it.
+ * the chain; when none is left, the loop truncates it. `cause` is the
+ * summary model's own failure, when one caused it: a failure that proves the
+ * credential cannot serve moves the summary to the next credential of the
+ * order, as a step's request moves.
  */
 export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
   "ModelCompactionError",
   {
     modelId: ModelId,
     reason: Schema.NonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -1802,7 +1806,12 @@ export interface CompactionRequest {
   readonly budget: ModelContextBudget
   /** What the model asked the summary to focus on, when it asked. */
   readonly instructions?: string
-  /** The admitted model for a summary bounded to `maxOutputTokens`. */
+  /**
+   * The admitted model for a summary bounded to `maxOutputTokens`, on the
+   * credential the turn's order chooses now. A compactor that fails with
+   * this model's failure as `ModelCompactionError.cause` lets the loop move
+   * the summary to the next credential and ask the compactor again.
+   */
   readonly summaryModel: (
     maxOutputTokens: number,
   ) => Effect.Effect<LanguageModel.LanguageModel, ProviderError | ProviderAuthError, Scope.Scope>
@@ -2148,6 +2157,13 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     message: Message,
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
   readonly summaryModel: CompactionRequest["summaryModel"]
+  /**
+   * Runs the compactor chain, and again on the next credential of the order
+   * each time its failure proves the summary's credential cannot serve.
+   */
+  readonly walkCredentials: <R>(
+    compact: Effect.Effect<CompactionSummary, ModelCompactionError, R>,
+  ) => Effect.Effect<CompactionSummary, ModelCompactionError, R>
 }) {
   const eventStore = yield* EventStore
   const now = yield* DateTime.nowAsDate
@@ -2281,18 +2297,20 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // a refused window drops its history.
   const compactor = yield* Effect.serviceOption(ModelContextCompactor)
   if (Option.isNone(compactor)) return yield* dropHistory(Option.none())
-  const summary = yield* compactor.value
-    .compact({
-      modelId: params.modelId,
-      agentName: params.agentName,
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      history,
-      kept,
-      budget: params.budget,
-      instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
-      summaryModel: params.summaryModel,
-    })
+  const summary = yield* params
+    .walkCredentials(
+      compactor.value.compact({
+        modelId: params.modelId,
+        agentName: params.agentName,
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        history,
+        kept,
+        budget: params.budget,
+        instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+        summaryModel: params.summaryModel,
+      }),
+    )
     .pipe(
       Effect.asSome,
       Effect.catchTag("ModelCompactionError", (error) =>

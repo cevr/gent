@@ -2638,6 +2638,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
+        walkCredentials: (compact) => compact,
       }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
@@ -2762,6 +2763,7 @@ describe("turn window projection", () => {
         promptCache: Option.none(),
         persist: (message) => Effect.succeed(message),
         summaryModel,
+        walkCredentials: (compact) => compact,
       }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
@@ -2823,6 +2825,7 @@ describe("turn window projection", () => {
             promptCache: Option.none(),
             persist: (message) => Effect.succeed(message),
             summaryModel,
+            walkCredentials: (compact) => compact,
           }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
         const first = yield* compact([
@@ -2906,6 +2909,7 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
+        walkCredentials: (compact) => compact,
       }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(false)
@@ -2982,6 +2986,7 @@ describe("turn window projection", () => {
           promptCache: Option.none(),
           persist: Effect.succeed,
           summaryModel,
+          walkCredentials: (compact) => compact,
         }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext))),
       )
 
