@@ -1556,6 +1556,15 @@ describe("provider login", () => {
             client.auth.renameKey({ sessionId, provider: "order-slots", from: home_, to: work }),
           )
           expect(Exit.isFailure(taken)).toBe(true)
+          // A label in use under a sharing driver's own key is in use too:
+          // the rename would hide that credential behind the owner's.
+          const spare = CredentialSlot.make("spare")
+          yield* auth.set("order-alias", AuthApi.make({ type: "api", key: "fake-spare" }), spare)
+          const shared = yield* Effect.exit(
+            client.auth.renameKey({ sessionId, provider: "order-slots", from: home_, to: spare }),
+          )
+          expect(Exit.isFailure(shared)).toBe(true)
+          expect(Predicate.isUndefined(yield* auth.get("order-slots", spare))).toBe(true)
           const fixed = yield* Effect.exit(
             client.auth.renameKey({
               sessionId,

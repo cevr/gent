@@ -821,6 +821,11 @@ export const renameSignIn = Effect.fn("renameSignIn")(function* (
   if (Option.isNone(stored)) {
     return yield* new AuthError({ message: `No credential "${from}" for "${provider}"` })
   }
+  // A label held under another key of the sign-in is in use as well: the
+  // store refuses only a label under the key it moves within.
+  if (Option.isSome(yield* storedCredential(auth, modelDrivers, provider, to))) {
+    return yield* new AuthError({ message: `"${to}" is in use for "${provider}"` })
+  }
   yield* auth.rename(stored.value.key, from, to)
 })
 
