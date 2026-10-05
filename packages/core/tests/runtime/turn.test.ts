@@ -2107,6 +2107,11 @@ describe("model-call budget", () => {
             (event): event is TurnCompleted => event._tag === "TurnCompleted",
           )
           expect(completed.map((event) => event.streamFailed)).toEqual([true])
+          // A budget this small is near from the start, but its first step
+          // reads only the task: the notice follows the first call.
+          expect((yield* storedNotices).map((message) => message.metadata?.details)).toEqual([
+            { used: 1, limit: 2 },
+          ])
 
           yield* Ref.set(eventsRef, [])
           yield* runAgentLoop(userMessage("budget-next", "go on"), budget(2))

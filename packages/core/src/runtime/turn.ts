@@ -5259,8 +5259,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
       }
       // Near its model-call budget the turn reads one notice, at the first
-      // boundary with few calls left. Written once: the reading is skipped once
-      // the turn holds it, and a recovered step finds it by id.
+      // boundary after a call with few calls left: a small budget is not
+      // near before the turn has worked, and its first step reads only the
+      // task. Written once: the reading is skipped once the turn holds it,
+      // and a recovered step finds it by id.
       const noticeId = modelAttemptsNoticeIdForTurn(params.state.message.id)
       if (!resolved.messages.some((existing) => existing.id === noticeId)) {
         const reading = yield* readModelAttempts({
@@ -5269,7 +5271,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         })
         const near = Option.filter(reading, (attempts) => {
           const left = modelAttemptsLeft(attempts)
-          return left > 0 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
+          return attempts.used > 0 && left > 0 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
         })
         if (Option.isSome(near)) {
           yield* appendBoundaryLine(

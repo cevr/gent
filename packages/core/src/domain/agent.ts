@@ -1177,7 +1177,8 @@ export type ModelAttempts = typeof ModelAttempts.Type
 /**
  * At this many calls left the turn writes its one budget notice and a
  * client draws the count as near: enough for a model to write what it has
- * and answer, with room for a retry. A smaller budget is near from its start.
+ * and answer, with room for a retry. A smaller budget is near from its start;
+ * its notice still waits for the turn's first call.
  */
 export const MODEL_ATTEMPTS_NOTICE_LEFT = 5
 
