@@ -47,6 +47,9 @@ import {
   messagePartsReasoning,
   messagePartsText,
   Model,
+  type ModelAttempts,
+  modelAttemptsLeft,
+  MODEL_ATTEMPTS_NOTICE_LEFT,
   type ModelContextMetrics,
   type ModelId,
   modelInputCeilingTokens,
@@ -227,6 +230,38 @@ export function buildContextLabels(input: {
     return [{ text: `${formatTokens(tokens)} (${pct}%)`, color: pressureColor(pct, input.theme) }]
   }
   return []
+}
+
+/**
+ * The running turn's model-call budget, for the right-anchored group before
+ * the context gauge: `calls 2/8` while it is far from the limit, and from
+ * `MODEL_ATTEMPTS_NOTICE_LEFT` calls left the calls left, `⧗ 3 of 8 calls
+ * left`, the glyph the turn's notice row draws. Near and far differ by shape
+ * (R0); the warning and error colors only add. Read from the newest step's
+ * receipt, so a request in flight counts once its step ends. Nothing for a
+ * turn with no budget, or between turns: the turn line keeps the count.
+ */
+export function buildBudgetLabels(input: {
+  readonly attempts: Option.Option<ModelAttempts>
+  readonly theme: Pick<ThemeColors, "textMuted" | "warning" | "error">
+}): StatusRowLabel[] {
+  return Option.match(input.attempts, {
+    onNone: () => [],
+    onSome: (attempts) => {
+      const left = modelAttemptsLeft(attempts)
+      if (left > MODEL_ATTEMPTS_NOTICE_LEFT)
+        return [{ text: `calls ${attempts.used}/${attempts.limit}`, color: input.theme.textMuted }]
+      let color = input.theme.warning
+      if (left === 0) color = input.theme.error
+      return [
+        {
+          text: `⧗ ${left} of ${attempts.limit} calls left`,
+          color,
+          short: { text: `⧗ ${left} left`, rank: STATUS_YIELD.budget },
+        },
+      ]
+    },
+  })
 }
 
 /**
@@ -2539,7 +2574,11 @@ export function useSessionFeed(
       ensureAssistantMessage(setStore, chunk, id, answerStartedAt)
     })
 
-  /** The transcript row that closes a turn: an interruption or a duration. */
+  /**
+   * The transcript row that closes a turn: an interruption or a duration.
+   * Every turn gets one, however short: it takes the rows the activity row
+   * gives back, so the live tail never shrinks under history (`watchGap`).
+   */
   const appendTurnEndRow = (
     event: Extract<AgentEvent, { _tag: "TurnCompleted" }>,
     stampedAt: number,
@@ -2549,12 +2588,9 @@ export function useSessionFeed(
       appendSessionEvent(setStore, { _tag: "interruption", createdAt: stampedAt, seq: eventSeq++ })
       return
     }
-    const durationSeconds = Math.round(event.durationMs / 1000)
-    // A turn shorter than a second gets no row.
-    if (durationSeconds <= 0) return
     appendSessionEvent(setStore, {
       _tag: "turn-ended",
-      durationSeconds,
+      durationSeconds: Math.round(event.durationMs / 1000),
       steps,
       createdAt: stampedAt,
       seq: eventSeq++,

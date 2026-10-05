@@ -24,7 +24,7 @@ import {
   SessionId,
   ToolCallId,
 } from "./ids.js"
-import { ModelId, ReasoningEffort } from "./agent.js"
+import { ModelAttempts, ModelId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
@@ -213,6 +213,13 @@ export const AgentEvent = Schema.TaggedUnion({
      * such a step's credential is unknown.
      */
     credential: Schema.optional(CredentialReceipt),
+    /**
+     * The turn's model-call budget as the step ended: the calls its durable
+     * reservation counted so far, retries and summaries included, and the
+     * run's `maxModelAttempts`. Absent for a turn with no budget, and on rows
+     * written before the field.
+     */
+    modelAttempts: Schema.optional(ModelAttempts),
   },
   TurnCompleted: {
     sessionId: SessionId,

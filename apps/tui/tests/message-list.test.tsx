@@ -37,6 +37,7 @@ import {
   dateFromMillis,
   Message,
   MessageId,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
   OutputCut,
   SessionId,
@@ -89,6 +90,7 @@ import {
   destroyRenderSetup,
   renderFrame,
   renderScoped,
+  TerminalOutput,
   terminalText,
 } from "./render-harness-boundary"
 import {
@@ -370,6 +372,115 @@ describe("turn line", () => {
     // The duration stays.
     expect(formatTurnLine(event, { steps: true, width: 5 })).toBe("Worked for 1m 48s")
   })
+})
+
+/**
+ * A turn with a model-call budget: its turn line counts the calls against
+ * the limit from the newest step's receipt, the one notice near the limit
+ * folds to a `⧗` row, and both keep their first part at every width.
+ */
+describe("model-call budget rows", () => {
+  const budgeted = [
+    { outcome: "ToolCalls", usage: { inputTokens: 20_000, outputTokens: 1_200 }, costUsd: 0.02 },
+    { outcome: "ToolCalls", modelAttempts: { used: 5, limit: 8 } },
+    {
+      outcome: "Answered",
+      usage: { inputTokens: 18_000, outputTokens: 900 },
+      costUsd: 0.02,
+      modelAttempts: { used: 6, limit: 8 },
+    },
+  ].reduce(addStep, addRetry(addRetry(emptyTurnSteps)))
+  const turnLine: Extract<SessionEvent, { _tag: "turn-ended" }> = {
+    _tag: "turn-ended",
+    durationSeconds: 108,
+    steps: budgeted,
+    createdAt: 1,
+    seq: 1,
+  }
+  const notice: ListMessage = {
+    ...userMessage("regular-message", "m1:model-attempts", "BUDGET-NOTICE-BODY"),
+    metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 5, limit: 8 } },
+  }
+  const lastCall: ListMessage = {
+    ...userMessage("regular-message", "m1:model-attempts-last", "BUDGET-LAST-CALL-BODY"),
+    metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 7, limit: 8 } },
+  }
+
+  test("the turn line counts the newest receipt's calls right after the time", () => {
+    expect(getSessionEventLabel(turnLine)).toBe(
+      "Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+    )
+    // A turn with no budget has no slot.
+    const unbudgeted = { ...turnLine, steps: addStep(emptyTurnSteps, { outcome: "Answered" }) }
+    expect(getSessionEventLabel(unbudgeted)).toBe("Worked for 1m 48s")
+  })
+
+  test("a turn under a second keeps its model-call slot", () => {
+    const short = { ...turnLine, durationSeconds: 0 }
+    expect(getSessionEventLabel(short)).toBe(
+      "Worked for <1s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+    )
+    expect(formatTurnLine(short, { steps: false, width: 40 })).toBe(
+      "Worked for <1s · 6/8 model calls",
+    )
+  })
+
+  const rowsAt = (width: number) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <MessageList
+            items={[notice, lastCall, turnLine]}
+            disclosure="collapsed"
+            syntaxStyle={syntaxStyle}
+          />
+        ),
+        { width, height: 10 },
+      )
+      return renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0)
+    })
+
+  it.scopedLive("at 100 columns the notice, the last call and the turn line are whole", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(100)).toEqual([
+        "  ⧗ 3 of 8 model calls left · the last runs without tools · a new message gets a fresh budget",
+        "  ⧗ last of 8 model calls · tools off · the turn answers with what it has",
+        "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
+      ])
+    }),
+  )
+
+  it.scopedLive("at 60 columns each row drops its last parts and keeps the count", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(60)).toEqual([
+        "  ⧗ 3 of 8 model calls left · the last runs without tools",
+        "  ⧗ last of 8 model calls · tools off",
+        "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries",
+      ])
+    }),
+  )
+
+  it.scopedLive("at 40 columns each row keeps its first part", () =>
+    Effect.gen(function* () {
+      expect(yield* rowsAt(40)).toEqual([
+        "  ⧗ 3 of 8 model calls left",
+        "  ⧗ last of 8 model calls · tools off",
+        "  ✻ Worked for 1m 48s · 6/8 model calls",
+      ])
+    }),
+  )
+
+  it.scopedLive("full detail draws the lines the model read", () =>
+    Effect.gen(function* () {
+      const frame = yield* renderLoaded([notice, lastCall], true)
+      expect(frame).toContain("BUDGET-NOTICE-BODY")
+      expect(frame).toContain("BUDGET-LAST-CALL-BODY")
+      expect(frame).not.toContain("⧗")
+    }),
+  )
 })
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
@@ -4153,9 +4264,15 @@ describe("native transcript region at the terminal's bottom", () => {
           }
           const settle = (step: string) =>
             Effect.gen(function* () {
+              // A replay keeps the old history on screen until its rows are
+              // drawn and land with the clear: until then a row may show in
+              // the old history and in the tail. Every row ends up once.
               yield* waitForFrame(
                 setup,
-                () => expectedRows().every((row) => bodyRowCounts(terminalText(setup)).has(row)),
+                () => {
+                  const counts = bodyRowCounts(terminalText(setup))
+                  return expectedRows().every((row) => counts.get(row) === 1)
+                },
                 step,
                 6_000,
               ).pipe(Effect.catch(() => Effect.sync(() => assertRows(step))))
@@ -4566,6 +4683,196 @@ describe("native transcript region at the terminal's bottom", () => {
         setFooter(6)
         yield* waitForStableFrame(setup)
         expectRowsOnce("tray row")
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // The rows a growing footer takes from the tail commit once their surface
+  // settles, a few frames later. Until they land, the tail keeps showing
+  // them: a tail that scrolled at once would leave them in neither history
+  // nor the screen, and the screen's top rows would read stale. The rows the
+  // turn adds wait under them instead.
+  it.scopedLive(
+    "while the rows a turn's footer takes are in flight, every frame reads the transcript in order",
+    () =>
+      Effect.gen(function* () {
+        const settledItems = [...longSession(), assistant("tail", longBody("TAIL-0"))]
+        const [items, setItems] = createSignal<ListMessage[]>(settledItems)
+        const [streaming, setStreaming] = createSignal(false)
+        const [footer, setFooter] = createSignal(3)
+        const { setup, renderer } = yield* settledLongSession({
+          items,
+          streaming,
+          footer,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        const turnItems: ListMessage[] = [
+          ...settledItems,
+          clientPrompt("ask", "ASK-0 line 1"),
+          { ...assistant("answer", "ANSWER-0 line 1"), draft: true },
+        ]
+        const expected = [...bodyRowCounts(turnItems.map((item) => item.content).join("\n")).keys()]
+        /** The body rows history and the frame show, in order: a prefix of the transcript's. */
+        const expectPrefix = (step: string) => {
+          const shown = [...terminalText(setup).matchAll(/[A-Z]+-\d+ line \d+/g)].map(
+            (match) => match[0],
+          )
+          expect([step, shown]).toEqual([step, expected.slice(0, shown.length)])
+        }
+        const hold = yield* makeSettleHold
+        hold.applyTo(renderer)
+        batch(() => {
+          setItems(turnItems)
+          setStreaming(true)
+          setFooter(5)
+        })
+        yield* hold.held
+        yield* Effect.promise(() => setup.renderOnce())
+        yield* Effect.promise(() => setup.renderOnce())
+        expectPrefix("commit in flight")
+        yield* hold.release
+        yield* waitForStableFrame(setup)
+        expectPrefix("landed")
+        expect(bodyRowCounts(terminalText(setup)).has("ANSWER-0 line 1")).toBe(true)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // A streamed answer grows the tail past the region: the final rows above
+  // it go to history. Until they land, every frame keeps them in view.
+  it.scopedLive(
+    "while a streamed answer pushes final rows to history, every frame reads the transcript in order",
+    () =>
+      Effect.gen(function* () {
+        const draft = (lines: number): ListMessage => ({
+          ...assistant(
+            "answer",
+            Array.from({ length: lines }, (_, index) => `ANSWER-0 line ${index + 1}`).join("\n\n"),
+          ),
+          draft: true,
+        })
+        // The feed keeps each item it does not change, as the session store does.
+        const settledItems = [
+          ...longSession(),
+          clientPrompt("ask", "ASK-0 line 1"),
+          assistant("step", "STEP-0 line 1\n\nSTEP-0 line 2"),
+        ]
+        const turnItems = (lines: number): ListMessage[] => [...settledItems, draft(lines)]
+        const [items, setItems] = createSignal<ListMessage[]>(turnItems(1))
+        const { setup, renderer } = yield* settledLongSession({
+          items,
+          streaming: () => true,
+          footer: () => 5,
+          paneOpen: () => false,
+          overlayOpen: () => false,
+        })
+        const expected = [
+          ...bodyRowCounts(
+            turnItems(6)
+              .map((item) => item.content)
+              .join("\n"),
+          ).keys(),
+        ]
+        const frames: string[][] = []
+        const look = () =>
+          frames.push(
+            [...terminalText(setup).matchAll(/[A-Z]+-\d+ line \d+/g)].map((match) => match[0]),
+          )
+        look()
+        const hold = yield* makeSettleHold
+        hold.applyTo(renderer)
+        for (const lines of [2, 3, 4, 5, 6]) {
+          setItems(turnItems(lines))
+          yield* Effect.promise(() => setup.renderOnce())
+          look()
+          yield* Effect.promise(() => setup.renderOnce())
+          look()
+        }
+        yield* hold.held
+        yield* Effect.promise(() => setup.renderOnce())
+        look()
+        yield* hold.release
+        yield* waitForStableFrame(setup)
+        look()
+        // Each frame shows a prefix of the transcript: no row missing between.
+        const torn = frames.filter((shown) => shown.some((row, at) => row !== expected[at]))
+        expect(torn).toEqual([])
+        expect(frames.at(-1)).toEqual(expected)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  // A terminal shows each synchronized update whole, and what comes outside
+  // one as it arrives. A replay clears the screen and its saved lines and
+  // writes every row again: written over many frames, the screen goes blank
+  // and refills, a flicker that grows with the session. The clear, every
+  // history row and the region's frame go in one update.
+  it.scopedLive(
+    "a replay writes its clear and all of history in one synchronized update",
+    () =>
+      Effect.gen(function* () {
+        const output = new TerminalOutput(60, height)
+        let screen = Option.none<CliRenderer>()
+        const setup = yield* renderScoped(
+          () =>
+            bottomTranscript({
+              items: () => [...longSession(), assistant("tail", "TAIL")],
+              streaming: () => false,
+              footer: () => 3,
+              paneOpen: () => false,
+              overlayOpen: () => false,
+              onRenderer: (renderer) => {
+                screen = Option.some(renderer)
+              },
+            }),
+          { width: 60, height, output },
+        )
+        const renderer = Option.getOrThrow(screen)
+        yield* waitForFrame(
+          setup,
+          () =>
+            rowsUnderRegion(renderer) === 0 &&
+            renderer.footerHeight === regionRows &&
+            bodyRowCounts(terminalText(setup)).has("ITEM-0 line 1"),
+          "the long session at the terminal's bottom",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        const before = output.written().length
+        setup.resize(50, height)
+        const replayed = () => output.written().slice(before)
+        yield* waitForFrame(
+          setup,
+          () => replayed().includes("\u001b[3J") && replayed().includes("ITEM-5 line 12"),
+          "the replay",
+          6_000,
+        )
+        yield* waitForStableFrame(setup)
+        const replay = replayed()
+        const clear = replay.indexOf("\u001b[3J")
+        const opened = replay.lastIndexOf("\u001b[?2026h", clear)
+        const closed = replay.indexOf("\u001b[?2026l", clear)
+        // The clear is inside an update, and that update is still open.
+        expect([opened >= 0, closed > clear]).toEqual([true, true])
+        expect(replay.slice(opened, clear)).not.toContain("\u001b[?2026l")
+        const update = replay.slice(clear, closed)
+        // Until then the screen keeps a whole frame: no update before the
+        // clear paints the region blank.
+        const blankUpdates = replay
+          .slice(0, opened)
+          .split("\u001b[?2026l")
+          .map((written) => Bun.stripANSI(written))
+          .filter((painted) => painted.length > regionRows && !/\S/.test(painted))
+        expect(blankUpdates).toEqual([])
+        const missing = [
+          ...bodyRowCounts(
+            longSession()
+              .map((item) => item.content)
+              .join("\n"),
+          ).keys(),
+        ].filter((row) => !update.includes(row))
+        expect(missing).toEqual([])
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )
@@ -6337,6 +6644,8 @@ describe("tool runs across steps", () => {
       expect(running).not.toContain("STEP-OUTPUT")
       // A turn that ends with no answer (an interrupt) ends the run.
       setStreaming(false)
+      // The tail's new bottom rows show a frame after it grows.
+      yield* waitForFrame(setup, (frame) => frame.includes("SECOND-STEP-OUTPUT"), "the preview")
       const ended = yield* shown()
       expect(ended).toContain("│ SECOND-STEP-OUTPUT")
       expect(ended).not.toContain("FIRST-STEP-OUTPUT")

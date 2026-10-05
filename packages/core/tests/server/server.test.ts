@@ -2187,7 +2187,7 @@ describe("session transport contract", () => {
           completed.some(
             ({ event }) =>
               event._tag === "ErrorOccurred" &&
-              event.error.includes("Model-attempt budget exhausted"),
+              event.error.startsWith("Stopped at the model-call budget: 0 of 0 model calls used"),
           ),
         ).toBe(true)
       }).pipe(Effect.timeout("5 seconds")),

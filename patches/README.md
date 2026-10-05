@@ -58,7 +58,7 @@ the split region grows at the terminal's bottom, the native frame scrolls the
 screen up with `CSI n S`. xterm and xterm.js drop the rows that leave the top
 on `CSI S`; they do not go to scrollback. A long session's turn that retries
 lost prompt and answer rows that way. Before each native frame
-(`flushPendingSplitCommits`, `renderNative`), `scrollSplitViewportIntoHistory`
+(`flushPendingSplitCommits`, `renderNative`), `openSplitFrame`
 writes the scroll itself: it opens the synchronized update the native frame
 then closes, saves the cursor, writes `n` line feeds at the screen's last row
 (a line feed there sends the top row to scrollback) and restores the cursor.
@@ -92,12 +92,40 @@ again can skip the frame. "split region growth" in `apps/tui/tests/ui.test.tsx`
 (a growth frame skipped, a second growth before the retry, a shrink and two
 commits, read in xterm) covers it.
 
+The patch also writes a replay's clear inside the frame after it. A terminal
+shows a synchronized update whole, and bytes outside one as they arrive.
+`resetSplitFooterForReplay` wrote its clear (`ESC[r ESC[0m ESC[H ESC[2J`,
+`ESC[3J` with `clearSavedLines`) at once, and a split resize that narrows
+the screen wrote its `moveCursorAndClear` at once: the terminal showed an
+empty screen until the next frames wrote history and the region again. Both
+now add their bytes to `pendingSplitFramePrefix`. `openSplitFrame` writes the
+prefix after the `ESC[?2026h` that opens the next native frame, under the same
+admission check as the line feeds, before them. A frame that opens with a
+prefix also drains every queued commit (as `drainAll` does), not
+`maxSplitCommitsPerFrame`: the clear, all the history rows queued with it and
+the region go out in one update. A change of screen mode that writes at once
+(`applyScreenMode` without the deferred split transition) writes a held
+prefix first, so the bytes keep their order. `resetSplitFooterForReplay` no
+longer flushes the queued output before it resets: the flush repainted the
+region from the empty next buffer, a blank frame in an update of its own,
+and the rows it wrote were the ones the clear removes. The reset drops the
+queue and applies a pending output mode, as the flush did once the queue was
+empty. Codex keeps its frame on screen
+until the next synchronized draw in the same way
+(`codex-rs/tui/src/tui.rs`, `defer_thread_switch_clear`). gent queues a
+replay's history in one step with the reset (`writeOffers` in
+`apps/tui/src/message-list.tsx`). "a replay writes its clear and all of
+history in one synchronized update" in `apps/tui/tests/message-list.test.tsx`
+covers it.
+
 Remove this patch when an OpenTUI release keeps the split's history state
-across the alternate screen, crops a box's border to the scissor and grows
-the split region without `CSI S`. Checked on 2026-10-04: `main` after 0.5.14
-still resets the state, its `drawVisibleBox` border fast path still writes
-past the scissor, and `applyPendingSplitFooterTransition` still writes
-`CSI S`.
+across the alternate screen, crops a box's border to the scissor, grows
+the split region without `CSI S` and writes the replay's clear inside a
+frame. Checked on 2026-10-04: `main` after 0.5.14 still resets the state,
+its `drawVisibleBox` border fast path still writes past the scissor, and
+`applyPendingSplitFooterTransition` still writes `CSI S`. Checked on
+2026-10-05 (`main` at 684d70ce): `resetSplitFooterForReplay` still writes
+its clear at once.
 
 ## `@effect/ai-anthropic@4.0.0`
 

@@ -1520,6 +1520,10 @@ interface SessionOperationStorageService {
     readonly messageId: MessageId
     readonly max: number
   }) => Effect.Effect<boolean, StorageError>
+  /** The model attempts the turn reserved so far: the same row's count, 0 before its first. */
+  readonly modelAttemptsUsed: (address: {
+    readonly messageId: MessageId
+  }) => Effect.Effect<number, StorageError>
   readonly cancelTurn: (address: TurnCancellationAddress) => Effect.Effect<void, StorageError>
   readonly isTurnCancelled: (
     address: TurnCancellationAddress,
@@ -1626,6 +1630,20 @@ export class SessionOperationStorage extends Context.Service<
             return reserved.length === 1
           },
           Effect.mapError(storageError("Failed to reserve model attempt")),
+        ),
+        modelAttemptsUsed: Effect.fn("SessionOperationStorage.modelAttemptsUsed")(
+          function* (address) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const rows = yield* sql<{ attempts: number }>`
+              SELECT json_extract(result_json, '$.attempts') AS attempts
+              FROM durable_operations
+              WHERE workspace_id = ${workspaceId}
+                AND operation = ${MODEL_ATTEMPT_OPERATION}
+                AND request_id = ${address.messageId}
+              LIMIT 1`
+            return rows[0]?.attempts ?? 0
+          },
+          Effect.mapError(storageError("Failed to read model attempts")),
         ),
         cancelTurn: Effect.fn("SessionOperationStorage.cancelTurn")(
           function* (address) {
