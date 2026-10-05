@@ -11,6 +11,7 @@ import {
   type Scope,
   type Stream,
   TxRef,
+  type Types,
   TxSemaphore,
 } from "effect"
 import type { Decision } from "effect/ai"
@@ -204,11 +205,17 @@ type ResourceServices<Resource> =
  * The services a `resources` declaration proves present. Only a tuple type
  * proves which definitions the value holds; an array type such as
  * `ReadonlyArray<typeof Counter>` also types an empty or partial array, so it
- * grants nothing. The factories take `Resources` as a `const` type parameter,
- * so an inline `resources: [Counter]` infers as a tuple.
+ * grants nothing. A union of tuple types grants nothing either: a value of any
+ * member satisfies it, and `readonly [] | readonly [typeof Counter]` takes `[]`.
+ * The factories take `Resources` as a `const` type parameter, so an inline
+ * `resources: [Counter]` infers as a tuple.
  */
 export type DeclaredResourceServices<Resources extends ReadonlyArray<AnyResourceContribution>> =
-  number extends Resources["length"] ? never : ResourceServices<Resources[number]>
+  number extends Resources["length"]
+    ? never
+    : [Resources] extends [Types.UnionToIntersection<Resources>]
+      ? ResourceServices<Resources[number]>
+      : never
 
 /**
  * A type that grants services makes the declaration that grants them

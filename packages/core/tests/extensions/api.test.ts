@@ -912,6 +912,7 @@ const StringOutput = Schema.String
 type NoParams = typeof NoInput
 type StringOut = typeof StringOutput
 type Readers = readonly [ReturnType<typeof defineResource<ReadOnlyService, "process">>]
+type MaybeReaders = readonly [] | Readers
 type Failure = CapabilityError
 
 /** A tool that reads `ReadOnlyService` from the resource it names. */
@@ -1169,6 +1170,38 @@ describe("Capability factory-shape locks (compile-time)", () => {
       execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
     })
     void typedResources
+    expect(true).toBe(true)
+  })
+
+  test("a union of resources tuples grants no services, since an empty member satisfies it", () => {
+    const empty: readonly [] = []
+    // @ts-expect-error -- `readonly []` satisfies the union, so no reader is proven present
+    defineResource<WriteCapableService, "branch", ReadOnlyService, never, MaybeReaders>({
+      id: "union/resource",
+      scope: "branch",
+      resources: empty,
+      layer: Layer.effect(
+        WriteCapableService,
+        Effect.map(ReadOnlyService, () => WriteCapableService.of({ write: Effect.void })),
+      ),
+    })
+    // @ts-expect-error -- `readonly []` satisfies the union, so no reader is proven present
+    tool<NoParams, StringOut, never, ReadOnlyService, MaybeReaders>({
+      id: "union-tool",
+      description: "x",
+      params: NoInput,
+      output: StringOutput,
+      resources: empty,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
+    // @ts-expect-error -- `readonly []` satisfies the union, so no reader is proven present
+    request<{}, string, ReadOnlyService, Failure, MaybeReaders>({
+      id: "union-request",
+      input: NoInput,
+      output: StringOutput,
+      resources: empty,
+      execute: () => Effect.flatMap(ReadOnlyService, (service) => service.read),
+    })
     expect(true).toBe(true)
   })
 
