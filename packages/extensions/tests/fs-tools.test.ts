@@ -2186,3 +2186,242 @@ describe("agent paths", () => {
     15_000,
   )
 })
+
+// ── run overrides narrow the agent ──────────────────────────────────────────
+
+/**
+ * A run's `tools` and `paths` only narrow what its agent's definition
+ * allows. `scoped` holds `read` and `write` and writes only under `a`; the
+ * model (or whoever creates the session) cannot widen it through overrides.
+ */
+const SCOPED = AgentName.make("scoped")
+const OPEN = AgentName.make("open")
+
+/** A cwd with `a/b`, `a/c`, `b` and a project config naming `scoped` and `open`. */
+const narrowedCwd = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const home = yield* makeTempDirectoryScoped("gent-narrow-home-")
+  const cwd = yield* makeTempDirectoryScoped("gent-narrow-cwd-")
+  for (const dir of ["a/b", "a/c", "b", ".gent"]) {
+    yield* fs.makeDirectory(path.join(cwd, dir), { recursive: true })
+  }
+  yield* fs.writeFileString(path.join(cwd, "a", "file.txt"), "inside")
+  yield* fs.writeFileString(
+    path.join(cwd, ".gent", "config.json"),
+    encodeJson({
+      agents: {
+        scoped: { tools: ["read", "write"], paths: [{ path: "a", access: "write" }] },
+        open: { tools: ["read", "write"] },
+      },
+    }),
+  )
+  return { home, cwd }
+})
+
+type NarrowAdmission = Parameters<typeof createRpcHarness>[0]["admission"]
+
+/** One harness over the narrowed cwd, its main session admitted as `admission`. */
+const narrowedHarness = (
+  dirs: { readonly home: string; readonly cwd: string },
+  admission: NarrowAdmission,
+  steps: Parameters<typeof LanguageModelLayers.sequence>[0],
+) =>
+  Effect.gen(function* () {
+    const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
+    const harness = yield* createRpcHarness({
+      agents: [],
+      extensionInputs: [AgentsExtension, FsToolsExtension],
+      providerLayer,
+      cwd: dirs.cwd,
+      home: dirs.home,
+      admission,
+      configServiceLayer: ConfigService.Live.pipe(
+        Layer.provide(RuntimeEnvironment.Live(dirs)),
+        Layer.provide(BunPlatformLive),
+      ),
+    })
+    return { ...harness, controls }
+  })
+
+/** Runs one turn that makes `calls` and returns whether each call failed, in order. */
+const callFailures = (
+  dirs: { readonly home: string; readonly cwd: string },
+  admission: NarrowAdmission,
+  calls: ReadonlyArray<{ readonly toolName: string; readonly input: unknown }>,
+) =>
+  Effect.gen(function* () {
+    const { client, sessionId, branchId, controls } = yield* narrowedHarness(dirs, admission, [
+      multiToolCallStep(...calls),
+      textStep("done"),
+    ])
+    yield* client.message.send({ sessionId, branchId, content: "Work." })
+    const messages = yield* waitFor(
+      client.message.list({ branchId }),
+      (list) =>
+        list.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.parts.some((part) => part.type === "text" && part.text === "done"),
+        ),
+      6000,
+      "reply after the file calls",
+    )
+    yield* controls.assertDone
+    return messages
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .map((part) => part.isFailure)
+  })
+
+describe("run overrides narrow the agent", () => {
+  it.scopedLive(
+    "a run's tools [*] holds only the tools its agent holds",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { tools: ["*"] } } },
+          [
+            { toolName: "read", input: { path: "a/file.txt" } },
+            { toolName: "write", input: { path: "a/new.txt", content: "x" } },
+            { toolName: "grep", input: { pattern: "inside", path: "a" } },
+          ],
+        )
+        expect(failures).toEqual([false, false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run's paths inside its agent's entry confine it further",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          {
+            agent: SCOPED,
+            runSpec: { overrides: { paths: [{ path: "a/b", access: "write" }] } },
+          },
+          [
+            { toolName: "write", input: { path: "a/b/x.txt", content: "x" } },
+            { toolName: "write", input: { path: "a/c/x.txt", content: "x" } },
+            { toolName: "read", input: { path: "a/file.txt" } },
+          ],
+        )
+        expect(failures).toEqual([false, true, true])
+        expect(yield* fs.exists(path.join(dirs.cwd, "a", "c", "x.txt"))).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run's read entry inside its agent's write entry reads and does not write",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: "a", access: "read" }] } } },
+          [
+            { toolName: "read", input: { path: "a/file.txt" } },
+            { toolName: "write", input: { path: "a/new.txt", content: "x" } },
+          ],
+        )
+        expect(failures).toEqual([false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a run whose paths leave its agent's entries is refused and the refusal names the entry",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const outside = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } } },
+          [],
+        ).pipe(Effect.flip)
+        expect(outside._tag).toBe("RunPathRefusedError")
+        expect(outside.message).toContain('"b"')
+        // A write entry under the agent's read-only reach asks for more access.
+        const wider = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: ".", access: "read" }] } } },
+          [],
+        ).pipe(Effect.flip)
+        expect(wider._tag).toBe("RunPathRefusedError")
+        expect(wider.message).toContain('"."')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "an agent without paths takes any run paths",
+    () =>
+      Effect.gen(function* () {
+        const dirs = yield* narrowedCwd
+        const failures = yield* callFailures(
+          dirs,
+          { agent: OPEN, runSpec: { overrides: { paths: [{ path: "b", access: "write" }] } } },
+          [
+            { toolName: "write", input: { path: "b/x.txt", content: "x" } },
+            { toolName: "write", input: { path: "a/x.txt", content: "x" } },
+          ],
+        )
+        expect(failures).toEqual([false, true])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  it.scopedLive(
+    "a child of a confined run stays inside the parent's paths",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const dirs = yield* narrowedCwd
+        const { client, sessionId, branchId } = yield* narrowedHarness(
+          dirs,
+          { agent: SCOPED, runSpec: { overrides: { paths: [{ path: "a/b", access: "write" }] } } },
+          [],
+        )
+        const parent = { cwd: dirs.cwd, parentSessionId: sessionId, parentBranchId: branchId }
+        // A child that names no paths runs inside the parent's.
+        const inherited = yield* client.session.create({ ...parent, admission: { agent: OPEN } })
+        const child = yield* client.session.get({ sessionId: inherited.sessionId })
+        expect(child?.admission?.runSpec?.overrides?.paths).toEqual([
+          { path: path.join(dirs.cwd, "a", "b"), access: "write" },
+        ])
+        // A child that names paths inside the parent's keeps them.
+        const inside = yield* client.session.create({
+          ...parent,
+          admission: {
+            agent: OPEN,
+            runSpec: { overrides: { paths: [{ path: "a/b", access: "read" }] } },
+          },
+        })
+        const narrowed = yield* client.session.get({ sessionId: inside.sessionId })
+        expect(narrowed?.admission?.runSpec?.overrides?.paths).toEqual([
+          { path: "a/b", access: "read" },
+        ])
+        // A child that names paths outside the parent's is refused.
+        const refused = yield* client.session
+          .create({
+            ...parent,
+            admission: {
+              agent: OPEN,
+              runSpec: { overrides: { paths: [{ path: "a/c", access: "write" }] } },
+            },
+          })
+          .pipe(Effect.flip)
+        expect(refused._tag).toBe("RunPathRefusedError")
+        expect(refused.message).toContain('"a/c"')
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
+  )
+})

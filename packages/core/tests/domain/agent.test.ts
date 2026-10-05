@@ -13,6 +13,7 @@ import {
   ProviderId,
   resolveSessionAgent,
   RunSpecSchema,
+  scopeReaches,
   StoredAgentDefinition,
 } from "../../src/domain/agent"
 
@@ -212,28 +213,71 @@ describe("old tool lists", () => {
     expect(held(runAs(reader, '{"overrides":{"deniedTools":["grep"]}}'))).toEqual(["read"])
   })
 
-  // An allow list alone replaced the agent's allow list and kept its denials.
-  test("an old allow-only override keeps the denials the agent inherits", () => {
+  // An allow list alone replaced the agent's allow list and kept its
+  // denials; a run now only narrows, so a tool the agent lacks stays out.
+  test("an old allow-only override narrows the tools the agent holds", () => {
     expect(held(runAs(reader, '{"overrides":{"allowedTools":["read","write","bash"]}}'))).toEqual([
       "read",
-      "write",
     ])
   })
 
-  test("both old lists replace the agent's tools", () => {
+  test("both old lists narrow the agent's tools", () => {
     expect(
       held(
-        runAs(reader, '{"overrides":{"allowedTools":["write","bash"],"deniedTools":["write"]}}'),
+        runAs(reader, '{"overrides":{"allowedTools":["grep","write"],"deniedTools":["write"]}}'),
       ),
-    ).toEqual(["bash"])
+    ).toEqual(["grep"])
   })
 
-  test("new tool patterns replace the agent's tools", () => {
-    expect(held(runAs(reader, '{"overrides":{"tools":["*","!read"]}}'))).toEqual([
-      "grep",
-      "write",
-      "bash",
+  test("new tool patterns narrow the agent's tools", () => {
+    expect(held(runAs(reader, '{"overrides":{"tools":["*","!read"]}}'))).toEqual(["grep"])
+  })
+
+  test("a run's tools [*] holds what the agent holds and no more", () => {
+    expect(held(runAs(reader, '{"overrides":{"tools":["*"]}}'))).toEqual(["read", "grep"])
+  })
+})
+
+// ── run narrowing ───────────────────────────────────────────────────────────
+
+describe("run narrowing", () => {
+  const within = (inner: string, outer: string) => inner === outer || inner.startsWith(`${outer}/`)
+
+  test("a scope reaches an entry inside one of its entries with at least its access", () => {
+    const scope = [
+      { path: "/w/a", access: "write" as const },
+      { path: "/w/docs", access: "read" as const },
+    ]
+    expect(scopeReaches(scope, { path: "/w/a/b", access: "write" }, within)).toBe(true)
+    expect(scopeReaches(scope, { path: "/w/a", access: "read" }, within)).toBe(true)
+    expect(scopeReaches(scope, { path: "/w/docs/x", access: "read" }, within)).toBe(true)
+    // A write entry under a read entry asks for more access.
+    expect(scopeReaches(scope, { path: "/w/docs/x", access: "write" }, within)).toBe(false)
+    // An entry outside every entry, or one that holds an entry, is not reached.
+    expect(scopeReaches(scope, { path: "/w/b", access: "read" }, within)).toBe(false)
+    expect(scopeReaches(scope, { path: "/w", access: "read" }, within)).toBe(false)
+  })
+
+  test("a run's paths add a scope after the agent's own", () => {
+    const painter = AgentDefinition.make({
+      name: AgentName.make("painter"),
+      paths: [{ path: "a", access: "write" }],
+    })
+    const run = runAs(painter, '{"overrides":{"paths":[{"path":"a/b","access":"read"}]}}')
+    expect(run.pathScopes()).toEqual([
+      [{ path: "a", access: "write" }],
+      [{ path: "a/b", access: "read" }],
     ])
+    expect(painter.pathScopes()).toEqual([[{ path: "a", access: "write" }]])
+  })
+
+  test("a run's other overrides still reshape the agent", () => {
+    const painter = AgentDefinition.make({ name: AgentName.make("painter"), maxSteps: 10 })
+    const run = runAs(painter, '{"overrides":{"maxSteps":3,"tools":["read"]}}')
+    expect(run.maxSteps).toBe(3)
+    expect(run.tools).toBeUndefined()
+    expect(run.admitsTool("read")).toBe(true)
+    expect(run.admitsTool("write")).toBe(false)
   })
 })
 

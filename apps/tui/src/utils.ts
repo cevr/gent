@@ -403,6 +403,8 @@ export const formatError = (error: UiError): string => {
       return `Invalid: ${error.message}`
     case "SessionDepthLimitError":
       return `Depth: ${error.message}`
+    case "RunPathRefusedError":
+      return `Paths: ${error.message}`
     case "ProviderAuthError":
       return `Auth: ${error.message}`
     case "DriverError":

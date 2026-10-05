@@ -236,6 +236,7 @@ const sessionMutationsTestLayer = (
     testRuntimeEnvironment,
     fixedSessionProfiles(),
     ConfigService.Test(),
+    BunServices.layer,
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
@@ -2313,6 +2314,7 @@ describe("requestId idempotency", () => {
             GentPlatform.Test(),
             testRuntimeEnvironment,
             ConfigService.Test(),
+            BunServices.layer,
           ),
         )
         const create = (registry: Layer.Layer<ExtensionRegistry>, requestId: string) =>
@@ -2383,6 +2385,7 @@ describe("requestId idempotency", () => {
           testRuntimeEnvironment,
           profiles,
           ConfigService.Test(),
+          BunServices.layer,
         )
         // The caller holds only SessionMutations: the check reads the cache
         // the service captured, not one from the caller's context.

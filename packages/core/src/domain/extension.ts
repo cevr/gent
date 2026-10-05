@@ -20,6 +20,7 @@ import {
   type Model,
   type ModelId,
   type ReasoningEffort,
+  type RunPathRefusedError,
   type SessionDepthLimitError,
 } from "./agent.js"
 import {
@@ -1536,6 +1537,7 @@ type SessionMutationError =
   | InvalidStateError
   | NotFoundError
   | SessionDepthLimitError
+  | RunPathRefusedError
 
 export interface SessionMutationsService {
   readonly createSession: (

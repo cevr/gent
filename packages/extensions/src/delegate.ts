@@ -83,11 +83,12 @@ const CHILD_TOOL_DENIALS: ReadonlyArray<string> = [
 export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
 
 /**
- * The one agent every child runs as. A child inherits nothing from its
- * caller: not the caller's agent, not the session's model. Its model and
+ * The one agent every child runs as. A child inherits neither its caller's
+ * agent nor the session's model, only the caller run's path bound
+ * (`session.create` keeps a child inside its parent's paths). Its model and
  * effort come from this definition, reshaped by `agents.delegate` in
  * `.gent/config.json` (user, then project), and a call's own `overrides`
- * win over both. That config entry is where a pairing such as
+ * win over both; their `tools` and `paths` only narrow it. That config entry is where a pairing such as
  * fable → opus or opus → sonnet is declared.
  */
 const delegateAgent = AgentDefinition.make({
@@ -1162,17 +1163,6 @@ const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: Reques
   return entry
 })
 
-/**
- * A call's `tools` replace the definition's, so the delegation tools are
- * taken back after them. A call that names no tools keeps the definition's,
- * as `agents.delegate` in config reshapes it.
- */
-const childOverrides = (overrides: typeof RunOverrides.Type): typeof RunOverrides.Type =>
-  Option.match(Option.fromUndefinedOr(overrides.tools), {
-    onNone: () => overrides,
-    onSome: (tools) => ({ ...overrides, tools: [...tools, ...CHILD_TOOL_DENIALS] }),
-  })
-
 const StartParams = Schema.Struct({
   todo: Schema.String.annotate({
     description:
@@ -1224,7 +1214,9 @@ export const StartChild = tool({
       toolCallId: ctx.toolCallId,
       runSpec: Option.match(Option.fromUndefinedOr(params.overrides), {
         onNone: () => ({}),
-        onSome: (overrides) => ({ overrides: childOverrides(overrides) }),
+        // A call's tools and paths only narrow the definition, so they
+        // cannot hand a child the delegation tools back.
+        onSome: (overrides) => ({ overrides }),
       }),
     })
     return { requestId: entry.requestId, sessionId: entry.sessionId, branchId: entry.branchId }

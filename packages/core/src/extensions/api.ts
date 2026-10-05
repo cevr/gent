@@ -55,9 +55,11 @@ import {
 export {
   AgentDefinition,
   AgentName,
+  type AgentPathEntry,
   ReasoningEffort,
   type RunSpec,
   RunOverrides,
+  scopeReaches,
 } from "../domain/agent.js"
 export {
   type GentExtension,
@@ -165,8 +167,10 @@ export {
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // Runs a command to completion over the Effect `ChildProcessSpawner`.
 export {
+  pathWithin,
   ProcessError,
   resolveDataDir,
+  resolveLinks,
   runProcess,
   writeFileAtomic,
 } from "../runtime/gent-platform.js"

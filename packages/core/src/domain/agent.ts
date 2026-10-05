@@ -427,10 +427,39 @@ const AgentPath = Schema.Union([
   Schema.String.pipe(
     Schema.decodeTo(Schema.toType(AgentPathEntry), {
       decode: SchemaGetter.transform((path: string) => ({ path, access: "write" as const })),
-      encode: SchemaGetter.transform((entry: typeof AgentPathEntry.Type) => entry.path),
+      encode: SchemaGetter.transform((entry: AgentPathEntry) => entry.path),
     }),
   ),
 ])
+
+/** One `paths` entry as resolution reads it: the path as written and its access. */
+export type AgentPathEntry = typeof AgentPathEntry.Type
+
+/**
+ * Whether `scope` reaches `entry`: one of its entries holds the entry's path
+ * (`within(inner, outer)`) with at least the entry's access, `write` holding
+ * `read`. The caller resolves both sides first (absolute, links followed):
+ * the file tools before each call, a session create before it admits a run.
+ */
+export const scopeReaches = (
+  scope: ReadonlyArray<AgentPathEntry>,
+  entry: AgentPathEntry,
+  within: (inner: string, outer: string) => boolean,
+): boolean =>
+  scope.some(
+    (outer) =>
+      (entry.access === "read" || outer.access === "write") && within(entry.path, outer.path),
+  )
+
+/**
+ * One narrowing of an agent: tool patterns a tool must also pass, and
+ * `paths` entries a path must also lie in. A run's overrides add one
+ * (`runAgent`); a config entry cannot write it, so a narrowing never widens.
+ */
+const AgentNarrowing = Schema.Struct({
+  tools: Schema.optional(Schema.Array(Schema.String)),
+  paths: Schema.optional(Schema.Array(AgentPath)),
+})
 
 // ── agent definition ────────────────────────────────────────────────────────
 
@@ -469,15 +498,30 @@ const agentDefinitionFields = {
   driver: Schema.optional(DriverRef),
 }
 
+/**
+ * The fields of the class: the definition's, and the narrowings a run adds.
+ * `narrowings` is not a patch field: neither a config entry nor a run's
+ * overrides can name it; resolution adds it (`runAgent`).
+ */
+const agentClassFields = {
+  ...agentDefinitionFields,
+  /**
+   * Narrowings of `tools` and `paths`, one for each run's overrides that
+   * named them: a tool must pass `tools` and every narrowing's `tools`; a
+   * path must lie in `paths` and in every narrowing's `paths`. Absent: none.
+   */
+  narrowings: Schema.optional(Schema.Array(AgentNarrowing)),
+}
+
 /** What `new AgentDefinition` and its static constructors take. */
-type AgentDefinitionInput = Schema.Struct.MakeIn<typeof agentDefinitionFields>
+type AgentDefinitionInput = Schema.Struct.MakeIn<typeof agentClassFields>
 
 /**
  * Why an agent's input is refused: the keys the schema does not name, read
  * before a constructor parses them away. `None` when every key is named.
  */
 const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> => {
-  const unknown = Object.keys(input).filter((key) => !Object.hasOwn(agentDefinitionFields, key))
+  const unknown = Object.keys(input).filter((key) => !Object.hasOwn(agentClassFields, key))
   if (unknown.length === 0) return Option.none()
   return Option.some(
     `AgentDefinition "${input.name}" has keys the schema does not name: ${unknown.join(", ")}. Tool lists are \`tools\` patterns: allowedTools [a, b] is tools [a, b]; deniedTools [x] is tools ["*", "!x"].`,
@@ -494,13 +538,14 @@ const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> =>
  * AgentDefinition.make(...))`, and JSON in a config file's `agents` key, an
  * `AgentPatch` by name that creates an agent or reshapes a registered one
  * (`resolveAgentRoster`). Per-run overrides are a part of the same patch, on
- * `RunSpec`. A config entry keeps the keys its author wrote
- * (`AuthoredAgentPatch`); stored rows and the wire also carry the old keys,
- * for an older gent (`StoredRunOverrides`, `StoredAgentDefinition`). A
- * `delegate.start` call sends the new keys only (`RunOverrides`).
+ * `RunSpec`; their `tools` and `paths` only narrow the agent (`runAgent`).
+ * A config entry keeps the keys its author wrote (`AuthoredAgentPatch`);
+ * stored rows and the wire also carry the old keys, for an older gent
+ * (`StoredRunOverrides`, `StoredAgentDefinition`). A `delegate.start` call
+ * sends the new keys only (`RunOverrides`).
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
-  agentDefinitionFields,
+  agentClassFields,
 ) {
   /**
    * Builds an agent and refuses a key the schema does not name. The schema
@@ -544,21 +589,35 @@ export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinit
   }
 
   /**
-   * Whether a turn of this agent holds the tool `id` (`toolPatternsAdmit`
-   * over `tools`). The patterns are authoritative: no extension adds a tool
-   * they leave out (`compileToolPolicy`). An extension that selects or
-   * describes its own tool asks this first.
+   * Whether a turn of this agent holds the tool `id`: `tools` and every
+   * narrowing's `tools` admit it (`toolPatternsAdmit`). The patterns are
+   * authoritative: no extension adds a tool they leave out
+   * (`compileToolPolicy`). An extension that selects or describes its own
+   * tool asks this first.
    */
   admitsTool(id: string): boolean {
-    return toolPatternsAdmit(Option.fromUndefinedOr(this.tools), id)
+    return [this.tools, ...(this.narrowings ?? []).map((narrowing) => narrowing.tools)].every(
+      (patterns) => toolPatternsAdmit(Option.fromUndefinedOr(patterns), id),
+    )
+  }
+
+  /**
+   * The scopes a file tool call must lie in: `paths`, then each narrowing's
+   * `paths`. A path is in reach when every scope reaches it
+   * (`scopeReaches`); no scope, every path is.
+   */
+  pathScopes(): ReadonlyArray<ReadonlyArray<AgentPathEntry>> {
+    return [this.paths, ...(this.narrowings ?? []).map((narrowing) => narrowing.paths)].filter(
+      Predicate.isNotUndefined,
+    )
   }
 }
 
 /**
  * An agent's fields but `name`, each optional (every field but `name` is
  * optional already): what a config `agents` entry and a run's overrides
- * write. Applied to an agent it replaces each field it names
- * (`mergeAgentPatches`).
+ * write. A config entry replaces each field it names (`mergeAgentPatches`);
+ * a run's `tools` and `paths` narrow instead (`runAgent`).
  */
 const AgentPatch = Schema.Struct(Struct.omit(agentDefinitionFields, ["name"]))
 type AgentPatch = typeof AgentPatch.Type
@@ -855,7 +914,8 @@ export const RunOverrides = RunOverridesInput.pipe(
  * `first`, except `systemPromptAddendum`, which appends after a blank line,
  * since an addendum adds to the agent's own prompt, and an old tool edit,
  * which applies to the tools `first` leaves. User then project config
- * entries merge this way, and a run's overrides over both.
+ * entries merge this way: they are the author's own edits. A run's
+ * overrides merge this way too, but for `tools` and `paths` (`runAgent`).
  */
 export const mergeAgentPatches = (
   first: StoredAgentPatch,
@@ -903,13 +963,39 @@ const agentFromPatch = (name: AgentName, patch: StoredAgentPatch): AgentDefiniti
   return AgentDefinition.make({ ...fields, tools, name })
 }
 
-/** `agent` reshaped by `patch` as `mergeAgentPatches` merges: config entries, then a run's overrides. */
+/** `agent` reshaped by `patch` as `mergeAgentPatches` merges a config entry. */
 const applyAgentPatch = (agent: AgentDefinition, patch: StoredAgentPatch): AgentDefinition =>
   agentFromPatch(agent.name, mergeAgentPatches({ ...agent }, patch))
 
 /**
+ * `agent` as one run of it. The overrides' model, effort, limits and
+ * addendum reshape it as a config entry does (`applyAgentPatch`). Their
+ * `tools` and `paths` add a narrowing: the agent's definition is the bound,
+ * and a run only narrows it (least authority). `tools: ["*"]` holds what
+ * the agent holds; a `paths` entry reaches only what the agent's entries
+ * reach too. An old tool edit narrows as the patterns it gives every tool.
+ */
+const runAgent = (agent: AgentDefinition, overrides: StoredAgentPatch): AgentDefinition => {
+  const { tools, legacyTools, paths, ...fields } = overrides
+  const merged = applyAgentPatch(agent, fields)
+  const legacy = Option.map(Option.fromUndefinedOr(legacyTools), (edit) =>
+    applyLegacyToolEdit(Option.none(), edit),
+  )
+  const narrowing = omitUndefined({
+    tools: tools ?? Option.getOrUndefined(legacy),
+    paths,
+  })
+  if (Object.keys(narrowing).length === 0) return merged
+  return AgentDefinition.make({
+    ...merged,
+    narrowings: [...(merged.narrowings ?? []), narrowing],
+  })
+}
+
+/**
  * The agent a session runs as: `name` from the roster (`resolveAgentRoster`)
- * with the session's run overrides applied; none when no agent has the name.
+ * as a run of the session's overrides (`runAgent`); none when no agent has
+ * the name.
  */
 export const resolveSessionAgent = (params: {
   readonly agents: Iterable<AgentDefinition>
@@ -922,7 +1008,7 @@ export const resolveSessionAgent = (params: {
     (agent) =>
       Option.match(params.overrides, {
         onNone: () => agent,
-        onSome: (patch) => applyAgentPatch(agent, patch),
+        onSome: (patch) => runAgent(agent, patch),
       }),
   )
 
@@ -965,8 +1051,9 @@ export const StoredAgentDefinition = Schema.Struct({
       ({ name, ...stored }: StoredPatchFields & { readonly name: AgentName }) =>
         agentFromPatch(name, readStoredPatch(stored)),
     ),
+    // Only roster agents go out: a run's narrowings stay in the process.
     encode: SchemaGetter.transform((agent: AgentDefinition) => ({
-      ...writeStoredPatch({ ...agent }),
+      ...writeStoredPatch(Struct.omit({ ...agent }, ["narrowings"])),
       name: agent.name,
     })),
   }),
@@ -1048,6 +1135,20 @@ export type RunSpec = typeof RunSpecSchema.Type
  * `parentSessionId` and no `continueThread`).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
+
+/**
+ * A session create asked for a run `paths` entry its agent does not reach,
+ * or, for a child, one its parent run does not reach. The whole run is
+ * refused: a dropped entry would change what the run means.
+ */
+export class RunPathRefusedError extends Schema.TaggedError<RunPathRefusedError>()(
+  "RunPathRefusedError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    access: AgentPathAccess,
+  },
+) {}
 
 /** A parent at the nesting cap asked for one more child. */
 export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(

@@ -4,6 +4,7 @@ import {
   Duration,
   Effect,
   Exit,
+  FileSystem,
   Layer,
   Option,
   Path,
@@ -109,7 +110,12 @@ import {
   SessionSettingsUpdated,
   SessionStarted,
 } from "../domain/event.js"
-import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
+import {
+  extensionPlatformServicesLive,
+  GentPlatform,
+  pathWithin,
+  resolveLinks,
+} from "../runtime/gent-platform.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import {
   admitChildSessionDepth,
@@ -153,7 +159,16 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { type AgentName, isReasoningEffort, resolveAgentRoster } from "../domain/agent.js"
+import {
+  type AgentName,
+  type AgentPathEntry,
+  DEFAULT_AGENT_NAME,
+  isReasoningEffort,
+  resolveAgentRoster,
+  resolveSessionAgent,
+  RunPathRefusedError,
+  scopeReaches,
+} from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
@@ -410,9 +425,14 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionProfileCache
   | RuntimeEnvironment
   | ConfigService
+  | FileSystem.FileSystem
+  | Path.Path
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
   const configService = yield* ConfigService
+  // A run's paths resolve links at admission, as the file tools resolve them.
+  const fileSystem = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -428,19 +448,25 @@ const makeSessionMutationsService: Effect.Effect<
    * because the receipt already answers the retry.
    */
   const eventStore = yield* EventStore
-  const once = <A, E, R>(
+  const once = <A, B, E, R, AdmitE, AdmitR>(
     operation: DurableOperation<A>,
     { requestId }: { readonly requestId?: RequestId },
     subject: (result: A) => { readonly sessionId: SessionId; readonly branchId: BranchId },
-    work: Effect.Effect<{ readonly envelope: EventEnvelope; readonly result: A }, E, R>,
-    admit: Effect.Effect<void, E, R> = Effect.void,
-  ): Effect.Effect<{ readonly result: A; readonly fresh: boolean }, E | StorageError, R> =>
+    work: (
+      admitted: B,
+    ) => Effect.Effect<{ readonly envelope: EventEnvelope; readonly result: A }, E, R>,
+    admit: Effect.Effect<B, AdmitE, AdmitR>,
+  ): Effect.Effect<
+    { readonly result: A; readonly fresh: boolean },
+    E | AdmitE | StorageError,
+    R | AdmitR
+  > =>
     Effect.gen(function* () {
       if (!Predicate.isUndefined(requestId)) {
         const existing = yield* sessionOperationStorage.getReceipt(operation, requestId)
         if (!Predicate.isUndefined(existing)) return { result: existing, fresh: false }
       }
-      yield* admit
+      const admitted = yield* admit
       const committed = yield* storageTransaction(
         Effect.gen(function* () {
           if (!Predicate.isUndefined(requestId)) {
@@ -449,7 +475,7 @@ const makeSessionMutationsService: Effect.Effect<
               return { result: existing, envelope: Option.none<EventEnvelope>() }
             }
           }
-          const committed = yield* work
+          const committed = yield* work(admitted)
           if (!Predicate.isUndefined(requestId)) {
             yield* sessionOperationStorage.saveReceipt(
               operation,
@@ -684,17 +710,89 @@ const makeSessionMutationsService: Effect.Effect<
 
   const profileCache = yield* SessionProfileCache
 
+  /** The agents a cwd's sessions can run as: its profile's, reshaped by its config. */
+  const rosterFor = Effect.fn("SessionMutations.rosterFor")(function* (cwd: string) {
+    const registry = yield* resolveRegistryForCwd(Option.some(cwd)).pipe(
+      // The agent roster is resolved data; the lease ends with the read.
+      Effect.scoped,
+      Effect.provideService(SessionProfileCache, profileCache),
+      Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
+    )
+    const config = yield* configService.get(cwd)
+    return {
+      agents: [...registry.getResolved().agents.values()],
+      configAgents: Option.fromUndefinedOr(config.agents),
+    }
+  })
+
   /**
-   * A session's agent names every turn it runs, and no verb changes it, so
-   * the agent the session will store must be one its own cwd's profile
-   * knows. That is the named agent, or for a handoff the parent's agent,
-   * which it inherits: a handoff can move to a project that has no such
-   * agent. The check resolves a profile, so it runs outside the storage
-   * transaction; `admitParent` checks the parent again inside it.
+   * Refuses the first entry of `entries` (resolved against `base`) that
+   * `scope` (resolved against `scopeBase`) does not reach. Links resolve on
+   * both sides at the check, as the file tools resolve them at each call.
    */
+  const requireScopeReaches = Effect.fn("SessionMutations.requireScopeReaches")(function* (
+    entries: ReadonlyArray<AgentPathEntry>,
+    base: string,
+    scope: ReadonlyArray<AgentPathEntry>,
+    scopeBase: string,
+    owner: string,
+  ) {
+    const resolve = (from: string) => (entry: AgentPathEntry) =>
+      Effect.map(resolveLinks(pathService.resolve(from, entry.path)), (path) => ({
+        path,
+        access: entry.access,
+      }))
+    const reach = yield* Effect.forEach(scope, resolve(scopeBase))
+    const within = (inner: string, outer: string) => pathWithin(pathService, outer, inner)
+    for (const entry of entries) {
+      if (scopeReaches(reach, yield* resolve(base)(entry), within)) continue
+      const named = scope.map((outer) => `${outer.path} (${outer.access})`).join(", ")
+      return yield* new RunPathRefusedError({
+        message: `Run paths entry "${entry.path}" (${entry.access}) is outside ${owner}'s paths: ${named}. A run's paths only narrow its agent's. Paths are relative to ${base}.`,
+        path: entry.path,
+        access: entry.access,
+      })
+    }
+  })
+
+  /**
+   * Admit the run a create asks for and return the admission to store. It
+   * resolves profiles and reads the file system, so it runs outside the
+   * storage transaction; `admitParent` checks the parent again inside it.
+   *
+   * - A session's agent names every turn it runs, and no verb changes it, so
+   *   the agent the session will store must be one its own cwd's profile
+   *   knows: the named agent, or for a handoff the parent's agent, which it
+   *   inherits (a handoff can move to a project that has no such agent).
+   * - A run's `paths` only narrow its agent (least authority): each entry
+   *   must lie in an entry of every agent scope with at least its access.
+   *   An entry outside refuses the whole run (`RunPathRefusedError`); a
+   *   dropped entry would change what the run means. An agent without
+   *   `paths` takes any entry.
+   * - A spawned child never exceeds its parent run: each entry it names must
+   *   lie in every scope of the parent's agent, and a child that names none
+   *   takes the parent's narrowest scope, as absolute paths, since the child
+   *   may run in another cwd. The file tools then hold it to both its own
+   *   agent's scopes and that one.
+   */
+  const admitRun = Effect.fn("SessionMutations.admitRun")(function* (input: CreateSessionInput) {
+    const requested = requestedAdmission(input.admission)
+    const cwd = input.cwd ?? runtimeEnvironment.cwd
+    const named = Option.fromUndefinedOr(requested?.runSpec?.overrides?.paths)
+    yield* admitAgent(input, cwd, named)
+    if (Predicate.isUndefined(input.parentSessionId) || input.continueThread === true) {
+      return requested
+    }
+    return yield* boundByParent(input.parentSessionId, requested, cwd, named)
+  })
+
+  /** The agent exists in the cwd's roster, and the run's `paths` lie in its scopes. */
   const admitAgent = Effect.fn("SessionMutations.admitAgent")(function* (
     input: CreateSessionInput,
+    cwd: string,
+    named: Option.Option<ReadonlyArray<AgentPathEntry>>,
   ) {
+    const requested = requestedAdmission(input.admission)
     const inherited = Effect.gen(function* () {
       if (input.continueThread !== true || Predicate.isUndefined(input.parentSessionId)) {
         return Option.none<AgentName>()
@@ -703,106 +801,149 @@ const makeSessionMutationsService: Effect.Effect<
       return Option.fromUndefinedOr(parent?.admission?.agent)
     })
     // A create that names an admission stores it, so its agent is the one.
-    const effective = yield* Option.match(
-      Option.fromUndefinedOr(requestedAdmission(input.admission)),
-      {
-        onNone: () => inherited,
-        onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
+    const effective = yield* Option.match(Option.fromUndefinedOr(requested), {
+      onNone: () => inherited,
+      onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
+    })
+    if (Option.isNone(effective) && Option.isNone(named)) return
+    const { agents, configAgents } = yield* rosterFor(cwd)
+    const name = Option.getOrElse(effective, () => DEFAULT_AGENT_NAME)
+    const agent = resolveAgentRoster(agents, configAgents).get(name)
+    if (Predicate.isUndefined(agent)) {
+      if (Option.isNone(effective)) return
+      return yield* new NotFoundError({ message: `Unknown agent: ${name}` })
+    }
+    if (Option.isNone(named)) return
+    for (const scope of agent.pathScopes()) {
+      yield* requireScopeReaches(named.value, cwd, scope, cwd, `agent "${name}"`)
+    }
+  })
+
+  /**
+   * The admission of a child spawned under `parentSessionId`, held inside
+   * the parent run's path scopes: named entries are checked against each,
+   * and a child that names none takes the narrowest, as absolute paths.
+   */
+  const boundByParent = Effect.fn("SessionMutations.boundByParent")(function* (
+    parentSessionId: SessionId,
+    requested: CreateSessionInput["admission"],
+    cwd: string,
+    named: Option.Option<ReadonlyArray<AgentPathEntry>>,
+  ) {
+    const parent = yield* sessionStorage.getSession(parentSessionId)
+    if (Predicate.isUndefined(parent)) return requested
+    const parentCwd = parent.cwd ?? runtimeEnvironment.cwd
+    const parentAgent = resolveSessionAgent({
+      ...(yield* rosterFor(parentCwd)),
+      name: parent.admission?.agent ?? DEFAULT_AGENT_NAME,
+      overrides: Option.fromUndefinedOr(parent.admission?.runSpec?.overrides),
+    })
+    const parentScopes = Option.match(parentAgent, {
+      onNone: () => [],
+      onSome: (agent) => agent.pathScopes(),
+    })
+    const narrowest = parentScopes.at(-1)
+    if (Predicate.isUndefined(narrowest)) return requested
+    if (Option.isSome(named)) {
+      for (const scope of parentScopes) {
+        yield* requireScopeReaches(named.value, cwd, scope, parentCwd, "the parent run")
+      }
+      return requested
+    }
+    const paths = narrowest.map((entry) => ({
+      path: pathService.resolve(parentCwd, entry.path),
+      access: entry.access,
+    }))
+    return {
+      ...requested,
+      runSpec: {
+        ...requested?.runSpec,
+        overrides: { ...requested?.runSpec?.overrides, paths },
       },
-    )
-    if (Option.isNone(effective)) return
-    const agent = effective.value
-    const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)).pipe(
-      // The agent roster is resolved data; the lease ends with the read.
-      Effect.scoped,
-      Effect.provideService(SessionProfileCache, profileCache),
-      Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
-    )
-    const config = yield* configService.get(input.cwd)
-    const roster = resolveAgentRoster(
-      registry.getResolved().agents.values(),
-      Option.fromUndefinedOr(config.agents),
-    )
-    if (roster.has(agent)) return
-    return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
+    }
   })
 
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
     input: CreateSessionInput,
   ) {
+    const admitted = admitRun(input).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, pathService),
+    )
     const committed = yield* once(
       DurableOperations.createSession,
       input,
       (result) => result,
-      Effect.gen(function* () {
-        const sessionId = SessionId.make(yield* platform.randomId)
-        const { threadId, admission } = yield* admitParent(input)
+      (admitted) =>
+        Effect.gen(function* () {
+          const sessionId = SessionId.make(yield* platform.randomId)
+          const { threadId, admission } = yield* admitParent({ ...input, admission: admitted })
 
-        const branchId = BranchId.make(yield* platform.randomId)
-        const now = yield* DateTime.nowAsDate
-        const name = input.name ?? DEFAULT_SESSION_NAME
-        // A handoff joins its parent's thread. Every other create, a spawned
-        // child included, starts its own: storage defaults the thread to the
-        // session id.
-        const session = new Session({
-          id: sessionId,
-          name,
-          cwd: input.cwd,
-          activeBranchId: branchId,
-          parentSessionId: input.parentSessionId,
-          parentBranchId: input.parentBranchId,
-          threadId: Option.getOrUndefined(threadId),
-          admission,
-          modelId: input.modelId,
-          reasoningLevel: input.reasoningLevel,
-          createdAt: now,
-          updatedAt: now,
-        })
-        const branch = new Branch({
-          id: branchId,
-          sessionId,
-          createdAt: now,
-        })
+          const branchId = BranchId.make(yield* platform.randomId)
+          const now = yield* DateTime.nowAsDate
+          const name = input.name ?? DEFAULT_SESSION_NAME
+          // A handoff joins its parent's thread. Every other create, a spawned
+          // child included, starts its own: storage defaults the thread to the
+          // session id.
+          const session = new Session({
+            id: sessionId,
+            name,
+            cwd: input.cwd,
+            activeBranchId: branchId,
+            parentSessionId: input.parentSessionId,
+            parentBranchId: input.parentBranchId,
+            threadId: Option.getOrUndefined(threadId),
+            admission,
+            modelId: input.modelId,
+            reasoningLevel: input.reasoningLevel,
+            createdAt: now,
+            updatedAt: now,
+          })
+          const branch = new Branch({
+            id: branchId,
+            sessionId,
+            createdAt: now,
+          })
 
-        yield* sessionStorage.createSession(session)
-        yield* branchStorage.createBranch(branch)
-        // An inheriting session starts from what the source's model sees now:
-        // the current context window, with hidden rows out, as in that
-        // branch's own turn. A tool call still running in the source (a fork
-        // made from inside `delegate.start`) is left out with its step. The
-        // rows get fresh ids, so a copied window marker's anchor never
-        // resolves; that is harmless, because the copy already is the window.
-        if (!Predicate.isUndefined(input.historyBranchId)) {
-          const source = yield* branchStorage.getBranch(input.historyBranchId)
-          if (Predicate.isUndefined(source)) {
-            return yield* new NotFoundError({
-              message: `History branch not found: ${input.historyBranchId}`,
-            })
-          }
-          const history = settledMessages(
-            messagesInCurrentWindow(yield* messageStorage.listMessages(input.historyBranchId)),
-          )
-          for (const message of history) {
-            if (message.metadata?.hidden === true) continue
-            yield* messageStorage.createMessage(
-              copyMessageToBranch(message, {
-                id: MessageId.make(yield* platform.randomId),
-                sessionId,
-                branchId,
-              }),
+          yield* sessionStorage.createSession(session)
+          yield* branchStorage.createBranch(branch)
+          // An inheriting session starts from what the source's model sees now:
+          // the current context window, with hidden rows out, as in that
+          // branch's own turn. A tool call still running in the source (a fork
+          // made from inside `delegate.start`) is left out with its step. The
+          // rows get fresh ids, so a copied window marker's anchor never
+          // resolves; that is harmless, because the copy already is the window.
+          if (!Predicate.isUndefined(input.historyBranchId)) {
+            const source = yield* branchStorage.getBranch(input.historyBranchId)
+            if (Predicate.isUndefined(source)) {
+              return yield* new NotFoundError({
+                message: `History branch not found: ${input.historyBranchId}`,
+              })
+            }
+            const history = settledMessages(
+              messagesInCurrentWindow(yield* messageStorage.listMessages(input.historyBranchId)),
             )
+            for (const message of history) {
+              if (message.metadata?.hidden === true) continue
+              yield* messageStorage.createMessage(
+                copyMessageToBranch(message, {
+                  id: MessageId.make(yield* platform.randomId),
+                  sessionId,
+                  branchId,
+                }),
+              )
+            }
           }
-        }
-        const envelope = yield* eventStore.append(SessionStarted.make({ sessionId, branchId }))
-        const result: StoredCreateSessionResult = {
-          sessionId,
-          branchId,
-          name,
-          initialPrompt: input.initialPrompt,
-        }
-        return { envelope, result }
-      }),
-      admitAgent(input),
+          const envelope = yield* eventStore.append(SessionStarted.make({ sessionId, branchId }))
+          const result: StoredCreateSessionResult = {
+            sessionId,
+            branchId,
+            name,
+            initialPrompt: input.initialPrompt,
+          }
+          return { envelope, result }
+        }),
+      admitted,
     )
     if (committed.fresh) {
       yield* Effect.logInfo("session.created").pipe(
@@ -825,24 +966,26 @@ const makeSessionMutationsService: Effect.Effect<
       DurableOperations.createBranch,
       input,
       (result) => ({ sessionId: input.sessionId, branchId: result.branchId }),
-      Effect.gen(function* () {
-        const branch = new Branch({
-          id: BranchId.make(yield* platform.randomId),
-          sessionId: input.sessionId,
-          name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
-        })
-        yield* branchStorage.createBranch(branch)
-        const envelope = yield* eventStore.append(
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            parentBranchId: branch.parentBranchId,
-          }),
-        )
-        const result: StoredBranchResult = { branchId: branch.id }
-        return { envelope, result }
-      }),
+      () =>
+        Effect.gen(function* () {
+          const branch = new Branch({
+            id: BranchId.make(yield* platform.randomId),
+            sessionId: input.sessionId,
+            name: input.name,
+            createdAt: yield* DateTime.nowAsDate,
+          })
+          yield* branchStorage.createBranch(branch)
+          const envelope = yield* eventStore.append(
+            BranchCreated.make({
+              sessionId: branch.sessionId,
+              branchId: branch.id,
+              parentBranchId: branch.parentBranchId,
+            }),
+          )
+          const result: StoredBranchResult = { branchId: branch.id }
+          return { envelope, result }
+        }),
+      Effect.void,
     )
     return committed.result
   })
@@ -854,50 +997,52 @@ const makeSessionMutationsService: Effect.Effect<
       DurableOperations.forkBranch,
       input,
       (result) => ({ sessionId: input.sessionId, branchId: result.branchId }),
-      Effect.gen(function* () {
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({ message: "Branch not found" })
-        }
+      () =>
+        Effect.gen(function* () {
+          const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+          if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({ message: "Branch not found" })
+          }
 
-        const messages = yield* messageStorage.listMessages(input.fromBranchId)
-        const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
-        if (targetIndex === -1) {
-          return yield* new NotFoundError({
-            message: "Message not found in branch",
+          const messages = yield* messageStorage.listMessages(input.fromBranchId)
+          const targetIndex = messages.findIndex((message) => message.id === input.atMessageId)
+          if (targetIndex === -1) {
+            return yield* new NotFoundError({
+              message: "Message not found in branch",
+            })
+          }
+
+          const branch = new Branch({
+            id: BranchId.make(yield* platform.randomId),
+            sessionId: input.sessionId,
+            parentBranchId: input.fromBranchId,
+            parentMessageId: input.atMessageId,
+            name: input.name,
+            createdAt: yield* DateTime.nowAsDate,
           })
-        }
-
-        const branch = new Branch({
-          id: BranchId.make(yield* platform.randomId),
-          sessionId: input.sessionId,
-          parentBranchId: input.fromBranchId,
-          parentMessageId: input.atMessageId,
-          name: input.name,
-          createdAt: yield* DateTime.nowAsDate,
-        })
-        yield* branchStorage.createBranch(branch)
-        // A fork point inside a tool step would copy a call without its
-        // result, and the new branch could never project a turn.
-        for (const message of settledMessages(messages.slice(0, targetIndex + 1))) {
-          yield* messageStorage.createMessage(
-            copyMessageToBranch(message, {
-              id: MessageId.make(yield* platform.randomId),
+          yield* branchStorage.createBranch(branch)
+          // A fork point inside a tool step would copy a call without its
+          // result, and the new branch could never project a turn.
+          for (const message of settledMessages(messages.slice(0, targetIndex + 1))) {
+            yield* messageStorage.createMessage(
+              copyMessageToBranch(message, {
+                id: MessageId.make(yield* platform.randomId),
+                branchId: branch.id,
+              }),
+            )
+          }
+          const envelope = yield* eventStore.append(
+            BranchCreated.make({
+              sessionId: branch.sessionId,
               branchId: branch.id,
+              parentBranchId: branch.parentBranchId,
+              parentMessageId: branch.parentMessageId,
             }),
           )
-        }
-        const envelope = yield* eventStore.append(
-          BranchCreated.make({
-            sessionId: branch.sessionId,
-            branchId: branch.id,
-            parentBranchId: branch.parentBranchId,
-            parentMessageId: branch.parentMessageId,
-          }),
-        )
-        const result: StoredBranchResult = { branchId: branch.id }
-        return { envelope, result }
-      }),
+          const result: StoredBranchResult = { branchId: branch.id }
+          return { envelope, result }
+        }),
+      Effect.void,
     )
     return committed.result
   })
@@ -909,44 +1054,46 @@ const makeSessionMutationsService: Effect.Effect<
       DurableOperations.switchBranch,
       input,
       (result) => ({ sessionId: result.sessionId, branchId: result.toBranchId }),
-      Effect.gen(function* () {
-        const session = yield* sessionStorage.getSession(input.sessionId)
-        if (Predicate.isUndefined(session)) {
-          return yield* new NotFoundError({
-            message: "Current session not found",
-          })
-        }
-        const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
-        if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.fromBranchId}" not found in current session`,
-          })
-        }
-        const toBranch = yield* branchStorage.getBranch(input.toBranchId)
-        if (Predicate.isUndefined(toBranch) || toBranch.sessionId !== input.sessionId) {
-          return yield* new NotFoundError({
-            message: `Branch "${input.toBranchId}" not found in current session`,
-          })
-        }
-        yield* sessionStorage.setActiveBranch(
-          input.sessionId,
-          input.toBranchId,
-          yield* DateTime.nowAsDate,
-        )
-        const envelope = yield* eventStore.append(
-          BranchSwitched.make({
+      () =>
+        Effect.gen(function* () {
+          const session = yield* sessionStorage.getSession(input.sessionId)
+          if (Predicate.isUndefined(session)) {
+            return yield* new NotFoundError({
+              message: "Current session not found",
+            })
+          }
+          const fromBranch = yield* branchStorage.getBranch(input.fromBranchId)
+          if (Predicate.isUndefined(fromBranch) || fromBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({
+              message: `Branch "${input.fromBranchId}" not found in current session`,
+            })
+          }
+          const toBranch = yield* branchStorage.getBranch(input.toBranchId)
+          if (Predicate.isUndefined(toBranch) || toBranch.sessionId !== input.sessionId) {
+            return yield* new NotFoundError({
+              message: `Branch "${input.toBranchId}" not found in current session`,
+            })
+          }
+          yield* sessionStorage.setActiveBranch(
+            input.sessionId,
+            input.toBranchId,
+            yield* DateTime.nowAsDate,
+          )
+          const envelope = yield* eventStore.append(
+            BranchSwitched.make({
+              sessionId: input.sessionId,
+              fromBranchId: input.fromBranchId,
+              toBranchId: input.toBranchId,
+            }),
+          )
+          const result: StoredSwitchBranchResult = {
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
             toBranchId: input.toBranchId,
-          }),
-        )
-        const result: StoredSwitchBranchResult = {
-          sessionId: input.sessionId,
-          fromBranchId: input.fromBranchId,
-          toBranchId: input.toBranchId,
-        }
-        return { envelope, result }
-      }),
+          }
+          return { envelope, result }
+        }),
+      Effect.void,
     )
   })
 
