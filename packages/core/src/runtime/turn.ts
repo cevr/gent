@@ -1775,7 +1775,10 @@ const ROUTE_REASON_CHARS = 200
  * first slot of its sign-in's `authOrder` the turn has not left, with that
  * slot's sign-in stamp, so a new sign-in on the slot reads as another
  * credential. None where the model names no sign-in. Fails when the order
- * fails or the turn left every slot.
+ * fails or the turn left every slot. A move never leaves the last slot of
+ * the order it reads, so the turn has left every slot only when the order
+ * changed while it ran (or after the receipts a resume or a child's first
+ * turn starts from): the failure says so.
  */
 const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(function* (params: {
   readonly request: ResolveModelRequest
@@ -1790,7 +1793,7 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
   const slot = slots.find((candidate) => !left.has(candidate))
   if (Predicate.isUndefined(slot)) {
     return yield* new ProviderAuthError({
-      message: `Every credential of provider "${provider}" failed this turn`,
+      message: `The authOrder of provider "${provider}" changed during this turn, and the turn already left every credential it names now (${slots.join(", ")}). The next turn starts again at its first credential`,
     })
   }
   return Option.some(

@@ -2822,6 +2822,33 @@ describe("credential order", () => {
     }),
   )
 
+  it.live("an order edited mid-turn to only slots the turn left names the edit", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "reorder-passed",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        // Once B serves, the order names only A, which the turn already left.
+        reorder: { on: "sk-b", order: [DEFAULT_CREDENTIAL_SLOT] },
+        replies: {
+          "sk-a": quotaSpent,
+          "sk-b": () =>
+            Stream.fromIterable([
+              toolCallPart("echo", { text: "hi" }),
+              finishPart({ finishReason: "tool-calls" }),
+            ]),
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-b"])
+      expect(run.errors.map((entry) => entry.error).at(-1)).toBe(
+        `The authOrder of provider "${FALLBACK}" changed during this turn, and the turn already left every credential it names now (default). The next turn starts again at its first credential`,
+      )
+    }),
+  )
+
   it.live("a turn resumed after a restart stays on the credential it moved to", () =>
     Effect.gen(function* () {
       const storage: CredentialStorage = Layer.succeedContext(
