@@ -523,6 +523,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - **Stoppables**: `stoppableContribution({ id, active, stop })` names something the extension holds pending that Esc on an empty idle composer stops; `useExtensionUI().stopPending()` stops the first active one, highest scope first, one per press, and a throw in `active` or `stop` fails the extension. Any extension gets the key, a user one as a shipped one. `@gent/wake` contributes `wake.resume`: it cancels the pending auto-resume through `wake.dismiss`, and the tray row says `esc cancels`
 - `workspace.cwd` / `workspace.home` for workspace-relative operations
+- **Scoped activity**: `lifecycle.addCleanup(activity.include(readSnapshot))` includes a reactive snapshot for the extension's lifetime. Only an idle focused session is promoted: working, then blocked, then unknown. The reader must guard its session and branch; the loader shares the activity facet but replaces each extension's lifecycle.
 - **`activity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (a test takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
 
 ## Key Files (Composer + Session)

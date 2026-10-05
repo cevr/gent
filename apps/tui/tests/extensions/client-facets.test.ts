@@ -8,12 +8,13 @@ import { ref } from "@gent/core/extensions/api"
 import { WakeRpc } from "@gent/extensions/client"
 import {
   ClientContext,
+  makeClientContextLayer,
   clientContributions,
   defineClientExtension,
   sessionQuery,
   widgetContribution,
 } from "../../src/extensions/client-facets"
-import { provideClientServices } from "../extension-test-harness-boundary"
+import { provideClientServices, testClientContextDeps } from "../extension-test-harness-boundary"
 import { renderScoped } from "../render-harness-boundary"
 import { waitUntil } from "../helpers-boundary"
 
@@ -70,6 +71,52 @@ describe("transport-only extension widgets", () => {
         yield* Scope.close(uiScope, Exit.void)
         expect(calls).toEqual(["cleanup", "after", "runtime"])
       }),
+  )
+})
+
+// ── activity ────────────────────────────────────────────────────────────────
+
+describe("Included activity", () => {
+  it.scopedLive("only idle focus is promoted, with working before blocked before unknown", () =>
+    Effect.gen(function* () {
+      const id = SessionId.make("focused")
+      const [focused, setFocused] = createSignal<"idle" | "working" | "blocked" | "unknown">("idle")
+      yield* Effect.gen(function* () {
+        const { activity } = yield* ClientContext
+        const unrelated = activity.include(() => ({
+          sessionId: SessionId.make("elsewhere"),
+          state: "working",
+        }))
+        expect(activity.snapshot().state).toBe("idle")
+        const unknown = activity.include(() => ({ sessionId: id, state: "unknown" }))
+        expect(activity.snapshot().state).toBe("unknown")
+        const blocked = activity.include(() => ({ sessionId: id, state: "blocked" }))
+        expect(activity.snapshot().state).toBe("blocked")
+        const working = activity.include(() => ({ sessionId: id, state: "working" }))
+        expect(activity.snapshot().state).toBe("working")
+        for (const state of ["working", "blocked", "unknown"] as const) {
+          setFocused(state)
+          expect(activity.snapshot().state).toBe(state)
+        }
+        setFocused("idle")
+        working()
+        working()
+        expect(activity.snapshot().state).toBe("blocked")
+        blocked()
+        expect(activity.snapshot().state).toBe("unknown")
+        unknown()
+        unrelated()
+        expect(activity.snapshot()).toEqual({ sessionId: id, state: "idle" })
+      }).pipe(
+        Effect.provide(
+          makeClientContextLayer(
+            testClientContextDeps({
+              activity: () => ({ sessionId: id, state: focused() }),
+            }),
+          ),
+        ),
+      )
+    }).pipe(Effect.timeout("5 seconds")),
   )
 })
 

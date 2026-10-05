@@ -91,6 +91,8 @@ export type ClientActivitySnapshot = typeof ClientActivitySnapshot.Type
  */
 interface ClientActivity {
   readonly snapshot: () => ClientActivitySnapshot
+  /** Include reactive activity; register the returned cleanup with the caller's lifecycle. */
+  readonly include: (readSnapshot: () => ClientActivitySnapshot) => () => void
 }
 
 // ── transport facet ─────────────────────────────────────────────────────────
@@ -510,12 +512,36 @@ export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<Cli
     ClientContext,
     Effect.gen(function* () {
       const scope = yield* Scope.Scope
+      const [included, setIncluded] = createSignal<
+        ReadonlyArray<{ readonly read: () => ClientActivitySnapshot }>
+      >([])
+      const activity: ClientActivity = {
+        snapshot: () => {
+          const focused = deps.activity()
+          if (focused.state !== "idle" || Predicate.isUndefined(focused.sessionId)) return focused
+          const states = included()
+            .map((entry) => entry.read())
+            .filter((next) => next.sessionId === focused.sessionId)
+          if (states.some((next) => next.state === "working"))
+            return { ...focused, state: "working" }
+          if (states.some((next) => next.state === "blocked"))
+            return { ...focused, state: "blocked" }
+          if (states.some((next) => next.state === "unknown"))
+            return { ...focused, state: "unknown" }
+          return focused
+        },
+        include: (read) => {
+          const entry = { read }
+          setIncluded((entries) => [...entries, entry])
+          return () => setIncluded((entries) => entries.filter((next) => next !== entry))
+        },
+      }
       return ClientContext.of({
         transport: transportFacet(deps.transport),
         shell: deps.shell,
         workspace: deps.workspace,
         lifecycle: { ...deps.lifecycle, scoped: (effect) => Scope.provide(scope)(effect) },
-        activity: { snapshot: deps.activity },
+        activity,
       })
     }),
   )

@@ -10,8 +10,14 @@ import {
   makeHerdrReporter,
   rankListed,
 } from "../../src/extensions/builtins"
+import agentsExtension, { makeAgentsController } from "../../src/extensions/agents.client"
+import type { AgentRowEntry } from "@gent/extensions/client"
+import { waitUntil } from "../helpers-boundary"
 import { readFrecencyStore } from "../../src/autocomplete"
-import { runAutocompleteContributions } from "../../src/extensions/loader-boundary"
+import {
+  makeTuiExtensionLoader,
+  runAutocompleteContributions,
+} from "../../src/extensions/loader-boundary"
 import { BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
@@ -946,6 +952,87 @@ const config = (socketPath: string) =>
   })
 
 describe("Herdr integration", () => {
+  it.scopedLive("an idle parent reports working while its child works", () =>
+    Effect.gen(function* () {
+      const server = yield* makeHerdrTestServer()
+      const here = { sessionId: SessionId.make("parent"), branchId: BranchId.make("parent-b") }
+      const child: AgentRowEntry = {
+        sessionId: SessionId.make("child"),
+        branchId: BranchId.make("child-b"),
+        parentSessionId: here.sessionId,
+        section: "running",
+        status: "Running",
+        live: true,
+        depth: 1,
+        sideThread: false,
+      }
+      let children: ReadonlyArray<AgentRowEntry> = [child]
+      const [focused, setFocused] = createSignal<ClientActivitySnapshot["state"]>("idle")
+      const cleanups: Array<() => void> = []
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          for (const cleanup of cleanups) cleanup()
+        }),
+      )
+      const context = yield* Layer.buildWithScope(
+        contextLayer({
+          transport: makeClientTestTransport({ currentSession: () => here }),
+          activity: () => ({ sessionId: here.sessionId, state: focused() }),
+          lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
+        }),
+        scope,
+      )
+      const controller = yield* makeAgentsController(
+        () => Effect.succeed(children),
+        () =>
+          Effect.succeed({
+            status: "Idle",
+            model: "test/model",
+            turns: 0,
+            costUsd: 0,
+            durationMs: 0,
+            omittedMessages: 0,
+          }),
+      ).pipe(Effect.provideContext(context))
+      controller.refresh("")
+      yield* waitUntil(
+        () => controller.rows().length === 1 && !controller.loading(),
+        "child listed",
+      )
+      yield* builtinHerdr.setup.pipe(
+        Effect.provideContext(context),
+        Effect.provideService(ConfigProvider.ConfigProvider, config(server.target.socketPath)),
+      )
+      const report = yield* server.next
+      expect(report.params.agent_session_id).toBe("parent")
+      expect(report.params.state).toBe("working")
+      children = [{ ...child, section: "idle", status: "Idle" }]
+      controller.reload()
+      expect((yield* server.next).params.state).toBe("idle")
+      setFocused("working")
+      expect((yield* server.next).params.state).toBe("working")
+      children = [{ ...child, status: "WaitingForInteraction" }]
+      controller.reload()
+      yield* waitUntil(() => !controller.loading(), "blocked child listed")
+      const { activity } = yield* ClientContext.pipe(Effect.provideContext(context))
+      expect(activity.snapshot().state).toBe("working")
+      setFocused("idle")
+      expect((yield* server.next).params.state).toBe("blocked")
+      setFocused("blocked")
+      children = [child]
+      controller.reload()
+      yield* waitUntil(() => !controller.loading(), "working child listed")
+      expect(activity.snapshot().state).toBe("blocked")
+      setFocused("unknown")
+      expect((yield* server.next).params.state).toBe("unknown")
+      setFocused("idle")
+      expect((yield* server.next).params.state).toBe("working")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+  )
+
   it.scopedLive("reports the active UI state and session changes, then releases the pane", () =>
     Effect.gen(function* () {
       const server = yield* makeHerdrTestServer()
@@ -994,6 +1081,73 @@ describe("Herdr integration", () => {
       expect(release.method).toBe("pane.release_agent")
       expect(release.params.seq).toBeGreaterThan(switched.params.seq)
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "the agents extension keeps reporting after setup and unload removes its activity",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* makeHerdrTestServer()
+        const here = {
+          sessionId: SessionId.make("loader-parent"),
+          branchId: BranchId.make("loader-parent-b"),
+        }
+        const child: AgentRowEntry = {
+          sessionId: SessionId.make("loader-child"),
+          branchId: BranchId.make("loader-child-b"),
+          parentSessionId: here.sessionId,
+          section: "running",
+          status: "Running",
+          live: true,
+          depth: 1,
+          sideThread: false,
+        }
+        const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+          Scope.close(scope, Exit.void),
+        )
+        const context = yield* Layer.buildWithScope(
+          contextLayer({
+            transport: makeClientTestTransport({
+              currentSession: () => here,
+              requestReply: { rows: [child] },
+            }),
+            activity: () => ({ sessionId: here.sessionId, state: "idle" }),
+          }),
+          scope,
+        )
+        yield* Effect.gen(function* () {
+          let disabled: ReadonlyArray<string> = []
+          const loader = yield* makeTuiExtensionLoader({
+            builtins: [agentsExtension, builtinHerdr],
+            userDir: "/nonexistent/herdr-test-user",
+            readPlace: Effect.sync(() => ({
+              projectDir: "/nonexistent/herdr-test-project",
+              disabled,
+            })),
+          })
+          const first = yield* loader.load
+          expect(first.resolved.failures).toEqual([])
+          expect((yield* server.next).params.state).toBe("unknown")
+          const open = first.resolved.commandSources
+            .flatMap((source) => source.commands)
+            .find((command) => command.id === "agents.view")
+          expect(open).toBeDefined()
+          open?.onSelect()
+          expect((yield* server.next).params.state).toBe("working")
+          disabled = [agentsExtension.id]
+          const removed = yield* loader.load
+          yield* removed.retire
+          expect((yield* server.next).params.state).toBe("idle")
+          disabled = [agentsExtension.id, builtinHerdr.id]
+          const ended = yield* loader.load
+          yield* ended.retire
+          expect((yield* server.next).method).toBe("pane.release_agent")
+          expect(server.received()).toBe(4)
+        }).pipe(
+          Effect.provideContext(context),
+          Effect.provideService(ConfigProvider.ConfigProvider, config(server.target.socketPath)),
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("release follows an in-flight report and discards queued reports", () =>
