@@ -576,6 +576,45 @@ describe("Auth route", () => {
       }
     }).pipe(Effect.timeout("6 seconds")),
   )
+  // Config entries that name different credential orders fail one sign-in:
+  // its row names them, and the other rows keep their state.
+  it.scopedLive("a conflicting credential order names its config entries on its own row", () =>
+    Effect.gen(function* () {
+      const client = createMockClient({
+        auth: {
+          listProviders: () =>
+            Effect.succeed([
+              {
+                provider: ProviderId.make("anthropic"),
+                name: "Anthropic",
+                hasKey: false,
+                required: false,
+                source: "stored",
+                authType: "oauth",
+                orderConflict: ["anthropic", "claude-code"],
+              },
+              {
+                provider: ProviderId.make("openai"),
+                hasKey: true,
+                required: false,
+                source: "stored",
+                authType: "api",
+              },
+            ]),
+          listMethods: () => Effect.succeed({}),
+        },
+      })
+      const setup = yield* renderScoped(() => <Auth sessionId={activeSessionId} />, {
+        client,
+        runtime: createMockRuntime(),
+        width: 120,
+      })
+      const list = yield* waitForFrame(setup, (frame) => frame.includes("openai"), "the list")
+      expect(list).toContain("Anthropic [authOrder conflict: anthropic, claude-code]")
+      expect(list).toContain("openai [api]")
+      destroyRenderSetup(setup)
+    }).pipe(Effect.timeout("6 seconds")),
+  )
   // The session's profile decides which driver owns a sign-in, so a typed
   // key is saved in that profile, as a sign-out is.
   it.scopedLive("a typed key is saved in the session's profile", () =>

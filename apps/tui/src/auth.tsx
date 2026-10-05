@@ -932,9 +932,15 @@ export function Auth(props: AuthProps) {
     return theme.textMuted
   }
   // A credential that still lacks an answer its sign-in needs is not ready:
-  // the row names its source and what is missing.
+  // the row names its source and what is missing. A sign-in whose config
+  // names conflicting credential orders names the entries to fix.
   const authLabel = (provider: AuthProviderInfo) => {
     if (isOther(provider)) return "[models.dev]"
+    const conflict = Option.filter(
+      Option.fromNullishOr(provider.orderConflict),
+      (ids) => ids.length > 0,
+    )
+    if (Option.isSome(conflict)) return `[authOrder conflict: ${conflict.value.join(", ")}]`
     const missing = Option.filter(
       Option.fromNullishOr(provider.missing),
       (labels) => labels.length > 0,

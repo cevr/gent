@@ -39,6 +39,7 @@ import {
   AuthApi,
   AuthError,
   listAuthProviders,
+  captureProviderLogin,
   AuthInfo,
   type AuthService,
   serializeAuthStore,
@@ -403,23 +404,14 @@ const emptyCatalogLayer = ModelCatalogSource.fixed(
   modelCatalogFromBodies({ chat: "{}", decision: "{}" }),
 )
 
-const authLayer = Layer.succeed(
-  Auth,
-  Auth.of(
-    serializeAuthStore({
-      list: Effect.succeed([]),
-      get: () => Effect.succeed(noStoredAuth),
-      set: () => Effect.void,
-      remove: () => Effect.void,
-    }),
-  ),
-)
+const authLayer = Auth.Test()
 
 const failingReadAuthLayer = Layer.succeed(
   Auth,
   Auth.of(
     serializeAuthStore({
       list: Effect.fail(new AuthError({ message: "read failed" })),
+      listSlots: () => Effect.fail(new AuthError({ message: "read failed" })),
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
@@ -564,22 +556,9 @@ describe("model catalog resolution", () => {
 
   it.scopedLive("gives each driver the auth stored for its own id", () =>
     Effect.gen(function* () {
-      const oauthLayer = Layer.succeed(
-        Auth,
-        Auth.of(
-          serializeAuthStore({
-            list: Effect.succeed(["openai"]),
-            get: (providerId) => {
-              if (providerId !== "openai") {
-                return Effect.succeed(noStoredAuth)
-              }
-              return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
-            },
-            set: () => Effect.void,
-            remove: () => Effect.void,
-          }),
-        ),
-      )
+      const oauthLayer = Auth.Test({
+        openai: AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }),
+      })
       const seen: Array<string> = []
       const registry = yield* loadRegistryWithDrivers(
         [
@@ -1123,6 +1102,30 @@ describe("Auth", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
 
+    // A named-slot directory that cannot be read hides only its named
+    // credentials: the default ones still list.
+    it.scopedLive("an unreadable named-slot directory keeps the default credentials", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        yield* auth.set("openai", AuthApi.make({ type: "api", key: "fake-default" }))
+        yield* fs.writeFileString(`${dir}/.slots`, "not a directory")
+        expect(yield* auth.list).toEqual(["openai"])
+        expect(yield* auth.listSlots("openai")).toEqual([CredentialSlot.make("default")])
+        yield* fs.remove(`${dir}/.slots`)
+        yield* fs.makeDirectory(`${dir}/.slots`)
+        yield* fs.writeFileString(`${dir}/.slots/broken`, "not a directory")
+        yield* auth.set(
+          "named",
+          AuthApi.make({ type: "api", key: "fake-named" }),
+          CredentialSlot.make("work"),
+        )
+        expect([...(yield* auth.list)].sort()).toEqual(["named", "openai"])
+        expect(yield* auth.listSlots("broken")).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
     it.scopedLive("persists round-trip to disk", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1604,6 +1607,7 @@ const failingAuthStoreLayer = Layer.succeed(
   Auth.of(
     serializeAuthStore({
       list: Effect.succeed([]),
+      listSlots: () => Effect.succeed([]),
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.void,
@@ -1693,6 +1697,7 @@ describe("provider login", () => {
 const missingAuthInfo: AuthInfo | undefined = undefined
 const testAuthStorage: AuthService = serializeAuthStore({
   list: Effect.succeed([]),
+  listSlots: () => Effect.succeed([]),
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
@@ -3656,6 +3661,35 @@ describe("generic providers", () => {
         }).pipe(inProfile({ env: { OPEN_API_KEY: "fake-ambient" }, seen: seenUnsupported }))
       }).pipe(Effect.timeout("5 seconds")),
   )
+  // A turn reads the credentials its order names, the default with none: a
+  // key stored only in another slot lists its row, and no model a turn
+  // cannot serve, until the order names that slot.
+  it.live("a named-only generic key serves models only once its order names the slot", () =>
+    Effect.gen(function* () {
+      const work = CredentialSlot.make("work")
+      const listing = (setup: Setup) =>
+        Effect.gen(function* () {
+          const auth = yield* Auth
+          yield* auth.set("open", AuthApi.make({ type: "api", key: "fake-work" }), work)
+          const listed = yield* modelCatalog()
+          const rows = yield* listAuthProviders([])
+          return {
+            models: listed.models
+              .map((model) => String(model.id))
+              .filter((id) => id.startsWith("open/")),
+            row: rows.find((row) => row.provider === "open"),
+          }
+        }).pipe(inProfile(setup))
+      const unordered = yield* listing({})
+      expect(unordered.models).toEqual([])
+      expect(unordered.row?.hasKey).toBe(false)
+      expect(
+        unordered.row?.credentials?.map((entry) => `${entry.slot}:${String(entry.hasKey)}`),
+      ).toEqual(["default:false", "work:true"])
+      const ordered = yield* listing({ config: { providers: { open: { authOrder: [work] } } } })
+      expect(ordered.models).toEqual(["open/big"])
+    }).pipe(Effect.timeout("5 seconds")),
+  )
   it.live(
     "a provider is active with a key variable set, a stored key or a config entry; the search finds the rest a class speaks",
     () =>
@@ -4058,13 +4092,25 @@ describe("named provider resolution", () => {
     }).pipe(Effect.timeout("5 seconds")),
   )
 
-  it.scopedLive("conflicting canonical alias orders fail instead of choosing by iteration", () =>
+  it.scopedLive("a conflicting canonical order fails its own sign-in and leaves the others", () =>
     Effect.gen(function* () {
       const owner = makeProvider("order-owner")
       const alias = { ...makeProvider("order-alias"), credentialFrom: owner.id }
-      const resolved = resolveExtensions([makeExt("order-alias", [owner, alias])])
+      const other = makeProvider("order-other")
+      const resolved = resolveExtensions([makeExt("order-alias", [owner, alias, other])])
       const first = CredentialSlot.make("default")
       const second = CredentialSlot.make("personal")
+      const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+      yield* auth.set(owner.id, AuthApi.make({ type: "api", key: "fake-owner" }))
+      yield* auth.set(other.id, AuthApi.make({ type: "api", key: "fake-other" }))
+      const isConflict = (exit: Exit.Exit<unknown, unknown>) =>
+        Exit.isFailure(exit) &&
+        Option.exists(
+          Cause.findErrorOption(exit.cause),
+          (error) =>
+            Schema.is(ProviderAuthError)(error) &&
+            error.message.includes("Conflicting credential orders"),
+        )
       for (const providers of [
         {
           "order-owner": { authOrder: [first, second] },
@@ -4082,23 +4128,50 @@ describe("named provider resolution", () => {
             providerConfig: Effect.succeed({ providers }),
           }),
         )
-        const result = yield* Effect.exit(
-          listAuthProviders([]).pipe(
-            Effect.provide(Layer.mergeAll(Auth.Test(), registry, fixtureModelCatalogSource)),
-          ),
+        const layer = Layer.provideMerge(
+          ModelResolver.Live,
+          Layer.mergeAll(Layer.succeed(Auth, auth), registry, fixtureModelCatalogSource),
         )
-        expect(Exit.isFailure(result)).toBe(true)
-        if (Exit.isFailure(result))
-          expect(
-            Option.exists(
-              Cause.findErrorOption(result.cause),
-              (error) =>
-                Schema.is(ProviderAuthError)(error) &&
-                error.message.includes("Conflicting credential orders"),
+        const rows = yield* listAuthProviders([]).pipe(Effect.provide(layer))
+        const ownerRow = rows.find((row) => row.provider === owner.id)
+        expect(ownerRow?.hasKey).toBe(false)
+        expect(ownerRow?.orderConflict).toEqual(["order-alias", "order-owner"])
+        const otherRow = rows.find((row) => row.provider === other.id)
+        expect(otherRow?.hasKey).toBe(true)
+        expect(otherRow?.orderConflict).toBeUndefined()
+        expect(
+          isConflict(
+            yield* Effect.exit(
+              resolveModel({ model: "order-alias/model" }).pipe(Effect.provide(layer)),
             ),
-          ).toBe(true)
+          ),
+        ).toBe(true)
+        expect(
+          isConflict(
+            yield* Effect.exit(
+              resolveModel({ model: "order-owner/model" }).pipe(Effect.provide(layer)),
+            ),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isSuccess(
+            yield* Effect.exit(
+              resolveModel({ model: "order-other/model" }).pipe(Effect.provide(layer)),
+            ),
+          ),
+        ).toBe(true)
+        expect(
+          isConflict(
+            yield* Effect.exit(captureProviderLogin(owner.id, 0).pipe(Effect.provide(layer))),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isSuccess(
+            yield* Effect.exit(captureProviderLogin(other.id, 0).pipe(Effect.provide(layer))),
+          ),
+        ).toBe(true)
       }
-    }).pipe(Effect.timeout("5 seconds")),
+    }).pipe(Effect.scoped, Effect.timeout("5 seconds")),
   )
 
   it.scopedLive("a missing named slot cannot impersonate a default environment credential", () =>

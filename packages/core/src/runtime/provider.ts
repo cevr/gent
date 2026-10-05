@@ -172,6 +172,12 @@ export const AuthProviderInfo = Schema.Struct({
    * only on a credential that is not ready for it: `hasKey` is false.
    */
   missing: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The `providers` config entries that name different `authOrder` lists
+   * for this sign-in. Present only when they conflict: the sign-in runs no
+   * turn and `hasKey` is false until they agree.
+   */
+  orderConflict: Schema.optional(Schema.Array(Schema.String)),
 })
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
@@ -200,7 +206,8 @@ class AuthEntryInvalid extends Schema.TaggedError<AuthEntryInvalid>()("AuthEntry
 
 /** The raw store under `serializeAuthStore`; it neither locks nor discards. */
 interface AuthStoreAccess {
-  readonly listSlots?: (provider: string) => Effect.Effect<ReadonlyArray<CredentialSlot>, AuthError>
+  /** The slots `provider` stores a credential in, the default first. */
+  readonly listSlots: (provider: string) => Effect.Effect<ReadonlyArray<CredentialSlot>, AuthError>
   readonly get: (
     provider: string,
     slot?: CredentialSlot,
@@ -305,17 +312,7 @@ export const serializeAuthStore = (
     )
   return {
     list: store.list,
-    listSlots: (provider) =>
-      store.listSlots?.(provider) ??
-      store.get(provider).pipe(
-        Effect.map((info) =>
-          Option.match(Option.fromUndefinedOr(info), {
-            onNone: () => [],
-            onSome: () => [DEFAULT_CREDENTIAL_SLOT],
-          }),
-        ),
-        Effect.catchTag("AuthEntryInvalid", () => Effect.succeed([DEFAULT_CREDENTIAL_SLOT])),
-      ),
+    listSlots: store.listSlots,
     get: (provider, slot) =>
       store
         .get(provider, slot)
@@ -466,9 +463,20 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             ),
             Effect.mapError(wrap("Failed to list auth info")),
           )
+        // A named-slot directory that cannot be read hides only the named
+        // credentials under it: the default ones still list.
+        const namedIn = (dir: string) =>
+          namesIn(dir).pipe(
+            Effect.catchTag("AuthError", (error) =>
+              Effect.logWarning("auth.named-slots-unreadable").pipe(
+                Effect.annotateLogs({ error: String(error.cause) }),
+                Effect.as<ReadonlyArray<string>>([]),
+              ),
+            ),
+          )
         const listSlots = (provider: string) =>
           Effect.gen(function* () {
-            const named = yield* namesIn(providerDirectory(provider))
+            const named = yield* namedIn(providerDirectory(provider))
             const slots = named
               .flatMap((name) => Option.toArray(Schema.decodeOption(CredentialSlot)(name)))
               .filter((slot) => slot !== DEFAULT_CREDENTIAL_SLOT)
@@ -533,7 +541,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
                 .filter((name) => !name.startsWith("."))
                 .map(decodeURIComponent)
               const named = yield* Effect.filter(
-                (yield* namesIn(slotsDirectory)).map(decodeURIComponent),
+                (yield* namedIn(slotsDirectory)).map(decodeURIComponent),
                 (provider) => listSlots(provider).pipe(Effect.map((slots) => slots.length > 0)),
               )
               return [...new Set([...legacy, ...named])]
@@ -615,28 +623,75 @@ const credentialKeys = (drivers: ModelDrivers, driverId: string): ReadonlyArray<
   return [owner, ...sharers]
 }
 
-/** Alias entries may name one order, never competing orders for one owner. */
-const validateCredentialOrders = Effect.fn("CredentialOrder.validate")(function* (
+/** One sign-in's ordered credentials: the owner they are stored under, and the slots to try, first to last. */
+interface CredentialOrder {
+  readonly provider: string
+  readonly slots: Arr.NonEmptyReadonlyArray<CredentialSlot>
+}
+
+/** The config entries that name an `authOrder` for `provider`'s sign-in, as `[id, order]`. */
+const configuredOrders = (
   drivers: ModelDrivers,
   config: ProviderConfig,
+  provider: string,
+): ReadonlyArray<readonly [string, ReadonlyArray<CredentialSlot>]> => {
+  const owner = credentialOwner(drivers, provider)
+  return Object.entries(config.providers ?? {}).flatMap(([id, entry]) => {
+    if (Predicate.isUndefined(entry.authOrder) || credentialOwner(drivers, id) !== owner) return []
+    return [[id, entry.authOrder] as const]
+  })
+}
+
+/**
+ * The config entries that name different orders for `provider`'s sign-in
+ * (an alias and its owner), sorted; none when they agree. Only that sign-in
+ * fails: a conflict never stops the others.
+ */
+const orderConflict = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+): ReadonlyArray<string> => {
+  const orders = configuredOrders(drivers, config, provider)
+  const first = orders[0]
+  if (Predicate.isUndefined(first)) return []
+  const [, slots] = first
+  const agree = orders.every(
+    ([, other]) =>
+      other.length === slots.length && other.every((slot, index) => slot === slots[index]),
+  )
+  if (agree) return []
+  return orders.map(([id]) => id).sort()
+}
+
+/**
+ * The credential order of `provider`'s sign-in: its config `authOrder`, read
+ * through aliases to the owner, else the default credential alone. Config
+ * entries that name different orders for one sign-in fail it, never by
+ * which entry comes first.
+ */
+const credentialOrder = Effect.fn("CredentialOrder.of")(function* (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
 ) {
-  const orders = new Map<string, ReadonlyArray<CredentialSlot>>()
-  for (const [id, entry] of Object.entries(config.providers ?? {})) {
-    if (Predicate.isUndefined(entry.authOrder)) continue
-    const owner = credentialOwner(drivers, id)
-    const prior = orders.get(owner)
-    if (
-      Predicate.isNotUndefined(prior) &&
-      (prior.length !== entry.authOrder.length ||
-        prior.some((slot, index) => slot !== entry.authOrder?.[index]))
-    ) {
-      return yield* new ProviderAuthError({
-        message: `Conflicting credential orders for provider "${owner}"`,
-      })
-    }
-    orders.set(owner, entry.authOrder)
+  const owner = credentialOwner(drivers, provider)
+  const conflict = orderConflict(drivers, config, provider)
+  if (conflict.length > 0) {
+    return yield* new ProviderAuthError({
+      message: `Conflicting credential orders for provider "${owner}": providers ${conflict.join(", ")} name different authOrder lists`,
+    })
   }
-  return orders
+  const configured = Option.flatMap(
+    Option.fromUndefinedOr(configuredOrders(drivers, config, provider)[0]),
+    ([, slots]) => Option.liftPredicate(slots, Arr.isReadonlyArrayNonEmpty),
+  )
+  return {
+    provider: owner,
+    slots: Option.getOrElse(configured, (): Arr.NonEmptyReadonlyArray<CredentialSlot> => [
+      DEFAULT_CREDENTIAL_SLOT,
+    ]),
+  } satisfies CredentialOrder
 })
 
 interface StoredCredential {
@@ -689,7 +744,8 @@ export const removeSignIn = Effect.fn("removeSignIn")(function* (
  * of the `ExtensionRegistry` in context. Reads try the owner's key first, so
  * a key stored under a sharing driver's own id would sit behind it. An API
  * key for a generic provider is stored only when its base URL answers pass
- * the rule a turn applies (`checkBaseUrlAnswers`).
+ * the rule a turn applies (`checkBaseUrlAnswers`). A sign-in whose config
+ * names conflicting credential orders stores nothing.
  */
 export const storeSignIn = Effect.fn("storeSignIn")(function* (
   provider: string,
@@ -697,7 +753,9 @@ export const storeSignIn = Effect.fn("storeSignIn")(function* (
   slot?: CredentialSlot,
 ) {
   const auth = yield* Auth
-  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const registry = yield* ExtensionRegistry
+  const { modelDrivers } = registry.getResolved()
+  yield* credentialOrder(modelDrivers, yield* registry.providerConfig, provider)
   if (info.type === "api" && !modelDrivers.has(provider)) {
     yield* checkBaseUrlAnswers(provider, info)
   }
@@ -733,13 +791,16 @@ const driverEnvReady = (driver: ModelDriverContribution): Effect.Effect<boolean>
  * when one of `requiredDriverIds` uses it: the drivers the caller's turns
  * route through, resolved as the turn resolves them (`effectiveModelDriver`).
  * With nothing stored, a row is ready from env only when every driver that
- * needs it (the required ones, else the owner) has its own variable set.
+ * needs it (the required ones, else the owner) has its own variable set. A
+ * generic provider that stores a key only in a named slot has a row too, so
+ * its credentials show, though its models wait for an order to name them.
  */
 export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
   requiredDriverIds: ReadonlyArray<string>,
 ) {
   const auth = yield* Auth
-  const drivers = (yield* servedProfile(auth, requiredDriverIds)).modelDrivers
+  const stored = yield* storedProviders(auth)
+  const drivers = (yield* servedProfile(auth, [...requiredDriverIds, ...stored])).modelDrivers
   const required = new Set(requiredDriverIds.map((id) => credentialOwner(drivers, id)))
   const providers: AuthProviderInfo[] = []
   for (const driver of drivers.values()) {
@@ -791,7 +852,8 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
       ...readiness(missing),
     })
   }
-  return yield* Effect.forEach(providers, (row) =>
+  const config = yield* (yield* ExtensionRegistry).providerConfig
+  const rows = yield* Effect.forEach(providers, (row) =>
     Effect.gen(function* () {
       const driver = drivers.get(row.provider)
       if (Predicate.isUndefined(driver)) return row
@@ -829,6 +891,13 @@ export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
       return { ...row, credentials }
     }),
   )
+  // Config entries that name different orders fail that sign-in only: its
+  // own row names them, and every other row stays as it is.
+  return rows.map((row): AuthProviderInfo => {
+    const conflict = orderConflict(drivers, config, row.provider)
+    if (conflict.length === 0) return row
+    return { ...row, hasKey: false, orderConflict: conflict }
+  })
 })
 
 /**
@@ -1048,7 +1117,7 @@ export const captureProviderLogin = Effect.fn("ProviderLogin.capture")(function*
   inputs?: AuthMetadata,
 ) {
   const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  yield* validateCredentialOrders(modelDrivers, yield* (yield* ExtensionRegistry).providerConfig)
+  yield* credentialOrder(modelDrivers, yield* (yield* ExtensionRegistry).providerConfig, provider)
   const owner = credentialOwner(modelDrivers, provider)
   const auth = yield* Auth
   const target: ProviderLoginTarget = {
@@ -2250,7 +2319,6 @@ const checkBaseUrlAnswers = Effect.fn("GenericProvider.checkBaseUrlAnswers")(fun
 ) {
   const registry = yield* ExtensionRegistry
   const config = yield* registry.providerConfig
-  yield* validateCredentialOrders(registry.getResolved().modelDrivers, config)
   const source = yield* (yield* ModelCatalogSource).read
   const provider = configuredCatalog(source, config, registry.getResolved().apiClasses).provider(
     providerId,
@@ -2405,19 +2473,39 @@ const genericProviderDriver = (
     },
   )
 
-/** Whether a generic provider is active: a config entry, a stored key, or a key variable set. */
+/**
+ * Whether a generic provider is active: a config entry, a default key, or a
+ * key variable set. A key stored only in a named slot serves a turn only
+ * once the provider's config entry names it in `authOrder`, and that entry
+ * makes the provider active.
+ */
 const genericActive = (
   config: ProviderConfig,
-  stored: ReadonlySet<string>,
+  storesDefault: (id: string) => Effect.Effect<boolean>,
   catalog: LoadedModelCatalog,
   id: string,
 ): Effect.Effect<boolean> => {
-  if (Object.hasOwn(config.providers ?? {}, id) || stored.has(id)) return Effect.succeed(true)
-  return Option.match(catalog.provider(id), {
-    onNone: () => Effect.succeed(false),
-    onSome: (provider) => Effect.map(firstEnvValue(keyVariables(provider)), Option.isSome),
+  if (Object.hasOwn(config.providers ?? {}, id)) return Effect.succeed(true)
+  return Effect.flatMap(storesDefault(id), (stored) => {
+    if (stored) return Effect.succeed(true)
+    return Option.match(catalog.provider(id), {
+      onNone: () => Effect.succeed(false),
+      onSome: (provider) => Effect.map(firstEnvValue(keyVariables(provider)), Option.isSome),
+    })
   })
 }
+
+/** The provider ids the auth store holds a credential for, in any slot; none when it cannot be listed. */
+const storedProviders = (auth: AuthService): Effect.Effect<ReadonlySet<string>> =>
+  auth.list.pipe(
+    Effect.map((ids) => new Set(ids)),
+    Effect.catch((error) =>
+      Effect.logWarning("generic-provider.auth-list-failed").pipe(
+        Effect.annotateLogs({ error: error.message }),
+        Effect.as(new Set<string>()),
+      ),
+    ),
+  )
 
 /**
  * What one profile serves: its registered drivers plus a driver for each
@@ -2437,22 +2525,24 @@ const servedProfile = Effect.fn("GenericProvider.servedProfile")(function* (
   const registry = yield* ExtensionRegistry
   const resolved = registry.getResolved()
   const config = yield* registry.providerConfig
-  yield* validateCredentialOrders(resolved.modelDrivers, config)
   const source = yield* (yield* ModelCatalogSource).read
   const catalog = configuredCatalog(source, config, resolved.apiClasses)
-  const stored = new Set(
-    yield* auth.list.pipe(
+  const stored = yield* storedProviders(auth)
+  const storesDefault = (id: string): Effect.Effect<boolean> => {
+    if (!stored.has(id)) return Effect.succeed(false)
+    return auth.listSlots(id).pipe(
+      Effect.map((slots) => slots.includes(DEFAULT_CREDENTIAL_SLOT)),
       Effect.catch((error) =>
-        Effect.logWarning("generic-provider.auth-list-failed").pipe(
-          Effect.annotateLogs({ error: error.message }),
-          Effect.as<ReadonlyArray<string>>([]),
+        Effect.logWarning("generic-provider.auth-slots-failed").pipe(
+          Effect.annotateLogs({ provider: id, error: error.message }),
+          Effect.as(false),
         ),
       ),
-    ),
-  )
+    )
+  }
   const active = yield* Effect.filter(genericCandidates(resolved, config, catalog), (id) => {
     if (alsoActive.includes(id)) return Effect.succeed(true)
-    return genericActive(config, stored, catalog, id)
+    return genericActive(config, storesDefault, catalog, id)
   })
   const generic = yield* Effect.forEach(active, (id) =>
     genericProviderDriver(resolved, config, catalog, id),
@@ -2618,7 +2708,7 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
   // A registered driver, else the generic driver of a servable catalog
   // provider, active or not: one with no key fails and names /auth.
   const config = yield* extensionRegistry.providerConfig
-  yield* validateCredentialOrders(resolved.modelDrivers, config)
+  yield* credentialOrder(resolved.modelDrivers, config, providerName)
   const catalog = configuredCatalog(source, config, resolved.apiClasses)
   const extensionProvider = yield* Option.match(
     Option.fromUndefinedOr(resolved.modelDrivers.get(providerName)),

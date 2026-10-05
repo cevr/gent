@@ -492,6 +492,7 @@ const failingAuthStoreLayer = Layer.succeed(
   Auth.of(
     serializeAuthStore({
       list: Effect.succeed([]),
+      listSlots: () => Effect.succeed([]),
       get: () => Effect.as(Effect.void, void 0),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
@@ -503,6 +504,7 @@ const failingReadAuthStoreLayer = Layer.succeed(
   Auth.of(
     serializeAuthStore({
       list: Effect.fail(new AuthError({ message: "read failed" })),
+      listSlots: () => Effect.fail(new AuthError({ message: "read failed" })),
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
