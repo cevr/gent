@@ -1196,6 +1196,36 @@ export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArr
   return findings
 }
 
+// ── a SQL list binds one parameter ──────────────────────────────────────────
+
+/**
+ * Guard: shipped source binds a SQL list as one JSON parameter, never through
+ * `sql.in`.
+ *
+ * `sql.in(list)` binds one parameter per item. A hosted SQLite (a Durable
+ * Object) refuses a statement with more than 100 bound parameters, and a
+ * session tree, a branch list or a job list has no such bound: the statement
+ * works on a local file and fails on the host once the list grows. The
+ * portable form binds the list once:
+ * `IN (SELECT value FROM json_each(${json}))`.
+ *
+ * Every `SqlClient` in the source roots is bound as `sql`, so the call reads
+ * as `sql.in(`. Tests may use it: their lists are fixed.
+ */
+const SHIPPED_SOURCE = /^(?:packages|apps)\/[^/]+\/src\//
+const SQL_IN_CALL = /\bsql\.in\(/g
+
+export const findSqlBoundLists = (file: string, text: string): ReadonlyArray<Finding> => {
+  if (!SHIPPED_SOURCE.test(file)) return []
+  const code = withoutComments(file, text)
+  return Array.from(code.matchAll(SQL_IN_CALL), (match) => ({
+    file,
+    line: lineAt(code, match.index),
+    message:
+      "`sql.in` binds one parameter per item, and a hosted SQLite refuses more than 100; bind the list as one JSON value: `IN (SELECT value FROM json_each(${json}))`",
+  }))
+}
+
 // ── names describe the product, not the process ─────────────────────────────
 
 /**
