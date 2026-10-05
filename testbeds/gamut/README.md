@@ -28,9 +28,14 @@ model comparisons.
 
 A comparison preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
 `anthropic/sonnet`, `anthropic/fable`), not releases. `up` and `list` resolve
-each family to its newest release in the models.dev catalog (falling back to
-gent's `~/.gent/models.json` copy offline), so a new Sol, Luna, Opus, Sonnet or
-Fable release needs no edit here.
+each family to its newest release in the models.dev catalog. Offline, they
+use the chat catalog body (`source = api.json`) in `model_catalog_snapshots`
+from `$GENT_DATA_DIR/data.db`, or the OS home directory's `.gent/data.db` when
+`GENT_DATA_DIR` is unset. The driver copies the database and its WAL into a
+fresh scratch directory, opens only that copy read-only, validates the body,
+and removes the copy after reading. It reads no auth files. If there is no
+valid chat snapshot, the original fetch error is reported. A new Sol, Luna,
+Opus, Sonnet or Fable release needs no edit here.
 
 `up` first checks that herdr has a current pane, and stops with one line if
 not. It then copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
@@ -39,7 +44,11 @@ roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
 launches it in a fresh pane. The run is recorded in
-`$TMPDIR/gent-gamut-<checkout name>.json`, one file per checkout, so two rifts can run at once.
+`$TMPDIR/gent-gamut-<checkout name>.json`. Rifts with different names can run at
+once. Each command checks the recorded binary's canonical checkout path before
+using the run. A checkout with the same name refuses a foreign run without
+changing its pane, state file or scratch tree. An existing owned run remains
+discoverable at the same path.
 
 ## What `status` proves
 
