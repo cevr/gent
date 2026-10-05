@@ -1555,7 +1555,7 @@ describe("App session view and fatal screen", () => {
           })
           if (surface === "tool renderer") {
             // ctrl+o opens the collapsed call to its full rows.
-            yield* waitForFrame(setup, (frame) => frame.includes("1 tool ·"), "the call")
+            yield* waitForFrame(setup, (frame) => frame.includes("breaks_tool 1×"), "the call")
             setup.mockInput.pressKey("o", { ctrl: true })
             setup.mockInput.pressKey("o", { ctrl: true })
           }
@@ -6900,6 +6900,79 @@ describe("TUI renderer surfaces", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive(
+    "a pending retry is the live line's phase and counts down; the transcript draws no row for it",
+    () =>
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make()
+        const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+        const sessionId = SessionId.make("session-retry-phase")
+        const branchId = BranchId.make("branch-retry-phase")
+        const running = {
+          _tag: "Running" satisfies "Running",
+          startedAtMs: 0,
+          queue: emptyQueueSnapshot(),
+        }
+        const events = yield* Queue.unbounded<EventEnvelope>()
+        const { setup } = yield* mountApp({
+          runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+          client: {
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId,
+                  branchId,
+                  messages: [],
+                  lastEventId: nullValue,
+                  reasoningLevel: absent,
+                  agent: AgentName.make("main"),
+                  runtime: running,
+                  metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+                }),
+              watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+              events: () => Stream.fromQueue(events),
+            },
+          },
+          initialSession: sessionNamed(sessionId, branchId, "Retry phase"),
+        })
+        const event = (id: number, agentEvent: AgentEvent) =>
+          Queue.offer(
+            events,
+            EventEnvelope.make({ id: EventId.make(id), createdAt: id, event: agentEvent }),
+          )
+        yield* waitForFrame(setup, (next) => next.includes("✻ Thinking ·"), "the turn")
+        yield* event(
+          1,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 3_000,
+            error: "Rate limit exceeded",
+          }),
+        )
+        const retrying = yield* waitForFrame(
+          setup,
+          (next) => next.includes("✻ Retrying in 3s · 1/3 · Rate limit exceeded"),
+          "the retry phase",
+        )
+        // The live line is the retry's one row.
+        expect(retrying.split("\n").filter((line) => line.includes("Retr"))).toHaveLength(1)
+        yield* clock.adjust(Duration.seconds(2))
+        yield* waitForFrame(setup, (next) => next.includes("✻ Retrying in 1s · 1/3"), "1s left")
+        // The retry ran: the model answers, and the settled retry waits for the preview.
+        yield* event(2, AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+        yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
+        const answering = yield* waitForFrame(
+          setup,
+          (next) => next.includes("✻ Generating") && next.includes("ANSWER"),
+          "the answer",
+        )
+        expect(answering).not.toContain("Retr")
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
@@ -7368,8 +7441,10 @@ describe("debug playground", () => {
             5_000,
           )
           setup.renderer.destroy()
-          expect(frame).toContain("● 5 tools · 2 edit · 1 read · 1 search · 1 command")
-          expect(frame).toContain("● 3 tools · 2 children · 1 read")
+          expect(frame).toContain(
+            "● Read 1 file · searched 1 pattern · ran 1 command · edited 1 file · wrote 1 file",
+          )
+          expect(frame).toContain("● Started 2 agents · read 1 session")
           expect(frame).toContain("Audit lines up")
           // The child's report is its own muted row, off the reader's rail.
           expect(frame).toContain(

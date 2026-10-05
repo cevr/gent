@@ -97,7 +97,7 @@ EnvProvider → WorkspaceProvider → ClientProvider → ExtensionUIProvider →
 | `ClientProvider`             | transport client, session state, event stream       |
 | `ExtensionUIProvider`        | extension loading, command list, composer dispatch  |
 | `TerminalDimensionsProvider` | terminal width and height, one reactive reader      |
-| `SpinnerClockProvider`       | the one 60 ms clock spinners and retry rows read    |
+| `SpinnerClockProvider`       | the one 60 ms clock spinners and blinks read        |
 | `ComposerMemoryProvider`     | drafts, refusals, prompt history, startup prompt    |
 | `SessionControllerContext`   | session-scoped: auth gate, overlays, composer state |
 
@@ -274,15 +274,19 @@ library through `DiagramLibraryContext`.
 
 A tool group reads in tool words, as fx does, not in the cell mechanism
 (`ToolCallGroup` in `message-list.tsx`, the projections in `utils.ts`). Its
-header counts the tools a group ran (a cell's ops; any other call is the one
-tool it is; a cell with no ops is one tool that names its source's verbs) by
-kind, largest first, then the reasoning the run took as thoughts:
-`● 7 tools · 4 read · 2 edit · 1 command · 6 thoughts · 1 failed · 4.2s`
-(`formatActivityHeader`). An MCP tool (`mcp.<server>.<tool>`) counts as its
-server (`2 linear`) and its rows read `Called linear.list_issues …`. A narrow
-header drops the thoughts first, then kinds from the right, and keeps the
-count, the failures and the time. The glyph is `●` when done, the pulse
-while a call runs, `✗` in the error colour when a call failed, and `●` in the
+header is verb phrases in the words its preview rows use, one a kind, largest
+first: `● Read 3 files · ran 2 commands · searched 1 pattern · edited 1 file ·
+1 failed` (`formatActivityHeader`). It counts a cell's ops (any other call is
+the one op it is; a cell with no ops counts the calls its source spells out,
+`ran code` when it names none, never its code). The ops still running read
+last in the running tense (`… · running 1 command`), and the failures and
+cancels end it. A header has no head count, no thoughts and no time: the turn
+line holds the time. An MCP tool (`mcp.<server>.<tool>`) counts as its server
+(`called linear 2×`) and its rows read `Called linear.list_issues …`; a tool
+with no unit counts its calls (`lint_fix 2×`). A narrow header drops kinds
+from the right and keeps the first kind, the failures and the cancels. The
+glyph is `●` when done, a `○`/`●` blink while a call runs (the `◇◈◆` pulse
+is a running child agent's alone), `✗` in the error colour when a call failed, and `●` in the
 warning colour when only ops failed inside a cell that recovered. A bash op
 whose command exits nonzero is a failed op, as fx counts it, though its call
 succeeded (`callOperation`).
@@ -324,13 +328,15 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
 - **Reasoning.** A run takes the reasoning just before its first call (from
   that call's own message only: an earlier message may already be in
   history), the reasoning between its calls, and the reasoning just before the
-  answer text that ends it; the header counts each as a thought, and full
-  draws each where it came. While a turn runs, the open run takes the
+  answer text that ends it; the header counts none, and full draws each where
+  it came. While a turn runs, the open run takes the
   reasoning since its last call at once (as its closing reasoning until a call
   or answer text follows), so a thought never draws on its own and then
-  leaves the live tail when the next call joins. Reasoning with no run is one line at collapsed and
-  preview, `∴ Thought · <first summary> · N summaries`, and its markdown at
-  full and in the transcript view.
+  leaves the live tail when the next call joins. Reasoning with no run is
+  hidden at collapsed (as Claude Code hides thinking) and one line at
+  preview, `∴ Thought · <first summary> · N summaries`. At full and in the
+  transcript view every reasoning block, a run's too, opens under a `∴` at
+  column 2 and hangs its text at column 4.
 - **Child completion** (`delegate.client.tsx`). Collapsed is one line,
   `✓ explore completed · 9f3a2c1d · 14 tools · ↑1.2k ↓300 $0.01`, with a
   failed child's error last; narrow, the error is cut first, then the usage
@@ -343,7 +349,16 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
 ctrl+o`), with a tree row for each failed extension; preview and full list
   every issue on its own row. It is in the live tail, so a level change costs
   no replay.
-- **Session error.** Below full, an error over four lines shows four, then
+- **Session rows** (`SessionEventIndicator`). Each sits at column 2 under its
+  own glyph and hangs a wrapped line at column 4: `✻` the turn line, `✗` an
+  error, `■ Interrupted · what should gent do instead?` in the warning colour,
+  `↻` a retry, a notice's own glyph. The turn line is `✻ Worked for 1m 48s ·
+2 retries · ↑38k ↓2.1k · $0.04` (`formatTurnLine`), muted, one blank row
+  above; the retry slot is there only when a provider call was retried, and
+  preview and full add `· N steps`. Narrow, its parts drop from the right and
+  the time stays. A settled retry is hidden at collapsed and reads `↻ Retried
+1/3 · <reason>` from preview on, where it happened, inside the run it
+  split nothing of. Below full, an error over four lines shows four, then
   `… +N lines (ctrl+o)`.
 - **Activity row.** A running call reads in the words its row will use once
   it ends (`formatRunningCall`): `Running mkdir -p x`, `Reading src/app.tsx`,
@@ -361,7 +376,7 @@ A group is one run of tool calls across the steps of a turn, as in fx
 (`projectToolRuns` in `message-list.tsx`): reasoning and blank text between
 calls do not end it; answer text, a user message, a session row, or a call
 that asks the reader (`ask_user`, `prompt`, `handoff`, in a cell's ops too)
-does. A pending retry ends nothing. The run draws at its
+does. A retry row, pending or settled, ends nothing. The run draws at its
 first tool-call segment (its head); the later steps skip the segments it took.
 The reasoning it took draws where it came at the full level only; a closing
 thought from a streamed answer keeps the head waiting for the stored answer. The
@@ -369,7 +384,7 @@ native transcript draws each item on its own, so it projects the runs once over
 every displayed item and gives them to the live view and to each history
 surface (`ToolRunsContext`). A message that heads a run is final only once the
 run has ended, holds no streamed step and no running call; its fingerprint
-holds the run's calls and thoughts (`historyFingerprints`), so a run that grows after
+holds the run's calls and the reasoning it took (`historyFingerprints`), so a run that grows after
 history took its top rows at idle replays history. The transcript view (full
 detail) groups each message's calls on their own.
 

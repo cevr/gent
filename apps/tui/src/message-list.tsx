@@ -13,6 +13,7 @@ import {
   formatFailureRow,
   formatPreviewFooter,
   formatRowCounts,
+  formatUsageStats,
   getString,
   type PathPlace,
   toolArgSummary,
@@ -20,8 +21,8 @@ import {
   plural,
   repliesInView,
   type ReplyWriter,
+  toolRunFrame,
   truncate,
-  workingIconFrame,
 } from "./utils"
 import { textWidth } from "./bun-adapter"
 import {
@@ -164,24 +165,48 @@ const formatThoughtLine = (reasoning: string, width = Number.POSITIVE_INFINITY):
 
 // ── session event labels ────────────────────────────────────────────────────
 
-/** What the model steps of one turn added up to, from each `StreamEnded.outcome`. */
+/**
+ * What the model steps of one turn added up to, from each `StreamEnded`
+ * (its outcome, usage and cost), and how many times a provider call was
+ * retried (`ProviderRetrying`).
+ */
 const TurnSteps = Schema.Struct({
   count: Schema.Finite,
   toolCalls: Schema.Finite,
   costUsd: Schema.Finite,
+  inputTokens: Schema.Finite,
+  outputTokens: Schema.Finite,
+  retries: Schema.Finite,
 })
 type TurnSteps = Schema.Schema.Type<typeof TurnSteps>
 
-export const emptyTurnSteps: TurnSteps = { count: 0, toolCalls: 0, costUsd: 0 }
+export const emptyTurnSteps: TurnSteps = {
+  count: 0,
+  toolCalls: 0,
+  costUsd: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  retries: 0,
+}
 
 export const addStep = (
   steps: TurnSteps,
-  step: { readonly outcome?: string; readonly costUsd?: number },
+  step: {
+    readonly outcome?: string
+    readonly costUsd?: number
+    readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+  },
 ): TurnSteps => ({
+  ...steps,
   count: steps.count + 1,
   toolCalls: steps.toolCalls + Number(step.outcome === "ToolCalls"),
   costUsd: steps.costUsd + (step.costUsd ?? 0),
+  inputTokens: steps.inputTokens + (step.usage?.inputTokens ?? 0),
+  outputTokens: steps.outputTokens + (step.usage?.outputTokens ?? 0),
 })
+
+/** A provider call of the turn failed and was tried again. */
+export const addRetry = (steps: TurnSteps): TurnSteps => ({ ...steps, retries: steps.retries + 1 })
 
 /**
  * How a retry ended, as far as the feed saw. `retried`: the retry ran (it
@@ -242,13 +267,31 @@ const retryReason = (reason: string): string => {
 
 export const currentMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 
-/** "3 steps · 2 tool calls · $0.012"; a turn with no recorded steps says nothing extra. */
-const stepSummary = (steps: TurnSteps): ReadonlyArray<string> => {
-  if (steps.count === 0) return []
-  const parts = [plural(steps.count, "step")]
-  if (steps.toolCalls > 0) parts.push(plural(steps.toolCalls, "tool call"))
+/**
+ * The turn line, `Worked for 1m 48s · 2 retries · ↑38k ↓2.1k · $0.04`: the
+ * whole turn's time, then a retry count only when a provider call was
+ * retried, the tokens its steps read and wrote, and its cost. `steps` (the
+ * preview level and up) adds the step count last. It counts no tools: the
+ * run headers do. Where it is wider than `width` columns, the parts after
+ * the time drop from the right; the time stays.
+ */
+export const formatTurnLine = (
+  event: Extract<SessionEvent, { _tag: "turn-ended" }>,
+  options: { readonly steps: boolean; readonly width?: number },
+): string => {
+  const { steps } = event
+  const parts: string[] = []
+  if (steps.retries > 0) parts.push(plural(steps.retries, "retry", "retries"))
+  const tokens = formatUsageStats({ input: steps.inputTokens, output: steps.outputTokens })
+  if (tokens.length > 0) parts.push(tokens)
   if (steps.costUsd > 0) parts.push(formatCost(steps.costUsd))
-  return parts
+  if (options.steps && steps.count > 0) parts.push(plural(steps.count, "step"))
+  const head = `Worked for ${formatDuration(event.durationSeconds * 1000, "compact")}`
+  const join = (kept: number) => [head, ...parts.slice(0, kept)].join(" · ")
+  const width = options.width ?? Number.POSITIVE_INFINITY
+  let kept = parts.length
+  while (kept > 0 && textWidth(join(kept)) > width) kept -= 1
+  return join(kept)
 }
 
 /** The error's text, its first line ending with the reset time when the failure names one. */
@@ -263,21 +306,18 @@ const errorLabel = (
 }
 
 /**
- * The row's text at `now`. Clock times read in the zone `zone` gives, the
- * viewer's own unless a test fixes it; only a row with a reset time asks.
+ * The row's text at `now`, at the collapsed level. Clock times read in the
+ * zone `zone` gives, the viewer's own unless a test fixes it; only a row with
+ * a reset time asks. A pending retry's text is the live line's phase
+ * (`Retrying in 3s · 2/3 · Rate limit exceeded`): it draws no row.
  */
 export const getSessionEventLabel = (
   event: SessionEvent,
   now = currentMillis(),
   zone: () => DateTime.TimeZone = DateTime.zoneMakeLocal,
 ): string => {
-  if (event._tag === "turn-ended") {
-    return [
-      `Worked for ${formatDuration(event.durationSeconds * 1000, "compact")}`,
-      ...stepSummary(event.steps),
-    ].join(" · ")
-  }
-  if (event._tag === "interruption") return "Interrupted · what do you want to do instead?"
+  if (event._tag === "turn-ended") return formatTurnLine(event, { steps: false })
+  if (event._tag === "interruption") return "Interrupted · what should gent do instead?"
   if (event._tag === "error") return errorLabel(event, now, zone)
   if (event._tag === "notice") return event.text
   const count = `${event.attempt}/${event.maxAttempts}`
@@ -289,16 +329,16 @@ export const getSessionEventLabel = (
   const retryAt = event.createdAt + event.delayMs
   const remainingMs = Math.max(0, retryAt - now)
   const seconds = Math.ceil(remainingMs / 1000)
-  if (seconds <= 0) return `Retrying now... ${count}${reason}`
-  return `Retrying in ${seconds}s... ${count}${reason}`
+  if (seconds <= 0) return `Retrying now · ${count}${reason}`
+  return `Retrying in ${seconds}s · ${count}${reason}`
 }
 
 // ── session event indicator ─────────────────────────────────────────────────
 
 interface SessionEventIndicatorProps {
   event: SessionEvent
-  /** Below it an error keeps its first lines; open, it shows whole. */
-  open: boolean
+  /** Below full an error keeps its first lines; collapsed hides a settled retry. */
+  disclosure: DisclosureLevel
 }
 
 /** The lines a session error keeps below the full level: a provider body can run long. */
@@ -313,26 +353,58 @@ const cappedError = (text: string): string => {
   )
 }
 
+/** The column a session row's glyph sits in, and the column its text and every wrapped line start in. */
+const EVENT_GLYPH_COLUMN = 2
+const EVENT_TEXT_COLUMN = 4
+
+/**
+ * A row the session draws, at column 2 with its own glyph (R3 in the
+ * clear-transcript rules): `✻` the turn line, `✗` an error that ended the
+ * turn, `■` the reader's interrupt, `↻` a retry, and a notice's own glyph.
+ * A pending retry is the live line's phase and draws nothing here; a
+ * settled one is detail the preview shows where it happened. A row that
+ * wraps hangs its next line at column 4, under its text.
+ */
 function SessionEventIndicator(props: SessionEventIndicatorProps) {
   const { theme } = useTheme()
-  const tick = useSpinnerClock()
+  const dimensions = useTerminalDimensions()
+  const lineWidth = () => Math.max(1, dimensions().width - EVENT_TEXT_COLUMN - FREE_LAST_COLUMN)
 
-  // Only a pending retry counts down; every other row's label is fixed, so
-  // only that row reads the clock.
+  const shown = () => {
+    const event = props.event
+    if (event._tag !== "retrying") return true
+    return event.outcome !== "pending" && props.disclosure !== "collapsed"
+  }
+
   const content = () => {
     const event = props.event
-    if (event._tag === "retrying" && event.outcome === "pending") tick()
+    if (event._tag === "turn-ended")
+      return formatTurnLine(event, {
+        steps: props.disclosure !== "collapsed",
+        width: lineWidth(),
+      })
     const label = getSessionEventLabel(event, currentMillis())
-    if (event._tag === "error" && !props.open) return cappedError(label)
+    if (event._tag === "error" && props.disclosure !== "full") return cappedError(label)
     return label
   }
 
-  const color = () => {
+  const glyph = () =>
+    Match.value(props.event).pipe(
+      Match.tagsExhaustive({
+        "turn-ended": () => ({ glyph: "✻", color: theme.textMuted }),
+        error: () => ({ glyph: "✗", color: theme.error }),
+        interruption: () => ({ glyph: "■", color: theme.warning }),
+        retrying: () => ({ glyph: "↻", color: theme.textMuted }),
+        notice: (event) => ({ glyph: event.glyph, color: resolveThemeColor(theme, event.color) }),
+      }),
+    )
+
+  // An error and an interrupt keep their glyph's colour on the text; every
+  // other row's text is muted.
+  const textColor = () => {
     switch (props.event._tag) {
       case "error":
         return theme.error
-      case "retrying":
-        return theme.warning
       case "interruption":
         return theme.warning
       default:
@@ -340,31 +412,21 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
     }
   }
 
-  // The glyph keeps its own column, so a row that wraps hangs its next line
-  // under the text, not under the glyph.
-  const event = props.event
-  if (event._tag === "notice") {
-    return (
-      <box marginTop={1} flexDirection="row">
-        <text flexShrink={0} style={{ fg: resolveThemeColor(theme, event.color) }}>
-          {`${event.glyph} `}
+  return (
+    <Show when={shown()}>
+      <box marginTop={1} paddingLeft={EVENT_GLYPH_COLUMN} flexDirection="row">
+        <text
+          width={EVENT_TEXT_COLUMN - EVENT_GLYPH_COLUMN}
+          flexShrink={0}
+          style={{ fg: glyph().color }}
+        >
+          {glyph().glyph}
         </text>
-        <text flexShrink={1} style={{ fg: theme.textMuted }}>
-          {event.text}
+        <text flexGrow={1} flexShrink={1} style={{ fg: textColor() }}>
+          {content()}
         </text>
       </box>
-    )
-  }
-
-  return (
-    <box marginTop={1} flexDirection="row">
-      <text flexShrink={0} style={{ fg: color() }}>
-        {"● "}
-      </text>
-      <text flexShrink={1} style={{ fg: color() }}>
-        {content()}
-      </text>
-    </box>
+    </Show>
   )
 }
 
@@ -624,15 +686,19 @@ function UserMessage(
 /** The columns an answer is indented by; its text is fitted to the rest. */
 const ANSWER_INDENT = 2
 
+/** The columns an open thought's `∴` takes before its text. */
+const THOUGHT_TEXT_INDENT = 2
+
 // ── tool runs ───────────────────────────────────────────────────────────────
 
 /**
  * A run of tool calls: what one group header draws. As in fx, a run spans the
  * steps of a turn. Reasoning and blank text between its calls do not end it;
- * answer text, an image, a user message, a session row, or an ask does. As in
- * opencode's activity line, the run also takes the reasoning just before its
- * first call (from that call's own message) and the reasoning just before the
- * text that ends it, and its header counts them all as thoughts.
+ * answer text, an image, a user message, a session row other than a retry, or
+ * an ask does. As in opencode's activity line, the run also takes the
+ * reasoning just before its first call (from that call's own message) and the
+ * reasoning just before the text that ends it; its header counts none of
+ * them, and the full level draws each where it came.
  */
 interface ToolRun {
   readonly calls: ReadonlyArray<ToolCall>
@@ -702,8 +768,8 @@ interface RunState {
  * The tool runs of `items`. `acrossSteps` lets a run span messages and pass
  * over reasoning; without it a run is one message's consecutive calls, as the
  * transcript view (full detail) draws them. A queued follow-up and a pending
- * retry sit at the transcript's end only until they take their place, so
- * they end nothing. Only a running turn adds steps, so with none the last
+ * retry sit at the transcript's end only until they take their place, and a
+ * settled retry is a failed attempt inside a step: none of them ends a run. Only a running turn adds steps, so with none the last
  * run has ended too.
  */
 const projectToolRuns = (
@@ -757,7 +823,7 @@ const projectToolRuns = (
   }
   for (const item of items) {
     prelude = noPassing()
-    if (waitsInPlace(item)) continue
+    if (isRetryRow(item)) continue
     if (!isMessageItem(item) || item.role !== "assistant") {
       close()
       continue
@@ -782,9 +848,12 @@ interface StepMessage {
   readonly draft?: true
 }
 
-/** A pending retry waits at the end until it takes its place. */
-const waitsInPlace = (item: SessionItem): boolean =>
-  !isMessageItem(item) && item._tag === "retrying" && item.outcome === "pending"
+/**
+ * A retry row ends no run. A pending one waits at the end until it takes its
+ * place; a settled one marks where a step failed and ran again, inside the
+ * same run, and draws only from the preview level on.
+ */
+const isRetryRow = (item: SessionItem): boolean => !isMessageItem(item) && item._tag === "retrying"
 
 /** Reasoning and blank text between calls leave a run open. */
 const passesRun = (segment: AssistantSegment): boolean =>
@@ -1070,9 +1139,10 @@ function AssistantMessage(props: {
       ),
     )
 
-  // A message whose every segment a run took draws nothing, not even its gap.
+  // A message whose every segment a run took, or the collapsed level hides,
+  // draws nothing, not even its gap.
   const hasContent = () => {
-    if (segments().length > 0 && drawnSegments().length === 0) return false
+    if (segments().length > 0 && shownSegments().length === 0) return false
     if (props.content.length > 0) return true
     if (props.reasoning.length > 0) return true
     if (props.images.length > 0) return true
@@ -1095,8 +1165,14 @@ function AssistantMessage(props: {
       return [{ segment, run: Option.fromUndefinedOr(props.runs.heads.get(key)) }]
     }),
   )
-  // Reasoning opens at the full level and in the transcript view; below
-  // that it is one line, as fx and Codex keep it out of the inline view.
+  // A thought no run took is detail: the collapsed level hides it, as Claude
+  // Code hides thinking, the preview draws it as one line, and the full level
+  // and the transcript view open it, as fx and Codex keep it out of the
+  // inline view.
+  const thoughtsShown = () => props.fullDetail || props.disclosure !== "collapsed"
+  const shownSegments = createMemo(() =>
+    drawnSegments().filter(({ segment }) => segment._tag !== "reasoning" || thoughtsShown()),
+  )
   const dimensions = useTerminalDimensions()
   const thoughtWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN
   const reasoningOpen = () => props.fullDetail || props.disclosure === "full"
@@ -1120,18 +1196,26 @@ function AssistantMessage(props: {
     if (last) return 0
     return 1
   }
+  // An open thought leads with its glyph, so it never reads as the answer
+  // beside it (both sit at column 2, and fx's grays alone part them); its
+  // text hangs at column 4.
   const reasoningMarkdownBlock = (content: string, last = false) => (
-    <box flexDirection="column" marginBottom={gapAfter(last)}>
-      <markdown
-        syntaxStyle={props.syntaxStyle()}
-        streaming
-        internalBlockMode="top-level"
-        tableOptions={ANSWER_TABLE}
-        renderNode={reasoningBlocks()}
-        content={reasoningMarkdown(content)}
-        fg={theme.textMuted}
-        conceal
-      />
+    <box flexDirection="row" marginBottom={gapAfter(last)}>
+      <text width={THOUGHT_TEXT_INDENT} flexShrink={0} style={{ fg: theme.textMuted }}>
+        ∴
+      </text>
+      <box flexDirection="column" flexGrow={1} flexShrink={1}>
+        <markdown
+          syntaxStyle={props.syntaxStyle()}
+          streaming
+          internalBlockMode="top-level"
+          tableOptions={ANSWER_TABLE}
+          renderNode={reasoningBlocks()}
+          content={reasoningMarkdown(content)}
+          fg={theme.textMuted}
+          conceal
+        />
+      </box>
     </box>
   )
 
@@ -1141,12 +1225,12 @@ function AssistantMessage(props: {
           no segments has no text, no reasoning, no image and no tool call to
           draw either. */}
       <Show when={segments().length > 0}>
-        <For each={drawnSegments()}>
+        <For each={shownSegments()}>
           {({ segment, run }, index) =>
             Match.value(segment).pipe(
               Match.tagsExhaustive({
                 reasoning: (segment) =>
-                  reasoningBlock(segment.content, index() === drawnSegments().length - 1),
+                  reasoningBlock(segment.content, index() === shownSegments().length - 1),
                 image: (segment) => (
                   <text style={{ fg: theme.info }}>
                     [Image: {segment.image.mediaType.replace("image/", "")}]
@@ -1221,10 +1305,10 @@ function ToolCallGroup(props: {
   const tick = useSpinnerClock()
   // A call that failed is the group's failure; ops that failed inside a cell
   // that recovered, or a command that exited nonzero, are a warning; the
-  // pulse runs while a call does.
+  // bullet blinks while a call runs.
   const symbol = () => {
     if (failed()) return "✗"
-    if (running()) return workingIconFrame(tick())
+    if (running()) return toolRunFrame(tick())
     return "●"
   }
   const groupColor = () => {
@@ -1236,12 +1320,7 @@ function ToolCallGroup(props: {
   // surface that draws the header or the rows (the live tail, a history
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
-  // Every reasoning segment the run took counts as a thought; one with no text is none.
-  const thoughts = () =>
-    [...props.closing, ...Array.from(props.reasoning.values()).flat()].filter(
-      (content) => content.trim().length > 0,
-    ).length
-  const header = createMemo(() => formatActivityHeader(activity(), lineWidth(), thoughts()))
+  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
   // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   // Collapsed draws one line under the header for each failure, so a failure
@@ -1479,6 +1558,11 @@ interface MessageListProps {
 }
 
 export function MessageList(props: MessageListProps) {
+  // The transcript view (full detail) opens every session row as the full level does.
+  const eventDisclosure = (): DisclosureLevel => {
+    if (props.fullDetail === true) return "full"
+    return props.disclosure
+  }
   // The transcript view (full detail) draws each message's own calls. Every
   // other view draws runs across steps: the native transcript's own, which
   // see every item, else the runs of the items given here.
@@ -1498,12 +1582,7 @@ export function MessageList(props: MessageListProps) {
           {(item) =>
             (() => {
               if (!isMessageItem(item)) {
-                return (
-                  <SessionEventIndicator
-                    event={item}
-                    open={props.fullDetail === true || props.disclosure === "full"}
-                  />
-                )
+                return <SessionEventIndicator event={item} disclosure={eventDisclosure()} />
               }
               return (
                 <Show
@@ -1605,6 +1684,9 @@ export const transcriptFingerprint = (item: SessionItem): string => {
       item.steps.count,
       item.steps.toolCalls,
       item.steps.costUsd,
+      item.steps.inputTokens,
+      item.steps.outputTokens,
+      item.steps.retries,
     ])
   if (item._tag === "error")
     return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])

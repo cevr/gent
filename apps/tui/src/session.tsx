@@ -107,10 +107,12 @@ import {
 import { type Command, executeSlashCommand, isSlashCommandName, useCommand } from "./commands"
 import { createStore, produce, type SetStoreFunction, unwrap } from "solid-js/store"
 import {
+  addRetry,
   addStep,
   type AssistantSegment,
   currentMillis,
   emptyTurnSteps,
+  getSessionEventLabel,
   leaveTerminal,
   isMessageItem,
   type Message,
@@ -2396,6 +2398,8 @@ export function useSessionFeed(
       case "ProviderRetrying":
         // A new retry means the one before it ran and failed again.
         settleRetryingEvents(setStore, "retried")
+        // The turn line counts it: the settled row is detail the preview shows.
+        turnSteps = addRetry(turnSteps)
         appendSessionEvent(setStore, {
           _tag: "retrying",
           attempt: event.attempt,
@@ -3447,8 +3451,33 @@ export function createSessionController(props: {
     return Predicate.isNotUndefined(last) && last.role === "assistant" && last.draft === true
   })
 
+  // A provider call that failed and waits to run again. The transcript draws
+  // no row for it while it waits: the live line names it, and the turn line
+  // counts it once the turn ends.
+  const pendingRetry = createMemo(() =>
+    Option.fromUndefinedOr(
+      feed
+        .items()
+        .findLast(
+          (item): item is Extract<SessionEvent, { _tag: "retrying" }> =>
+            !isMessageItem(item) && item._tag === "retrying" && item.outcome === "pending",
+        ),
+    ),
+  )
+  // The retry counts down on the clock its row was stamped by, which the
+  // timer reads each second: the turn's start plus the time it has run.
+  const retryPhase = (retry: Extract<SessionEvent, { _tag: "retrying" }>): string =>
+    getSessionEventLabel(
+      retry,
+      Option.match(timerStart(), {
+        onNone: currentMillis,
+        onSome: (start) => start + elapsed(),
+      }),
+    )
+
   // The status row reads the label while idle, the live line while a turn
-  // runs: an open ask, then the running op, then whether answer text streams.
+  // runs: an open ask, then the running op, then a retry's wait, then whether
+  // answer text streams.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
@@ -3460,8 +3489,13 @@ export function createSessionController(props: {
         return nextActivity.toolInfo
       case "thinking":
         if (waitingForAnswer()) return "Waiting for your answer"
-        if (answering()) return "Generating"
-        return "Thinking"
+        return Option.match(pendingRetry(), {
+          onSome: retryPhase,
+          onNone: () => {
+            if (answering()) return "Generating"
+            return "Thinking"
+          },
+        })
     }
   })
 
