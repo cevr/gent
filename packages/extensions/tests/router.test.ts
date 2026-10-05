@@ -1,3 +1,4 @@
+import { FetchHttpClient, type HttpClient } from "effect/http"
 /**
  * @gent/router: virtual models from the config files. The classifier is a
  * scripted decision model behind a test driver, and the chat model is
@@ -847,8 +848,12 @@ const anthropicModelNamed = Effect.fn("test.anthropicModelNamed")(function* (
     yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
   const services = Context.add(
     yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-    >(),
+      | FileSystem.FileSystem
+      | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Crypto.Crypto
+      | HttpClient.HttpClient
+    >().pipe(Effect.provide(FetchHttpClient.layer)),
     AnthropicPlatform,
     AnthropicPlatform.of({ platform: "darwin", home: "/nonexistent/gent-test-home", env: {} }),
   )

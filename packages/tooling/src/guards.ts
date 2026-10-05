@@ -3112,10 +3112,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     count: 2,
   },
   {
-    file: "packages/extensions/src/anthropic.ts",
-    text: "strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.",
-  },
-  {
     // `new AgentDefinition` must be as strict as `make`: a key the schema
     // drops would leave an agent with every tool.
     file: "packages/core/src/domain/agent.ts",

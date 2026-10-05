@@ -92,7 +92,7 @@ import {
   spentLimitsReset,
 } from "./providers.js"
 import { ChildProcessSpawner } from "effect/process"
-import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/http"
+import { Headers, HttpClient, HttpClientRequest } from "effect/http"
 import type { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type * as AnthropicSdkModule from "@effect/ai-anthropic"
 import { type AiError, Model as AiModel, type Response } from "effect/ai"
@@ -923,15 +923,6 @@ const refreshViaOAuthClient = (
     return creds.value
   })
 
-/** Legacy primary source retains its existing HTTP boundary. */
-const refreshViaOAuth = (
-  refreshToken: string,
-): Effect.Effect<ClaudeCredentials, CredentialFailure> =>
-  refreshViaOAuthClient(refreshToken).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off -- the credential read owns its HTTP client at the extension boundary; it outlives no scope.
-    Effect.provide(FetchHttpClient.layer),
-  )
-
 /**
  * Run `claude -p .` so the CLI refreshes its own credentials. stdin is
  * closed so the CLI does not wait for piped input. It runs in the home
@@ -991,7 +982,11 @@ const refreshClaudeCodeCredentials = (
 ): Effect.Effect<
   ClaudeCredentials,
   CredentialFailure,
-  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  | AnthropicPlatform
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
 > =>
   Effect.gen(function* () {
     // Why each direct attempt failed. A failed CLI fallback reports all of
@@ -1065,7 +1060,7 @@ const refreshClaudeCodeCredentials = (
  */
 const rotateAndWriteBack = (base: RefreshBase) =>
   Effect.gen(function* () {
-    const refreshed = yield* refreshViaOAuth(base.sent.refreshToken)
+    const refreshed = yield* refreshViaOAuthClient(base.sent.refreshToken)
     const outcome = yield* writeBackCredentials(refreshed, base).pipe(
       Effect.catchEager((e: ProviderAuthError) =>
         Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
@@ -1100,6 +1095,7 @@ type AnthropicCredentialIORequirements =
   | AnthropicPlatform
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
+  | HttpClient.HttpClient
   | Path.Path
 
 type CredentialIO = Effect.Effect<
@@ -1124,7 +1120,7 @@ const realIO: AnthropicCredentialIO = {
 }
 
 /**
- * What the driver runs on: the host's files, paths, processes and crypto, captured
+ * What the driver runs on: the host's files, paths, processes, crypto and HTTP client, captured
  * once at setup, plus the Claude Code platform facts. The driver provides no
  * platform of its own, so a test host's services reach the keychain reads.
  */
@@ -1206,14 +1202,8 @@ const buildNamedCredentialCache = (
             credentialFailure: "Unavailable",
           })
         }
-        const client = Context.getOption(services, HttpClient.HttpClient)
-        return yield* Option.match(client, {
-          onNone: () => refreshViaOAuth(held.value.refreshToken),
-          onSome: (http) =>
-            refreshViaOAuthClient(held.value.refreshToken).pipe(
-              Effect.provideService(HttpClient.HttpClient, http),
-            ),
-        }).pipe(
+        return yield* refreshViaOAuthClient(held.value.refreshToken).pipe(
+          Effect.provideContext(services),
           Effect.catchTags({
             // Only a refusal the token endpoint answered proves the credential
             // is gone; an unreadable reply keeps the turn on it.
@@ -3221,14 +3211,9 @@ export const AnthropicExtension = defineExtension({
         ChildProcessSpawner.ChildProcessSpawner,
         yield* ChildProcessSpawner.ChildProcessSpawner,
       ),
+      Context.add(HttpClient.HttpClient, yield* HttpClient.HttpClient),
       Context.add(AnthropicPlatform, AnthropicPlatform.fromSetup(ctx, env)),
     )
-
-    const http = yield* Effect.serviceOption(HttpClient.HttpClient)
-    const driverServices = Option.match(http, {
-      onNone: () => services,
-      onSome: (client) => Context.add(services, HttpClient.HttpClient, client),
-    })
 
     // One credential cell per extension instance, allocated at setup, so it
     // survives across `resolveModel` calls until the runtime tears the
@@ -3238,12 +3223,7 @@ export const AnthropicExtension = defineExtension({
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(
-        credentialCellRef,
-        envApiKey,
-        driverServices,
-        yield* readPromptCacheTtl,
-      ),
+      buildAnthropicModelDriver(credentialCellRef, envApiKey, services, yield* readPromptCacheTtl),
     )
     yield* ctx.register("apiClass", MESSAGES_CLASS)
   }),

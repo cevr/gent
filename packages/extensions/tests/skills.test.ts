@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import {
@@ -482,6 +483,7 @@ describe("bundled skills", () => {
           BunServices.layer,
           BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
           GentPlatform.Test(),
+          FetchHttpClient.layer,
         ),
       ),
     ),

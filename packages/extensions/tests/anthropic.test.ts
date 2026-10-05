@@ -551,7 +551,7 @@ const credentialCache = (io: AnthropicCredentialIO) => {
   )
   return SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
     Effect.flatMap((cellRef) => makeAnthropicCredentialCache(cellRef, io)),
-    Effect.provide(Layer.merge(BunServices.layer, platformLayer)),
+    Effect.provide(Layer.mergeAll(BunServices.layer, platformLayer, FetchHttpClient.layer)),
   )
 }
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
@@ -1395,13 +1395,22 @@ const testPlatform = AnthropicPlatform.of({
   home: "/nonexistent/gent-test-home",
   env: {},
 })
-/** The driver's services as setup captures them: the running platform, its crypto, and the Claude Code facts. */
+/**
+ * The driver's services as setup captures them: the running platform, its
+ * crypto, the host's HTTP client and the Claude Code facts. The client is
+ * the fetch client over whatever fetch the test provides, as the host's is
+ * over the real one.
+ */
 const driverServices = (platform: typeof testPlatform) =>
-  Effect.map(
-    Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
-    >(),
-    Context.add(AnthropicPlatform, platform),
+  Effect.context<
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Crypto.Crypto
+    | HttpClient.HttpClient
+  >().pipe(
+    Effect.map(Context.add(AnthropicPlatform, platform)),
+    Effect.provide(FetchHttpClient.layer),
   )
 type DriverArgs = Parameters<typeof buildAnthropicModelDriverLive>
 /** The driver over the test platform; its markers ask for `promptCacheTtl`, 1 hour unless a test sets the switch. */

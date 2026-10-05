@@ -6,6 +6,7 @@ import {
 } from "@gent/core/extensions/api"
 import type { GentPlatform } from "@gent/core/extensions/branch-tools"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
+import type { HttpClient } from "effect/http"
 import { CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
@@ -62,6 +63,7 @@ export const BuiltinExtensions: ReadonlyArray<
     | ExtensionHost
     | FileSystem.FileSystem
     | GentPlatform
+    | HttpClient.HttpClient
     | Path.Path
   >
 > = [
