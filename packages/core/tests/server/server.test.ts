@@ -37,18 +37,16 @@ import {
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
 import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  waitFor,
-} from "../../src/test-utils/language-model"
-import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
+  emptyQueueSnapshot,
   fixedSessionProfiles,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
   testAgent,
   testSqliteStorage,
-  emptyQueueSnapshot,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   DEFAULT_SESSION_NAME,

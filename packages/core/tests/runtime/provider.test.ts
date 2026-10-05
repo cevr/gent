@@ -85,11 +85,11 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   createRpcHarness,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
   type ModelCatalogFixtureRequest,

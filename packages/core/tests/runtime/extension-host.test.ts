@@ -40,18 +40,21 @@ import {
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  registerContributions,
-  runToolWithCtx,
-  recordingEventStore,
-  testExtensionHostContext,
-  testHostFacts,
-  testToolContext,
   ensureStorageParents,
   fixedSessionProfiles,
   fixtureModelCatalog,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
+  recordingEventStore,
+  registerContributions,
+  runToolWithCtx,
+  testExtensionHostContext,
+  testHostFacts,
   testSqliteStorage,
+  testToolContext,
   testTurnExtension,
+  turnRequestText,
+  waitFor,
 } from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -150,7 +153,6 @@ import {
   textStep,
   toolCallStep,
 } from "../../src/runtime/provider"
-import { LanguageModelLayers, turnRequestText, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,

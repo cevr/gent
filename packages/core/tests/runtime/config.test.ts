@@ -35,14 +35,14 @@ import {
 import { resolveSessionRoute } from "../../src/runtime/turn"
 import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
-import { createRpcHarness } from "../../src/test-utils/harness"
 import {
+  createRpcHarness,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   type SequenceStep,
   systemTextOf,
   waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/test-utils/harness"
 import { textStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"

@@ -3010,7 +3010,7 @@ tests/
 ├── runtime/       # agent-loop, config, extension-host, model-context, provider, session, tools, turn, ...
 ├── server/        # rpc, server, workspace-rpc
 ├── storage/       # schema, storage
-└── test-utils/    # index, language-model
+└── test-utils/    # index (the harness entry and its scripted models)
 ```
 
 One test file per source file. No god tests. Names match source owners.
@@ -3032,8 +3032,10 @@ One test file per source file. No god tests. Names match source owners.
   `createRpcHarness`, the thin RPC acceptance helper that chains
   `createE2ELayer` → `createRpcClient` (the in-process RPC client,
   `makeInProcessClient` in `packages/core/src/server/server.ts`) → seeded
-  `session.create`
-- `packages/core/src/test-utils/language-model.ts` — `LanguageModelLayers.debug`, `sequence`, `signal`, `failing` + stream-part helpers
+  `session.create`. The same file holds `LanguageModelLayers` (`debug`, `sequence`,
+  `signal`, `failing`), `waitFor` and the temp-directory, port and
+  worker-environment fixtures; the step and stream-part helpers live in
+  `packages/core/src/runtime/provider.ts`.
 - `apps/tui/tests/render-harness-boundary.tsx` — TUI render test harness
 
 ## Interaction Tools Extension

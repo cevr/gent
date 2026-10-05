@@ -24,7 +24,6 @@ import {
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { ToolRunner } from "../../src/runtime/tools"
-import { LanguageModelLayers, waitFor } from "../../src/test-utils/language-model"
 import {
   dateFromMillis,
   Message,
@@ -42,8 +41,10 @@ import {
   ensureStorageParents,
   fixedSessionProfiles,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
   recordingEventStore,
   testSqliteStorage,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   type BranchId,

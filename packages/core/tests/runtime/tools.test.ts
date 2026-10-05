@@ -37,7 +37,13 @@ import {
   type ToolCallSucceeded,
 } from "../../src/domain/event"
 import * as Prompt from "effect/ai/Prompt"
-import { createRpcHarness, testToolContext } from "../../src/test-utils/harness"
+import {
+  createRpcHarness,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
+  testToolContext,
+  waitFor,
+} from "../../src/test-utils/harness"
 import {
   BranchId,
   ExtensionId,
@@ -47,11 +53,6 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { test } from "bun:test"
-import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  waitFor,
-} from "../../src/test-utils/language-model"
 import { omitUndefined } from "../../src/domain/guards"
 import { multiToolCallStep, textStep, toolCallStep } from "../../src/runtime/provider"
 import { messagePartsText } from "../../src/domain/message"

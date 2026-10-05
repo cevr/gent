@@ -115,20 +115,18 @@ import {
   ToolRunner,
 } from "../../src/runtime/tools"
 import {
-  ensureStorageParents,
-  testSqliteStorage,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
-  hostProfileRegistry,
+  ensureStorageParents,
   fixtureModelCatalogSource,
-  recordingEventStore,
-} from "../../src/test-utils/harness"
-import {
+  hostProfileRegistry,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  recordingEventStore,
+  testSqliteStorage,
   waitFor,
-} from "../../src/test-utils/language-model"
+} from "../../src/test-utils/harness"
 import {
   defineExtension,
   defineResource,

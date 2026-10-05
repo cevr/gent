@@ -63,12 +63,6 @@ import {
   toolCallStep,
 } from "../../src/runtime/provider"
 import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  type SequenceStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
-import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
@@ -79,13 +73,17 @@ import {
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
-  type E2ELayerConfig,
-  fixedSessionProfiles,
   createRpcClient,
   createRpcHarness,
+  type E2ELayerConfig,
+  fixedSessionProfiles,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
   modelCatalogFixture,
   registerContributions,
+  type SequenceStep,
   testTurnExtension,
+  waitFor,
 } from "../../src/test-utils/harness"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
 import { Model as AiModel, type LanguageModel } from "effect/ai"

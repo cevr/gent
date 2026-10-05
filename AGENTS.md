@@ -124,7 +124,7 @@ Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtim
 - **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `testSqliteStorage()` from the test utilities for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
 - **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
 - **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` lives in `packages/core/src/test-utils/language-model.ts`. The stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`), the step builders (`textStep`, `toolCallStep`, `multiToolCallStep`) and the scripted model behind `LanguageModelLayers.debug()` and `Gent.provider.mock()` (`ScriptedLanguageModel`) live in `packages/core/src/runtime/provider.ts`. The scripted model plays a multi-step tool turn (real tools in the session cwd) for a message that holds `debug tools`. Tests outside core import them from `@gent/core/test-utils`.
+- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` lives in `packages/core/src/test-utils/harness.ts`. The stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`), the step builders (`textStep`, `toolCallStep`, `multiToolCallStep`) and the scripted model behind `LanguageModelLayers.debug()` and `Gent.provider.mock()` (`ScriptedLanguageModel`) live in `packages/core/src/runtime/provider.ts`. The scripted model plays a multi-step tool turn (real tools in the session cwd) for a message that holds `debug tools`. Tests outside core import them from `@gent/core/test-utils`.
 - **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
 - **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
 - **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
@@ -204,20 +204,19 @@ Core tests record the event sequence for assertions with `recordingEventStore(re
 
 ## Key Files
 
-| File                                             | Purpose                                                               |
-| ------------------------------------------------ | --------------------------------------------------------------------- |
-| `packages/core/src/storage/storage.ts`           | SQLite layer composition for focused storage tags                     |
-| `packages/core/src/storage/schema.ts`            | SQLite schema, migration, and initialization logic                    |
-| `packages/core/src/test-utils/harness.ts`        | recorders, harnesses, and the in-process layers                       |
-| `packages/core/src/server/server.ts`             | startup wiring + dependency graph                                     |
-| `packages/core/src/server/rpc.ts`                | shared client contract                                                |
-| `packages/core/src/domain/agent-loop.ts`         | loop state, entity id, and the actor protocol                         |
-| `packages/core/src/runtime/agent-loop.ts`        | mailbox, worker, behavior, and the actor                              |
-| `packages/core/src/runtime/turn.ts`              | per-branch turn engine used by the actor                              |
-| `packages/core/src/runtime/provider.ts`          | models.dev catalog snapshot, API class match, generic providers, auth |
-| `packages/core/src/domain/driver.ts`             | `ApiClassContribution`, `ModelDriverContribution`, catalog overrides  |
-| `packages/core/src/test-utils/language-model.ts` | `LanguageModelLayers`, step and stream-part helpers                   |
-| `apps/tui/tsconfig.json`                         | `jsxImportSource: "@opentui/solid"` required                          |
+| File                                      | Purpose                                                               |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| `packages/core/src/storage/storage.ts`    | SQLite layer composition for focused storage tags                     |
+| `packages/core/src/storage/schema.ts`     | SQLite schema, migration, and initialization logic                    |
+| `packages/core/src/test-utils/harness.ts` | recorders, harnesses, the in-process layers, `LanguageModelLayers`    |
+| `packages/core/src/server/server.ts`      | startup wiring + dependency graph                                     |
+| `packages/core/src/server/rpc.ts`         | shared client contract                                                |
+| `packages/core/src/domain/agent-loop.ts`  | loop state, entity id, and the actor protocol                         |
+| `packages/core/src/runtime/agent-loop.ts` | mailbox, worker, behavior, and the actor                              |
+| `packages/core/src/runtime/turn.ts`       | per-branch turn engine used by the actor                              |
+| `packages/core/src/runtime/provider.ts`   | models.dev catalog snapshot, API class match, generic providers, auth |
+| `packages/core/src/domain/driver.ts`      | `ApiClassContribution`, `ModelDriverContribution`, catalog overrides  |
+| `apps/tui/tsconfig.json`                  | `jsxImportSource: "@opentui/solid"` required                          |
 
 ## Documentation
 

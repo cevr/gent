@@ -64,10 +64,14 @@ import {
   ensureStorageParents,
   fixedSessionProfiles,
   fixtureModelCatalogSource,
+  LanguageModelLayers,
+  makeTempDirectoryScoped,
   recordingEventStore,
   testAgent,
   testSqliteStorage,
   testTurnExtension,
+  turnRequestText,
+  waitFor,
 } from "../../src/test-utils/harness"
 import {
   finishPart,
@@ -82,12 +86,6 @@ import {
   textStep,
   toolCallStep,
 } from "../../src/runtime/provider"
-import {
-  LanguageModelLayers,
-  makeTempDirectoryScoped,
-  turnRequestText,
-  waitFor,
-} from "../../src/test-utils/language-model"
 import {
   assistantMessageIdForTurn,
   Branch,
