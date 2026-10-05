@@ -1,16 +1,16 @@
 import {
   type ActivityCall,
-  type ActivityOutcome,
+  type ActivityTone,
+  activityHeaderRuns,
   activityRows,
   decodeToolOutputOption,
-  formatActivityHeader,
   formatActivityRow,
   formatCellRowLabel,
   formatCost,
   formatClock,
   formatDuration,
   collapsedOperations,
-  formatFailureRow,
+  failureRowRuns,
   formatPreviewFooter,
   formatRowCounts,
   formatUsageStats,
@@ -46,6 +46,7 @@ import { useClient } from "./client"
 import {
   AgentMessageRow,
   CollapsedRow,
+  ToneRuns,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
   FrameClicks,
@@ -1233,6 +1234,16 @@ function AssistantMessage(props: {
     if (last) return 0
     return 1
   }
+  // An answer and a tool run are two blocks, as Codex parts its history
+  // cells: one blank row between a text segment and the run after it, and
+  // between a run and the text after it.
+  const gapBefore = (index: number) => {
+    const previous = shownSegments()[index - 1]?.segment._tag
+    const current = shownSegments()[index]?.segment._tag
+    if (previous === "text" && current === "tool-call") return 1
+    if (previous === "tool-call" && current === "text") return 1
+    return 0
+  }
   // An open thought leads with its glyph, so it never reads as the answer
   // beside it (both sit at column 2, and fx's grays alone part them); its
   // text hangs at column 4.
@@ -1274,27 +1285,30 @@ function AssistantMessage(props: {
                   </text>
                 ),
                 "tool-call": (segment) => (
-                  <ToolCallGroup
-                    calls={Option.match(run, {
-                      onNone: () => [segment.toolCall],
-                      onSome: (value) => [...value.calls],
-                    })}
-                    reasoning={Option.match(run, {
-                      onNone: () => new Map<string, ReadonlyArray<string>>(),
-                      onSome: (value) => value.reasoning,
-                    })}
-                    closing={Option.match(run, {
-                      onNone: () => [],
-                      onSome: (value) => value.closing,
-                    })}
-                    renderReasoning={reasoningMarkdownBlock}
-                    runOpen={Option.exists(run, (value) => value.open)}
-                    disclosure={props.disclosure}
-                    fullDetail={props.fullDetail}
-                  />
+                  <box flexDirection="column" marginTop={gapBefore(index())}>
+                    <ToolCallGroup
+                      calls={Option.match(run, {
+                        onNone: () => [segment.toolCall],
+                        onSome: (value) => [...value.calls],
+                      })}
+                      reasoning={Option.match(run, {
+                        onNone: () => new Map<string, ReadonlyArray<string>>(),
+                        onSome: (value) => value.reasoning,
+                      })}
+                      closing={Option.match(run, {
+                        onNone: () => [],
+                        onSome: (value) => value.closing,
+                      })}
+                      renderReasoning={reasoningMarkdownBlock}
+                      runOpen={Option.exists(run, (value) => value.open)}
+                      disclosure={props.disclosure}
+                      fullDetail={props.fullDetail}
+                    />
+                  </box>
                 ),
                 text: (segment) => (
                   <markdown
+                    marginTop={gapBefore(index())}
                     syntaxStyle={props.syntaxStyle()}
                     streaming
                     internalBlockMode="top-level"
@@ -1357,7 +1371,7 @@ function ToolCallGroup(props: {
   // surface that draws the header or the rows (the live tail, a history
   // commit) keeps the terminal's last column free.
   const lineWidth = () => dimensions().width - ANSWER_INDENT - FREE_LAST_COLUMN - 2
-  const header = createMemo(() => formatActivityHeader(activity(), lineWidth()))
+  const header = createMemo(() => activityHeaderRuns(activity(), lineWidth()))
   // The transcript view and the full level both open every row.
   const rowsOpen = () => props.fullDetail || props.disclosure === "full"
   // Collapsed draws one line under the header for each failure, so a failure
@@ -1396,10 +1410,12 @@ function ToolCallGroup(props: {
       ),
     )
   }
-  // A cancel is the reader's own act, a warning; a failure is an error.
-  const endingColor = (outcome: ActivityOutcome) => {
-    if (outcome === "cancelled") return theme.warning
-    return theme.error
+  // Hue goes only where the reader must look: a failure is an error, a
+  // cancel (the reader's own act) or a cut a warning; the words stay muted.
+  const toneColor = (tone: ActivityTone) => {
+    if (tone === "failed") return theme.error
+    if (tone === "stopped") return theme.warning
+    return theme.textMuted
   }
   const connector = (index: number, count: number) => {
     if (index === count - 1) return "└"
@@ -1409,38 +1425,43 @@ function ToolCallGroup(props: {
     <Show when={props.calls.length > 0}>
       <box flexDirection="column">
         <Show when={!props.fullDetail}>
-          <text wrapMode="none" truncate style={{ fg: groupColor() }}>
-            {symbol()} {header()}
+          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+            <span style={{ fg: groupColor() }}>{symbol()}</span>{" "}
+            <ToneRuns runs={header()} color={toneColor} />
           </text>
         </Show>
         <For each={failureRows()}>
           {(operation, index) => (
-            <text wrapMode="none" truncate style={{ fg: endingColor(operation.outcome) }}>
-              {connector(index(), failureRows().length)} {formatFailureRow(operation, lineWidth())}
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              {connector(index(), failureRows().length)}{" "}
+              <ToneRuns runs={failureRowRuns(operation, lineWidth())} color={toneColor} />
             </text>
           )}
         </For>
         <For each={toolRows()}>
           {(row, index) => {
             const text = () => formatActivityRow(row, lineWidth())
-            const color = () => {
-              if (row.outcome === "succeeded" || row.outcome === "running") return theme.textMuted
-              return endingColor(row.outcome)
-            }
             return (
               <box flexDirection="column">
-                <text wrapMode="none" truncate style={{ fg: color() }}>
+                <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
                   {connector(index(), toolRows().length)} {text().head}
                   <Show when={Option.getOrUndefined(text().diff)}>
                     {(diff) => (
                       <>
                         <span style={{ fg: theme.success }}> +{diff().added}</span>
-                        <span style={{ fg: color() }}> / </span>
+                        <span style={{ fg: theme.textMuted }}> / </span>
                         <span style={{ fg: theme.error }}>-{diff().removed}</span>
                       </>
                     )}
                   </Show>
-                  {text().tail}
+                  <Show when={Option.getOrUndefined(text().ending)}>
+                    {(ending) => (
+                      <>
+                        {" · "}
+                        <span style={{ fg: toneColor(ending().tone) }}>{ending().text}</span>
+                      </>
+                    )}
+                  </Show>
                 </text>
                 <Show when={Option.getOrUndefined(rowHead(row, index()))}>
                   {(head) => <OutputHeadRows head={head()} width={lineWidth() - 2} />}
@@ -2964,8 +2985,11 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       ),
     )
   })
+  // The reader's surface takes its colour from the terminal's palette, so a
+  // row reaches history only once that read has ended: born with its fill.
+  const { paletteSettled } = useTheme()
   createEffect(() => {
-    if (!ext.loaded() || !props.settled) return
+    if (!ext.loaded() || !props.settled || !paletteSettled()) return
     if (!nativeOutputReady() || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = fingerprints()

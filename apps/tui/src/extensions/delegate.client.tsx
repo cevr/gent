@@ -14,6 +14,7 @@ import {
 import {
   type ActivityCall,
   type ActivityOperation,
+  type ActivityTone,
   activityRows,
   AgentMessageRow,
   ClientContext,
@@ -32,9 +33,12 @@ import {
   plural,
   rendererContribution,
   shortId,
+  type TextRun,
   textWidth,
+  ToneRuns,
   ToolFrame,
   truncate,
+  truncateRuns,
   type ToolInput,
   type ToolRendererProps,
   useTerminalDimensions,
@@ -273,7 +277,7 @@ const completionHead = (
   state: CompletionState,
   details: CompletionDetails,
   options: { readonly width: number; readonly open: boolean },
-): string => {
+): ReadonlyArray<TextRun<HeadTone>> => {
   /** ` · <part>` for a part the line holds; nothing for an empty one. */
   const part = (text: string) =>
     Option.match(nonEmpty(text), { onNone: () => "", onSome: (value) => ` · ${value}` })
@@ -291,8 +295,21 @@ const completionHead = (
   const base = `${name}${id}${failure}`
   if (textWidth(base) > options.width) {
     const room = Math.max(1, options.width - textWidth(`${id}${failure}`))
-    return truncate(`${truncate(name, room)}${id}${failure}`, options.width)
+    return truncateRuns<HeadTone>(
+      [
+        { text: truncate(name, room), tone: "name" },
+        { text: `${id}${failure}`, tone: "muted" },
+      ],
+      options.width,
+    )
   }
+  // The line opens with the name whole; the rest is muted.
+  const named = (line: string): ReadonlyArray<TextRun<HeadTone>> => [
+    { text: name, tone: "name" },
+    ...Option.toArray(
+      Option.map(nonEmpty(line.slice(name.length)), (text) => ({ text, tone: "muted" as const })),
+    ),
+  ]
   const time = Option.map(Option.fromUndefinedOr(details.durationMs), (ms) =>
     formatDuration(ms, "compact"),
   )
@@ -322,14 +339,17 @@ const completionHead = (
     }
   }
   return Option.match(error, {
-    onNone: () => line,
+    onNone: () => named(line),
     onSome: (text) => {
       const room = options.width - textWidth(line) - 3
-      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return line
-      return `${line} · ${truncate(text, room)}`
+      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return named(line)
+      return named(`${line} · ${truncate(text, room)}`)
     },
   })
 }
+
+/** The head's hue: the child's name in the names' colour (Codex draws a nickname in its accent), the rest muted. */
+type HeadTone = "name" | "muted"
 
 /** The answer's lines, with the blank lines at its end dropped. */
 const answerLines = (content: string): ReadonlyArray<string> => {
@@ -362,9 +382,10 @@ function ChildCallRows(props: {
     if (props.open) return calls.flatMap((call) => activityRows([call]))
     return activityRows(calls)
   })
-  const color = (row: ReturnType<typeof activityRows>[number]) => {
-    if (row.outcome === "failed") return theme.error
-    if (row.outcome === "incomplete" || row.outcome === "cancelled") return theme.warning
+  // As a run's rows: only the outcome word takes a hue.
+  const color = (tone: ActivityTone) => {
+    if (tone === "failed") return theme.error
+    if (tone === "stopped") return theme.warning
     return theme.textMuted
   }
   const connector = (index: number) => {
@@ -374,7 +395,10 @@ function ChildCallRows(props: {
   // The connector and its space take two columns.
   const text = (row: ReturnType<typeof activityRows>[number]) => {
     const parts = formatActivityRow(row, props.width - 2)
-    return truncate(`${parts.head}${parts.tail}`, props.width - 2)
+    const runs: Array<TextRun<ActivityTone>> = [{ text: parts.head, tone: "muted" }]
+    for (const ending of Option.toArray(parts.ending))
+      runs.push({ text: " · ", tone: "muted" }, ending)
+    return truncateRuns(runs, props.width - 2)
   }
   return (
     <box flexDirection="column">
@@ -385,8 +409,8 @@ function ChildCallRows(props: {
       </Show>
       <For each={[...rows()]}>
         {(row, index) => (
-          <text style={{ fg: color(row) }} wrapMode="none">
-            {connector(index())} {text(row)}
+          <text style={{ fg: theme.textMuted }} wrapMode="none">
+            {connector(index())} <ToneRuns runs={text(row)} color={color} />
           </text>
         )}
       </For>
@@ -411,6 +435,10 @@ function ChildCompletionRow(
   const width = () => dimensions().width - ROW_INDENT - FREE_LAST_COLUMN
   const head = () =>
     completionHead(state(), props.details, { width: width() - GLYPH_COLUMNS, open: open() })
+  const headColor = (tone: HeadTone) => {
+    if (tone === "name") return theme.info
+    return theme.textMuted
+  }
   const answer = createMemo(() => answerLines(props.content))
   const shownAnswer = () => {
     if (open()) return answer()
@@ -423,7 +451,8 @@ function ChildCompletionRow(
   return (
     <box marginTop={1} paddingLeft={ROW_INDENT} flexDirection="column">
       <text style={{ fg: theme.textMuted }} wrapMode="none">
-        <span style={{ fg: glyph().color }}>{glyph().mark}</span> {head()}
+        <span style={{ fg: glyph().color }}>{glyph().mark}</span>{" "}
+        <ToneRuns runs={head()} color={headColor} />
       </text>
       <Show when={props.disclosure !== "collapsed"}>
         {/* The error tells a failure that will repeat (a sign-in) from a flake. */}

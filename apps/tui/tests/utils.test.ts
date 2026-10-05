@@ -20,6 +20,8 @@ import {
   expandFileRefs,
   fitWidth,
   fileHref,
+  activityHeaderRuns,
+  failureRowRuns,
   formatActivityHeader,
   formatActivityRow,
   formatFailureRow,
@@ -46,6 +48,7 @@ import {
   toolArgSummary,
   truncate,
   truncatePath,
+  truncateRuns,
   truncateStart,
   toolRunFrame,
   workingIconFrame,
@@ -1066,7 +1069,11 @@ describe("activity rows", () => {
         onNone: () => "",
         onSome: ({ added, removed }) => ` +${added} / -${removed}`,
       })
-      return `${text.head}${diff}${text.tail}`
+      const ending = Option.match(text.ending, {
+        onNone: () => "",
+        onSome: ({ text: word }) => ` · ${word}`,
+      })
+      return `${text.head}${diff}${ending}`
     })
 
   test("ops read in past-tense verbs, consecutive ops of one tool folded into one row", () => {
@@ -1496,5 +1503,64 @@ describe("failure rows", () => {
 
   test("a failure with no reason ends with its outcome word", () => {
     expect(formatFailureRow(op("write", "out.json", "failed"))).toBe("Wrote out.json · failed")
+  })
+
+  test("only the outcome word takes a tone: the head and the reason stay muted", () => {
+    expect(failureRowRuns(failure("ls d.ts", "no such file", 2))).toEqual([
+      { text: "Ran ls d.ts", tone: "muted" },
+      { text: " · ", tone: "muted" },
+      { text: "exit 2", tone: "failed" },
+      { text: " · no such file", tone: "muted" },
+    ])
+    expect(failureRowRuns(op("bash", "sleep 9", "cancelled")).at(-1)).toEqual({
+      text: "cancelled",
+      tone: "stopped",
+    })
+  })
+})
+
+describe("line runs", () => {
+  test("a header's failures and cancels take their tones, its work stays muted", () => {
+    const calls = [
+      cell([op("read", "a.ts"), op("read", "b.ts", "failed"), op("bash", "x", "cancelled")]),
+    ]
+    expect(activityHeaderRuns(calls)).toEqual([
+      { text: "Read 2 files · ran 1 command · ", tone: "muted" },
+      { text: "1 failed", tone: "failed" },
+      { text: " · ", tone: "muted" },
+      { text: "1 cancelled", tone: "stopped" },
+    ])
+    expect(
+      activityHeaderRuns(calls)
+        .map((run) => run.text)
+        .join(""),
+    ).toBe(formatActivityHeader(calls))
+  })
+
+  test("runs cut as one line keep their tones, the ellipsis in the run it cuts", () => {
+    const runs = [
+      { text: "» child ", tone: "muted" },
+      { text: "explore", tone: "name" },
+      { text: " · 0e493eaf", tone: "muted" },
+    ] as const
+    expect(truncateRuns(runs, 40)).toEqual(runs)
+    expect(truncateRuns(runs, 12)).toEqual([
+      { text: "» child ", tone: "muted" },
+      { text: "exp…", tone: "name" },
+    ])
+    expect(truncateRuns(runs, 15)).toEqual([
+      { text: "» child ", tone: "muted" },
+      { text: "explor…", tone: "name" },
+    ])
+    expect(truncateRuns(runs, 16)).toEqual([
+      { text: "» child ", tone: "muted" },
+      { text: "explore", tone: "name" },
+      { text: "…", tone: "muted" },
+    ])
+    expect(truncateRuns(runs, 0)).toEqual([])
+    // A wide character is never split: the cut is by columns.
+    expect(truncateRuns([{ text: "日本語のタスク", tone: "name" }], 6)).toEqual([
+      { text: "日本…", tone: "name" },
+    ])
   })
 })
