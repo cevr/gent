@@ -737,7 +737,6 @@ export type DisclosureLevel = "collapsed" | "preview" | "full"
 export interface MessageRowProps {
   readonly content: string
   readonly images: ReadonlyArray<ImagePartProjection>
-  readonly interjection: boolean
   /** The message's `metadata.details`, for the renderer to decode. */
   readonly details: unknown
   /** The transcript's level, so a row folds with `ctrl+o` like every other block. */

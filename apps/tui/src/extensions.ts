@@ -61,8 +61,10 @@ export {
 // ── rendering kit ──
 
 export {
+  AgentMessageRow,
   ChromePanel,
   CollapsedRow,
+  type CollapsedRowProps,
   decoration,
   groupedRows,
   keyHint,

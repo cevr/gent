@@ -12,6 +12,7 @@ import {
   readChildCompletionHeadline,
 } from "@gent/extensions/client"
 import {
+  AgentMessageRow,
   clientContributions,
   defineClientExtension,
   failureReason,
@@ -27,7 +28,6 @@ import {
   truncate,
   type ToolInput,
   type ToolRendererProps,
-  UserRow,
   useTerminalDimensions,
   useTheme,
 } from "@gent/tui/extensions"
@@ -303,7 +303,11 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
         <Show when={shownAnswer().length > 0}>
           <Show
             when={!open()}
-            fallback={<text style={{ fg: theme.text }}>{shownAnswer().join("\n")}</text>}
+            fallback={
+              <box paddingLeft={2}>
+                <text style={{ fg: theme.textMuted }}>{shownAnswer().join("\n")}</text>
+              </box>
+            }
           >
             <box flexDirection="column" paddingLeft={2}>
               <For each={[...shownAnswer()]}>
@@ -335,21 +339,34 @@ export default defineClientExtension(DELEGATE_EXTENSION_ID, {
   setup: Effect.succeed(
     clientContributions(
       rendererContribution(["delegate.start"], (props) => <DelegateStartRow {...props} />),
-      // Details that do not decode draw the plain row.
+      // Details that do not decode draw the raw text, off the reader's rail.
       messageRendererContribution(CHILD_COMPLETION_TYPE, (props) => (
         <Show
           when={Option.getOrUndefined(decodeCompletionDetails(props.details))}
-          fallback={<UserRow {...props} />}
+          fallback={
+            <AgentMessageRow
+              head="child completion"
+              body={props.content}
+              images={props.images}
+              disclosure={props.disclosure}
+            />
+          }
         >
           {(details) => <ChildCompletionRow {...props} details={details()} />}
         </Show>
       )),
       // A child's first message is its task under a frame the child's model
-      // reads; the transcript shows the task, and the frame when expanded.
+      // reads. Its parent wrote it, so it is the `»` row, not the reader's rail;
+      // the transcript shows the task, and the raw view the frame.
       messageRendererContribution(
         CHILD_TASK_TYPE,
         (props) => (
-          <UserRow {...props} header="delegate · task" content={childTaskBody(props.content)} />
+          <AgentMessageRow
+            head="task from parent"
+            body={childTaskBody(props.content)}
+            images={props.images}
+            disclosure={props.disclosure}
+          />
         ),
         { prompt: childTaskBody },
       ),

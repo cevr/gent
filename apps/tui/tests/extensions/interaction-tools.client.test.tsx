@@ -265,16 +265,16 @@ describe("QuestionPane", () => {
 describe("answeredLabel", () => {
   it.live("a narrow row cuts the question first and keeps the answer", () =>
     Effect.sync(() => {
-      expect(answeredLabel(cache.question, "Redis", 116)).toBe(
-        `↳ answered · ${cache.question} → Redis`,
+      expect(answeredLabel(cache.question, "Redis", 114)).toBe(
+        `answered · ${cache.question} → Redis`,
       )
-      const narrow = answeredLabel(cache.question, "Redis, we already run it", 56)
-      expect(narrow).toBe("↳ answered · Which cache bac… → Redis, we already run it")
-      expect(Bun.stringWidth(narrow)).toBeLessThanOrEqual(56)
+      const narrow = answeredLabel(cache.question, "Redis, we already run it", 54)
+      expect(narrow).toBe("answered · Which cache bac… → Redis, we already run it")
+      expect(Bun.stringWidth(narrow)).toBeLessThanOrEqual(54)
       // A long answer is cut too, past a short head of the question.
-      const long = answeredLabel(cache.question, "x".repeat(80), 56)
-      expect(long.startsWith("↳ answered · Which cache…")).toBe(true)
-      expect(Bun.stringWidth(long)).toBeLessThanOrEqual(56)
+      const long = answeredLabel(cache.question, "x".repeat(80), 54)
+      expect(long.startsWith("answered · Which cache…")).toBe(true)
+      expect(Bun.stringWidth(long)).toBeLessThanOrEqual(54)
     }),
   )
 })

@@ -7247,9 +7247,11 @@ describe("debug playground", () => {
             width: 120,
             height: 40,
           })
-          const frame = yield* waitForFrame(
+          const frame = yield* waitForTerminal(
             setup,
-            (text) => text.includes("Review the TUI renderer cleanup"),
+            (text) =>
+              text.includes("Review the TUI renderer cleanup") &&
+              text.includes("✓ explore completed"),
             "seeded transcript",
             5_000,
           )
@@ -7257,6 +7259,13 @@ describe("debug playground", () => {
           expect(frame).toContain("● 5 tools · 2 edit · 1 read · 1 search · 1 command")
           expect(frame).toContain("● 3 tools · 2 children · 1 read")
           expect(frame).toContain("Audit lines up")
+          // The child's report is its own muted row, off the reader's rail.
+          expect(frame).toContain(
+            "  » child explore · 0e493eaf · The double border comes from two surfaces drawing one",
+          )
+          expect(frame).toContain("  ✓ explore completed · 0e493eaf · 6 tools")
+          expect(frame).toContain("┃ Review the TUI renderer cleanup")
+          expect(frame).not.toContain("┃ » ")
         }).pipe(Effect.timeout("15 seconds")),
       ),
     20_000,

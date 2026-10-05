@@ -924,7 +924,7 @@ describe("transcript message rows", () => {
     )
   }
 
-  it.scopedLive("a message from another session names its sender above the text", () =>
+  it.scopedLive("a message from another session is one line that names its sender", () =>
     Effect.gen(function* () {
       const sent: ListMessage = {
         ...userMessage(
@@ -941,9 +941,10 @@ describe("transcript message rows", () => {
       }
       const frame = yield* renderLoaded([sent])
       // A blank line in the name or the body leaves the header strip whole.
-      expect(frame).toContain('» from your parent "auth refactor" · aabbccdd')
-      expect(frame).toContain("Use the v2 token route.")
-      expect(frame).toContain("Then rerun the suite.")
+      expect(frame).toContain("  » parent auth refactor · aabbccdd · Use the v2 token route.")
+      // Collapsed is the head line: the rest of the body waits for ctrl+o.
+      expect(frame).not.toContain("Then rerun the suite.")
+      expect(frame).not.toContain("┃")
       expect(frame).not.toContain("Message from your parent")
       expect(frame).not.toContain("(session 0199aabbccdd)")
       const expandedFrame = yield* renderLoaded([sent], true)
@@ -991,12 +992,12 @@ describe("transcript message rows", () => {
           CHILD_TASK_TYPE,
         )
         const frame = yield* renderLoaded([thread, child])
-        expect(frame).toContain("thread · task")
-        expect(frame).toContain("Tidy the changelog.")
+        // Another session wrote each task: neither draws on the reader's rail.
+        expect(frame).toContain("  » task from session · Tidy the changelog.")
         expect(frame).not.toContain("Thread started by session")
-        expect(frame).toContain("delegate · task")
-        expect(frame).toContain("Fix the csv quoting.")
+        expect(frame).toContain("  » task from parent · Fix the csv quoting.")
         expect(frame).not.toContain("Task from your parent session")
+        expect(frame).not.toContain("┃")
         const expandedFrame = yield* renderLoaded([thread, child], true)
         expect(expandedFrame).toContain("Thread started by session")
         expect(expandedFrame).toContain("Task from your parent session")
@@ -1022,8 +1023,9 @@ describe("transcript message rows", () => {
         },
       }
       const frame = yield* renderLoaded([sent])
-      expect(frame).toContain('» from your child "delegate: Use session.send with…" · ca0cb3e7')
-      expect(frame).toContain("hello from the child")
+      expect(frame).toContain(
+        "  » child delegate: Use session.send with… · ca0cb3e7 · hello from the child",
+      )
       // The status line is for the model; the row already says who is writing.
       expect(frame).not.toContain("not its completion")
     }),
@@ -1052,7 +1054,9 @@ describe("transcript message rows", () => {
       expect(frame).toContain("old question")
       expect(frame).not.toContain("Message from your child")
       // Wide characters count two columns: 15 of them fit before the ellipsis, and the id stays on the line.
-      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · ca0cb3e7`)
+      expect(frame).toContain(
+        `» child ${Array.from(from.name).slice(0, 15).join("")}… · ca0cb3e7 · old question`,
+      )
     }),
   )
 
@@ -1248,6 +1252,195 @@ describe("rows that fold until full detail is on", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("⇄ model changed")
       expect(frame).not.toContain("MODEL-NOTICE-BODY")
+    }),
+  )
+})
+
+/**
+ * Speaker lanes: column 0 and the `┃` rail mean the reader. Whose message it
+ * is comes from typed metadata (the server's client origin, or an older row
+ * with no custom type and no author), never from its text. Everything gent or
+ * another agent wrote starts at column 2 behind its own glyph.
+ */
+describe("speaker lanes", () => {
+  const row = (
+    id: string,
+    content: string,
+    metadata: NonNullable<ListMessage["metadata"]> = {},
+    tag: "regular-message" | "interjection-message" = "regular-message",
+  ): ListMessage => ({
+    ...userMessage(tag, id, content),
+    metadata,
+  })
+  const childFrom = {
+    sessionId: SessionId.make("01a0ca0cb3e7"),
+    name: "explore",
+    relation: "child",
+  } satisfies SessionMessageDetails["from"]
+  const childMessage = row(
+    "child-said",
+    sessionMessageText({ from: childFrom, message: "CHILD-SAYS the loader is fine\nmore" }),
+    {
+      customType: "session-message",
+      extensionId: "@gent/session-tools",
+      details: { from: childFrom },
+    },
+    "interjection-message",
+  )
+  const items: SessionItem[] = [
+    row("typed", "PROMPT-TYPED", { fromClient: true }),
+    row("legacy", "PROMPT-LEGACY"),
+    row("steer", "PROMPT-STEER", { fromClient: true }, "interjection-message"),
+    childMessage,
+    row("child-task", childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting."), {
+      customType: CHILD_TASK_TYPE,
+      extensionId: "@gent/delegate",
+    }),
+    row("thread-task", threadTaskText(SessionId.make("01a0ca0cb3e7"), "Tidy the changelog."), {
+      customType: THREAD_TASK_TYPE,
+      extensionId: "@gent/session-tools",
+    }),
+    row("wake", "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run tests.", {
+      customType: "wake",
+      extensionId: "@gent/wake",
+      details: { outcome: "fired", note: "Run tests." },
+    }),
+    row("goal", "Continue working toward the active goal.", {
+      customType: "goal-context",
+      extensionId: "@gent/goal",
+    }),
+    row("model", "MODEL-NOTICE-BODY", { customType: MODEL_CHANGE_MESSAGE_TYPE }),
+    compactionMessage(),
+    row("answer", "ANSWER-BODY", {
+      customType: "question-answer",
+      extensionId: "@gent/interaction-tools",
+      details: { answers: [{ id: "q1", question: "Cache?", assume: "LRU", answer: "Redis" }] },
+    }),
+    row("merge", "MERGE-BODY", {
+      customType: "btw-merge",
+      extensionId: "@gent/btw",
+      fromClient: true,
+      details: {
+        fork: { sessionId: "fork", branchId: "fork-branch", name: "btw: why?" },
+        fromMessageId: "m-1",
+        replyId: "m-2",
+        turns: 1,
+        question: "Bird?",
+        reply: "Heron.",
+      },
+    }),
+    row("note", "NOTE-BODY", { customType: "note", extensionId: "@user/notes" }),
+  ]
+
+  /** Each kind's first row: its glyph and the column it starts in. */
+  const firstRows = [
+    "┃ PROMPT-TYPED",
+    "┃ PROMPT-LEGACY",
+    "┃ PROMPT-STEER",
+    "  » child explore · ca0cb3e7",
+    "  » task from parent · Fix the csv",
+    "  » task from session · Tidy the",
+    "  ◷ alarm fired",
+    "  ↻ goal continuation",
+    "  ⇄ model changed",
+    "  ⇣ context handoff",
+    "  ↳ answered · Cache? → Redis",
+    "  ↳ merged btw · Bird? → Heron.",
+    "  » @user/notes · note",
+  ]
+
+  const drawLoaded = (width: number, fullDetail = false) =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => <LoadedMessageList items={items} fullDetail={fullDetail} />,
+        { width, height: 120 },
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => !text.includes("loading message renderers") && text.includes("PROMPT-TYPED"),
+        "message renderers",
+      )
+      return { setup, lines: frame.split("\n").map((line) => line.trimEnd()) }
+    })
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`each kind starts with its own glyph in its own lane at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const { lines } = yield* drawLoaded(width)
+        for (const first of firstRows)
+          expect(lines.some((line) => line.startsWith(first.slice(0, width - 3)))).toBe(true)
+        // Only the reader's own messages hold column 0.
+        expect(lines.filter((line) => /^\S/.test(line))).toEqual([
+          "┃ PROMPT-TYPED",
+          "┃ PROMPT-LEGACY",
+          "┃ PROMPT-STEER",
+        ])
+        // A child's message is muted text, not the reader's bold prompt.
+        expect(lines.join("\n")).not.toContain("from your child")
+        expect(lines.every((line) => line.length <= width - 1)).toBe(true)
+      }),
+    )
+  }
+
+  it.scopedLive("a delivered steer draws exactly like a typed prompt", () =>
+    Effect.gen(function* () {
+      const { setup } = yield* drawLoaded(100)
+      const spansOf = (marker: string) =>
+        Option.getOrThrow(
+          Option.fromUndefinedOr(
+            setup
+              .captureSpans()
+              .lines.find((line) => line.spans.some((span) => span.text.includes(marker))),
+          ),
+        ).spans
+      const typed = spansOf("PROMPT-TYPED")
+      const steer = spansOf("PROMPT-STEER")
+      expect(steer.map((span) => span.text.replace("STEER", "TYPED"))).toEqual(
+        typed.map((span) => span.text),
+      )
+      steer.forEach((span, index) => {
+        expect(span.fg.equals(typed[index]?.fg ?? span.bg)).toBe(true)
+        expect(span.attributes).toBe(typed[index]?.attributes ?? -1)
+      })
+    }),
+  )
+
+  it.scopedLive("the full transcript draws another session's raw text off the rail", () =>
+    Effect.gen(function* () {
+      const { lines } = yield* drawLoaded(100, true)
+      expect(lines).toContain("  » @gent/session-tools · session-message")
+      expect(lines).toContain('    Message from your child "explore" (session 01a0ca0cb3e7):')
+      expect(lines).toContain("    CHILD-SAYS the loader is fine")
+      // An older row with no client origin, no custom type and no author is the reader's.
+      expect(lines).toContain("┃ PROMPT-LEGACY")
+      expect(lines.filter((line) => /^\S/.test(line))).toEqual([
+        "┃ PROMPT-TYPED",
+        "┃ PROMPT-LEGACY",
+        "┃ PROMPT-STEER",
+        "┃ MERGE-BODY",
+      ])
+    }),
+  )
+
+  it.scopedLive("a session message whose details do not decode draws its raw text", () =>
+    Effect.gen(function* () {
+      const setup = yield* renderScoped(
+        () => (
+          <LoadedMessageList
+            items={[
+              row("odd", "RAW-SENT-TEXT\nsecond", {
+                customType: "session-message",
+                extensionId: "@gent/session-tools",
+                details: { unrelated: true },
+              }),
+            ]}
+          />
+        ),
+        { width: 60, height: 10 },
+      )
+      const frame = yield* waitForFrame(setup, (text) => text.includes("RAW-SENT"), "the row")
+      expect(frame).toContain("  » session · RAW-SENT-TEXT")
+      expect(frame).not.toContain("┃")
     }),
   )
 })
@@ -5477,7 +5670,12 @@ describe("sticky last prompt", () => {
           ),
           metadata: { customType: BTW_QUESTION_TYPE, extensionId: "@gent/btw" },
         }
-        const setup = yield* mountTranscript(() => [asked, reply("r1", 20)], { streaming: true })
+        // A finished reply pushes the question deep into history, and a
+        // streaming one keeps the turn running: the question is off screen.
+        const setup = yield* mountTranscript(
+          () => [asked, reply("r1", 20), { ...reply("r2", 20), draft: true }],
+          { streaming: true },
+        )
         const frame = yield* waitForFrame(setup, (next) => next.includes("↑ WHY-THIS"), "pinned")
         expect(frame).not.toContain("↑ A side question")
       }).pipe(Effect.timeout("10 seconds")),

@@ -41,6 +41,7 @@ import {
 import { resolveThemeColor, useTheme } from "./theme"
 import { useClient } from "./client"
 import {
+  AgentMessageRow,
   CollapsedRow,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
@@ -531,9 +532,9 @@ export const isMessageItem = Predicate.or(
 const runtimeRows = new Map<string, MessageRenderer>([
   [
     CONTEXT_WINDOW_MESSAGE_TYPE,
-    (props) => <CollapsedRow label={windowLabel(decodeHandoffDetails(props.details))} />,
+    (props) => <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />,
   ],
-  [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow label="⇄ model changed" />],
+  [MODEL_CHANGE_MESSAGE_TYPE, () => <CollapsedRow glyph="⇄" label="model changed" />],
 ])
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
@@ -541,15 +542,37 @@ const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
   handoff.pipe(
     Option.flatMap((value) => Option.fromUndefinedOr(value.summarized)),
     Option.match({
-      onNone: () => "⇣ new context window",
-      onSome: (summarized) =>
-        `⇣ context handoff · ${plural(summarized.count, "message")} summarized`,
+      onNone: () => "new context window",
+      onSome: (summarized) => `context handoff · ${plural(summarized.count, "message")} summarized`,
     }),
   )
 
-function UserMessage(props: MessageRowProps & { customType?: string; fullDetail: boolean }) {
+/**
+ * Whether a user-role message is the reader's own, from its metadata alone:
+ * the server's client origin (typed, or a steer that joined the turn), or a
+ * row stored before that origin existed, which no extension or runtime wrote
+ * (no custom type, no author). Never from its text.
+ */
+const fromReader = (metadata: MessageMetadataInfo = {}): boolean =>
+  metadata.fromClient === true ||
+  (Predicate.isUndefined(metadata.customType) && Predicate.isUndefined(metadata.extensionId))
+
+/**
+ * A user-role message. An extension's renderer draws its custom type, then
+ * the runtime's; full detail (the raw view) draws every message as stored.
+ * Otherwise the lane decides: the reader's message is the rail row, and a
+ * message gent or another agent wrote is the `»` row, headed by who wrote it
+ * and its kind.
+ */
+function UserMessage(
+  props: MessageRowProps & {
+    customType?: string
+    extensionId?: string
+    reader: boolean
+    fullDetail: boolean
+  },
+) {
   const ext = useExtensionUI()
-  /** An extension's renderer first, then the runtime's; full detail draws every message plain. */
   const renderer = () =>
     Option.fromUndefinedOr(props.customType).pipe(
       Option.filter(() => !props.fullDetail),
@@ -564,10 +587,34 @@ function UserMessage(props: MessageRowProps & { customType?: string; fullDetail:
       ),
     )
   const hasContent = () => props.content.length > 0 || props.images.length > 0
+  const author = () =>
+    [props.extensionId, props.customType].filter(Predicate.isNotUndefined).join(" · ")
+  const disclosure = (): DisclosureLevel => {
+    if (props.fullDetail) return "full"
+    return props.disclosure
+  }
 
   return (
     <Show when={hasContent()}>
-      <Show when={Option.getOrUndefined(renderer())} keyed fallback={<UserRow {...props} />}>
+      <Show
+        when={Option.getOrUndefined(renderer())}
+        keyed
+        fallback={
+          <Show
+            when={props.reader}
+            fallback={
+              <AgentMessageRow
+                head={author()}
+                body={props.content}
+                images={props.images}
+                disclosure={disclosure()}
+              />
+            }
+          >
+            <UserRow {...props} />
+          </Show>
+        }
+      >
         {(Row) => <Row {...props} />}
       </Show>
     </Show>
@@ -1478,8 +1525,9 @@ export function MessageList(props: MessageListProps) {
                   <UserMessage
                     content={item.content}
                     images={item.images}
-                    interjection={item._tag === "interjection-message"}
                     customType={item.metadata?.customType}
+                    extensionId={item.metadata?.extensionId}
+                    reader={fromReader(item.metadata)}
                     details={item.metadata?.details}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail === true}

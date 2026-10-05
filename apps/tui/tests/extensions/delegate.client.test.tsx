@@ -5,7 +5,12 @@ import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { onCleanup } from "solid-js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
-import { CHILD_COMPLETION_TYPE } from "@gent/extensions/client"
+import {
+  CHILD_COMPLETION_TYPE,
+  CHILD_TASK_TYPE,
+  childTaskText,
+  DELEGATE_EXTENSION_ID,
+} from "@gent/extensions/client"
 import {
   type AssistantSegment,
   MessageList,
@@ -306,10 +311,32 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.scopedLive("details that do not decode draw the plain row", () =>
+  it.scopedLive("details that do not decode draw the raw text off the reader's rail", () =>
     Effect.gen(function* () {
-      const frame = yield* loadedFrame([completion({ unrelated: true })])
-      expect(frame).toContain("Completion is a turn receipt")
+      const frame = (yield* loadedFrame([completion({ unrelated: true })])).replace(/ +$/gm, "")
+      expect(frame).toContain("  » child completion\n")
+      expect(frame).toContain("    Completion is a turn receipt")
+      expect(frame).not.toContain("┃")
+    }),
+  )
+
+  it.scopedLive("a child's own task draws as its parent's message, off the reader's rail", () =>
+    Effect.gen(function* () {
+      const task: SessionItem = {
+        _tag: "regular-message",
+        id: "child-task",
+        role: "user",
+        content: childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting.\nThen test."),
+        reasoning: "",
+        images: [],
+        createdAt: 1,
+        metadata: { customType: CHILD_TASK_TYPE, extensionId: DELEGATE_EXTENSION_ID },
+      }
+      const frame = (yield* loadedFrame([task])).replace(/ +$/gm, "")
+      expect(frame).toContain("  » task from parent\n")
+      expect(frame).toContain("    Fix the csv quoting.\n    Then test.")
+      expect(frame).not.toContain("Task from your parent session")
+      expect(frame).not.toContain("┃")
     }),
   )
 })
