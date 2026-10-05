@@ -1,4 +1,5 @@
 import {
+  Clock,
   Context,
   Effect,
   Equal,
@@ -494,10 +495,9 @@ export class ConfigWriteError extends Schema.TaggedError<ConfigWriteError>()("Co
  * keeps the version, and a stat inside an in-place save can see the new
  * version over the old bytes; `File.Info` has no ctime, and a ctime ticks
  * with the same clock. So a stamp taken within one tick of its mtime is not
- * proof of the bytes: the extension loader keeps it as racy and reads the
- * bytes (`RACY_STAMP_MILLIS` in `extension-host.ts`).
+ * proof of the bytes (`fileStamp`).
  */
-export const fileVersion = (info: FileSystem.File.Info): string => {
+const fileVersion = (info: FileSystem.File.Info): string => {
   const mtime = Option.match(info.mtime, {
     onNone: () => "",
     onSome: (date) => String(date.getTime()),
@@ -505,6 +505,46 @@ export const fileVersion = (info: FileSystem.File.Info): string => {
   const inode = Option.match(info.ino, { onNone: () => "", onSome: String })
   return `${mtime}:${String(info.size)}:${inode}`
 }
+
+/**
+ * How old a file's mtime must be before its stat stamp is trusted: the
+ * racy-git rule (git's `Documentation/technical/racy-git.adoc`), where an
+ * entry not older than the index that recorded it is compared by content.
+ *
+ * A file's clock ticks coarser than the millisecond of its stamp, and an
+ * in-place save sets the mtime before it copies the bytes. A stat in that
+ * tick can see the new stamp over the old bytes, and a save that ends in the
+ * same tick keeps that stamp. So a stamp whose mtime is within one tick of
+ * the stat is kept as `RACY_STAMP`, which no stat matches, and the bytes
+ * decide. The tick is the coarsest clock a user's files can sit on: the
+ * kernel's coarse clock on Linux before multigrain timestamps (4 ms at
+ * `HZ=250`, 10 ms at `HZ=100`), one second on HFS+ and two on FAT. Two
+ * seconds covers all of them; an mtime in the future (a skewed network
+ * clock) is always racy.
+ */
+const RACY_STAMP_MILLIS = 2_000
+/** A kept stamp no stat matches, so the next look reads the bytes. */
+export const RACY_STAMP = "racy"
+
+/**
+ * A file's stat stamp now (`fileVersion`, or `missing` when it is gone):
+ * `seen` to compare with a kept stamp, and `kept` to keep, which is
+ * `RACY_STAMP` when the mtime is within one tick of the file clock. The
+ * config read cache and the extension loader both keep stamps this way.
+ */
+export const fileStamp = Effect.fn("FileStamp.stat")(function* (
+  fs: FileSystem.FileSystem,
+  file: string,
+) {
+  const now = yield* Clock.currentTimeMillis
+  const info = yield* fs.stat(file).pipe(Effect.option)
+  const seen = Option.match(info, { onNone: () => "missing", onSome: fileVersion })
+  const racy = Option.flatMap(info, (found) => found.mtime).pipe(
+    Option.exists((mtime) => mtime.getTime() > now - RACY_STAMP_MILLIS),
+  )
+  if (racy) return { seen, kept: RACY_STAMP }
+  return { seen, kept: seen }
+})
 
 export class ConfigService extends Context.Service<ConfigService, ConfigServiceService>()(
   "@gent/core/src/runtime/config/ConfigService",
@@ -596,7 +636,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
       // The read of each file, kept while its stat (mtime, size and inode) is
       // the same, so a turn does not read and decode unchanged files. A
-      // changed or new file is read at once; a missing one reads as empty.
+      // changed or new file is read at once; a missing one reads as empty. A
+      // stamp within one tick of the file clock is kept as `RACY_STAMP`, so
+      // the file is read again until its last save ages (`fileStamp`).
       // Only a read is kept: a read that failed (EMFILE, a permission changed
       // and back) is tried again on the next call, since the stat need not
       // change. An entry holds the decode and what the file held (`file`).
@@ -606,17 +648,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         readonly file: ConfigFileRead
       }
       const keptReads = new Map<string, KeptRead>()
-      const fileStamp = (filePath: string) =>
-        fs.stat(filePath).pipe(
-          Effect.map(fileVersion),
-          Effect.orElseSucceed(() => "missing"),
-        )
       /** The file as it is now; fails only when it cannot be read. */
       const readConfigFile = (filePath: string): Effect.Effect<KeptRead, ConfigLoadError> =>
         Effect.gen(function* () {
-          const stamp = yield* fileStamp(filePath)
+          const stamp = yield* fileStamp(fs, filePath)
           const cached = Option.fromUndefinedOr(keptReads.get(filePath))
-          if (Option.isSome(cached) && cached.value.stamp === stamp) return cached.value
+          if (Option.isSome(cached) && cached.value.stamp === stamp.seen) return cached.value
           const text = yield* fs.exists(filePath).pipe(
             Effect.flatMap((exists) => {
               if (exists) return Effect.asSome(fs.readFileString(filePath))
@@ -634,7 +671,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             onNone: () => ConfigFileRead.cases.Missing.make({ path: filePath }),
             onSome: (content) => ConfigFileRead.cases.Read.make({ path: filePath, text: content }),
           })
-          const kept: KeptRead = { stamp, read, file }
+          const kept: KeptRead = { stamp: stamp.kept, read, file }
           keptReads.set(filePath, kept)
           return kept
         })
@@ -648,9 +685,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // and a read that raced a write cannot put the older config back.
       const readUserConfig: Effect.Effect<Result.Result<KeptRead, ConfigLoadError>> = Effect.gen(
         function* () {
-          const stamp = yield* fileStamp(userConfigPath)
+          const { seen } = yield* fileStamp(fs, userConfigPath)
           const cached = Option.fromUndefinedOr(keptReads.get(userConfigPath))
-          if (Option.isSome(cached) && cached.value.stamp === stamp)
+          if (Option.isSome(cached) && cached.value.stamp === seen)
             return Result.succeed(cached.value)
           return yield* SynchronizedRef.modifyEffect(userConfigRef, (current) =>
             Effect.result(readConfigFile(userConfigPath)).pipe(
