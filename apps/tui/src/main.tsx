@@ -111,7 +111,7 @@ const gentFlags = {
   isolate: isolateFlag,
   debug: Flag.Boolean("debug").pipe(
     Flag.withDescription(
-      'Start an in-memory server with a seeded session on the scripted model, to exercise the TUI; a message with "debug tools" plays a multi-step tool turn, one with "debug ask" asks a background question, one with "debug threads" starts two threads, and one with "debug handoff" asks for a handoff',
+      'Start an in-memory server with a seeded session on the scripted model, to exercise the TUI; a message with "debug tools" plays a multi-step tool turn, one with "debug ask" asks a background question, one with "debug threads" starts two threads, one with "debug handoff" asks for a handoff, and one with "debug think" thinks under a reasoning heading',
     ),
     Flag.withDefault(false),
   ),

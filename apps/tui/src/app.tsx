@@ -40,8 +40,14 @@ import {
   DockProvider,
   KEY_HINT_SEPARATOR,
   keyHint,
+  keyHintColors,
+  keyHintRuns,
   KeyHints,
-  keyHintsLine,
+  fitKeyHints,
+  keyHintText,
+  ToneRuns,
+  KeyHintsText,
+  keyHintsWidth,
   useDockPaneOpen,
   useDockSpacer,
   useSpinnerClock,
@@ -549,7 +555,7 @@ export function QueueWidget(props: QueueWidgetProps) {
         </For>
         <text wrapMode="none" style={{ fg: theme.textMuted }}>
           {"  "}
-          {keyHintsLine([KeyHints.restoreQueue], width() - 2)}
+          <KeyHintsText hints={fitKeyHints([KeyHints.restoreQueue], width() - 2)} />
         </text>
       </box>
     </Show>
@@ -598,8 +604,8 @@ function ExtensionWidgets(props: { slot: WidgetSlot }) {
 
 /**
  * The live line: `✻ <phase> (<turn elapsed>) · esc cancel`, its glyph
- * pulsing on the spinner clock. Its blank row above gives way while a docked
- * pane is short.
+ * pulsing on the spinner clock and its key bright. Its blank row above gives
+ * way while a docked pane is short.
  */
 function ActivityRow(props: { label: string; elapsed: number }) {
   const { theme } = useTheme()
@@ -616,11 +622,13 @@ function ActivityRow(props: { label: string; elapsed: number }) {
     if (props.elapsed < 1000) return ""
     return ` (${formatDuration(props.elapsed, "compact")})`
   }
+  const line = () => activityLine(props.label, elapsed(), Math.max(1, dimensions().width - 4))
   return (
     <box height={1} flexShrink={0} paddingLeft={2} marginTop={spacer()} overflow="hidden">
       <text wrapMode="none" style={{ fg: theme.textMuted }}>
-        <span style={{ fg: glyphColor() }}>✻</span>{" "}
-        {activityLine(props.label, elapsed(), Math.max(1, dimensions().width - 4))}
+        <span style={{ fg: glyphColor() }}>✻</span> {line().lead}
+        {KEY_HINT_SEPARATOR}
+        <KeyHintsText hints={line().hints} />
       </text>
     </box>
   )
@@ -686,13 +694,14 @@ export const statusCredentialLabel = (
 
 /**
  * The activity row while a turn runs: what it does, how long it has run, and
- * the way out. Too narrow, the elapsed time goes first, then the label cuts;
- * the way out stays.
+ * the way out: the `lead` before the separator, and the hints after it. Too
+ * narrow, the elapsed time goes first, then the label cuts; the way out stays.
  */
-export const activityLine = (label: string, elapsed: string, width: number): string => {
-  const hint = `${KEY_HINT_SEPARATOR}${keyHintsLine([KeyHints.cancel], width)}`
-  if (textWidth(label + elapsed + hint) <= width) return label + elapsed + hint
-  return truncate(label, Math.max(1, width - textWidth(hint))) + hint
+export const activityLine = (label: string, elapsed: string, width: number) => {
+  const hints = fitKeyHints([KeyHints.cancel], width)
+  const hint = textWidth(KEY_HINT_SEPARATOR) + keyHintsWidth(hints)
+  if (textWidth(label + elapsed) + hint <= width) return { lead: label + elapsed, hints }
+  return { lead: truncate(label, Math.max(1, width - hint)), hints }
 }
 
 /** A reasoning row id; `default` decodes to `None` and clears the override, `auto` routes each turn. */
@@ -852,10 +861,11 @@ export function Session(props: SessionProps) {
     const a = controller.activity()
     const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
-      items.push({
-        text: `transcript · ${keyHintsLine([KeyHints.close], 80)}`,
-        color: theme.textMuted,
-      })
+      const close = KeyHints.close
+      items.push(
+        { text: "transcript", color: theme.textMuted },
+        { text: keyHintText(close), color: theme.textMuted, key: close.key },
+      )
     }
     // One footer line, one owner. An armed key's cue (`ctrl+c again to exit`)
     // comes first: it answers the key just pressed and lasts a second. A
@@ -924,10 +934,8 @@ export function Session(props: SessionProps) {
             <box height={1} flexShrink={0}>
               <text>
                 <span style={{ fg: theme.primary, bold: true }}>gent</span>
-                <span style={{ fg: theme.textMuted }}>
-                  {" "}
-                  · {keyHintsLine([keyHint("ctrl+p", "commands")], 80)}
-                </span>
+                <span style={{ fg: theme.textMuted }}>{KEY_HINT_SEPARATOR}</span>
+                <KeyHintsText hints={[keyHint("ctrl+p", "commands")]} />
               </text>
             </box>
           </Show>
@@ -1123,10 +1131,12 @@ const decodeError = Schema.decodeUnknownOption(Schema.instanceOf(Error))
  * keys, so this screen keeps one way out: ctrl+c or ctrl+d exits. The error
  * goes to the client log with its stack, since the screen shows only the
  * message. It draws outside the theme provider (a throw may have come from
- * there), so it reads the default theme's error color.
+ * there), so it reads the default theme's colors: its error color, and its
+ * key-hint colors for the way out.
  */
 function FatalScreen(props: { readonly error: unknown; readonly mode?: "dark" | "light" }) {
-  const error = resolveTheme(DEFAULT_THEMES.fx, props.mode ?? "dark").error
+  const fallback = resolveTheme(DEFAULT_THEMES.fx, props.mode ?? "dark")
+  const error = fallback.error
   const exit = useExit()
   const client = useClient()
   const cause = decodeError(props.error)
@@ -1153,7 +1163,12 @@ function FatalScreen(props: { readonly error: unknown; readonly mode?: "dark" | 
         <span style={{ fg: error, bold: true }}>Fatal error</span>
       </text>
       <text>{message}</text>
-      <text>{keyHintsLine([KeyHints.exit], 80)}</text>
+      <text>
+        <ToneRuns
+          runs={keyHintRuns([KeyHints.exit])}
+          color={(tone) => keyHintColors(fallback)[tone]}
+        />
+      </text>
     </box>
   )
 }

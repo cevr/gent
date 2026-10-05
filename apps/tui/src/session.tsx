@@ -70,6 +70,7 @@ import {
   extractUnknownMessage,
   formatError,
   formatTokens,
+  latestReasoningHeading,
   type PathPlace,
   runningCallLabel,
   lostRequest,
@@ -150,6 +151,8 @@ export interface StatusRowLabel {
    * cut can shorten it.
    */
   short?: StatusLabelShort
+  /** The key a hint label opens with (`esc` of `esc close`): it draws bright, as in a hint row. */
+  key?: string
 }
 
 /**
@@ -3508,9 +3511,29 @@ export function createSessionController(props: {
       }),
     )
 
+  // What the model works on, as Codex's status header names it: the newest
+  // heading the running turn's reasoning marked (`**Investigating the bug**`),
+  // never its prose. The client sees reasoning only in a step's stored message,
+  // so the heading names the step before the one that thinks now; through a
+  // tool call it stays, as Codex keeps its last summary. A runtime notice
+  // inside the turn (the budget's) is a user message and changes nothing.
+  const reasoningHeading = createMemo(() =>
+    Option.flatMap(controllerState().turn, (turn) =>
+      latestReasoningHeading(
+        feed
+          .items()
+          .filter(
+            (item): item is Message =>
+              isMessageItem(item) && item.role === "assistant" && item.createdAt >= turn.startedAt,
+          )
+          .map((message) => message.reasoning),
+      ),
+    ),
+  )
+
   // The status row reads the label while idle, the live line while a turn
   // runs: an open ask, then the running op, then a retry's wait, then whether
-  // answer text streams.
+  // answer text streams, then the reasoning's heading.
   const phaseLabel = createMemo(() => {
     const nextActivity = activity()
     switch (nextActivity.phase) {
@@ -3526,7 +3549,7 @@ export function createSessionController(props: {
           onSome: retryPhase,
           onNone: () => {
             if (answering()) return "Generating"
-            return "Thinking"
+            return Option.getOrElse(reasoningHeading(), () => "Thinking")
           },
         })
     }

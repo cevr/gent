@@ -22,7 +22,6 @@ import {
   NativeTranscript,
   promptOnScreen,
   readerPrompt,
-  reasoningMarkdown,
   type AssistantSegment,
   type RetryOutcome,
   type SessionEvent,
@@ -152,63 +151,6 @@ describe("split footer height", () => {
       expect(splitFooterHeight(1, 10)).toBe(1)
       expect(splitFooterHeight(2, 10)).toBe(1)
       expect(splitFooterHeight(3, 10)).toBe(1)
-    }),
-  )
-})
-
-// ── reasoning text ──────────────────────────────────────────────────────────
-
-/**
- * Reasoning summaries must read as separate lines.
- *
- * A model emits reasoning as a run of summaries, each its own bold markdown
- * heading, and `messagePartsReasoning` joins the parts with an empty string.
- * `reasoningMarkdown` splits the run into paragraphs, so the markdown element
- * draws each heading on its own line rather than one line with the asterisks
- * printed, as in:
- *
- *     **Verifying final test output****Refactoring LedgerStore.list…**
- */
-
-describe("reasoning text", () => {
-  it.effect("colliding summaries are split onto their own paragraphs", () =>
-    Effect.sync(() => {
-      const collided = "**Verifying final test output and diff summary****Refactoring LedgerStore**"
-      expect(reasoningMarkdown(collided)).toBe(
-        "**Verifying final test output and diff summary**\n\n**Refactoring LedgerStore**",
-      )
-    }),
-  )
-
-  it.effect("a run of three summaries keeps every one", () =>
-    Effect.sync(() => {
-      const collided = "**One****Two****Three**"
-      expect(reasoningMarkdown(collided)).toBe("**One**\n\n**Two**\n\n**Three**")
-    }),
-  )
-
-  it.effect("summaries already separated are left alone", () =>
-    Effect.sync(() => {
-      const spaced = "**One**\n\n**Two**"
-      expect(reasoningMarkdown(spaced)).toBe(spaced)
-    }),
-  )
-
-  it.effect("a single summary keeps its emphasis for markdown to render", () =>
-    Effect.sync(() => {
-      expect(reasoningMarkdown("**Only one**")).toBe("**Only one**")
-    }),
-  )
-
-  it.effect("plain reasoning without emphasis passes through", () =>
-    Effect.sync(() => {
-      expect(reasoningMarkdown("thinking about the problem")).toBe("thinking about the problem")
-    }),
-  )
-
-  it.effect("empty reasoning stays empty", () =>
-    Effect.sync(() => {
-      expect(reasoningMarkdown("")).toBe("")
     }),
   )
 })

@@ -53,6 +53,7 @@ export {
   listModelCatalog,
   modelCatalogFromBodies,
   multiToolCallStep,
+  reasoningDeltaPart,
   resolveDriverModel,
   textDeltaPart,
   textStep,

@@ -150,16 +150,31 @@ palette dock inside the composer after it; the model, effort, branch, fork,
 prompt-search and sign-in panes and the extension panes dock after the
 composer. The status row never moves when a pane opens. Every pane's key-hint
 row is data: `PickerFrame` takes `keys` and draws them in one vocabulary
-(`KeyHints` and `keyHintsLine` in `ui.tsx`, also exported to client
-extensions): lowercase keys, one `·` separator, Enter `select` on a row and
-`submit` on typed text, Esc `close` on a pane and `back` on a sub-screen. A
-narrow row drops the move hint first, then takes each hint's short verb from
-the right (`keyHint(key, verb, short)`: `/revert` reads `enter all` for `enter
-files + conversation`), then drops hints from the right, and keeps the way out. An ask's footer uses the same line.
+(`keyHint` and `KeyHints` in `ui.tsx`, also exported to client extensions):
+lowercase keys, one `·` separator, Enter `select` on a row and `submit` on
+typed text, Esc `close` on a pane and `back` on a sub-screen. A narrow row
+drops the move hint first, then takes each hint's short verb from the right
+(`keyHint(key, verb, short)`: `/revert` reads `enter all` for `enter files +
+conversation`), then drops hints from the right, and keeps the way out
+(`fitKeyHints`). `KeyHintsText` draws what is kept as Codex does: each key
+bright (`theme.text`), its verb and the separators muted (`theme.textMuted`),
+both from `keyHintColors`, the one owner of those colors. It draws them as tone
+runs (`TextRun` and `ToneRuns`), as every line drawn in parts does. Every hint row draws
+through it: a pane's, an ask's footer, the live line's `esc cancel`, the queue's
+`alt+up edit`, the empty state's `ctrl+p commands`. A status-row label that is
+a hint (`esc close` beside `transcript`) names its key (`StatusRowLabel.key`)
+and `StatusRow` draws that key bright too.
 
 The live line (`ActivityRow` in `app.tsx`) reads
 `✻ <phase> (<elapsed>) · esc cancel`; the `✻` pulses on the spinner clock.
-The phase is `Thinking` until answer text streams, then `Generating`; the
+The phase is `Thinking` until answer text streams, then `Generating`. Once a
+step of the running turn stored reasoning with a heading, the phase names the
+newest one, as Codex's status header does: a summary whose first line is bold
+(`**Investigating the bug**`, with any text after the bold) or a markdown
+heading (`latestReasoningHeading` in `utils.ts`). Reasoning prose never reaches
+the line. The client sees reasoning only in a step's stored message, so the
+heading names the last step that ended and stays through its tool calls; a
+retry's countdown takes the line while it waits. The phase is the
 running call's words while one runs (a `cell` reads in its source's verbs,
 `Reading 3 files`, never its code: `runningCallLabel` in `utils.ts`); and
 `Waiting for your answer` while the turn waits on an ask. The count runs from

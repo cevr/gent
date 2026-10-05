@@ -841,6 +841,75 @@ export function truncatePath(path: string, maxLen = 40): string {
   return "…/" + result
 }
 
+// ── reasoning text ──────────────────────────────────────────────────────────
+
+/**
+ * Reasoning summaries, prepared for the markdown renderer.
+ *
+ * A model emits reasoning as a run of summaries, each its own bold markdown
+ * heading, and `messagePartsReasoning` joins the parts with an empty string:
+ *
+ *     **Verifying final test output****Refactoring LedgerStore.list…**
+ *
+ * The run is split back into summaries and joined with a blank line, the
+ * paragraph break markdown needs to draw each summary as its own line.
+ */
+
+/** A bold span that ends where the next one begins, with no separator between. */
+const collidingSummaries = /\*\*(?=\*\*)/g
+
+export const reasoningMarkdown = (reasoning: string): string => {
+  if (reasoning.length === 0) return ""
+  return reasoning
+    .replace(collidingSummaries, "**\n\n")
+    .split("\n\n")
+    .map((summary) => summary.trim())
+    .filter((summary) => summary.length > 0)
+    .join("\n\n")
+}
+
+/** The summaries of a reasoning run, oldest first: one paragraph each. */
+export const reasoningSummaries = (reasoning: string): ReadonlyArray<string> =>
+  reasoningMarkdown(reasoning)
+    .split("\n\n")
+    .filter((summary) => summary.length > 0)
+
+const nonEmpty = (text: string) => text.length > 0
+
+/**
+ * A summary's heading: its first line, when the model marks it as one. A
+ * markdown heading (`## Planning`) loses its marks. A line that opens in bold
+ * reads as Codex reads it, the bold text and what follows it on the line
+ * (`**Checking tests**: running suite` reads `Checking tests: running
+ * suite`). A first line in plain prose is the reasoning itself: `None`.
+ */
+export const summaryHeading = (summary: string): Option.Option<string> => {
+  const first = (summary.split("\n")[0] ?? "").trim()
+  const marked = Option.fromNullishOr(/^#+\s+(.*)$/.exec(first))
+  if (Option.isSome(marked)) return Option.liftPredicate((marked.value[1] ?? "").trim(), nonEmpty)
+  if (!first.startsWith("**")) return Option.none()
+  const close = first.indexOf("**", 2)
+  if (close < 0) return Option.none()
+  return Option.liftPredicate(`${first.slice(2, close)}${first.slice(close + 2)}`.trim(), nonEmpty)
+}
+
+/**
+ * The newest heading in a run of reasoning texts, oldest first: what the live
+ * line names while the model thinks (Codex's status header). `None` when no
+ * summary carries one, so raw reasoning never reaches the line.
+ */
+export const latestReasoningHeading = (
+  reasonings: ReadonlyArray<string>,
+): Option.Option<string> => {
+  for (const reasoning of reasonings.toReversed()) {
+    for (const summary of reasoningSummaries(reasoning).toReversed()) {
+      const heading = summaryHeading(summary)
+      if (Option.isSome(heading)) return heading
+    }
+  }
+  return Option.none()
+}
+
 // ── RLM activity summary ──
 // The collapsed transcript group describes what the cell did, not that a tool ran.
 

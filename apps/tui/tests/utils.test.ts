@@ -40,7 +40,10 @@ import {
   formatUsageStats,
   headGraphemes,
   displayPath,
+  latestReasoningHeading,
+  reasoningMarkdown,
   summaryAfterSubject,
+  summaryHeading,
   previewOutput,
   toolArgSummary,
   truncate,
@@ -804,6 +807,79 @@ describe("truncatePath", () => {
     expect(result.startsWith("…/")).toBe(true)
     expect(result.endsWith("说明.md")).toBe(true)
     expect(textWidth(result)).toBeLessThanOrEqual(22) // +2 for "…/"
+  })
+})
+
+// ── reasoning text ──────────────────────────────────────────────────────────
+
+/**
+ * Reasoning summaries must read as separate lines.
+ *
+ * A model emits reasoning as a run of summaries, each its own bold markdown
+ * heading, and `messagePartsReasoning` joins the parts with an empty string.
+ * `reasoningMarkdown` splits the run into paragraphs, so the markdown element
+ * draws each heading on its own line rather than one line with the asterisks
+ * printed, as in:
+ *
+ *     **Verifying final test output****Refactoring LedgerStore.list…**
+ */
+describe("reasoning text", () => {
+  test("colliding summaries are split onto their own paragraphs", () => {
+    const collided = "**Verifying final test output and diff summary****Refactoring LedgerStore**"
+    expect(reasoningMarkdown(collided)).toBe(
+      "**Verifying final test output and diff summary**\n\n**Refactoring LedgerStore**",
+    )
+  })
+
+  test("a run of three summaries keeps every one", () => {
+    expect(reasoningMarkdown("**One****Two****Three**")).toBe("**One**\n\n**Two**\n\n**Three**")
+  })
+
+  test("summaries already separated are left alone", () => {
+    const spaced = "**One**\n\n**Two**"
+    expect(reasoningMarkdown(spaced)).toBe(spaced)
+  })
+
+  test("a single summary keeps its emphasis for markdown to render", () => {
+    expect(reasoningMarkdown("**Only one**")).toBe("**Only one**")
+  })
+
+  test("plain reasoning without emphasis passes through", () => {
+    expect(reasoningMarkdown("thinking about the problem")).toBe("thinking about the problem")
+  })
+
+  test("empty reasoning stays empty", () => {
+    expect(reasoningMarkdown("")).toBe("")
+  })
+
+  // The live line names what the model works on as Codex's status header does:
+  // a heading the model marked, never its prose.
+  test("a heading is a first line the model marked: bold, or a markdown heading", () => {
+    expect(summaryHeading("**Investigating rendering code**\nThe chrome draws twice.")).toEqual(
+      Option.some("Investigating rendering code"),
+    )
+    expect(summaryHeading("**Checking tests**: running suite")).toEqual(
+      Option.some("Checking tests: running suite"),
+    )
+    expect(summaryHeading("## Planning the edit")).toEqual(Option.some("Planning the edit"))
+    expect(summaryHeading("Compare the two chrome paths.")).toEqual(Option.none())
+    expect(summaryHeading("**Unclosed heading")).toEqual(Option.none())
+    expect(summaryHeading("****")).toEqual(Option.none())
+  })
+
+  test("the newest heading wins, over every summary and every step", () => {
+    expect(
+      latestReasoningHeading([
+        "**Reading the files**\n\nOpen a.ts.",
+        "**Verifying output****Refactoring the store**",
+      ]),
+    ).toEqual(Option.some("Refactoring the store"))
+    // A newer summary with no heading keeps the last heading.
+    expect(
+      latestReasoningHeading(["**Reading the files**", "Then compare them line by line."]),
+    ).toEqual(Option.some("Reading the files"))
+    expect(latestReasoningHeading(["Plain prose only.", ""])).toEqual(Option.none())
+    expect(latestReasoningHeading([])).toEqual(Option.none())
   })
 })
 

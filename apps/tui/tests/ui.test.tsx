@@ -21,7 +21,7 @@ import {
   decoration,
   groupedRows,
   keyHint,
-  keyHintsLine,
+  fitKeyHints,
   KeyHints,
   pickerHeight,
   PickerFrame,
@@ -947,15 +947,20 @@ describe("picker height rule", () => {
 
 describe("key hints", () => {
   const keys = [KeyHints.move, KeyHints.select, KeyHints.delete, KeyHints.close]
+  /** The hints a row of `width` columns keeps, as the reader reads them. */
+  const line = (hints: ReadonlyArray<ReturnType<typeof keyHint>>, width: number) =>
+    fitKeyHints(hints, width)
+      .map((hint) => `${hint.key} ${hint.verb}`)
+      .join(" · ")
 
   test("one spelling: lowercase keys joined by one separator", () => {
-    expect(keyHintsLine(keys, 80)).toBe("↑↓ move · enter select · ctrl+x delete · esc close")
+    expect(line(keys, 80)).toBe("↑↓ move · enter select · ctrl+x delete · esc close")
   })
 
   test("a narrow row drops the move hint first, then from the right, and keeps the way out", () => {
-    expect(keyHintsLine(keys, 40)).toBe("enter select · ctrl+x delete · esc close")
-    expect(keyHintsLine(keys, 26)).toBe("enter select · esc close")
-    expect(keyHintsLine(keys, 4)).toBe("esc close")
+    expect(line(keys, 40)).toBe("enter select · ctrl+x delete · esc close")
+    expect(line(keys, 26)).toBe("enter select · esc close")
+    expect(line(keys, 4)).toBe("esc close")
   })
 
   test("a short verb comes before a dropped key: the move hint goes, then verbs shorten from the right", () => {
@@ -965,10 +970,70 @@ describe("key hints", () => {
       keyHint("f", "files only"),
       KeyHints.close,
     ]
-    expect(keyHintsLine(own, 60)).toBe("enter files + conversation · f files only · esc close")
-    expect(keyHintsLine(own, 40)).toBe("enter all · f files only · esc close")
-    expect(keyHintsLine(own, 30)).toBe("enter all · esc close")
+    expect(line(own, 60)).toBe("enter files + conversation · f files only · esc close")
+    expect(line(own, 40)).toBe("enter all · f files only · esc close")
+    expect(line(own, 30)).toBe("enter all · esc close")
   })
+
+  // Codex's status line: the key a reader looks for draws bright, what it does
+  // muted, so `esc` reads at a glance in a row of gray.
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(
+      `a pane's hint row draws each key bright and its verb muted at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+          const setup = yield* renderScoped(
+            () => {
+              colors = Option.some(useTheme().theme)
+              return (
+                <PickerFrame title="TITLE" keys={keys} error={Option.none()}>
+                  <SelectList
+                    id="hint-colors"
+                    open={true}
+                    rows={() => [
+                      selectable("BODY", (_selected, id) => (
+                        <box id={id}>
+                          <text>BODY</text>
+                        </box>
+                      )),
+                    ]}
+                    rowKey={(label) => label}
+                    onSelect={() => {}}
+                    onDismiss={() => {}}
+                  />
+                </PickerFrame>
+              )
+            },
+            { width, height: 20 },
+          )
+          yield* waitForFrame(setup, (frame) => frame.includes("esc close"), "the hint row")
+          const theme = Option.getOrThrow(colors)
+          const spans = (
+            setup
+              .captureSpans()
+              .lines.find((row) => row.spans.some((span) => span.text.includes("close")))?.spans ??
+            []
+          ).filter((span) => span.text.trim().length > 0)
+          const row = spans.map((span) => span.text).join("")
+          const shown = row
+            .trim()
+            .split(" · ")
+            .map((hint) => hint.split(" ")[0] ?? "")
+          // The way out stays at every width.
+          expect(shown.at(-1)).toBe("esc")
+          const bright = spans.filter((span) => span.fg.equals(theme.text))
+          expect(bright.map((span) => span.text.trim())).toEqual(shown)
+          // Every other cell, the verbs and the separators, is the muted gray.
+          expect(
+            spans
+              .filter((span) => !span.fg.equals(theme.text))
+              .every((span) => span.fg.equals(theme.textMuted)),
+          ).toBe(true)
+          expect(bright.length).toBeGreaterThan(0)
+        }),
+    )
+  }
 })
 
 describe("docked panes", () => {

@@ -42,6 +42,8 @@ import {
   ModelId,
   ProviderId,
   Message as StoredMessage,
+  MODEL_ATTEMPTS_MESSAGE_TYPE,
+  type ModelAttempts,
   Session,
   SessionId,
   ToolCallId,
@@ -61,8 +63,10 @@ import {
   type ExtensionStatusScope,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  reasoningDeltaPart,
   testAgent,
   textStep,
+  toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
@@ -104,6 +108,7 @@ import {
   ExtensionHost,
   ExtensionId,
   ProviderAuthError,
+  tool,
 } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import {
@@ -116,7 +121,7 @@ import {
 } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { useWorkspace } from "../src/workspace"
-import { useTheme } from "../src/theme"
+import { DEFAULT_THEMES, resolveTheme, useTheme } from "../src/theme"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
@@ -556,22 +561,44 @@ const mountApp = (
     const { client, replies, app, ...render } = options
     let ctx = Option.none<ClientContextValue>()
     let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+    let colors = Option.none<ThemeColors>()
     const setup = yield* renderScoped(
-      () => (
-        <>
-          <App {...app} />
-          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
-          <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-        </>
-      ),
+      () => {
+        colors = Option.some(useTheme().theme)
+        return (
+          <>
+            <App {...app} />
+            <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+          </>
+        )
+      },
       { ...render, client: createMockClient(client, replies) },
     )
     return {
       setup,
       client: yield* requireClient(ctx),
       ext: yield* requireProbe(ext, "extension UI"),
+      theme: yield* requireProbe(colors, "theme"),
     }
   })
+
+type ThemeColors = ReturnType<typeof useTheme>["theme"]
+
+/** The drawn spans of the first row that holds `marker`, blank spans left out. */
+const rowSpans = (setup: TestSetup, marker: string) =>
+  (
+    setup.captureSpans().lines.find((line) =>
+      line.spans
+        .map((span) => span.text)
+        .join("")
+        .includes(marker),
+    )?.spans ?? []
+  ).filter((span) => span.text.trim().length > 0)
+
+/** The words of a row drawn in `color`, each span trimmed. */
+const wordsIn = (spans: ReturnType<typeof rowSpans>, color: ThemeColors["text"]) =>
+  spans.filter((span) => span.fg.equals(color)).map((span) => span.text.trim())
 
 /**
  * Counts the renderer teardowns the app performs in place of them, so a test
@@ -760,7 +787,7 @@ const mountIdleSession = (
 ) =>
   Effect.gen(function* () {
     const sent: Array<string> = []
-    const { setup } = yield* mountApp({
+    const { setup, theme } = yield* mountApp({
       client: { message: recordSends(sent) },
       runtime,
       ...terminal,
@@ -770,6 +797,7 @@ const mountIdleSession = (
     const { shutdowns, destroy } = yield* countShutdowns(setup)
     return {
       setup,
+      theme,
       shutdowns,
       sent: (): ReadonlyArray<string> => sent,
       /** Tears the view down, as the harness does after the test. */
@@ -1648,7 +1676,13 @@ describe("App session view and fatal screen", () => {
         (current) => current.includes("Fatal error"),
         "fatal",
       )
-      expect(frame).toContain("ctrl+c")
+      expect(frame).toContain("ctrl+c exit")
+      // Outside the theme provider the way out still reads as a hint: the
+      // default theme's key color, then its muted verb.
+      const fallback = resolveTheme(DEFAULT_THEMES.fx, "dark")
+      const hint = rowSpans(setup, "ctrl+c exit")
+      expect(wordsIn(hint, fallback.text)).toEqual(["ctrl+c"])
+      expect(wordsIn(hint, fallback.textMuted)).toEqual(["exit"])
       expect(logged).toContain("app.fatal")
       setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(setup, () => shutdowns() === 1, "exit")
@@ -2034,12 +2068,19 @@ describe("App status and activity rows", () => {
     Effect.gen(function* () {
       const view = yield* mountIdleSession(createMockRuntime(), { kittyKeyboard: true })
       yield* waitForFrame(view.setup, (frame) => frame.includes("gent · ctrl+p commands"), "empty")
+      // The key draws bright, its verb muted, as in every hint row.
+      const empty = rowSpans(view.setup, "ctrl+p commands")
+      expect(wordsIn(empty, view.theme.text)).toEqual(["ctrl+p"])
+      expect(wordsIn(empty, view.theme.textMuted).join(" ")).toContain("commands")
       view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
       yield* waitForFrame(
         view.setup,
         (frame) => frame.includes("transcript · esc close"),
         "transcript",
       )
+      const label = rowSpans(view.setup, "transcript · esc close")
+      expect(wordsIn(label, view.theme.text)).toContain("esc")
+      expect(wordsIn(label, view.theme.textMuted).join(" ")).toContain("close")
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive("ctrl+j starts a new line under the kitty keyboard protocol", () =>
@@ -2149,9 +2190,13 @@ describe("App status and activity rows", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
   test("a narrow activity row drops the elapsed time first, then cuts the label, and keeps the way out", () => {
-    expect(activityLine("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
-    expect(activityLine("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
-    expect(activityLine("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
+    const text = (label: string, elapsed: string, width: number) => {
+      const line = activityLine(label, elapsed, width)
+      return [line.lead, ...line.hints.map((hint) => `${hint.key} ${hint.verb}`)].join(" · ")
+    }
+    expect(text("Generating", " (12s)", 40)).toBe("Generating (12s) · esc cancel")
+    expect(text("Generating", " (12s)", 24)).toBe("Generating · esc cancel")
+    expect(text("read(src/very/long/path.ts)", " (3s)", 20)).toBe("read(s… · esc cancel")
   })
   // Two catalogs can share a model name; the row says which provider runs,
   // and bills, the next turn.
@@ -6752,6 +6797,10 @@ describe("TUI renderer surfaces", () => {
         const drawn = (row?.spans ?? []).filter((span) => span.text.trim().length > 0)
         expect(drawn.length).toBeGreaterThan(0)
         expect(drawn.every((span) => span.fg.equals(theme.textMuted))).toBe(true)
+        // The way back to the draft: its key bright, its verb muted.
+        const hint = rowSpans(setup, "alt+up edit")
+        expect(wordsIn(hint, theme.text)).toEqual(["alt+up"])
+        expect(wordsIn(hint, theme.textMuted)).toEqual(["edit"])
       }
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -6982,6 +7031,294 @@ describe("TUI renderer surfaces", () => {
         expect(answering).not.toContain("Retr")
       }).pipe(Effect.timeout("10 seconds")),
   )
+
+  // ── the live line's reasoning heading ──
+  // Codex's status indicator names what the model works on: the newest
+  // heading of its reasoning (`**Investigating rendering code**`), never the
+  // reasoning itself, and `Thinking` until a heading arrives.
+
+  /**
+   * A turn that started at 100 on a test clock that reads 0, so the live line
+   * shows no count. `event` feeds it live events; `attempts` is the turn's
+   * model-call receipt, which the status row reads.
+   */
+  const mountLiveLine = (width: number, attempts: Option.Option<ModelAttempts> = Option.none()) =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
+      const sessionId = SessionId.make("session-live-line")
+      const branchId = BranchId.make("branch-live-line")
+      const running = {
+        _tag: "Running" satisfies "Running",
+        startedAtMs: 100,
+        queue: emptyQueueSnapshot(),
+      }
+      const events = yield* Queue.unbounded<EventEnvelope>()
+      const view = yield* mountApp({
+        runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
+        width,
+        height: 24,
+        client: {
+          session: {
+            getSnapshot: () =>
+              Effect.succeed({
+                sessionId,
+                branchId,
+                messages: [],
+                lastEventId: nullValue,
+                reasoningLevel: absent,
+                agent: AgentName.make("main"),
+                runtime: running,
+                metrics: {
+                  turns: 1,
+                  durationMs: 0,
+                  costUsd: 0,
+                  lastInputTokens: 0,
+                  ...Option.match(attempts, {
+                    onNone: () => ({}),
+                    onSome: (turnModelAttempts) => ({ turnModelAttempts }),
+                  }),
+                },
+              }),
+            watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+            events: () => Stream.fromQueue(events),
+          },
+        },
+        initialSession: sessionNamed(sessionId, branchId, "Live line"),
+      })
+      let next = 0
+      const event = (agentEvent: AgentEvent) => {
+        next += 1
+        return Queue.offer(
+          events,
+          EventEnvelope.make({ id: EventId.make(next), createdAt: 100 + next, event: agentEvent }),
+        )
+      }
+      yield* event(
+        AgentEvent.cases.StreamSynchronized.make({
+          sessionId,
+          branchId,
+          lastEventId: EventId.make(0),
+        }),
+      )
+      /** A step's stored message, stamped at `at`: its reasoning, then the text `TEXT-<id>`. */
+      const step = (id: string, reasoning: string, at = 150) =>
+        event(
+          AgentEvent.cases.MessageReceived.make({
+            message: StoredMessage.cases.regular.make({
+              id: MessageId.make(id),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [
+                Prompt.reasoningPart({ text: reasoning }),
+                Prompt.textPart({ text: `TEXT-${id}` }),
+              ],
+              createdAt: dateFromMillis(at),
+            }),
+          }),
+        )
+      /** The turn's model-call line, as the turn stores it. */
+      const budgetLine = (id: string, used: number, limit: number) =>
+        event(
+          AgentEvent.cases.MessageReceived.make({
+            message: StoredMessage.cases.regular.make({
+              id: MessageId.make(id),
+              sessionId,
+              branchId,
+              role: "user",
+              parts: [Prompt.textPart({ text: `BUDGET-BODY ${used}/${limit}` })],
+              createdAt: dateFromMillis(160),
+              metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used, limit } },
+            }),
+          }),
+        )
+      const liveLine = (frame: string) =>
+        (frame.split("\n").find((line) => line.includes("✻ ")) ?? "").trimEnd()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("✻ Thinking ·"), "the turn")
+      return { ...view, sessionId, branchId, event, step, budgetLine, liveLine }
+    })
+
+  const heading = "Investigating rendering code"
+  const headed = `**${heading}**\n\nCompare the RAW-THOUGHT chrome paths.`
+
+  /** The live line names `label` whole where it fits, and always ends with its way out. */
+  const expectLiveLine = (line: string, label: string, width: number) => {
+    expect(line.endsWith(" · esc cancel")).toBe(true)
+    expect(line.length).toBeLessThanOrEqual(width)
+    if (width >= 60) expect(line).toBe(`  ✻ ${label} · esc cancel`)
+    else expect(line.startsWith(`  ✻ ${label.slice(0, 12)}`)).toBe(true)
+  }
+
+  for (const width of [100, 60, 40]) {
+    it.scopedLive(`the live line names the newest reasoning heading at ${width} columns`, () =>
+      Effect.gen(function* () {
+        const view = yield* mountLiveLine(width)
+        yield* view.step("step-1", "**Reading the files**\n\nOpen a.ts first.")
+        yield* view.step("step-2", headed, 151)
+        const frame = yield* waitForFrame(
+          view.setup,
+          (next) => view.liveLine(next).includes("Investigating"),
+          "the heading",
+        )
+        expectLiveLine(view.liveLine(frame), heading, width)
+        // The reasoning itself never reaches the live line.
+        expect(view.liveLine(frame)).not.toContain("RAW-THOUGHT")
+        // The key is bright and the rest muted, as in every hint row.
+        const spans = rowSpans(view.setup, "esc cancel")
+        expect(wordsIn(spans, view.theme.text).filter((word) => word !== "✻")).toEqual(["esc"])
+        expect(wordsIn(spans, view.theme.textMuted).join(" ")).toContain("cancel")
+        expect(wordsIn(spans, view.theme.textMuted).join(" ")).toContain("Investigating")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+
+    it.scopedLive(
+      `reasoning with no heading leaves the live line at Thinking at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const view = yield* mountLiveLine(width)
+          yield* view.step("step-plain", "Compare the RAW-THOUGHT chrome paths.\nThen read a.ts.")
+          // A heading from before the turn started is the last turn's.
+          yield* view.step("step-old", "**An earlier turn's heading**", 50)
+          const frame = yield* waitForFrame(
+            view.setup,
+            (next) => next.includes("TEXT-step-plain") && next.includes("TEXT-step-old"),
+            "both steps",
+          )
+          expectLiveLine(view.liveLine(frame), "Thinking", width)
+          expect(view.liveLine(frame)).not.toContain("RAW-THOUGHT")
+          expect(view.liveLine(frame)).not.toContain("earlier turn")
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+
+    it.scopedLive(
+      `a retry's countdown takes the live line, then the heading comes back at ${width} columns`,
+      () =>
+        Effect.gen(function* () {
+          const view = yield* mountLiveLine(width)
+          yield* view.step("step-1", headed)
+          yield* waitForFrame(
+            view.setup,
+            (next) => view.liveLine(next).includes("Investigating"),
+            "the heading",
+          )
+          yield* view.event(
+            AgentEvent.cases.ProviderRetrying.make({
+              sessionId: view.sessionId,
+              branchId: view.branchId,
+              attempt: 1,
+              maxAttempts: 3,
+              delayMs: 3_000,
+              error: "Rate limit exceeded",
+            }),
+          )
+          const retrying = yield* waitForFrame(
+            view.setup,
+            (next) => view.liveLine(next).includes("✻ Retrying in 3s"),
+            "the retry",
+          )
+          expect(view.liveLine(retrying).endsWith(" · esc cancel")).toBe(true)
+          expect(view.liveLine(retrying)).not.toContain("Investigating")
+          // The retry's request goes out: the step thinks again under the same heading.
+          yield* view.event(
+            AgentEvent.cases.StreamStarted.make({
+              sessionId: view.sessionId,
+              branchId: view.branchId,
+            }),
+          )
+          const back = yield* waitForFrame(
+            view.setup,
+            (next) => view.liveLine(next).includes("Investigating"),
+            "the heading again",
+          )
+          expectLiveLine(view.liveLine(back), heading, width)
+        }).pipe(Effect.timeout("10 seconds")),
+    )
+
+    for (const [state, used, notice, status] of [
+      ["near its end", 5, "⧗ 3 of 8 model calls left", "⧗ 3"],
+      ["on its last call", 7, "⧗ last of 8 model calls", "⧗ 1"],
+    ] as const) {
+      it.scopedLive(
+        `with the model-call budget ${state}, the live line keeps the heading at ${width} columns`,
+        () =>
+          Effect.gen(function* () {
+            const view = yield* mountLiveLine(width, Option.some({ used, limit: 8 }))
+            yield* view.step("step-1", headed)
+            // The turn's budget line lands after the step, inside the same turn.
+            yield* view.budgetLine(`budget-${used}`, used, 8)
+            const frame = yield* waitForFrame(
+              view.setup,
+              (next) => next.includes(notice) && view.liveLine(next).includes("Investigating"),
+              "the budget line and the heading",
+            )
+            expectLiveLine(view.liveLine(frame), heading, width)
+            // The status row counts the calls left.
+            const rows = frame.split("\n")
+            expect(rows.some((row) => row.includes(status) && !row.includes("model calls"))).toBe(
+              true,
+            )
+          }).pipe(Effect.timeout("10 seconds")),
+      )
+    }
+  }
+
+  // The whole path: a scripted model streams a step's reasoning and calls a
+  // tool; while the next step thinks, the live line names that heading.
+  for (const [reasoning, label] of [
+    [headed, heading],
+    ["Compare the RAW-THOUGHT chrome paths.", "Thinking"],
+  ] as const) {
+    it.scopedLive(`a scripted turn's thinking step reads "${label}" on the live line`, () =>
+      Effect.gen(function* () {
+        const echo = defineExtension({
+          id: "live-line-echo",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "echo",
+                description: "Echo the text back",
+                params: Schema.Struct({ text: Schema.String }),
+                output: Schema.String,
+                execute: ({ text }) => Effect.succeed(text),
+              }),
+            )
+          }),
+        })
+        const call = toolCallStep("echo", { text: "hello" })
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { parts: [reasoningDeltaPart(reasoning), ...call.parts] },
+          { ...textStep("Done."), gated: true },
+        ])
+        const harness = yield* createRpcHarness({
+          providerLayer,
+          agents: [testAgent],
+          extensionInputs: [echo],
+        })
+        // The held step ends before the server closes, whether the test passes or not.
+        yield* Effect.addFinalizer(() => controls.emitAll(1))
+        const setup = yield* renderScoped(() => <App />, {
+          client: harness.client,
+          runtime: createMockRuntime(),
+          width: 100,
+          initialSession: sessionNamed(harness.sessionId, harness.branchId, "Scripted"),
+        })
+        yield* Effect.promise(() => setup.mockInput.typeText("look"))
+        setup.mockInput.pressEnter()
+        yield* controls.waitForCall(1).pipe(Effect.timeout("5 seconds"))
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes(`✻ ${label}`),
+          "the thinking step",
+        )
+        expect(frame).not.toContain("RAW-THOUGHT chrome paths. ·")
+        yield* controls.emitAll(1)
+        yield* waitForFrame(setup, (next) => next.includes("Done."), "the answer")
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
 
   it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
