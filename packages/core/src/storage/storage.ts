@@ -5,12 +5,9 @@ import {
   type Crypto,
   DateTime,
   Effect,
-  FileSystem,
   SchemaGetter as Getter,
   Layer,
   Option,
-  Path,
-  type PlatformError,
   Predicate,
   Schema,
 } from "effect"
@@ -81,7 +78,6 @@ import {
   InteractionRequestStatus,
   type StoredInteractionDecision,
 } from "../domain/interaction.js"
-import { SqliteClient } from "@effect/sql-sqlite-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
@@ -2183,80 +2179,21 @@ const provideFocusedRepositories = <E, R>(
     base,
   )
 
-const ensureDbDirectory = (dbPath: string) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = path.dirname(dbPath)
-      yield* fs.makeDirectory(dir, { recursive: true })
-    }),
-  )
-
-/**
- * The PRAGMAs of a connection gent opens itself. They configure the
- * connection, not the schema, so they belong to the client layer that opens
- * it: a hosted client's platform owns its durability and refuses them.
- */
-const configureLocalConnection: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient
-      yield* sql.unsafe(`PRAGMA journal_mode = WAL`)
-      yield* sql.unsafe(`PRAGMA synchronous = NORMAL`)
-      yield* sql.unsafe(`PRAGMA busy_timeout = 5000`)
-      yield* sql.unsafe(`PRAGMA wal_autocheckpoint = 1000`)
-      yield* sql.unsafe(`PRAGMA foreign_keys = ON`)
-    }).pipe(Effect.mapError(storageError("Storage pragma initialization failed"))),
-  )
-
-/** A Bun SQLite connection gent opens and configures: a file, or `:memory:`. */
-const localSqliteClient = (filename: string): Layer.Layer<SqlClient.SqlClient, StorageError> =>
-  configureLocalConnection.pipe(Layer.provideMerge(Layer.orDie(SqliteClient.layer({ filename }))))
-
-const makeLiveSqliteLayer = (
-  dbPath: string,
-): Layer.Layer<
-  SqlClient.SqlClient,
-  StorageError | PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path
-> =>
-  StorageInitLive.pipe(
-    Layer.provideMerge(localSqliteClient(dbPath)),
-    Layer.provideMerge(ensureDbDirectory(dbPath)),
-  )
-
-const memorySqliteLayer: Layer.Layer<SqlClient.SqlClient, StorageError> = StorageInitLive.pipe(
-  Layer.provideMerge(localSqliteClient(":memory:")),
-)
-
 export const SqliteStorage = {
-  // Load-bearing: `deleteSession`'s atomic SELECT+DELETE runs in one transaction that
-  // @effect/sql-sqlite-bun opens with BEGIN IMMEDIATE over its one connection, so it holds
-  // the write lock from the start and no child row is committed between the recursive
-  // SELECT and the DELETE.
-  LiveWithSql: (
-    dbPath: string,
-  ): Layer.Layer<
-    FocusedStorage,
-    StorageError | PlatformError.PlatformError,
-    FileSystem.FileSystem | Path.Path | GentPlatform | Crypto.Crypto
-  > => provideFocusedRepositories(makeLiveSqliteLayer(dbPath)),
-
-  MemoryWithSql: provideFocusedRepositories(memorySqliteLayer) satisfies Layer.Layer<
-    FocusedStorage,
-    StorageError,
-    GentPlatform | Crypto.Crypto
-  >,
-
   /**
-   * The repositories over a host's own SQLite client (a Durable Object's, for
-   * one). The host owns the connection and its PRAGMAs; init runs the portable
-   * DDL only. `deleteSession` stays atomic: the host's transaction is the one
-   * writer's (a Durable Object runs one at a time).
+   * The kernel's repositories over a SQLite client the host opens: the Bun
+   * host's file or in-memory connection (`BunSqlite`, `gent-platform-bun.ts`)
+   * or a host's own (a Durable Object's). The client layer owns the
+   * connection and its PRAGMAs; init runs the portable DDL only.
+   *
+   * Load-bearing: `deleteSession`'s atomic SELECT+DELETE runs in one
+   * transaction. The Bun client opens it with BEGIN IMMEDIATE over its one
+   * connection, so it holds the write lock from the start and no child row is
+   * committed between the recursive SELECT and the DELETE; a Durable Object
+   * runs one writer at a time.
    */
-  HostedWithSql: (
-    sql: Layer.Layer<SqlClient.SqlClient>,
-  ): Layer.Layer<FocusedStorage, StorageError, GentPlatform | Crypto.Crypto> =>
+  WithSql: <E, R>(
+    sql: Layer.Layer<SqlClient.SqlClient, E, R>,
+  ): Layer.Layer<FocusedStorage, E | StorageError, R | GentPlatform | Crypto.Crypto> =>
     provideFocusedRepositories(StorageInitLive.pipe(Layer.provideMerge(sql))),
 }

@@ -22,10 +22,10 @@ import {
   type MessageStorage,
   type SessionStorage,
   workspaceIdForCwd,
-  BunPlatformLive,
   type RpcHandlersLive,
   resolveDataDir,
 } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import type { buildOwnedServer, startOwnedServer } from "./server.js"

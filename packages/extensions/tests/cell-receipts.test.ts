@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import { BunSqlite } from "@gent/core/host-bun"
 import {
   Deferred,
   Effect,
@@ -2216,7 +2217,7 @@ describe("cell execution storage", () => {
         const dir = yield* fs.makeTempDirectoryScoped()
         const storageLayer = Layer.provideMerge(
           CellStorage.Live,
-          SqliteStorage.LiveWithSql(path.join(dir, "gent.db")),
+          SqliteStorage.WithSql(BunSqlite.file(path.join(dir, "gent.db"))),
         ).pipe(Layer.provide(GentPlatform.Test()))
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2615,7 +2616,7 @@ describe("cell tool operation storage", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const layer = Layer.provideMerge(
           CellStorage.Live,
-          SqliteStorage.LiveWithSql(path.join(directory, "gent.db")),
+          SqliteStorage.WithSql(BunSqlite.file(path.join(directory, "gent.db"))),
         ).pipe(Layer.provide(GentPlatform.Test()))
         yield* Effect.scoped(
           Effect.gen(function* () {

@@ -245,7 +245,7 @@
       "files": [
         "packages/core/src/runtime/gent-platform.ts",
         "packages/core/src/runtime/gent-platform-bun.ts",
-        "packages/core/src/host.ts",
+        "packages/core/src/host-bun.ts",
         "packages/sdk/src/discovery.ts",
         "packages/sdk/src/server.ts",
         "apps/tui/src/main.tsx",

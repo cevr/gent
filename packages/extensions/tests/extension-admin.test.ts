@@ -2,7 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { ExtensionId, ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
-import { BunPlatformLive } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import { messagePartsText } from "@gent/core/protocol"
 import {
   ApprovalService,

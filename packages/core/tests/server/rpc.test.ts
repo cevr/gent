@@ -122,7 +122,7 @@ import {
 } from "../../src/runtime/extension-host"
 import { SessionStorage, SqliteStorage } from "../../src/storage/storage"
 import { StorageError } from "../../src/domain/errors"
-import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { MinimumLogLevel } from "effect/References"
 import { type Message, messagePartsText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
@@ -1931,7 +1931,7 @@ const liveSessionProfiles = (
           Layer.mergeAll(
             BunPlatformLive,
             ConfigService.Test(),
-            SqliteStorage.MemoryWithSql.pipe(Layer.provide(BunPlatformLive)),
+            SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
           ),
         ),
         Layer.orDie,

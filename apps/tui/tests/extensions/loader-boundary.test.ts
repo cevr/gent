@@ -12,7 +12,8 @@ import {
   Ref,
   Schema,
 } from "effect"
-import { BunPlatformLive, GentPlatform } from "@gent/core/host"
+import { GentPlatform } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
@@ -1818,7 +1819,7 @@ describe("tool renderer reach", () => {
       expect(loaded.failures).toEqual([])
       expect(loaded.renderers.has("delegate.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 })
 

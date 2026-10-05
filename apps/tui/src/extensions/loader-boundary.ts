@@ -22,7 +22,6 @@ import {
   SCOPE_PRECEDENCE,
 } from "@gent/core/protocol"
 import {
-  bindBunModules,
   buildExtensionModule,
   extensionEntryModules,
   extensionModuleChanged,
@@ -33,6 +32,7 @@ import {
   readDisabledExtensions,
   type RuntimeModuleSource,
 } from "@gent/core/host"
+import { bindBunModules } from "@gent/core/host-bun"
 import * as ProtocolEntry from "@gent/core/protocol"
 import * as ClientExtensionEntry from "@gent/tui/extensions"
 import * as ShippedExtensionsClientEntry from "@gent/extensions/client"

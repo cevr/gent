@@ -26,7 +26,6 @@ import {
 } from "effect"
 import { Base64, Base64Url, Hex } from "effect/encoding"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { BunHttpServer } from "@effect/platform-bun"
 import {
   auth,
   extractResourceMetadataUrl,
@@ -34,7 +33,8 @@ import {
 } from "@modelcontextprotocol/sdk/client/auth.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { SSEClientTransport, SseError } from "@modelcontextprotocol/sdk/client/sse.js"
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
+import type * as StdioModuleTypes from "@modelcontextprotocol/sdk/client/stdio.js"
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import {
   StreamableHTTPClientTransport,
   StreamableHTTPError,
@@ -64,6 +64,8 @@ import {
   ToolResultFailure,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
+// The host's loopback listener for a sign-in redirect (`GentPlatform.loopbackServer`).
+import { GentPlatform } from "@gent/core/extensions/branch-tools"
 
 // Test seam: `McpServers` (the extension over inline servers),
 // `HostEnvironment` (the environment a stdio server inherits) and
@@ -1656,11 +1658,10 @@ const serveRedirect = (
           HttpServerResponse.text(`gent is logged in to ${server.name}. You can close this tab.`),
       })
     })
+    // The host's listener on a free loopback port, for one sign-in.
+    const platform = yield* GentPlatform
     const context = yield* Layer.build(
-      HttpServer.serve(app).pipe(
-        // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- the OAuth redirect listener of `/mcp login` binds a free loopback port for one sign-in; no entry provides an HTTP server, and a user extension may start its own listener
-        Layer.provideMerge(BunHttpServer.layerServer({ port: 0, hostname: "127.0.0.1" })),
-      ),
+      HttpServer.serve(app).pipe(Layer.provideMerge(platform.loopbackServer(0))),
     )
     const address = Context.get(context, HttpServer.HttpServer).address
     if (address._tag === "UnixPathAddress") {
@@ -1732,22 +1733,39 @@ export const HostEnvironment = Context.Reference<Readonly<Record<string, string>
 const TransportKind = Schema.Literals(["stdio", "streamable-http", "sse"])
 type TransportKind = typeof TransportKind.Type
 
+/**
+ * The SDK's stdio transport, loaded when a stdio server first dials: it spawns
+ * through `node:child_process`, which a host with no processes (a Worker, a
+ * Durable Object) cannot load, so the extension does not import it when it
+ * loads.
+ */
+type StdioModule = typeof StdioModuleTypes
+const loadStdio = Effect.promise(
+  // oxlint-disable-next-line effect/noDynamicImports -- the stdio transport loads at the first stdio dial: it imports `node:child_process`, which a hosted root cannot load
+  (): Promise<StdioModule> => import("@modelcontextprotocol/sdk/client/stdio.js"),
+)
+
 const transportFor = (
   server: McpServer,
   kind: TransportKind,
   environment: Readonly<Record<string, string>>,
   oauth: Option.Option<OAuthTransport>,
-) => {
+): Effect.Effect<() => Transport> => {
   const config = server.config
   if ("command" in config) {
-    return new StdioClientTransport({
-      command: config.command,
-      args: [...(config.args ?? [])],
-      env: { ...environment, ...config.env },
-      cwd: server.cwd,
-      // The server's own log would land in the terminal gent draws.
-      stderr: "ignore",
-    })
+    return Effect.map(
+      loadStdio,
+      ({ StdioClientTransport }) =>
+        () =>
+          new StdioClientTransport({
+            command: config.command,
+            args: [...(config.args ?? [])],
+            env: { ...environment, ...config.env },
+            cwd: server.cwd,
+            // The server's own log would land in the terminal gent draws.
+            stderr: "ignore",
+          }),
+    )
   }
   const options = {
     requestInit: { headers: { ...config.headers } },
@@ -1756,8 +1774,9 @@ const transportFor = (
       () => ({}),
     ),
   }
-  if (kind === "sse") return new SSEClientTransport(new URL(config.url), options)
-  return new StreamableHTTPClientTransport(new URL(config.url), options)
+  if (kind === "sse")
+    return Effect.succeed(() => new SSEClientTransport(new URL(config.url), options))
+  return Effect.succeed(() => new StreamableHTTPClientTransport(new URL(config.url), options))
 }
 
 /** The HTTP status a failed connect was answered with, when it has one. */
@@ -1799,8 +1818,10 @@ const dial = (
       (opened) =>
         Effect.tryPromise(() => opened.close()).pipe(Effect.timeout(CLOSE_TIMEOUT), Effect.ignore),
     )
+    // Built inside the connect: a bad URL fails it as a refused connect does.
+    const makeTransport = yield* transportFor(server, kind, environment, oauth)
     yield* Effect.tryPromise({
-      try: () => client.connect(transportFor(server, kind, environment, oauth)),
+      try: () => client.connect(makeTransport()),
       catch: (cause) => {
         const refusal = loginRefusal(cause, oauth)
         return new McpError({
@@ -2216,6 +2237,8 @@ const mcpClientsLive = ({
     McpClients,
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto
+      // The host's loopback listener, for the redirect of a login.
+      const platform = yield* GentPlatform
       const blobStore = yield* makeBlobStore(blobs)
       const writePermit = yield* Semaphore.make(1)
       /** Each registered server's state, under its cache key. */
@@ -2530,6 +2553,7 @@ const mcpClientsLive = ({
               const started = yield* restore(
                 startLogin(state.entry.server, config, auth, scope).pipe(
                   Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.provideService(GentPlatform, platform),
                   Effect.mapError((error) => {
                     if (error._tag === "McpError") return error
                     return new McpError({ server: name, message: `login: ${error.message}` })

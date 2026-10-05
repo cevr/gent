@@ -5,7 +5,8 @@ import { BuiltinExtensionModules } from "../src/index.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
-import { BunPlatformLive, extensionEntryModules, GentPlatform } from "@gent/core/host"
+import { extensionEntryModules, GentPlatform } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host-bun"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -92,7 +93,7 @@ describe("builtin peer modules", () => {
       const stdout = yield* runFresh(
         [
           `const { Effect } = await import("${import.meta.resolve("effect")}")`,
-          `const { bindBunModules } = await import("${import.meta.resolve("@gent/core/host")}")`,
+          `const { bindBunModules } = await import("${import.meta.resolve("@gent/core/host-bun")}")`,
           `const { BuiltinExtensionModules } = await import("${extensionsEntry}")`,
           `await Effect.runPromise(bindBunModules(BuiltinExtensionModules))`,
           `const { AnthropicClient } = await import("./user-extension.ts")`,
@@ -101,6 +102,26 @@ describe("builtin peer modules", () => {
         [["user-extension.ts", `export { AnthropicClient } from "@effect/ai-anthropic"`]],
       )
       expect(stdout).toBe("function")
+    }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
+  )
+
+  // No shipped extension imports the Bun platform; the Bun host binds it, so a
+  // user extension that imports it gets the instance gent runs.
+  it.live("a user extension imports the Bun platform the Bun host binds", () =>
+    Effect.gen(function* () {
+      const stdout = yield* runFresh(
+        [
+          `const { Effect } = await import("${import.meta.resolve("effect")}")`,
+          `const host = await import("${import.meta.resolve("@gent/core/host-bun")}")`,
+          `const { BuiltinExtensionModules } = await import("${extensionsEntry}")`,
+          `await Effect.runPromise(host.bindBunModules(new Map([...BuiltinExtensionModules, ...host.BunHostModules])))`,
+          `const { BunServices } = await import("./user-extension.ts")`,
+          `const bound = host.BunHostModules.get("@effect/platform-bun")()`,
+          `console.log(BunServices === bound.BunServices)`,
+        ],
+        [["user-extension.ts", `export { BunServices } from "@effect/platform-bun"`]],
+      )
+      expect(stdout).toBe("true")
     }).pipe(Effect.timeout("25 seconds"), Effect.provide(freshProcessLayer)),
   )
 })

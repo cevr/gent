@@ -4,8 +4,8 @@ import {
   type GentExtension,
   LoadedArtifactIdentity,
 } from "@gent/core/extensions/api"
+import type { GentPlatform } from "@gent/core/extensions/branch-tools"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import * as EffectPlatformBun from "@effect/platform-bun"
 import { CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
@@ -57,7 +57,12 @@ const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Result.tr
 
 export const BuiltinExtensions: ReadonlyArray<
   GentExtension<
-    ChildProcessSpawner | Crypto.Crypto | ExtensionHost | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner
+    | Crypto.Crypto
+    | ExtensionHost
+    | FileSystem.FileSystem
+    | GentPlatform
+    | Path.Path
   >
 > = [
   CellExtension,
@@ -104,7 +109,9 @@ export const BuiltinExtensions: ReadonlyArray<
  * the core loader binds them (`extensionEntryModules`). The keys are exactly
  * the `@effect/*` specifiers the shipped extensions import;
  * `tests/index.test.ts` derives that set from their sources and fails when
- * the two differ.
+ * the two differ. No shipped extension imports `@effect/platform-bun`: they
+ * reach the host through `GentPlatform`. The Bun host binds it for a user
+ * extension (`BunHostModules`, `@gent/core/host-bun`).
  *
  * The provider SDKs load when a module first imports them, as the shipped
  * drivers load them: their generated schemas cost a launch time to evaluate.
@@ -124,6 +131,4 @@ export const BuiltinExtensionModules: ReadonlyMap<string, () => object | Promise
   ["@effect/ai-openai-compat", () => import("#unbound/ai-openai-compat")],
   // oxlint-disable-next-line effect/noDynamicImports -- the SDK loads when a module first imports it, not at launch
   ["@effect/ai-typesafe", () => import("#unbound/ai-typesafe")],
-  // oxlint-disable-next-line effect/noPlatformLayerOutsideEntry -- a user extension resolves @effect/platform-bun here to share the instances a shipped extension imports; it provides no layer
-  ["@effect/platform-bun", () => EffectPlatformBun],
 ])

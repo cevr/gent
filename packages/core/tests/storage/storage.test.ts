@@ -1,4 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
+import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import * as Prompt from "effect/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -254,7 +255,7 @@ describe("Sessions", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
-      const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db")).pipe(
+      const layer = SqliteStorage.WithSql(BunSqlite.file(path.join(dir, "gent.db"))).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -290,7 +291,7 @@ describe("Sessions", () => {
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
       const dbPath = path.join(dir, "gent.db")
-      const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const layer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -373,7 +374,7 @@ describe("Sessions", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const dir = yield* fs.makeTempDirectoryScoped()
-      const layer = SqliteStorage.LiveWithSql(path.join(dir, "gent.db")).pipe(
+      const layer = SqliteStorage.WithSql(BunSqlite.file(path.join(dir, "gent.db"))).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),
@@ -453,7 +454,7 @@ describe("Sessions", () => {
         `)
       }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
-      const layer = SqliteStorage.LiveWithSql(dbPath).pipe(
+      const layer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
         Layer.provide(BunFileSystem.layer),
         Layer.provide(BunServices.layer),
         Layer.provide(GentPlatform.Test()),

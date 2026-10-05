@@ -1,4 +1,5 @@
 import { expect } from "effect-bun-test"
+import { BunSqlite } from "@gent/core/host-bun"
 import { Context, Effect, Fiber, FileSystem, Layer, Path, Predicate, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
@@ -138,7 +139,7 @@ export const cellTestStorage = Layer.provideMerge(CellStorage.Live, testSqliteSt
 
 export const testLayer = Layer.provideMerge(
   Layer.effect(ExtensionContext, storedSessionContext()),
-  Layer.provideMerge(CellStorage.Live, SqliteStorage.MemoryWithSql),
+  Layer.provideMerge(CellStorage.Live, SqliteStorage.WithSql(BunSqlite.memory)),
 ).pipe(Layer.provideMerge(platform))
 
 /** A catalog that selects the named host tools, hashed by their names. */

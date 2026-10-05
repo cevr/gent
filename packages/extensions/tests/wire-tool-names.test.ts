@@ -9,7 +9,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
-  Crypto,
+  type Crypto,
   Effect,
   Fiber,
   FileSystem,
@@ -50,6 +50,7 @@ import {
   modelCatalogFromBodies,
   testAgent,
   testTurnExtension,
+  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import { resolveShipped } from "./helpers/api-classes.js"
 import {
@@ -218,7 +219,7 @@ const openaiModel = Effect.gen(function* () {
     credentialCellRef,
     new Map(),
     Option.none(),
-    yield* Crypto.Crypto,
+    yield* bunDriverHostServices,
   )
   return yield* driver.resolveModel("gpt-5.4", apiKey)
 }).pipe(Effect.provide(BunServices.layer))

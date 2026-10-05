@@ -44,7 +44,7 @@ import {
 } from "@gent/core/extensions/api"
 import { ApprovalService } from "../../src/runtime/extension-host"
 import { InteractionStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
-import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
+import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
 import { Message } from "../../src/domain/message"
@@ -537,7 +537,9 @@ describe("interaction.respondInteraction", () => {
       Effect.gen(function* () {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-decision.db`
-        const storageLayer = SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))
+        const storageLayer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
+          Layer.provide(BunPlatformLive),
+        )
         const finalReply = "approval resumed from stored decision"
         const firstProvider = yield* LanguageModelLayers.sequence([
           toolCallStep("approval_probe", { text: "approve deploy?" }),
@@ -1794,7 +1796,9 @@ describe("interaction.respondInteraction", () => {
         const pending = yield* Effect.gen(function* () {
           return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
-          Effect.provide(SqliteStorage.LiveWithSql(dbPath).pipe(Layer.provide(BunPlatformLive))),
+          Effect.provide(
+            SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(Layer.provide(BunPlatformLive)),
+          ),
           Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(dbPath)),
         )
         expect(pending).toEqual([])
@@ -2513,7 +2517,9 @@ describe("interaction.respondInteraction", () => {
               yield* storage.decide(first, first.q2, decisionJson)
             }).pipe(
               Effect.provide(
-                SqliteStorage.LiveWithSql(first.dbPath).pipe(Layer.provide(BunPlatformLive)),
+                SqliteStorage.WithSql(BunSqlite.file(first.dbPath)).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
               ),
               Effect.provideService(CurrentWorkspaceId, workspaceOfDatabase(first.dbPath)),
             ),

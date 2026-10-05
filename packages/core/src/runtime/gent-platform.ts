@@ -17,7 +17,7 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
-import { HttpClient } from "effect/http"
+import { HttpClient, HttpServer, HttpServerError } from "effect/http"
 import { causeMessage } from "../domain/guards.js"
 
 // ── gent-platform ───────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ import { causeMessage } from "../domain/guards.js"
  *                          ids and cache keys. Sync because content-addressed
  *                          SQLite chunking is sync.
  *   - `transcodeImage`   — decode an image, fit it inside a square, encode it
+ *   - `loopbackServer`   — an HTTP listener on 127.0.0.1, for a sign-in redirect
  *
  * Random bytes come from Effect `Crypto`, and `file://` URLs become paths
  * through Effect `Path.fromFileUrl`; neither is a platform fact.
@@ -185,6 +186,14 @@ interface GentPlatformApi {
     bytes: Uint8Array,
     options: ImageTranscode,
   ) => Effect.Effect<TranscodedImage, ImageCodecError>
+  /**
+   * An HTTP server on `127.0.0.1:port` (`0` picks a free port), for the
+   * duration of the layer: the redirect listener of a sign-in. Only this
+   * machine reaches it. A host with no listener fails it.
+   */
+  readonly loopbackServer: (
+    port: number,
+  ) => Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError>
 }
 
 export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>()(
@@ -242,6 +251,14 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
                 reason: "failed",
                 message: "the test platform has no image codec",
               }),
+            ),
+          // No listener: a test that signs in through a redirect runs the Bun platform.
+          loopbackServer: () =>
+            Layer.effect(
+              HttpServer.HttpServer,
+              Effect.fail(
+                new HttpServerError.ServeError({ cause: "the test platform opens no listener" }),
+              ),
             ),
         })
       }),

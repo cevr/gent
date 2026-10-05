@@ -19,13 +19,12 @@ import {
   Result,
   Schedule,
   Schema,
-  Scope,
+  type Scope,
   Semaphore,
   Stream,
   Struct,
 } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import { Database } from "bun:sqlite"
 import { ModelCatalogSnapshotStorage } from "../storage/storage.js"
 import { type ExtensionModelsService, ExtensionServiceError } from "../domain/extension.js"
 import {
@@ -285,8 +284,8 @@ export interface AuthService {
   ) => Effect.Effect<A, E | AuthError>
 }
 
-/** Wraps one provider's store operation in a lock another process also honors. */
-type ProviderLock = (
+/** Wraps one provider's store operation in a lock every store of the directory honors. */
+type StoreExclusion = (
   provider: string,
 ) => <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E | AuthError>
 
@@ -305,7 +304,7 @@ type ProviderLock = (
  */
 export const serializeAuthStore = (
   store: AuthStoreAccess,
-  crossProcess: ProviderLock = () => (effect) => effect,
+  crossProcess: StoreExclusion = () => (effect) => effect,
 ): AuthService => {
   const locks = new Map<string, Semaphore.Semaphore>()
   const exclusive =
@@ -404,86 +403,50 @@ const keepStamp = (next: AuthInfo, signedInAt: Option.Option<number>): AuthInfo 
   return { ...next, signedInAt: signedInAt.value }
 }
 
-// ── auth file lock ──────────────────────────────────────────────────────────
+// ── provider lock ───────────────────────────────────────────────────────────
 
-/** SQLite reports a lock another connection holds as `SQLITE_BUSY`. */
-const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
-
-/** Another connection holds the provider's lock file; try again shortly. */
-class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {}) {}
-
-/** A writer polls a busy lock this often, this many times (about 30 seconds). */
-const AUTH_LOCK_POLL = Duration.millis(20)
-const AUTH_LOCK_POLLS = 1500
+/** The lock of one provider in one credential store, as `ProviderLock` gives it. */
+interface ProviderLockService {
+  /**
+   * Run `effect` while no other writer of `provider` in the store at
+   * `directory` runs: another store over the same directory, in this process
+   * or in another one the host can see.
+   */
+  readonly exclusive: (
+    directory: string,
+    provider: string,
+  ) => <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E | AuthError>
+}
 
 /**
- * An exclusive SQLite transaction on one lock file per provider. The OS drops
- * the lock when its process exits, so a crash never leaves a held lock (the
- * same kind of lock the server kernel uses). Taking it never blocks the event
- * loop: a busy file is polled.
+ * The lock a credential store takes around each write of one provider, so
+ * every store over one directory orders its writes with the others. The host
+ * provides it. On Bun it is a lock file per provider that every gent process
+ * on the machine honors (`BunProviderLockLive`, `gent-platform-bun.ts`, part
+ * of `BunPlatformLive`). `InProcess` orders the stores of one process only;
+ * a host whose process is the only writer of its store (a Durable Object)
+ * needs no file system for it.
  */
-const fileProviderLock =
-  (lockDirectory: string, pathService: Path.Path, fs: FileSystem.FileSystem): ProviderLock =>
-  (provider) =>
-  (effect) => {
-    const file = pathService.join(lockDirectory, `${encodeURIComponent(provider)}.lock.db`)
-    const lockError = (cause: unknown) =>
-      new AuthError({ message: `Failed to take the auth lock for "${provider}"`, cause })
-    const open = Effect.try({
-      try: () => new Database(file, { create: true }),
-      catch: lockError,
-    })
-    const take = (db: Database) =>
-      Effect.try({
-        try: () => {
-          db.exec("PRAGMA busy_timeout = 0")
-          db.exec("BEGIN EXCLUSIVE")
-        },
-        catch: (cause) => {
-          if (isSqliteBusy(cause)) return new AuthLockBusy()
-          return lockError(cause)
-        },
-      })
-    const close = (db: Database) =>
-      Effect.sync(() => {
-        db.close()
-      })
-    // One open-and-take attempt is the uninterruptible acquire; the poll
-    // between attempts is not, so a cancel ends the wait at once. Only a
-    // held lock outlives an interrupt, and its release always runs.
-    const attempt = Effect.acquireRelease(
-      fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
-        Effect.mapError(lockError),
-        Effect.andThen(open),
-        Effect.flatMap((db) =>
-          take(db).pipe(
-            Effect.onError(() => close(db)),
-            Effect.as(db),
-          ),
-        ),
-      ),
-      close,
-    )
-    const held = attempt.pipe(
-      Effect.retry({
-        while: (error) => error._tag === "AuthLockBusy",
-        schedule: Schedule.spaced(AUTH_LOCK_POLL),
-        times: AUTH_LOCK_POLLS,
-      }),
-      Effect.catchTag("AuthLockBusy", () =>
-        Effect.fail(
-          new AuthError({ message: `Timed out waiting for the auth lock for "${provider}"` }),
-        ),
-      ),
-    )
-    // The held lock lives in a private scope, so `effect` never runs inside
-    // it: a scope of the caller's stays the caller's, whatever `effect` needs.
-    return Effect.acquireUseRelease(
-      Scope.make(),
-      (lockScope) => held.pipe(Scope.provide(lockScope), Effect.andThen(effect)),
-      (lockScope, exit) => Scope.close(lockScope, exit),
-    )
-  }
+export class ProviderLock extends Context.Service<ProviderLock, ProviderLockService>()(
+  "@gent/core/src/runtime/provider/ProviderLock",
+) {
+  static InProcess: Layer.Layer<ProviderLock> = Layer.sync(ProviderLock)(() => {
+    const locks = new Map<string, Semaphore.Semaphore>()
+    return {
+      exclusive: (directory, provider) => (effect) =>
+        Effect.suspend(() => {
+          // A path holds no NUL, so the key names one directory and one provider.
+          const key = `${directory}\u0000${provider}`
+          let lock = locks.get(key)
+          if (Predicate.isUndefined(lock)) {
+            lock = Semaphore.makeUnsafe(1)
+            locks.set(key, lock)
+          }
+          return lock.withPermits(1)(effect)
+        }),
+    }
+  })
+}
 
 export class Auth extends Context.Service<Auth, AuthService>()(
   "@gent/core/src/runtime/provider/Auth",
@@ -491,12 +454,16 @@ export class Auth extends Context.Service<Auth, AuthService>()(
   /**
    * File-system-backed live layer. One file per provider (URL-encoded
    * key) under `directory`. Stale or corrupt entries are discarded and
-   * logged so a single broken file can't brick startup.
+   * logged so a single broken file can't brick startup. Each write of a
+   * provider takes the host's `ProviderLock` for this directory.
    */
-  static Live = (directory: string): Layer.Layer<Auth, never, FileSystem.FileSystem | Path.Path> =>
+  static Live = (
+    directory: string,
+  ): Layer.Layer<Auth, never, FileSystem.FileSystem | Path.Path | ProviderLock> =>
     Layer.effect(
       Auth,
       Effect.gen(function* () {
+        const providerLock = yield* ProviderLock
         const fs = yield* FileSystem.FileSystem
         const pathService = yield* Path.Path
         const codec = Schema.fromJsonString(Schema.toCodecJson(AuthInfo))
@@ -554,9 +521,6 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             if (hasDefault) return [DEFAULT_CREDENTIAL_SLOT, ...slots.sort()]
             return slots.sort()
           })
-        // A dot directory inside the store: no provider id starts with a dot,
-        // so it never reads as a credential, and it goes with the store.
-        const lockDirectory = pathService.join(directory, ".locks")
         return serializeAuthStore(
           {
             listSlots,
@@ -609,7 +573,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
               return [...new Set([...legacy, ...named])]
             }),
           },
-          fileProviderLock(lockDirectory, pathService, fs),
+          (provider) => providerLock.exclusive(directory, provider),
         )
       }),
     )

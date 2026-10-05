@@ -3,7 +3,7 @@ import {
   Cause,
   Clock,
   Context,
-  Crypto,
+  type Crypto,
   Effect,
   Exit,
   Fiber,
@@ -51,6 +51,7 @@ import {
   textStep,
   toolCallStep,
   waitFor,
+  bunDriverHostServices,
 } from "@gent/core/test-utils"
 import {
   AnthropicPlatform,
@@ -979,7 +980,7 @@ const responsesModel = Effect.gen(function* () {
     credentialCellRef,
     new Map(),
     Option.none(),
-    yield* Crypto.Crypto,
+    yield* bunDriverHostServices,
   )
   return yield* driver.resolveModel("gpt-5.4", apiKey)
 }).pipe(Effect.provide(BunServices.layer))
