@@ -398,6 +398,10 @@ describe("model-call budget rows", () => {
     ...userMessage("regular-message", "m1:model-attempts", "BUDGET-NOTICE-BODY"),
     metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 5, limit: 8 } },
   }
+  const lastCall: ListMessage = {
+    ...userMessage("regular-message", "m1:model-attempts-last", "BUDGET-LAST-CALL-BODY"),
+    metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 7, limit: 8 } },
+  }
 
   test("the turn line counts the newest receipt's calls right after the time", () => {
     expect(getSessionEventLabel(turnLine)).toBe(
@@ -413,7 +417,7 @@ describe("model-call budget rows", () => {
       const setup = yield* renderScoped(
         () => (
           <MessageList
-            items={[notice, turnLine]}
+            items={[notice, lastCall, turnLine]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}
           />
@@ -426,10 +430,11 @@ describe("model-call budget rows", () => {
         .filter((line) => line.length > 0)
     })
 
-  it.scopedLive("at 100 columns the notice and the turn line are whole", () =>
+  it.scopedLive("at 100 columns the notice, the last call and the turn line are whole", () =>
     Effect.gen(function* () {
       expect(yield* rowsAt(100)).toEqual([
-        "  ⧗ 3 of 8 model calls left · the turn stops at 8 · send a message to go on",
+        "  ⧗ 3 of 8 model calls left · the last runs without tools · a new message gets a fresh budget",
+        "  ⧗ last of 8 model calls · tools off · the turn answers with what it has",
         "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries · ↑38k ↓2.1k · $0.04",
       ])
     }),
@@ -438,7 +443,8 @@ describe("model-call budget rows", () => {
   it.scopedLive("at 60 columns each row drops its last parts and keeps the count", () =>
     Effect.gen(function* () {
       expect(yield* rowsAt(60)).toEqual([
-        "  ⧗ 3 of 8 model calls left · the turn stops at 8",
+        "  ⧗ 3 of 8 model calls left · the last runs without tools",
+        "  ⧗ last of 8 model calls · tools off",
         "  ✻ Worked for 1m 48s · 6/8 model calls · 2 retries",
       ])
     }),
@@ -448,15 +454,17 @@ describe("model-call budget rows", () => {
     Effect.gen(function* () {
       expect(yield* rowsAt(40)).toEqual([
         "  ⧗ 3 of 8 model calls left",
+        "  ⧗ last of 8 model calls · tools off",
         "  ✻ Worked for 1m 48s · 6/8 model calls",
       ])
     }),
   )
 
-  it.scopedLive("full detail draws the notice the model read", () =>
+  it.scopedLive("full detail draws the lines the model read", () =>
     Effect.gen(function* () {
-      const frame = yield* renderLoaded([notice], true)
+      const frame = yield* renderLoaded([notice, lastCall], true)
       expect(frame).toContain("BUDGET-NOTICE-BODY")
+      expect(frame).toContain("BUDGET-LAST-CALL-BODY")
       expect(frame).not.toContain("⧗")
     }),
   )

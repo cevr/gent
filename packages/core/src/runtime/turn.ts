@@ -322,6 +322,10 @@ const finalStepMessageIdForTurn = (messageId: MessageId): MessageId =>
 const modelAttemptsNoticeIdForTurn = (messageId: MessageId): MessageId =>
   MessageId.make(`${messageId}:model-attempts`)
 
+/** The instruction that opens the last call a turn's model-call budget allows. */
+const modelAttemptsLastCallIdForTurn = (messageId: MessageId): MessageId =>
+  MessageId.make(`${messageId}:model-attempts-last`)
+
 const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(message.parts)
 
 // ── turn profile ────────────────────────────────────────────────────────────
@@ -3460,21 +3464,77 @@ const MAX_STEPS_INSTRUCTION =
 
 /**
  * The one notice a turn with a model-call budget reads, at the first step
- * boundary with `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer left: what the
- * calls count, what happens when none is left, and what to do with the rest.
- * A notice, not a stop: the cap stays, and the model decides how to finish.
+ * boundary after a call with `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer
+ * left: what the calls count, what the last one does, and what to do with
+ * the rest. A notice, not a stop: the cap stays, and the model decides how
+ * to finish.
  */
 const modelAttemptsNotice = (attempts: ModelAttempts): string =>
-  `This turn has ${modelAttemptsLeft(attempts)} of its ${attempts.limit} model calls left. Every model request uses one, a retry or a context summary too, and when none is left the turn stops before it answers. Finish with the calls left: answer now with what you have established, or save your progress where it can be read later and say what is unfinished. Do not start new work. A new message starts a new turn with a fresh budget.`
+  `This turn has ${modelAttemptsLeft(attempts)} of its ${attempts.limit} model calls left. Every model request uses one, a retry or a context summary too. The last call runs with tools disabled, so the turn answers with what it has. Finish with the calls left: answer now with what you have established, or save your progress where it can be read later and say what is unfinished. Do not start new work. A new message starts a new turn with a fresh budget.`
+
+/**
+ * The instruction that opens the last call a turn's model-call budget
+ * allows, worded as the step limit's (`MAX_STEPS_INSTRUCTION`): the step runs
+ * with tools off and writes the turn's answer.
+ */
+const modelAttemptsLastCall = (limit: number): string =>
+  `This is the last model call of this turn's budget of ${limit}, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the model-call budget stopped you, summarise what you established, and name what is still unfinished. A new message starts a new turn with a fresh budget.`
 
 /**
  * Why a turn stopped at its model-call budget, and how to go on: the error
- * row, a child's completion and a headless run all print it. The budget binds
- * one turn, so a new message runs with a fresh one; nothing lifts the cap of
- * the turn it stopped.
+ * row, a child's completion and a headless run all print it. A turn reaches
+ * it only when its last call cannot answer: a retry, a context summary or a
+ * credential move inside that call finds none left, or the budget is 0. The
+ * budget binds one turn, so a new message runs with a fresh one; nothing
+ * lifts the cap of the turn it stopped.
  */
 const modelAttemptsSpent = (limit: number): string =>
   `Stopped at the model-call budget: ${limit} of ${limit} model calls used this turn. Its work so far is kept. Send a message to continue with a fresh budget of ${limit}, or raise maxModelAttempts for the run.`
+
+/**
+ * The step at this boundary is the last call the budget allows: one is
+ * left. It runs as the step limit's last step does, tools off, so the turn
+ * answers with what it has rather than stop mid-work. A retry, a summary or
+ * a credential move inside it finds no call left, and the turn stops at the
+ * budget saying so.
+ */
+const isLastModelCall = (reading: Option.Option<ModelAttempts>): boolean =>
+  Option.exists(reading, (attempts) => modelAttemptsLeft(attempts) === 1)
+
+/**
+ * The budget line a step boundary writes, if any. The last call's line, but
+ * not on the step limit's last step, whose own line already says tools are
+ * off. Otherwise the one near notice, at the first boundary after a call with
+ * `MODEL_ATTEMPTS_NOTICE_LEFT` calls or fewer left: a small budget is not
+ * near before the turn has worked, so its first step reads only the task.
+ * Each id comes from the turn, so a line is written once and a recovered
+ * step finds it.
+ */
+const modelAttemptsLine = (params: {
+  readonly messageId: MessageId
+  readonly reading: Option.Option<ModelAttempts>
+  readonly lastStep: boolean
+  readonly written: (id: MessageId) => boolean
+}): Option.Option<{
+  readonly id: MessageId
+  readonly text: string
+  readonly attempts: ModelAttempts
+}> =>
+  Option.flatMap(params.reading, (attempts) => {
+    const left = modelAttemptsLeft(attempts)
+    if (left === 1) {
+      if (params.lastStep) return Option.none()
+      return Option.some({
+        id: modelAttemptsLastCallIdForTurn(params.messageId),
+        text: modelAttemptsLastCall(attempts.limit),
+        attempts,
+      })
+    }
+    const noticeId = modelAttemptsNoticeIdForTurn(params.messageId)
+    const near = attempts.used > 0 && left > 1 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
+    if (!near || params.written(noticeId)) return Option.none()
+    return Option.some({ id: noticeId, text: modelAttemptsNotice(attempts), attempts })
+  })
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
   "Your previous step was cut off by the output limit or a full context window before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
@@ -5241,8 +5301,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // tell the model its tools are gone and let it spend this step writing
       // the answer. Prior art: opencode-v2 does the same at its ceiling
       // (`runner/llm.ts:221`).
-      const finalStep = params.step === maxSteps
-      if (finalStep) {
+      const lastStep = params.step === maxSteps
+      // The turn's model-call budget as its reservation row reads at this
+      // boundary; none for a turn with no budget.
+      const reading = yield* readModelAttempts({
+        messageId: params.state.message.id,
+        limit: Option.fromUndefinedOr(resolved.agent.maxModelAttempts),
+      })
+      const finalStep = lastStep || isLastModelCall(reading)
+      if (lastStep) {
         yield* appendBoundaryLine(
           Message.cases.regular.make({
             id: finalStepMessageIdForTurn(params.state.message.id),
@@ -5258,34 +5325,25 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
       }
-      // Near its model-call budget the turn reads one notice, at the first
-      // boundary after a call with few calls left: a small budget is not
-      // near before the turn has worked, and its first step reads only the
-      // task. Written once: the reading is skipped once the turn holds it,
-      // and a recovered step finds it by id.
-      const noticeId = modelAttemptsNoticeIdForTurn(params.state.message.id)
-      if (!resolved.messages.some((existing) => existing.id === noticeId)) {
-        const reading = yield* readModelAttempts({
-          messageId: params.state.message.id,
-          limit: Option.fromUndefinedOr(resolved.agent.maxModelAttempts),
-        })
-        const near = Option.filter(reading, (attempts) => {
-          const left = modelAttemptsLeft(attempts)
-          return attempts.used > 0 && left > 0 && left <= MODEL_ATTEMPTS_NOTICE_LEFT
-        })
-        if (Option.isSome(near)) {
-          yield* appendBoundaryLine(
-            Message.cases.regular.make({
-              id: noticeId,
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              role: "user",
-              parts: [Prompt.textPart({ text: modelAttemptsNotice(near.value) })],
-              createdAt: yield* DateTime.nowAsDate,
-              metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: near.value },
-            }),
-          )
-        }
+      const budgetLine = modelAttemptsLine({
+        messageId: params.state.message.id,
+        reading,
+        lastStep,
+        written: (id) => resolved.messages.some((existing) => existing.id === id),
+      })
+      if (Option.isSome(budgetLine)) {
+        const line = budgetLine.value
+        yield* appendBoundaryLine(
+          Message.cases.regular.make({
+            id: line.id,
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: line.text })],
+            createdAt: yield* DateTime.nowAsDate,
+            metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: line.attempts },
+          }),
+        )
       }
       if (params.step === 1) {
         yield* scope.turnLedger.noteModel({ agent: currentTurnAgent, model: resolved.modelId })
@@ -5329,6 +5387,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       }
+      // The limit that made this the last step: the step limit's own, else the call budget's.
+      let refusal = {
+        error: "The tool did not run: the turn reached its step limit.",
+        reason: "StepLimit",
+      }
+      if (!lastStep) {
+        refusal = {
+          error: "The tool did not run: the turn reached its model-call budget.",
+          reason: "ModelCallBudget",
+        }
+      }
       const refuseToolsAtStepLimit = Effect.gen(function* () {
         const address = stepAddress(params.state.message.id, params.step)
         yield* recordToolOutcome({
@@ -5342,10 +5411,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               name: call.name,
               isFailure: true,
               providerExecuted: false,
-              result: {
-                error: "The tool did not run: the turn reached its step limit.",
-                reason: "StepLimit",
-              },
+              result: refusal,
             }),
           ),
         })

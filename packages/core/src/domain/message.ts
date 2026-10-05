@@ -235,10 +235,11 @@ export type MessageRole = typeof MessageRole.Type
  * with an answer rather than being cut off mid-plan. Like the others it is
  * never a turn to answer on its own.
  *
- * `model-attempts` is the one notice a turn with a model-call budget gets
- * near its limit: how many calls are left, what happens when none is, and
- * how to go on. Its details are the reading it was written at
- * (`ModelAttempts`).
+ * `model-attempts` marks a turn's model-call budget lines: the one notice
+ * near its limit (how many calls are left and how to go on), and the
+ * instruction that opens its last call, which runs with tools off as the
+ * `max-steps` step does. Their details are the reading each was written at
+ * (`ModelAttempts`); one call left is the last call's.
  *
  * `steering` is the marker older builds wrote over the custom type of an
  * interjection delivered at a step boundary. Stored rows still carry it, so

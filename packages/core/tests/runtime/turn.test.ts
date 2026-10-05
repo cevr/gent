@@ -2073,54 +2073,107 @@ describe("model-call budget", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
+  const lastCallLine = "last model call of this turn's budget of 3"
+
   it.live(
-    "a turn that spends its budget stops saying so, keeps its work, and the next message has a fresh budget",
+    "the last allowed call runs with tools off, the turn ends with its answer, and the next message has a fresh budget",
     () =>
       Effect.gen(function* () {
+        const toolsOn = (options: LanguageModel.ProviderOptions) => {
+          expect(options.toolChoice).not.toBe("none")
+          expect(promptText(options.prompt)).not.toContain(lastCallLine)
+        }
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          toolCallStep("echo", { text: "one" }),
-          toolCallStep("echo", { text: "two" }),
+          { ...toolCallStep("echo", { text: "one" }), assertOptions: toolsOn },
+          { ...toolCallStep("echo", { text: "two" }), assertOptions: toolsOn },
+          {
+            ...textStep("what the work established"),
+            assertOptions: (options) => {
+              expect(options.toolChoice).toBe("none")
+              expect(promptText(options.prompt)).toContain(lastCallLine)
+            },
+          },
           textStep("the next turn answers"),
         ])
         const eventsRef = yield* Ref.make<AgentEvent[]>([])
         yield* Effect.gen(function* () {
-          yield* runAgentLoop(userMessage("budget-spent", "more than two calls"), budget(2))
+          yield* runAgentLoop(userMessage("budget-last", "more work than calls"), budget(3))
           const events = yield* Ref.get(eventsRef)
-          // The third request is refused before it reaches the model.
-          expect(yield* controls.callCount).toBe(2)
-          const errors = events.filter(
-            (event): event is ErrorOccurred => event._tag === "ErrorOccurred",
-          )
-          expect(errors.map((event) => event.error)).toEqual([
-            "Stopped at the model-call budget: 2 of 2 model calls used this turn. Its work so far is kept. Send a message to continue with a fresh budget of 2, or raise maxModelAttempts for the run.",
-          ])
+          expect(events.filter((event) => event._tag === "ErrorOccurred")).toEqual([])
           const last = ended(events).at(-1)
-          expect(last?.outcome).toBe("Failed")
-          expect(last?.modelAttempts).toEqual({ used: 2, limit: 2 })
-          const succeeded = new Set(
-            events
-              .filter((event) => event._tag === "ToolCallSucceeded")
-              .map((event) => event.toolCallId),
-          )
-          expect(succeeded.size).toBe(2)
+          expect(last?.outcome).toBe("Answered")
+          expect(last?.modelAttempts).toEqual({ used: 3, limit: 3 })
           const completed = events.filter(
             (event): event is TurnCompleted => event._tag === "TurnCompleted",
           )
-          expect(completed.map((event) => event.streamFailed)).toEqual([true])
-          // A budget this small is near from the start, but its first step
-          // reads only the task: the notice follows the first call.
+          expect(completed.map((event) => [event.streamFailed, event.unanswered === true])).toEqual(
+            [[false, false]],
+          )
+          // The near notice after the first call, then the last call's line;
+          // a budget this small is near from the start, but its first step
+          // reads only the task.
           expect((yield* storedNotices).map((message) => message.metadata?.details)).toEqual([
-            { used: 1, limit: 2 },
+            { used: 1, limit: 3 },
+            { used: 2, limit: 3 },
           ])
 
           yield* Ref.set(eventsRef, [])
-          yield* runAgentLoop(userMessage("budget-next", "go on"), budget(2))
+          yield* runAgentLoop(userMessage("budget-next", "go on"), budget(3))
+          yield* controls.assertDone
           const next = yield* Ref.get(eventsRef)
           expect(ended(next).map((event) => [event.outcome, event.modelAttempts] as const)).toEqual(
-            [["Answered", { used: 1, limit: 2 }]],
+            [["Answered", { used: 1, limit: 3 }]],
           )
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
       }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a tool call on the last allowed call is refused, not run", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        toolCallStep("echo", { text: "past the budget" }),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-refused", "two calls at most"), budget(2))
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1)
+        const messageStorage = yield* MessageStorage
+        const refused = (yield* messageStorage.listMessages(branchId))
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.isFailure)
+        expect(refused).toHaveLength(1)
+        const completed = events.filter(
+          (event): event is TurnCompleted => event._tag === "TurnCompleted",
+        )
+        expect(completed.map((event) => event.unanswered)).toEqual([true])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a budget of one answers on its only call, with tools off", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("the only answer"),
+          assertOptions: (options) => {
+            expect(options.toolChoice).toBe("none")
+            expect(promptText(options.prompt)).toContain(
+              "last model call of this turn's budget of 1",
+            )
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(userMessage("budget-one", "one call"), budget(1))
+        yield* controls.assertDone
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ErrorOccurred")).toEqual([])
+        expect(ended(events).map((event) => event.modelAttempts)).toEqual([{ used: 1, limit: 1 }])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 

@@ -620,20 +620,29 @@ const runtimeRows = new Map<string, MessageRenderer>([
 const decodeModelAttempts = Schema.decodeUnknownOption(ModelAttempts)
 
 /**
- * The model-call budget notice, `⧗ 3 of 8 model calls left · the turn stops
- * at 8 · send a message to go on`, from its typed details (R6). Narrower than
- * its parts, it drops them from the right; the count stays. A notice whose
- * details do not decode says only what it is.
+ * A model-call budget line, from its typed details (R6): the near notice,
+ * `⧗ 3 of 8 model calls left · the last runs without tools · a new message
+ * gets a fresh budget`, or the last call's, `⧗ last of 8 model calls · tools
+ * off · the turn answers with what it has`. Narrower than its parts, it drops
+ * them from the right; the count stays. A line whose details do not decode
+ * says only what it is.
  */
 const budgetNoticeLabel = (attempts: Option.Option<ModelAttempts>, width: number): string =>
   Option.match(attempts, {
     onNone: () => "model-call budget near its limit",
     onSome: (attempts) => {
-      const parts = [
-        `${modelAttemptsLeft(attempts)} of ${attempts.limit} model calls left`,
-        `the turn stops at ${attempts.limit}`,
-        "send a message to go on",
+      const left = modelAttemptsLeft(attempts)
+      let parts = [
+        `${left} of ${attempts.limit} model calls left`,
+        "the last runs without tools",
+        "a new message gets a fresh budget",
       ]
+      if (left <= 1)
+        parts = [
+          `last of ${attempts.limit} model calls`,
+          "tools off",
+          "the turn answers with what it has",
+        ]
       let kept = parts.length
       while (kept > 1 && textWidth(parts.slice(0, kept).join(" · ")) > width) kept -= 1
       return parts.slice(0, kept).join(" · ")
