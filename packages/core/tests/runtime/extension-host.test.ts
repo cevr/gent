@@ -5368,7 +5368,6 @@ describe("addressed session verbs via RPC", () => {
         const ctx = yield* ExtensionContext
         const child = yield* ctx.Session.create({
           name: "child",
-          parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
           historyBranchId: ctx.branchId,
           requestId: input.requestId,

@@ -4,6 +4,7 @@ import {
   Duration,
   Effect,
   Exit,
+  FileSystem,
   Layer,
   Option,
   Path,
@@ -109,7 +110,12 @@ import {
   SessionSettingsUpdated,
   SessionStarted,
 } from "../domain/event.js"
-import { extensionPlatformServicesLive, GentPlatform } from "../runtime/gent-platform.js"
+import {
+  extensionPlatformServicesLive,
+  GentPlatform,
+  pathWithin,
+  resolveLinks,
+} from "../runtime/gent-platform.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
 import {
   admitChildSessionDepth,
@@ -148,12 +154,25 @@ import {
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveExistingSessionBranch,
+  resolveParentBound,
+  resolveSessionBound,
   resolveTurnProfile,
   RunOpener,
   type SessionProfile,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { type AgentName, isReasoningEffort, resolveAgentRoster } from "../domain/agent.js"
+import {
+  type AgentName,
+  type AgentPathEntry,
+  bindSessionAgent,
+  DEFAULT_AGENT_NAME,
+  isReasoningEffort,
+  noRunBound,
+  type PathScope,
+  resolveAgentRoster,
+  RunPathRefusedError,
+  scopeReaches,
+} from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
@@ -410,9 +429,14 @@ const makeSessionMutationsService: Effect.Effect<
   | SessionProfileCache
   | RuntimeEnvironment
   | ConfigService
+  | FileSystem.FileSystem
+  | Path.Path
 > = Effect.gen(function* () {
   const storageTransaction = yield* makeStorageTransaction
   const configService = yield* ConfigService
+  // A run's paths resolve links at admission, as the file tools resolve them.
+  const fileSystem = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
   const sessionStorage = yield* SessionStorage
   const branchStorage = yield* BranchStorage
   const messageStorage = yield* MessageStorage
@@ -428,13 +452,17 @@ const makeSessionMutationsService: Effect.Effect<
    * because the receipt already answers the retry.
    */
   const eventStore = yield* EventStore
-  const once = <A, E, R>(
+  const once = <A, E, R, AdmitE = never, AdmitR = never>(
     operation: DurableOperation<A>,
     { requestId }: { readonly requestId?: RequestId },
     subject: (result: A) => { readonly sessionId: SessionId; readonly branchId: BranchId },
     work: Effect.Effect<{ readonly envelope: EventEnvelope; readonly result: A }, E, R>,
-    admit: Effect.Effect<void, E, R> = Effect.void,
-  ): Effect.Effect<{ readonly result: A; readonly fresh: boolean }, E | StorageError, R> =>
+    admit: Effect.Effect<void, AdmitE, AdmitR> = Effect.void,
+  ): Effect.Effect<
+    { readonly result: A; readonly fresh: boolean },
+    E | AdmitE | StorageError,
+    R | AdmitR
+  > =>
     Effect.gen(function* () {
       if (!Predicate.isUndefined(requestId)) {
         const existing = yield* sessionOperationStorage.getReceipt(operation, requestId)
@@ -685,16 +713,76 @@ const makeSessionMutationsService: Effect.Effect<
   const profileCache = yield* SessionProfileCache
 
   /**
-   * A session's agent names every turn it runs, and no verb changes it, so
-   * the agent the session will store must be one its own cwd's profile
-   * knows. That is the named agent, or for a handoff the parent's agent,
-   * which it inherits: a handoff can move to a project that has no such
-   * agent. The check resolves a profile, so it runs outside the storage
-   * transaction; `admitParent` checks the parent again inside it.
+   * Refuses the first entry of `entries` (resolved against `cwd`) that
+   * `scope` does not reach. Links resolve on both sides at the check, as
+   * the file tools resolve them at each call.
    */
-  const admitAgent = Effect.fn("SessionMutations.admitAgent")(function* (
+  const requireScopeReaches = Effect.fn("SessionMutations.requireScopeReaches")(
+    function* (
+      entries: ReadonlyArray<AgentPathEntry>,
+      cwd: string,
+      scope: PathScope,
+      owner: string,
+    ) {
+      const resolve = (base: string) => (entry: AgentPathEntry) =>
+        Effect.map(resolveLinks(pathService.resolve(base, entry.path)), (path) => ({
+          path,
+          access: entry.access,
+        }))
+      const reach = yield* Effect.forEach(scope.entries, resolve(scope.cwd))
+      const within = (inner: string, outer: string) => pathWithin(pathService, outer, inner)
+      for (const entry of entries) {
+        if (scopeReaches(reach, yield* resolve(cwd)(entry), within)) continue
+        const named = scope.entries.map((outer) => `${outer.path} (${outer.access})`).join(", ")
+        return yield* new RunPathRefusedError({
+          message: `Run paths entry "${entry.path}" (${entry.access}) is outside ${owner}'s paths: ${named}, relative to ${scope.cwd}. A run's paths only narrow its agent's and its parent run's. Run paths are relative to ${cwd}.`,
+          path: entry.path,
+          access: entry.access,
+        })
+      }
+    },
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, pathService),
+  )
+
+  /**
+   * Admit the run a create asks for. It resolves profiles and reads the
+   * file system, so it runs outside the storage transaction; `admitParent`
+   * checks the parent again inside it.
+   *
+   * - A session's agent names every turn it runs, and no verb changes it, so
+   *   the agent the session will store must be one its own cwd's profile
+   *   knows: the named agent, or for a handoff the parent's agent, which it
+   *   inherits (a handoff can move to a project that has no such agent).
+   * - A spawned child is bounded by its parent run (`resolveSessionBound`),
+   *   and a handoff by its predecessor's parent run (`inheritedBound`): a
+   *   bound nobody can resolve refuses the create (`ParentBoundError`).
+   *   The bound is resolved again at each of the child's turns and file
+   *   calls; nothing of it is copied into the child.
+   * - A run's `paths` only narrow: each entry must lie in an entry of every
+   *   scope of its agent and of its parent run, with at least its access.
+   *   An entry outside refuses the whole run (`RunPathRefusedError`), early
+   *   and by name; a dropped entry would change what the run means.
+   */
+  /**
+   * The bound a create's run inherits: a spawn's parent run's whole bound,
+   * a handoff's predecessor's parent bound (`resolveParentBound`), none for a
+   * root. A handoff's missing predecessor is left to `admitParent`.
+   */
+  const inheritedBound = Effect.fn("SessionMutations.inheritedBound")(function* (
     input: CreateSessionInput,
   ) {
+    if (Predicate.isUndefined(input.parentSessionId)) return noRunBound
+    if (input.continueThread !== true) {
+      return yield* resolveSessionBound(input.parentSessionId, runtimeEnvironment.cwd)
+    }
+    const predecessor = yield* sessionStorage.getSession(input.parentSessionId)
+    if (Predicate.isUndefined(predecessor)) return noRunBound
+    return yield* resolveParentBound(predecessor, runtimeEnvironment.cwd)
+  })
+
+  const admitRun = Effect.fn("SessionMutations.admitRun")(function* (input: CreateSessionInput) {
+    const requested = requestedAdmission(input.admission)
     const inherited = Effect.gen(function* () {
       if (input.continueThread !== true || Predicate.isUndefined(input.parentSessionId)) {
         return Option.none<AgentName>()
@@ -703,28 +791,43 @@ const makeSessionMutationsService: Effect.Effect<
       return Option.fromUndefinedOr(parent?.admission?.agent)
     })
     // A create that names an admission stores it, so its agent is the one.
-    const effective = yield* Option.match(
-      Option.fromUndefinedOr(requestedAdmission(input.admission)),
-      {
-        onNone: () => inherited,
-        onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
-      },
+    const effective = yield* Option.match(Option.fromUndefinedOr(requested), {
+      onNone: () => inherited,
+      onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
+    })
+    const parent = yield* inheritedBound(input).pipe(
+      Effect.provideService(SessionStorage, sessionStorage),
+      Effect.provideService(SessionProfileCache, profileCache),
+      Effect.provideService(ConfigService, configService),
     )
-    if (Option.isNone(effective)) return
-    const agent = effective.value
-    const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)).pipe(
+    const named = Option.fromUndefinedOr(requested?.runSpec?.overrides?.paths)
+    if (Option.isNone(effective) && Option.isNone(named)) return
+    const cwd = input.cwd ?? runtimeEnvironment.cwd
+    const registry = yield* resolveRegistryForCwd(Option.some(cwd)).pipe(
       // The agent roster is resolved data; the lease ends with the read.
       Effect.scoped,
       Effect.provideService(SessionProfileCache, profileCache),
       Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
     )
-    const config = yield* configService.get(input.cwd)
-    const roster = resolveAgentRoster(
+    const config = yield* configService.get(cwd)
+    const name = Option.getOrElse(effective, () => DEFAULT_AGENT_NAME)
+    const agent = resolveAgentRoster(
       registry.getResolved().agents.values(),
       Option.fromUndefinedOr(config.agents),
-    )
-    if (roster.has(agent)) return
-    return yield* new NotFoundError({ message: `Unknown agent: ${agent}` })
+    ).get(name)
+    // Named paths with no agent to check them against fail closed, as a
+    // named agent the roster lacks does.
+    if (Predicate.isUndefined(agent)) {
+      return yield* new NotFoundError({ message: `Unknown agent: ${name}` })
+    }
+    if (Option.isNone(named)) return
+    const own = bindSessionAgent(agent, { overrides: Option.none(), cwd, parent: noRunBound })
+    for (const scope of own.pathScopes()) {
+      yield* requireScopeReaches(named.value, cwd, scope, `agent "${name}"`)
+    }
+    for (const scope of parent.paths) {
+      yield* requireScopeReaches(named.value, cwd, scope, "the parent run")
+    }
   })
 
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
@@ -802,7 +905,7 @@ const makeSessionMutationsService: Effect.Effect<
         }
         return { envelope, result }
       }),
-      admitAgent(input),
+      admitRun(input),
     )
     if (committed.fresh) {
       yield* Effect.logInfo("session.created").pipe(

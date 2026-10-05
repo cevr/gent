@@ -5008,7 +5008,6 @@ describe("session threads", () => {
                   const ctx = yield* ExtensionContext
                   const child = yield* ctx.Session.create({
                     name,
-                    parentSessionId: ctx.sessionId,
                     parentBranchId: ctx.branchId,
                   })
                   return child.sessionId
@@ -5620,7 +5619,14 @@ describe("sessionDeleted hook", () => {
         const parentCwd = "/nonexistent/gent-probe-deleted-parent"
         const childCwd = "/nonexistent/gent-probe-deleted-child"
         const heard: Array<{ readonly sessionId: SessionId; readonly cwd: string }> = []
-        // Only the child's cwd enables the cleanup extension.
+        // Only the child's cwd enables the cleanup extension; the parent's
+        // roster holds the parent's agent, so the child's parent run resolves.
+        const parentAgents: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/parent-agents") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: { agents: e2ePreset.agents },
+        }
         const cleanup: LoadedExtension = {
           manifest: { id: ExtensionId.make("@test/session-deleted-cleanup") },
           scope: "builtin",
@@ -5638,7 +5644,7 @@ describe("sessionDeleted hook", () => {
         }
         const sessionProfileCacheLayer = fixedSessionProfiles(
           new Map([
-            [parentCwd, yield* makeProfile(parentCwd, [])],
+            [parentCwd, yield* makeProfile(parentCwd, [parentAgents])],
             [childCwd, yield* makeProfile(childCwd, [cleanup])],
           ]),
         )

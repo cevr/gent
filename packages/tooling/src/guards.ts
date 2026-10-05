@@ -3005,6 +3005,12 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "overriddenSchemaConstructor:off -- the check refuses only keys the schema does not name, and a decode passes only named keys; `new` must be as strict as `make`.",
   },
   {
+    // A session's run agent is a resolution result over a parsed
+    // definition, with its bound beside the fields; no author builds one.
+    file: "packages/core/src/domain/agent.ts",
+    text: "overriddenSchemaConstructor:off -- a run agent is built only by `bindSessionAgent`, from a definition that already parsed.",
+  },
+  {
     // The replay test runs the registered thread.start twice with one call id,
     // which no model turn can do; the tool it finds is the erased registration.
     file: "packages/extensions/tests/session-tools.test.ts",
