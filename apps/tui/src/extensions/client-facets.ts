@@ -518,14 +518,16 @@ export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<Cli
       const activity: ClientActivity = {
         snapshot: () => {
           const focused = deps.activity()
-          if (focused.state !== "idle" || Predicate.isUndefined(focused.sessionId)) return focused
+          if (focused.state === "blocked" || Predicate.isUndefined(focused.sessionId))
+            return focused
           const states = included()
             .map((entry) => entry.read())
             .filter((next) => next.sessionId === focused.sessionId)
-          if (states.some((next) => next.state === "working"))
-            return { ...focused, state: "working" }
           if (states.some((next) => next.state === "blocked"))
             return { ...focused, state: "blocked" }
+          if (focused.state !== "idle") return focused
+          if (states.some((next) => next.state === "working"))
+            return { ...focused, state: "working" }
           if (states.some((next) => next.state === "unknown"))
             return { ...focused, state: "unknown" }
           return focused

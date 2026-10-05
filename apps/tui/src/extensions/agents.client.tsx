@@ -176,13 +176,6 @@ export function SubagentTray(props: { controller: AgentsController }) {
   // A done thread the shell is on is shown, so it leaves the tray at once.
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
-  // Switching sessions changes whose subtree the tray lists; refetch for it.
-  createEffect(
-    on(
-      () => props.controller.current().sessionId,
-      () => props.controller.refresh(""),
-    ),
-  )
   // Two columns of padding, the pulse and its space, and the hint on the first line.
   const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
   const lines = () => trayLines(running(), rowWidth(), finished())
@@ -298,12 +291,6 @@ export const makeAgentsController = (
     const empty: ReadonlyArray<AgentRowEntry> = []
     // Returning to a session does not make its earlier activity current again.
     const [view, setView] = createSignal(0)
-    createRoot((dispose) => {
-      lifecycle.addCleanup(dispose)
-      createEffect(
-        on(transport.currentSession, () => setView((value) => value + 1), { defer: true }),
-      )
-    })
     // The filter the reader typed; a reload re-reads under it.
     let query = ""
     const open = () => shell.pane.isOpen(AGENTS_PANE)
@@ -477,9 +464,9 @@ export const makeAgentsController = (
         const children = descendants()
         if (Option.isNone(children)) return { sessionId, state: "unknown" }
         const live = children.value.filter((row) => row.section !== "inactive")
-        if (live.some((row) => row.status === "Running")) return { sessionId, state: "working" }
         if (live.some((row) => row.status === "WaitingForInteraction"))
           return { sessionId, state: "blocked" }
+        if (live.some((row) => row.status === "Running")) return { sessionId, state: "working" }
         if (live.some((row) => row.status !== "Idle")) return { sessionId, state: "unknown" }
         return { sessionId, state: "idle" }
       }),
@@ -526,6 +513,18 @@ export const makeAgentsController = (
       listing.refresh()
     }
 
+    // Knowledge belongs to the controller, even when another extension
+    // replaces its tray. The same coalescer reads initial and changed views.
+    createRoot((dispose) => {
+      lifecycle.addCleanup(dispose)
+      createEffect(
+        on(transport.currentSession, () => {
+          setView((value) => value + 1)
+          tick()
+        }),
+      )
+    })
+
     // A delegate pulse in the current session means its subtree changed; so
     // does a session-tools pulse, which `thread.start` sends.
     lifecycle.addCleanup(
@@ -548,11 +547,11 @@ export const makeAgentsController = (
       Effect.forkScoped(
         Effect.sync(() => {
           const watching = Option.match(descendants(), {
-            onNone: () => Option.isSome(listing.error()),
+            onNone: () => true,
             onSome: (children) => children.some((row) => row.section !== "inactive"),
           })
           if (open() || watching) tick()
-        }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
+        }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY)), Effect.delay(POLL_EVERY)),
       ),
     )
 

@@ -1018,9 +1018,10 @@ describe("Herdr integration", () => {
       controller.reload()
       yield* waitUntil(() => !controller.loading(), "blocked child listed")
       const { activity } = yield* ClientContext.pipe(Effect.provideContext(context))
-      expect(activity.snapshot().state).toBe("working")
-      setFocused("idle")
+      expect(activity.snapshot().state).toBe("blocked")
       expect((yield* server.next).params.state).toBe("blocked")
+      setFocused("idle")
+      expect(activity.snapshot().state).toBe("blocked")
       setFocused("blocked")
       children = [child]
       controller.reload()
@@ -1127,13 +1128,12 @@ describe("Herdr integration", () => {
           })
           const first = yield* loader.load
           expect(first.resolved.failures).toEqual([])
-          expect((yield* server.next).params.state).toBe("unknown")
+          expect((yield* server.next).params.state).toBe("working")
           const open = first.resolved.commandSources
             .flatMap((source) => source.commands)
             .find((command) => command.id === "agents.view")
           expect(open).toBeDefined()
           open?.onSelect()
-          expect((yield* server.next).params.state).toBe("working")
           disabled = [agentsExtension.id]
           const removed = yield* loader.load
           yield* removed.retire
@@ -1142,7 +1142,7 @@ describe("Herdr integration", () => {
           const ended = yield* loader.load
           yield* ended.retire
           expect((yield* server.next).method).toBe("pane.release_agent")
-          expect(server.received()).toBe(4)
+          expect(server.received()).toBe(3)
         }).pipe(
           Effect.provideContext(context),
           Effect.provideService(ConfigProvider.ConfigProvider, config(server.target.socketPath)),
