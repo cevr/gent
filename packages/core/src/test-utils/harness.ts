@@ -164,6 +164,7 @@ const defaultSession = (): ExtensionSessionService => ({
       }),
     ),
   renameCurrent: () => die("Session.renameCurrent"),
+  forkBranch: () => die("Session.forkBranch"),
   create: () => die("Session.create"),
   delete: () => die("Session.delete"),
   send: () => die("Session.send"),

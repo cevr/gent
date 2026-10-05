@@ -40,6 +40,7 @@ import {
   BranchId,
   ExtensionId,
   InteractionRequestId,
+  MessageId,
   ProcessGenerationId,
   RequestId,
   SessionId,
@@ -4986,6 +4987,106 @@ describe("event subscriptions", () => {
         expect(resumed.map((env) => env.event._tag)).toEqual(["StreamSynchronized"])
       }),
     ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+})
+
+describe("extension branch forks", () => {
+  it.live(
+    "an extension forks its branch at a message, and the same request id forks once",
+    () =>
+      Effect.gen(function* () {
+        const extensionId = ExtensionId.make("@test/fork-at")
+        const ForkInput = Schema.Struct({ atMessageId: MessageId, requestId: RequestId })
+        const ext: LoadedExtension = {
+          manifest: { id: extensionId },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            requests: [
+              request({
+                id: "fork-at",
+                input: ForkInput,
+                output: BranchId,
+                execute: (input) =>
+                  Effect.gen(function* () {
+                    const ctx = yield* ExtensionContext
+                    const forked = yield* ctx.Session.forkBranch({
+                      atMessageId: input.atMessageId,
+                      requestId: input.requestId,
+                      name: "rewound",
+                    })
+                    return forked.branchId
+                  }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new CapabilityError({
+                          extensionId,
+                          capabilityId: "fork-at",
+                          reason: cause.message,
+                        }),
+                    ),
+                  ),
+              }),
+            ],
+          },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first answer"),
+          textStep("second answer"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensions: [ext],
+          cwd: "/nonexistent/gent-extension-fork",
+        })
+        for (const [index, content] of ["first", "second"].entries()) {
+          yield* client.message.send({ sessionId, branchId, content })
+          yield* waitFor(
+            client.message.list({ branchId }),
+            (messages) =>
+              messages.filter((message) => message.role === "assistant").length === index + 1,
+            4000,
+            `reply to ${content}`,
+          )
+        }
+        const before = yield* client.message.list({ branchId })
+        const firstAnswer = before.find(
+          (message) =>
+            message.role === "assistant" && messagePartsText(message.parts) === "first answer",
+        )
+        expect(firstAnswer).toBeDefined()
+        const fork = (requestId: string) =>
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "fork-at",
+              input: { atMessageId: firstAnswer?.id ?? "", requestId },
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(BranchId)))
+        const forked = yield* fork("fork-1")
+        expect(forked).not.toBe(branchId)
+        // A repeat of the request answers the branch the first call made.
+        expect(yield* fork("fork-1")).toBe(forked)
+        const branches = yield* client.branch.list({ sessionId })
+        expect(branches.map((branch) => branch.id).sort()).toEqual([branchId, forked].sort())
+        const made = branches.find((branch) => branch.id === forked)
+        expect(made?.parentBranchId).toBe(branchId)
+        expect(made?.name).toBe("rewound")
+        // The fork holds the conversation up to the message; the old branch keeps all of it.
+        const copied = yield* client.message.list({ branchId: forked })
+        expect(copied.map((message) => messagePartsText(message.parts))).toEqual([
+          "first",
+          "first answer",
+        ])
+        expect((yield* client.message.list({ branchId })).length).toBe(before.length)
+        // The session's active branch did not move.
+        const session = (yield* client.session.list()).find((found) => found.id === sessionId)
+        expect(session?.activeBranchId).toBe(branchId)
+      }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+    10_000,
   )
 })
 

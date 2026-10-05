@@ -4026,6 +4026,20 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),
           ).pipe(Effect.mapError(sessionError("renameCurrent")), inWorkspace),
+        // A branch of the run's own session only: the fork names no other session.
+        forkBranch: (params) =>
+          mutations((service) =>
+            service.forkSessionBranch({
+              sessionId: runInfo.sessionId,
+              fromBranchId: params.branchId ?? runInfo.branchId,
+              atMessageId: params.atMessageId,
+              ...omitUndefined({ name: params.name, requestId: params.requestId }),
+            }),
+          ).pipe(
+            Effect.map(({ branchId }) => ({ branchId })),
+            Effect.mapError(sessionError("forkBranch")),
+            inWorkspace,
+          ),
         create: (params) =>
           requireHistoryReach(runInfo, Option.fromUndefinedOr(params.historyBranchId)).pipe(
             Effect.andThen(
