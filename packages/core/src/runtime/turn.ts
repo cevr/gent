@@ -29,7 +29,7 @@ import {
   getToolMetadata,
   type PromptSection,
   systemPromptBlocks,
-  type ToolCallVerdict,
+  type KeptToolCallVerdict,
   type ToolCapability,
   toWirePrompt,
   wireToolName,
@@ -3457,8 +3457,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const markParkedCalls = Effect.fn("AgentLoop.markParkedCalls")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
       readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
-      /** Each parked call, with the verdict its run applied when a hook judged it. */
-      readonly parked: ReadonlyMap<string, Option.Option<ToolCallVerdict>>
+      /** Each parked call, with the verdict its run applied when a hook judged it and its gate's state. */
+      readonly parked: ReadonlyMap<string, Option.Option<KeptToolCallVerdict>>
     }) {
       const pendingToolCalls: ReadonlyArray<PendingToolCall> = params.toolCalls.map((toolCall) => {
         const mark = params.parked.get(toolCall.id)
@@ -3467,7 +3467,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           id: toolCall.id,
           name: toolCall.name,
           parked: true,
-          ...Option.match(mark, { onNone: () => ({}), onSome: (verdict) => ({ verdict }) }),
+          ...Option.match(mark, {
+            onNone: () => ({}),
+            onSome: ({ verdict, gate }) => ({ verdict, gate }),
+          }),
         }
       })
       yield* writeTurnRecord(params.messageId, () => ({ pendingToolCalls }), { onFailure: "die" })
@@ -3586,7 +3589,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         hostToolBindings: ResolvedTurnContext["toolBindings"]
         recoveredResults?: ReadonlyArray<Prompt.ToolResultPart>
         /** The verdicts the parked calls' earlier runs applied (`ToolCallGate`). */
-        verdicts?: ReadonlyMap<string, ToolCallVerdict>
+        verdicts?: ReadonlyMap<string, KeptToolCallVerdict>
       }) {
         if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
@@ -3605,11 +3608,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // Every call that parks is marked when it parks, one write at a time,
         // each restating every mark so far. Only a parked call runs again
         // when the turn resumes; a call cut short without a mark does not.
-        const parked = yield* Ref.make<ReadonlyMap<string, Option.Option<ToolCallVerdict>>>(
+        const parked = yield* Ref.make<ReadonlyMap<string, Option.Option<KeptToolCallVerdict>>>(
           new Map(),
         )
         const markLock = yield* Semaphore.make(1)
-        const onParked = (toolCallId: ToolCallId, verdict: Option.Option<ToolCallVerdict>) =>
+        const onParked = (toolCallId: ToolCallId, verdict: Option.Option<KeptToolCallVerdict>) =>
           Ref.updateAndGet(parked, (current) => new Map([...current, [toolCallId, verdict]])).pipe(
             Effect.flatMap((marked) =>
               markParkedCalls({
@@ -4190,7 +4193,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         pendingToolCalls: settled,
         // No call of a step the record does not name may run again.
         parkedCallIds: new Set<string>(),
-        parkedVerdicts: new Map<string, ToolCallVerdict>(),
+        parkedVerdicts: new Map<string, KeptToolCallVerdict>(),
       }
       const record = yield* readTurnRecord(messageId)
       if (record.pendingToolCalls.length > 0) {
@@ -4211,7 +4214,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             parkedVerdicts: new Map(
               record.pendingToolCalls.flatMap((call) => {
                 if (call.parked !== true || Predicate.isUndefined(call.verdict)) return []
-                return [[call.id, call.verdict] as const]
+                // A row from before the gate state asks again.
+                const kept: KeptToolCallVerdict = {
+                  verdict: call.verdict,
+                  gate: call.gate ?? "pending",
+                }
+                return [[call.id, kept] as const]
               }),
             ),
           }

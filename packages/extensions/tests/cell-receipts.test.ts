@@ -1789,6 +1789,199 @@ describe("recorded host operations", () => {
   )
 
   it.scopedLive(
+    "an operation whose Ask the user approved resumes after a restart with no second question: its own approval takes its saved answer",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
+        const storagePath = (yield* Path.Path).join(directory, "gent.db")
+        const judgedHost = {
+          ...cellToolHost,
+          assistantMessageId: MessageId.make("gated-host-turn:assistant:1"),
+        }
+        const judged = yield* Ref.make(0)
+        const contributions = yield* collectTestContributions(
+          Effect.gen(function* () {
+            yield* (yield* ExtensionHost).on("toolCall", () =>
+              Ref.update(judged, (count) => count + 1).pipe(
+                Effect.as(ToolCallVerdict.cases.Ask.make({ reason: "approvals are watched" })),
+              ),
+            )
+          }),
+        )
+        const layer = createE2ELayer({
+          agents: [],
+          extensions: [
+            {
+              manifest: { id: ExtensionId.make("gated-host") },
+              scope: "builtin",
+              sourcePath: "gated-host",
+              artifactIdentity: LoadedArtifactIdentity.make("gated-host-source"),
+              contributions: {
+                ...contributions,
+                tools: [
+                  tool({
+                    id: "approve",
+                    description: "Approve saved input",
+                    params: Schema.Struct({ valid: Schema.Boolean }),
+                    output: Schema.Boolean,
+                    execute: () =>
+                      Effect.gen(function* () {
+                        const ctx = yield* ExtensionContext
+                        return (yield* ctx.Interaction.approve({ text: "Allow saved input?" }))
+                          .approved
+                      }),
+                  }),
+                ],
+              },
+            },
+          ],
+          providerLayer: LanguageModelLayers.debug(),
+          approvalLayer: ApprovalService.Live,
+          storagePath,
+        }).pipe(withCellStorage)
+        const hostParams = Effect.gen(function* () {
+          const turn = yield* captureTurnTools(judgedHost)
+          return {
+            cell: judgedHost,
+            profile: {
+              ...turn.profile,
+              turnHostCtx: { ...turn.profile.turnHostCtx, agentName: DEFAULT_AGENT_NAME },
+            },
+            toolBindings: turn.toolBindings,
+            ledger: yield* ModelContextLedger.make,
+          }
+        })
+        const operation = (cell: typeof judgedHost) =>
+          Effect.gen(function* () {
+            return yield* (yield* CellStorage).operations.get({ cell, operationId: "1" })
+          })
+        const waitingOn = (skip: Option.Option<InteractionRequestId>) =>
+          waitFor(
+            operation(judgedHost),
+            ({ state }) =>
+              state._tag === "Waiting" &&
+              !Option.exists(skip, (requestId) => requestId === state.requestId),
+            5_000,
+            "the operation waits for an answer",
+          ).pipe(
+            Effect.flatMap((current) => {
+              if (current.state._tag !== "Waiting")
+                return Effect.die("The operation is not waiting")
+              return Effect.succeed(current.state.requestId)
+            }),
+          )
+        // First process: the guard's question is approved, the tool's own
+        // approval is asked, and the worker is lost before it is answered.
+        const own = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(layer)
+            return yield* Effect.gen(function* () {
+              yield* plantCellCall(judgedHost, "1")
+              yield* (yield* CellStorage).executions.claim(judgedHost)
+              const host = yield* makeCellToolHost(yield* hostParams)
+              const asking = yield* host
+                .call(requestToolHost("1", "approve"))
+                .pipe(Effect.forkChild)
+              const guard = yield* waitingOn(Option.none())
+              const approvals = yield* ApprovalService
+              yield* approvals.storeResolution(judgedHost, guard, { approved: true })
+              const tool = yield* waitingOn(Option.some(guard))
+              yield* Fiber.interrupt(asking)
+              yield* approvals.storeResolution(judgedHost, tool, { approved: true })
+              expect((yield* operation(judgedHost)).gate).toBe("passed")
+              return tool
+            }).pipe(Effect.provideContext(context))
+          }),
+        )
+        // Second process: the operation resumes on the tool's answer.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(layer)
+            yield* Effect.gen(function* () {
+              const result = yield* resumeCellToolOperation({
+                ...(yield* hostParams),
+                operationId: "1",
+                requestId: own,
+              }).pipe(Effect.timeout("3 seconds"))
+              expect(result.isFailure).toBe(false)
+              expect(result.result).toBe(true)
+              expect(yield* Ref.get(judged)).toBe(1)
+            }).pipe(Effect.provideContext(context))
+          }),
+        )
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+    25000,
+  )
+
+  it.scopedLive(
+    "a verdict the operation cannot store fails the operation before it runs",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const judged = yield* Ref.make(0)
+        // The hook corrupts the operation's row, so storing its verdict fails.
+        const corrupt = yield* Ref.make<Effect.Effect<void>>(Effect.void)
+        const contributions = yield* collectTestContributions(
+          Effect.gen(function* () {
+            yield* (yield* ExtensionHost).on("toolCall", () =>
+              Ref.update(judged, (count) => count + 1).pipe(
+                Effect.andThen(Effect.flatten(Ref.get(corrupt))),
+                Effect.as(ToolCallVerdict.cases.Allow.make({})),
+              ),
+            )
+          }),
+        )
+        const context = yield* Layer.build(
+          createE2ELayer({
+            agents: [],
+            extensions: [
+              {
+                manifest: { id: ExtensionId.make("unstored-host") },
+                scope: "builtin",
+                sourcePath: "unstored-host",
+                artifactIdentity: LoadedArtifactIdentity.make("unstored-host-source"),
+                contributions: { ...contributions, tools: [countTool(calls)] },
+              },
+            ],
+            providerLayer: LanguageModelLayers.debug(),
+            approvalLayer: ApprovalService.Live,
+          }).pipe(withCellStorage),
+        )
+        yield* Effect.gen(function* () {
+          const unstoredHost = {
+            ...cellToolHost,
+            assistantMessageId: MessageId.make("unstored-host-turn:assistant:1"),
+          }
+          yield* plantCellCall(unstoredHost, "1")
+          yield* (yield* CellStorage).executions.claim(unstoredHost)
+          const sql = yield* SqlClient.SqlClient
+          yield* Ref.set(
+            corrupt,
+            sql`UPDATE cell_tool_operations SET record_json = '{}' WHERE assistant_message_id = ${unstoredHost.assistantMessageId}`.pipe(
+              Effect.asVoid,
+              Effect.orDie,
+            ),
+          )
+          const turn = yield* captureTurnTools(unstoredHost)
+          const host = yield* makeCellToolHost({
+            cell: unstoredHost,
+            profile: {
+              ...turn.profile,
+              turnHostCtx: { ...turn.profile.turnHostCtx, agentName: DEFAULT_AGENT_NAME },
+            },
+            toolBindings: turn.toolBindings,
+            ledger: yield* ModelContextLedger.make,
+          })
+          const exit = yield* host.call(requestToolHost("1", "count")).pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(yield* Ref.get(judged)).toBe(1)
+          expect(yield* Ref.get(calls)).toBe(0)
+        }).pipe(Effect.provideContext(context))
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+    18000,
+  )
+
+  it.scopedLive(
     "an operation resumed after a restart applies the verdict its first run kept, with no new judgement",
     () =>
       Effect.gen(function* () {

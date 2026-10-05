@@ -32,6 +32,7 @@ import {
   type ToolBindingIdentity,
   ToolCallBindingConflictError,
   type ToolCallBindingKey,
+  ToolCallGateState,
   ToolCallVerdict,
   validateToolBindingIdentity,
 } from "../domain/capability.js"
@@ -1888,6 +1889,12 @@ export const PendingToolCall = Schema.Struct({
    * and on rows written before the verdict existed.
    */
   verdict: Schema.optional(ToolCallVerdict),
+  /**
+   * Whether the call passed its gate: `passed` once the user approved its
+   * `Ask`, so the next run does not ask that question again. Absent reads as
+   * `pending` (a row written before the state existed asks again).
+   */
+  gate: Schema.optional(ToolCallGateState),
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 

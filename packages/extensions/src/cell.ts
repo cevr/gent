@@ -80,6 +80,8 @@ import {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   type ToolCallGate,
+  ToolCallGateState,
+  type KeptToolCallVerdict,
   type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
@@ -155,6 +157,13 @@ const Operation = Schema.Struct({
    * judged it, and on records written before the verdict existed.
    */
   verdict: Schema.optional(ToolCallVerdict),
+  /**
+   * Whether the operation passed its gate: `passed` once the user approved
+   * its `Ask`, so a resumed operation does not ask that question again and
+   * its own approval takes the answer the record keeps. Absent reads as
+   * `pending`.
+   */
+  gate: Schema.optional(ToolCallGateState),
 })
 type CellToolOperation = typeof Operation.Type
 const OperationJson = Schema.fromJsonString(Operation)
@@ -209,11 +218,13 @@ interface CellToolOperationStorageService {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) => Effect.Effect<CellToolOperation, StorageError>
-  /** Keep the verdict the hooks gave the operation; the first one stays. */
+  /** Keep the verdict the hooks gave the operation, its gate `pending`; the first one stays. */
   readonly judge: (
     key: CellToolOperationKey,
     verdict: ToolCallVerdict,
   ) => Effect.Effect<void, StorageError>
+  /** Keep that the user approved the operation's `Ask`: its gate is `passed`. */
+  readonly pass: (key: CellToolOperationKey) => Effect.Effect<void, StorageError>
   /** The call took its answer and runs on: it waits for nothing now. */
   readonly take: (
     key: CellToolOperationKey,
@@ -522,7 +533,17 @@ const makeToolOperationStorage = Effect.gen(function* () {
       yield* own(key)
       const operation = yield* read(key)
       if (Predicate.isNotUndefined(operation.verdict)) return
-      yield* write(key, { ...operation, verdict })
+      yield* write(key, { ...operation, verdict, gate: "pending" })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
+  const pass = Effect.fn("CellToolOperationStorage.pass")(function* (key: CellToolOperationKey) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      const operation = yield* read(key)
+      if (Predicate.isUndefined(operation.verdict))
+        return yield* new StorageError({ message: "A cell operation with no verdict cannot pass" })
+      yield* write(key, { ...operation, gate: "passed" })
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
   return {
@@ -533,6 +554,7 @@ const makeToolOperationStorage = Effect.gen(function* () {
     suspend,
     resume,
     judge,
+    pass,
     take,
     complete,
   } satisfies CellToolOperationStorageService
@@ -2312,8 +2334,22 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           },
           toolCallId: admitted.toolCallId,
           binding: Option.some(binding),
-          // A resumed operation keeps the verdict its first run applied.
-          gate: omitUndefined({ verdict: admitted.verdict }),
+          // A resumed operation keeps the verdict its first run applied and
+          // its gate's state: a passed gate does not ask again.
+          gate: {
+            ...omitUndefined({
+              kept: Option.getOrUndefined(
+                Option.map(
+                  Option.fromUndefinedOr(admitted.verdict),
+                  (verdict): KeptToolCallVerdict => ({
+                    verdict,
+                    gate: admitted.gate ?? "pending",
+                  }),
+                ),
+              ),
+            }),
+            onPassed: storage.pass(key),
+          },
         }).pipe(
           Effect.provideService(CurrentCellToolOperation, key),
           Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
@@ -2441,19 +2477,12 @@ export const makeCellToolHost = (
               request,
               toolCallId: admission.operation.toolCallId,
               binding: captured,
-              // The verdict is kept before the call asks or runs, so a
-              // restart resumes it without a second judgement.
+              // The verdict and an approval of its `Ask` are kept before the
+              // call goes on, so a restart resumes it without a second
+              // judgement or question; a write that fails fails the call.
               gate: {
-                onVerdict: (verdict) =>
-                  storage
-                    .judge(key, verdict)
-                    .pipe(
-                      Effect.catch((error) =>
-                        Effect.logWarning("cell.operation.verdict-not-kept").pipe(
-                          Effect.annotateLogs({ error: error.message }),
-                        ),
-                      ),
-                    ),
+                onVerdict: (verdict) => storage.judge(key, verdict),
+                onPassed: storage.pass(key),
               },
             }).pipe(
               Effect.provideService(CurrentCellToolOperation, key),

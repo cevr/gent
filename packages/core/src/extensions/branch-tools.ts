@@ -47,6 +47,7 @@ export { innerOperationBindingIdentity, resolveStoredToolBinding } from "../runt
 export { CurrentDispatchingCall } from "../runtime/tools.js"
 export { CurrentToolCall } from "../runtime/tools.js"
 export { type ResolvedToolCapability, type ToolCallGate, ToolRunner } from "../runtime/tools.js"
+export { type KeptToolCallVerdict, ToolCallGateState } from "../domain/capability.js"
 export { getToolMetadata } from "../domain/capability.js"
 export { toolResultSummary } from "../domain/capability.js"
 

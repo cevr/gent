@@ -806,6 +806,23 @@ export const ToolCallVerdict = Schema.TaggedUnion({
 })
 export type ToolCallVerdict = typeof ToolCallVerdict.Type
 
+/**
+ * Where a call stands at its gate. `pending`: the verdict is given and the
+ * call has not passed it (an `Ask` not yet approved). `passed`: the user
+ * approved the `Ask`, so a later run of the call does not ask again.
+ */
+export const ToolCallGateState = Schema.Literals(["pending", "passed"])
+export type ToolCallGateState = typeof ToolCallGateState.Type
+
+/**
+ * The verdict a call keeps across its runs (a parked call, a cell operation
+ * resumed after a restart): the hooks judge a call once.
+ */
+export interface KeptToolCallVerdict {
+  readonly verdict: ToolCallVerdict
+  readonly gate: ToolCallGateState
+}
+
 // ── tool-wire-name ──────────────────────────────────────────────────────────
 
 /**

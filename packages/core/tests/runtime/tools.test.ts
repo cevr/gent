@@ -1526,4 +1526,50 @@ describe("toolCall hook", () => {
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(gatePlatform)),
     12_000,
   )
+
+  it.scopedLive(
+    "the hook reads the input the tool will run with: a field its schema drops never reaches the hook",
+    () =>
+      Effect.gen(function* () {
+        const inputs: Array<ToolCallInput["input"]> = []
+        const server = yield* gatedServer({
+          hooks: [
+            toolCallHookExtension("test/record", (input) =>
+              Effect.sync(() => inputs.push(input.input)).pipe(
+                Effect.as(ToolCallVerdict.cases.Allow.make({})),
+              ),
+            ),
+          ],
+          steps: [
+            toolCallStep("note", { text: "milk", extra: "rm -rf build" }),
+            textStep("finished"),
+          ],
+        })
+        const { results } = yield* server.run("Note milk.", true)
+        expect(results.map((part) => part.isFailure)).toEqual([false])
+        expect(inputs).toEqual([{ text: "milk" }])
+        expect(server.ran).toEqual(["milk"])
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
+
+  it.scopedLive("a call whose input does not decode fails as before, and no hook judges it", () =>
+    Effect.gen(function* () {
+      let judged = 0
+      const server = yield* gatedServer({
+        hooks: [
+          toolCallHookExtension("test/count", () =>
+            Effect.sync(() => {
+              judged += 1
+            }).pipe(Effect.as(ToolCallVerdict.cases.Allow.make({}))),
+          ),
+        ],
+        steps: [toolCallStep("note", { count: 3 }), textStep("finished")],
+      })
+      const { results, answered } = yield* server.run("Note.", true)
+      expect(results.map((part) => part.isFailure)).toEqual([true])
+      expect(errorFromResult(results[0]!)).toContain("input failed")
+      expect(judged).toBe(0)
+      expect(answered).toBe(true)
+    }).pipe(Effect.timeout("6 seconds"), Effect.provide(gatePlatform)),
+  )
 })

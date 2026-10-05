@@ -314,7 +314,7 @@ export const provideExtensionLeaf =
 
 // ── extension-hooks ─────────────────────────────────────────────────────────
 
-interface CompiledExtensionHooks {
+export interface CompiledExtensionHooks {
   readonly resolveSystemPrompt: (
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentExtensionHostContext>
