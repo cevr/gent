@@ -264,11 +264,11 @@ const configUpdates = {
     from: CredentialSlot,
     to: CredentialSlot,
   ): Option.Option<UserConfig> => {
-    const held = [owner, ...aliases]
-      .map((id) => current.providers?.[id]?.authOrder)
-      .find(Predicate.isNotUndefined)
-    if (Predicate.isUndefined(held) || !held.includes(from)) return Option.none()
-    const order = held.map((slot) => {
+    const held = heldAuthOrder(current, owner, aliases).pipe(
+      Option.filter((order) => order.includes(from)),
+    )
+    if (Option.isNone(held)) return Option.none()
+    const order = held.value.map((slot) => {
       if (slot === from) return to
       return slot
     })
@@ -292,6 +292,59 @@ const shadowingOrderEntries = (
     if (Predicate.isUndefined(entry)) return false
     return id === owner || Predicate.isNotUndefined(entry.authOrder)
   })
+}
+
+/** The sign-in's order in one file: the first one `owner` or an entry in `aliases` names. */
+const heldAuthOrder = (
+  config: UserConfig,
+  owner: string,
+  aliases: ReadonlyArray<string>,
+): Option.Option<ReadonlyArray<CredentialSlot>> =>
+  Option.fromUndefinedOr(
+    [owner, ...aliases]
+      .map((id) => config.providers?.[id]?.authOrder)
+      .find(Predicate.isNotUndefined),
+  )
+
+/** The opening of a refusal that names project entries winning over the user file. */
+export const projectEntriesText = (ids: ReadonlyArray<string>) =>
+  `The project config (.gent/config.json) has an entry for ${ids.map((id) => `"${id}"`).join(", ")}`
+
+/**
+ * Why `owner`'s credential `from` cannot be relabeled `to`, read before
+ * anything moves; none when it can. A project entry that wins over the
+ * user file (`shadowingOrderEntries`) and names `from` refuses it: its order
+ * would then walk a label no credential holds. An order the user file or
+ * such an entry holds that names `to` refuses it: the order would name the
+ * moved credential twice, or enrol it where the user never put it.
+ */
+const authSlotRenameRefusal = (params: {
+  readonly user: UserConfig
+  readonly project: UserConfig
+  readonly owner: string
+  readonly aliases: ReadonlyArray<string>
+  readonly from: CredentialSlot
+  readonly to: CredentialSlot
+}): Option.Option<string> => {
+  const projectOrders = shadowingOrderEntries(params.project, params.owner, params.aliases).map(
+    (id) => ({ id, order: params.project.providers?.[id]?.authOrder ?? [] }),
+  )
+  const keepsFrom = projectOrders.filter(({ order }) => order.includes(params.from))
+  if (keepsFrom.length > 0) {
+    return Option.some(
+      `${projectEntriesText(keepsFrom.map(({ id }) => id))}, whose authOrder names "${params.from}": edit it there first`,
+    )
+  }
+  const orders = [
+    Option.getOrElse(heldAuthOrder(params.user, params.owner, params.aliases), () => []),
+    ...projectOrders.map(({ order }) => order),
+  ]
+  if (orders.some((order) => order.includes(params.to))) {
+    return Option.some(
+      `"${params.to}" is in the authOrder of "${params.owner}": move it out of the order first, or pick another label`,
+    )
+  }
+  return Option.none()
 }
 
 /** User then project `agents` entries: a project entry replaces only the fields it names. */
@@ -466,6 +519,19 @@ interface ConfigServiceService {
     aliases: ReadonlyArray<string>,
     cwd: string,
   ) => Effect.Effect<ReadonlyArray<string>, ConfigLoadError | ConfigWriteError>
+  /**
+   * Why the sign-in's credential `from` cannot be relabeled `to`, read from
+   * the user file and the project config of `cwd` before anything moves;
+   * none when it can: a project order that wins names `from`, or an order
+   * names `to` (`authSlotRenameRefusal`).
+   */
+  readonly authSlotRenameRefusal: (
+    owner: string,
+    aliases: ReadonlyArray<string>,
+    from: CredentialSlot,
+    to: CredentialSlot,
+    cwd: string,
+  ) => Effect.Effect<Option.Option<string>>
   /**
    * Relabel `from` as `to` in the order the user config holds for the
    * sign-in (`owner` and its `aliases`); no-op when it holds none with
@@ -929,7 +995,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // does not decode reads as the last one that did; a project file that
       // does not decode sets nothing. Both are in `failures`, and a turn
       // refuses to run on either: the stand-in can grant more than the file.
-      const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
+      const readUser = Effect.gen(function* () {
         const failures: Array<ConfigLoadError> = []
         const files: Array<ConfigFileRead> = []
         const userRead = yield* readUserConfig
@@ -942,6 +1008,10 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           if (Result.isSuccess(userRead.success.read)) user = userRead.success.read.success
           else failures.push(userRead.success.read.failure)
         }
+        return { user, failures, files }
+      })
+      const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
+        const { user, failures, files } = yield* readUser
         const projectRead = yield* readProject(cwd)
         failures.push(...projectRead.failures)
         files.push(...projectRead.files)
@@ -1001,6 +1071,14 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               }),
             )
             return []
+          },
+        ),
+
+        authSlotRenameRefusal: Effect.fn("ConfigService.authSlotRenameRefusal")(
+          function* (owner, aliases, from, to, cwd) {
+            const { project } = yield* readProject(cwd)
+            const { user } = yield* readUser
+            return authSlotRenameRefusal({ user, project, owner, aliases, from, to })
           },
         ),
 
@@ -1069,6 +1147,17 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 () => current,
               ),
             ).pipe(Effect.as([])),
+          authSlotRenameRefusal: (owner, aliases, from, to) =>
+            Effect.map(Ref.get(userConfigRef), (user) =>
+              authSlotRenameRefusal({
+                user,
+                project: emptyProjectConfig,
+                owner,
+                aliases,
+                from,
+                to,
+              }),
+            ),
           renameAuthSlot: (owner, aliases, from, to) =>
             Ref.update(userConfigRef, (current) =>
               Option.getOrElse(
