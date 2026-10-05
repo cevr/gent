@@ -3935,6 +3935,49 @@ describe("virtual model routing", () => {
   )
 
   it.scopedLive(
+    "a route after a move to another account reads the branch's model as cold",
+    () =>
+      Effect.gen(function* () {
+        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first"),
+          textStep("second"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: e2ePreset.agents,
+          providerLayer,
+          extensionInputs: [
+            routingExtension({
+              route: (input) =>
+                Ref.update(inputs, (all) => [...all, input]).pipe(
+                  Effect.as({ choice: 1, reason: "strong" }),
+                ),
+            }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectAuto(client, sessionId)
+        yield* client.auth.setKey({ provider: "custom", key: "sk-fake-a", sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        const work = CredentialSlot.make("work")
+        yield* client.auth.setKey({ provider: "custom", slot: work, key: "sk-fake-b", sessionId })
+        yield* client.auth.setOrder({ provider: "custom", order: [work], sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        yield* afterTurns(2)
+        const second = (yield* Ref.get(inputs))[1]
+        expect(Option.map(second?.current ?? Option.none(), (current) => current.model.id)).toEqual(
+          Option.some(STRONG_MODEL),
+        )
+        // The cache the strong model holds is the other account's.
+        expect(Option.exists(second?.current ?? Option.none(), (current) => current.warm)).toBe(
+          false,
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a router runs under its own extension id: its state pulse names it and the route stands",
     () =>
       Effect.gen(function* () {
@@ -4990,6 +5033,47 @@ describe("effort auto", () => {
             expect(second?.classifier).toBeUndefined()
           }
         }
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a turn that goes out on another account than the last request holds no effort for a warm cache",
+    () =>
+      Effect.gen(function* () {
+        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+        // No lifetime: only the account can make the cache cold.
+        const model = plainModel(Option.none())
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          textStep("first"),
+          textStep("second"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          agents: agentOn(model),
+          providerLayer,
+          models: [model],
+          extensionInputs: [
+            routingExtension({ effort: effortRouter, route: pickEfforts(inputs, [2, 0]) }),
+          ],
+        })
+        const afterTurns = yield* recordBranchEvents(client, { sessionId, branchId })
+        yield* selectEffortAuto(client, sessionId)
+        yield* client.auth.setKey({ provider: "plain", key: "sk-fake-a", sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* afterTurns(1)
+        const work = CredentialSlot.make("work")
+        yield* client.auth.setKey({ provider: "plain", slot: work, key: "sk-fake-b", sessionId })
+        yield* client.auth.setOrder({ provider: "plain", order: [work], sessionId })
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        const events = yield* afterTurns(2)
+        const slots = events.flatMap((event) => {
+          if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) return []
+          return [event.credential.slot]
+        })
+        expect(slots).toEqual([DEFAULT_CREDENTIAL_SLOT, work])
+        // The move leaves the cache cold: the router is asked again.
+        expect(stepLevels(events)).toEqual([Option.some("high"), Option.some("low")])
+        expect((yield* Ref.get(inputs)).length).toBe(2)
       }).pipe(Effect.timeout("20 seconds")),
     25_000,
   )

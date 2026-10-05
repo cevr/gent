@@ -1769,12 +1769,74 @@ const ROUTE_DEADLINE_MS = 10_000
 /** The most of a router's reason a `ModelRouted` keeps. */
 const ROUTE_REASON_CHARS = 200
 
+/**
+ * The credential the next request on `request`'s model goes out with: the
+ * first slot of its sign-in's `authOrder` the turn has not left, with that
+ * slot's sign-in stamp, so a new sign-in on the slot reads as another
+ * credential. None where the model names no sign-in. Fails when the order
+ * fails or the turn left every slot.
+ */
+const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(function* (params: {
+  readonly request: ResolveModelRequest
+  readonly turnLedger: TurnLedger
+  readonly extensionRegistry: ExtensionRegistryService
+  readonly modelRegistry: ModelRegistry["Service"]
+}) {
+  const order = yield* requestCredentialOrder(params.request, params.extensionRegistry)
+  if (Option.isNone(order)) return Option.none<CredentialReceipt>()
+  const { provider, slots } = order.value
+  const left = yield* params.turnLedger.passedCredentials(provider, slots)
+  const slot = slots.find((candidate) => !left.has(candidate))
+  if (Predicate.isUndefined(slot)) {
+    return yield* new ProviderAuthError({
+      message: `Every credential of provider "${provider}" failed this turn`,
+    })
+  }
+  return Option.some(
+    yield* params.modelRegistry.stamp(
+      { provider: ProviderId.make(provider), slot },
+      params.extensionRegistry,
+    ),
+  )
+})
+
+/**
+ * Whether a request on `next` reads the cache a request on `last` wrote: the
+ * same credential, by its sign-in stamp or else its label. A credential
+ * either side does not know (a row before receipts, a model no sign-in
+ * serves) counts as the same.
+ */
+const sameAccount = (
+  last: Option.Option<CredentialReceipt>,
+  next: Option.Option<CredentialReceipt>,
+): boolean =>
+  Option.match(Option.all([last, next]), {
+    onNone: () => true,
+    onSome: ([before, now]) => sameCredential(before, now),
+  })
+
+/**
+ * Whose cache a request reads: the credential the branch's last request went
+ * out with, and the one the next request on a model takes (none where the
+ * order cannot choose one).
+ */
+interface RequestAccount {
+  readonly last: Option.Option<CredentialReceipt>
+  readonly next: (request: ResolveModelRequest) => Effect.Effect<Option.Option<CredentialReceipt>>
+}
+
+/** Whether the next request on `request`'s model goes out on the branch's last account. */
+const onLastAccount = (account: RequestAccount, request: ResolveModelRequest) =>
+  Effect.map(account.next(request), (next) => sameAccount(account.last, next))
+
 /** What routing reads from the branch's log. */
 interface RoutingLog {
   /** The concrete model the branch runs on: its last request's, or a notice's. */
   readonly current: Option.Option<ModelIdType>
   readonly lastCallModel: Option.Option<ModelIdType>
   readonly lastCallAtMillis: Option.Option<number>
+  /** A cache is warm only for a request on the account that wrote it. */
+  readonly account: RequestAccount
   readonly measure: Option.Option<StepMeasure>
   /** The branch's newest `ModelRouted`. */
   readonly routed: Option.Option<ModelRouted>
@@ -2010,23 +2072,27 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
   const current = yield* Option.match(log.current, {
     onNone: () => Effect.succeed(Option.none<ModelRouteCurrent>()),
     onSome: (id) =>
-      Effect.map(
-        entryOf(id),
-        Option.map((model: Model): ModelRouteCurrent => ({
+      Effect.gen(function* () {
+        const entry = yield* entryOf(id)
+        if (Option.isNone(entry)) return Option.none<ModelRouteCurrent>()
+        const model = entry.value
+        // A cache belongs to the model and the account of the last request. A
+        // model whose entry names no lifetime never goes cold.
+        const warm =
+          Option.contains(log.lastCallModel, model.id) &&
+          Option.exists(log.lastCallAtMillis, (at) =>
+            Option.match(promptCacheTtlMsFor(model, resolved.child), {
+              onNone: () => true,
+              onSome: (ttlMs) => now < at + ttlMs,
+            }),
+          ) &&
+          (yield* onLastAccount(log.account, { modelId: model.id }))
+        return Option.some<ModelRouteCurrent>({
           model,
-          // A cache belongs to the model of the last request. A model whose
-          // entry names no lifetime never goes cold.
-          warm:
-            Option.contains(log.lastCallModel, model.id) &&
-            Option.exists(log.lastCallAtMillis, (at) =>
-              Option.match(promptCacheTtlMsFor(model, resolved.child), {
-                onNone: () => true,
-                onSome: (ttlMs) => now < at + ttlMs,
-              }),
-            ),
+          warm,
           historyTokens: estimateHistoryTokens(resolved.messages, log.measure, model),
-        })),
-      ),
+        })
+      }),
   })
 
   // Where the turn cannot route, it keeps the model the branch runs on, a
@@ -2200,6 +2266,8 @@ interface EffortRoutingLog {
   readonly routed: Option.Option<ModelRouted>
   readonly lastCallModel: Option.Option<ModelIdType>
   readonly lastCallAtMillis: Option.Option<number>
+  /** A cache is warm only for a request on the account that wrote it. */
+  readonly account: RequestAccount
   readonly measure: Option.Option<StepMeasure>
   /** The newest step's receipt: its model, and the effort its request was sent at. */
   readonly lastEffort: Option.Option<StepEffort>
@@ -2264,7 +2332,8 @@ const admitEfforts = Effect.fn("TurnHelpers.admitEfforts")(function* (params: {
   )
   if (!accepted.some(Option.isSome)) return Option.none<EffortAdmission>()
   const now = yield* Clock.currentTimeMillis
-  // A cache belongs to the model of the last request; one with no lifetime never goes cold.
+  // A cache belongs to the model and the account of the last request; one
+  // with no lifetime never goes cold.
   const warm =
     Option.contains(log.lastCallModel, turn.modelId) &&
     Option.exists(log.lastCallAtMillis, (at) =>
@@ -2272,7 +2341,11 @@ const admitEfforts = Effect.fn("TurnHelpers.admitEfforts")(function* (params: {
         onNone: () => true,
         onSome: (ttlMs) => now < at + ttlMs,
       }),
-    )
+    ) &&
+    (yield* onLastAccount(log.account, {
+      modelId: turn.modelId,
+      driverId: Option.getOrUndefined(turn.modelDriver.driverId),
+    }))
   const held = Option.flatMap(
     Option.filter(log.lastEffort, (receipt) => receipt.model === turn.modelId),
     (receipt) => receipt.level,
@@ -2729,26 +2802,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const modelRegistry = yield* ModelRegistry
   // The turn walks its sign-in's `authOrder`, first to last, and never comes
   // back to a slot it left: a slot that answers serves the rest of the turn.
-  // A conflicting order fails here as it fails the request's resolution. The
-  // receipt carries the moment the slot's credential was signed in, so a new
-  // sign-in on the slot reads as another credential.
-  const selectCredential = Effect.gen(function* () {
-    const order = yield* requestCredentialOrder(
-      { modelId: resolved.modelId, driverId: Option.getOrUndefined(driverId) },
-      extensionRegistry,
-    )
-    if (Option.isNone(order)) return Option.none<CredentialReceipt>()
-    const { provider, slots } = order.value
-    const left = yield* params.turnLedger.passedCredentials(provider, slots)
-    const slot = slots.find((candidate) => !left.has(candidate))
-    if (Predicate.isUndefined(slot)) {
-      return yield* new ProviderAuthError({
-        message: `Every credential of provider "${provider}" failed this turn`,
-      })
-    }
-    return Option.some(
-      yield* modelRegistry.stamp({ provider: ProviderId.make(provider), slot }, extensionRegistry),
-    )
+  // A conflicting order fails here as it fails the request's resolution.
+  const selectCredential = nextRequestCredential({
+    request: { modelId: resolved.modelId, driverId: Option.getOrUndefined(driverId) },
+    turnLedger: params.turnLedger,
+    extensionRegistry,
+    modelRegistry,
   })
   // The credential the step's first request goes out with, as the order
   // chooses it now: its catalog view sets the window and the prices, and its
@@ -2808,16 +2867,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // cache belongs to the model and the credential that wrote it: a turn on
   // another model, another account or a new sign-in than the last request
   // reads no cache either way, and handing its window off for that would
-  // surprise the reader who only switched. A credential either side does not
-  // know (a row before receipts, a model no sign-in serves) counts as the same.
+  // surprise the reader who only switched.
   const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
-  const sameAccount = Option.match(Option.all([params.lastCallCredential, nextCredential]), {
-    onNone: () => true,
-    onSome: ([last, next]) => sameCredential(last, next),
-  })
+  const onAccount = sameAccount(params.lastCallCredential, nextCredential)
   const promptCache = Option.map(
     Option.all([
-      Option.filter(params.lastCallAtMillis, () => sameModel && sameAccount),
+      Option.filter(params.lastCallAtMillis, () => sameModel && onAccount),
       promptCacheTtlMsFor(modelOption.value, resolved.child),
     ]),
     ([lastCallAtMillis, ttlMs]): PromptCache => ({
@@ -4981,12 +5036,27 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // A virtual model runs the turn on the concrete model its router picks,
       // before the model-change notice compares models: a routed switch
       // writes the transcript a hand switch writes.
-      const profile = (yield* ExtensionRegistry).getResolved()
+      const extensionRegistry = yield* ExtensionRegistry
+      const profile = extensionRegistry.getResolved()
       const virtual = servedVirtualModel(profile, resolved.modelId)
+      const modelRegistry = yield* ModelRegistry
+      // The order chooses as the step's request would; where it cannot, the
+      // request's resolution reports why, and the cache reads by model alone.
+      const account: RequestAccount = {
+        last: knownSteps.lastCallCredential,
+        next: (request) =>
+          nextRequestCredential({
+            request,
+            turnLedger: scope.turnLedger,
+            extensionRegistry,
+            modelRegistry,
+          }).pipe(Effect.orElseSucceed(() => Option.none<CredentialReceipt>())),
+      }
       const effortLog: EffortRoutingLog = {
         routed: knownSteps.effortRouted,
         lastCallModel: knownSteps.lastCallModel,
         lastCallAtMillis: knownSteps.lastCallAtMillis,
+        account,
         measure: knownSteps.measure,
         lastEffort: knownSteps.lastEffort,
         stepEfforts: knownSteps.stepEfforts,
@@ -5021,6 +5091,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             current: knownSteps.model,
             lastCallModel: knownSteps.lastCallModel,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
+            account,
             measure: knownSteps.measure,
             routed: knownSteps.routed,
           },
