@@ -186,6 +186,12 @@ export const contrastRatio = (a: RGBA, b: RGBA): number => {
 const isLight = (color: RGBA): boolean =>
   (0.299 * color.r + 0.587 * color.g + 0.114 * color.b) * 255 > 128
 
+/** The mode a terminal with this background draws in. */
+const modeOn = (background: RGBA): ThemeMode => {
+  if (isLight(background)) return "light"
+  return "dark"
+}
+
 /** Black or white, whichever stands further from `background`. */
 const farEndpoint = (background: RGBA): RGBA => {
   if (contrastRatio(BLACK, background) >= contrastRatio(WHITE, background)) return BLACK
@@ -644,7 +650,9 @@ const readDarwinAppearance = Effect.gen(function* () {
 })
 
 /**
- * Detect if terminal is using dark or light mode.
+ * The first frame's guess at the terminal's mode, before its palette read
+ * answers. The background that read reports decides once it lands
+ * (`ThemeProvider`); this guess stays only when the terminal reports none.
  * Strategies in order:
  * 1. COLORFGBG env var (set by some terminals)
  * 2. macOS system appearance (`defaults read AppleInterfaceStyle`)
@@ -735,9 +743,11 @@ const lazyView = <A extends object>(source: () => A): A => {
 export function ThemeProvider(props: ThemeProviderProps) {
   const renderer = useRenderer()
 
-  // Mode is resolved by the host (main.tsx) before render so theme detection
-  // never runs in the synchronous render path. A render that names none (a
-  // test of <App />) draws dark.
+  // The first mode is the host's guess (main.tsx), resolved before render so
+  // detection never runs in the synchronous render path; a render that names
+  // none (a test of <App />) draws dark. Each palette read that reports the
+  // terminal's background sets the mode from it, and the palette's Mode
+  // toggle sets it until the next read.
   const [store, setStore] = createStore<ThemeStore>({
     mode: Option.getOrElse(Option.fromNullishOr(props.mode), (): ThemeMode => "dark"),
     active: "fx",
@@ -781,15 +791,22 @@ export function ThemeProvider(props: ThemeProviderProps) {
             // Keep the default when palette detection fails.
             onFailure: keepDefault,
             onSuccess: (colors) => {
-              setTerminalBackground(
-                Option.map(
-                  Option.filter(
-                    Option.fromNullishOr(colors.defaultBackground),
-                    (hex) => hex.length > 0,
-                  ),
-                  (hex) => RGBA.fromHex(hex),
+              const background = Option.map(
+                Option.filter(
+                  Option.fromNullishOr(colors.defaultBackground),
+                  (hex) => hex.length > 0,
                 ),
+                (hex) => RGBA.fromHex(hex),
               )
+              setTerminalBackground(background)
+              // The terminal's own background decides the mode over the
+              // first guess, in the step that settles the read: history waits
+              // for it, so its first row has the inks of the mode it keeps.
+              // OpenTUI reads its `themeMode` from the same answer by the same
+              // rule (`inferThemeModeFromBackgroundColor`).
+              if (Option.isSome(background)) {
+                setStore("mode", modeOn(background.value))
+              }
               // Keep the default when the terminal does not report its palette.
               if (Option.isNone(Option.fromNullishOr(colors.palette[0]))) return keepDefault()
               setSystemColors(Option.some(colors))

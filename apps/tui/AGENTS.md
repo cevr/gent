@@ -52,6 +52,7 @@ Who owns the mouse decides who copies a selection. In the split footer (the sess
 Ported from opencode: its schema and token names, cut to the tokens gent draws. Key patterns:
 
 - `renderer.getPalette({ size: 16 })` queries terminal's ANSI palette via OSC
+- The mode follows the terminal: a palette read that reports the background sets it (`isLight`, Codex's `is_light`, the rule of OpenTUI's `themeMode`), in the step that sets `paletteSettled`, so history draws in that mode from its first row. `detectColorScheme` (`COLORFGBG`, then the macOS appearance, else dark) is only the first frame's guess, and the mode when the terminal reports no background; the Mode toggle sets it until the next read (SIGUSR2)
 - System theme generated from terminal colors; fallback to the `fx` theme
 - JSON themes in `src/themes/*.json` with `defs` + dark/light variants
 - `resolveTheme(themeJson, mode, terminalBackground)` resolves refs to RGBA values. A ported theme may omit `selectedListItemText` (the background) and `backgroundPanel`; a key gent does not draw is ignored, so an opencode theme file resolves as it is.

@@ -90,6 +90,13 @@ const terminalColors = (foreground: string, background: string): TerminalColors 
   highlightForeground: "#000000",
 })
 
+/** The answer of a terminal that reports its palette but not its background. */
+const withoutBackground = (colors: TerminalColors): TerminalColors => ({
+  ...colors,
+  // eslint-disable-next-line effect/noNullish -- OpenTUI's palette answer holds null for a color the terminal did not report.
+  defaultBackground: null,
+})
+
 /** A themed render whose terminal answers `colors`, once the palette read has landed. */
 const renderWithPalette = (colors: TerminalColors) =>
   Effect.gen(function* () {
@@ -106,6 +113,20 @@ const renderWithPalette = (colors: TerminalColors) =>
     process.emit("SIGUSR2")
     yield* waitForFrame(setup, () => "system" in theme.all(), "the system theme")
     return { setup, theme }
+  })
+
+/** The terminal answers `colors` to a later palette read (SIGUSR2); the mode once it lands. */
+const rereadPalette = (
+  setup: Effect.Success<ReturnType<typeof renderWithPalette>>["setup"],
+  theme: ReturnType<typeof useTheme>,
+  colors: TerminalColors,
+) =>
+  Effect.gen(function* () {
+    const before = theme.all()["system"]
+    answerPalette(setup.renderer, colors)
+    process.emit("SIGUSR2")
+    yield* waitForFrame(setup, () => theme.all()["system"] !== before, "the palette read again")
+    return theme.mode()
   })
 
 describe("system theme", () => {
@@ -160,6 +181,52 @@ describe("system theme", () => {
       const { theme } = yield* renderWithPalette(terminalColors("#c5c8c6", "#1d1f21"))
       expect(theme.selected()).toBe("fx")
       expect(rgbToHex(theme.theme.backgroundPanel)).toBe("#343638")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── theme mode ──────────────────────────────────────────────────────────────
+
+describe("theme mode", () => {
+  // The first guess (COLORFGBG, then the macOS appearance) reads a Linux or
+  // ssh terminal with no COLORFGBG as dark. The background the palette read
+  // reports is the terminal's own, so it decides: fx draws its light inks.
+  it.scopedLive("a light terminal that the first guess read as dark draws light inks", () =>
+    Effect.gen(function* () {
+      const { theme } = yield* renderWithPalette(terminalColors("#303030", "#ffffff"))
+      const white = RGBA.fromHex("#ffffff")
+      expect(theme.mode()).toBe("light")
+      for (const token of ["text", "textMuted", "info"] as const) {
+        expect(contrastRatio(theme.theme[token], white)).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST)
+      }
+      expect(theme.theme.backgroundPanel.a).toBeGreaterThan(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a later read that reports a dark background draws dark inks again", () =>
+    Effect.gen(function* () {
+      const { setup, theme } = yield* renderWithPalette(terminalColors("#303030", "#ffffff"))
+      expect(theme.mode()).toBe("light")
+      const mode = yield* rereadPalette(setup, theme, terminalColors("#c5c8c6", "#1d1f21"))
+      expect(mode).toBe("dark")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // A terminal that answers the palette but not its background leaves the
+  // first guess in force, and the reader's toggle stands until the next read.
+  it.scopedLive("a palette read with no background keeps the mode in force", () =>
+    Effect.gen(function* () {
+      const { setup, theme } = yield* renderWithPalette(
+        withoutBackground(terminalColors("#303030", "#ffffff")),
+      )
+      expect(theme.mode()).toBe("dark")
+      theme.setMode("light")
+      const mode = yield* rereadPalette(
+        setup,
+        theme,
+        withoutBackground(terminalColors("#c5c8c6", "#1d1f21")),
+      )
+      expect(mode).toBe("light")
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
