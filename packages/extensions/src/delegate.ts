@@ -17,6 +17,7 @@ import {
   Cause,
   Clock,
   Context,
+  Crypto,
   Effect,
   Exit,
   Layer,
@@ -29,6 +30,7 @@ import {
   Stream,
   Struct,
 } from "effect"
+import { Hex } from "effect/encoding"
 import {
   ActorCommandId,
   AGENT_PROMPT_PRIORITY,
@@ -134,6 +136,13 @@ export const DelegateEntry = Schema.Struct({
   prompt: Schema.String,
   toolCallId: Schema.optionalKey(ToolCallId),
   /**
+   * The id of the child's first message, named for the child session: a
+   * message id is unique across every session, and a tool call id is unique
+   * only in its parent. Absent on older rows, whose first message is
+   * `delegate-start:<requestId>`.
+   */
+  startMessageId: Schema.optionalKey(MessageId),
+  /**
    * Always written false. Older binaries wrote true for a `read_session` extraction child and
    * still require the key, so it stays in the schema for files on both sides of that change.
    */
@@ -190,7 +199,10 @@ const asDelegateError = (message: string) =>
 
 // ── child turns ─────────────────────────────────────────────────────────────
 
-const startMessageId = (requestId: RequestId) => MessageId.make(`delegate-start:${requestId}`)
+const startMessageId = (entry: {
+  readonly requestId: RequestId
+  readonly startMessageId?: MessageId
+}) => entry.startMessageId ?? MessageId.make(`delegate-start:${entry.requestId}`)
 
 type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
 const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
@@ -333,7 +345,7 @@ const childMessages = (entry: DelegateEntry) =>
     const ctx = yield* ExtensionContext
     const detail = yield* ctx.Session.getDetail(entry.sessionId)
     const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
-    return startTurnMessages(branch?.messages ?? [], startMessageId(entry.requestId))
+    return startTurnMessages(branch?.messages ?? [], startMessageId(entry))
   })
 
 /** Children never spend the parent's patience on a broken model. */
@@ -576,7 +588,7 @@ const childWork = Effect.fn("Delegate.childWork")(function* (entry: DelegateEntr
   const places = yield* Effect.serviceOption(Workspaces)
   if (Option.isNone(places)) return Option.none<ChildWork>()
   const collected = yield* places.value
-    .collect(entry.sessionId, startMessageId(entry.requestId))
+    .collect(entry.sessionId, startMessageId(entry))
     .pipe(Effect.result)
   if (collected._tag === "Success") return Option.map(collected.success, workOf)
   const message = collected.failure.message
@@ -715,7 +727,7 @@ const submitStart = (entry: DelegateEntry) =>
         entry.prompt,
         Option.getOrUndefined(Option.map(place, ({ cwd, branch }) => ({ cwd, branch }))),
       ),
-      commandId: ActorCommandId.make(startMessageId(entry.requestId)),
+      commandId: ActorCommandId.make(startMessageId(entry)),
       completion: "admission",
       metadata: { customType: CHILD_TASK_TYPE },
     })
@@ -766,7 +778,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* (options: {
           // never delivered: the completion lands now.
           if (!claimedByStop(entry)) continue
           const own = Option.filter(
-            yield* turnEnd({ ...entry, messageId: startMessageId(entry.requestId) }),
+            yield* turnEnd({ ...entry, messageId: startMessageId(entry) }),
             (end) => end.receipt.interrupted !== true,
           )
           if (Option.isNone(own)) continue
@@ -797,7 +809,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* (options: {
         }
         const end = yield* turnEnd({
           ...entry,
-          messageId: startMessageId(entry.requestId),
+          messageId: startMessageId(entry),
         })
         if (Option.isNone(end)) {
           // No receipt yet: the child is running, or it was mid-turn when the
@@ -901,13 +913,49 @@ interface AdmitParams {
 type Isolation = "shared" | "snapshot"
 
 /**
+ * The request id of the child session's create: a digest of the start's
+ * whole identity (the parent session, the parent branch, the tool call).
+ * Core keeps one session per request id, so a tool call id alone would give
+ * two parents whose calls share an id one child.
+ */
+const childCreateRequestId = Effect.fn("Delegate.childCreateRequestId")(function* (
+  parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  requestId: RequestId,
+) {
+  const crypto = yield* Crypto.Crypto
+  const identity = [parent.sessionId, parent.branchId, requestId].join("\n")
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(identity))
+  return RequestId.make(`delegate.start:${Hex.encode(digest)}`)
+})
+
+/**
+ * The child session a start stored, read from storage: the one session under
+ * this parent branch whose cwd is in the start's copy. The copy's path is
+ * named by the start's whole identity, so no other start's child works there.
+ */
+const storedChildIn = Effect.fn("Delegate.storedChildIn")(function* (cwd: string) {
+  const ctx = yield* ExtensionContext
+  const sessions = yield* ctx.Session.listSessions({ thread: ctx.sessionId })
+  return Option.fromUndefinedOr(
+    sessions.find(
+      (session) =>
+        session.parentSessionId === ctx.sessionId &&
+        session.parentBranchId === ctx.branchId &&
+        session.cwd === cwd,
+    ),
+  )
+})
+
+/**
  * A snapshot child's place for the admission. The copy's record exists from
- * the first step of its making, so a failed or interrupted admission whose
- * child session was never created removes the copy by its name (the
- * finalizer on the admission's scope, which closes after the registry
- * write). Once the session is created, nothing here removes the copy: the
- * session owns it, and its delete releases it. The making itself can be
- * interrupted. A shared child gets none.
+ * the first step of its making. When the admission fails or is interrupted
+ * (the finalizer on the admission's scope, which closes after the registry
+ * write), storage decides what happens to the copy, not what this fiber saw:
+ * core can store the session and then be interrupted before `Session.create`
+ * returns. A stored child session gets the copy (bound); a copy is released
+ * only when storage shows no child session works in it; a check that fails
+ * keeps the copy. The making itself can be interrupted. A shared child gets
+ * none.
  */
 const admissionPlace = Effect.fn("Delegate.admissionPlace")(function* (params: AdmitParams) {
   if (params.isolation !== "snapshot") return Option.none()
@@ -923,25 +971,29 @@ const admissionPlace = Effect.fn("Delegate.admissionPlace")(function* (params: A
     return yield* new DelegateError({ message: 'isolation "snapshot" needs a request id' })
   }
   const start = yield* places.value.locate({ key: params.requestId, cwd: ctx.cwd })
-  const created = yield* Ref.make(false)
+  const acquired = yield* Ref.make(Option.none<{ readonly cwd: string }>())
   yield* Effect.addFinalizer((exit) =>
     Effect.gen(function* () {
-      if (Exit.isSuccess(exit) || (yield* Ref.get(created))) return
-      yield* places.value
-        .release(start.name)
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("delegate.workspace.release.failed").pipe(
-              Effect.annotateLogs({ name: start.name, cause: Cause.pretty(cause) }),
-            ),
-          ),
-        )
-    }),
+      if (Exit.isSuccess(exit)) return
+      // No place: `Session.create` never ran, so no session can work in the copy.
+      const place = yield* Ref.get(acquired)
+      let stored = Option.none<{ readonly id: SessionId }>()
+      if (Option.isSome(place)) stored = yield* storedChildIn(place.value.cwd)
+      if (Option.isSome(stored)) {
+        return yield* places.value.bind(start.name, stored.value.id)
+      }
+      yield* places.value.release(start.name)
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("delegate.workspace.kept").pipe(
+          Effect.annotateLogs({ name: start.name, cause: Cause.pretty(cause) }),
+        ),
+      ),
+    ),
   )
   const place = yield* places.value.acquire(start)
-  /** The session exists: from here the copy is the session's, whatever fails next. */
-  const handOff = (sessionId: SessionId) =>
-    Ref.set(created, true).pipe(Effect.andThen(places.value.bind(place.name, sessionId)))
+  yield* Ref.set(acquired, Option.some({ cwd: place.cwd }))
+  const handOff = (sessionId: SessionId) => places.value.bind(place.name, sessionId)
   return Option.some({ place, handOff })
 })
 
@@ -985,6 +1037,10 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           })
         }
         const place = yield* admissionPlace(params)
+        const createRequestId = yield* Option.match(requested, {
+          onNone: () => Effect.succeedNone,
+          onSome: (id) => Effect.asSome(childCreateRequestId(ctx, id)),
+        })
         // The child is its agent for every turn it runs, not only this one.
         const child = yield* ctx.Session.create({
           name: childName(params.prompt),
@@ -999,7 +1055,10 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
             runSpec: childRunSpec(params.runSpec),
           },
           ...Record.filter(
-            { requestId: params.requestId, historyBranchId: params.historyBranchId },
+            {
+              requestId: Option.getOrUndefined(createRequestId),
+              historyBranchId: params.historyBranchId,
+            },
             Predicate.isNotUndefined,
           ),
         })
@@ -1013,6 +1072,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          startMessageId: MessageId.make(`delegate-start:${child.sessionId}`),
           private: false,
           submitted: false,
           delivered: false,
@@ -1079,7 +1139,7 @@ const stopChild = Effect.fn("Delegate.stopChild")(function* (entry: DelegateEntr
     ctx.Session.stopMessage({
       sessionId: entry.sessionId,
       branchId: entry.branchId,
-      messageId: startMessageId(entry.requestId),
+      messageId: startMessageId(entry),
     }),
   )
   if (Exit.isSuccess(answer)) return
@@ -1120,7 +1180,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
           (!row.delivered || (!input.interrupted && claimedByStop(row))) &&
           !row.private &&
           row.sessionId === input.sessionId &&
-          startMessageId(row.requestId) === input.messageId,
+          startMessageId(row) === input.messageId,
       )
       if (Predicate.isUndefined(found)) return { next: entries, result: false }
       const entry = unclaimed(found)
@@ -1447,7 +1507,7 @@ export const CancelChild = tool({
         sessionId: entry.sessionId,
         branchId: entry.branchId,
         requestId: RequestId.make(`delegate-cancel:${params.requestId}`),
-        messageId: startMessageId(params.requestId),
+        messageId: startMessageId(entry),
       }).pipe(Effect.asVoid, asDelegateError("Cannot submit child cancellation"))
     }
     return observationOf(entry)

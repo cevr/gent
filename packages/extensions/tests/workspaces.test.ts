@@ -1,12 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
+  DateTime,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   type Scope,
   Stream,
@@ -21,13 +24,15 @@ import {
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  runToolWithCtx,
   testLeafContext,
   testToolContext,
   textDeltaPart,
   toolCallPart,
   waitFor,
 } from "@gent/core/test-utils"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
+import { BranchId, Session, SessionId, ToolCallId } from "@gent/core/protocol"
+import { StartChild } from "../src/delegate.js"
 import {
   makeWorkspacesExtension,
   WORKSPACES_EXTENSION_ID,
@@ -1072,6 +1077,14 @@ const StartedInCopy = Schema.fromJsonString(
   Schema.Struct({ workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }) }),
 )
 
+/** The copy and the branch a snapshot child's completion names. */
+const WorkOfCompletion = Schema.Struct({
+  sessionId: SessionId,
+  workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }),
+})
+
+type CreateParams = Parameters<ReturnType<typeof testToolContext>["Session"]["create"]>[0]
+
 describe("a snapshot child", () => {
   it.live(
     "edits its own copy, leaves the parent's tree as it was, and hands back a branch that holds the edit",
@@ -1184,5 +1197,130 @@ describe("a snapshot child", () => {
         expect(yield* sh(origin, "git for-each-ref refs/gent")).toBe("")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
+  )
+
+  it.live(
+    "a start from two parents with one tool call id makes two children, each with its own copy",
+    () =>
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const harness = yield* harnessIn(origin, home)
+        const second = yield* harness.client.session.create({ cwd: origin })
+        const parents = [{ sessionId: harness.sessionId, branchId: harness.branchId }, second]
+        // Each parent's model calls `delegate.start` with the same tool call id, `start-1`.
+        const completions = yield* Effect.forEach(parents, (parent) =>
+          Effect.gen(function* () {
+            yield* harness.client.message.send({ ...parent, content: "delegate it in a copy" })
+            const snapshot = yield* waitFor(
+              harness.client.session.getSnapshot(parent),
+              (current) =>
+                Predicate.isNotUndefined(completionOf(current.messages)) &&
+                current.runtime._tag === "Idle",
+              15_000,
+              "the child's completion woke its parent",
+            )
+            return completionOf(snapshot.messages)?.metadata?.details
+          }),
+        )
+        const children = (yield* harness.client.session.list()).filter((session) =>
+          parents.some((parent) => parent.sessionId === session.parentSessionId),
+        )
+        expect(children).toHaveLength(2)
+        expect(new Set(children.map((child) => child.cwd)).size).toBe(2)
+        const works = completions.map((details) =>
+          Schema.decodeUnknownSync(WorkOfCompletion)(details),
+        )
+        expect(new Set(works.map((work) => work.workspace.branch)).size).toBe(2)
+        for (const [index, work] of works.entries()) {
+          // Each completion names its own parent's child, and the copy that child works in.
+          const child = children.find((found) => found.id === work.sessionId)
+          expect(child?.parentSessionId).toBe(parents[index]?.sessionId)
+          expect(child?.cwd).toBe(work.workspace.path)
+          expect(work.workspace.branch).toBe(`gent/${work.workspace.path.split("/").at(-1)}`)
+          expect(yield* sh(work.workspace.path, "cat child.txt")).toBe("from the child")
+          expect(yield* sh(origin, `git show ${work.workspace.branch}:child.txt`)).toBe(
+            "from the child",
+          )
+        }
+        expect(yield* worktreeCount(origin)).toBe("3")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "an admission stopped after its session was stored keeps the copy for that session; one stopped before removes it",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const origin = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const { places, within } = yield* installed(home, { rift: NO_RIFT })
+          const stored = yield* Ref.make<ReadonlyArray<Session>>([])
+          /** Core stores the session, then the call is interrupted before it returns. */
+          const storeThenStop = (sessionId: SessionId) => (params: CreateParams) =>
+            Effect.gen(function* () {
+              const now = yield* DateTime.nowAsDate
+              const session = new Session({
+                id: sessionId,
+                cwd: params.cwd,
+                parentSessionId: params.parentSessionId,
+                parentBranchId: params.parentBranchId,
+                createdAt: now,
+                updatedAt: now,
+              })
+              yield* Ref.update(stored, (all) => [...all, session])
+              return yield* Effect.interrupt
+            })
+          const admit = (
+            id: string,
+            session: Partial<
+              Pick<ReturnType<typeof testToolContext>["Session"], "create" | "listSessions">
+            >,
+          ) =>
+            runToolWithCtx(
+              StartChild,
+              { todo: "a task", isolation: "snapshot" },
+              {
+                ...testToolContext({
+                  cwd: origin,
+                  home,
+                  sessionId: parentA.sessionId,
+                  branchId: parentA.branchId,
+                  Session: {
+                    ...testToolContext().Session,
+                    listSessions: () => Ref.get(stored),
+                    ...session,
+                  },
+                }),
+                toolCallId: ToolCallId.make(id),
+              },
+            ).pipe(Effect.provideService(Workspaces, places), Effect.exit)
+          const copyOf = (id: string) =>
+            within(places.locate({ key: key(id), cwd: origin })).pipe(
+              Effect.map((start) => `${home}/.gent/workspaces/worktrees/${start.name}`),
+            )
+          // Stored, then stopped: the copy is the stored session's.
+          const committed = SessionId.make("stored-child")
+          const afterStore = yield* admit("call-stored", { create: storeThenStop(committed) })
+          expect(Exit.hasInterrupts(afterStore)).toBe(true)
+          const kept = yield* copyOf("call-stored")
+          expect(yield* exists(kept)).toBe(true)
+          expect(Option.map(yield* within(places.find(committed)), (found) => found.path)).toEqual(
+            Option.some(kept),
+          )
+          // Stopped before anything was stored: the copy goes.
+          const beforeStore = yield* admit("call-unstored", { create: () => Effect.interrupt })
+          expect(Exit.hasInterrupts(beforeStore)).toBe(true)
+          expect(yield* exists(yield* copyOf("call-unstored"))).toBe(false)
+          // A check that cannot tell keeps the copy.
+          const unknown = yield* admit("call-unknown", {
+            create: storeThenStop(SessionId.make("unknown-child")),
+            listSessions: () => Effect.die("the session list is not readable"),
+          })
+          expect(Exit.hasInterrupts(unknown)).toBe(true)
+          expect(yield* exists(yield* copyOf("call-unknown"))).toBe(true)
+        }),
+      ),
   )
 })
