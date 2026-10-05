@@ -678,7 +678,13 @@ describe("SessionRuntime", () => {
         const { sessionId, branchId } = yield* createSessionBranch
         yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
         yield* controls.waitForCall(0)
-        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "drain me" })
+        // The reader's message, with the client origin the server's boundary gives it.
+        yield* sessionRuntime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "drain me",
+          metadata: { fromClient: true },
+        })
         const drained = yield* sessionRuntime.drainQueuedMessages({
           sessionId,
           branchId,
@@ -713,6 +719,60 @@ describe("SessionRuntime", () => {
         yield* controls.assertDone
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
+  )
+  it.scopedLive(
+    "a drain takes back only the clients' messages; an agent's waits to be delivered",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...textStep("first reply"), gated: true },
+          {
+            ...textStep("agent reply"),
+            assertOptions: (options) => {
+              expect(latestUserText(options)).toBe("from an agent")
+            },
+          },
+        ])
+        const layer = makeRuntimeLayer(providerLayer)
+        yield* Effect.gen(function* () {
+          const sessionRuntime = yield* SessionRuntime
+          const { sessionId, branchId } = yield* createSessionBranch
+          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
+          yield* controls.waitForCall(0)
+          // A child's `Session.send`: no client origin.
+          yield* sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "from an agent",
+            metadata: { extensionId: "@gent/delegate" },
+          })
+          yield* sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "from the reader",
+            metadata: { fromClient: true },
+          })
+          const drained = yield* sessionRuntime.drainQueuedMessages({
+            sessionId,
+            branchId,
+            requestId: "req-drain-client-only",
+          })
+          expect(drained.followUp.map((entry) => entry.content)).toEqual(["from the reader"])
+          expect(
+            (yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).followUp.map(
+              (entry) => entry.content,
+            ),
+          ).toEqual(["from an agent"])
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            controls.callCount,
+            (count) => count === 2,
+            5000,
+            "the agent's message delivered as the next turn",
+          )
+          yield* controls.assertDone
+        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+      }),
   )
   it.scopedLive("an answer resumes a waiting interaction through the live loop", () =>
     Effect.gen(function* () {
