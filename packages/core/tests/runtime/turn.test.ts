@@ -2576,15 +2576,29 @@ describe("credential order", () => {
         },
       },
     }
-    return {
-      layer,
-      events,
-      sent,
-      resolvedWith,
-      admission,
-      sessionId: SessionId.make(`credential-${params.name}-session`),
-      branchId: BranchId.make(`credential-${params.name}-branch`),
-    }
+    const sessionId = SessionId.make(`credential-${params.name}-session`)
+    const branchId = BranchId.make(`credential-${params.name}-branch`)
+    /** The session's parents and one old assistant message per history entry. */
+    const seed = Effect.gen(function* () {
+      yield* ensureStorageParents({ sessionId, branchId, admission })
+      const storage = yield* MessageStorage
+      yield* Effect.forEach(
+        params.history ?? [],
+        (chars, index) =>
+          storage.createMessage(
+            Message.cases.regular.make({
+              id: MessageId.make(`${params.name}-old-${index + 1}`),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: [Prompt.textPart({ text: "x".repeat(chars) })],
+              createdAt: dateFromMillis(1_000 + index),
+            }),
+          ),
+        { discard: true },
+      )
+    })
+    return { layer, events, sent, resolvedWith, admission, sessionId, branchId, seed }
   }
 
   /** Each step's credential labels; its sign-in stamp is the store's clock, not the test's. */
@@ -2616,27 +2630,7 @@ describe("credential order", () => {
       const root = credentialRoot(params)
       const outcome = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* ensureStorageParents({
-            sessionId: root.sessionId,
-            branchId: root.branchId,
-            admission: root.admission,
-          })
-          const storage = yield* MessageStorage
-          yield* Effect.forEach(
-            params.history ?? [],
-            (chars, index) =>
-              storage.createMessage(
-                Message.cases.regular.make({
-                  id: MessageId.make(`${params.name}-old-${index + 1}`),
-                  sessionId: root.sessionId,
-                  branchId: root.branchId,
-                  role: "assistant",
-                  parts: [Prompt.textPart({ text: "x".repeat(chars) })],
-                  createdAt: dateFromMillis(1_000 + index),
-                }),
-              ),
-            { discard: true },
-          )
+          yield* root.seed
           return yield* Effect.exit(
             Effect.forEach(
               params.prompts ?? ["hello"],
@@ -3170,6 +3164,123 @@ describe("credential order", () => {
       expect(root.resolvedWith).toEqual(["sk-a"])
       expect(report.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
     }).pipe(Effect.timeout("15 seconds")),
+  )
+
+  /** Waits for the first event with the tag; fails when none comes in time. */
+  type Seen = (
+    tag: AgentEvent["_tag"],
+  ) => Effect.Effect<void, Effect.Error<ReturnType<typeof waitFor>>>
+  /**
+   * One turn over a seeded history, stopped once `before` returns; `after`
+   * runs once the stop is in. Returns the turn's events and the model calls
+   * its budget row counts.
+   */
+  const stoppedTurn = (
+    params: CredentialRootParams & {
+      readonly before: (seen: Seen) => Effect.Effect<void, Effect.Error<ReturnType<Seen>>>
+      readonly after?: Effect.Effect<void>
+    },
+  ) =>
+    Effect.gen(function* () {
+      const root = credentialRoot(params)
+      const message = makeMessage(root.sessionId, root.branchId, "hello")
+      const seen = (tag: AgentEvent["_tag"]) =>
+        waitFor(
+          Ref.get(root.events),
+          (all) => all.some((event) => event._tag === tag),
+          5_000,
+          `a ${tag} event`,
+        ).pipe(Effect.asVoid)
+      const attemptsUsed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* root.seed
+          yield* submitAgentLoop(message, root.admission)
+          yield* params.before(seen)
+          yield* stopAgentLoopMessage({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+            messageId: message.id,
+            requestId: params.name,
+          })
+          yield* params.after ?? Effect.void
+          yield* seen("TurnCompleted")
+          const operations = yield* SessionOperationStorage
+          return yield* operations.modelAttemptsUsed({ messageId: message.id })
+        }),
+      ).pipe(Effect.provide(root.layer))
+      const recorded = yield* Ref.get(root.events)
+      return {
+        sent: root.sent,
+        attemptsUsed,
+        ...credentialReport(recorded),
+        interrupted: recorded.flatMap((event) => {
+          if (event._tag !== "TurnCompleted") return []
+          return [event.interrupted === true]
+        }),
+      }
+    }).pipe(Effect.timeout("15 seconds"))
+
+  it.live(
+    "a cancel during a chained summary's retry wait ends the turn with no other model call",
+    () =>
+      Effect.gen(function* () {
+        const run = yield* stoppedTurn({
+          name: "cancel-summary-backoff",
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          stored: twoKeys,
+          maxModelAttempts: 10,
+          // The retry waits long enough for the cancel to land inside it.
+          retry: { initialDelay: 60_000, maxDelay: 120_000 },
+          history: Array.from({ length: 12 }, () => 50_000),
+          compactor: chainCompactors(rangeCompactor, rangeCompactor),
+          replies: {
+            "sk-a": () => failWith(new AiError.RateLimitError({})),
+            "sk-b": answer("from b"),
+          },
+          before: (seen) => seen("ProviderRetrying"),
+        })
+        // The first summary's request is the only one: no second compactor,
+        // no step, no move, and no truncation notice.
+        expect(run.sent).toEqual(["sk-a"])
+        expect(run.attemptsUsed).toBe(1)
+        expect(run.errors).toEqual([])
+        expect(run.projected).toEqual([])
+        expect(run.interrupted).toEqual([true])
+      }),
+  )
+
+  it.live("a compactor that asks for its summary model after a stop gets no model", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const finished = yield* Deferred.make<void>()
+      // It holds the window until the stop is in, and no stop can end it
+      // first: it reaches the summary model's admission after the stop.
+      const late = ModelContextCompactor.of({
+        compact: (request) =>
+          Deferred.succeed(entered, void 0).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(rangeCompactor.compact(request)),
+            Effect.ensuring(Deferred.succeed(finished, void 0)),
+            Effect.uninterruptible,
+          ),
+      })
+      const run = yield* stoppedTurn({
+        name: "late-summary",
+        order: [DEFAULT_CREDENTIAL_SLOT],
+        stored: [[DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")]],
+        maxModelAttempts: 10,
+        history: Array.from({ length: 12 }, () => 50_000),
+        compactor: late,
+        replies: { "sk-a": answer("from a") },
+        before: () => Deferred.await(entered),
+        after: Deferred.succeed(release, void 0).pipe(Effect.andThen(Deferred.await(finished))),
+      })
+      expect(run.sent).toEqual([])
+      expect(run.attemptsUsed).toBe(0)
+      expect(run.errors).toEqual([])
+      expect(run.interrupted).toEqual([true])
+    }),
   )
 
   it.live("a reorder while a request runs leaves its receipt, price and move on its slot", () =>

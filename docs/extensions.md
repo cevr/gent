@@ -872,7 +872,10 @@ the turn's order chooses; a compactor that puts the model's failure in
 `ModelCompactionError.cause` lets the loop retry it on that credential
 under the driver's retry policy, or move it to the next credential of the
 order and ask the same compactor again, as a step's request retries and
-moves, before the next compactor of the chain gets the window.
+moves, before the next compactor of the chain gets the window. A stop of
+the turn ends the compaction where it is: no later compactor runs, the
+history stays whole, and `request.summaryModel` asked for after the stop
+fails with no model call.
 `compact` runs with the `ExtensionContext` a tool call of the same
 extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
 the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.

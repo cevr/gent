@@ -1,6 +1,7 @@
 import {
   Context,
   DateTime,
+  Deferred,
   Effect,
   Layer,
   Option,
@@ -1780,6 +1781,13 @@ export class ModelCompactionError extends Schema.TaggedError<ModelCompactionErro
   },
 ) {}
 
+/**
+ * The turn stopped while its window was compacted. It is not a refusal: the
+ * projection raises it outside every compactor, so no later compactor of the
+ * chain runs, no history is dropped, and the turn asks no model again.
+ */
+class CompactionStopped extends Schema.TaggedError<CompactionStopped>()("CompactionStopped", {}) {}
+
 /** What the handoff marker carries: the notice the model reads, and the receipt of producing it. */
 export const CompactionSummary = Schema.Struct({
   notice: Schema.NonEmptyString,
@@ -2186,6 +2194,12 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
    * serve. Each compactor of a chain runs under it (`chainCompactors`).
    */
   readonly walkCredentials: CompactionRun
+  /**
+   * The turn's stop. Once it is set, the compaction in progress ends where it
+   * is and the projection fails with `CompactionStopped`, whatever the
+   * compactor did after it.
+   */
+  readonly stop: Deferred.Deferred<void>
 }) {
   const eventStore = yield* EventStore
   const now = yield* DateTime.nowAsDate
@@ -2329,7 +2343,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         return new ModelCompactionError({ modelId: error.modelId, reason: error.reason })
       }),
     )
-  const summary = yield* run(
+  const compacted = run(
     compactor.value.compact({
       modelId: params.modelId,
       agentName: params.agentName,
@@ -2341,10 +2355,18 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
       summaryModel: params.summaryModel,
     }),
-  ).pipe(
-    Effect.provideService(CompactionAttempt, { run }),
-    Effect.asSome,
-    Effect.catchTag("ModelCompactionError", (error) =>
+  ).pipe(Effect.provideService(CompactionAttempt, { run }), Effect.result)
+  // A stop ends the compaction where it is: a backoff, a summary stream, or
+  // the next compactor of the chain. A compaction that ends after the stop
+  // stopped too, so its refusal never reads as a reason to truncate.
+  const result = yield* Effect.raceFirst(
+    compacted,
+    Deferred.await(params.stop).pipe(Effect.andThen(Effect.fail(new CompactionStopped()))),
+  )
+  if (yield* Deferred.isDone(params.stop)) return yield* new CompactionStopped()
+  const summary = yield* Result.match(result, {
+    onSuccess: Effect.succeedSome,
+    onFailure: (error) =>
       // Every compactor of the chain refused. A summary that cannot be
       // produced must not cost the turn: the window is truncated instead,
       // with a visible notice.
@@ -2365,10 +2387,9 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
             notice: true,
           }),
         )
-        return Option.none()
+        return Option.none<CompactionSummary>()
       }),
-    ),
-  )
+  })
   const handoff = Option.all([summary, anchor]).pipe(
     Option.flatMap(([value, anchorMessage]) =>
       summarizedRange(history, value).pipe(

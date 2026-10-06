@@ -1,6 +1,7 @@
 import { test } from "bun:test"
 import {
   Clock,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -2639,6 +2640,8 @@ describe("turn window projection", () => {
         },
         summaryModel,
         walkCredentials: (compact) => compact,
+        // A stop no one sets: the projection runs to its end.
+        stop: yield* Deferred.make<void>(),
       }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
@@ -2764,6 +2767,8 @@ describe("turn window projection", () => {
         persist: (message) => Effect.succeed(message),
         summaryModel,
         walkCredentials: (compact) => compact,
+        // A stop no one sets: the projection runs to its end.
+        stop: yield* Deferred.make<void>(),
       }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(true)
@@ -2810,6 +2815,8 @@ describe("turn window projection", () => {
           }),
         )
         const publisher = yield* recordingPublisher
+        // A stop no one sets: each projection runs to its end.
+        const stop = yield* Deferred.make<void>()
         const compact = (messages: ReadonlyArray<Message>) =>
           projectContextWindow({
             sessionId,
@@ -2826,6 +2833,7 @@ describe("turn window projection", () => {
             persist: (message) => Effect.succeed(message),
             summaryModel,
             walkCredentials: (compact) => compact,
+            stop,
           }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
 
         const first = yield* compact([
@@ -2910,6 +2918,8 @@ describe("turn window projection", () => {
         },
         summaryModel,
         walkCredentials: (compact) => compact,
+        // A stop no one sets: the projection runs to its end.
+        stop: yield* Deferred.make<void>(),
       }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext)))
 
       expect(compacted).toBe(false)
@@ -2987,6 +2997,8 @@ describe("turn window projection", () => {
           persist: Effect.succeed,
           summaryModel,
           walkCredentials: (compact) => compact,
+          // A stop no one sets: the projection runs to its end.
+          stop: yield* Deferred.make<void>(),
         }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer, leafContext))),
       )
 

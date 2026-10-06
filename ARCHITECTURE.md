@@ -1036,7 +1036,13 @@ Shape:
   walk (`CompactionAttempt`, model-context.ts): a failure whose `cause` is
   the summary model's is retried, or moved to the next credential, before
   the next compactor gets the window, and a failure the walk gave up on
-  leaves without its cause, so no outer run retries it again. A compactor runs with the `ExtensionContext` a tool call of its
+  leaves without its cause, so no outer run retries it again. A stop of the
+  turn ends the compaction where it is (a backoff, a summary stream, the next
+  compactor): the projection fails with `CompactionStopped`, which no
+  compactor sees, the step does not start, and the turn ends interrupted with
+  no truncation notice. A stopped turn admits no model
+  (`resolveAdmittedModel`, turn.ts), so a compactor that asks for its summary
+  model after the stop gets a refusal and spends no model call. A compactor runs with the `ExtensionContext` a tool call of its
   extension on the compacted branch gets: the merge wraps each extension's
   compactor before it joins the chain (`ownedCompactor`), and each call runs
   `provideExtensionLeaf` with the owner's id over the turn's host context and

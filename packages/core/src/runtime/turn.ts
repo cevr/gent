@@ -2845,9 +2845,18 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ),
   })
   const modelResolver = yield* ModelResolver
+  // A stopped turn admits no model: no summary, no step, no retry of
+  // either. The refusal spends no attempt, and the step that reads it ends
+  // as an interrupted one.
   const resolveAdmittedModel = Effect.fn("TurnHelpers.resolveAdmittedModel")(function* (
     request: ResolveModelRequest,
   ) {
+    if (yield* wasInterrupted(params.activeStream)) {
+      return yield* new ProviderError({
+        message: "The turn stopped before its model call",
+        model: resolved.modelId,
+      })
+    }
     const admission = yield* reserveAttempt
     if (Option.isSome(admission) && !admission.value) {
       return yield* new ProviderError({
@@ -3164,7 +3173,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       walkCredentials(compact.pipe(retryOnCredential(summaryFailure)), (error) =>
         Option.fromUndefinedOr(error.cause),
       ),
+    stop: params.activeStream.interrupted,
   }).pipe(
+    // A summary admitted before the stop may have spent tokens, so the
+    // turn's cost is unknown.
+    Effect.tapError((error) =>
+      Effect.gen(function* () {
+        if (error._tag !== "CompactionStopped" || !(yield* Ref.get(summaryAdmitted))) return
+        yield* params.turnLedger.noteCompaction(Option.none())
+      }),
+    ),
     // The compactor runs with the context a tool call on this branch gets:
     // the session's cwd and facets, and the agent whose window it compacts.
     // An installed compactor runs as its owner's leaf (`ownedCompactor` in
@@ -4304,7 +4322,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         )
 
-      const source = yield* resolveTurnSource({
+      const resolvedSource = yield* resolveTurnSource({
         messageId: params.messageId,
         step: params.step,
         finalStep: params.finalStep,
@@ -4319,7 +4337,23 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         overflowed: params.overflowed,
         ledger: scope.ledger,
         turnLedger: scope.turnLedger,
-      })
+      }).pipe(
+        Effect.asSome,
+        Effect.catchTag("CompactionStopped", () => Effect.succeedNone),
+      )
+      // The turn stopped while its window was compacted: the step never
+      // starts, so it writes nothing and asks no model.
+      if (Option.isNone(resolvedSource)) {
+        return {
+          collected: collectNormalizedResponse({
+            responseParts: [],
+            streamFailed: false,
+            interrupted: true,
+          }),
+          outcome: StepOutcome.cases.Interrupted.make({}),
+        }
+      }
+      const source = resolvedSource.value
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
       yield* scope.turnLedger.noteNotices(params.resolved.notices)
