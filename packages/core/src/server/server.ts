@@ -1912,29 +1912,30 @@ const RpcHandlers = GentRpcs.toLayer(
       // where it walked the old one. Only the user file's own order is
       // relabeled; a project order is never copied into it. A rename an
       // order would break (a winning project order names the old label, or
-      // an order names the new one) is refused before anything moves.
+      // an order names the new one) is refused before anything moves. The
+      // check, the move and the rewrite hold the config write permit, so an
+      // order write waits for the rename instead of landing inside it.
       "auth.renameKey": ({ provider, from, to, sessionId }: RenameAuthKeyInput) =>
         inSessionProfile(
           sessionId,
           Effect.gen(function* () {
             const held = yield* signInEntries(provider)
             const cwd = Option.getOrElse(yield* sessionCwd(sessionId), () => runtimeEnvironment.cwd)
-            const refusal = yield* configService.authSlotRenameRefusal(
-              held.owner,
-              held.keys,
+            const refusal = yield* configService.renameAuthSlot({
+              owner: held.owner,
+              aliases: held.keys,
               from,
               to,
               cwd,
-            )
+              move: renameSignIn(provider, from, to).pipe(
+                Effect.mapError(
+                  (error) => new ProviderAuthError({ message: error.message, cause: error }),
+                ),
+              ),
+            })
             if (Option.isSome(refusal)) {
               return yield* new ProviderAuthError({ message: refusal.value })
             }
-            yield* renameSignIn(provider, from, to).pipe(
-              Effect.mapError(
-                (error) => new ProviderAuthError({ message: error.message, cause: error }),
-              ),
-            )
-            yield* configService.renameAuthSlot(held.owner, held.keys, from, to)
           }),
         ),
 

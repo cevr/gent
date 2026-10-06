@@ -514,30 +514,24 @@ interface ConfigServiceService {
     cwd: string,
   ) => Effect.Effect<ReadonlyArray<string>, ConfigLoadError | ConfigWriteError>
   /**
-   * Why the sign-in's credential `from` cannot be relabeled `to`, read from
-   * the user file and the project config of `cwd` before anything moves;
-   * none when it can: a project order that wins names `from`, or an order
-   * names `to` (`authSlotRenameRefusal`).
+   * Relabel the sign-in's credential `from` as `to` (`owner` and its
+   * `aliases`), under the user-config write permit. Refused, with the
+   * reason and nothing moved, when an order of the user file or of a project
+   * entry of `cwd` that wins would break (`authSlotRenameRefusal`). Else
+   * `move` relabels the credential, then the order the user file holds
+   * follows it (`configUpdates.renameAuthSlot`); a project order is never
+   * copied into the user file. An order write waits for it, so none lands
+   * between the check and the rewrite; a `move` that fails writes nothing.
+   * Fails as `setDriverOverride` does.
    */
-  readonly authSlotRenameRefusal: (
-    owner: string,
-    aliases: ReadonlyArray<string>,
-    from: CredentialSlot,
-    to: CredentialSlot,
-    cwd: string,
-  ) => Effect.Effect<Option.Option<string>>
-  /**
-   * Relabel `from` as `to` in the order the user config holds for the
-   * sign-in (`owner` and its `aliases`); no-op when it holds none with
-   * `from`. A project order is never copied into the user file. Fails as
-   * `setDriverOverride` does.
-   */
-  readonly renameAuthSlot: (
-    owner: string,
-    aliases: ReadonlyArray<string>,
-    from: CredentialSlot,
-    to: CredentialSlot,
-  ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
+  readonly renameAuthSlot: <E, R>(params: {
+    readonly owner: string
+    readonly aliases: ReadonlyArray<string>
+    readonly from: CredentialSlot
+    readonly to: CredentialSlot
+    readonly cwd: string
+    readonly move: Effect.Effect<void, E, R>
+  }) => Effect.Effect<Option.Option<string>, E | ConfigLoadError | ConfigWriteError, R>
 }
 
 /**
@@ -930,16 +924,23 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       yield* ensureUserConfig
       yield* loadUserConfig
 
-      const mutateUserConfig = (
-        decide: (current: UserConfig) => {
-          readonly updated: UserConfig
-          readonly save: boolean
-        },
-      ): Effect.Effect<void, ConfigLoadError | ConfigWriteError> =>
-        // The ref orders writers; the file is the source. Deciding on the file
-        // as it is now keeps a hand edit made since the last read, and a file
-        // that does not decode fails here instead of being replaced.
-        SynchronizedRef.updateEffect(userConfigRef, () =>
+      // The ref orders writers; the file is the source. Deciding on the file
+      // as it is now keeps a hand edit made since the last read, and a file
+      // that does not decode fails here instead of being replaced. `decide`
+      // runs under the permit, so what it checks and what it writes are one
+      // step: no other writer lands between them.
+      const writeUserConfig = <A, E, R>(
+        decide: (current: UserConfig) => Effect.Effect<
+          {
+            readonly updated: UserConfig
+            readonly save: boolean
+            readonly result: A
+          },
+          E,
+          R
+        >,
+      ): Effect.Effect<A, E | ConfigLoadError | ConfigWriteError, R> =>
+        SynchronizedRef.modifyEffect(userConfigRef, () =>
           Effect.gen(function* () {
             const [raw, onDisk] = yield* readConfigText(userConfigPath).pipe(
               Effect.flatMap((content) =>
@@ -952,11 +953,21 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 (cause) => new ConfigLoadError({ path: userConfigPath, message: String(cause) }),
               ),
             )
-            const decision = decide(onDisk)
+            const decision = yield* decide(onDisk)
             if (decision.save) yield* saveUserConfig(raw, onDisk, decision.updated)
-            return decision.updated
+            return [decision.result, decision.updated] as const
           }),
         )
+      const mutateUserConfig = (
+        decide: (current: UserConfig) => {
+          readonly updated: UserConfig
+          readonly save: boolean
+        },
+      ): Effect.Effect<void, ConfigLoadError | ConfigWriteError> =>
+        writeUserConfig((current) => {
+          const decision = decide(current)
+          return Effect.succeed({ ...decision, result: decision.save })
+        }).pipe(Effect.asVoid)
 
       // The project file of `cwd` as it is now: empty outside a project
       // scope, and empty (with its failure) when it does not decode.
@@ -1068,24 +1079,27 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           },
         ),
 
-        authSlotRenameRefusal: Effect.fn("ConfigService.authSlotRenameRefusal")(
-          function* (owner, aliases, from, to, cwd) {
-            const { project } = yield* readProject(cwd)
-            const { user } = yield* readUser
-            return authSlotRenameRefusal({ user, project, owner, aliases, from, to })
-          },
-        ),
-
-        renameAuthSlot: Effect.fn("ConfigService.renameAuthSlot")(
-          function* (owner, aliases, from, to) {
-            yield* mutateUserConfig((current) =>
-              Option.match(configUpdates.renameAuthSlot(current, owner, aliases, from, to), {
-                onNone: () => ({ updated: current, save: false }),
-                onSome: (updated) => ({ updated, save: true }),
-              }),
-            )
-          },
-        ),
+        renameAuthSlot: (params) =>
+          writeUserConfig((current) =>
+            Effect.gen(function* () {
+              const { project } = yield* readProject(params.cwd)
+              const refusal = authSlotRenameRefusal({ ...params, user: current, project })
+              if (Option.isSome(refusal)) return { updated: current, save: false, result: refusal }
+              yield* params.move
+              const renamed = configUpdates.renameAuthSlot(
+                current,
+                params.owner,
+                params.aliases,
+                params.from,
+                params.to,
+              )
+              return {
+                updated: Option.getOrElse(renamed, () => current),
+                save: Option.isSome(renamed),
+                result: Option.none<string>(),
+              }
+            }),
+          ).pipe(Effect.withSpan("ConfigService.renameAuthSlot")),
       }
 
       return service
@@ -1096,7 +1110,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
     Layer.effect(
       ConfigService,
       Effect.gen(function* () {
-        const userConfigRef = yield* Ref.make(initialConfig)
+        // Every write takes the ref's permit, as `Live` writes do.
+        const userConfigRef = yield* SynchronizedRef.make(initialConfig)
         // No filesystem, so there is no project config to read: the merge runs
         // against the empty one for its normalizing half.
         const emptyProjectConfig = new UserConfig({})
@@ -1107,12 +1122,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           // tmpdir cwd, since `Test` is for hermetic units.
           get: () =>
             Effect.gen(function* () {
-              const user = yield* Ref.get(userConfigRef)
+              const user = yield* SynchronizedRef.get(userConfigRef)
               return mergeConfigs(user, emptyProjectConfig)
             }),
           getFresh: () =>
             Effect.gen(function* () {
-              const user = yield* Ref.get(userConfigRef)
+              const user = yield* SynchronizedRef.get(userConfigRef)
               return {
                 config: mergeConfigs(user, emptyProjectConfig),
                 failures: [],
@@ -1122,42 +1137,45 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               }
             }),
           setDriverOverride: (agent, driver) =>
-            Ref.update(userConfigRef, (current) =>
+            SynchronizedRef.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),
             ),
           clearDriverOverride: (agent) =>
-            Ref.update(userConfigRef, (current) =>
+            SynchronizedRef.update(userConfigRef, (current) =>
               Option.getOrElse(configUpdates.clearDriverOverride(current, agent), () => current),
             ),
           setModelIfUnset: (model) =>
-            Ref.update(userConfigRef, (current) =>
+            SynchronizedRef.update(userConfigRef, (current) =>
               Option.getOrElse(configUpdates.setModelIfUnset(current, model), () => current),
             ),
           // No project config to shadow the write.
           setAuthOrder: (owner, order, aliases) =>
-            Ref.update(userConfigRef, (current) =>
+            SynchronizedRef.update(userConfigRef, (current) =>
               Option.getOrElse(
                 configUpdates.setAuthOrder(current, owner, order, aliases),
                 () => current,
               ),
             ).pipe(Effect.as([])),
-          authSlotRenameRefusal: (owner, aliases, from, to) =>
-            Effect.map(Ref.get(userConfigRef), (user) =>
-              authSlotRenameRefusal({
-                user,
-                project: emptyProjectConfig,
-                owner,
-                aliases,
-                from,
-                to,
+          // One permit for the check, the move and the rewrite, as `Live` holds.
+          renameAuthSlot: (params) =>
+            SynchronizedRef.modifyEffect(userConfigRef, (current) =>
+              Effect.gen(function* () {
+                const refusal = authSlotRenameRefusal({
+                  ...params,
+                  user: current,
+                  project: emptyProjectConfig,
+                })
+                if (Option.isSome(refusal)) return [refusal, current] as const
+                yield* params.move
+                const renamed = configUpdates.renameAuthSlot(
+                  current,
+                  params.owner,
+                  params.aliases,
+                  params.from,
+                  params.to,
+                )
+                return [Option.none<string>(), Option.getOrElse(renamed, () => current)] as const
               }),
-            ),
-          renameAuthSlot: (owner, aliases, from, to) =>
-            Ref.update(userConfigRef, (current) =>
-              Option.getOrElse(
-                configUpdates.renameAuthSlot(current, owner, aliases, from, to),
-                () => current,
-              ),
             ),
         })
       }),

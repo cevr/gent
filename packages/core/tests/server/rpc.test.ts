@@ -1651,6 +1651,95 @@ describe("provider login", () => {
       ).pipe(Effect.provide(BunServices.layer)),
   )
 
+  // An order write sent while a rename moves its credential waits for the
+  // rename: it never lands between the rename's check and its rewrite, where
+  // the order would name the moved credential twice.
+  it.live("an order write sent during a rename's credential move lands after the rename", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const project = yield* makeTempDirectoryScoped("gent-auth-race-")
+        const home = yield* makeTempDirectoryScoped("gent-auth-race-home-")
+        const store = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const work = CredentialSlot.make("work")
+        const crew = CredentialSlot.make("crew")
+        yield* store.set("race-slots", AuthApi.make({ type: "api", key: "fake-default" }))
+        yield* store.set("race-slots", AuthApi.make({ type: "api", key: "fake-work" }), work)
+        // The credential move signals, then waits for the test.
+        const moving = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const auth = Auth.of({
+          ...store,
+          rename: (provider, from, to) =>
+            Deferred.succeed(moving, void 0).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(store.rename(provider, from, to)),
+            ),
+        })
+        const userConfig = path.join(home, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(userConfig), { recursive: true })
+        yield* fs.writeFileString(
+          userConfig,
+          encodeJson({ providers: { "race-slots": { authOrder: ["work"] } } }),
+        )
+        const extension = defineExtension({
+          id: "@test/race-slots",
+          setup: Effect.gen(function* () {
+            yield* (yield* ExtensionHost).register("modelDriver", {
+              id: "race-slots",
+              name: "Race",
+              resolveModel: () => Effect.succeed(stubModel),
+              auth: { methods: [AuthMethod.make({ type: "api", label: "Key" })] },
+            })
+          }),
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            agents: e2ePreset.agents,
+            providerLayer,
+            extensionInputs: [extension],
+            authLayer: Layer.succeed(Auth, auth),
+            configServiceLayer: ConfigService.Live.pipe(
+              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+              Layer.provide(BunPlatformLive),
+            ),
+          }),
+        )
+        const { sessionId } = yield* client.session.create({ cwd: project })
+        const renamed = yield* client.auth
+          .renameKey({ sessionId, provider: "race-slots", from: work, to: crew })
+          .pipe(Effect.exit, Effect.forkScoped)
+        yield* Deferred.await(moving)
+        const ordered = yield* client.auth
+          .setOrder({ sessionId, provider: "race-slots", order: [work, crew] })
+          .pipe(Effect.exit, Effect.forkScoped)
+        // A waiting fiber gives no signal, so the order write gets a bounded
+        // chance to land inside the move: it cannot, and this wait never
+        // fails a serialized rename. Unserialized, it lands here every time.
+        yield* Fiber.await(ordered).pipe(Effect.timeout("1 second"), Effect.ignore)
+        yield* Deferred.succeed(release, void 0)
+        const outcome = (exit: Exit.Exit<void, unknown>) => {
+          if (Exit.isSuccess(exit)) return "done"
+          if (Cause.hasDies(exit.cause)) return "defect"
+          return "failed"
+        }
+        expect([outcome(yield* Fiber.join(renamed)), outcome(yield* Fiber.join(ordered))]).toEqual([
+          "done",
+          "done",
+        ])
+        expect((yield* store.get("race-slots", crew))?.type).toBe("api")
+        expect(Predicate.isUndefined(yield* store.get("race-slots", work))).toBe(true)
+        // The rename relabeled [work]; the order write came after it.
+        const written = yield* fs
+          .readFileString(userConfig)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        expect(written).toEqual({ providers: { "race-slots": { authOrder: ["work", "crew"] } } })
+      }).pipe(Effect.timeout("8 seconds")),
+    ).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("an expired named login cannot write into the default credential", () =>
     Effect.scoped(
       Effect.gen(function* () {

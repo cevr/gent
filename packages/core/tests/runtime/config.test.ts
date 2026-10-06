@@ -751,10 +751,24 @@ describe("user configuration", () => {
             expect(yield* readRaw).toEqual(cleared)
             // A rename relabels only an order this file holds.
             const team = CredentialSlot.make("team")
-            yield* cfg.renameAuthSlot("owner", ["owner", "alias"], work, team)
+            yield* cfg.renameAuthSlot({
+              owner: "owner",
+              aliases: ["owner", "alias"],
+              from: work,
+              to: team,
+              cwd,
+              move: Effect.void,
+            })
             expect(yield* readRaw).toEqual(cleared)
             yield* fs.writeFileString(userConfigPath, encodeJson(written))
-            yield* cfg.renameAuthSlot("owner", ["owner", "alias"], work, team)
+            yield* cfg.renameAuthSlot({
+              owner: "owner",
+              aliases: ["owner", "alias"],
+              from: work,
+              to: team,
+              cwd,
+              move: Effect.void,
+            })
             expect(yield* readRaw).toEqual({
               providers: {
                 owner: { name: "Owner", futureKey: { kept: true }, authOrder: ["default", "team"] },
