@@ -15,13 +15,14 @@ import {
   type ActivityCall,
   type ActivityOperation,
   type ActivityTone,
+  activityHeaderRuns,
   activityRows,
+  activityToneColor,
   AgentMessageRow,
   ClientContext,
   clientContributions,
   defineClientExtension,
   failureReason,
-  formatActivityHeader,
   formatActivityRow,
   formatDuration,
   formatPreviewFooter,
@@ -232,7 +233,10 @@ const childCall = (
  * a row saved before them reads its kept calls when they are all of them,
  * else counts its calls (`14 tools`), since the kept kinds would undercount.
  */
-const workSummary = (details: CompletionDetails, width: number): string => {
+const workSummary = (
+  details: CompletionDetails,
+  width: number,
+): ReadonlyArray<TextRun<ActivityTone>> => {
   const tools = details.tools ?? []
   const counted = Option.fromUndefinedOr(details.toolCounts).pipe(
     Option.map((counts) =>
@@ -248,10 +252,14 @@ const workSummary = (details: CompletionDetails, width: number): string => {
     ),
   )
   return Option.match(counted, {
-    onNone: () => plural(details.toolCount ?? 0, "tool"),
-    onSome: (calls) => formatActivityHeader(calls, width),
+    onNone: () => [{ text: plural(details.toolCount ?? 0, "tool"), tone: "muted" as const }],
+    onSome: (calls) => activityHeaderRuns(calls, width),
   })
 }
+
+/** The runs' text as one line. */
+const runsText = <Tone,>(runs: ReadonlyArray<TextRun<Tone>>): string =>
+  runs.map((run) => run.text).join("")
 
 /** A text the line holds, or none for an empty one. */
 const nonEmpty = (text: string): Option.Option<string> =>
@@ -303,13 +311,7 @@ const completionHead = (
       options.width,
     )
   }
-  // The line opens with the name whole; the rest is muted.
-  const named = (line: string): ReadonlyArray<TextRun<HeadTone>> => [
-    { text: name, tone: "name" },
-    ...Option.toArray(
-      Option.map(nonEmpty(line.slice(name.length)), (text) => ({ text, tone: "muted" as const })),
-    ),
-  ]
+  const muted = (text: string): TextRun<HeadTone> => ({ text, tone: "muted" })
   const time = Option.map(Option.fromUndefinedOr(details.durationMs), (ms) =>
     formatDuration(ms, "compact"),
   )
@@ -325,31 +327,43 @@ const completionHead = (
     onNone: () => 0,
     onSome: (text) => 3 + Math.min(MIN_ERROR_COLUMNS, textWidth(text)),
   })
-  const join = (work: string, tail: ReadonlyArray<string>) =>
-    [base, ...Option.toArray(nonEmpty(work)), ...tail].join(" · ")
+  // The line opens with the name whole; the child's work draws as a run
+  // header does (`1 failed` in its tone), the rest muted.
+  const join = (
+    work: ReadonlyArray<TextRun<ActivityTone>>,
+    tail: ReadonlyArray<string>,
+  ): ReadonlyArray<TextRun<HeadTone>> => {
+    const runs: Array<TextRun<HeadTone>> = [{ text: name, tone: "name" }, muted(`${id}${failure}`)]
+    if (work.length > 0) runs.push(muted(" · "), ...work)
+    for (const text of tail) runs.push(muted(` · ${text}`))
+    return runs.filter((run) => run.text.length > 0)
+  }
   const tails = [[...Option.toArray(time), ...Option.toArray(usage)], Option.toArray(time), []]
-  let line = base
+  let line = join([], [])
   for (const tail of tails) {
-    const fixed = textWidth(join("", tail)) + errorReserve
+    const fixed = textWidth(runsText(join([], tail))) + errorReserve
     if (fixed > options.width) continue
     const work = workSummary(details, options.width - fixed - 3)
-    if (work.length === 0 || textWidth(join(work, tail)) + errorReserve <= options.width) {
+    if (
+      work.length === 0 ||
+      textWidth(runsText(join(work, tail))) + errorReserve <= options.width
+    ) {
       line = join(work, tail)
       break
     }
   }
   return Option.match(error, {
-    onNone: () => named(line),
+    onNone: () => line,
     onSome: (text) => {
-      const room = options.width - textWidth(line) - 3
-      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return named(line)
-      return named(`${line} · ${truncate(text, room)}`)
+      const room = options.width - textWidth(runsText(line)) - 3
+      if (room < Math.min(MIN_ERROR_COLUMNS, textWidth(text))) return line
+      return [...line, muted(` · ${truncate(text, room)}`)]
     },
   })
 }
 
-/** The head's hue: the child's name in the names' colour (Codex draws a nickname in its accent), the rest muted. */
-type HeadTone = "name" | "muted"
+/** The head's hue: the child's name in the names' colour (Codex draws a nickname in its accent), its work in the run tones, the rest muted. */
+type HeadTone = "name" | ActivityTone
 
 /** The answer's lines, with the blank lines at its end dropped. */
 const answerLines = (content: string): ReadonlyArray<string> => {
@@ -383,11 +397,7 @@ function ChildCallRows(props: {
     return activityRows(calls)
   })
   // As a run's rows: only the outcome word takes a hue.
-  const color = (tone: ActivityTone) => {
-    if (tone === "failed") return theme.error
-    if (tone === "stopped") return theme.warning
-    return theme.textMuted
-  }
+  const color = (tone: ActivityTone) => activityToneColor(theme)(tone)
   const connector = (index: number) => {
     if (index === rows().length - 1) return "└"
     return "├"
@@ -437,7 +447,7 @@ function ChildCompletionRow(
     completionHead(state(), props.details, { width: width() - GLYPH_COLUMNS, open: open() })
   const headColor = (tone: HeadTone) => {
     if (tone === "name") return theme.info
-    return theme.textMuted
+    return activityToneColor(theme)(tone)
   }
   const answer = createMemo(() => answerLines(props.content))
   const shownAnswer = () => {

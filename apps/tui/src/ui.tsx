@@ -24,8 +24,9 @@ import {
   useScopedKeyboard,
   useTerminalDimensions,
 } from "./terminal"
-import { useTheme } from "./theme"
+import { type Theme, useTheme } from "./theme"
 import {
+  type ActivityTone,
   dropFirstGrapheme,
   dropLastGrapheme,
   formatPreviewFooter,
@@ -1946,6 +1947,20 @@ export function ToneRuns<Tone>(props: {
     </For>
   )
 }
+
+/**
+ * The colour of a run row's tone, the one owner of the run rows' hue: hue
+ * goes only where the reader must look, as Codex colours its failures. A
+ * failure is an error, a cancel (the reader's own act) or a cut a warning;
+ * the words stay muted.
+ */
+export const activityToneColor =
+  (theme: Theme) =>
+  (tone: ActivityTone): RGBA => {
+    if (tone === "failed") return theme.error
+    if (tone === "stopped") return theme.warning
+    return theme.textMuted
+  }
 
 /** A notice's glyph and its words: `↳` and `answered · Cache? → Redis`. */
 export interface CollapsedRowProps {

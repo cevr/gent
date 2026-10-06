@@ -20,7 +20,7 @@ import {
 } from "../../src/message-list"
 import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
-import { createMockClient, renderScoped } from "../render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { untilExtensionsLoaded, waitForFrame } from "../helpers-boundary"
 import { delegateSubtitle } from "../../src/extensions/delegate.client"
 import { useTheme } from "../../src/theme"
@@ -505,10 +505,11 @@ describe("child-completion row on the ctrl+o ladder", () => {
   )
 
   // Codex draws an agent's nickname in its accent: the name takes the names'
-  // colour, a child that ended badly its `✕` in the error colour, the rest muted.
+  // colour, a child that ended badly its `✕` in the error colour, and its work
+  // draws as a run header does, `1 failed` in the error colour; the rest muted.
   for (const width of [100, 60, 40]) {
     it.scopedLive(
-      `the head colours the child's name and a bad end's mark at ${width} columns`,
+      `the head colours the child's name, a bad end's mark and its failures at ${width} columns`,
       () =>
         Effect.gen(function* () {
           const failed = { ...ladderDetails, outcome: { streamFailed: true } }
@@ -533,18 +534,18 @@ describe("child-completion row on the ctrl+o ladder", () => {
               .captureSpans()
               .lines.flatMap((line) => line.spans.filter((span) => span.text.trim().length > 0))
               .filter((span) => !span.fg.equals(theme.textMuted))
-            const name = colored.at(-1)
+            const name = colored.find((span) => span.fg.equals(theme.info))
             expect(name?.text.startsWith("delegate: lo")).toBe(true)
-            expect(name?.fg.equals(theme.info)).toBe(true)
-            if (details === failed) {
-              expect(colored.map((span) => span.text.trim())).toEqual([
-                "✕",
-                name?.text.trim() ?? "",
-              ])
-              expect(colored[0]?.fg.equals(theme.error)).toBe(true)
-            } else {
-              expect(colored).toHaveLength(1)
-            }
+            const showsFailures = renderFrame(setup).includes("· 1 failed")
+            const expected: Array<string> = []
+            if (details === failed) expected.push("✕")
+            expected.push(name?.text.trim() ?? "")
+            if (showsFailures) expected.push("1 failed")
+            expect(colored.map((span) => span.text.trim())).toEqual(expected)
+            for (const span of colored.filter((span) => span !== name))
+              expect(span.fg.equals(theme.error)).toBe(true)
+            // Wide, the work holds the failure; narrow, it may drop with the work.
+            if (width === 100) expect(showsFailures).toBe(true)
           }
         }),
     )

@@ -1355,24 +1355,6 @@ const tally = (counts: Map<string, KindCount>, kind: ToolKind) => {
 }
 
 /**
- * Header for a group of calls, in the words its rows use: `Read 3 files ·
- * ran 2 commands · searched 1 pattern · edited 1 file · 1 failed`. Kinds go
- * largest first, ties in the order they ran; the ops still running read
- * last, in the running tense (`running 1 command`), and the failures and
- * cancels end it. A header counts no thoughts and sums no time: the turn
- * line holds the time. Where it is wider than `width` columns, kinds drop
- * from the right; the first kind, the failures and the cancels stay.
- */
-export function formatActivityHeader(
-  calls: ReadonlyArray<ActivityCall>,
-  width = Number.POSITIVE_INFINITY,
-): string {
-  return activityHeaderRuns(calls, width)
-    .map((run) => run.text)
-    .join("")
-}
-
-/**
  * Where a run row's hue goes: only to what the reader must look at. A
  * failure (`2 failed`, `exit 2`, `failed`) is `failed`; a cancel or a call
  * cut short (`1 cancelled`, `incomplete`) is `stopped`; the rest is `muted`.
@@ -1386,7 +1368,17 @@ const outcomeTone = (outcome: ActivityOutcome): ActivityTone => {
   return "muted"
 }
 
-/** `formatActivityHeader` in runs: the work muted, `N failed` and `N cancelled` in their tones. */
+/**
+ * Header for a group of calls, in the words its rows use: `Read 3 files ·
+ * ran 2 commands · searched 1 pattern · edited 1 file · 1 failed`. Kinds go
+ * largest first, ties in the order they ran; the ops still running read
+ * last, in the running tense (`running 1 command`), and the failures and
+ * cancels end it. A header counts no thoughts and sums no time: the turn
+ * line holds the time. Where it is wider than `width` columns, kinds drop
+ * from the right; the first kind, the failures and the cancels stay. In
+ * runs: the work muted, `N failed` and `N cancelled` in their tones, which
+ * `activityToneColor` (`ui.tsx`) colours for every run row.
+ */
 export function activityHeaderRuns(
   calls: ReadonlyArray<ActivityCall>,
   width = Number.POSITIVE_INFINITY,
@@ -1670,18 +1662,9 @@ const MIN_REASON_COLUMNS = 4
  * A failed op as the collapsed level's one line, fitted to `width` columns:
  * `Ran ls d.ts · exit 2 · ls: cannot access…`, `Read a.ts · failed · no such
  * file`. A narrow row cuts the reason first, then drops it, then cuts the
- * subject; the verb and the outcome always show.
+ * subject; the verb and the outcome always show. In runs: the outcome word
+ * in its tone, the head and the reason muted.
  */
-export function formatFailureRow(
-  operation: ActivityOperation,
-  width = Number.POSITIVE_INFINITY,
-): string {
-  return failureRowRuns(operation, width)
-    .map((run) => run.text)
-    .join("")
-}
-
-/** `formatFailureRow` in runs: the outcome word in its tone, the head and the reason muted. */
 export function failureRowRuns(
   operation: ActivityOperation,
   width = Number.POSITIVE_INFINITY,

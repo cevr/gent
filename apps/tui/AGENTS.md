@@ -325,7 +325,7 @@ A tool group reads in tool words, as fx does, not in the cell mechanism
 (`ToolCallGroup` in `message-list.tsx`, the projections in `utils.ts`). Its
 header is verb phrases in the words its preview rows use, one a kind, largest
 first: `● Read 3 files · ran 2 commands · searched 1 pattern · edited 1 file ·
-1 failed` (`formatActivityHeader`). It counts a cell's ops (any other call is
+1 failed` (`activityHeaderRuns`). It counts a cell's ops (any other call is
 the one op it is; a cell with no ops counts the calls its source spells out,
 `ran code` when it names none, never its code). The ops still running read
 last in the running tense (`… · running 1 command`), and the failures and
@@ -341,7 +341,7 @@ whose command exits nonzero is a failed op, as fx counts it, though its call
 succeeded (`callOperation`). Hue goes only where the reader must look, as
 Codex colours its failures: the glyph, `N failed` in the error colour and
 `N cancelled` in the warning colour; the header's work, the connectors and
-the reasons stay muted (`activityHeaderRuns`, `ActivityTone`). One blank row
+the reasons stay muted (`activityHeaderRuns`, `ActivityTone`; `activityToneColor` in `ui.tsx` is the one map from tone to colour, for the tool group and for a child's row, whose work draws as a run header does). One blank row
 parts a tool run from the answer text before it and after it, in one message
 as across two (`gapBefore` in `AssistantMessage`).
 
@@ -352,7 +352,7 @@ block, plus one line a failure, so a failure shows at every level. Preview is
 the tree: one line a child. Full opens the bodies. `esc` collapses.
 
 - **Tool group.** Collapsed draws the header and, under it, one row for each
-  failed call or op (`failedOperations`, `formatFailureRow`, `failureRowRuns`):
+  failed call or op (`collapsedOperations`, `failureRowRuns`):
   `└ Ran ls d.ts · exit 2 · ls: cannot access …`, only its outcome word
   (`exit 2`, `failed`) in the error colour (`cancelled` in the warning
   colour), the rest muted; a preview row colours its outcome word the same

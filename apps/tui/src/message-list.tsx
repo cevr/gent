@@ -44,6 +44,7 @@ import {
 import { resolveThemeColor, useTheme } from "./theme"
 import { useClient } from "./client"
 import {
+  activityToneColor,
   AgentMessageRow,
   CollapsedRow,
   ToneRuns,
@@ -1429,13 +1430,7 @@ function ToolCallGroup(props: {
       ),
     )
   }
-  // Hue goes only where the reader must look: a failure is an error, a
-  // cancel (the reader's own act) or a cut a warning; the words stay muted.
-  const toneColor = (tone: ActivityTone) => {
-    if (tone === "failed") return theme.error
-    if (tone === "stopped") return theme.warning
-    return theme.textMuted
-  }
+  const toneColor = (tone: ActivityTone) => activityToneColor(theme)(tone)
   const connector = (index: number, count: number) => {
     if (index === count - 1) return "└"
     return "├"

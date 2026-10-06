@@ -61,6 +61,7 @@ export {
 // ── rendering kit ──
 
 export {
+  activityToneColor,
   AgentMessageRow,
   ChromePanel,
   CollapsedRow,
@@ -92,7 +93,7 @@ export {
   activityRows,
   placedSummary,
   fitWidth,
-  formatActivityHeader,
+  activityHeaderRuns,
   formatActivityRow,
   formatAge,
   formatClock,
