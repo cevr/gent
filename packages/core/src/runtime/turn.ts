@@ -202,6 +202,7 @@ import {
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
+  type ModelCompactionError,
   type ModelContextLedger,
   announcedModel,
   assistantRunEfforts,
@@ -3078,6 +3079,49 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     )
     return visit
   }
+  /**
+   * The same-credential retries of the step's request and of the handoff
+   * summary, under the driver's policy: a transient failure (`failureOf`
+   * reads the provider failure out of the attempt's error) runs the attempt
+   * again, and each run resolves its model again, so each reserves a model
+   * attempt. A cancel during a backoff ends the wait; the failure it leaves
+   * reads as an interrupted step. Each retry publishes its notice.
+   */
+  const retryOnCredential = <E>(
+    failureOf: (error: E) => Option.Option<ProviderError | ProviderAuthError>,
+  ) =>
+    retryProviderCall(retryPolicy, failureOf, {
+      stop: Deferred.await(params.activeStream.interrupted),
+      onRetry: ({ attempt: count, maxAttempts, delayMs, error }) =>
+        publishEventOrDie(
+          ProviderRetrying.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            attempt: count,
+            maxAttempts,
+            delayMs,
+            error: retryReason(error),
+          }),
+        ).pipe(Effect.provideService(EventStore, eventStore)),
+    })
+  /**
+   * The summary model's failure inside a compactor's error, as the step's
+   * request reads its own: a failure at resolution is a provider failure
+   * already; one from the stream is wrapped as the step's stream wraps it.
+   * None for a compactor that refused with no model failure behind it.
+   */
+  const summaryFailure = (
+    error: ModelCompactionError,
+  ): Option.Option<ProviderError | ProviderAuthError> => {
+    const cause = error.cause
+    if (Predicate.isUndefined(cause)) return Option.none()
+    if (Schema.is(ProviderError)(cause) || Schema.is(ProviderAuthError)(cause)) {
+      return Option.some(cause)
+    }
+    return Option.some(
+      new ProviderError({ message: causeMessage(cause), model: resolved.modelId, cause }),
+    )
+  }
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
@@ -3114,8 +3158,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...turnHints, maxTokens, reasoning: "none" },
       }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
+    // A summary retries and moves under the step's rule: a rate limit
+    // leaves its credential only once the retries on it end.
     walkCredentials: (compact) =>
-      walkCredentials(compact, (error) => Option.fromUndefinedOr(error.cause)),
+      walkCredentials(compact.pipe(retryOnCredential(summaryFailure)), (error) =>
+        Option.fromUndefinedOr(error.cause),
+      ),
   }).pipe(
     // The compactor runs with the context a tool call on this branch gets:
     // the session's cwd and facets, and the agent whose window it compacts.
@@ -3297,24 +3345,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       // credential cannot serve (`credentialRefusal`, which reads a proved
       // `credentialFailure`) moves the turn down its order below; any other
       // ends the step as a failed one.
-      const attempt = effect.pipe(
-        retryProviderCall(retryPolicy, {
-          // A cancel during a backoff ends the wait; the failure it leaves
-          // reads as an interrupted step below.
-          stop: Deferred.await(params.activeStream.interrupted),
-          onRetry: ({ attempt: count, maxAttempts, delayMs, error }) =>
-            publishEventOrDie(
-              ProviderRetrying.make({
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                attempt: count,
-                maxAttempts,
-                delayMs,
-                error: retryReason(error),
-              }),
-            ),
-        }),
-      )
+      const attempt = effect.pipe(retryOnCredential<ProviderError | ProviderAuthError>(Option.some))
       // A failure that reaches here came before any output: the collector
       // keeps a step that wrote something. When it proves the credential
       // cannot serve, the turn leaves that slot and runs the step again on

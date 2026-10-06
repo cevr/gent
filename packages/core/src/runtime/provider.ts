@@ -4135,41 +4135,40 @@ interface RetryAttemptInfo {
   readonly error: ProviderError
 }
 
+interface RetryProviderCallOptions<R2> {
+  readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
+  readonly stop?: Effect.Effect<void>
+}
+
 /**
  * Retry a provider call on transient failure under the driver's policy. The
- * time the failure names (`RetryPolicy.retryAt`) wins over the backoff; the
- * backoff is capped at `maxDelay`, and a time past it ends the retries.
- * `onRetry` runs before each wait with the delay the schedule will take.
- * `stop` ends a wait early: once it completes, no further attempt runs and
- * the last failure is the result.
+ * attempt fails with its own error; `failureOf` reads the provider failure
+ * inside it (a step's request fails with it, a handoff summary's compactor
+ * with `ModelCompactionError`), and only that failure decides a retry: none
+ * ends the retries. The time the failure names (`RetryPolicy.retryAt`) wins
+ * over the backoff; the backoff is capped at `maxDelay`, and a time past it
+ * ends the retries. `onRetry` runs before each wait with the delay the
+ * schedule will take. `stop` ends a wait early: once it completes, no
+ * further attempt runs and the last failure is the result.
  */
 export const retryProviderCall =
-  <R2 = never>(
+  <E, R2 = never>(
     config: RetryPolicy,
-    options?: {
-      readonly onRetry?: (info: RetryAttemptInfo) => Effect.Effect<void, never, R2>
-      readonly stop?: Effect.Effect<void>
-    },
-  ): (<A, R>(
-    effect: Effect.Effect<A, ProviderOrAuthError, R>,
-  ) => Effect.Effect<A, ProviderOrAuthError, R | R2>) =>
-  <A, R>(effect: Effect.Effect<A, ProviderOrAuthError, R>) => {
+    failureOf: (error: E) => Option.Option<ProviderOrAuthError>,
+    options?: RetryProviderCallOptions<R2>,
+  ): (<A, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R | R2>) =>
+  <A, R>(effect: Effect.Effect<A, E, R>) => {
     // meta.attempt is 1-indexed: 1 after the first failure, 2 after the second.
-    const schedule = Schedule.fromStepWithMetadata<
-      ProviderOrAuthError,
-      number,
-      R2,
-      never,
-      never,
-      never
-    >(
-      Effect.succeed((meta: Schedule.InputMetadata<ProviderOrAuthError>) =>
+    const schedule = Schedule.fromStepWithMetadata<E, number, R2, never, never, never>(
+      Effect.succeed((meta: Schedule.InputMetadata<E>) =>
         Effect.gen(function* () {
           const nowMs = yield* Clock.currentTimeMillis
-          const error = meta.input
-          if (meta.attempt >= config.maxAttempts || !isRetryable(config, error, nowMs)) {
+          const failure = failureOf(meta.input)
+          if (meta.attempt >= config.maxAttempts || Option.isNone(failure)) {
             return yield* Cause.done(meta.attempt)
           }
+          const error = failure.value
+          if (!isRetryable(config, error, nowMs)) return yield* Cause.done(meta.attempt)
           const jitter = yield* Random.next
           const delayMs = retryDelay(meta.attempt - 1, error, config, jitter, nowMs)
           if (!Predicate.isUndefined(options?.onRetry)) {

@@ -2732,6 +2732,63 @@ describe("credential order", () => {
     }),
   )
 
+  it.live("a handoff summary retries a transient rate limit on its own credential", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "summary-retries",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        history: Array.from({ length: 12 }, () => 50_000),
+        replies: {
+          "sk-a": (call) => {
+            if (call === 0) return failWith(new AiError.RateLimitError({}))
+            return answer("from a")(call)
+          },
+          "sk-b": answer("from b"),
+        },
+      })
+      // One 429, one retry on default: the summary and the step stay there.
+      expect(run.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+      expect(run.retries).toBe(1)
+      expect(run.projected.map((event) => event.compacted)).toEqual([true])
+      expect(run.errors).toEqual([])
+      expect(labelsOf(run.ended)).toEqual([
+        { provider: fallbackProvider, slot: DEFAULT_CREDENTIAL_SLOT },
+      ])
+    }),
+  )
+
+  it.live("a handoff summary moves on a rate limit only once its retries end", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "summary-rate-limit",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        history: Array.from({ length: 12 }, () => 50_000),
+        replies: {
+          "sk-a": () => failWith(new AiError.RateLimitError({})),
+          "sk-b": answer("from b"),
+        },
+      })
+      expect(run.sent).toEqual(["sk-a", "sk-a", "sk-b", "sk-b"])
+      expect(run.retries).toBe(1)
+      expect(run.projected.map((event) => event.compacted)).toEqual([true])
+      expect(run.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} is rate limited; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+      expect(labelsOf(run.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
+    }),
+  )
+
   it.live("a rate limit moves the turn on only once its same-credential retries end", () =>
     Effect.gen(function* () {
       const run = yield* credentialTurn({

@@ -175,7 +175,7 @@ const failThenSucceed = (error: ProviderOrAuth, failures: number, config = fast)
     if (calls <= failures) return yield* error
     return "ok"
   }).pipe(
-    retryProviderCall(config, {
+    retryProviderCall(config, Option.some, {
       onRetry: ({ delayMs }) => Effect.sync(() => void delays.push(delayMs)),
     }),
   )
@@ -242,7 +242,7 @@ describe("provider retry", () => {
         if (calls < 3) return yield* streamEvent({ code: "server_error" })
         return "ok"
       }).pipe(
-        retryProviderCall(fast, {
+        retryProviderCall(fast, Option.some, {
           onRetry: ({ attempt, maxAttempts, error }) =>
             Effect.sync(() => void attempts.push({ attempt, maxAttempts, error: error.message })),
         }),
