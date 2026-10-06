@@ -1192,7 +1192,7 @@ Shape:
   a virtual model. On a session on auto, the turn asks it once per user
   turn, at step 1, after a model route (`routeEffort`, `runtime/turn.ts`,
   effort-routing section). The model facts come from the model the turn
-  dispatches to (`modelDriver.contextModelId`: a `driverOverride` reads its
+  dispatches to (`modelDriver.contextModelId`: a driver override, `driverOverrides`, reads its
   own catalog entry), and the receipts name the model the session asked
   for. It offers only the choices that model runs at their own level
   (`effectiveEffort` returns the level unchanged), so the levels filter to

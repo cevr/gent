@@ -3049,6 +3049,136 @@ export const findStaleSteeringReceipts = (
   })
 }
 
+// ── a steering code name lives in the code ──────────────────────────────────
+
+/**
+ * A code name as steering prose spells one: a whole backticked camelCase or
+ * PascalCase word with a capital after its first letter (`paletteSettled`,
+ * `KeyHintsText`). A prose word (`cancel`, `Model`), a dotted name, a call
+ * and a path do not match, so the guard reads only what is plainly code.
+ */
+const STEERING_CODE_NAME = /`([a-z][a-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*)`/g
+
+/** An identifier in a source text. */
+const SOURCE_WORD = /[A-Za-z_$][\w$]*/g
+
+/** A steering code name no tracked source holds: the file that names it, and why. */
+interface SteeringNameOutsideTheTree {
+  readonly name: string
+  readonly file: string
+  readonly reason: string
+}
+
+/**
+ * The steering code names no tracked source holds, each with the steering
+ * file that names it and its reason: a dependency's own API, which lives in
+ * `node_modules`, not the tree, or a name the prose tells the reader not to
+ * use. A row whose file no longer names it, or whose name a tracked source
+ * now holds, is reported, so the list keeps no dead row.
+ */
+export const STEERING_NAMES_OUTSIDE_THE_TREE: ReadonlyArray<SteeringNameOutsideTheTree> = [
+  {
+    name: "SqlMessageStorage",
+    file: "ARCHITECTURE.md",
+    reason: "Effect's cluster message storage (`effect/cluster/SqlMessageStorage`)",
+  },
+  {
+    name: "entityMaxIdleTime",
+    file: "ARCHITECTURE.md",
+    reason: "Effect's `ShardingConfig` option (`effect/cluster/ShardingConfig`)",
+  },
+  {
+    name: "getOrElseMemoize",
+    file: "ARCHITECTURE.md",
+    reason: "Effect's layer memo map method (`effect/Layer`), the call the layer count counts",
+  },
+  {
+    name: "marginY",
+    file: "apps/tui/AGENTS.md",
+    reason: "OpenTUI's shorthand prop, which the TUI guide forbids by name",
+  },
+  {
+    name: "refreshOn",
+    file: "NORTH_STAR.md",
+    reason: "a rejected design the rejected list names, which was never built",
+  },
+]
+
+/**
+ * The steering prose whose names are not gent's: `PRIOR_ART.md` names the
+ * code of other repos, `patches/README.md` the code of the dependencies it
+ * patches (an upstream name the patch never touches too), and the bundled
+ * principle skills teach with examples (`renderHeader`, `OrderPlaced`) that
+ * no code is meant to hold.
+ */
+const FOREIGN_NAME_PROSE =
+  /^(?:PRIOR_ART\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+
+/** The texts whose words would hold every name the guard reads: its own rows and its tests. */
+const STEERING_NAME_GUARD_FILES: ReadonlySet<string> = new Set([
+  GUARDS_FILE,
+  "packages/tooling/tests/guards.test.ts",
+])
+
+/**
+ * Guard: a backticked code name in steering prose (`STEERING_CODE_NAME`) is
+ * a word some tracked source holds.
+ *
+ * The receipt guard checks a name that states its file; most names in the
+ * prose state none (the history gate, `paletteSettled`). A rename leaves the
+ * old name in the prose, and an agent that searches for it finds nothing,
+ * or invents it. A name is held when a tracked text outside the Markdown
+ * holds it as a whole word: a fixture counts, since the prose names the
+ * fixtures it explains, and a dependency patch counts, since its notes name
+ * what it patches. A dependency's name, which no tracked file holds, is a
+ * row of `STEERING_NAMES_OUTSIDE_THE_TREE` with its reason. Fenced blocks
+ * are the guide check's: they compile. `FOREIGN_NAME_PROSE` is not read.
+ */
+export const findUnheldSteeringNames = (
+  texts: ReadonlyMap<string, string>,
+): ReadonlyArray<Finding> => {
+  const words = new Set<string>()
+  for (const [file, text] of texts) {
+    if (file.endsWith(".md") || STEERING_NAME_GUARD_FILES.has(file)) continue
+    for (const word of text.matchAll(SOURCE_WORD)) words.add(word[0])
+  }
+  const named = new Set<string>()
+  const allowed = (file: string, name: string) =>
+    STEERING_NAMES_OUTSIDE_THE_TREE.some((row) => row.file === file && row.name === name)
+  const findings = [...texts].flatMap(([file, text]) => {
+    if (!isSteeringFile(file) || FOREIGN_NAME_PROSE.test(file)) return []
+    const prose = withoutFences(text)
+    return prose
+      .matchAll(STEERING_CODE_NAME)
+      .flatMap((match): ReadonlyArray<Finding> => {
+        const name = match[1] ?? ""
+        named.add(`${file}\n${name}`)
+        if (words.has(name) || allowed(file, name)) return []
+        return [
+          {
+            file,
+            line: lineAt(prose, match.index),
+            message: `steering file names \`${name}\`, which no tracked source holds -- name what the code calls it today, or drop it; a dependency's name goes in \`STEERING_NAMES_OUTSIDE_THE_TREE\` with its reason`,
+          },
+        ]
+      })
+      .toArray()
+  })
+  // A row speaks for its file: a scan without that file judges no row.
+  const deadRows = STEERING_NAMES_OUTSIDE_THE_TREE.flatMap((row): ReadonlyArray<Finding> => {
+    if (!texts.has(row.file)) return []
+    if (named.has(`${row.file}\n${row.name}`) && !words.has(row.name)) return []
+    return [
+      {
+        file: GUARDS_FILE,
+        line: 1,
+        message: `\`STEERING_NAMES_OUTSIDE_THE_TREE\` keeps \`${row.name}\` for \`${row.file}\`, which that file no longer names or a tracked source now holds -- drop the row`,
+      },
+    ]
+  })
+  return [...findings, ...deadRows]
+}
+
 /** The part of a package's `turbo.json` the guide input check reads. */
 export const TurboTypecheckInputsSchema = Schema.Struct({
   tasks: Schema.Struct({

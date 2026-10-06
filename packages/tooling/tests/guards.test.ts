@@ -20,6 +20,8 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findStaleSteeringReceipts,
+  type Finding,
+  findUnheldSteeringNames,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
   findBunfigPreloads,
@@ -47,6 +49,7 @@ import {
   type PackageJson,
   workspaceManifests,
   RETIRED_SURFACES,
+  STEERING_NAMES_OUTSIDE_THE_TREE,
   workspaceTsconfigs,
 } from "../src/guards"
 import { indexFileNames, scanTrackedTexts, trackedTexts } from "../src/check-guardrails"
@@ -2259,6 +2262,66 @@ describe("steering receipts", () => {
       ].map((lines) => linesOfReceipts(lines.join("\n"))),
     ).toEqual([[], [], []])
     expect(linesOfReceipts(receipt, "plans/ledger.md")).toEqual([])
+  })
+})
+
+describe("steering code names", () => {
+  const sources: ReadonlyArray<readonly [string, string]> = [
+    ["apps/tui/src/theme.tsx", "const [paletteSettled, setPaletteSettled] = createSignal(false)"],
+    ["packages/tooling/fixtures/held/doc-name.ts", "export const fixtureOnlyName = 1"],
+    ["apps/tui/src/layout.tsx", "export const Row = () => <box marginTop={1} />"],
+  ]
+  // A doc no allow-list row speaks for: a scan without a row's file judges no row.
+  const findingsOf = (doc: string, file = "docs/architecture/probe.md") =>
+    findUnheldSteeringNames(new Map([...sources, [file, doc]]))
+  const where = (findings: ReadonlyArray<Finding>) =>
+    findings.map((finding) => [finding.file, finding.line])
+
+  test("a code name no tracked source holds is reported at its line", () => {
+    const doc = [
+      "# Theme",
+      "History waits for `paletteSettled`.",
+      "The read sets `messageSurface`.",
+    ]
+    expect(where(findingsOf(doc.join("\n")))).toEqual([["docs/architecture/probe.md", 3]])
+  })
+
+  test("a held name, a fixture's name and a prose word pass", () => {
+    expect(findingsOf("`paletteSettled`, `fixtureOnlyName`, `cancel`, `Model`, `a.bC`")).toEqual([])
+  })
+
+  test("an allow-list row passes its name in its own file only", () => {
+    const row = STEERING_NAMES_OUTSIDE_THE_TREE.find((entry) => entry.name === "marginY")
+    expect(row?.file).toBe("apps/tui/AGENTS.md")
+    expect(findingsOf("Use `marginTop`, not `marginY`.", "apps/tui/AGENTS.md")).toEqual([])
+    expect(where(findingsOf("Use `marginY`."))).toEqual([["docs/architecture/probe.md", 1]])
+  })
+
+  test("a fenced block, a Markdown text, a file outside the steering prose and foreign prose are not read", () => {
+    expect(findingsOf(["```ts", "`goneName`", "```"].join("\n"))).toEqual([])
+    expect(
+      findUnheldSteeringNames(
+        new Map([
+          ...sources,
+          ["docs/notes.md", "`heldOnlyInMarkdown`"],
+          ["docs/architecture/probe.md", "`heldOnlyInMarkdown`"],
+          ["plans/ledger.md", "`goneName`"],
+          ["PRIOR_ART.md", "`otherRepoName`"],
+          ["patches/README.md", "`upstreamName`"],
+        ]),
+      ).map((finding) => finding.file),
+    ).toEqual(["docs/notes.md", "docs/architecture/probe.md"])
+  })
+
+  test("an allow-list row its file no longer names, or a source now holds, is reported", () => {
+    const dead = (doc: string, extra: ReadonlyArray<readonly [string, string]> = []) =>
+      findUnheldSteeringNames(new Map([...sources, ...extra, ["apps/tui/AGENTS.md", doc]])).map(
+        (finding) => finding.message,
+      )
+    expect(dead("Use `marginTop`.")).toEqual([expect.stringContaining("keeps `marginY`")])
+    expect(dead("Not `marginY`.", [["apps/tui/src/ui.tsx", "const marginY = 1"]])).toEqual([
+      expect.stringContaining("keeps `marginY`"),
+    ])
   })
 })
 

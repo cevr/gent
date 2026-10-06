@@ -24,6 +24,7 @@ import {
   findRetiredSurfaces,
   findSteeringFilePaths,
   findStaleSteeringReceipts,
+  findUnheldSteeringNames,
   findSuppressionInventoryFindings,
   findTestLaneDefaults,
   findBunfigPreloads,
@@ -612,6 +613,8 @@ const program = Effect.gen(function* () {
     ...(yield* packageSurfaceFindings(texts, indexFiles)),
     ...(yield* guideInputFindings(texts, indexFiles)),
     ...(yield* runConfigFindings(texts, indexFiles)),
+    // A steering code name no tracked text holds: every text is read, a patch's too.
+    ...findUnheldSteeringNames(texts),
   ]
 
   // Two finders may report one line with one message; say it once.
