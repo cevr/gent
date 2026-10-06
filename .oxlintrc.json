@@ -253,6 +253,7 @@
         "apps/tui/src/main.tsx",
         "apps/tui/scripts/build.ts",
         "apps/tui/scripts/dev-preload-boundary.ts",
+        "packages/tooling/src/warm-source-start-boundary.ts",
         "packages/tooling/src/check-guide-code.ts"
       ],
       "rules": {

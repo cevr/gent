@@ -37,6 +37,7 @@ export {
   captureProviderStopReason,
   createWorkerEnv,
   freePort,
+  GENT_START_BOUND_MS,
   interruptAtEachStep,
   LanguageModelLayers,
   makeTempDirectoryScoped,

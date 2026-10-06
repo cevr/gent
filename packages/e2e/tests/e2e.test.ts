@@ -5,7 +5,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Option } from "effect"
-import { makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { GENT_START_BOUND_MS, makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
   DEFAULT_PTY_SIZE,
   keys,
@@ -33,7 +33,7 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("hello world")
         // The composer draws each keystroke on its own, so only the screen shows the words whole.
         yield* screenWaitFor(ctx, (visible) => visible.some((row) => row.includes("hello world")), {
@@ -51,7 +51,7 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write(keys.esc)
         // oxlint-disable-next-line effect/noFixedWaitInTests -- a lone ESC counts as a key only after the escape-sequence timeout, and nothing on screen marks it
         yield* Effect.sleep(`${ESC_KEY_DECODE_MS} millis`)
@@ -68,7 +68,7 @@ describe("E2E: Basics", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write(keys["ctrl+d"])
         expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
       }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
@@ -82,7 +82,7 @@ describe("E2E: Auth", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* spawnNoAuth
-        yield* ptyWaitFor(ctx, "Sign in", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "Sign in", { timeout: GENT_START_BOUND_MS })
         // The boot gate opens on the first *required* provider, and the
         // user's model (the fixture home's config) is a Claude one, so the
         // picker it opens is anthropic's.
@@ -106,7 +106,7 @@ describe("E2E: Slash Commands", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn()
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("/")
         yield* ptyWaitFor(ctx, "Commands", { timeout: 5_000 })
         yield* ptyWaitFor(ctx, "/new", { timeout: 5_000 })
@@ -130,7 +130,7 @@ describe("E2E: Shell Mode", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedAndSpawn(["--mock-empty"])
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("!")
         yield* ptyWaitFor(ctx, "$", { timeout: 5_000 })
         ctx.pty.write("echo first-$((1+1))")
@@ -157,7 +157,7 @@ describe("E2E: Session", () => {
         // session, a model that answers nothing. The home footer reads
         // "ready"; only the session route renders the `✻` live line.
         const ctx = yield* seedAndSpawn(["--mock-empty"])
-        yield* ptyWaitFor(ctx, "ready", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "ready", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("hi")
         // Enter must reach the composer after the text it submits is drawn.
         yield* settlePty(ctx, REPAINT)
@@ -181,7 +181,7 @@ describe("E2E: Skill Popup", () => {
     () =>
       Effect.gen(function* () {
         const ctx = yield* seedSkillAndSpawn
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         // oxlint-disable-next-line effect/noFixedWaitInTests -- a `$` typed before the skills are listed opens no popup, and no screen signal marks the listing
         yield* Effect.sleep(SKILL_DISCOVERY)
         ctx.pty.write("$t")
@@ -223,7 +223,7 @@ describe("E2E: Terminal handover", () => {
           VISUAL: editor,
           EDITOR: editor,
         })
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("draft")
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys["ctrl+g"])
@@ -266,7 +266,7 @@ describe("E2E: Terminal handover", () => {
           VISUAL: editor,
           EDITOR: editor,
         })
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("draft")
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys["ctrl+g"])
@@ -309,7 +309,7 @@ describe("E2E: Terminal handover", () => {
           // oxlint-disable-next-line effect/noGlobals -- the stand-in goes ahead of the test's own PATH
           PATH: `${dir}:${Bun.env["PATH"] ?? ""}`,
         })
-        yield* ptyWaitFor(ctx, "┃", { timeout: 10_000 })
+        yield* ptyWaitFor(ctx, "┃", { timeout: GENT_START_BOUND_MS })
         ctx.pty.write("/diff")
         yield* settlePty(ctx, REPAINT)
         ctx.pty.write(keys.enter)

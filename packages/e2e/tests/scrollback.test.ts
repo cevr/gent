@@ -16,7 +16,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, FileSystem, Option, Result, Schema } from "effect"
-import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
+import { GENT_START_BOUND_MS, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
   countRows,
   fedStream,
@@ -66,7 +66,7 @@ class TranscriptReadinessError extends Schema.TaggedError<TranscriptReadinessErr
  */
 const submitMessages = (ctx: TestContext, count: number) =>
   Effect.gen(function* () {
-    yield* ptyWaitFor(ctx, "ready", { timeout: 25_000 })
+    yield* ptyWaitFor(ctx, "ready", { timeout: GENT_START_BOUND_MS })
     for (let index = 1; index <= count; index++) {
       ctx.pty.write(messageText(index))
       yield* settlePty(ctx, TYPED)
