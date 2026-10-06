@@ -18,6 +18,10 @@ import {
   defineClientExtension,
   formatClock,
   formatDuration,
+  type KeyHint,
+  KeyHints,
+  KeyHintsText,
+  keyHintsWidth,
   messageRendererContribution,
   sessionQuery,
   stoppableContribution,
@@ -52,7 +56,12 @@ const formatRemaining = (millis: number): string => {
 interface WakeTrayLine {
   readonly glyph: string
   readonly text: string
+  /** The keys the row ends on, in the `KeyHints` words; they show at every width. */
+  readonly keys?: ReadonlyArray<KeyHint>
 }
+
+/** The separator between a row's words and its keys. */
+const KEYS_SEPARATOR = " · "
 
 /** fx-style marks: a clock face for an alarm, a fisheye for a monitor, a bare dot for the overflow line. */
 const ALARM_GLYPH = "◷"
@@ -67,9 +76,10 @@ type NoticeEntry = Extract<WakeEntryType, { readonly _tag: "notice" }>
 type ResumeNotice = NonNullable<NoticeEntry["resume"]>
 
 /**
- * `resume at 17:05 · in 47m 0s · 1/3 · esc cancels`: the wall clock it fires
+ * `resume at 17:05 · in 47m 0s · 1/3 · esc cancel`: the wall clock it fires
  * at, the countdown, the attempt, and the key that cancels it. A narrow tray
- * keeps the countdown and the key.
+ * drops the clock and the attempt, then the word `resume`, then cuts the
+ * countdown; the key stays at every width.
  */
 const resumeLine = (
   alarm: AlarmEntry,
@@ -78,10 +88,17 @@ const resumeLine = (
   width: number,
   zone: () => DateTime.TimeZone,
 ): WakeTrayLine => {
+  const keys = [KeyHints.cancel]
+  const room = width - keyHintsWidth(keys) - textWidth(KEYS_SEPARATOR)
   const left = formatRemaining(alarm.dueAt - now)
-  const full = `resume at ${formatClock(alarm.dueAt, now, zone())} · in ${left} · ${resume.attempt}/${resume.maxResumes} · esc cancels`
-  if (textWidth(full) <= width) return { glyph: RESUME_GLYPH, text: full }
-  return { glyph: RESUME_GLYPH, text: truncate(`resume in ${left} · esc cancels`, width) }
+  const words = [
+    `resume at ${formatClock(alarm.dueAt, now, zone())} · in ${left} · ${resume.attempt}/${resume.maxResumes}`,
+    `resume in ${left}`,
+    `in ${left}`,
+  ]
+  const text =
+    words.find((candidate) => textWidth(candidate) <= room) ?? truncate(`in ${left}`, room)
+  return { glyph: RESUME_GLYPH, text, keys }
 }
 
 /** A resume that did not run: why, and when the limit resets (or did). */
@@ -216,6 +233,16 @@ export function WakeTray(props: {
             <text wrapMode="none">
               <span style={{ fg: theme.info }}>{`${line.glyph} `}</span>
               <span style={{ fg: theme.textMuted }}>{line.text}</span>
+              <Show when={line.keys}>
+                {(keys) => (
+                  <>
+                    <Show when={line.text.length > 0}>
+                      <span style={{ fg: theme.textMuted }}>{KEYS_SEPARATOR}</span>
+                    </Show>
+                    <KeyHintsText hints={keys()} />
+                  </>
+                )}
+              </Show>
             </text>
           )}
         </For>

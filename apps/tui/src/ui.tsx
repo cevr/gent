@@ -523,7 +523,7 @@ export const usePickerBody = (lines: () => PickerBodyLines): (() => Option.Optio
 // ── key hints ───────────────────────────────────────────────────────────────
 
 /** One key and what it does, as a pane's key-hint row draws it: `enter select`. */
-interface KeyHint {
+export interface KeyHint {
   readonly key: string
   readonly verb: string
   /** A shorter verb a narrow row takes before it drops a key (`all` for `files + conversation`). */

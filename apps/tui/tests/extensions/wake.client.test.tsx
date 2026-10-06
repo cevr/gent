@@ -8,6 +8,10 @@ import wakeExtension, { WakeTray, wakeLabel, wakeTrayLines } from "../../src/ext
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame, waitUntil } from "../helpers-boundary"
+import { useTheme } from "../../src/theme"
+import { KeyHints } from "../../src/ui"
+
+const cancelKey = KeyHints.cancel
 
 // ── wake tray ───────────────────────────────────────────────────────────────
 
@@ -140,17 +144,53 @@ describe("auto-resume rows", () => {
   it.live("a pending resume names its time, countdown, attempt and the key that cancels it", () =>
     Effect.sync(() => {
       expect(wakeTrayLines(resumePending, RESUME_NOW, 80, utc)).toEqual([
-        { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3 · esc cancels" },
+        { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3", keys: [cancelKey] },
       ])
       // A narrow tray keeps the countdown and the key, and drops the rest.
       expect(wakeTrayLines(resumePending, RESUME_NOW, 30, utc)).toEqual([
-        { glyph: "↻", text: "resume in 47m 0s · esc cancels" },
+        { glyph: "↻", text: "resume in 47m 0s", keys: [cancelKey] },
       ])
-      expect(wakeTrayLines(resumePending, RESUME_NOW, 20, utc)[0]?.text).toBe(
-        "resume in 47m 0s · …",
-      )
+      // Narrower, the words give way before the key does.
+      expect(wakeTrayLines(resumePending, RESUME_NOW, 20, utc)).toEqual([
+        { glyph: "↻", text: "in 47m…", keys: [cancelKey] },
+      ])
+      expect(wakeTrayLines(resumePending, RESUME_NOW, 10, utc)).toEqual([
+        { glyph: "↻", text: "", keys: [cancelKey] },
+      ])
     }),
   )
+
+  // The key reads as every key hint does, in the `KeyHints` words: the key
+  // bright, its verb muted (`keyHintColors`), at every width.
+  for (const [width, row] of [
+    [100, /^ ↻ resume at \d\d:\d\d · in 47m 0s · 1\/3 · esc cancel$/],
+    [40, /^ ↻ resume in 47m 0s · esc cancel$/],
+  ] as const) {
+    it.scopedLive(`the resume row ends on the key that cancels it at ${width} columns`, () =>
+      Effect.gen(function* () {
+        let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
+        const setup = yield* renderScoped(
+          () => {
+            colors = Option.some(useTheme().theme)
+            return <WakeTray pending={() => Option.some(resumePending)} now={() => RESUME_NOW} />
+          },
+          { width, height: 8 },
+        )
+        yield* waitForFrame(setup, () => renderFrame(setup).includes("↻"), "resume row")
+        const line = renderFrame(setup)
+          .split("\n")
+          .map((text) => text.trimEnd())
+          .find((text) => text.includes("↻"))
+        expect(line).toMatch(row)
+        const theme = Option.getOrThrow(colors)
+        const spans = setup.captureSpans().lines.flatMap((spanLine) => spanLine.spans)
+        const key = spans.find((span) => span.text.trim() === "esc")
+        expect(key?.fg.equals(theme.text)).toBe(true)
+        const verb = spans.find((span) => span.text.trim() === "cancel")
+        expect(verb?.fg.equals(theme.textMuted)).toBe(true)
+      }),
+    )
+  }
 
   it.live("a resume that did not run says why and when the limit resets", () =>
     Effect.sync(() => {
@@ -277,7 +317,7 @@ describe("auto-resume rows", () => {
           entries: [alarm("a1", 60), alarm("a2", 120), alarm("a3", 180), ...resumePending.entries],
         }
         expect(wakeTrayLines(crowded, RESUME_NOW, 80, utc)).toEqual([
-          { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3 · esc cancels" },
+          { glyph: "↻", text: "resume at 01:03 · in 47m 0s · 1/3", keys: [cancelKey] },
           { glyph: "◷", text: "alarm in 1m 0s · check a1" },
           { glyph: "◷", text: "alarm in 2m 0s · check a2" },
           { glyph: " ", text: "+1 more pending" },
