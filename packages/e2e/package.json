@@ -7,7 +7,7 @@
     "typecheck": "tsc --noEmit",
     "drive": "bun src/drive.ts",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --timeout=30000 tests/pty-fixture.test.ts",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --timeout=30000 --max-concurrency=1 tests"
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --preload ../tooling/src/warm-source-start-boundary.ts --timeout=30000 --max-concurrency=1 tests"
   },
   "dependencies": {
     "@gent/core": "workspace:*",

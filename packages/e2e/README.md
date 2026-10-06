@@ -9,6 +9,8 @@ Each file in `packages/e2e/tests/` is one area:
 
 `bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only the fixture test, the one that spawns nothing.
 
+Every wait for a gent that a test starts from source (the first frame, the server's ready line, a headless run's exit) has one bound, `GENT_START_BOUND_MS` from `@gent/core/test-utils`. The bound times a warm start, about 1.5 CPU-seconds: the test preload names one transform cache for the checkout (`XDG_CACHE_HOME`, `node_modules/.cache/gent-test`), and each `test:e2e` lane also preloads `packages/tooling/src/warm-source-start-boundary.ts`, which fills that cache before the first test. A start with a cold cache costs about 5.5 CPU-seconds and misses the bound once the load passes 30, so a bare `bun test` of one file, which skips the warm-up, can fail its first start on a loaded machine.
+
 `packages/e2e/src/pty-fixture.ts` owns the pty: zigpty in the caller's scope, with `@xterm/headless` as the screen. zigpty makes the pty the child's controlling terminal, so a resize reaches the child as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun 1.4.2) does not: its child has no controlling terminal and gets neither signal (`stty size` follows a resize only because it reads the size directly). Switch to it when Bun fixes that.
 
 ## Drive scripts

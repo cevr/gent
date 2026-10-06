@@ -2200,12 +2200,14 @@ export const createWorkerEnv = (root: string): Record<string, string> => {
  * TUI's modules, so one bound serves them all.
  *
  * Measured on a 16-core machine with the transform cache warm (the test
- * preload's `XDG_CACHE_HOME`): a start costs about 1.5 CPU-seconds, and the
- * TUI draws its first frame in 1 to 2 seconds at load 15 and in 4.5 seconds
- * at load 75. A start with a cold cache costs about 5.5 CPU-seconds and took
- * 18 to 27 seconds at load 75: that start, not this bound, made the start
- * waits fail whenever the load passed 30. A child that never starts fails
- * here, well inside the inner bound of its test.
+ * preload's `XDG_CACHE_HOME`, which the `test:e2e` lanes fill before their
+ * first test with `warm-source-start-boundary.ts` in `packages/tooling/src`): a start
+ * costs about 1.5 CPU-seconds, and the TUI draws its first frame in 1 to 2
+ * seconds at load 15 and in 4.5 seconds at load 75. A start with a cold cache
+ * costs about 5.5 CPU-seconds and took 18 to 27 seconds at load 75: that
+ * start, not this bound, made the start waits fail whenever the load passed
+ * 30. A child that never starts fails here, well inside the inner bound of
+ * its test.
  */
 export const GENT_START_BOUND_MS = 10_000
 
