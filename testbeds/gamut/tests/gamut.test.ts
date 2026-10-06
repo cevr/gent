@@ -275,12 +275,12 @@ describe("a settled run", () => {
   test("an idle root with a working background child is not settled", () => {
     // The tray's running row: the pulse (`◇◈◆◈`) at its head, no state word.
     for (const pulse of ["◇", "◈"]) {
-      const pane = `idle · work (main) · GPT-5.6 Sol\n ${pulse} delegate: Task 2. Read-only audit · Reading src  ctrl+t sessions\n`
+      const pane = `idle · work (main) · GPT-5.6 Sol\n ${pulse} delegate: Task 2. Read-only audit · Reading src  ← sessions\n`
       expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
     }
   })
   test("an idle root whose tray shows only a done thread settles", () => {
-    const pane = "  Done.\n\nidle · work (main) · GPT-5.6 Sol\n ◆ release notes  ctrl+t sessions\n"
+    const pane = "  Done.\n\nidle · work (main) · GPT-5.6 Sol\n ◆ release notes  ← sessions\n"
     expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
@@ -323,7 +323,7 @@ describe("a settled run", () => {
     const quiet = { started: false, open: [], stored: false }
     const reads = [
       ...repeated(idlePane, quiet, QUIET_READS - 1),
-      [`${idlePane} ◇ delegate: audit  ctrl+t sessions\n`, quiet] as const,
+      [`${idlePane} ◇ delegate: audit  ← sessions\n`, quiet] as const,
       ...repeated(idlePane, quiet, QUIET_READS),
     ]
     expect(settlesAt(reads, false)).toBe(2 * QUIET_READS - 1)

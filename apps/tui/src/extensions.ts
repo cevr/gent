@@ -75,6 +75,7 @@ export {
   keyHintsWidth,
   lineEdit,
   PickerFrame,
+  pickerHeight,
   plainRow,
   selectable,
   SelectList,

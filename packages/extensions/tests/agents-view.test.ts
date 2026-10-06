@@ -34,7 +34,9 @@ import {
 } from "../src/agents-view.js"
 import {
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   textStep,
+  toolCallStep,
   createRpcHarness,
   testAgent,
   testLeafContext,
@@ -48,11 +50,17 @@ import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 const sid = (value: string) => SessionId.make(value)
 const bid = (value: string) => BranchId.make(value)
 
-const live = (overrides: { session: string; branch: string; status?: string }): LiveAgentRow => ({
+const live = (overrides: {
+  session: string
+  branch: string
+  status?: string
+  openQuestions?: number
+}): LiveAgentRow => ({
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
   status: Option.some(overrides.status ?? "Running"),
   runningSince: Option.none(),
+  openQuestions: overrides.openQuestions ?? 0,
 })
 
 const durable = (overrides: {
@@ -112,9 +120,16 @@ describe("agents view projection", () => {
       expect(sectionOf(Option.some(row))).toBe("idle")
     })
 
-    test("a loop waiting on an interaction counts as running, not idle", () => {
+    test("a loop waiting on an answer needs the reader, before any running loop", () => {
       const row = live({ session: "s", branch: "b", status: "WaitingForInteraction" })
-      expect(sectionOf(Option.some(row))).toBe("running")
+      expect(sectionOf(Option.some(row))).toBe("needs")
+    })
+
+    test("a loop with an open background question needs the reader, idle or running", () => {
+      for (const status of ["Idle", "Running"]) {
+        const row = live({ session: "s", branch: "b", status, openQuestions: 1 })
+        expect(sectionOf(Option.some(row))).toBe("needs")
+      }
     })
 
     test("a durable-only row is inactive", () => {
@@ -267,17 +282,19 @@ describe("agents view projection", () => {
       ])
     })
 
-    test("orders running before idle before inactive", () => {
+    test("orders needs you before running before idle before inactive", () => {
       const rows = buildRowTree(
         reconcileAgentRows({
           live: [
             live({ session: "idle", branch: "b", status: "Idle" }),
             live({ session: "run", branch: "b", status: "Running" }),
+            live({ session: "ask", branch: "b", status: "Idle", openQuestions: 2 }),
           ],
           durable: [durable({ session: "old", branch: "b" })],
         }),
       )
-      expect(rows.map((row) => row.section)).toEqual(["running", "idle", "inactive"])
+      expect(rows.map((row) => row.section)).toEqual(["needs", "running", "idle", "inactive"])
+      expect(rows[0]?.openQuestions).toBe(2)
     })
 
     test("draws children under their parent in the order they started, as the tray does", () => {
@@ -372,7 +389,7 @@ describe("agents view projection", () => {
         expect(rows).toHaveLength(1)
         const folded = rows[0]
         expect(folded?.status).toEqual(Option.some("WaitingForInteraction"))
-        expect(folded?.section).toBe("running")
+        expect(folded?.section).toBe("needs")
         expect(folded?.runningSince).toEqual(
           Option.some(10 + statuses.indexOf("WaitingForInteraction")),
         )
@@ -412,6 +429,19 @@ describe("agents view projection", () => {
         durable: chain(Option.none()),
       })
       expect(rows[0]?.runningSince).toEqual(Option.some(20))
+    })
+
+    test("an older session's open question puts its thread under needs you, and the row counts every member's", () => {
+      const rows = projectAgentRows({
+        live: [
+          live({ session: "first", branch: "b", status: "Idle", openQuestions: 1 }),
+          live({ session: "second", branch: "b", status: "Running", openQuestions: 2 }),
+        ],
+        durable: chain(Option.none()),
+      })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.section).toBe("needs")
+      expect(rows[0]?.openQuestions).toBe(3)
     })
 
     test("a handoff chain is one row that opens its newest session and counts its sessions", () => {
@@ -899,6 +929,65 @@ describe("AgentsViewExtension via RPC", () => {
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+
+  it.live(
+    "a session that asked a background question lists under needs you with its open count",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ask_user_async", {
+              questions: [
+                {
+                  question: "Which cache backend do you want in production?",
+                  assume: "in-memory LRU",
+                },
+              ],
+            }),
+            textStep("Assumed an in-memory LRU."),
+          ])
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: yield* makeTempDirectoryScoped("agents-view-cwd-"),
+            home: yield* makeTempDirectoryScoped("agents-view-home-"),
+          })
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "add a cache",
+          })
+          const OpenCount = Schema.Struct({
+            rows: Schema.Array(
+              Schema.Struct({
+                sessionId: Schema.String,
+                section: Schema.String,
+                status: Schema.optional(Schema.String),
+                openQuestions: Schema.optional(Schema.Finite),
+              }),
+            ),
+          })
+          const row = yield* waitFor(
+            requestRows(harness, {}).pipe(
+              Effect.flatMap(({ raw }) => Schema.decodeUnknownEffect(OpenCount)(raw)),
+              Effect.map((reply) =>
+                Option.fromUndefinedOr(
+                  reply.rows.find(
+                    (candidate) =>
+                      candidate.sessionId === harness.sessionId && candidate.status === "Idle",
+                  ),
+                ),
+              ),
+            ),
+            (found) => Option.exists(found, (value) => value.openQuestions === 1),
+            8_000,
+            "the session idle with its question open",
+          )
+          expect(Option.getOrUndefined(row)?.section).toBe("needs")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 
   it.live(

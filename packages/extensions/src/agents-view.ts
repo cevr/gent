@@ -16,6 +16,7 @@ import {
   tailChars,
 } from "@gent/core/extensions/api"
 import { DELEGATE_AGENT_NAME } from "./delegate.js"
+import { openQuestionCount } from "./interaction-tools.js"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
 // DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
@@ -47,8 +48,11 @@ import { DELEGATE_AGENT_NAME } from "./delegate.js"
  * @module
  */
 
-/** Section an agent row is grouped under, in display order. */
-type AgentSection = "running" | "idle" | "inactive"
+/**
+ * Section an agent row is grouped under, in display order. `needs`: the loop
+ * waits on the reader, on an ask or a background question it left open.
+ */
+type AgentSection = "needs" | "running" | "idle" | "inactive"
 
 /** Identity of one agent loop. One session with three branches is three rows. */
 interface AgentRowKey {
@@ -69,6 +73,8 @@ export interface LiveAgentRow {
   readonly status: Option.Option<string>
   /** When the current turn began; `None` while idle or when the state read failed. */
   readonly runningSince: Option.Option<number>
+  /** Background questions (`ask_user_async`) the branch holds open for the reader. */
+  readonly openQuestions: number
 }
 
 /** A stored session branch, from session storage. Survives restarts. */
@@ -101,6 +107,8 @@ export interface AgentRow {
   readonly updatedAt: Option.Option<number>
   /** When the live loop's current turn began: a woken child's run time, not its age. */
   readonly runningSince: Option.Option<number>
+  /** Background questions its live loops hold open; a thread counts every member's. */
+  readonly openQuestions: number
   readonly parent: Option.Option<AgentRowKey>
   /** True when the loop is materialized right now. */
   readonly live: boolean
@@ -131,6 +139,10 @@ export const rowKey = (key: AgentRowKey): string =>
 /**
  * Which section a row belongs to. Anything only in durable storage is inactive.
  *
+ * A loop that waits on the reader needs them: one parked on an ask, or one
+ * that left a background question open, whether its turn still runs or not.
+ * A stored session's questions wait for its loop to open.
+ *
  * A materialized loop whose status was not read counts as **idle**, not
  * running: being resident is not the same as working, and claiming otherwise
  * leaves every live loop stuck in `running` forever. Only a status that says
@@ -139,17 +151,23 @@ export const rowKey = (key: AgentRowKey): string =>
 export const sectionOf = (live: Option.Option<LiveAgentRow>): AgentSection =>
   Option.match(live, {
     onNone: () => "inactive",
-    onSome: (row) =>
-      Option.match(row.status, {
+    onSome: (row) => {
+      if (row.openQuestions > 0 || Option.contains(row.status, "WaitingForInteraction"))
+        return "needs"
+      return Option.match(row.status, {
         onNone: () => "idle",
         onSome: (status) => {
           if (status === "Idle") return "idle"
           return "running"
         },
-      }),
+      })
+    },
   })
 
-const SECTION_ORDER = { running: 0, idle: 1, inactive: 2 } satisfies Record<AgentSection, number>
+const SECTION_ORDER = { needs: 0, running: 1, idle: 2, inactive: 3 } satisfies Record<
+  AgentSection,
+  number
+>
 
 /**
  * Merge the live and durable catalogs into one row per loop.
@@ -189,6 +207,7 @@ export const reconcileAgentRows = (params: {
       createdAt: Option.map(durable, (row) => row.createdAt),
       updatedAt: Option.map(durable, (row) => row.updatedAt),
       runningSince: Option.flatMap(live, (row) => row.runningSince),
+      openQuestions: Option.match(live, { onNone: () => 0, onSome: (row) => row.openQuestions }),
       parent: Option.flatMap(durable, (row) => row.parent),
       live: Option.isSome(live),
       depth: 0,
@@ -220,10 +239,10 @@ const firstBy = (
     return best
   }, seed)
 
-/** A known ask needs attention even while another member works. */
+/** A known ask or an open question needs attention even while another member works. */
 const attentionOrder = (row: AgentRow): number => {
   if (row.section === "inactive") return 4
-  if (Option.contains(row.status, "WaitingForInteraction")) return 0
+  if (row.section === "needs") return 0
   if (Option.contains(row.status, "Running")) return 1
   if (!Option.contains(row.status, "Idle")) return 2
   return 3
@@ -252,6 +271,7 @@ const foldThread = (seed: AgentRow, others: ReadonlyArray<AgentRow>): AgentRow =
     section: busiest.section,
     status: busiest.status,
     runningSince: busiest.runningSince,
+    openQuestions: all.reduce((sum, row) => sum + row.openQuestions, 0),
     createdAt: first.createdAt,
     updatedAt: Option.map(
       Option.liftPredicate(stamps, (values) => values.length > 0),
@@ -602,8 +622,10 @@ const AGENTS_VIEW_EXTENSION_ID = ExtensionId.make("@gent/agents-view")
 export const AgentRowEntry = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
-  section: Schema.Literals(["running", "idle", "inactive"]),
+  section: Schema.Literals(["needs", "running", "idle", "inactive"]),
   status: Schema.optional(Schema.String),
+  /** Background questions the row's live loops hold open. Absent at none. Wire only. */
+  openQuestions: Schema.optional(Schema.Finite),
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.Finite),
@@ -693,14 +715,23 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
   // selected row at a time. Under a root, only the subtree's loops: a loop
   // with no stored session yet has no parent link to place it by.
   const inTree = new Set<string>(sessions.map((session) => session.id))
-  const live: ReadonlyArray<LiveAgentRow> = activeLoops
-    .filter((loop) => Option.isNone(root) || inTree.has(loop.sessionId))
-    .map((loop) => ({
-      sessionId: loop.sessionId,
-      branchId: loop.branchId,
-      status: loop.status,
-      runningSince: loop.runningSince,
-    }))
+  const live: ReadonlyArray<LiveAgentRow> = yield* Effect.forEach(
+    activeLoops.filter((loop) => Option.isNone(root) || inTree.has(loop.sessionId)),
+    (loop) =>
+      // A question file the store cannot read is the questions view's error
+      // to show; here the loop counts none rather than failing the listing.
+      openQuestionCount(loop.branchId).pipe(
+        Effect.orElseSucceed(() => 0),
+        Effect.map((openQuestions) => ({
+          sessionId: loop.sessionId,
+          branchId: loop.branchId,
+          status: loop.status,
+          runningSince: loop.runningSince,
+          openQuestions,
+        })),
+      ),
+    { concurrency: 8 },
+  )
 
   // The durable half. One row per session, keyed to its active branch — a
   // session with no active branch has never run and has no loop to show.
@@ -772,6 +803,9 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           branchId: row.branchId,
           section: row.section,
           status: Option.getOrUndefined(row.status),
+          openQuestions: Option.getOrUndefined(
+            Option.liftPredicate(row.openQuestions, (count) => count > 0),
+          ),
           name: Option.getOrUndefined(row.name),
           cwd: Option.getOrUndefined(row.cwd),
           createdAt: Option.getOrUndefined(row.createdAt),
