@@ -1723,3 +1723,18 @@ Opening HEAD `59517a2bc`. Sweeps and triage in `~/.cache/architecture-loop/gent/
 - Fix: the test preload sets `XDG_CACHE_HOME=<checkout>/node_modules/.cache/gent-test` for every child (red test in dev-preload-boundary.test.ts); `GENT_START_BOUND_MS = 10_000` in test-utils is the one start bound (e2e first waits, scrollback, `spawnServer`, headless `runGent` = bound + `DEBUG_TURN_MS`); a lane preload `warm-source-start-boundary.ts` warms the cache with one `gent --version` before the first e2e test (cache keys hold the file path, so a new rift starts cold). A child that never draws still fails at 10 s, inside the inner `Effect.timeout`. Decided by fix-root-causes, derive-dont-sync, use-the-platform, subtract-before-you-add.
 - Receipts under 32 CPU burners (load 50–63): main e2e.test.ts 0/11 and 2/11 pass, fix 11/11 cold and warm; headless main 6/11, fix 11/11; server-lifecycle main 5/6, fix 6/6. Agent gate EXIT 0 (one fix for a `strictEffectProvide` error), e2e EXIT 0 from cold. Orchestrator after the T4 merge: gate EXIT 0 (load 18), e2e EXIT 0 (load 11). Fast-forwarded and pushed. Closes the start-wait load-flake rows (Skill Popup startup, Auth method picker, Shell Mode, Session submit, Slash popup, Terminal handover, headless spawn waits, server ready).
 - Carried: a bare `bun test <file>` gets the cache but not the warm-up (README says so).
+
+### Pass 32 TUI sweep and apply, 2026-10-06
+
+- Sweep (read-only, Claude agent, `pass32/tui.md`, base 5bc4bafd7): one P2 and five P3; no regressions in flicker/replay, run budget, T1, T2, T3, the e2e fixture or gamut; no owner questions. The orchestrator's live herdr check of T4 added TUI-7.
+- Apply (Claude agent, rift f-p32-tui, commits 10b85dc98..5b4b9c04e, report `pass32/apply-tui.md`):
+  - TUI-1 (P2, a clear transcript): the theme mode follows the palette read's background (then COLORFGBG, then macOS appearance, then dark). On a light terminal with no COLORFGBG, fx answer text went 1.27:1 → 13.20:1, muted 2.68 → 6.10 (rendered rows, light-ground drive). Decided by use-the-platform, derive-dont-sync, fix-root-causes.
+  - TUI-2: stale doc names fixed; the ARCHITECTURE split-region paragraph cut to a pointer at apps/tui/AGENTS.md.
+  - TUI-3 (guardrail): a guard reports a backticked code name in steering docs that no source defines, with an allow list whose rows carry the naming file and a reason; red on the tree with 50 findings, fixed to green.
+  - TUI-4: one tone colour owner (`activityToneColor`); a child's `N failed` draws like a run header; `formatActivityHeader`/`formatFailureRow` deleted.
+  - TUI-5: `KeyHint`/`KeyHintsText`/`keyHintsWidth` exported to client extensions; the wake tray and the agents tray `← sessions` draw as key hints.
+  - TUI-6: `runtimeRows` covers all 6 runtime message kinds, and a new kind fails typecheck (TS2741 probe).
+  - TUI-7: one `modelDisplayName` owner; the Sessions pane shows "Claude Sonnet 5.5 (anthropic)" like the status row.
+  - Drive scripts take `ground: "light"`.
+- Gate EXIT 0 (load 7 → 22), e2e EXIT 0 (23 → 12), first run, no start-wait timeout. Fast-forwarded and pushed.
+- Carried: follow live `theme_mode` changes; message-list "history keeps every row once through turn end after a live answer" failed once at load 21 (watch, the replay family); the debug tools scenario writes `gent-debug-tools/` into the cwd.
