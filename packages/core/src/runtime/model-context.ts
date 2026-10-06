@@ -1830,9 +1830,28 @@ export class ModelContextCompactor extends Context.Service<
   ModelContextCompactorService
 >()("@gent/core/src/runtime/model-context/ModelContextCompactor") {}
 
+type CompactionRun = <R>(
+  compact: Effect.Effect<CompactionSummary, ModelCompactionError, R>,
+) => Effect.Effect<CompactionSummary, ModelCompactionError, R>
+
+/**
+ * How a projection runs each compactor of the chain: the turn's credential
+ * walk (`walkCredentials` of `projectContextWindow`). A failure it gives up
+ * on leaves without its `cause`, so a second run over it changes nothing.
+ * Outside a projection it runs a compactor as it is.
+ */
+const CompactionAttempt = Context.Reference<{ readonly run: CompactionRun }>(
+  "@gent/core/src/runtime/model-context/CompactionAttempt",
+  { defaultValue: () => ({ run: (compact) => compact }) },
+)
+
 /**
  * Two compactors as one: `first` is asked, and a window it refuses with
  * `ModelCompactionError` goes to `next`, whose answer (or refusal) stands.
+ * Each one runs under the projection's credential walk (`CompactionAttempt`):
+ * a summary model failure of `first` is retried, or moved to the next
+ * credential of the order, before `next` gets the window, since `next` would
+ * ask the same model on the same credential.
  * The host chains each extension's compactor over the ones of lower scope.
  */
 export const chainCompactors = (
@@ -1841,9 +1860,12 @@ export const chainCompactors = (
 ) =>
   ModelContextCompactor.of({
     compact: (request) =>
-      first
-        .compact(request)
-        .pipe(Effect.catchTag("ModelCompactionError", () => next.compact(request))),
+      Effect.gen(function* () {
+        const { run } = yield* CompactionAttempt
+        return yield* run(first.compact(request)).pipe(
+          Effect.catchTag("ModelCompactionError", () => run(next.compact(request))),
+        )
+      }),
   })
 
 // ── model-context-ledger ────────────────────────────────────────────────────
@@ -2158,12 +2180,12 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
   readonly summaryModel: CompactionRequest["summaryModel"]
   /**
-   * Runs the compactor chain, and again on the next credential of the order
-   * each time its failure proves the summary's credential cannot serve.
+   * Runs one compactor of the chain, again on the same credential after a
+   * transient failure of the summary model, and on the next credential of
+   * the order each time its failure proves the summary's credential cannot
+   * serve. Each compactor of a chain runs under it (`chainCompactors`).
    */
-  readonly walkCredentials: <R>(
-    compact: Effect.Effect<CompactionSummary, ModelCompactionError, R>,
-  ) => Effect.Effect<CompactionSummary, ModelCompactionError, R>
+  readonly walkCredentials: CompactionRun
 }) {
   const eventStore = yield* EventStore
   const now = yield* DateTime.nowAsDate
@@ -2297,47 +2319,56 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // a refused window drops its history.
   const compactor = yield* Effect.serviceOption(ModelContextCompactor)
   if (Option.isNone(compactor)) return yield* dropHistory(Option.none())
-  const summary = yield* params
-    .walkCredentials(
-      compactor.value.compact({
-        modelId: params.modelId,
-        agentName: params.agentName,
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        history,
-        kept,
-        budget: params.budget,
-        instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
-        summaryModel: params.summaryModel,
+  // The walk runs each compactor of a chain and the chain as a whole (a lone
+  // compactor is no chain). A failure it gave up on drops its cause, so an
+  // outer run passes it on instead of retrying or moving it again.
+  const run: CompactionRun = (compact) =>
+    params.walkCredentials(compact).pipe(
+      Effect.mapError((error) => {
+        if (Predicate.isUndefined(error.cause)) return error
+        return new ModelCompactionError({ modelId: error.modelId, reason: error.reason })
       }),
     )
-    .pipe(
-      Effect.asSome,
-      Effect.catchTag("ModelCompactionError", (error) =>
-        // Every compactor of the chain refused. A summary that cannot be
-        // produced must not cost the turn: the window is truncated instead,
-        // with a visible notice.
-        Effect.gen(function* () {
-          let outcome = "the history before the kept messages is dropped"
-          if (!params.overflowed) {
-            outcome = Result.match(fit, {
-              onSuccess: (plain) =>
-                `continuing with ${plain.omittedMessageIds.length} older messages omitted`,
-              onFailure: () => "the window is still over budget",
-            })
-          }
-          yield* eventStore.publish(
-            ErrorOccurred.make({
-              sessionId: params.sessionId,
-              branchId: params.branchId,
-              error: `Context compaction failed (${error.reason}); ${outcome}`,
-              notice: true,
-            }),
-          )
-          return Option.none()
-        }),
-      ),
-    )
+  const summary = yield* run(
+    compactor.value.compact({
+      modelId: params.modelId,
+      agentName: params.agentName,
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      history,
+      kept,
+      budget: params.budget,
+      instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+      summaryModel: params.summaryModel,
+    }),
+  ).pipe(
+    Effect.provideService(CompactionAttempt, { run }),
+    Effect.asSome,
+    Effect.catchTag("ModelCompactionError", (error) =>
+      // Every compactor of the chain refused. A summary that cannot be
+      // produced must not cost the turn: the window is truncated instead,
+      // with a visible notice.
+      Effect.gen(function* () {
+        let outcome = "the history before the kept messages is dropped"
+        if (!params.overflowed) {
+          outcome = Result.match(fit, {
+            onSuccess: (plain) =>
+              `continuing with ${plain.omittedMessageIds.length} older messages omitted`,
+            onFailure: () => "the window is still over budget",
+          })
+        }
+        yield* eventStore.publish(
+          ErrorOccurred.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: `Context compaction failed (${error.reason}); ${outcome}`,
+            notice: true,
+          }),
+        )
+        return Option.none()
+      }),
+    ),
+  )
   const handoff = Option.all([summary, anchor]).pipe(
     Option.flatMap(([value, anchorMessage]) =>
       summarizedRange(history, value).pipe(

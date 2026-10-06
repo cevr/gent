@@ -158,8 +158,19 @@ import {
   submitAgentLoop,
   waitForPhase,
 } from "../helpers/agent-loop"
-import { contextWindowOf } from "../../src/runtime/model-context"
-import { e2ePreset, rangeCompactorLayer, testAgent, testAgents } from "../helpers/test-preset"
+import {
+  chainCompactors,
+  contextWindowOf,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "../../src/runtime/model-context"
+import {
+  e2ePreset,
+  rangeCompactor,
+  rangeCompactorLayer,
+  testAgent,
+  testAgents,
+} from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
 import {
   CredentialSlot,
@@ -2434,6 +2445,8 @@ describe("credential order", () => {
     readonly storage?: CredentialStorage
     /** Messages of this many characters each stored before the turn: 4 or more overflow the window. */
     readonly history?: ReadonlyArray<number>
+    /** The compactor the handoff asks; default: `rangeCompactor`. */
+    readonly compactor?: ModelContextCompactor["Service"]
   }
 
   /**
@@ -2552,7 +2565,9 @@ describe("credential order", () => {
       overrides: ModelRegistry.Live.pipe(
         Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
       ),
-    }).pipe(Layer.provideMerge(rangeCompactorLayer))
+    }).pipe(
+      Layer.provideMerge(Layer.succeed(ModelContextCompactor, params.compactor ?? rangeCompactor)),
+    )
     const admission: SessionAdmission = {
       runSpec: {
         overrides: {
@@ -2729,6 +2744,71 @@ describe("credential order", () => {
         },
       ])
       expect(labelsOf(run.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
+    }),
+  )
+
+  it.live("a chained compactor's refusal moves its summary before the next compactor runs", () =>
+    Effect.gen(function* () {
+      const builtinCalls = Ref.makeUnsafe(0)
+      // The builtin under it refuses with no model failure behind it, as the
+      // shipped one does for a history it cannot fit.
+      const builtin = ModelContextCompactor.of({
+        compact: (request) =>
+          Ref.update(builtinCalls, (count) => count + 1).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new ModelCompactionError({ modelId: request.modelId, reason: "SourceTooLarge" }),
+              ),
+            ),
+          ),
+      })
+      const run = yield* credentialTurn({
+        name: "chain-refusal",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        history: Array.from({ length: 12 }, () => 50_000),
+        compactor: chainCompactors(rangeCompactor, builtin),
+        replies: { "sk-a": quotaSpent, "sk-b": answer("from b") },
+      })
+      // The project compactor makes the summary on personal; the history is not dropped.
+      expect(run.sent).toEqual(["sk-a", "sk-b", "sk-b"])
+      expect(run.projected.map((event) => event.compacted)).toEqual([true])
+      expect(run.errors).toEqual([
+        {
+          error: `Credential "default" of ${FALLBACK} is out of quota; continuing with "personal"`,
+          notice: true,
+        },
+      ])
+      expect(yield* Ref.get(builtinCalls)).toBe(0)
+      expect(labelsOf(run.ended)).toEqual([{ provider: fallbackProvider, slot: personal }])
+    }),
+  )
+
+  it.live("each compactor of a chain gets the summary's retries once", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "chain-retries",
+        order: [DEFAULT_CREDENTIAL_SLOT],
+        stored: [[DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")]],
+        history: Array.from({ length: 12 }, () => 50_000),
+        compactor: chainCompactors(rangeCompactor, rangeCompactor),
+        replies: {
+          "sk-a": (call) => {
+            if (call < 4) return failWith(new AiError.RateLimitError({}))
+            return answer("from a")(call)
+          },
+        },
+      })
+      // Two tries per compactor, then the window is cut and the step answers.
+      expect(run.sent).toEqual(["sk-a", "sk-a", "sk-a", "sk-a", "sk-a"])
+      expect(run.retries).toBe(2)
+      expect(run.projected.map((event) => event.compacted)).toEqual([false])
+      expect(
+        run.errors.map((entry) => entry.error.startsWith("Context compaction failed")),
+      ).toEqual([true])
     }),
   )
 

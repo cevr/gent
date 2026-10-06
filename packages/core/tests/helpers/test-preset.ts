@@ -17,34 +17,33 @@ export const testAgents: ReadonlyArray<AgentDefinition> = [testAgent]
  * A compactor that asks the summary model once and names the id range it
  * replaced. The shipped compactor's notice format is its own extension's test.
  */
-export const rangeCompactorLayer = Layer.succeed(
-  ModelContextCompactor,
-  ModelContextCompactor.of({
-    compact: (request) =>
-      Effect.gen(function* () {
-        // The model's failure travels as the cause, so a refused credential moves on.
-        const failed = (error: { readonly message: string }) =>
-          new ModelCompactionError({
-            modelId: request.modelId,
-            reason: error.message,
-            cause: error,
-          })
-        const model = yield* request.summaryModel(1_000).pipe(Effect.mapError(failed))
-        const text: Array<string> = []
-        yield* Stream.runForEach(model.streamText({ prompt: "summarize" }), (part) =>
-          Effect.sync(() => {
-            if (part.type === "text-delta") text.push(part.delta)
-          }),
-        ).pipe(Effect.mapError(failed))
-        const first = request.history.at(0)?.id ?? "none"
-        const last = request.history.at(-1)?.id ?? "none"
-        return {
-          notice: `Summary:\n${text.join("")}\n(${first} … ${last})`,
+export const rangeCompactor = ModelContextCompactor.of({
+  compact: (request) =>
+    Effect.gen(function* () {
+      // The model's failure travels as the cause, so a refused credential moves on.
+      const failed = (error: { readonly message: string }) =>
+        new ModelCompactionError({
           modelId: request.modelId,
-        }
-      }),
-  }),
-)
+          reason: error.message,
+          cause: error,
+        })
+      const model = yield* request.summaryModel(1_000).pipe(Effect.mapError(failed))
+      const text: Array<string> = []
+      yield* Stream.runForEach(model.streamText({ prompt: "summarize" }), (part) =>
+        Effect.sync(() => {
+          if (part.type === "text-delta") text.push(part.delta)
+        }),
+      ).pipe(Effect.mapError(failed))
+      const first = request.history.at(0)?.id ?? "none"
+      const last = request.history.at(-1)?.id ?? "none"
+      return {
+        notice: `Summary:\n${text.join("")}\n(${first} … ${last})`,
+        modelId: request.modelId,
+      }
+    }),
+})
+
+export const rangeCompactorLayer = Layer.succeed(ModelContextCompactor, rangeCompactor)
 
 const testCompactorExtension = defineExtension({
   id: "test-compactor",

@@ -869,8 +869,10 @@ that fails with `ModelCompactionError` passes the window to the next one, and
 the loop truncates the window, with a visible notice, only when no compactor
 is left. The summary model (`request.summaryModel`) runs on the credential
 the turn's order chooses; a compactor that puts the model's failure in
-`ModelCompactionError.cause` lets the loop move the summary to the next
-credential of the order and ask the chain again, as a step's request moves.
+`ModelCompactionError.cause` lets the loop retry it on that credential
+under the driver's retry policy, or move it to the next credential of the
+order and ask the same compactor again, as a step's request retries and
+moves, before the next compactor of the chain gets the window.
 `compact` runs with the `ExtensionContext` a tool call of the same
 extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
 the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
