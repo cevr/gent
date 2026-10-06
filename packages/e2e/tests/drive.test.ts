@@ -131,4 +131,38 @@ describe("drive scripts", () => {
       }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
     TEST_TIMEOUT,
   )
+
+  // A light-mode check needs a terminal that reports a light ground: the
+  // script's `ground` names what a background query (OSC 11) answers.
+  for (const [label, ground, reply] of [
+    ["default", {}, "rgb:1d1d/1f1f/2121"],
+    ["light", { ground: "light" }, "rgb:ffff/ffff/ffff"],
+  ] as const) {
+    it.scopedLive(
+      `a background query answers the ${label} ground`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const out = yield* makeTempDirectoryScoped("gent-drive-")
+          // Raw, no echo: the reply reaches the program as bytes, and it
+          // prints them with the escapes spelled `E`.
+          const query =
+            "stty raw -echo; printf '\\033]11;?\\033\\\\'; head -c 25 | tr '\\033' E; printf ' read'; while true; do sleep 0.05; done"
+          yield* runDriveScript({
+            command: ["bash", "-c", query],
+            cwd: out,
+            cols: 80,
+            rows: 6,
+            ...ground,
+            out,
+            steps: [
+              ["waitFor", " read", 5_000],
+              ["cap", "reply"],
+            ],
+          })
+          expect(yield* fs.readFileString(`${out}/reply.txt`)).toContain(`E]11;${reply}E`)
+        }).pipe(Effect.timeout(EFFECT_TIMEOUT), Effect.provide(BunServices.layer)),
+      TEST_TIMEOUT,
+    )
+  }
 })

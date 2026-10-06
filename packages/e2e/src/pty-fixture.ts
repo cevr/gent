@@ -505,18 +505,40 @@ const LIVE_PALETTE = [
   "#eeeeec",
 ] as const
 
-/** OSC 10 to 19 (foreground, background, cursor, mouse, Tek, highlight) and the colour each reports. */
-const LIVE_SPECIAL_COLORS: ReadonlyArray<readonly [number, string]> = [
-  [10, "#c5c8c6"],
-  [11, "#1d1f21"],
-  [12, "#c5c8c6"],
-  [13, "#c5c8c6"],
-  [14, "#1d1f21"],
-  [15, "#c5c8c6"],
-  [16, "#1d1f21"],
-  [17, "#373b41"],
-  [19, "#c5c8c6"],
-]
+/** The ground a live terminal reports: Tomorrow Night's (dark) or Tomorrow's (light). */
+const LiveGround = Schema.Literals(["dark", "light"])
+type LiveGround = typeof LiveGround.Type
+
+/**
+ * OSC 10 to 19 (foreground, background, cursor, mouse, Tek, highlight) and
+ * the colour each reports, for each ground: Tomorrow Night's, or Tomorrow's
+ * white ground and text, which a light-mode check reads.
+ */
+const LIVE_SPECIAL_COLORS: Readonly<Record<LiveGround, ReadonlyArray<readonly [number, string]>>> =
+  {
+    dark: [
+      [10, "#c5c8c6"],
+      [11, "#1d1f21"],
+      [12, "#c5c8c6"],
+      [13, "#c5c8c6"],
+      [14, "#1d1f21"],
+      [15, "#c5c8c6"],
+      [16, "#1d1f21"],
+      [17, "#373b41"],
+      [19, "#c5c8c6"],
+    ],
+    light: [
+      [10, "#4d4d4c"],
+      [11, "#ffffff"],
+      [12, "#4d4d4c"],
+      [13, "#4d4d4c"],
+      [14, "#ffffff"],
+      [15, "#4d4d4c"],
+      [16, "#ffffff"],
+      [17, "#d6d6d6"],
+      [19, "#4d4d4c"],
+    ],
+  }
 
 /** `#1d1f21` as an xterm colour reply spells it: `rgb:1d1d/1f1f/2121`. */
 const xtermColor = (hex: string): string => {
@@ -531,6 +553,7 @@ const xtermColor = (hex: string): string => {
  */
 const answerColorQueries = (
   screen: Terminal,
+  ground: LiveGround,
   reply: (text: string) => void,
 ): ReadonlyArray<{ readonly dispose: () => void }> => [
   screen.parser.registerOscHandler(4, (data) => {
@@ -545,7 +568,7 @@ const answerColorQueries = (
     reply(answers.join(""))
     return true
   }),
-  ...LIVE_SPECIAL_COLORS.map(([ident, hex]) =>
+  ...LIVE_SPECIAL_COLORS[ground].map(([ident, hex]) =>
     screen.parser.registerOscHandler(ident, (data) => {
       if (data !== "?") return false
       reply(`\x1b]${ident};${xtermColor(hex)}\x1b\\`)
@@ -560,9 +583,12 @@ const answerColorQueries = (
  * each byte at the size it was written for, so history across a resize reads
  * as a real terminal's would. It also answers the child's terminal queries
  * (device attributes, cursor position) and, as a real terminal does, its
- * colour queries, from `LIVE_PALETTE`.
+ * colour queries, from `LIVE_PALETTE` and the ground's special colours.
  */
-const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtyContext, never, Scope.Scope> =>
+const openLivePty = (
+  spec: PtyCommand,
+  ground: LiveGround,
+): Effect.Effect<LivePtyContext, never, Scope.Scope> =>
   Effect.gen(function* () {
     const screen = yield* Effect.acquireRelease(
       Effect.sync(() => newEmulator(spec.size)),
@@ -574,7 +600,7 @@ const openLivePty = (spec: PtyCommand): Effect.Effect<LivePtyContext, never, Sco
       (subscription) => ignoreSyncDefect(() => subscription.dispose()),
     )
     yield* Effect.acquireRelease(
-      Effect.sync(() => answerColorQueries(screen, (reply) => context.pty.write(reply))),
+      Effect.sync(() => answerColorQueries(screen, ground, (reply) => context.pty.write(reply))),
       (handlers) => ignoreSyncDefect(() => handlers.forEach((handler) => handler.dispose())),
     )
     const session: LivePtyContext = {
@@ -659,6 +685,8 @@ export const DriveScript = Schema.Struct({
   env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   cols: Schema.Int,
   rows: Schema.Int,
+  /** The ground the terminal reports to a colour query; dark when the script names none. */
+  ground: Schema.optionalKey(LiveGround),
   out: Schema.String,
   steps: Schema.Array(DriveStep),
 })
@@ -692,13 +720,16 @@ export const runDriveScript = (
     // the code is read after it.
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        const session = yield* openLivePty({
-          command: script.command[0],
-          args: script.command.slice(1),
-          cwd: script.cwd,
-          env,
-          size: { cols: script.cols, rows: script.rows },
-        })
+        const session = yield* openLivePty(
+          {
+            command: script.command[0],
+            args: script.command.slice(1),
+            cwd: script.cwd,
+            env,
+            size: { cols: script.cols, rows: script.rows },
+          },
+          script.ground ?? "dark",
+        )
         const save = (name: string, extension: string, text: string) =>
           fs.writeFileString(path.join(script.out, `${name}.${extension}`), text).pipe(Effect.orDie)
         const capture = (name: string, scope: "viewport" | "all") =>

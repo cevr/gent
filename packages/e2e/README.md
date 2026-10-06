@@ -44,7 +44,7 @@ bun packages/e2e/src/drive.ts <script.json>
 }
 ```
 
-- `command` runs on the pty; `cwd` and `out` resolve against the script's directory. `env` values are used as written (give absolute paths) and laid over `PATH`, `COLORTERM` and `LANG` only (zigpty adds `TERM`), shared by the pty program and `sh` steps, so no key from the caller's environment reaches either unless the script names it.
+- `command` runs on the pty; `cwd` and `out` resolve against the script's directory. `ground` (`dark` by default, or `light`) is what the emulator reports to a colour query: Tomorrow Night's ground, or Tomorrow's white one for a light-mode check. `env` values are used as written (give absolute paths) and laid over `PATH`, `COLORTERM` and `LANG` only (zigpty adds `TERM`), shared by the pty program and `sh` steps, so no key from the caller's environment reaches either unless the script names it.
 - Steps: `send` text, `keys` a name from `keys` in `src/pty-fixture.ts` (other text goes as is), `wait` ms, `waitFor` a regex on the screen (default 15 s; a miss is logged, the script goes on), `settle` until quiet for that many ms (default 500; no quiet within 15 s fails the script), `resize` cols rows, `cap` / `capAll` the screen without / with scrollback, `cells` the cursor row's first 16 cells, `raw` the bytes so far, `sh` a shell command in `cwd`.
 - Each capture prints and lands in `out/<name>.txt` (`raw`: `<name>.raw`). The screen is a live emulator that follows each resize and answers the program's terminal queries, so a capture after a resize reads as a terminal window would.
 - At the end the program gets ctrl+c, then SIGKILL after a second; the script prints `exit=<code>`.
