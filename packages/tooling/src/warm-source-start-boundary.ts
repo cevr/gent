@@ -13,7 +13,7 @@
  * top-level await is this file's Promise edge: bun waits for a preload.
  */
 import { BunServices } from "@effect/platform-bun"
-import { Config, Console, Duration, Effect, FileSystem, Path, Stream } from "effect"
+import { Config, Console, Duration, Effect, FileSystem, ManagedRuntime, Path, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 
 /** Longer than a cold `gent --version` at load 75 (about 20 s). */
@@ -47,8 +47,10 @@ const warmStart = Effect.gen(function* () {
   Effect.catch((error) =>
     Console.error(`warm-source-start: ${String(error)}; the first start runs cold`),
   ),
-  Effect.provide(BunServices.layer),
 )
 
+const runtime = ManagedRuntime.make(BunServices.layer)
 // oxlint-disable-next-line effect/noAsyncFunction -- bun waits for a preload only through its top-level await
-await Effect.runPromise(warmStart)
+await runtime.runPromise(warmStart)
+// oxlint-disable-next-line effect/noAsyncFunction -- the same edge: the runtime closes before the tests start
+await runtime.dispose()
