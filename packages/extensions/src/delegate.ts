@@ -1320,8 +1320,8 @@ const noticeTask = (prompt: string) => {
 
 /**
  * A child's session name (`childSessionName`). The agent's name only when
- * neither the start's name nor its task has words: every child runs as
- * `delegate`, so that name tells no child from another.
+ * that leaves none (no words, or only the default name): every child runs
+ * as `delegate`, so that name tells no child from another.
  */
 const childName = (params: Pick<AdmitParams, "name" | "prompt">): string =>
   Option.getOrElse(

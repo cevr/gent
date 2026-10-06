@@ -729,6 +729,39 @@ describe("threads", () => {
           expect(yield* nameOf({ task: THREAD_TASK, name: "  changelog\ntidy " })).toBe(
             "changelog tidy",
           )
+          // A given default name is no name: the task names the thread.
+          expect(yield* nameOf({ task: THREAD_TASK, name: DEFAULT_SESSION_NAME })).toBe(THREAD_TASK)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  // A default name marks a session the first message still names; a thread
+  // is named when it starts, so its name never reads as the default.
+  it.live(
+    "a thread whose task opens with the default name keeps its name after its turns",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          const started = yield* rig.start(rig.starter, `${DEFAULT_SESSION_NAME} (${THREAD_TASK})`)
+          const thread = { sessionId: started.sessionId, branchId: started.branchId }
+          const nameOf = Effect.map(
+            rig.client.session.get({ sessionId: thread.sessionId }),
+            (found) => found?.name,
+          )
+          const named = yield* nameOf
+          expect(named).not.toBe(DEFAULT_SESSION_NAME)
+          const events = rig.client.session.events(thread)
+          const first = yield* turnEnds(events, 1)
+          // The loop runs a turn's `turnAfter` hooks before it takes the next
+          // turn, so once the second turn ends the first one's hooks have run.
+          const second = yield* turnEnds(events, 2)
+          yield* Deferred.succeed(rig.gate, true)
+          yield* Fiber.join(first)
+          yield* rig.client.message.send({ ...thread, content: "again" })
+          yield* Fiber.join(second)
+          expect(yield* nameOf).toBe(named)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

@@ -287,19 +287,25 @@ const wholeWords = (text: string, max: number): string => {
  * The name of a child session (a delegate child or a thread), which the
  * tray, the sessions pane and its result row head with: the start's own
  * `name` on one line, else its prompt's first clause in whole words
- * (`Check the greeting files`). None when neither has words; the caller
- * names its own fallback.
+ * (`Check the greeting files`), else its whole first line in whole words.
+ * Never the default name: that name marks a session its first message still
+ * names (`nameFromFirstMessage`), so a child named it would lose its name
+ * after its first turn. None when no candidate is left; the caller names
+ * its own fallback.
  */
 export const childSessionName = (start: {
   readonly name: Option.Option<string>
   readonly prompt: string
 }): Option.Option<string> => {
+  const named = (value: string) =>
+    Option.liftPredicate(value, (name) => name !== DEFAULT_SESSION_NAME)
   const given = start.name.pipe(
     Option.map((value) => value.replace(/\s+/gu, " ").trim()),
     Option.filter((value) => value.length > 0),
+    Option.flatMap((value) => named(wholeWords(value, maximumGivenChildNameChars))),
   )
-  if (Option.isSome(given)) return Option.some(wholeWords(given.value, maximumGivenChildNameChars))
-  return Option.map(sessionTitleOf(start.prompt), (title) => {
+  if (Option.isSome(given)) return given
+  return Option.flatMap(sessionTitleOf(start.prompt), (title) => {
     const clause = Option.getOrElse(
       Option.filter(
         Option.fromUndefinedOr(title.split(CLAUSE_END)[0]?.trim()),
@@ -307,7 +313,9 @@ export const childSessionName = (start: {
       ),
       () => title,
     )
-    return wholeWords(clause, maximumDerivedChildNameChars)
+    return Option.orElse(named(wholeWords(clause, maximumDerivedChildNameChars)), () =>
+      named(wholeWords(title, maximumDerivedChildNameChars)),
+    )
   })
 }
 
