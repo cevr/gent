@@ -2541,10 +2541,14 @@ describe("Subagent tray", () => {
       }
       for (const width of [100, 60, 40]) {
         let names = () => RGBA.fromInts(0, 0, 0, 0)
+        let keys = () => RGBA.fromInts(0, 0, 0, 0)
+        let muted = () => RGBA.fromInts(0, 0, 0, 0)
         const setup = yield* renderScoped(
           () => {
             const { theme } = useTheme()
             names = () => theme.info
+            keys = () => theme.text
+            muted = () => theme.textMuted
             return (
               <SubagentTray
                 place={PLACE}
@@ -2583,6 +2587,11 @@ describe("Subagent tray", () => {
         expect(line).toContain("· Reading")
         if (width === 100) expect(line).toContain("· Reading ARCHITECTURE.md")
         expect(line).toContain("← sessions")
+        // The hint reads as every key hint does: the key bright, its verb muted.
+        const key = spans.find((span) => span.text.trim() === "←")
+        expect(key?.fg.equals(keys())).toBe(true)
+        const verb = spans.find((span) => span.text.trim() === "sessions")
+        expect(verb?.fg.equals(muted())).toBe(true)
         expect(line).not.toContain("working")
         expect(line.trimEnd().length).toBeLessThanOrEqual(width)
       }

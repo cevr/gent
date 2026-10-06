@@ -162,7 +162,7 @@ bright (`theme.text`), its verb and the separators muted (`theme.textMuted`),
 both from `keyHintColors`, the one owner of those colors. It draws them as tone
 runs (`TextRun` and `ToneRuns`), as every line drawn in parts does. Every hint row draws
 through it: a pane's, an ask's footer, the live line's `esc cancel`, the queue's
-`alt+up edit`, the empty state's `ctrl+p commands`, the wake tray's resume row; an extension reaches it, `keyHintsWidth` and the `KeyHints` words through `@gent/tui/extensions`. A status-row label that is
+`alt+up edit`, the empty state's `ctrl+p commands`, the wake tray's resume row, the agents tray's `← sessions`; an extension reaches it, `keyHintsWidth` and the `KeyHints` words through `@gent/tui/extensions`. A status-row label that is
 a hint (`esc close` beside `transcript`) names its key (`StatusRowLabel.key`)
 and `StatusRow` draws that key bright too.
 

@@ -24,7 +24,10 @@ import {
   formatCost,
   formatDuration,
   groupedRows,
+  keyHint,
   KeyHints,
+  KeyHintsText,
+  keyHintsWidth,
   type PathPlace,
   PickerFrame,
   pickerHeight,
@@ -119,6 +122,8 @@ const subtreeRows = (
 /** The key that opens the pane: ← on an empty composer (`agents.view`). */
 const TRAY_KEY = "←"
 const TRAY_HINT = `${TRAY_KEY} sessions`
+/** The tray's way in, drawn as every key hint is: the key bright, its verb muted. */
+const TRAY_HINTS = [keyHint(TRAY_KEY, "sessions")]
 const TRAY_MAX_ROWS = 3
 /**
  * Columns of a child's name on the status row; a delegate's name is often its
@@ -258,7 +263,7 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
   // Two columns of padding, the glyph and its space, and the hint on the first line.
-  const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
+  const rowWidth = () => Math.max(8, dimensions().width - 4 - keyHintsWidth(TRAY_HINTS) - 2)
   const lines = () => trayLines(running(), rowWidth(), finished(), props.place)
   const glyph = (mark: TrayMark) => {
     if (mark === "running") return { text: workingIconFrame(tick()), color: theme.success }
@@ -276,8 +281,9 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
               <span style={{ fg: theme.textMuted }}>{line.text.slice(line.name.length)}</span>
               <Show when={index() === 0}>
                 <span style={{ fg: theme.textMuted }}>
-                  {`${" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}${TRAY_HINT}`}
+                  {" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}
                 </span>
+                <KeyHintsText hints={TRAY_HINTS} />
               </Show>
             </text>
           )}
