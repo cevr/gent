@@ -25,6 +25,7 @@ import {
   SessionId,
   type GentClientRpcError,
   type GentNamespacedClient,
+  messagePartsText,
 } from "@gent/core/protocol"
 import type { CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
@@ -112,11 +113,20 @@ export interface ExtensionAgentDetail {
   readonly status: SessionSnapshot["runtime"]["_tag"]
   /** None when nobody named the session a model. */
   readonly model: Option.Option<string>
+  /** The reasoning effort the next turn uses; None when the model takes none. */
+  readonly effort: Option.Option<string>
   readonly turns: number
   readonly costUsd: number
   readonly durationMs: number
   /** Messages the last projection left out of the model's view; 0 before a turn has run. */
   readonly omittedMessages: number
+  /**
+   * The session's first prompt, whole: what it was started to do. A child's
+   * or a thread's opens with its source, which the reader strips.
+   */
+  readonly firstPrompt: Option.Option<string>
+  /** The text of the latest assistant answer that has any. */
+  readonly lastAnswer: Option.Option<string>
 }
 
 /**
@@ -361,17 +371,27 @@ const agentDetailAt = (
   shellRead(transport, "session.getSnapshot", (client) =>
     client.session.getSnapshot({ sessionId: key.sessionId, branchId: key.branchId }),
   ).pipe(
-    Effect.map((snapshot) => ({
-      status: snapshot.runtime._tag,
-      model: Option.fromUndefinedOr(snapshot.resolvedModelId),
-      turns: snapshot.metrics.turns,
-      costUsd: snapshot.metrics.costUsd,
-      durationMs: snapshot.metrics.durationMs,
-      omittedMessages: Option.fromUndefinedOr(snapshot.metrics.context).pipe(
-        Option.map((context) => context.omittedMessages),
-        Option.getOrElse(() => 0),
-      ),
-    })),
+    Effect.map((snapshot) => {
+      const texts = (role: string) =>
+        snapshot.messages
+          .filter((message) => message.role === role)
+          .map((message) => messagePartsText(message.parts).trim())
+          .filter((text) => text.length > 0)
+      return {
+        status: snapshot.runtime._tag,
+        model: Option.fromUndefinedOr(snapshot.resolvedModelId),
+        effort: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
+        turns: snapshot.metrics.turns,
+        costUsd: snapshot.metrics.costUsd,
+        durationMs: snapshot.metrics.durationMs,
+        omittedMessages: Option.fromUndefinedOr(snapshot.metrics.context).pipe(
+          Option.map((context) => context.omittedMessages),
+          Option.getOrElse(() => 0),
+        ),
+        firstPrompt: Option.fromUndefinedOr(texts("user")[0]),
+        lastAnswer: Option.fromUndefinedOr(texts("assistant").at(-1)),
+      }
+    }),
   )
 
 // ── workspace, shell and lifecycle facets ───────────────────────────────────
@@ -870,6 +890,8 @@ export interface StatusLabelItem {
    * Absent, the label keeps its text, and only the row's last cut shortens it.
    */
   readonly short?: StatusLabelShort
+  /** The key a hint label opens with (`←` of `← sessions`): it draws bright, as in a hint row. */
+  readonly key?: string
 }
 
 /** Where a status label sits: the left group, or the right group before the gauge and cost. */

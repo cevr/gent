@@ -4131,8 +4131,32 @@ describe("App slash commands", () => {
     it.scopedLive(name, () =>
       Effect.gen(function* () {
         const setupRelease = yield* Deferred.make<void>()
+        // An extension pane on a ctrl key: a ctrl keybind fires over a draft
+        // and over the prompt search, where a bare key does not.
+        const keyPane = defineClientExtension("@test/key-pane", {
+          setup: Effect.gen(function* () {
+            const { shell } = yield* ClientContext
+            return clientContributions(
+              clientCommandContribution({
+                id: "key-pane.open",
+                title: "Key pane",
+                keybind: "ctrl+q",
+                onSelect: () => shell.pane.open("key-pane"),
+              }),
+              widgetContribution({
+                id: "key-pane",
+                slot: "below-input",
+                component: () => (
+                  <Show when={shell.pane.isOpen("key-pane")}>
+                    <text>key pane open</text>
+                  </Show>
+                ),
+              }),
+            )
+          }),
+        })
         const { setup, ext } = yield* mountApp({
-          builtins: builtinClientModules.map((extension) => {
+          builtins: [...builtinClientModules, keyPane].map((extension) => {
             if (!gateSetup) return extension
             return {
               ...extension,
@@ -4154,15 +4178,16 @@ describe("App slash commands", () => {
         setup.mockInput.pressArrow("up")
         yield* waitForFrame(setup, (frame) => frame.includes("┃ older prompt"), "the preview")
         // Core prompt search can preview before client extensions finish setup.
-        // Ctrl+T belongs to an extension: its contribution must exist at dispatch.
-        const keybindReady = () => ext.commands().some((command) => command.keybind === "ctrl+t")
+        // Ctrl+Q belongs to an extension: its contribution must exist at dispatch.
+        const keybindReady = () => ext.commands().some((command) => command.keybind === "ctrl+q")
         if (gateSetup) {
           expect(keybindReady()).toBe(false)
           yield* Deferred.complete(setupRelease, Effect.void)
         }
-        yield* waitForFrame(setup, keybindReady, "the sessions keybind loaded")
-        setup.mockInput.pressKey("t", { ctrl: true })
+        yield* waitForFrame(setup, keybindReady, "the pane keybind loaded")
+        setup.mockInput.pressKey("q", { ctrl: true })
         yield* waitForFrame(setup, (frame) => !frame.includes("Prompt search"), "search replaced")
+        yield* waitForFrame(setup, (frame) => frame.includes("key pane open"), "the pane")
         yield* waitForFrame(setup, (frame) => frame.includes("┃ mine"), "the draft back")
       }).pipe(Effect.timeout("10 seconds")),
     )
@@ -4489,7 +4514,7 @@ describe("App docked panes at short heights", () => {
       const setup = yield* mountShortTerminalWithTrays(24, [], {
         deleteSession: Effect.fail(new ProviderAuthError({ message: "delete refused" })),
       })
-      setup.mockInput.pressKey("t", { ctrl: true })
+      setup.mockInput.pressArrow("left")
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3"),
@@ -4511,7 +4536,7 @@ describe("App docked panes at short heights", () => {
       Effect.gen(function* () {
         const setup = yield* mountShortTerminalWithTrays(14)
         yield* waitForFrame(setup, (frame) => frame.includes("alarm in now"), "the alarm tray")
-        setup.mockInput.pressKey("t", { ctrl: true })
+        setup.mockInput.pressArrow("left")
         yield* waitForFrame(
           setup,
           (frame) => frame.includes("Sessions ·") && frame.includes("delegate: task 3"),
@@ -4557,7 +4582,7 @@ describe("App docked panes at short heights", () => {
         Effect.gen(function* () {
           const setup = yield* mountShortTerminalWithTrays(height)
           yield* waitForFrame(setup, (frame) => frame.includes("alarm in now"), "the alarm tray")
-          setup.mockInput.pressKey("t", { ctrl: true })
+          setup.mockInput.pressArrow("left")
           yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the agents pane")
           const frame = yield* waitForFrame(
             setup,
@@ -4744,7 +4769,7 @@ describe("App docked panes at short heights", () => {
     {
       name: "agents pane",
       open: (view) => Effect.sync(() => view.setup.mockInput.pressArrow("left")),
-      shown: "Sessions ·",
+      shown: "Sessions",
       rowClean: () => true,
     },
   ]
@@ -4888,7 +4913,7 @@ describe("App docked panes at short heights", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions"), "the agents pane")
       view.setup.resize(view.setup.renderer.terminalWidth, 5)
       yield* waitForFrame(
         view.setup,
@@ -4937,12 +4962,12 @@ describe("App docked panes at short heights", () => {
     Effect.gen(function* () {
       const view = yield* mountRunningTurn()
       view.setup.mockInput.pressArrow("left")
-      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions ·"), "the agents pane")
+      yield* waitForFrame(view.setup, (frame) => frame.includes("Sessions"), "the agents pane")
       const width = view.setup.renderer.terminalWidth
       view.setup.resize(width, 5)
       yield* waitForFrame(
         view.setup,
-        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions ·"),
+        (frame) => view.setup.renderer.terminalHeight === 5 && !frame.includes("Sessions"),
         "the agents pane with no row",
       )
       view.setup.mockInput.pressEscape()
@@ -4954,7 +4979,7 @@ describe("App docked panes at short heights", () => {
         (frame) => view.setup.renderer.terminalHeight === 24 && frame.includes("✻ "),
         "the full terminal",
       )
-      expect(renderFrame(view.setup)).not.toContain("Sessions ·")
+      expect(renderFrame(view.setup)).not.toContain("Sessions")
       expect(view.steers).toEqual([])
       expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
@@ -6244,6 +6269,21 @@ describe("agents view on the left arrow", () => {
       setup.mockInput.pressArrow("left")
       yield* Effect.promise(() => setup.mockInput.typeText("b"))
       const frame = yield* waitForFrame(setup, (current) => current.includes("┃ abc"), "abc")
+      expect(paneOpen(frame)).toBe(false)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The empty composer is the one state ← opens the pane in. At column 0 of
+  // an empty line the draft still holds text, and ← moves to the line above.
+  it.scopedLive("← at column 0 of an empty draft line moves the cursor up and opens nothing", () =>
+    Effect.gen(function* () {
+      const setup = yield* mountShortTerminalWithTrays(30)
+      yield* Effect.promise(() => setup.mockInput.typeText("hi"))
+      setup.mockInput.pressKey("j", { ctrl: true })
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      const frame = yield* waitForFrame(setup, (current) => current.includes("┃ hi!"), "hi!")
       expect(paneOpen(frame)).toBe(false)
     }).pipe(Effect.timeout("10 seconds")),
   )

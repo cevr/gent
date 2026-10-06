@@ -1563,12 +1563,13 @@ describe("loadTuiExtensions", () => {
         )
         expect(resolved.widgets.map((widget) => widget.id)).toContain("checkpoints.revert")
         expect(executeSlashCommand("revert", "", commands)).toBe(true)
-        // The builtin status labels: the git branch and changes (20), the goal
+        // The builtin status labels: the watched child (0), the git branch and changes (20), the goal
         // (40), the cache timer (55, in the right group) and the cache waste
         // total (60).
         expect(
           resolved.statusLabels.map((label) => [label.priority, label.anchor] as const),
         ).toEqual([
+          [0, "left"],
           [20, "left"],
           [40, "left"],
           [55, "right"],

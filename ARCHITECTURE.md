@@ -1445,6 +1445,28 @@ files`); never the agent's name, since every child runs as `delegate`. A
   clears it; a filtered listing never does. A delegate child gets none: its completion lands in
   its parent's transcript, and its row carries the additive `delegate` flag
   (its admission names the `delegate` agent).
+- The Sessions pane is the agent command center, docked like every pane.
+  `sectionOf` puts a live loop under `needs` (the wire section widened
+  additively) when it waits on the reader: its status is
+  `WaitingForInteraction`, or its branch holds open background questions
+  (`ask_user_async`, read through `openQuestionCount` from the questions
+  store; a store it cannot read counts none). The row carries the count as
+  the wire-only `openQuestions`, and a thread's row sums its members'.
+  Sections order `needs`, `running`, `idle`, `inactive`; the glyph's shape
+  says the state (`●` needs you, the `◇◈◆` pulse running, `○` idle, `·`
+  inactive) and a needs row says why (`waiting for an answer`, `1 open
+question`). The title counts each state there is (`Sessions · 1 needs you
+· 2 running`). From 100 terminal columns a details column (40% of the
+  width, ruled off in `border`) shows the selected row: name, state, `model ·
+effort`, turns · cost · time, cwd, what it does now or the head of its
+  last answer, and its task. The detail is the one per-row snapshot read
+  (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and `lastAnswer`);
+  under 100 columns the one-line detail stays. While the session in view
+  is a child (its row names a parent), the extension's status label reads
+  `↳ child <name> · ← sessions`, derived from the latest listing. The
+  name is cut at a whole word to 16 columns (what a 100-column row leaves
+  it), and on a narrow row the child label gives way whole before the way
+  back and the cwd, so it never costs the reader either.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:

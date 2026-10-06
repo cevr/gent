@@ -12,6 +12,7 @@ import {
 } from "effect"
 import { Hex } from "effect/encoding"
 import {
+  type BranchId,
   defineExtension,
   defineRequests,
   ExtensionContext,
@@ -440,6 +441,17 @@ export const addOpenQuestions = (
 /** The rows the reader can still answer: those with no recorded answer. */
 const openRows = (rows: ReadonlyArray<QuestionRow>): ReadonlyArray<OpenQuestion> =>
   rows.filter((row) => !isAnswered(row))
+
+/**
+ * How many background questions `branchId` holds open. The agents view lists
+ * a loop with any under "Needs you": the question waits on the reader as an
+ * ask does, though the turn goes on.
+ */
+export const openQuestionCount = (branchId: BranchId) =>
+  questionStore
+    .at(branchId)
+    .read()
+    .pipe(Effect.map((rows) => openRows(rows).length))
 
 const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
 
