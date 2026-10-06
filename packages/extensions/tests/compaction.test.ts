@@ -12,7 +12,7 @@ import {
   Message,
   ModelId,
 } from "@gent/core/protocol"
-import { ExtensionContext, RequestId } from "@gent/core/extensions/api"
+import { ExtensionContext, ProviderAuthError, RequestId } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
@@ -634,6 +634,50 @@ describe("context handoff", () => {
         expect(Option.map(failure, Schema.is(ModelCompactionError))).toEqual(Option.some(true))
       }
     }).pipe(Effect.timeout("10 seconds"))
+  })
+
+  // The loop retries a summary or moves it to the next credential only by the
+  // model failure the compactor carries as its cause.
+  it.scopedLive("a summary model failure travels as the compaction error's cause", () => {
+    const attempt = (summaryModel: Effect.Effect<LanguageModel.LanguageModel, ProviderAuthError>) =>
+      Effect.gen(function* () {
+        const compactor = yield* ModelContextCompactor
+        return yield* compactor.compact({
+          modelId,
+          agentName: DEFAULT_AGENT_NAME,
+          sessionId,
+          branchId,
+          history: history(),
+          kept: [],
+          budget: budget(),
+          summaryModel: () => summaryModel,
+        })
+      }).pipe(Effect.exit, Effect.map(failureOf))
+    const quota = AiError.make({
+      module: "ModelCompactionTest",
+      method: "streamText",
+      reason: new AiError.QuotaExhaustedError({}),
+    })
+    return Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const streamed = yield* attempt(Effect.succeed(model))
+      expect(Option.map(streamed, (error) => error.cause)).toEqual(Option.some(quota))
+      const refused = new ProviderAuthError({
+        message: "no credential",
+        credentialFailure: "Unavailable",
+      })
+      const unresolved = yield* attempt(Effect.fail(refused))
+      expect(Option.map(unresolved, (error) => error.cause)).toEqual(Option.some(refused))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ModelContextCompactorLive,
+          LanguageModelLayers.testStream(() => Effect.succeed(Stream.fail(quota))),
+          leafContext,
+        ),
+      ),
+      Effect.timeout("10 seconds"),
+    )
   })
 })
 
