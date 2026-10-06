@@ -17,6 +17,7 @@ import {
   GentConnectionError,
   GentRpcError,
   lineCount,
+  type Model,
   type Session,
   splitLines,
   type GentClientRpcError,
@@ -305,6 +306,40 @@ export const repliesInView = <K>(
     newest: (): ReplyWriter => writer(newest, key()),
   }
 }
+
+// ── model names ─────────────────────────────────────────────────────────────
+
+/**
+ * The model as gent names it to the reader, the one owner of a model's name:
+ * its catalog name (`Claude Sonnet 5.5`), and its provider's label after it
+ * when another provider's model has the same name, so the name says which
+ * provider runs, and bills, it. `label` spells the provider: the status row
+ * reads the sign-in's names (`providerLabel`); a view with no sign-in in
+ * reach names the provider by its id.
+ */
+export const modelDisplayName = (
+  model: Model,
+  models: ReadonlyArray<Model>,
+  label: (provider: string) => string = (provider) => provider,
+): string => {
+  const shared = models.some(
+    (other) => other.name === model.name && other.provider !== model.provider,
+  )
+  if (!shared) return model.name
+  return `${model.name} (${label(model.provider)})`
+}
+
+/**
+ * A model id as {@link modelDisplayName} names it from `models`, the catalog;
+ * an id the catalog does not hold (a model of a provider no longer signed in)
+ * reads without its provider prefix: `anthropic/claude-sonnet-5` is
+ * `claude-sonnet-5`.
+ */
+export const modelIdName = (id: string, models: ReadonlyArray<Model>): string =>
+  Option.match(Option.fromUndefinedOr(models.find((model) => model.id === id)), {
+    onNone: () => id.slice(id.lastIndexOf("/") + 1),
+    onSome: (model) => modelDisplayName(model, models),
+  })
 
 // ── size formatting ─────────────────────────────────────────────────────────
 

@@ -107,6 +107,7 @@ export {
   formatPreviewFooter,
   formatTokens,
   formatUsageStats,
+  modelIdName,
   isReferenceablePath,
   type PathPlace,
   plural,

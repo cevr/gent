@@ -14,7 +14,15 @@ import {
   Session as DomainSession,
 } from "@gent/core/protocol"
 import { type Session as ClientSession, useClient, useRuntime } from "./client"
-import { formatCost, formatDuration, isConversation, plural, randomId, truncate } from "./utils"
+import {
+  formatCost,
+  formatDuration,
+  isConversation,
+  modelDisplayName,
+  plural,
+  randomId,
+  truncate,
+} from "./utils"
 import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
 import { createEffect, createMemo, createSignal, ErrorBoundary, For, on, Show } from "solid-js"
@@ -638,23 +646,17 @@ function ActivityRow(props: { label: string; elapsed: number }) {
 export const NO_MODEL_LABEL = "no model · /model"
 
 /**
- * The model as the status row names it: its name, and its provider's label
- * (`providerLabel`) when another provider's model has the same name, so the
- * row says which provider runs, and bills, the next turn. A narrow row takes
- * the label's short form instead (`shortModelName`, no provider label), so
- * the pair `Auto → Sonnet 5` fits beside the effort and the gauge.
+ * The model as the status row names it (`modelDisplayName`, the name the
+ * Sessions pane gives it too), the provider spelled as the sign-in names it
+ * (`providerLabel`). A narrow row takes the label's short form instead
+ * (`shortModelName`, no provider label), so the pair `Auto → Sonnet 5` fits
+ * beside the effort and the gauge.
  */
 export const statusModelName = (
   model: Model,
   models: ReadonlyArray<Model>,
   providers: ReadonlyArray<AuthProviderInfo>,
-): string => {
-  const shared = models.some(
-    (other) => other.name === model.name && other.provider !== model.provider,
-  )
-  if (!shared) return model.name
-  return `${model.name} (${providerLabel(providers, model.provider)})`
-}
+): string => modelDisplayName(model, models, (provider) => providerLabel(providers, provider))
 
 /**
  * The credential label the status row names beside the model: the one the

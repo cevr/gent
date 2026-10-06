@@ -558,16 +558,16 @@ at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 
-| Command            | Action                                                                  |
-| ------------------ | ----------------------------------------------------------------------- |
-| `/new`, `/clear`   | Start a new session                                                     |
-| `/help`            | Open the command palette                                                |
-| `/sessions`        | Sessions pane: one row per thread, needs you first; side threads marked |
-| `/agents`, `/tree` | Aliases of `/sessions`                                                  |
-| `/branch`          | Create new branch                                                       |
-| `/fork`            | Fork from a message                                                     |
-| `/thread`          | Thread pane: the sessions and windows this one runs on                  |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side; `ctrl+s` merges it back  |
+| Command            | Action                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                                                                                       |
+| `/help`            | Open the command palette                                                                                                  |
+| `/sessions`        | Sessions pane: one row per thread, needs you first; side threads marked; a model by the status row's name (`modelIdName`) |
+| `/agents`, `/tree` | Aliases of `/sessions`                                                                                                    |
+| `/branch`          | Create new branch                                                                                                         |
+| `/fork`            | Fork from a message                                                                                                       |
+| `/thread`          | Thread pane: the sessions and windows this one runs on                                                                    |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side; `ctrl+s` merges it back                                                    |
 
 A command sent before every command source has answered (the client
 extensions' load and the session's server slash list, `commandsSettled` in

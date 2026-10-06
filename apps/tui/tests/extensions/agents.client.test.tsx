@@ -3,7 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Exit, Layer, Option, Predicate, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
-import { BranchId, SessionId } from "@gent/core/protocol"
+import { BranchId, Model, ModelId, ProviderId, SessionId } from "@gent/core/protocol"
 import {
   type AgentRowEntry,
   BTW_EXTENSION_ID,
@@ -593,6 +593,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={open()}
           controller={{
@@ -633,6 +634,7 @@ describe("Agents pane navigation", () => {
       const [open, setOpen] = createSignal(true)
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={open()}
           controller={{
@@ -681,6 +683,7 @@ describe("Agents pane navigation", () => {
 
         const setup = yield* renderScoped(() => (
           <AgentsPane
+            models={() => []}
             place={PLACE}
             open={true}
             controller={{
@@ -736,6 +739,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -800,6 +804,7 @@ describe("Agents pane navigation", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -844,6 +849,7 @@ describe("Agents pane navigation", () => {
       const busy: AgentRowEntry = { ...rowPane("ask", "Alpha", 0), section: "running", live: true }
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -883,6 +889,7 @@ describe("Agents pane navigation", () => {
       const idle: AgentRowEntry = { ...rowPane("rest", "Alpha", 0), section: "idle", live: true }
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -948,6 +955,7 @@ describe("Agents pane delete", () => {
       const deleted: Array<string> = []
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -1024,6 +1032,7 @@ describe("Agents pane reopen", () => {
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={open()}
           controller={controller}
@@ -1067,6 +1076,7 @@ describe("Agents pane framing", () => {
         const setup = yield* renderScoped(
           () => (
             <AgentsPane
+              models={() => []}
               place={PLACE}
               open={true}
               controller={{
@@ -1139,6 +1149,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            models={() => []}
             place={PLACE}
             open={true}
             controller={{
@@ -1190,6 +1201,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            models={() => []}
             place={PLACE}
             open={true}
             controller={{
@@ -1247,6 +1259,7 @@ describe("Agents pane framing", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            models={() => []}
             place={PLACE}
             open={true}
             controller={{
@@ -1323,6 +1336,7 @@ describe("agents pane rows", () => {
     renderScoped(
       () => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={{
@@ -1471,6 +1485,12 @@ describe("agents pane rows", () => {
  * the selected row once the terminal is wide.
  */
 describe("agents pane command center", () => {
+  /** The selected child's model as the catalog the status row reads names it. */
+  const SONNET = new Model({
+    id: ModelId.make("anthropic/claude-sonnet-5-5"),
+    name: "Claude Sonnet 5.5",
+    provider: ProviderId.make("anthropic"),
+  })
   /**
    * The selected row's live detail: a delegate child parked on an ask, three
    * turns in. Its first prompt is its task under the parent's frame.
@@ -1503,6 +1523,7 @@ describe("agents pane command center", () => {
           return (
             <AgentsPane
               place={PLACE}
+              models={() => [SONNET]}
               open={true}
               controller={{
                 rows: () => listed,
@@ -1642,7 +1663,7 @@ describe("agents pane command center", () => {
       expect(rule).toBeGreaterThan(50)
       for (const text of [
         "● needs you · waiting for an answer",
-        "claude-sonnet-5-5 · high",
+        "Claude Sonnet 5.5 · high",
         "turn 4 running · $0.01",
         "~/work/docs",
         "Which docs folder is current?",
@@ -1654,7 +1675,9 @@ describe("agents pane command center", () => {
       // A child's task reads without the parent's frame around it.
       expect(frame).not.toContain("Task from your parent")
       // The one-line detail under the list gives way to the column.
-      expect(frame).not.toContain("claude-sonnet-5-5  ·  turn 4 running")
+      expect(frame).not.toContain("Claude Sonnet 5.5  ·  turn 4 running")
+      // The model reads by the name the status row gives it, never its id.
+      expect(frame).not.toContain("claude-sonnet-5-5")
     }),
   )
 
@@ -1662,8 +1685,9 @@ describe("agents pane command center", () => {
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis
       const { frame } = yield* paneAt(waiting(now), 60)
-      expect(frame).toContain("claude-sonnet-5-5  ·  turn 4 running")
-      expect(frame).not.toContain("claude-sonnet-5-5 · high")
+      expect(frame).toContain("Claude Sonnet 5.5  ·  turn 4 running")
+      expect(frame).not.toContain("Claude Sonnet 5.5 · high")
+      expect(frame).not.toContain("claude-sonnet-5-5")
       expect(frame).not.toContain("Task:")
     }),
   )
@@ -1851,10 +1875,10 @@ describe("agents pane counts and detail", () => {
         firstPrompt: Option.none(),
         lastAnswer: Option.none(),
       })
-      expect(detailLabel(Option.some(detail("Running", 0)))).toBe(
+      expect(detailLabel(Option.some(detail("Running", 0)), [])).toBe(
         "claude-sonnet-5  ·  turn 1 running  ·  $0.03",
       )
-      expect(detailLabel(Option.some(detail("Idle", 2)))).toContain("2 turns  ·  $0.03")
+      expect(detailLabel(Option.some(detail("Idle", 2)), [])).toContain("2 turns  ·  $0.03")
     }),
   )
 })
@@ -1896,6 +1920,7 @@ describe("idle middle parent", () => {
       const setup = yield* renderScoped(
         () => (
           <AgentsPane
+            models={() => []}
             place={PLACE}
             open={true}
             controller={controllerOver(() => true)}
@@ -1944,6 +1969,7 @@ describe("thread rows", () => {
     renderScoped(
       () => (
         <AgentsPane
+          models={() => []}
           place={PLACE}
           open={true}
           controller={controllerOver(listed, current)}

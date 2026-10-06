@@ -24,6 +24,7 @@ import {
   formatCost,
   formatDuration,
   groupedRows,
+  modelIdName,
   keyHint,
   KeyHints,
   KeyHintsText,
@@ -53,6 +54,7 @@ import {
   workingIconFrame,
 } from "@gent/tui/extensions"
 import { ref } from "@gent/core/extensions/api"
+import type { Model } from "@gent/core/protocol"
 
 // ── agents tray ─────────────────────────────────────────────────────────────
 
@@ -880,18 +882,6 @@ const currentMarker = (current: boolean): string => {
   return "  "
 }
 
-/**
- * Drop the provider prefix from a model id: `anthropic/claude-sonnet-5` becomes
- * `claude-sonnet-5`. The detail line is the widest content in the panel, and
- * the prefix is the least informative part of it — every row in a given install
- * usually shares one.
- */
-const shortModel = (model: string): string => {
-  const slash = model.lastIndexOf("/")
-  if (slash < 0) return model
-  return model.slice(slash + 1)
-}
-
 /** "1 turn", not "1 turns". */
 const formatTurns = (turns: number): string => {
   if (turns === 1) return "1 turn"
@@ -905,22 +895,26 @@ const formatTurns = (turns: number): string => {
  *
  * Turns and time count finished turns. A working loop names the turn it is
  * on instead and leaves the time out, so a child a minute into its first
- * turn does not read "0 turns · 0s".
+ * turn does not read "0 turns · 0s". The model reads by the name the status
+ * row gives it (`modelIdName` over `models`, the catalog).
  */
-export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
+export const detailLabel = (
+  detail: Option.Option<ExtensionAgentDetail>,
+  models: ReadonlyArray<Model>,
+): string =>
   Option.match(detail, {
     onNone: () => "",
     onSome: (value) => {
       if (value.status === "Idle") {
         return [
-          ...Option.toArray(Option.map(value.model, shortModel)),
+          ...Option.toArray(Option.map(value.model, (id) => modelIdName(id, models))),
           formatTurns(value.turns),
           formatCost(value.costUsd),
           formatDuration(value.durationMs, "padded"),
         ].join("  ·  ")
       }
       return [
-        ...Option.toArray(Option.map(value.model, shortModel)),
+        ...Option.toArray(Option.map(value.model, (id) => modelIdName(id, models))),
         `turn ${value.turns + 1} running`,
         formatCost(value.costUsd),
       ].join("  ·  ")
@@ -987,6 +981,7 @@ const detailLines = (
   detail: Option.Option<ExtensionAgentDetail>,
   place: PathPlace,
   answerLines: number,
+  models: ReadonlyArray<Model>,
 ): ReadonlyArray<ReadonlyArray<DetailRun>> => {
   const reason = needsReason(row, detail)
   const state = [
@@ -1002,7 +997,7 @@ const detailLines = (
   ]
   if (Option.isSome(detail)) {
     const model = [
-      ...Option.toArray(Option.map(detail.value.model, shortModel)),
+      ...Option.toArray(Option.map(detail.value.model, (id) => modelIdName(id, models))),
       ...Option.toArray(detail.value.effort),
     ].join(" · ")
     if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
@@ -1063,6 +1058,8 @@ export function AgentsPane(props: {
   onSelect: (row: AgentRowEntry) => void
   /** Where the TUI launched: a row's running call reads its paths against it. */
   place: PathPlace
+  /** The catalog the status row names models by: a row's model reads by the same name. */
+  models: () => ReadonlyArray<Model>
   /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
   onDelete: (row: AgentRowEntry) => void
 }) {
@@ -1248,6 +1245,7 @@ export function AgentsPane(props: {
           cursorDetail(row),
           props.place,
           answerLines,
+          props.models(),
         ),
     })
   // Lines the list draws: its filter row, each row, and a heading per section.
@@ -1289,7 +1287,7 @@ export function AgentsPane(props: {
         detail={Option.getOrUndefined(
           Option.liftPredicate(
             Option.liftPredicate(
-              detailLabel(props.controller.detail()),
+              detailLabel(props.controller.detail(), props.models()),
               () => visible().length > 0,
             ),
             () => !wide(),
@@ -1440,6 +1438,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         component: () => (
           <AgentsPane
             place={place}
+            models={() => Option.getOrElse(transport.modelCatalog(), () => [])}
             open={controller.open()}
             controller={controller}
             onClose={() => shell.pane.close(AGENTS_PANE)}
