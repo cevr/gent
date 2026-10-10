@@ -30,7 +30,7 @@ Propose nothing against these.
 - A shipped extension is never more privileged than a user extension.
 - Core runs bash and monitor commands as given, with no classifier or ask in front. An extension the owner enables may put one there (`@gent/guard`, off by default).
 - Personal library, no shims.
-- Child sessions cache 5 minutes, and they keep their own effort.
+- Child sessions cache 5 minutes, unless their agent keeps the session cache (`promptCache: "session"`, 1 hour) as a long-lived seat that waits between turns does; every child keeps its own effort (owner, 2026-10-10).
 - The handoff leans on discovery (message ids, read tools).
 - Classifiers are one host verb (`ExtensionContext.Models.decide`, the cell's `models.decide`), with no Jev-aware features.
 - In the TUI, state that follows the session identity reads the identity (`sessionIdentity()`, `activeSessionId()`), not the session record, and one-shot state lives outside a component instance.

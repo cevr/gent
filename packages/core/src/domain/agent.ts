@@ -506,6 +506,16 @@ const agentDefinitionFields = {
    * spending forever; unset, the turn has no such ceiling.
    */
   maxModelAttempts: Schema.optional(Schema.Natural),
+  /**
+   * The prompt cache a spawned child session of this agent keeps. `child`
+   * (absent): the model's child lifetime (`Model.childPromptCacheTtlMs`), for
+   * a child that runs its steps back to back. `session`: the session lifetime
+   * (`Model.promptCacheTtlMs`), for a long-lived child that waits between
+   * turns, such as a track's seat waiting on a review. A root session always
+   * keeps the session lifetime. Only the cache: a child stays unrouted and
+   * keeps its own effort either way.
+   */
+  promptCache: Schema.optional(Schema.Literals(["child", "session"])),
   driver: Schema.optional(DriverRef),
 }
 

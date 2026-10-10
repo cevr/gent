@@ -1425,7 +1425,13 @@ interface ResolvedTurnContext {
   notices: ReadonlyArray<ExtensionTurnNotice>
   /** Today's date when the prompt names an earlier one (`dateNotice`); sent first among the notices. */
   dateNotice: Option.Option<TurnNotice>
-  /** The session is a spawned child (`isSpawnedSession`): its requests say so to the driver. */
+  /** The session is a spawned child (`isSpawnedSession`): it is never routed. */
+  spawned: boolean
+  /**
+   * The turn keeps the child cache lifetime: a spawned child whose agent does
+   * not keep the session cache (`AgentDefinition.promptCache`). Its requests
+   * say so to the driver, and every cache reading uses the child lifetime.
+   */
   child: boolean
   /** The driver the agent names; a routed turn derives `modelDriver` from it again. */
   driverRef: Option.Option<DriverRef>
@@ -1759,7 +1765,8 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelDriver: effectiveModelDriver(route.driverRef, route.modelId.value),
     notices: projEval.notices,
     dateNotice: dateNotice(treeStart, today),
-    child: Option.exists(session, isSpawnedSession),
+    spawned: Option.exists(session, isSpawnedSession),
+    child: Option.exists(session, isSpawnedSession) && dispatchAgent.promptCache !== "session",
     driverRef: route.driverRef,
     sessionReasoning: Option.flatMap(session, (value) =>
       Option.fromUndefinedOr(value.reasoningLevel),
@@ -2449,7 +2456,7 @@ const routeEffort = Effect.fn("TurnHelpers.routeEffort")(function* (params: {
   readonly decided: DecidedEffort
 }) {
   const { resolved, served, log } = params
-  if (resolved.child || params.step > 1) return Option.none<ModelRouted>()
+  if (resolved.spawned || params.step > 1) return Option.none<ModelRouted>()
   const startedAt = yield* Clock.currentTimeMillis
   const admission = yield* admitEfforts({
     sessionId: params.sessionId,

@@ -1661,6 +1661,7 @@ const runColdCacheTurns = (params: {
   readonly quotaSpent?: ReadonlyArray<number>
   readonly childPromptCacheTtlMs?: number
   readonly spawned?: boolean
+  readonly promptCache?: "child" | "session"
   readonly secondPrompt?: string
 }) =>
   Effect.gen(function* () {
@@ -1736,7 +1737,13 @@ const runColdCacheTurns = (params: {
     const otherModel = Model.make({ ...model, id: ModelId.make("cold-cache/other-window") })
     const harness = yield* createRpcHarness({
       providerLayer,
-      agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: model.id })],
+      agents: [
+        AgentDefinition.make({
+          name: DEFAULT_AGENT_NAME,
+          model: model.id,
+          ...omitUndefined({ promptCache: params.promptCache }),
+        }),
+      ],
       extensionInputs: [waitToolExtension, ...compactor],
       models: [model, otherModel],
     })
@@ -1935,6 +1942,27 @@ describe("cold prompt cache", () => {
       expect(handoffMarkers(result.durable)).toHaveLength(1)
       // Each step's end says it ran in a child, so a client reads the child lifetime too.
       expect(settledStepsChild(result.events)).toEqual([true, true])
+    }),
+  )
+
+  it.live("a child whose agent keeps the session cache keeps the root lifetime", () =>
+    Effect.gen(function* () {
+      // A track's seat waits between turns: past the child lifetime, but
+      // within the session's, its window stays whole.
+      const result = yield* runColdCacheTurns({
+        promptCacheTtlMs: Option.some(60 * 60_000),
+        childPromptCacheTtlMs: 0,
+        spawned: true,
+        promptCache: "session",
+        firstInputTokens: LARGE_WINDOW_TOKENS,
+        compactor: true,
+        steps: [textStep("second reply")],
+      })
+
+      expect(result.calls).toBe(2)
+      expect(handoffMarkers(result.durable)).toHaveLength(0)
+      // Its steps asked for the session lifetime, so a client reads that one.
+      expect(settledStepsChild(result.events)).toEqual([false, false])
     }),
   )
 

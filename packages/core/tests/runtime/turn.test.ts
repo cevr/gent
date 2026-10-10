@@ -5787,35 +5787,44 @@ describe("effort auto", () => {
     25_000,
   )
 
-  it.scopedLive(
-    "a spawned child session never asks the effort router",
-    () =>
-      Effect.gen(function* () {
-        const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          textStep("child answer"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          agents: agentOn(CARRIER_MODEL),
-          providerLayer,
-          models: [CARRIER_MODEL],
-          extensionInputs: [
-            routingExtension({ effort: effortRouter, route: pickEfforts(inputs, [0]) }),
-          ],
-        })
-        const child = yield* client.session.create({
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-        })
-        const afterTurns = yield* recordBranchEvents(client, child)
-        yield* selectEffortAuto(client, child.sessionId)
-        yield* client.message.send({ ...child, content: "child work" })
-        const events = yield* afterTurns(1)
-        expect(routedEvents(events)).toEqual([])
-        expect(yield* Ref.get(inputs)).toEqual([])
-      }).pipe(Effect.timeout("15 seconds")),
-    20_000,
-  )
+  // A child on the session cache (a track's seat) is still a child: unrouted.
+  for (const [cache, agents] of [
+    ["child", agentOn(CARRIER_MODEL)],
+    [
+      "session",
+      [AgentDefinition.make({ ...testAgent, model: CARRIER_MODEL.id, promptCache: "session" })],
+    ],
+  ] as const) {
+    it.scopedLive(
+      `a spawned child session on the ${cache} cache never asks the effort router`,
+      () =>
+        Effect.gen(function* () {
+          const inputs = yield* Ref.make<ReadonlyArray<ModelRouteInput>>([])
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("child answer"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            agents,
+            providerLayer,
+            models: [CARRIER_MODEL],
+            extensionInputs: [
+              routingExtension({ effort: effortRouter, route: pickEfforts(inputs, [0]) }),
+            ],
+          })
+          const child = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const afterTurns = yield* recordBranchEvents(client, child)
+          yield* selectEffortAuto(client, child.sessionId)
+          yield* client.message.send({ ...child, content: "child work" })
+          const events = yield* afterTurns(1)
+          expect(routedEvents(events)).toEqual([])
+          expect(yield* Ref.get(inputs)).toEqual([])
+        }).pipe(Effect.timeout("15 seconds")),
+      20_000,
+    )
+  }
 
   it.scopedLive(
     "a recovered turn runs at its recorded effort route and does not ask the router again",

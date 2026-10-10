@@ -243,7 +243,8 @@ export interface ProviderHints {
    */
   readonly cacheKey?: string
   /**
-   * The request is a spawned child session's (`isSpawnedSession`). A child
+   * The request is a spawned child session's (`isSpawnedSession`) whose
+   * agent keeps the child cache (`AgentDefinition.promptCache`). Such a child
    * runs its steps back to back, so a driver may give its prompt cache a
    * shorter lifetime; the catalog names it as `Model.childPromptCacheTtlMs`.
    */

@@ -288,7 +288,10 @@ updates this list in the same commit.
     The model catalog names the cache lifetime (`Model.promptCacheTtlMs`, which
     each driver fills in `listModels`): Anthropic asks for the 1-hour cache on
     every marker, or 5 minutes with `ANTHROPIC_PROMPT_CACHE_TTL=5m`, and OpenAI
-    says 30 minutes, as measured. The lifetime runs from the start of the
+    says 30 minutes, as measured. A spawned child asks for the shorter child
+    lifetime (`Model.childPromptCacheTtlMs`) unless its agent keeps the
+    session cache (`AgentDefinition.promptCache: "session"`); either way it
+    is never routed. The lifetime runs from the start of the
     branch's last model request (its newest stored `StreamStarted`, or a
     `ProviderRetrying` plus its `delayMs` when the request was retried), since
     the provider refreshes its cache when a request starts. The cache belongs to the
