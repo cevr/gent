@@ -37,6 +37,7 @@ Propose nothing against these.
 - Single files: one concern lives in one file under section banners. A new file has a reason: a process entry, a package entry, a module two concerns share, or a lint-scoped boundary. A test split by feature area is not fragmentation. A candidate breaks it when it splits a concern into fragment or helper files (`x-part.ts`). Merging fragments back is a reduction. A fragment split is a finding.
 - Every session-scoped RPC names its session: `sessionId` is required.
 - An unknown slash command is refused in the composer, not sent to the model.
+- Push: `main` to `origin` once a pass's batches are merged, the gate on main is green and the ledger row is committed; no rift branches, no force (owner, 2026-09-24).
 
 Project safety, beside `~/.claude/skills/architecture-loop/safety.md`:
 
