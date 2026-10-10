@@ -13,11 +13,11 @@
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@distilled.cloud/core": "https://pkg.alchemy.run/@distilled.cloud/core/-/d01a5e00b11539b4120841e2641c24f35edc23fb0b27be300e7a02676ab979ae.tgz",
-    "@distilled.cloud/railway": "https://pkg.alchemy.run/@distilled.cloud/railway/-/ec5d6074943be486156a6fb48bbb22c4f7899943a7b52535725ba0b14f45e20b.tgz",
+    "@distilled.cloud/core": "1.0.0-rc.13",
+    "@distilled.cloud/railway": "1.0.0-rc.13",
     "@effect/platform-bun": "catalog:",
     "@effect/platform-node": "catalog:",
-    "alchemy": "https://pkg.alchemy.run/alchemy/-/0b74dc88ad083e12082d7d84a7e46b4e7094ae17db987b4e799159402d4930ab.tgz",
+    "alchemy": "2.0.0-beta.81",
     "effect-bun-test": "catalog:"
   }
 }
