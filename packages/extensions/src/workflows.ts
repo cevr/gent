@@ -45,7 +45,7 @@ const auditRecipe = (input: string, outputPath: string) =>
   ].join("\n")
 
 const counselRecipe = (input: string) =>
-  `Get a second opinion on ${input || "the current approach"}: delegate a self-contained question with the approach, alternatives, and tradeoffs. Use a different model with overrides.modelId when one is available. Report the opinion verbatim, then your response.`
+  `Get a second opinion on ${input || "the current approach"}: delegate a self-contained question with the approach, alternatives, and tradeoffs. Use a different model with overrides.model when one is available. Report the opinion verbatim, then your response.`
 
 const researchRecipe = (input: string) => {
   if (input.length === 0) {
