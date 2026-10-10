@@ -4596,7 +4596,8 @@ const TOOL_STEPS: ReadonlyArray<ScenarioStep> = [
   },
   {
     reasoning: "Check for the file the TODO wants; it does not exist yet.",
-    ops: [{ tool: "bash", input: { command: `sleep 2; ls ${scenarioFile("d.ts")}` } }],
+    // `|| exit 2`: a missing file is 2 for GNU ls, 1 for BSD ls (macOS).
+    ops: [{ tool: "bash", input: { command: `sleep 2; ls ${scenarioFile("d.ts")} || exit 2` } }],
   },
   { reasoning: "Summarize.", ops: [] },
 ]
