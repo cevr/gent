@@ -427,6 +427,11 @@ class SessionProfileStartProbe extends Context.Service<
   { readonly value: string }
 >()("@gent/core/tests/runtime/extension-host.test/SessionProfileStartProbe") {}
 
+class ServerResourceProbe extends Context.Service<
+  ServerResourceProbe,
+  { readonly build: number }
+>()("@gent/core/tests/runtime/extension-host.test/ServerResourceProbe") {}
+
 /** A process resource whose layer runs `start` as it builds. */
 const startResource = (id: string, start: Effect.Effect<void>) =>
   defineResource({
@@ -848,6 +853,74 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive(
+    "a server resource is built once for every place, and a place's process resource reads it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-resource-" })
+        const home = path.join(directory, "home")
+        const first = path.join(directory, "first")
+        const second = path.join(directory, "second")
+        yield* Effect.forEach([home, first, second], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        const builds = { server: 0, process: 0 }
+        const shared = defineExtension({
+          id: "server-shared",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-shared/feed",
+                scope: "server",
+                layer: Layer.effect(
+                  ServerResourceProbe,
+                  Effect.sync(() => {
+                    builds.server += 1
+                    return ServerResourceProbe.of({ build: builds.server })
+                  }),
+                ),
+              }),
+              defineResource({
+                id: "server-shared/place",
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileStartProbe,
+                  Effect.gen(function* () {
+                    builds.process += 1
+                    const feed = yield* Effect.serviceOption(ServerResourceProbe)
+                    const read = Option.match(feed, {
+                      onNone: () => "none",
+                      onSome: (found) => `server build ${found.build}`,
+                    })
+                    return SessionProfileStartProbe.of({ value: read })
+                  }),
+                ),
+              }),
+            )
+          }),
+        })
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const atFirst = yield* Effect.scoped(cache.resolve(first))
+          const atSecond = yield* Effect.scoped(cache.resolve(second))
+          expect(Context.get(atFirst.layerContext, ServerResourceProbe)).toBe(
+            Context.get(atSecond.layerContext, ServerResourceProbe),
+          )
+          expect(builds).toEqual({ server: 1, process: 2 })
+          expect(Context.get(atSecond.layerContext, SessionProfileStartProbe).value).toBe(
+            "server build 1",
+          )
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [shared] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive("a user tool's binding names its file version: an edit changes it", () =>

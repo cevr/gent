@@ -85,11 +85,16 @@ import type {
  * One primitive carries the whole concept: "this extension owns a long-lived
  * service with optional startup/shutdown."
  *
- * The `scope` discriminator is intentionally narrow. The host owns two
+ * The `scope` discriminator is intentionally narrow. The host owns three
  * long-lived resource lifetimes:
  *
- *   - `"process"` — shared by compatible profiles, released when the last
- *     holder retires or the server closes; requires `ServerScope`
+ *   - `"server"`  — one build per server, shared by the profiles of every
+ *     place (workspace and cwd) that run the same extension version,
+ *     released when the last holder retires or the server closes; requires
+ *     `ServerScope`
+ *   - `"process"` — shared by the compatible profiles of one place, released
+ *     when the last holder retires or the server closes; requires
+ *     `PlaceScope`
  *   - `"branch"`  — survives for one agent-loop branch; requires `BranchScope`
  *
  * Add a scope literal only together with its host lifecycle implementation.
@@ -106,12 +111,17 @@ type ResourceId = typeof ResourceId.Type
 /**
  * Pure type-level scope brand used by Resource declarations. Encodes the
  * lifetime of a `Scope.Scope` at the type level. `ServerScope` is held by the
- * profiles sharing a process resource, until their last holder retires or the
- * server closes. Add brands only with their host lifecycle. These types carry
- * no runtime payload; they are purely structural.
+ * profiles of every place sharing a server resource, and `PlaceScope` by the
+ * profiles of one place sharing a process resource, each until their last
+ * holder retires or the server closes. Add brands only with their host
+ * lifecycle. These types carry no runtime payload; they are purely
+ * structural.
  */
 declare const ServerBrand: unique symbol
 type ServerScope = { readonly [ServerBrand]: true }
+
+declare const PlaceBrand: unique symbol
+type PlaceScope = { readonly [PlaceBrand]: true }
 
 /**
  * One agent-loop branch's lifetime. The actor forks a child of its own scope
@@ -122,17 +132,19 @@ declare const BranchBrand: unique symbol
 type BranchScope = { readonly [BranchBrand]: true }
 
 /** Runtime literal-string union for Resource lifetimes. */
-export type ResourceScope = "process" | "branch"
+export type ResourceScope = "server" | "process" | "branch"
 
 /**
  * Type-level mapping from the `scope` literal to the corresponding nominal
  * scope brand. The brand flows into the `R` channel of the Resource's `layer`.
  */
-type ScopeOf<S extends ResourceScope> = S extends "process"
+type ScopeOf<S extends ResourceScope> = S extends "server"
   ? ServerScope
-  : S extends "branch"
-    ? BranchScope
-    : never
+  : S extends "process"
+    ? PlaceScope
+    : S extends "branch"
+      ? BranchScope
+      : never
 
 // ── The host context of a build ─────────────────────────────────────────────
 
@@ -171,15 +183,17 @@ export class BranchAddress extends Context.Service<
  *   that must run when the resource starts goes in the layer build; disposal
  *   is a finalizer in that build. A layer that fails rejects its extension.
  * - `resources` — the process Resources of the same extension whose services
- *   a branch Resource's layer reads. A process Resource names none.
+ *   a branch Resource's layer reads. A server or process Resource names none.
  *
- * A build reads the host's services (`ResourceHostServices`). A branch build
- * also reads its `BranchAddress` and the services of the Resources it names,
- * and nothing else: its build key holds exactly these, so an edit to another
- * extension keeps it. A process build runs over the process Resources of the
+ * A build reads the host's services (`ResourceHostServices`). A server build
+ * reads nothing else: it is shared across places, so it cannot read a
+ * place's services. A branch build also reads its `BranchAddress` and the
+ * services of the Resources it names, and nothing else: its build key holds
+ * exactly these, so an edit to another extension keeps it. A process build
+ * runs over every server Resource and the process Resources of the
  * extensions before it too; no declaration names another extension's
  * Resource, so typed code reads those only as optional
- * (`Effect.serviceOption`).
+ * (`Effect.serviceOption`). A leaf reads the services of every scope.
  *
  * Consumers yield the service Tags the layer provides; they never see the
  * Resource.
@@ -1547,17 +1561,18 @@ const validateResources = (contribs: ExtensionContributions): Option.Option<stri
     if (!Schema.is(ResourceId)(resource.id)) {
       return Option.some(`resources[${i}]: resource requires a non-empty id`)
     }
-    // A process Resource builds over the host's services only; a branch
-    // Resource reads the process Resources it names, never another branch one.
+    // A server or process Resource builds over the host's services only; a
+    // branch Resource reads the process Resources it names, never another
+    // branch one or a server one.
     const label = `resources[${i}] (${resource.id})`
     const named = resource.resources
-    if (resource.scope === "process" && named.length > 0) {
-      return Option.some(`${label}: a process resource names no resources`)
+    if (resource.scope !== "branch" && named.length > 0) {
+      return Option.some(`${label}: a ${resource.scope} resource names no resources`)
     }
-    const branchNamed = named.find((candidate) => candidate.scope !== "process")
-    if (!Predicate.isUndefined(branchNamed)) {
+    const notProcess = named.find((candidate) => candidate.scope !== "process")
+    if (!Predicate.isUndefined(notProcess)) {
       return Option.some(
-        `${label}: names resource "${branchNamed.id}", a branch resource; a branch resource names process resources only`,
+        `${label}: names resource "${notProcess.id}", a ${notProcess.scope} resource; a branch resource names process resources only`,
       )
     }
   }

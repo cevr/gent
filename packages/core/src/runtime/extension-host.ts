@@ -2864,12 +2864,17 @@ export class SessionProfileCache extends Context.Service<
           readonly resources: ReadonlyArray<string>
         }
         // Every map below changes only under the place's lock. A shared
-        // resource's key starts with its place, so its place's lock guards it.
+        // process resource's key starts with its place, so its place's lock
+        // guards it. A server resource's key starts with `server` and holds no
+        // place: its builds run under the server's own lock
+        // (`serverResourceLock`), and a profile of any place takes and drops a
+        // hold on it in one synchronous step.
         const entries = new Map<string, ProfileEntry>()
         const leases = new Map<string, number>()
         // One extension's process resources, shared by every profile that
-        // builds them over the same context (`startProcessResources`), with
-        // the number of profiles that hold them.
+        // builds them over the same context, and its server resources, shared
+        // by every profile that runs the same version of it
+        // (`startProcessResources`), with the number of profiles that hold them.
         const sharedResources = new Map<
           string,
           {
@@ -3026,8 +3031,25 @@ export class SessionProfileCache extends Context.Service<
         const closeScopes = (scopes: ReadonlyArray<Scope.Closeable>) =>
           Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true })
 
+        // One server resource build at a time, whatever its place: two places
+        // that first run an extension at once build its server resources once.
+        const serverResourceLock = yield* Semaphore.make(1)
+        /** A server resource's key: its extension's version, and no place. */
+        const serverResourceKey = (extension: LoadedExtension): string =>
+          ["server", extensionResourceIdentity(extension)].join("\u0000")
+
         /**
-         * Build every extension's process resources in resolution order, so
+         * Build every extension's server resources, then its process
+         * resources over them, in resolution order, so a later extension's
+         * service wins exactly as it does in the registry. An extension's
+         * server resources are shared by every profile, of any place, that
+         * runs the same version of it (id, source and file version); they read
+         * the host's services only, so the place a profile was built for does
+         * not change them. A process build and a leaf read them as any other
+         * resource's services. They close when the last profile holding them
+         * retires.
+         *
+         * Process resources are built in resolution order, so
          * a later extension's service wins exactly as it does in the
          * registry. An extension's resources are shared by every profile of
          * the place that builds them over the same context: the same
@@ -3068,10 +3090,56 @@ export class SessionProfileCache extends Context.Service<
             // The set as it runs: each last good version in place of the
             // version it stands for.
             let effective = extensions
-            const started = yield* buildScopeResources({
+            // A last good version runs only where its contributions collide
+            // with none of the set's: the set validated without it, so a
+            // collision is its own, and the extension whose new version
+            // failed is the one that fails.
+            const fallback = (extension: LoadedExtension, error: string) => {
+              if (extension.scope === "builtin") return Option.none()
+              return Option.fromNullishOr(lastGood.get(lastGoodKey(place, extension))).pipe(
+                Option.filter((previous) => previous.version !== extension.version),
+                Option.map((previous): LoadedExtension => ({
+                  ...previous,
+                  reloadFailed: { phase: "startup", error },
+                })),
+                Option.filter((previous) => {
+                  const substituted = effective.map((other) => {
+                    if (sameSource(other, extension)) return previous
+                    return other
+                  })
+                  if (collectValidationFailures(substituted).size > 0) return false
+                  effective = substituted
+                  return true
+                }),
+              )
+            }
+            yield* restore(serverResourceLock.take(1))
+            const server = yield* buildScopeResources({
               extensions,
-              scope: "process",
+              scope: "server",
               context: platformServicesContext,
+              buildContext: () => platformServicesContext,
+              parent: serverScope,
+              restore,
+              reuse: (extension) => {
+                const key = serverResourceKey(extension)
+                const shared = Option.fromNullishOr(sharedResources.get(key))
+                if (Option.isNone(shared)) return Option.none()
+                shared.value.holders += 1
+                held.push(key)
+                return Option.some(shared.value.context)
+              },
+              built: (extension, scope, context) => {
+                const key = serverResourceKey(extension)
+                sharedResources.set(key, { scope, context, holders: 1 })
+                held.push(key)
+              },
+              fallback,
+            }).pipe(Effect.ensuring(serverResourceLock.release(1)))
+            const started = yield* buildScopeResources({
+              extensions: server.active,
+              scope: "process",
+              context: server.context,
               buildContext: (_extension, before) => before,
               parent: serverScope,
               restore,
@@ -3088,29 +3156,7 @@ export class SessionProfileCache extends Context.Service<
                 sharedResources.set(key, { scope, context, holders: 1 })
                 accept(extension, key)
               },
-              // A last good version runs only where its contributions collide
-              // with none of the set's: the set validated without it, so a
-              // collision is its own, and the extension whose new version
-              // failed is the one that fails.
-              fallback: (extension, error) => {
-                if (extension.scope === "builtin") return Option.none()
-                return Option.fromNullishOr(lastGood.get(lastGoodKey(place, extension))).pipe(
-                  Option.filter((previous) => previous.version !== extension.version),
-                  Option.map((previous): LoadedExtension => ({
-                    ...previous,
-                    reloadFailed: { phase: "startup", error },
-                  })),
-                  Option.filter((previous) => {
-                    const substituted = effective.map((other) => {
-                      if (sameSource(other, extension)) return previous
-                      return other
-                    })
-                    if (collectValidationFailures(substituted).size > 0) return false
-                    effective = substituted
-                    return true
-                  }),
-                )
-              },
+              fallback,
             })
             const process = new Map<
               ExtensionId,
@@ -3122,7 +3168,7 @@ export class SessionProfileCache extends Context.Service<
             }
             return {
               active: started.active,
-              failed: started.failed.map(({ failure }) => failure),
+              failed: [...server.failed, ...started.failed].map(({ failure }) => failure),
               context: started.context,
               process,
             }

@@ -404,42 +404,6 @@ interface ThreadRoundsService {
   readonly admissions: Semaphore.Semaphore
 }
 
-/** What every profile of one server shares: the feed of round ends and the admission permit. */
-interface SharedRounds {
-  readonly ended: PubSub.PubSub<RoundEnded>
-  readonly admissions: Semaphore.Semaphore
-}
-
-/**
- * The shared part, by the server's database client. A process resource is
- * built once per place (workspace and cwd), and a thread started with `cwd`
- * runs in another place than its starter, so a feed or a permit per build
- * would split a round's sender from its end. Every place's build reads the
- * one client its server opened, so the client names the server; a second
- * server (a test's) has its own. The map holds the client weakly: the shared
- * part goes with it.
- */
-const sharedByDatabase = new WeakMap<SqlClient.SqlClient, SharedRounds>()
-
-/** Two places' first builds race on the map; the first one makes the shared part. */
-const sharing = Semaphore.makeUnsafe(1)
-
-const sharedRounds = Effect.fn("ThreadRounds.shared")(function* (sql: SqlClient.SqlClient) {
-  return yield* Semaphore.withPermit(
-    sharing,
-    Effect.gen(function* () {
-      const found = sharedByDatabase.get(sql)
-      if (Predicate.isNotUndefined(found)) return found
-      const shared: SharedRounds = {
-        ended: yield* PubSub.unbounded<RoundEnded>(),
-        admissions: yield* Semaphore.make(1),
-      }
-      sharedByDatabase.set(sql, shared)
-      return shared
-    }),
-  )
-})
-
 /**
  * The round table, in the server's database. Threads run their own
  * migrations, recorded in their own table (`thread_migrations`), as the cell
@@ -500,7 +464,12 @@ const migrateThreadRounds = Migrator.make({})({
   table: "thread_migrations",
 }).pipe(Effect.mapError(storageError("Thread table migration failed")))
 
-/** The `thread_rounds` table. Building it runs the migrations it lacks. */
+/**
+ * The `thread_rounds` table, the feed of round ends and the admission permit.
+ * Building it runs the migrations it lacks. It is a server resource: a thread
+ * started with `cwd` runs in another place than its starter, and its round's
+ * sender and end must meet one feed and one permit.
+ */
 class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
   "@gent/extensions/src/threads/ThreadRounds",
 ) {
@@ -508,7 +477,8 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
     ThreadRounds,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const { ended, admissions } = yield* sharedRounds(sql)
+      const ended = yield* PubSub.unbounded<RoundEnded>()
+      const admissions = yield* Semaphore.make(1)
       yield* migrateThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
@@ -1679,13 +1649,10 @@ export class Threads extends Context.Service<Threads, ThreadsApi>()(
   "@gent/extensions/src/threads",
 ) {}
 
-/**
- * The round table and the service, built per place; every place's build
- * shares the server's round ends and admission permit (`sharedRounds`).
- */
+/** The round table and the service: one per server, every place's profile shares them. */
 const ThreadsResource = defineResource({
   id: "@gent/session-tools/threads",
-  scope: "process",
+  scope: "server",
   layer: Layer.effect(
     Threads,
     Effect.map(ThreadRounds, (rounds) => Threads.of(makeThreads(rounds))),
