@@ -387,7 +387,12 @@ interface ThreadRoundsService {
   }) => Effect.Effect<ReadonlyArray<RoundRow>, ThreadStorageError>
   /** Drops a round that is still open: its turn was refused, so it never ran. */
   readonly releaseRound: (round: string) => Effect.Effect<void, ThreadStorageError>
-  /** Drops the rounds a deleted session sent or ran. */
+  /**
+   * Drops the rounds a deleted session ran. A round it sent stays: the
+   * starter's thread owns it, and its handoffs still read and hear it. A
+   * deleted thread's own threads go with it, spawned below it, and their
+   * rounds with them.
+   */
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void, ThreadStorageError>
   /** Every round end this server marks, in order. In memory: a restart starts it empty. */
   readonly ended: PubSub.PubSub<RoundEnded>
@@ -696,8 +701,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
         removeSession: Effect.fn("ThreadRounds.removeSession")(
           function* (sessionId) {
             yield* sql`
-              DELETE FROM thread_rounds
-              WHERE starter_session_id = ${sessionId} OR session_id = ${sessionId}
+              DELETE FROM thread_rounds WHERE session_id = ${sessionId}
             `
           },
           Effect.mapError(storageError("Failed to remove the session's rounds")),
@@ -903,8 +907,9 @@ const wakeTargetOf = (round: RoundRow) =>
 
 /**
  * Where a round's end wakes its starter: the starter thread's current
- * session, so a starter that handed off reads it in its new session. The
- * branch is the one that sent the round while that session is still current.
+ * session, so a starter that handed off reads it in its new session, also
+ * once the session that sent it is deleted. The branch is the one that sent
+ * the round while that session is still current.
  */
 const starterPlace = Effect.fn("Threads.starterPlace")(function* (round: RoundRow) {
   const ctx = yield* ExtensionContext
@@ -912,7 +917,11 @@ const starterPlace = Effect.fn("Threads.starterPlace")(function* (round: RoundRo
     sessionId: SessionId.make(round.starter_session_id),
     branchId: BranchId.make(round.starter_branch_id),
   }
-  const sessions = yield* ctx.Session.listSessions({ thread: sent.sessionId })
+  const tree = yield* ctx.Session.listSessions({ thread: sent.sessionId })
+  // A deleted sender seeds no tree; its handoffs own the round, so the
+  // starter thread's sessions are read from the workspace by their key.
+  let sessions = tree
+  if (tree.length === 0) sessions = yield* ctx.Session.listSessions()
   const newest = sessions
     .filter((session) => sessionThread(session) === round.starter_thread)
     .toSorted(byCreation)

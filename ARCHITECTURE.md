@@ -910,6 +910,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     read with `Effect.serviceOption`, as delegate reads `Workspaces`) carries
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.
+    A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
+    it sent stay, since the starter's thread owns them and its handoffs read
+    and hear them.
   - The thread tools act for the caller's thread, not its session: after a
     handoff the new session owns what the older one started. `thread.list`
     reads the caller's thread tree (`listSessions({ thread })`: every session

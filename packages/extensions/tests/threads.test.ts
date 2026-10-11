@@ -939,6 +939,21 @@ const startWorker = (
     return decodeThread(started?.result)
   })
 
+/** The round read by `place` until `ready` holds. */
+const readRoundUntil = (
+  client: Client,
+  place: SessionKey,
+  round: string,
+  id: string,
+  ready: (text: string) => boolean,
+) =>
+  waitFor(
+    call(client, place, [["thread.round", id, { round }]]),
+    ([found]) => found?.failed === false && ready(textOf(found.result)),
+    8_000,
+    `round ${round} is read as ready`,
+  ).pipe(Effect.map(([found]) => found))
+
 // ── rounds: acceptance ──────────────────────────────────────────────────────
 
 describe("thread rounds", () => {
@@ -1283,6 +1298,36 @@ describe("thread round ownership", () => {
           expect(textOf(refused?.result)).toContain("queue full")
           const [listed] = yield* call(client, starter, [["thread.list", "list-full", {}]])
           expect(byThread(listed?.result)[impl.thread]?.openRound).toBeUndefined()
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+  it.live(
+    "deleting an older session of the starter's thread keeps the rounds it sent to a thread a newer session started",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* roundHarness()
+          const older = { sessionId, branchId }
+          const newer: SessionKey = yield* client.session.create({
+            parentSessionId: older.sessionId,
+            parentBranchId: older.branchId,
+            continueThread: true,
+          })
+          const impl = yield* startWorker(client, newer, "start-impl")
+          const [sent] = yield* call(client, older, [
+            ["thread.send", "send-old", { thread: impl.thread, message: "ECHO from the older" }],
+          ])
+          const round = decodeRound(sent?.result)
+          yield* readRoundUntil(client, newer, round.round, "read-ended", (text) =>
+            text.includes('"status":"ended"'),
+          )
+          yield* client.session.delete({ sessionId: older.sessionId })
+          const [read] = yield* call(client, newer, [
+            ["thread.round", "read-kept", { round: round.round }],
+          ])
+          expect(read?.failed).toBe(false)
+          expect(read?.result).toMatchObject({ status: "ended", text: "from the older" })
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
