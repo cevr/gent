@@ -569,9 +569,14 @@ an asker still holds it: every asker that holds it, or asks before the last of
 them lets go, shares its failure, and the first asker after that builds again.
 The reference and its release are taken in one step (`RcMap.get`), so no
 interrupt leaves a hold behind. A profile build closes the scopes it lets go
-of (a pass a later pass replaced, the whole profile when its build fails) only
-after the place's lock is let go, as a retired profile's, so an extension
-finalizer never runs under the lock.
+of (a hold that failed or was interrupted, a pass a later pass replaced, the
+whole profile when its build fails) only after the place's lock is let go, as
+a retired profile's, so letting go of a build never runs its finalizers under
+the lock. Each closes on its own: a finalizer that dies is logged and stops no
+other close, and fails no resolve. A build's own acquisition, and its rollback
+when that acquisition fails, still run while the resolve that awaits the build
+holds the place's lock, so a Resource must not resolve or reload its own place
+from those.
 
 A profile builds every extension's server Resources first, in resolution
 order. A server build reads the host's services only, so its key is its
