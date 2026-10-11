@@ -4,41 +4,51 @@ Replaces [tracks-extension.md](tracks-extension.md) (owner, 2026-10-10). The wor
 
 ## Goal
 
-The owner's loops (implementor and reviewer per unit, verdict-driven rounds, a gate, merges) run in gent with no orchestration extension. gent ships **primitives**; the orchestrator model **composes** them as cell programs, the way `@gent/workflows` are outcome prompts over cell bindings and files. Routing is code the model writes; judgment stays with the model. baton keeps running until stage 5 replaces it.
+The owner's loops (an implementor, a reviewer and a verifier per unit, verdict-driven rounds, a gate, merges) run in gent with no orchestration extension. gent ships **primitives**; the orchestrator model **composes** them in the cell kernel, the way `@gent/workflows` are outcome prompts over cell bindings and files. Routing is a state machine the model defines as data; judgment stays with the model. baton keeps running until stage 5 replaces it.
+
+Prime Intellect's Rust rewrite of Prime Agent (2026-10-09, <https://www.primeintellect.ai/blog/prime-agent-rust>) ran this shape with over 2,000 agents:
+
+- a root orchestrator that writes no product code;
+- a planner, an implementer in its own worktree, a reviewer on a different model in a separate context, and a verifier that builds and tests in a fresh sandbox;
+- failed review or verification goes back to the implementer with the findings; a merge needs both to pass.
+
+They are generalising it into "a factory of finite state machines, so workflows like this one can be defined once, reused, and updated". P3 is that factory.
 
 A track, once every primitive exists:
 
 ```js
-const impl = await tools.seat.open({
-  name: "impl",
-  model: "anthropic/claude-opus-5-5",
-  effort: "medium",
-  cwd: rift,
+await tools.machine.define({
+  name: "track",
+  seats: {
+    impl: { model: "anthropic/claude-opus-5-5", effort: "medium" },
+    rev: { model: "openai/gpt-6.1-sol", effort: "high" },
+  },
+  start: "implement",
+  states: {
+    implement: {
+      seat: "impl",
+      say: "Implement {{input.spec}}. Fix: {{review.findings}} {{verify.output}}",
+      next: "review",
+    },
+    review: {
+      seat: "rev",
+      say: "Review {{input.branch}} against {{input.spec}}",
+      on: { accepted: "verify", changes: "implement" },
+      maxVisits: 4,
+      exhausted: "decide",
+    },
+    verify: { run: "bun run gate", permit: "gate", on: { pass: "decide", fail: "implement" } },
+    decide: {
+      ask: "Merge {{input.branch}}? Review: {{review}}. Gate: {{verify}}",
+      on: { merge: "done", replan: "implement", drop: "done" },
+    },
+    done: { final: true },
+  },
 })
-const rev = await tools.seat.open({
-  name: "rev",
-  model: "openai/gpt-6.1-sol",
-  effort: "high",
-  cwd: rift,
-  account: "default",
-})
-let work = await tools.seat.turn({ seat: impl.seat, message: `Build round 1: ${spec}` })
-for (let round = 1; ; round++) {
-  const review = await tools.seat.turn({
-    seat: rev.seat,
-    message: `Review round ${round}`,
-    reply: "verdict: accepted | changes, findings[]",
-  })
-  if (review.reply?.verdict === "accepted") return review
-  if (round === 3) return tools.program.ask({ question: `Stuck after 3 rounds`, context: review })
-  work = await tools.seat.turn({
-    seat: impl.seat,
-    message: `Fix: ${JSON.stringify(review.reply.findings)}`,
-  })
-}
+const run = await tools.machine.start({ machine: "track", input: { spec, branch, cwd: rift } })
 ```
 
-`seat.turn` only resolves inside a durable program (P3). Until P3 lands, the same loop runs one step per cell: `seat.send` returns a round handle, the round's end wakes the orchestrator, and its next cell reads `seat.round` and decides. Both modes share P1 and P2.
+The orchestrator starts one run per unit, orders units by their dependencies, and answers `ask` states. Until P3 lands, the same loop runs one step per cell: `seat.send` returns a round handle, the round's end wakes the orchestrator, and its next cell reads `seat.round` and decides. Both modes share P1 and P2.
 
 ## Owner rules this design keeps
 
@@ -47,7 +57,7 @@ for (let round = 1; ; round++) {
 - Persisted formats change only additively.
 - One concern per file: `seats.ts`, `programs.ts`, each with section banners.
 - Child sessions cache 5 minutes unless their agent keeps the session cache: seats are the long-lived case and keep it.
-- Ambiguous side effects are never replayed (P3's reattach rule).
+- Ambiguous side effects are never replayed: a crashed command becomes an `ask` (P3).
 
 ## Primitives
 
@@ -55,10 +65,12 @@ for (let round = 1; ; round++) {
 
 A seat is a durable child session that takes many rounds.
 
-- **Agent `seat`**, registered by the extension: `promptCache: "session"`, and tools that deny `seat.*`, `program.*`, `delegate.*` and `thread.start` (as `CHILD_TOOL_DENIALS` does in `delegate.ts`). Builtin, so every cwd's profile knows it.
+- **Agent `seat`**, registered by the extension: `promptCache: "session"`, and tools that deny `seat.*` (except `seat.reply`), `machine.*`, `delegate.*` and `thread.start` (as `CHILD_TOOL_DENIALS` does in `delegate.ts`). Builtin, so every cwd's profile knows it.
 - **`seat.open({ name, model, effort?, cwd?, instructions?, tools?, account? })`** returns `{ seat, sessionId, branchId }` at admission. It calls `ctx.Session.create` with `modelId`, `reasoningLevel`, `admission: { agent: "seat", runSpec: { overrides: { systemPromptAddendum, tools } } }`, the cwd, and `requestId: "seat:<toolCallId>"`, which is deterministic inside a cell. It sends no first message. `account` waits for P5. A row goes in `seats`.
 - **`seat.send({ seat, message, reply? })`** returns `{ round }` at admission, with `delivery: "turn"`, `commandId: "seat-round:<toolCallId>"` and `completion: "admission"`. A seat runs one round at a time: a send while a round is open is refused, and the refusal names that round. Only the session that opened a seat may send to it.
 - **Round end**: a `turnAfter` hook matches `messageId` to an open round's commandId. It records `{ text, reply, interrupted, streamFailed, usage, endedAt }` in `seat_rounds`, then queues `{ delivery: "queue", wake: true, sourceId: "seat-round-end:<round>" }` to the opener's branch with a one-line summary and the round id. `loopOpen` reconciles a round that ended while the server was down, by the same `TurnCompleted` fold delegate's `turnEnd` uses.
+- **The `Seats` service** (a Tag, as `Workspaces` is) carries `open`, `send({ ..., notify })`, `round` and `close`, and publishes each round's end to subscribers in the process. The tools call it with `notify: "owner"`; machines call it with `notify: "none"`.
+- **A retry comes before a refusal**: `seat.open`, `seat.send` and `seat.close` first look up what they already admitted under the same request id and return that handle. Only then does the busy-seat refusal apply, so a retried send never refuses itself.
 - **`seat.round({ round })`** returns the stored result. **`seat.list()`** lists the opener's seats with each seat's open round. **`seat.close({ seat })`** stops an open round and marks the seat closed. The session stays readable.
 - Storage: a process Resource owns `seats` and `seat_rounds` (`CREATE TABLE IF NOT EXISTS`, as `exec-tools.ts` does).
 
@@ -67,19 +79,41 @@ A seat is a durable child session that takes many rounds.
 - **Structured reply**: `seat.send`'s optional `reply` describes the value the round must return. For that round the seat gets the tool `seat.reply({ value })`. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
 - **Usage**: every round records its usage and cost, so a program can budget by them.
 
-### P3. Durable programs: `program.*` (design gate before building)
+### P3. Machines: `@gent/machines`, `packages/extensions/src/machines.ts`
 
-A program is cell source that runs outside any turn, survives deadlines, worker faults and restarts, and wakes the model only through `program.ask` or when it finishes.
+A machine is a state machine defined as data. A host interpreter runs it outside any turn, with persisted state and event-driven steps. Counsel's design gate (2026-10-11, `/tmp/counsel/gent-kernel-orch-6e040dec/20261011-002120-claude-to-codex-df8a77/codex.md`) rejected replaying program source (the earlier option B) for five blockers:
 
-Recommended shape, the survey's option B over option A's journal:
+- content keys hide divergence instead of detecting it;
+- re-evaluating full Bun source repeats effects outside the journal;
+- a call with no owning turn is refused (`ToolRunner`, `packages/core/src/runtime/tools.ts:1100`);
+- a round's wake starts an owner model turn, so it cannot double as the program's resume signal;
+- an answer keyed only by program cannot reject a stale retry.
 
-- `program.start({ source, name })` returns a handle at admission. A branch Resource runs the program in its own worker. Its host calls go through a journal, `program_operations`, keyed by a **content key**: tool id, canonical input, and that pair's occurrence number. A content key survives `Promise.all` reordering; reply order does not.
-- **Replay**: after a fault or restart, the runner re-evaluates the source from the start. A completed operation answers from the journal and runs nothing. A `Started` operation reattaches only through a tool that declares itself idempotent on its call id (`seat.send`, `seat.open`, `delegate.start`). Any other `Started` operation fails the program with `Interrupted` and wakes the model. Ambiguous effects are never replayed.
-- **Determinism**: the program receives a journaled `now()` and `random()`, and the guideline asks for pure code between tool calls. Divergence fails fast, by the existing immutability check: same key, different binding.
-- **`seat.turn`** is `seat.send`, then a journaled wait on the round's end. A program waiting on a round holds no turn, and the runner re-arms the wait on `loopOpen`.
-- **`program.ask({ question, context })`** queues a wake message to the owning branch and suspends. The model answers with `program.answer({ program, value })`, which resolves the journaled ask on replay. **`program.list`** and **`program.stop`** complete the set.
-- **Open question for the gate**: turn-free host authority. Today a host call needs the turn's profile, bindings and the assistant message (the FK). A program needs a host whose bindings come from the branch profile at the time of the call, with receipts keyed to the program rather than to a message.
-- **Rejected**: replaying cells in place inside a turn (option A), because it holds the turn for hours, breaking "children wake, never block". The reducer `step(state, event)` (option C) keeps the no-replay rule but is not the natural `await` loop the model writes. It stays the fallback if the gate rejects B.
+A machine avoids each of them:
+
+- **Definition**: plain data, checked by an Effect Schema, with no functions.
+  - `seats`: a name mapped to a P1 seat spec.
+  - `states`, each one of four kinds:
+    - `seat`: a round. Its `say` template is filled from the run's context, and the round's `seat.reply` value names the transition: `next` must be one of the state's `on` keys.
+    - `run`: a command spawned by the extension, optionally under a P4 permit. Exit 0 takes `pass`, anything else `fail`, and its output tail is saved into the context.
+    - `ask`: queues a question to the owner with the allowed answers, and waits.
+    - `final`.
+  - `maxVisits` with `exhausted` caps a loop. `fresh: true` on a seat state opens a new seat session for each visit: Prime's verifier, with no memory of earlier rounds.
+  - A template reads `{{input.*}}` and `{{<state>.*}}`, the last reply saved under each state's name. There is no expression language: a branch the data cannot express is an `ask`.
+  - `machine.define` writes the definition to `.gent/machines/<name>.json` in the project, so machines are defined once, reviewed, reused and edited like code. A run snapshots its definition when it starts.
+- **Execution**: state C with no source replay.
+  - `machine_runs`: the current state, the context as JSON, visit counts, status, and the pending action.
+  - `machine_steps`: an append-only log, from which status and audit read.
+  - Before dispatching, a step records its next action. Recovery reads that action's receipt:
+    - a seat round recovers by its request id, since P1 makes `seat.send` idempotent on it;
+    - a command that was running at a crash is ambiguous and is never rerun: the run moves to `ask` with "interrupted".
+- **Authority**: a machine calls no tools. It drives seats through the `Seats` service with `notify: "none"`, so a round's end moves the machine and starts no owner turn. It spawns commands through the platform's `ChildProcessSpawner` in the run's cwd. So it needs no turn-free tool authority, and approvals do not arise. The machine's power is exactly what its states declare.
+- **Ask and answer**: `machine.answer({ run, askId, choice, note? })`. The ask is persisted before it is delivered, through an outbox with a deduplicated `sourceId`. An identical retry succeeds; a different answer to the same ask, or an answer to an ask that has moved on, is refused. The answer returns at admission, and the step runs after it.
+- **Liveness** (Counsel blocker 4, verified: gent has no server-start hook, and an idle loop is put to sleep after one minute):
+  - While a run has an open action it holds the owner branch resident, through `Session.holdResident`.
+  - After a restart, the extension activates only its own active runs. That needs one generic core seam, `BranchActivation.activate({ sessionId, branchId })` or an extension start hook. Stage 3's design review picks one. A sweep of every unopened session stays rejected.
+- **Tools**: `machine.define`, `machine.start({ machine, input })` (returns `{ run }` at admission), `machine.answer`, `machine.status({ run })`, `machine.list`, `machine.stop`. The owner is woken only by an `ask`, a run reaching `final`, or a run failing.
+- **Natural `await` code**: deferred. If the owner wants it later, it compiles to these persisted states, since a snapshot cannot hold an async stack (`cell-value.ts:845`).
 
 ### P4. Named permits
 
@@ -107,12 +141,16 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a send to a busy seat is refused;
    - the gate is green.
 2. **P5 accounts.** Done when an imported `personal` slot resolves from the keychain service, a seat with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
-3. **P3 design gate, then build.** A design-mode counsel review of P3 comes first. Done when a program survives a server restart in the middle of `seat.turn` with no rerun of a completed round, when an ask wakes the model, and when its answer resumes the program.
+3. **P3 machines.** A design-mode counsel review of the core activation seat and the schema comes first. Done when:
+   - a track machine runs implement, review with changes, implement, review accepted, verify and decide on fake models, with no owner turn between rounds;
+   - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
+   - a command interrupted by a crash moves the run to `ask`;
+   - a stale or conflicting answer is refused.
 4. **P4 and P6.**
 5. **The library and baton's retirement.** An `/orchestrate` outcome prompt in `@gent/workflows` and the track program as a cell snippet. One real unit runs end to end, with a Codex pane under baton as a shadow reviewer for the first two units.
 
 ## Risks
 
 - R1. Reviewer quality on gent's OpenAI path versus Codex CLI: the shadow run in stage 5 measures it.
-- R2. Program determinism: the model writes the program. Divergence must fail loudly and wake the model, never guess.
-- R3. Laziness: a branch nobody opens never runs `loopOpen`, so a program waiting on a round must also be re-armed by the round's own wake to its owner.
+- R2. Expressiveness: a data machine cannot express every branch. The escape is an `ask` to the orchestrator, which costs a model turn. Watch how often real runs take it.
+- R3. Liveness after a restart depends on the core activation seam (P3). Until it lands, a run resumes when its owner's loop next opens.
