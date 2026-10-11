@@ -134,6 +134,7 @@ import {
   captureProviderLogin,
   type ProviderLoginTarget,
   completeProviderAuth,
+  CredentialPlacement,
   DecisionModelResolver,
   listAuthMethods,
   listAuthProviders,
@@ -2299,6 +2300,8 @@ export const createDependencies = (config: DependenciesConfig) => {
       modelRegistryLive,
       modelResolverLive,
       DecisionModelResolver.Live,
+      // One usage table per server: accounts are not per workspace.
+      CredentialPlacement.Live,
       FileLockService.layer,
       AgentLoopSessionGovernance.Live,
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),

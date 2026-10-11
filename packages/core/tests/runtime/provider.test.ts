@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   ConfigProvider,
   Context,
   Deferred,
@@ -54,7 +55,10 @@ import {
   listAuthMethods,
   limitResetAt,
   listCatalogProviders,
+  makeCredentialPlacement,
   makeExtensionModels,
+  rankPlacement,
+  requestCredentialOrder,
   retryProviderCall,
   listModelCatalog,
   type LoadedModelCatalog,
@@ -4967,5 +4971,206 @@ describe("named provider resolution", () => {
       yield* resolveModel({ model: "slot-env/model" }).pipe(Effect.provide(layer))
       expect(dispatched).toBe(true)
     }).pipe(Effect.timeout("5 seconds")),
+  )
+})
+
+// ── credential placement ────────────────────────────────────────────────────
+
+describe("credential placement", () => {
+  const a = CredentialSlot.make("a")
+  const b = CredentialSlot.make("b")
+  const c = CredentialSlot.make("c")
+  const row = (slot: CredentialSlot, load: number, live: number, held = false) => ({
+    slot,
+    load,
+    live,
+    held,
+  })
+
+  bunTest(
+    "placement takes the least-used eligible account, counting live sessions, and keeps the preferred one within one session of it",
+    () => {
+      // Four sessions spent $8: a unit is $2. a scores 6/2 + 1 = 4, b 2/2 + 0 = 1.
+      expect(
+        rankPlacement({
+          slots: [row(a, 6, 1), row(b, 2, 0)],
+          sessions: 4,
+          preferred: Option.none(),
+        }),
+      ).toEqual([b, a])
+      // Preferred within one session of the lowest: it stays.
+      expect(
+        rankPlacement({
+          slots: [row(a, 4, 0), row(b, 2, 0)],
+          sessions: 2,
+          preferred: Option.some(a),
+        }),
+      ).toEqual([a, b])
+      // More than one session above: the lowest wins.
+      expect(
+        rankPlacement({
+          slots: [row(a, 6, 1), row(b, 2, 0)],
+          sessions: 4,
+          preferred: Option.some(a),
+        }),
+      ).toEqual([b, a])
+      // Live sessions count before their usage lands: a burst spreads.
+      expect(
+        rankPlacement({
+          slots: [row(a, 0, 3), row(b, 0, 1)],
+          sessions: 0,
+          preferred: Option.none(),
+        }),
+      ).toEqual([b, a])
+      // Ties go by pool order; an empty history scores live sessions alone.
+      expect(
+        rankPlacement({
+          slots: [row(c, 0, 0), row(a, 0, 0), row(b, 0, 0)],
+          sessions: 0,
+          preferred: Option.none(),
+        }),
+      ).toEqual([c, a, b])
+      // A held account is never chosen, and walks last.
+      expect(
+        rankPlacement({
+          slots: [row(a, 0, 0, true), row(b, 9, 2), row(c, 3, 0)],
+          sessions: 3,
+          preferred: Option.some(a),
+        }),
+      ).toEqual([c, b, a])
+      // With none eligible, the preferred account.
+      expect(
+        rankPlacement({
+          slots: [row(a, 0, 0, true), row(b, 0, 0, true)],
+          sessions: 0,
+          preferred: Option.some(b),
+        }),
+      ).toEqual([b, a])
+    },
+  )
+
+  it.effect("an account refused until its reset is not placed on before then", () =>
+    Effect.gen(function* () {
+      const placement = yield* makeCredentialPlacement(Option.none())
+      const request = {
+        provider: "spread",
+        pool: [a, b] as const,
+        preferred: Option.none<CredentialSlot>(),
+        starter: Option.none<SessionId>(),
+        left: new Set<CredentialSlot>(),
+        ttlMs: 1_000,
+      }
+      const place = (session: string) =>
+        Effect.map(
+          placement.place({ ...request, sessionId: SessionId.make(session) }),
+          (walk) => walk[0],
+        )
+      // b has spent, a has not: a is the least used.
+      yield* placement.noteStep({
+        provider: "spread",
+        slot: b,
+        sessionId: SessionId.make("spent"),
+        costUsd: Option.some(5),
+        ttlMs: 1,
+      })
+      yield* TestClock.adjust("1 second")
+      expect(yield* place("first")).toBe(a)
+      // A refusal that names its reset holds a until then.
+      const now = yield* Clock.currentTimeMillis
+      yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.some(now + 600_000) })
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* place("held-reset")).toBe(b)
+      yield* TestClock.adjust("597 seconds")
+      expect(yield* place("held-reset-again")).toBe(b)
+      yield* TestClock.adjust("1 second")
+      expect(yield* place("after-reset")).toBe(a)
+      // One that names none holds it 5 minutes.
+      yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.none() })
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* place("held-default")).toBe(b)
+      yield* TestClock.adjust("298 seconds")
+      expect(yield* place("after-default")).toBe(a)
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test()))),
+  )
+
+  it.scopedLive(
+    "a spread sign-in walks its pool before the rest of its authOrder, and conflicting authSpread entries fail that sign-in only",
+    () =>
+      Effect.gen(function* () {
+        const owner = makeProvider("spread-owner")
+        const alias = { ...makeProvider("spread-alias"), credentialFrom: owner.id }
+        const other = makeProvider("spread-other")
+        const resolved = resolveExtensions([makeExt("spread", [owner, alias, other])])
+        const fallback = CredentialSlot.make("fallback")
+        const registryOf = (config: ProviderConfig) =>
+          ExtensionRegistry.of({
+            getResolved: () => resolved,
+            providerConfig: Effect.succeed(config),
+          })
+        const orderOf = (
+          config: ProviderConfig,
+          model: string,
+          pin: Option.Option<CredentialSlot> = Option.none(),
+        ) =>
+          requestCredentialOrder({ modelId: ModelId.make(model) }, registryOf(config), pin).pipe(
+            Effect.map(Option.map((order) => order.slots)),
+          )
+        const spread: ProviderConfig = {
+          providers: { "spread-owner": { authOrder: [a, fallback], authSpread: [b, a] } },
+        }
+        // Unpinned: the pool first, then what the order adds.
+        expect(yield* orderOf(spread, "spread-owner/model")).toEqual(Option.some([b, a, fallback]))
+        // Through the alias, to the owner's pool.
+        expect(yield* orderOf(spread, "spread-alias/model")).toEqual(Option.some([b, a, fallback]))
+        // Pinned: the pin alone.
+        expect(yield* orderOf(spread, "spread-owner/model", Option.some(fallback))).toEqual(
+          Option.some([fallback]),
+        )
+        // No pool: the plain order.
+        expect(
+          yield* orderOf(
+            { providers: { "spread-owner": { authOrder: [a, b] } } },
+            "spread-owner/model",
+          ),
+        ).toEqual(Option.some([a, b]))
+        // An alias and its owner that name different pools fail that sign-in alone.
+        const conflicting: ProviderConfig = {
+          providers: {
+            "spread-owner": { authSpread: [a, b] },
+            "spread-alias": { authSpread: [b, a] },
+          },
+        }
+        const failed = yield* Effect.exit(orderOf(conflicting, "spread-owner/model"))
+        expect(
+          Exit.isFailure(failed) &&
+            Option.exists(
+              Cause.findErrorOption(failed.cause),
+              (error) =>
+                Schema.is(ProviderAuthError)(error) &&
+                error.message.includes("Conflicting credential orders"),
+            ),
+        ).toBe(true)
+        expect(yield* orderOf(conflicting, "spread-other/model")).toEqual(
+          Option.some([DEFAULT_CREDENTIAL_SLOT]),
+        )
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const rows = yield* listAuthProviders([]).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              ModelResolver.Live,
+              Layer.mergeAll(
+                Layer.succeed(Auth, auth),
+                Layer.succeed(ExtensionRegistry, registryOf(conflicting)),
+                fixtureModelCatalogSource,
+              ),
+            ),
+          ),
+        )
+        expect(rows.find((entry) => entry.provider === owner.id)?.orderConflict).toEqual([
+          "spread-alias",
+          "spread-owner",
+        ])
+        expect(rows.find((entry) => entry.provider === other.id)?.orderConflict).toBeUndefined()
+      }).pipe(Effect.timeout("5 seconds")),
   )
 })
