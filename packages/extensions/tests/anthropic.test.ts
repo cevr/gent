@@ -29,6 +29,7 @@ import {
   type Crypto,
   FileSystem,
   Deferred,
+  type Duration,
   Effect,
   Exit,
   Fiber,
@@ -40,6 +41,7 @@ import {
   Ref,
   Predicate,
   Schema,
+  Semaphore,
   Sink,
   Stream,
   SynchronizedRef,
@@ -81,6 +83,8 @@ import {
   type ProviderHints,
   SessionId,
   ProviderAuthInfo,
+  type LockSourceRotation,
+  type PendingRotation,
   type TurnNotice,
 } from "@gent/core/extensions/api"
 import { monitorMessage, WakeEntry, wakeTurnNotice } from "../src/wake.js"
@@ -3923,6 +3927,8 @@ describe("Anthropic reset time", () => {
 /** `sha256("/nonexistent/gent-link/claude-personal")` starts `60475e44`: the service Claude Code names for it. */
 const LINKED_DIRECTORY = "/nonexistent/gent-link/claude-personal"
 const LINKED_SERVICE = "Claude Code-credentials-60475e44"
+/** The whole SHA-256 of `LINKED_DIRECTORY`: the key gent's store holds its rotation under. */
+const LINKED_KEY = "60475e44c7992da8758ab6b20d184256ebbae977bbd313d882c36f8adb6d9052"
 const PRIMARY_SERVICE = "Claude Code-credentials"
 const TOKEN_URL = "https://claude.ai/v1/oauth/token"
 const LINKED_SLOT = CredentialSlot.make("personal")
@@ -3981,6 +3987,7 @@ const fakeKeychain = (initial: ReadonlyArray<readonly [string, KeychainEntry]>) 
   let refuseWrites = false
   let locked = false
   let hideAccount = false
+  let onWrite: (refused: boolean) => void = () => {}
   const answer = (command: string, args: ReadonlyArray<string>) => {
     if (command !== "security") return processAnswer(1, "", `${command}: refused by the test`)
     if (locked)
@@ -3998,7 +4005,9 @@ const fakeKeychain = (initial: ReadonlyArray<readonly [string, KeychainEntry]>) 
       return processAnswer(0, `attributes:\n${account}    "svce"<blob>="${service}"\n`)
     }
     if (args[0] === "add-generic-password") {
-      if (refuseWrites) return processAnswer(1, "", "write refused")
+      const refused = refuseWrites
+      onWrite(refused)
+      if (refused) return processAnswer(1, "", "write refused")
       const account = flagValue(args, "-a")
       const next = { account, blob: flagValue(args, "-w") }
       const index = held.findIndex((entry) => entry.account === account)
@@ -4033,8 +4042,15 @@ const fakeKeychain = (initial: ReadonlyArray<readonly [string, KeychainEntry]>) 
     lock: () => {
       locked = true
     },
+    unlock: () => {
+      locked = false
+    },
     hideAccount: () => {
       hideAccount = true
+    },
+    /** Run `hook` at each `add-generic-password`, told whether the write is refused. */
+    onWrite: (hook: (refused: boolean) => void) => {
+      onWrite = hook
     },
   }
 }
@@ -4047,12 +4063,52 @@ const writesOf = (calls: ReadonlyArray<ReadonlyArray<string>>) =>
 const callsOn = (calls: ReadonlyArray<ReadonlyArray<string>>, service: string) =>
   calls.filter((call) => call.includes(service))
 
+/**
+ * gent's credential store as a linked slot reaches it: the rotations it holds
+ * per source, under one lock, as `Auth.Test` keeps them. `failWrites()` makes
+ * the store refuse to hold or forget one.
+ */
+const rotationStore = () => {
+  const held = new Map<string, PendingRotation>()
+  const lock = Semaphore.makeUnsafe(1)
+  let failWrites = false
+  const lockSourceRotation: LockSourceRotation = (source) => (use) =>
+    use({
+      read: Effect.sync(() => Option.fromUndefinedOr(held.get(source))),
+      write: (next) =>
+        Effect.suspend(() => {
+          if (failWrites) {
+            return Effect.fail(new ProviderAuthError({ message: "the store refused the write" }))
+          }
+          if (Option.isSome(next)) held.set(source, next.value)
+          else held.delete(source)
+          return Effect.void
+        }),
+    }).pipe(lock.withPermits(1))
+  return {
+    held,
+    lockSourceRotation,
+    failWrites: () => {
+      failWrites = true
+    },
+  }
+}
+type RotationStore = ReturnType<typeof rotationStore>
+
+/**
+ * The credential store of the process a test runs: each `linkedDriver` starts
+ * a process, with a store of its own, and `linkedSignIn` reads that store as a
+ * profile's sign-ins do.
+ */
+let processStore: RotationStore = rotationStore()
+
 /** The driver over `platform` with `spawner` as its only process host, as setup builds it. */
 const linkedDriver = (
   platform: "darwin" | "linux",
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) =>
   Effect.gen(function* () {
+    processStore = rotationStore()
     const services = Context.add(
       yield* driverServices(
         AnthropicPlatform.of({ platform, home: "/nonexistent/gent-link-home", env: {} }),
@@ -4074,13 +4130,19 @@ const linkedSignIn = (
   directory: string,
   signedInAt = 1,
   slot: CredentialSlot = LINKED_SLOT,
+  store: RotationStore = processStore,
 ): ProviderAuthInfo =>
   ProviderAuthInfo.cases.Oauth.make({
     slot,
     signedInAt,
     metadata: { directory },
     update: () => Effect.die(new Error("a linked slot never reads the gent store")),
+    lockSourceRotation: store.lockSourceRotation,
   })
+
+/** The access token of each rotation `store` holds; empty when every source is synced. */
+const heldAccess = (store: RotationStore) =>
+  [...store.held.values()].map((held) => held.rotation.access)
 
 /** The token endpoint rotates a refresh token; `during` runs while the refresh is in flight. */
 const rotatingEndpoint =
@@ -4101,13 +4163,15 @@ const rotatingEndpoint =
 
 /**
  * The token endpoint numbering each rotation it hands out
- * (`fake-rotated-1-access`, then `-2`), across every request it answers.
- * `refuseNext()` makes the next messages request answer 401, as a revoked
- * access token does.
+ * (`fake-rotated-1-access`, then `-2`), across every request it answers. A
+ * refresh token is single-use, as the real endpoint's is: one it already
+ * spent is refused `invalid_grant`. `refuseNext()` makes the next messages
+ * request answer 401, as a revoked access token does.
  */
 const numberedEndpoint = () => {
   let rotations = 0
   let unauthorized = 0
+  const spent = new Set<string>()
   const respond: FakeResponder = (request) => {
     if (request.url !== TOKEN_URL) {
       if (unauthorized > 0) {
@@ -4116,6 +4180,11 @@ const numberedEndpoint = () => {
       }
       return anthropicHappyResponse()
     }
+    const token = refreshTokenOf(request)
+    if (spent.has(token)) {
+      return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
+    }
+    spent.add(token)
     rotations += 1
     return {
       status: 200,
@@ -4525,7 +4594,7 @@ describe("linked Claude Code write-back", () => {
   )
 
   it.scopedLive(
-    "a failed write-back leaves the keychain entry untouched and serves the rotated token from memory",
+    "a failed write-back leaves the keychain entry untouched and holds the rotation in gent's store, keyed by the directory",
     () =>
       Effect.gen(function* () {
         const original = { account: "alice", blob: claudeBlob("fake-expired", 0) }
@@ -4536,8 +4605,11 @@ describe("linked Claude Code write-back", () => {
         // The write was tried, and refused: the entry is as it was.
         expect(keychain.calls.filter((call) => call[1] === "add-generic-password").length).toBe(1)
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([original])
-        // The endpoint spent the old refresh token: the rotation is kept in
-        // memory and serves, and no second refresh spends it again.
+        // The endpoint spent the old refresh token: the rotation is held in
+        // gent's store under the directory's whole digest, with the base it
+        // replaced, and serves; no second refresh spends it again.
+        expect([...processStore.held.keys()]).toEqual([LINKED_KEY])
+        expect(heldAccess(processStore)).toEqual(["fake-rotated-access"])
         expect(sent.authorization).toBe("Bearer fake-rotated-access")
         const again = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
         expect(again.authorization).toBe("Bearer fake-rotated-access")
@@ -4667,6 +4739,8 @@ describe("linked Claude Code write-back", () => {
         expect(
           keychain.entries.get(LINKED_SERVICE)?.map((entry) => entry.blob.includes("rotated-2")),
         ).toEqual([true])
+        // Both rotations landed: the store holds nothing beyond the source.
+        expect(heldAccess(processStore)).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
@@ -4726,6 +4800,586 @@ describe("linked Claude Code write-back", () => {
         expect(writesOf(keychain.calls)).toEqual([])
         expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+// ── the linked rotation, transition by transition ───────────────────────────
+
+/** A Claude Code login blob with exactly these tokens. */
+const loginBlob = (access: string, refresh: string, expiresAt: number) =>
+  encodeExternalJson({
+    claudeAiOauth: {
+      accessToken: access,
+      refreshToken: refresh,
+      expiresAt,
+      subscriptionType: "max",
+    },
+  })
+
+/**
+ * A darwin link whose first refresh spent `fake-expired`'s token and could not
+ * write `fake-rotated-1` back: gent's store holds it, on the expired login's base.
+ */
+const heldAfterRefusedWrite = Effect.gen(function* () {
+  const original = { account: "alice", blob: claudeBlob("fake-expired", 0) }
+  const keychain = fakeKeychain([[LINKED_SERVICE, original]])
+  keychain.refuseWrites()
+  const endpoint = numberedEndpoint()
+  const driver = yield* linkedDriver("darwin", keychain.spawner)
+  const store = processStore
+  const first = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+  expect(first.refreshTokens).toEqual(["fake-expired-refresh"])
+  expect(first.authorization).toBe("Bearer fake-rotated-1-access")
+  expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+  const held = [...store.held.values()][0]
+  if (Predicate.isUndefined(held)) return yield* Effect.die("no rotation held")
+  return { keychain, endpoint, driver, store, original, held }
+})
+
+/** A responder's answer, as an effect. */
+const answerOf = (answer: ReturnType<FakeResponder>) => {
+  if (Effect.isEffect(answer)) return answer
+  return Effect.succeed(answer)
+}
+
+/** `respond`'s answer to a token request, after `delay`: two holders' refreshes overlap. */
+const slowTokenEndpoint =
+  (respond: FakeResponder, delay: Duration.Input): FakeResponder =>
+  (request, call) => {
+    if (request.url !== TOKEN_URL) return respond(request, call)
+    return Effect.sleep(delay).pipe(Effect.flatMap(() => answerOf(respond(request, call))))
+  }
+
+describe("linked rotation: reads", () => {
+  it.scopedLive(
+    "a blob with no claudeAiOauth is a sign-out: the slot has no login and nothing is spent",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: encodeExternalJson({ mcpOAuth: {} }) }],
+        ])
+        const endpoint = numberedEndpoint()
+        const sent: Array<string> = []
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const failure = yield* resolveFailure(driver, linkedSignIn(LINKED_DIRECTORY), (request) => {
+          if (request.url === TOKEN_URL) sent.push(refreshTokenOf(request))
+          return endpoint.respond(request, 0)
+        })
+        expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
+          Option.some("Unavailable"),
+        )
+        expect(sent).toEqual([])
+        expect(writesOf(keychain.calls)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a blob that does not parse is unreadable, not a sign-out: the failure names the source, may pass, and spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([[LINKED_SERVICE, { account: "alice", blob: "{torn" }]])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const result = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          numberedEndpoint().respond,
+        )
+        expect(result.resolveFailed).toBe(false)
+        expect(
+          Option.exists(
+            result.request,
+            (text) =>
+              text.includes(`Claude Code's login on ${LINKED_DIRECTORY} could not be read`) &&
+              text.includes("does not parse") &&
+              text.includes("no token was spent"),
+          ),
+        ).toBe(true)
+        expect(result.sent).toEqual([])
+        expect(writesOf(keychain.calls)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a locked keychain after the cache lifetime still serves the trusted cached login, and spends nothing",
+    () =>
+      runWithTestClock(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const keychain = fakeKeychain([
+            [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-current", now + 3600000) }],
+          ])
+          const endpoint = numberedEndpoint()
+          const driver = yield* linkedDriver("darwin", keychain.spawner)
+          const warm = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+          expect(warm.authorization).toBe("Bearer fake-current")
+          keychain.lock()
+          yield* TestClock.adjust("31 seconds")
+          const reads = callsOn(keychain.calls, LINKED_SERVICE).length
+          const later = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+          // The lifetime lapsed, so the source was read, and it proved nothing.
+          expect(callsOn(keychain.calls, LINKED_SERVICE).length > reads).toBe(true)
+          expect(later.authorization).toBe("Bearer fake-current")
+          expect(later.refreshTokens).toEqual([])
+        }),
+      ).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a held rotation serves while the keychain is locked, stays held, and spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, endpoint, store } = yield* heldAfterRefusedWrite
+        keychain.lock()
+        // A new link (a new cell) reads the source first.
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY, 2), endpoint.respond)
+        expect(sent.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(sent.refreshTokens).toEqual([])
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a held rotation the source already holds is synced: nothing is written and it serves",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, endpoint, store, held } = yield* heldAfterRefusedWrite
+        // Another holder landed the rotation meanwhile.
+        yield* keychain.write(LINKED_SERVICE, {
+          account: "alice",
+          blob: loginBlob(held.rotation.access, held.rotation.refresh, held.rotation.expires),
+        })
+        const writes = writesOf(keychain.calls).length
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY, 2), endpoint.respond)
+        expect(sent.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(sent.refreshTokens).toEqual([])
+        expect(writesOf(keychain.calls).length).toBe(writes)
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a new login Claude Code wrote over the spent one wins: it serves, the rotation is dropped, nothing is written",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, endpoint, store } = yield* heldAfterRefusedWrite
+        const now = yield* Clock.currentTimeMillis
+        const theirs = { account: "alice", blob: claudeBlob("fake-claude-code", now + 3600000) }
+        yield* keychain.write(LINKED_SERVICE, theirs)
+        keychain.allowWrites()
+        const writes = writesOf(keychain.calls).length
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY, 2), endpoint.respond)
+        expect(sent.authorization).toBe("Bearer fake-claude-code")
+        expect(sent.refreshTokens).toEqual([])
+        expect(writesOf(keychain.calls).length).toBe(writes)
+        expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a sign-out Claude Code wrote while a rotation is held drops it: the slot has no login, and nothing is recreated",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, store } = yield* heldAfterRefusedWrite
+        keychain.allowWrites()
+        keychain.entries.delete(LINKED_SERVICE)
+        const writes = writesOf(keychain.calls).length
+        const failure = yield* resolveFailure(driver, linkedSignIn(LINKED_DIRECTORY, 2))
+        expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
+          Option.some("Unavailable"),
+        )
+        expect(writesOf(keychain.calls).length).toBe(writes)
+        expect(keychain.entries.has(LINKED_SERVICE)).toBe(false)
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked rotation: refreshes", () => {
+  it.scopedLive("a synced refresh holds the rotation before it writes it back", () =>
+    Effect.gen(function* () {
+      const keychain = fakeKeychain([
+        [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+      ])
+      const driver = yield* linkedDriver("darwin", keychain.spawner)
+      const store = processStore
+      const heldAtWrite: Array<ReadonlyArray<string>> = []
+      keychain.onWrite(() => {
+        heldAtWrite.push(heldAccess(store))
+      })
+      const sent = yield* sendThrough(
+        driver,
+        linkedSignIn(LINKED_DIRECTORY),
+        numberedEndpoint().respond,
+      )
+      expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+      expect(heldAtWrite).toEqual([["fake-rotated-1-access"]])
+      // It landed: the store holds nothing beyond the source.
+      expect(heldAccess(store)).toEqual([])
+      expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a store that cannot hold the rotation does not stop its write-back, which lands",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        processStore.failWrites()
+        const sent = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          numberedEndpoint().respond,
+        )
+        expect(sent.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a held rotation is refreshed with its own token even while the source is unreadable, and its successor keeps the base",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, endpoint, store, held } = yield* heldAfterRefusedWrite
+        keychain.lock()
+        endpoint.refuseNext()
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+        // Only gent holds the rotation's token; the source's is never sent again.
+        expect(sent.refreshTokens).toEqual(["fake-rotated-1-refresh"])
+        expect(sent.authorizations).toEqual([
+          "Bearer fake-rotated-1-access",
+          "Bearer fake-rotated-2-access",
+        ])
+        expect([...store.held.values()].map((next) => [next.rotation.access, next.base])).toEqual([
+          ["fake-rotated-2-access", held.base],
+        ])
+        // The keychain opens: the next read writes the successor over the expired login.
+        keychain.unlock()
+        keychain.allowWrites()
+        const after = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 2),
+          endpoint.respond,
+        )
+        expect(after.authorization).toBe("Bearer fake-rotated-2-access")
+        expect(after.refreshTokens).toEqual([])
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-2-refresh")
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a held rotation the endpoint refuses is Rejected and stays held, so the spent source token is never sent; Claude Code's next login clears it",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, store } = yield* heldAfterRefusedWrite
+        let unauthorized = 1
+        const refusing: FakeResponder = (request) => {
+          if (request.url === TOKEN_URL) {
+            return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
+          }
+          if (unauthorized > 0) {
+            unauthorized -= 1
+            return { status: 401, body: encodeExternalJson({ error: "unauthorized" }) }
+          }
+          return anthropicHappyResponse()
+        }
+        const result = yield* sendExpectingFailure(driver, linkedSignIn(LINKED_DIRECTORY), refusing)
+        // Every token sent is the rotation's: the expired login's, which gent
+        // spent, is never sent again, by this refresh or the retries after it.
+        expect(result.sent.length > 0).toBe(true)
+        expect(result.sent.every((token) => token === "fake-rotated-1-refresh")).toBe(true)
+        expect(Option.exists(result.request, (text) => text.includes("invalid_grant"))).toBe(true)
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+        // Claude Code signs in again: its login serves, and the rotation is forgotten.
+        const now = yield* Clock.currentTimeMillis
+        const theirs = { account: "alice", blob: claudeBlob("fake-claude-code", now + 3600000) }
+        yield* keychain.write(LINKED_SERVICE, theirs)
+        const after = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY, 2), refusing)
+        expect(after.authorization).toBe("Bearer fake-claude-code")
+        expect(after.refreshTokens).toEqual([])
+        expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("an unreachable endpoint keeps the held rotation, and the failure may pass", () =>
+    Effect.gen(function* () {
+      const { driver, store } = yield* heldAfterRefusedWrite
+      let unauthorized = 1
+      const result = yield* sendExpectingFailure(
+        driver,
+        linkedSignIn(LINKED_DIRECTORY),
+        (request) => {
+          if (request.url === TOKEN_URL) return { status: 503, body: "unavailable" }
+          if (unauthorized > 0) {
+            unauthorized -= 1
+            return { status: 401, body: encodeExternalJson({ error: "unauthorized" }) }
+          }
+          return anthropicHappyResponse()
+        },
+      )
+      expect(result.sent).toEqual(["fake-rotated-1-refresh"])
+      expect(Option.exists(result.request, (text) => text.includes("503"))).toBe(true)
+      expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked rotation: the reviewer's round-2 probes", () => {
+  it.scopedLive(
+    "R2-1: a held rotation refreshed after a failed settle never writes over the login Claude Code wrote meanwhile",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const theirs = { account: "alice", blob: claudeBlob("fake-claude-code", now + 3600000) }
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        keychain.refuseWrites()
+        let refused = 0
+        keychain.onWrite((isRefused) => {
+          if (!isRefused) return
+          refused += 1
+          // Claude Code signs in again just as gent's third write (the settle
+          // at the top of the refresh) fails.
+          if (refused === 3) {
+            keychain.entries.set(LINKED_SERVICE, [theirs])
+            keychain.allowWrites()
+          }
+        })
+        const endpoint = numberedEndpoint()
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+        endpoint.refuseNext()
+        const second = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), endpoint.respond)
+        expect(refused).toBe(3)
+        expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
+        expect(second.authorization).toBe("Bearer fake-claude-code")
+        expect(heldAccess(processStore)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "R2-2: a label linked again, or renamed, meets the held rotation and never resends the spent token",
+    () =>
+      Effect.gen(function* () {
+        const { keychain, driver, endpoint, store } = yield* heldAfterRefusedWrite
+        keychain.allowWrites()
+        const relinked = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 2),
+          endpoint.respond,
+        )
+        expect(relinked.refreshTokens).toEqual([])
+        expect(relinked.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(writtenAccess(keychain.calls)).toEqual([
+          "fake-rotated-1-access",
+          "fake-rotated-1-access",
+        ])
+        expect(heldAccess(store)).toEqual([])
+        // A second label on the same directory reads the landed rotation.
+        const renamed = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 3, CredentialSlot.make("renamed")),
+          endpoint.respond,
+        )
+        expect(renamed.refreshTokens).toEqual([])
+        expect(renamed.authorization).toBe("Bearer fake-rotated-1-access")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "R2-5: a keychain entry that reads torn after the spend keeps the rotation held, and lands it later",
+    () =>
+      Effect.gen(function* () {
+        const original = { account: "alice", blob: claudeBlob("fake-expired", 0) }
+        const keychain = fakeKeychain([[LINKED_SERVICE, original]])
+        const endpoint = numberedEndpoint()
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const store = processStore
+        // While gent's refresh is in flight, the entry reads back undecodable.
+        const first = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          (request, call) => {
+            if (request.url !== TOKEN_URL) return endpoint.respond(request, call)
+            return keychain
+              .write(LINKED_SERVICE, { account: "alice", blob: "{torn" })
+              .pipe(Effect.flatMap(() => answerOf(endpoint.respond(request, call))))
+          },
+        )
+        expect(first.resolveFailed).toBe(false)
+        expect(first.request).toEqual(Option.none())
+        expect(first.sent).toEqual(["fake-expired-refresh"])
+        expect(writesOf(keychain.calls)).toEqual([])
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+        // The entry reads whole again: it still holds the spent token.
+        yield* keychain.write(LINKED_SERVICE, original)
+        const second = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 2),
+          endpoint.respond,
+        )
+        expect(second.sent).toEqual([])
+        expect(second.request).toEqual(Option.none())
+        expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "R2-6: a credentials file that reads empty after the spend keeps the rotation held, and lands it later",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const original = claudeBlob("fake-expired", 0)
+        const linked = yield* scratchDirectory(home, "claude-personal", Option.some(original))
+        const endpoint = numberedEndpoint()
+        const driver = yield* linkedDriver("linux", fakeKeychain([]).spawner)
+        const store = processStore
+        const first = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(linked.directory),
+          (request, call) => {
+            if (request.url !== TOKEN_URL) return endpoint.respond(request, call)
+            // Claude Code is mid-write (truncate, then write): the file reads empty.
+            return fs.writeFileString(linked.file, "").pipe(
+              Effect.orDie,
+              Effect.flatMap(() => answerOf(endpoint.respond(request, call))),
+            )
+          },
+        )
+        expect(first.resolveFailed).toBe(false)
+        expect(first.request).toEqual(Option.none())
+        expect(first.sent).toEqual(["fake-expired-refresh"])
+        expect(yield* fs.readFileString(linked.file)).toBe("")
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+        yield* fs.writeFileString(linked.file, original)
+        const second = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(linked.directory, 2),
+          endpoint.respond,
+        )
+        expect(second.sent).toEqual([])
+        expect(second.request).toEqual(Option.none())
+        const written = yield* fs.readFileString(linked.file)
+        expect(written).toContain("fake-rotated-1-refresh")
+        expect(written).toContain('"subscriptionType":"max"')
+        expect(heldAccess(store)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked rotation: two gent processes on one directory", () => {
+  /** One gent process: its own driver, and its own credential store over the shared auth directory. */
+  const gentProcess = (
+    spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+    authDirectory: string,
+  ) =>
+    Effect.map(linkedDriver("darwin", spawner), (driver) =>
+      storedCredentialModel({
+        modelDrivers: [driver],
+        stored: {},
+        authDirectory,
+        oauth: [
+          {
+            provider: "anthropic",
+            slot: LINKED_SLOT,
+            credential: { access: "", refresh: "", expires: 0 },
+            metadata: { directory: LINKED_DIRECTORY },
+          },
+        ],
+        modelId: "anthropic/claude-opus-4-6",
+        catalog: fixtureModelCatalog(),
+        credentialSlot: LINKED_SLOT,
+      }).pipe(Layer.provide(BunServices.layer)),
+    )
+
+  const sentBy = (state: ReturnType<typeof makeFakeFetchState>) => ({
+    authorizations: state.captured
+      .filter((request) => request.url !== TOKEN_URL)
+      .map((request) => request.headers["authorization"] ?? "none"),
+    refreshTokens: state.captured
+      .filter((request) => request.url === TOKEN_URL)
+      .map(refreshTokenOf),
+  })
+
+  it.scopedLive(
+    "two processes refreshing one expired login at once spend its token once, and both serve the rotation",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const authDirectory = path.join(home, "auth")
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = slowTokenEndpoint(numberedEndpoint().respond, "150 millis")
+        const first = yield* gentProcess(keychain.spawner, authDirectory)
+        const second = yield* gentProcess(keychain.spawner, authDirectory)
+        const states = [makeFakeFetchState(), makeFakeFetchState()] as const
+        yield* Effect.all(
+          [oneGenerate(first, states[0], endpoint), oneGenerate(second, states[1], endpoint)],
+          { concurrency: 2 },
+        )
+        const [a, b] = states.map(sentBy)
+        expect([...(a?.refreshTokens ?? []), ...(b?.refreshTokens ?? [])]).toEqual([
+          "fake-expired-refresh",
+        ])
+        expect(a?.authorizations).toEqual(["Bearer fake-rotated-1-access"])
+        expect(b?.authorizations).toEqual(["Bearer fake-rotated-1-access"])
+        expect(writtenAccess(keychain.calls)).toEqual(["fake-rotated-1-access"])
+        expect(
+          yield* fs.exists(path.join(authDirectory, ".rotations", "anthropic", LINKED_KEY)),
+        ).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive(
+    "a rotation one process holds is landed and served by another, which spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const authDirectory = path.join(home, "auth")
+        const rotationFile = path.join(authDirectory, ".rotations", "anthropic", LINKED_KEY)
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = numberedEndpoint()
+        keychain.refuseWrites()
+        const first = makeFakeFetchState()
+        yield* oneGenerate(
+          yield* gentProcess(keychain.spawner, authDirectory),
+          first,
+          endpoint.respond,
+        )
+        expect(sentBy(first).refreshTokens).toEqual(["fake-expired-refresh"])
+        // The first process's store holds the rotation, owner-only, on disk.
+        expect(yield* fs.readFileString(rotationFile)).toContain("fake-rotated-1-refresh")
+        expect((yield* fs.stat(rotationFile)).mode & 0o777).toBe(0o600)
+        keychain.allowWrites()
+        const second = makeFakeFetchState()
+        yield* oneGenerate(
+          yield* gentProcess(keychain.spawner, authDirectory),
+          second,
+          endpoint.respond,
+        )
+        expect(sentBy(second)).toEqual({
+          authorizations: ["Bearer fake-rotated-1-access"],
+          refreshTokens: [],
+        })
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
+        expect(yield* fs.exists(rotationFile)).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
   )
 })
 

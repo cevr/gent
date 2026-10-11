@@ -12,7 +12,6 @@ import {
   Option,
   Path,
   Predicate,
-  Ref,
   Schema,
   Stream,
   SynchronizedRef,
@@ -32,8 +31,11 @@ import {
   isRecord,
   isRecordArray,
   type JsonRecord,
+  type LockSourceRotation,
   omitUndefined,
   Model,
+  type PendingRotation,
+  type SourceRotation,
   type ModelDriverContribution,
   ProviderAuthError,
   type CredentialSlot,
@@ -547,12 +549,14 @@ const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
  *   primary account, not this one.
  *
  * Claude Code refreshes the same entry. Both programs read it before they
- * refresh and write it back with a compare-and-swap (`compareAndWrite`), so
- * neither signs the other out.
+ * refresh and write it back with a compare-and-swap (`compareAndWrite` for the
+ * primary, `landRotation` for a link), so neither signs the other out. A
+ * link's `key`, the full SHA-256 of its directory, names the rotation gent
+ * holds for it in its credential store (`refreshLinked`).
  */
 const ClaudeCodeSource = Schema.TaggedUnion({
   Primary: {},
-  ConfigDir: { directory: Schema.String, service: Schema.String },
+  ConfigDir: { directory: Schema.String, service: Schema.String, key: Schema.String },
 })
 type ClaudeCodeSource = typeof ClaudeCodeSource.Type
 type LinkedSource = typeof ClaudeCodeSource.cases.ConfigDir.Type
@@ -581,14 +585,8 @@ const linkedSource = (
     return ClaudeCodeSource.cases.ConfigDir.make({
       directory,
       service: `${CLAUDE_KEYCHAIN_SERVICE}-${digest.slice(0, 8)}`,
+      key: digest,
     })
-  })
-
-/** The keychain service `source` reads and writes on darwin. */
-const keychainService = (source: ClaudeCodeSource): string =>
-  ClaudeCodeSource.match(source, {
-    Primary: () => CLAUDE_KEYCHAIN_SERVICE,
-    ConfigDir: (linked) => linked.service,
   })
 
 /** What a user does when `source` no longer holds a usable sign-in. */
@@ -620,55 +618,39 @@ const credentialFileDeadline = <A, R>(io: Effect.Effect<A, ProviderAuthError, R>
     }),
   )
 
-/**
- * Read the credentials file of `source`. A linked directory with no file
- * holds no login: that failure says so (`Unavailable`), so a turn may move
- * on. The primary file's failures carry no reason, as before links.
- */
-const readCredentialsFile = (
-  source: ClaudeCodeSource,
-): Effect.Effect<
+/** Read the primary account's credentials file, `~/.claude/.credentials.json`. */
+const readCredentialsFile: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const credentialsFile = yield* credentialsFilePath(source)
-    const exists = yield* fs.exists(credentialsFile).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProviderAuthError({
-            message: `Failed to read Claude credentials file: ${e.message}`,
-            cause: e,
-          }),
-      ),
-    )
-    if (!exists) {
-      return yield* new ProviderAuthError({
-        message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
-        ...omitUndefined({
-          credentialFailure: Option.getOrUndefined(missingLoginFailure(source)),
+> = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const credentialsFile = yield* credentialsFilePath(PRIMARY_SOURCE)
+  const exists = yield* fs.exists(credentialsFile).pipe(
+    Effect.mapError(
+      (e) =>
+        new ProviderAuthError({
+          message: `Failed to read Claude credentials file: ${e.message}`,
+          cause: e,
         }),
-      })
-    }
-    const raw = yield* fs.readFileString(credentialsFile).pipe(
-      Effect.mapError(
-        (e) =>
-          new ProviderAuthError({
-            message: `Failed to read Claude credentials file: ${e.message}`,
-            cause: e,
-          }),
-      ),
-    )
-    return yield* decodeCredentials(raw)
-  }).pipe(credentialFileDeadline)
-
-/** The reason a missing login gives: a linked source that holds none cannot serve; the primary's carries none. */
-const missingLoginFailure = (source: ClaudeCodeSource): Option.Option<"Unavailable"> => {
-  if (source._tag === "ConfigDir") return Option.some("Unavailable")
-  return Option.none()
-}
+    ),
+  )
+  if (!exists) {
+    return yield* new ProviderAuthError({
+      message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
+    })
+  }
+  const raw = yield* fs.readFileString(credentialsFile).pipe(
+    Effect.mapError(
+      (e) =>
+        new ProviderAuthError({
+          message: `Failed to read Claude credentials file: ${e.message}`,
+          cause: e,
+        }),
+    ),
+  )
+  return yield* decodeCredentials(raw)
+}).pipe(credentialFileDeadline)
 
 /** Two stored credentials, or their absence, are the same sign-in at the same rotation. */
 const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
@@ -735,7 +717,6 @@ const compareAndWrite = <E, R>(
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
   base: RefreshBase,
-  source: ClaudeCodeSource,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -743,7 +724,7 @@ const writeCredentialsFile = (
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const credentialsFile = yield* credentialsFilePath(source)
+    const credentialsFile = yield* credentialsFilePath(PRIMARY_SOURCE)
     const mapFsError = (e: { readonly message: string }) =>
       new ProviderAuthError({
         message: `Failed to write Claude credentials file: ${e.message}`,
@@ -876,91 +857,30 @@ const writeKeychainEntry = (
 // ── oauth accounts ──────────────────────────────────────────────────────────
 
 /**
- * Read the credentials of `source`. The primary account: the keychain on
- * darwin, falling back to `~/.claude/.credentials.json` when the keychain has
- * no entry; that file alone elsewhere, mirroring the CLI. A linked directory:
- * its own keychain service on darwin, with no fallback (a missing entry holds
- * no login, `Unavailable`); its own `.credentials.json` elsewhere.
+ * Read Claude Code's primary-account credentials: the keychain on darwin,
+ * falling back to `~/.claude/.credentials.json` when the keychain has no
+ * entry; that file alone elsewhere, mirroring the CLI. A linked directory is
+ * read by `readLinkedSource`.
  */
-const readClaudeCodeCredentials = (
-  source: ClaudeCodeSource,
-): Effect.Effect<
+const readClaudeCodeCredentials: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") {
-      return yield* readCredentialsFile(source)
-    }
-    const service = keychainService(source)
-    return yield* readFromKeychain(service).pipe(
-      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
-        ClaudeCodeSource.match(source, {
-          Primary: () => readCredentialsFile(source),
-          ConfigDir: () =>
-            Effect.fail(
-              new ProviderAuthError({
-                message: `No Claude Code login in keychain service ${service}`,
-                credentialFailure: "Unavailable",
-              }),
-            ),
-        }),
-      ),
-    )
-  })
-
-/**
- * Write a linked directory's refreshed credentials back to its source: its
- * `.credentials.json` off darwin, its keychain service on darwin under
- * `account`, the `acct` the refresh found on that service before it spent a
- * token (a write under another account would add a second entry, not update
- * this one).
- *
- * The write is a compare-and-swap (`compareAndWrite`): it re-reads the entry
- * and writes only while it still holds what the refresh started from, so a
- * refresh or a sign-in Claude Code wrote meanwhile wins (`Superseded`). An
- * entry that is gone at the re-read is a sign-out, also `Superseded` (with
- * nothing stored): it is never recreated. The keychain has no conditional
- * write, so one window stays: between the re-read and `add-generic-password
- * -U`, two `security` calls that follow each other directly, a sign-out or a
- * new login Claude Code writes is overwritten (or the entry recreated). The
- * file has the same window between its read and its atomic rename.
- */
-const writeBackLinked = (
-  creds: ClaudeCredentials,
-  base: RefreshBase,
-  source: LinkedSource,
-  account: Option.Option<string>,
-): Effect.Effect<
-  WriteBack,
-  ProviderAuthError,
-  AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") return yield* writeCredentialsFile(creds, base, source)
-    if (Option.isNone(account)) {
-      return yield* new ProviderAuthError({
-        message: `Cannot write back: no account on keychain service ${source.service}`,
-      })
-    }
-    const raw = yield* spawnSecurity(["find-generic-password", "-s", source.service, "-w"]).pipe(
-      Effect.asSome,
-      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => Effect.succeedNone),
-    )
-    if (Option.isNone(raw)) return WriteBack.cases.Superseded.make({ stored: Option.none() })
-    return yield* compareAndWrite(raw.value, creds, base, (blob) =>
-      writeKeychainEntry(source.service, account.value, blob),
-    )
-  })
+> = Effect.gen(function* () {
+  const platform = yield* AnthropicPlatform
+  if (platform.platform !== "darwin") {
+    return yield* readCredentialsFile
+  }
+  return yield* readFromKeychain(CLAUDE_KEYCHAIN_SERVICE).pipe(
+    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile),
+  )
+})
 
 /**
  * Persist the primary account's refreshed credentials back to the entry
  * they were read from: the primary keychain entry (or
  * `~/.claude/.credentials.json` on non-darwin). A linked directory writes
- * back through `writeBackLinked`. Without this, every direct OAuth refresh
+ * back through `landRotation`. Without this, every direct OAuth refresh
  * is wasted — the next read pulls the stale `accessToken` straight back
  * from disk/keychain, and the program that shares the entry holds a spent
  * refresh token. The `acct` field is preserved by reading the existing
@@ -987,7 +907,7 @@ const writeBackCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds, base, PRIMARY_SOURCE)
+      return yield* writeCredentialsFile(creds, base)
     }
 
     // A read failure surfaces as a typed error, so the refresh call site
@@ -1149,7 +1069,7 @@ const refreshCandidates = (
  * was unreachable and the CLI fallback also failed, so the loop retries.
  *
  * This is the primary account's refresh. A linked directory refreshes
- * through `refreshLinkedCredentials`, which never runs the CLI.
+ * through `refreshLinked`, which never runs the CLI.
  */
 const refreshClaudeCodeCredentials = (
   held: Option.Option<ClaudeCredentials>,
@@ -1167,7 +1087,7 @@ const refreshClaudeCodeCredentials = (
     // them instead of only the last one.
     const failures: Array<string> = []
     let endpointUnavailable = false
-    const current = yield* Effect.exit(readClaudeCodeCredentials(PRIMARY_SOURCE))
+    const current = yield* Effect.exit(readClaudeCodeCredentials)
     if (Exit.isFailure(current)) {
       failures.push(
         Option.match(Cause.findErrorOption(current.cause), {
@@ -1205,7 +1125,7 @@ const refreshClaudeCodeCredentials = (
     const platform = yield* AnthropicPlatform
     return yield* spawnClaudeCli(platform.home).pipe(
       Effect.retry({ times: 1 }),
-      Effect.andThen(readClaudeCodeCredentials(PRIMARY_SOURCE)),
+      Effect.andThen(readClaudeCodeCredentials),
       Effect.mapError((cause): CredentialFailure => {
         const message = `${failures.join("; ")}; CLI fallback: ${cause.message}`
         if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
@@ -1245,103 +1165,234 @@ const rotateAndWriteBack = (base: RefreshBase) =>
     return refreshed
   }).pipe(Effect.uninterruptible)
 
-// ── linked directory refresh ────────────────────────────────────────────────
+// ── linked directory ────────────────────────────────────────────────────────
+//
+// A linked directory's login belongs to Claude Code: gent reads it, and a
+// refresh spends the refresh token Claude Code holds too. The rotation goes
+// back to the source with a compare-and-swap, and until it lands gent's
+// credential store holds it (`PendingRotation`, keyed by the directory, not
+// by the label), so neither a failed write, a restart, a rename, a second
+// link nor a second gent process loses the only live token. `readLinked` and
+// `refreshLinked` are the whole state machine; ARCHITECTURE.md (Credential
+// slots) states it.
+
+type LinkedIORequirements = AnthropicCredentialIORequirements | Crypto.Crypto
 
 /**
- * A linked refresh whose write-back failed: the rotation gent holds, the
- * base it started from, and the keychain account it found. The token
- * endpoint spent the source's refresh token, so this rotation is the only
- * live one until it lands in the source. It is written again on the next
- * read, before anything else is served or refreshed (`settleLinkedRotation`).
+ * What a read of a linked source found. `SignedOut` is a confirmed absence
+ * only: no entry or file, or a JSON object with no `claudeAiOauth`, as a
+ * Claude Code logout leaves it. Anything else that is no login (a locked
+ * keychain, a timeout, bytes that do not parse, as a torn write gives them)
+ * is `Unreadable`: it proves nothing, so a held rotation stays held.
  */
-interface PendingRotation {
-  readonly creds: ClaudeCredentials
-  readonly base: RefreshBase
-  readonly account: Option.Option<string>
-}
+const LinkedRead = Schema.TaggedUnion({
+  Login: { creds: ClaudeCredentials, raw: Schema.String },
+  SignedOut: {},
+  Unreadable: { reason: Schema.String },
+})
+type LinkedRead = typeof LinkedRead.Type
 
-/** Where a link's pending rotation lives: beside the link's cell, for as long as the link. */
-type PendingRotationRef = Ref.Ref<Option.Option<PendingRotation>>
+/** What the blob `raw` of a linked source holds. */
+const classifyLinkedBlob = (raw: string): Effect.Effect<LinkedRead> =>
+  decodeCredentials(raw).pipe(
+    Effect.map((creds): LinkedRead => LinkedRead.cases.Login.make({ creds, raw })),
+    Effect.catchEager(() =>
+      Effect.succeed(
+        Option.match(decodeCredentialBlob(raw), {
+          onNone: (): LinkedRead =>
+            LinkedRead.cases.Unreadable.make({ reason: "its login does not parse" }),
+          onSome: (blob): LinkedRead => {
+            if (
+              Predicate.isUndefined(blob["claudeAiOauth"]) &&
+              Predicate.isUndefined(blob["accessToken"]) &&
+              Predicate.isUndefined(blob["refreshToken"])
+            ) {
+              return LinkedRead.cases.SignedOut.make({})
+            }
+            return LinkedRead.cases.Unreadable.make({ reason: "its login does not decode" })
+          },
+        }),
+      ),
+    ),
+  )
 
-type LinkedIORequirements = AnthropicCredentialIORequirements
-
-/**
- * What a linked refresh starts from: the source's login, read in this
- * refresh, and on darwin the keychain account the write-back will use. A
- * token is spent only when both are in hand, so gent never spends the
- * refresh token Claude Code holds when it already knows it cannot write the
- * rotation back. A source with no login fails as that read did
- * (`Unavailable`); any other fault (a locked or denied keychain, a timeout,
- * no account) is `CredentialRefreshUnavailable`: it may pass, and nothing
- * was spent.
- */
-const linkedRefreshBase = (
+/** Read a linked source: its keychain service on darwin, else its `.credentials.json`. */
+const readLinkedSource = (
   source: LinkedSource,
-): Effect.Effect<
-  { readonly read: ClaudeCredentials; readonly account: Option.Option<string> },
-  CredentialFailure,
-  LinkedIORequirements
-> =>
+): Effect.Effect<LinkedRead, never, LinkedIORequirements> =>
   Effect.gen(function* () {
-    const unavailable = (reason: string) =>
-      new CredentialRefreshUnavailable({
-        message: `Not refreshing Claude Code on ${source.directory}: ${reason}; no token was spent`,
-      })
-    const read = yield* readClaudeCodeCredentials(source).pipe(
-      Effect.mapError((error): CredentialFailure => {
-        if (Predicate.isNotUndefined(error.credentialFailure)) return error
-        return unavailable(error.message)
+    const platform = yield* AnthropicPlatform
+    const unreadable = (reason: string) =>
+      Effect.succeed<LinkedRead>(LinkedRead.cases.Unreadable.make({ reason }))
+    const signedOut = () => Effect.succeed<LinkedRead>(LinkedRead.cases.SignedOut.make({}))
+    if (platform.platform === "darwin") {
+      return yield* spawnSecurity(["find-generic-password", "-s", source.service, "-w"]).pipe(
+        Effect.flatMap(classifyLinkedBlob),
+        Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), signedOut),
+        Effect.catchIf(Schema.is(ProviderAuthError), (error) => unreadable(error.message)),
+      )
+    }
+    const fs = yield* FileSystem.FileSystem
+    const file = yield* credentialsFilePath(source)
+    return yield* fs.readFileString(file).pipe(
+      Effect.flatMap(classifyLinkedBlob),
+      Effect.catchIf((error) => error.reason._tag === "NotFound", signedOut),
+      Effect.catchEager((error) => unreadable(`reading ${file} failed: ${error.message}`)),
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(5),
+        orElse: () => unreadable(`reading ${file} timed out`),
       }),
     )
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") return { read, account: Option.none<string>() }
-    const account = yield* getKeychainAccountName(source.service)
-    if (Option.isNone(account)) {
-      return yield* unavailable(`no account found on keychain service ${source.service}`)
-    }
-    return { read, account }
   })
 
-/**
- * Write a pending rotation back, as the first step of a read or a refresh.
- * Some credential to serve when the source holds no newer login: the rotation
- * once it landed (`Kept`), or still pending when the write failed again, so a
- * re-read never puts the older source login, whose refresh token is spent,
- * over it. A newer login Claude Code wrote (`Superseded`) is served in its
- * place, and a source Claude Code signed out of drops the rotation. None when
- * nothing was pending.
- */
-const settleLinkedRotation = (
+/** Write `blob` to a linked source: under `account` on darwin, atomically to its file elsewhere. */
+const writeLinkedSource = (
   source: LinkedSource,
-  pending: PendingRotationRef,
-): Effect.Effect<
-  Option.Option<Exit.Exit<ClaudeCredentials, ProviderAuthError>>,
-  never,
-  LinkedIORequirements
-> =>
+  blob: string,
+  account: Option.Option<string>,
+): Effect.Effect<void, ProviderAuthError, LinkedIORequirements> =>
   Effect.gen(function* () {
-    const held = yield* Ref.get(pending)
-    if (Option.isNone(held)) return Option.none()
-    const { creds, base, account } = held.value
-    const written = yield* Effect.exit(writeBackLinked(creds, base, source, account))
-    if (Exit.isFailure(written)) {
-      yield* Effect.logWarning("anthropic.oauth.linked.writeback.retry-failed").pipe(
-        Effect.annotateLogs({ directory: source.directory }),
-      )
-      return Option.some(Exit.succeed(creds))
+    const platform = yield* AnthropicPlatform
+    if (platform.platform === "darwin") {
+      if (Option.isNone(account)) {
+        return yield* new ProviderAuthError({
+          message: `no account found on keychain service ${source.service}`,
+        })
+      }
+      return yield* writeKeychainEntry(source.service, account.value, blob)
     }
-    yield* Ref.set(pending, Option.none())
-    return Option.some(
-      WriteBack.match(written.value, {
-        Kept: () => Exit.succeed(creds),
-        Superseded: ({ stored }) =>
-          Option.match(stored, {
-            onSome: Exit.succeed,
-            onNone: () => Exit.fail(linkedSignedOut(source)),
-          }),
-      }),
+    const file = yield* credentialsFilePath(source)
+    // Staged and renamed over the file, owner-only from the first byte.
+    return yield* writeFileAtomic(file, blob, { mode: 0o600 }).pipe(
+      Effect.mapError(
+        (error) => new ProviderAuthError({ message: `writing ${file} failed: ${error.message}` }),
+      ),
+      credentialFileDeadline,
     )
-  }).pipe(Effect.uninterruptible)
+  })
+
+/** One login at one rotation: what `compareAndWrite` compares, as a fingerprint gent may store. */
+const loginFingerprint = (creds: ClaudeCredentials): Effect.Effect<string, never, Crypto.Crypto> =>
+  sha256Hex(`${creds.accessToken}\n${creds.refreshToken}\n${creds.expiresAt}`)
+
+const sameLogin = Schema.toEquivalence(ClaudeCredentials)
+
+const heldRotation = (rotation: ClaudeCredentials, base: string): PendingRotation => ({
+  rotation: {
+    access: rotation.accessToken,
+    refresh: rotation.refreshToken,
+    expires: rotation.expiresAt,
+  },
+  base,
+})
+
+const heldCredentials = (held: PendingRotation): ClaudeCredentials => ({
+  accessToken: held.rotation.access,
+  refreshToken: held.rotation.refresh,
+  expiresAt: held.rotation.expires,
+})
+
+/** What handing a rotation back to its source found. */
+const Landing = Schema.TaggedUnion({
+  /** The source holds the rotation: written now, or already. */
+  Landed: {},
+  /** The source holds another login than the one the spend replaced: Claude Code's, which wins. */
+  Moved: { creds: ClaudeCredentials },
+  /** Claude Code signed out of the directory. */
+  SignedOut: {},
+  /** The source could not be read or written, or names no account: the rotation stays held. */
+  NotLanded: { reason: Schema.String },
+})
+type Landing = typeof Landing.Type
+
+/**
+ * Hand `rotation` back to a linked source, over the login the spend replaced
+ * (fingerprint `base`) and over nothing else. The comparison reads the source
+ * now and compares it with `base`, never with an earlier read, so a login
+ * Claude Code wrote at any time since the spend wins. On darwin the account
+ * is found first, so the re-read and the write follow each other directly.
+ *
+ * The keychain has no conditional write, so one window stays: a login or a
+ * sign-out Claude Code writes between the re-read and `add-generic-password
+ * -U`, two `security` calls in a row, is overwritten. The file has the same
+ * window between its read and its atomic rename.
+ */
+const landRotation = (
+  source: LinkedSource,
+  rotation: ClaudeCredentials,
+  base: string,
+): Effect.Effect<Landing, never, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    let account = Option.none<string>()
+    if (platform.platform === "darwin") account = yield* getKeychainAccountName(source.service)
+    const read = yield* readLinkedSource(source)
+    if (read._tag === "SignedOut") return Landing.cases.SignedOut.make({})
+    if (read._tag === "Unreadable") return Landing.cases.NotLanded.make({ reason: read.reason })
+    if (sameLogin(read.creds, rotation)) return Landing.cases.Landed.make({})
+    if ((yield* loginFingerprint(read.creds)) !== base) {
+      return Landing.cases.Moved.make({ creds: read.creds })
+    }
+    const blob = updateCredentialBlob(read.raw, rotation)
+    if (Option.isNone(blob)) {
+      return Landing.cases.NotLanded.make({ reason: "its blob does not parse" })
+    }
+    const written = yield* Effect.exit(writeLinkedSource(source, blob.value, account))
+    if (Exit.isSuccess(written)) return Landing.cases.Landed.make({})
+    return Landing.cases.NotLanded.make({
+      reason: Option.match(Cause.findErrorOption(written.cause), {
+        onNone: () => "the write failed",
+        onSome: (error) => error.message,
+      }),
+    })
+  })
+
+/** Forget a source's held rotation. A failure is logged: the next settle finds the rotation landed and forgets it then. */
+const forgetRotation = (held: SourceRotation, source: LinkedSource) =>
+  held
+    .write(Option.none())
+    .pipe(
+      Effect.catchEager((error) =>
+        Effect.logWarning("anthropic.oauth.linked.forget-failed").pipe(
+          Effect.annotateLogs({ directory: source.directory, error: error.message }),
+        ),
+      ),
+    )
+
+/** What settling a held rotation left. */
+const Settled = Schema.TaggedUnion({
+  /** Nothing was held. */
+  Synced: {},
+  /** The held rotation landed, or Claude Code's newer login replaced it: serve this one. */
+  Serve: { creds: ClaudeCredentials },
+  /** The rotation could not be handed back; it stays held and serves. */
+  Pending: { creds: ClaudeCredentials, base: Schema.String },
+  /** Claude Code signed out of the directory; the rotation was dropped. */
+  SignedOut: {},
+})
+type Settled = typeof Settled.Type
+
+/** Hand a held rotation back to the source, as every read and refresh of a link does first. */
+const settleRotation = (
+  source: LinkedSource,
+  held: SourceRotation,
+): Effect.Effect<Settled, ProviderAuthError, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const stored = yield* held.read
+    if (Option.isNone(stored)) return Settled.cases.Synced.make({})
+    const creds = heldCredentials(stored.value)
+    const landing = yield* landRotation(source, creds, stored.value.base)
+    if (landing._tag === "NotLanded") {
+      yield* Effect.logWarning("anthropic.oauth.linked.rotation-held").pipe(
+        Effect.annotateLogs({ directory: source.directory, reason: landing.reason }),
+      )
+      return Settled.cases.Pending.make({ creds, base: stored.value.base })
+    }
+    yield* forgetRotation(held, source)
+    if (landing._tag === "SignedOut") return Settled.cases.SignedOut.make({})
+    if (landing._tag === "Moved") return Settled.cases.Serve.make({ creds: landing.creds })
+    return Settled.cases.Serve.make({ creds })
+  })
 
 /** The failure of a link whose source Claude Code signed out of. */
 const linkedSignedOut = (source: LinkedSource) =>
@@ -1351,115 +1402,219 @@ const linkedSignedOut = (source: LinkedSource) =>
   })
 
 /**
- * One linked refresh: spend `base.sent`'s refresh token and write the
- * rotation back, as one step a caller cannot stop (see `rotateAndWriteBack`).
- * A failed write keeps the rotation pending, served from memory and written
- * again on the next read. A newer login Claude Code wrote meanwhile wins, and
- * a source it signed out of fails `Unavailable`; neither is written over.
+ * Hold `rotation` in gent's store, then hand it back to the source. It is
+ * held before the write, so a write that fails, or a process that ends
+ * before it, leaves it for the next read; only a crash between the token
+ * response and the hold loses it. A store that cannot hold it is logged and
+ * the write tried all the same.
  */
-const rotateLinked = (
-  base: RefreshBase,
+const holdAndLand = (
   source: LinkedSource,
-  account: Option.Option<string>,
-  pending: PendingRotationRef,
-): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+  held: SourceRotation,
+  rotation: ClaudeCredentials,
+  base: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, LinkedIORequirements> =>
   Effect.gen(function* () {
-    const refreshed = yield* refreshViaOAuthClient(base.sent.refreshToken)
-    const written = yield* Effect.exit(writeBackLinked(refreshed, base, source, account))
-    if (Exit.isFailure(written)) {
-      yield* Effect.logWarning("anthropic.oauth.linked.writeback.failed").pipe(
-        Effect.annotateLogs({ directory: source.directory }),
+    yield* held
+      .write(Option.some(heldRotation(rotation, base)))
+      .pipe(
+        Effect.catchEager((error) =>
+          Effect.logWarning("anthropic.oauth.linked.hold-failed").pipe(
+            Effect.annotateLogs({ directory: source.directory, error: error.message }),
+          ),
+        ),
       )
-      yield* Ref.set(pending, Option.some({ creds: refreshed, base, account }))
-      return refreshed
+    const landing = yield* landRotation(source, rotation, base)
+    if (landing._tag === "NotLanded") {
+      yield* Effect.logWarning("anthropic.oauth.linked.rotation-held").pipe(
+        Effect.annotateLogs({ directory: source.directory, reason: landing.reason }),
+      )
+      return rotation
     }
-    yield* Ref.set(pending, Option.none())
-    return yield* WriteBack.match(written.value, {
-      Kept: () => Effect.succeed(refreshed),
-      Superseded: ({ stored }) =>
-        Effect.fromOption(stored).pipe(Effect.mapError(() => linkedSignedOut(source))),
-    })
-  }).pipe(Effect.uninterruptible)
+    yield* forgetRotation(held, source)
+    if (landing._tag === "SignedOut") return yield* linkedSignedOut(source)
+    if (landing._tag === "Moved") return landing.creds
+    return rotation
+  })
+
+/** A token endpoint refusal: the refresh token is spent or revoked. */
+const refusedToken = (error: CredentialFailure): boolean =>
+  error._tag === "ProviderAuthError" && error.credentialFailure === "Rejected"
 
 /**
- * Refresh a linked directory's login, direct OAuth only: never the `claude`
- * CLI, which refreshes the primary account, and never the primary entry.
- *
- * A pending rotation is written back first. A token is spent only after
- * this refresh read the source and found its keychain account
- * (`linkedRefreshBase`). The candidates are the newest rotation gent holds
- * when one is still pending (the source's token is spent), else the source's
- * login and then the held one, each refresh token once.
- *
- * When the endpoint refuses every token, the source is read once more: a
- * login Claude Code wrote meanwhile (its own refresh won the race) is
- * adopted, and only an unchanged source is `Rejected`.
+ * After the endpoint refused `refused`, read the source once more: a fresh
+ * login Claude Code wrote meanwhile, past the base, means its own refresh won
+ * the race. It is served, and a held rotation is forgotten: the source moved
+ * past it. Only an unmoved source is `Rejected`, and a held rotation stays
+ * held: forgetting it would make the source's login at the base, whose token
+ * gent already spent, look spendable again.
  */
-const refreshLinkedCredentials = (
-  held: Option.Option<ClaudeCredentials>,
+const afterRefusal = (
   source: LinkedSource,
-  pending: PendingRotationRef,
-): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+  held: SourceRotation,
+  refused: string,
+  base: string,
+  message: string,
+): Effect.Effect<ClaudeCredentials, ProviderAuthError, LinkedIORequirements> =>
   Effect.gen(function* () {
-    yield* settleLinkedRotation(source, pending)
-    const { read, account } = yield* linkedRefreshBase(source)
-    const unsettled = yield* Ref.get(pending)
-    let candidates = refreshCandidates([Option.some(read), held])
-    if (Option.isSome(unsettled))
-      candidates = refreshCandidates([Option.some(unsettled.value.creds)])
-    if (candidates.length === 0) {
-      return yield* new ProviderAuthError({
-        message: `Claude Code on ${source.directory} holds no refresh token`,
-        credentialFailure: "Unavailable",
-      })
-    }
-    const failures: Array<string> = []
-    let everyTokenRejected = true
-    for (const sent of candidates) {
-      const refreshed = yield* Effect.exit(
-        rotateLinked({ read: Option.some(read), sent }, source, account, pending),
-      )
-      if (Exit.isSuccess(refreshed)) return refreshed.value
-      const error = Cause.findErrorOption(refreshed.cause)
-      if (Option.isNone(error)) return yield* Effect.failCause(refreshed.cause)
-      // A sign-out or an unreachable endpoint ends the refresh as it is.
-      if (
-        error.value._tag === "CredentialRefreshUnavailable" ||
-        error.value.credentialFailure === "Unavailable"
-      ) {
-        return yield* error.value
-      }
-      failures.push(error.value.message)
-      if (error.value.credentialFailure !== "Rejected") everyTokenRejected = false
-    }
-    const message = failures.join("; ")
-    if (!everyTokenRejected) return yield* new ProviderAuthError({ message })
     const now = yield* Clock.currentTimeMillis
-    const after = yield* Effect.option(readClaudeCodeCredentials(source))
+    const after = yield* readLinkedSource(source)
     if (
-      Option.isSome(after) &&
-      after.value.refreshToken !== read.refreshToken &&
-      freshEnoughAt(after.value.expiresAt, now)
+      after._tag === "Login" &&
+      after.creds.refreshToken !== refused &&
+      freshEnoughAt(after.creds.expiresAt, now) &&
+      (yield* loginFingerprint(after.creds)) !== base
     ) {
-      return after.value
+      yield* forgetRotation(held, source)
+      return after.creds
     }
     return yield* new ProviderAuthError({ message, credentialFailure: "Rejected" })
   })
 
 /**
- * The read and refresh of a linked directory, with `pending` holding a
- * rotation whose write-back failed. The read writes a pending rotation back
- * before it reads the source, so the cache's TTL re-read never replaces the
- * rotation gent holds with the older login whose refresh token it spent.
+ * Spend `token` and hand its rotation back (`holdAndLand`), as one step a
+ * caller cannot stop: the endpoint spends the token it is sent. A refusal
+ * reads the source once more (`afterRefusal`).
  */
-const linkedIO = (source: LinkedSource, pending: PendingRotationRef): AnthropicCredentialIO => ({
-  read: Effect.gen(function* () {
-    const settled = yield* settleLinkedRotation(source, pending)
-    if (Option.isSome(settled)) return yield* settled.value
-    return yield* readClaudeCodeCredentials(source)
-  }),
-  refresh: (held) => refreshLinkedCredentials(held, source, pending),
-})
+const spendLinked = (
+  source: LinkedSource,
+  held: SourceRotation,
+  token: string,
+  base: string,
+): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const refreshed = yield* Effect.exit(refreshViaOAuthClient(token))
+    if (Exit.isSuccess(refreshed)) return yield* holdAndLand(source, held, refreshed.value, base)
+    const error = Cause.findErrorOption(refreshed.cause)
+    if (Option.isSome(error) && refusedToken(error.value)) {
+      return yield* afterRefusal(source, held, token, base, error.value.message)
+    }
+    return yield* Effect.failCause(refreshed.cause)
+  }).pipe(Effect.uninterruptible)
+
+/**
+ * Spend the source's own token. Only from a synced state, and only after
+ * this refresh read the source and, on darwin, found the account its write
+ * needs: gent never spends the token Claude Code holds unless it can hand the
+ * rotation back. A source that cannot be read, or names no account, fails
+ * `CredentialRefreshUnavailable` (it may pass) and spends nothing. A fresh
+ * login that is not the held one is Claude Code's newer refresh: it serves,
+ * and nothing is spent. The held credential's token is never sent: it is the
+ * source's own, or one Claude Code no longer holds, whose rotation would
+ * land over a newer login.
+ */
+const spendSource = (
+  source: LinkedSource,
+  held: SourceRotation,
+  cached: Option.Option<ClaudeCredentials>,
+): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const unavailable = (reason: string) =>
+      new CredentialRefreshUnavailable({
+        message: `Claude Code's login on ${source.directory} ${reason}; no token was spent`,
+      })
+    const read = yield* readLinkedSource(source)
+    if (read._tag === "SignedOut") return yield* linkedSignedOut(source)
+    if (read._tag === "Unreadable") {
+      return yield* unavailable(`could not be read: ${read.reason}`)
+    }
+    const login = read.creds
+    const now = yield* Clock.currentTimeMillis
+    if (
+      freshEnoughAt(login.expiresAt, now) &&
+      !Option.exists(cached, (creds) => sameLogin(creds, login))
+    ) {
+      return login
+    }
+    if (login.refreshToken === "") {
+      return yield* new ProviderAuthError({
+        message: `Claude Code on ${source.directory} holds no refresh token`,
+        credentialFailure: "Unavailable",
+      })
+    }
+    const platform = yield* AnthropicPlatform
+    if (
+      platform.platform === "darwin" &&
+      Option.isNone(yield* getKeychainAccountName(source.service))
+    ) {
+      return yield* unavailable(
+        `could not be written back: no account found on keychain service ${source.service}`,
+      )
+    }
+    return yield* spendLinked(source, held, login.refreshToken, yield* loginFingerprint(login))
+  })
+
+/**
+ * A read of a linked source, as the credential cache asks for it: a held
+ * rotation is handed back first, and serves while it cannot be (the source
+ * still holds the login whose token it spent). A source that cannot be read
+ * proves nothing: the trusted cached credential serves on, and nothing is
+ * spent. None sends the cache to `refreshLinked`, which says why.
+ */
+const readLinked = (
+  source: LinkedSource,
+  lock: LockSourceRotation,
+  cached: Option.Option<ClaudeCredentials>,
+): Effect.Effect<Option.Option<ClaudeCredentials>, never, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const context = yield* Effect.context<LinkedIORequirements>()
+    return yield* lock(source.key)((held) =>
+      Effect.gen(function* () {
+        const settled = yield* settleRotation(source, held)
+        // A held rotation that stays held serves: the source holds its spent token.
+        if (settled._tag === "Pending") return Option.some(settled.creds)
+        if (settled._tag === "Serve") return Option.some(settled.creds)
+        if (settled._tag === "SignedOut") return Option.none<ClaudeCredentials>()
+        const read = yield* readLinkedSource(source)
+        if (read._tag === "Login") return Option.some(read.creds)
+        if (read._tag === "SignedOut") return Option.none<ClaudeCredentials>()
+        return cached
+      }).pipe(Effect.provideContext(context)),
+    ).pipe(
+      Effect.catchEager((error) =>
+        Effect.logWarning("anthropic.oauth.linked.store-unreadable").pipe(
+          Effect.annotateLogs({ directory: source.directory, error: error.message }),
+          Effect.as(cached),
+        ),
+      ),
+    )
+  })
+
+/**
+ * Refresh a linked directory's login: direct OAuth only, never the `claude`
+ * CLI (it refreshes the primary account) and never the primary entry. Under
+ * the store's lock: a held rotation is handed back first; while it stays held
+ * (the source still holds the spent token, or cannot be read), only its own
+ * token is spent, which gent alone holds. Otherwise the source's token is
+ * spent (`spendSource`). A held rotation the endpoint refuses stays held
+ * until the source moves past its base (`afterRefusal`).
+ */
+const refreshLinked = (
+  source: LinkedSource,
+  lock: LockSourceRotation,
+  cached: Option.Option<ClaudeCredentials>,
+): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const context = yield* Effect.context<LinkedIORequirements>()
+    return yield* lock(source.key)((held) =>
+      Effect.gen(function* () {
+        const settled = yield* settleRotation(source, held)
+        if (settled._tag === "SignedOut") return yield* linkedSignedOut(source)
+        const now = yield* Clock.currentTimeMillis
+        // A fresh login that is not the one the cache holds serves, and nothing is spent.
+        const servesFresh = (creds: ClaudeCredentials) =>
+          freshEnoughAt(creds.expiresAt, now) &&
+          !Option.exists(cached, (cachedCreds) => sameLogin(cachedCreds, creds))
+        if (settled._tag === "Pending") {
+          // A fresh rotation gent holds serves while the source cannot take it.
+          if (servesFresh(settled.creds)) return settled.creds
+          return yield* spendLinked(source, held, settled.creds.refreshToken, settled.base)
+        }
+        if (settled._tag === "Serve" && servesFresh(settled.creds)) return settled.creds
+        return yield* spendSource(source, held, cached)
+      }).pipe(Effect.provideContext(context)),
+    )
+  })
 
 // ── credential service ──────────────────────────────────────────────────────
 
@@ -1500,7 +1655,7 @@ export interface AnthropicCredentialIO {
 
 /** The real IO of the primary account: its read, and its refresh that writes back to it. */
 const realIO: AnthropicCredentialIO = {
-  read: readClaudeCodeCredentials(PRIMARY_SOURCE),
+  read: readClaudeCodeCredentials,
   refresh: refreshClaudeCodeCredentials,
 }
 
@@ -1528,21 +1683,58 @@ export const makeAnthropicCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
-  makeSourceCredentialCache(cellRef, io, PRIMARY_SOURCE)
+  makeSourceCredentialCache(
+    cellRef,
+    {
+      // A keychain miss surfaces as ProviderAuthError; swallowing it
+      // turns the miss into a refresh attempt instead of a failure.
+      read: () => Effect.option(io.read),
+      refresh: io.refresh,
+    },
+    PRIMARY_SOURCE,
+  )
+
+/**
+ * The credential cache of a linked directory: its read and refresh are the
+ * state machine of `readLinked` and `refreshLinked`, under the lock on the
+ * rotation gent's store holds for the directory.
+ */
+const makeLinkedCredentialCache = (
+  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  source: LinkedSource,
+  lock: LockSourceRotation,
+): Effect.Effect<CredentialCache<ClaudeCredentials>, never, LinkedIORequirements> =>
+  makeSourceCredentialCache(
+    cellRef,
+    {
+      read: (cached) => readLinked(source, lock, cached),
+      refresh: (held) => refreshLinked(source, lock, held),
+    },
+    source,
+  )
+
+/** How a source's cache reads (given the credential it holds, if any) and refreshes. */
+interface SourceIO<R> {
+  readonly read: (
+    cached: Option.Option<ClaudeCredentials>,
+  ) => Effect.Effect<Option.Option<ClaudeCredentials>, never, R>
+  readonly refresh: (
+    held: Option.Option<ClaudeCredentials>,
+  ) => Effect.Effect<ClaudeCredentials, CredentialFailure, R>
+}
 
 /**
  * The credential cache over the Claude Code login of `source`, read and
  * refreshed through `io`. The source is the truth: once the cache TTL lapses
  * the cache re-reads it, so a refresh Claude Code wrote there is adopted.
  */
-const makeSourceCredentialCache = (
+const makeSourceCredentialCache = <R>(
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  io: AnthropicCredentialIO,
+  io: SourceIO<R>,
   source: ClaudeCodeSource,
-): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
+): Effect.Effect<CredentialCache<ClaudeCredentials>, never, R> =>
   Effect.gen(function* () {
-    const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
-    const read = io.read.pipe(Effect.provideContext(ioContext))
+    const ioContext = yield* Effect.context<R>()
     const hint = signInHint(source)
     const subject = ClaudeCodeSource.match(source, {
       Primary: () => "Claude Code",
@@ -1553,9 +1745,7 @@ const makeSourceCredentialCache = (
       credentials: ClaudeCredentials,
       cellRef,
       expiresAt: (creds) => creds.expiresAt,
-      // A keychain miss surfaces as ProviderAuthError; swallowing it
-      // turns the miss into a refresh attempt instead of a failure.
-      read: Option.some(() => Effect.option(read)),
+      read: Option.some((cached) => io.read(cached).pipe(Effect.provideContext(ioContext))),
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
       // gets the generic hint. A linked directory's failure keeps the
@@ -3445,12 +3635,11 @@ export const buildAnthropicModelDriver = (
   // another, gets a new stamp, so it reads its new directory and is never
   // answered by the last one's warm token. A request still on the old link
   // takes a cell of its own; no cell ever holds two links' tokens. A
-  // rotation whose write-back failed stays pending beside its link's cell,
-  // so every later request on that link writes it back first.
+  // rotation gent holds is not in the cell: it is in the credential store,
+  // keyed by the directory, so every link of that directory meets it.
   interface LinkedCell {
     readonly link: string
     readonly cell: CredentialCacheCellRef<ClaudeCredentials>
-    readonly pending: PendingRotationRef
   }
   const linkedCells = new Map<CredentialSlot, LinkedCell>()
   const linkedCell = (slot: CredentialSlot, link: string): LinkedCell => {
@@ -3461,23 +3650,34 @@ export const buildAnthropicModelDriver = (
       cell: SynchronizedRef.makeUnsafe<CredentialCacheCell<ClaudeCredentials>>(
         EMPTY_CREDENTIAL_CELL,
       ),
-      pending: Ref.makeUnsafe(Option.none<PendingRotation>()),
     }
     linkedCells.set(slot, fresh)
     return fresh
   }
   /** The credential cache of a named slot: the Claude Code directory its sign-in links. */
   const buildLinkedCredentialCache = (
-    signIn: { readonly metadata?: Readonly<Record<string, string>>; readonly signedInAt?: number },
+    signIn: {
+      readonly metadata?: Readonly<Record<string, string>>
+      readonly signedInAt?: number
+      readonly lockSourceRotation?: LockSourceRotation
+    },
     slot: CredentialSlot,
   ) =>
     Effect.gen(function* () {
       const source = yield* linkedSource(yield* linkedDirectory(signIn, slot))
+      // A link refreshes only where gent can hold the rotation it spends for.
+      const lock = signIn.lockSourceRotation
+      if (Predicate.isUndefined(lock)) {
+        return yield* new ProviderAuthError({
+          message: `Anthropic credential "${slot}" has no credential store to hold its rotation`,
+          credentialFailure: "Unavailable",
+        })
+      }
       const linked = linkedCell(
         slot,
         `${signIn.signedInAt ?? "unstamped"}\u0000${source.directory}`,
       )
-      return yield* makeSourceCredentialCache(linked.cell, linkedIO(source, linked.pending), source)
+      return yield* makeLinkedCredentialCache(linked.cell, source, lock)
     }).pipe(Effect.provideContext(services))
   return {
     id: "anthropic",
@@ -3604,14 +3804,17 @@ export const buildAnthropicModelDriver = (
             // Read once: the directory must hold a login that decodes. An
             // expired one is linked all the same; the first request
             // refreshes it. The reason names no token.
-            yield* readClaudeCodeCredentials(source).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAuthError({
-                    message: `No Claude Code login to link in ${source.directory}: ${cause.message}`,
-                  }),
-              ),
-            )
+            const found = yield* readLinkedSource(source)
+            if (found._tag === "SignedOut") {
+              return yield* new ProviderAuthError({
+                message: `No Claude Code login to link in ${source.directory}: it holds none`,
+              })
+            }
+            if (found._tag === "Unreadable") {
+              return yield* new ProviderAuthError({
+                message: `No Claude Code login to link in ${source.directory}: ${found.reason}`,
+              })
+            }
             // No token is stored: gent's store holds no secret it does not
             // read, and an older gent that reads this record finds no
             // refresh token, so it fails closed instead of refreshing a copy.
@@ -3638,7 +3841,7 @@ export const buildAnthropicModelDriver = (
           return yield* Effect.uninterruptibleMask((restore) =>
             SynchronizedRef.modifyEffect(credentialCellRef, () =>
               Effect.gen(function* () {
-                let creds = yield* restore(readClaudeCodeCredentials(PRIMARY_SOURCE))
+                let creds = yield* restore(readClaudeCodeCredentials)
                 const now = yield* Clock.currentTimeMillis
                 if (!freshEnoughAt(creds.expiresAt, now)) {
                   creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(

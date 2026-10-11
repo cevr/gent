@@ -71,6 +71,7 @@ export {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   DriverError,
+  PendingRotation,
   ProviderAuthError,
   ProviderAuthInfo,
   rateLimitResponse,
@@ -102,6 +103,8 @@ export type {
   ProviderAuthorizationResult,
   ProviderHints,
   RunEffort,
+  LockSourceRotation,
+  SourceRotation,
   StoredOAuthCredentials,
   UpdateStoredOAuth,
 } from "../domain/driver.js"

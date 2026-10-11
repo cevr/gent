@@ -282,6 +282,50 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
 )
 
 /**
+ * A token rotation a driver got for a login another program keeps (a
+ * linked Claude Code directory), held in gent's credential store until
+ * that program's store holds it. The refresh spent the program's refresh
+ * token, so until then `rotation` is the only live token of the login.
+ * `base` fingerprints the stored login the spend replaced: the program's
+ * store is still where gent left it while it holds that login, and moved on
+ * (a sign-in, its own refresh) once it holds another.
+ */
+export const PendingRotation = Schema.Struct({
+  rotation: Schema.Struct({
+    access: Schema.String,
+    refresh: Schema.String,
+    expires: Schema.Finite,
+  }),
+  base: Schema.String,
+})
+export type PendingRotation = typeof PendingRotation.Type
+
+/** The pending rotation of one source, read and written under the store's lock. */
+export interface SourceRotation {
+  /** The rotation the store holds for the source; none once it landed. */
+  readonly read: Effect.Effect<Option.Option<PendingRotation>, ProviderAuthError>
+  /** Hold `next`, or, with none, forget the source's rotation. */
+  readonly write: (next: Option.Option<PendingRotation>) => Effect.Effect<void, ProviderAuthError>
+}
+
+/**
+ * Run `use` with the pending rotation of `source` (a key the driver derives
+ * from the login's place, never from a label), under the same lock as every
+ * write of the provider's credentials: in this process and, on a host with a
+ * lock file, in every gent process over the store. Two refreshes of one
+ * source, in two profiles or two processes, never interleave.
+ */
+export type LockSourceRotation = (
+  source: string,
+) => <A, E>(
+  use: (held: SourceRotation) => Effect.Effect<A, E>,
+) => Effect.Effect<A, E | ProviderAuthError>
+
+const LockSourceRotation = Schema.declare<LockSourceRotation>(
+  (value): value is LockSourceRotation => Predicate.isFunction(value),
+)
+
+/**
  * The stored credential a driver receives in `resolveModel` and
  * `listModels`. An API key carries the answers to its method's prompts
  * (`metadata`, absent for a key stored without any). An OAuth sign-in carries
@@ -292,7 +336,10 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
  * answered by the account it held before. Its `metadata` is what its sign-in
  * stored beside the tokens (`PersistAuth`), as an API key's answers are: a
  * refresh through `update` and a rename keep it, and no `/auth` listing
- * shows it.
+ * shows it. `lockSourceRotation` reaches the rotations a driver holds for
+ * logins other programs keep (`PendingRotation`), keyed by the login's
+ * place, so a rename or a second sign-in of the label meets the same one;
+ * the store gives it to every OAuth sign-in.
  */
 export const ProviderAuthInfo = Schema.TaggedUnion({
   Api: {
@@ -305,6 +352,7 @@ export const ProviderAuthInfo = Schema.TaggedUnion({
     slot: Schema.optional(CredentialSlot),
     signedInAt: Schema.optional(Schema.Finite),
     metadata: Schema.optional(AuthMetadata),
+    lockSourceRotation: Schema.optional(LockSourceRotation),
   },
 })
 export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>

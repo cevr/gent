@@ -61,6 +61,8 @@ import {
   type ModelRouterContribution,
   modelFromCatalog,
   ReasoningOption,
+  type LockSourceRotation,
+  PendingRotation,
   type PersistAuth,
   authMethodAppliesTo,
   type CredentialFailureReason,
@@ -238,6 +240,17 @@ interface AuthStoreAccess {
   readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
   /** The provider ids an entry is stored under, decoded or not. */
   readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
+  /** The rotation `provider`'s driver holds for `source` (`PendingRotation`); none when it holds none. */
+  readonly getRotation: (
+    provider: string,
+    source: string,
+  ) => Effect.Effect<Option.Option<PendingRotation>, AuthError>
+  /** Hold `next` for `source`, or remove the held one. */
+  readonly setRotation: (
+    provider: string,
+    source: string,
+    next: Option.Option<PendingRotation>,
+  ) => Effect.Effect<void, AuthError>
 }
 
 export interface AuthService {
@@ -283,6 +296,21 @@ export interface AuthService {
       current: Option.Option<AuthInfo>,
     ) => Effect.Effect<readonly [A, Option.Option<AuthInfo>], E>,
     slot?: CredentialSlot,
+  ) => Effect.Effect<A, E | AuthError>
+  /**
+   * Run `use` with the rotation `provider`'s driver holds for `source`, under
+   * the provider's lock: the lock of `set`, `remove` and `update`, so two
+   * refreshes of one source, in any profile or any process over the store,
+   * never interleave. A rotation is no credential of a label: no listing
+   * shows it, and a rename or a removal leaves it.
+   */
+  readonly withRotation: <A, E>(
+    provider: string,
+    source: string,
+    use: (held: {
+      readonly read: Effect.Effect<Option.Option<PendingRotation>, AuthError>
+      readonly write: (next: Option.Option<PendingRotation>) => Effect.Effect<void, AuthError>
+    }) => Effect.Effect<A, E>,
   ) => Effect.Effect<A, E | AuthError>
 }
 
@@ -390,6 +418,13 @@ export const serializeAuthStore = (
           return result
         }),
       ),
+    withRotation: (provider, source, use) =>
+      exclusive(provider)(
+        use({
+          read: store.getRotation(provider, source),
+          write: (next) => store.setRotation(provider, source, next),
+        }),
+      ),
   }
 }
 
@@ -486,6 +521,18 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             return pathService.join(directory, encodeURIComponent(provider))
           return pathService.join(providerDirectory(provider), encodeURIComponent(slot))
         }
+        // Held rotations sit beside the entries, under a dot directory no
+        // listing reads, so an older gent never sees one.
+        const segment = (name: string) => {
+          const encoded = encodeURIComponent(name)
+          if (encoded === "." || encoded === "..") return encoded.replaceAll(".", "%2E")
+          return encoded
+        }
+        const rotationFileOf = (provider: string, source: string) =>
+          pathService.join(directory, ".rotations", segment(provider), segment(source))
+        const rotationCodec = Schema.fromJsonString(Schema.toCodecJson(PendingRotation))
+        const decodeRotation = Schema.decodeEffect(rotationCodec)
+        const encodeRotation = Schema.encodeEffect(rotationCodec)
         const namesIn = (dir: string) =>
           fs.readDirectory(dir).pipe(
             Effect.catchIf(
@@ -574,6 +621,48 @@ export class Auth extends Context.Service<Auth, AuthService>()(
               )
               return [...new Set([...legacy, ...named])]
             }),
+            // A held rotation that does not decode is never discarded: it may
+            // be the only live token of a login. The read fails and says so.
+            getRotation: (provider, source) =>
+              fs.readFileString(rotationFileOf(provider, source)).pipe(
+                Effect.asSome,
+                Effect.catchIf(
+                  (error) => error.reason._tag === "NotFound",
+                  () => Effect.succeedNone,
+                ),
+                Effect.mapError(wrap("Failed to read a held token rotation")),
+                Effect.flatMap((text) =>
+                  Option.match(text, {
+                    onNone: () => Effect.succeedNone,
+                    onSome: (raw) =>
+                      decodeRotation(raw).pipe(
+                        Effect.asSome,
+                        Effect.mapError(wrap("A held token rotation does not decode")),
+                      ),
+                  }),
+                ),
+              ),
+            setRotation: (provider, source, next) =>
+              Option.match(next, {
+                onNone: () =>
+                  fs
+                    .remove(rotationFileOf(provider, source), { force: true })
+                    .pipe(Effect.mapError(wrap("Failed to remove a held token rotation"))),
+                onSome: (rotation) =>
+                  encodeRotation(rotation).pipe(
+                    Effect.tap(() =>
+                      fs.makeDirectory(pathService.dirname(rotationFileOf(provider, source)), {
+                        recursive: true,
+                      }),
+                    ),
+                    Effect.flatMap((text) =>
+                      writeFileAtomic(rotationFileOf(provider, source), text, { mode: 0o600 }),
+                    ),
+                    Effect.mapError(wrap("Failed to hold a token rotation")),
+                    Effect.provideService(FileSystem.FileSystem, fs),
+                    Effect.provideService(Path.Path, pathService),
+                  ),
+              }),
           },
           (provider) => providerLock.exclusive(directory, provider),
         )
@@ -591,7 +680,17 @@ export class Auth extends Context.Service<Auth, AuthService>()(
           new Map([[DEFAULT_CREDENTIAL_SLOT, info]]),
         ]),
       )
+      // A path holds no NUL, so the key names one provider and one source.
+      const rotations = new Map<string, PendingRotation>()
+      const rotationKey = (provider: string, source: string) => `${provider}\u0000${source}`
       return serializeAuthStore({
+        getRotation: (provider, source) =>
+          Effect.sync(() => Option.fromUndefinedOr(rotations.get(rotationKey(provider, source)))),
+        setRotation: (provider, source, next) =>
+          Effect.sync(() => {
+            if (Option.isSome(next)) rotations.set(rotationKey(provider, source), next.value)
+            else rotations.delete(rotationKey(provider, source))
+          }),
         list: Effect.sync(() => {
           const providers: string[] = []
           for (const [provider, slots] of map) if (slots.size > 0) providers.push(provider)
@@ -1204,8 +1303,33 @@ const toProviderAuthInfo = (
             ),
           ),
         ),
+    lockSourceRotation: sourceRotationLock(authStore, providerId),
   })
 }
+
+/**
+ * The rotations `providerId`'s driver holds for sources other programs keep,
+ * as a driver reaches them (`LockSourceRotation`): keyed by source, under
+ * the provider's lock, with the store's faults as `ProviderAuthError`.
+ */
+const sourceRotationLock =
+  (authStore: AuthService, providerId: string): LockSourceRotation =>
+  (source) =>
+  (use) => {
+    const asAuthFailure = (cause: AuthError) =>
+      new ProviderAuthError({
+        message: `${cause.message} (provider "${providerId}")`,
+        cause,
+      })
+    return authStore
+      .withRotation(providerId, source, (held) =>
+        use({
+          read: held.read.pipe(Effect.mapError(asAuthFailure)),
+          write: (next) => held.write(next).pipe(Effect.mapError(asAuthFailure)),
+        }),
+      )
+      .pipe(Effect.catchIf(Schema.is(AuthError), (cause) => Effect.fail(asAuthFailure(cause))))
+  }
 
 /** The OAuth fields of a stored credential; none for an API key. */
 const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentials> => {

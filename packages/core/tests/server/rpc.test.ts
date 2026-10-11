@@ -483,6 +483,8 @@ const failingAuthStoreLayer = Layer.succeed(
       get: () => Effect.as(Effect.void, void 0),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
+      getRotation: () => Effect.succeedNone,
+      setRotation: () => Effect.fail(new AuthError({ message: "write failed" })),
     }),
   ),
 )
@@ -495,6 +497,8 @@ const failingReadAuthStoreLayer = Layer.succeed(
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
+      getRotation: () => Effect.fail(new AuthError({ message: "read failed" })),
+      setRotation: () => Effect.void,
     }),
   ),
 )

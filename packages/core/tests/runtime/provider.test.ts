@@ -427,6 +427,8 @@ const failingReadAuthLayer = Layer.succeed(
       get: () => Effect.fail(new AuthError({ message: "read failed" })),
       set: () => Effect.void,
       remove: () => Effect.void,
+      getRotation: () => Effect.fail(new AuthError({ message: "read failed" })),
+      setRotation: () => Effect.void,
     }),
   ),
 )
@@ -986,6 +988,40 @@ describe("Auth", () => {
         }
         expect(yield* fs.exists(dir + "/personal")).toBe(false)
       }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "a held rotation is a file of its own keyed by its source, owner-only, shared by every store over the directory, and never discarded",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const source = "60475e44c7992da8758ab6b20d184256ebbae977bbd313d882c36f8adb6d9052"
+          const file = `${dir}/.rotations/anthropic/${source}`
+          const rotation = {
+            rotation: { access: "fake-held", refresh: "fake-held-refresh", expires: 1 },
+            base: "fake-base",
+          }
+          const readHeld = (store: typeof auth) =>
+            store.withRotation("anthropic", source, (held) => held.read)
+          yield* auth.withRotation("anthropic", source, (held) => held.write(Option.some(rotation)))
+          expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600)
+          // Another store over the directory, as another gent process opens it, reads it.
+          const other = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          expect(yield* readHeld(other)).toEqual(Option.some(rotation))
+          // It is no credential entry.
+          expect(yield* auth.list).toEqual([])
+          expect(yield* auth.listSlots("anthropic")).toEqual([])
+          // One that does not decode fails the read and stays: it may be a login's only live token.
+          yield* fs.writeFileString(file, "{torn")
+          const failure = yield* Effect.flip(readHeld(auth))
+          expect(failure._tag).toBe("AuthError")
+          expect(yield* fs.readFileString(file)).toBe("{torn")
+          yield* other.withRotation("anthropic", source, (held) => held.write(Option.none()))
+          expect(yield* fs.exists(file)).toBe(false)
+          expect(yield* readHeld(auth)).toEqual(Option.none())
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
     it.scopedLive(
@@ -1680,6 +1716,8 @@ const failingAuthStoreLayer = Layer.succeed(
       get: () => Effect.succeed(noStoredAuth),
       set: () => Effect.fail(new AuthError({ message: "write failed" })),
       remove: () => Effect.void,
+      getRotation: () => Effect.succeedNone,
+      setRotation: () => Effect.fail(new AuthError({ message: "write failed" })),
     }),
   ),
 )
@@ -1770,6 +1808,8 @@ const testAuthStorage: AuthService = serializeAuthStore({
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
+  getRotation: () => Effect.succeedNone,
+  setRotation: () => Effect.void,
 })
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
