@@ -520,7 +520,8 @@ export const withHeaders = (
  * `transformClient` signature requires.
  *
  * - `CredentialRefreshUnavailable` becomes a `TransportError`. The AI SDKs
- *   map it to a retryable `NetworkError`, and the loop tries again.
+ *   map it to a retryable `NetworkError`, and the loop tries again;
+ *   `explainCredentialFailure` gives it the failure's own message.
  * - `ProviderAuthError` becomes an `EncodeError`: the credential is part of
  *   building the request, and the request cannot be built. The AI SDKs map
  *   it to a `NetworkError` that is not retryable, so the loop does not run a
@@ -542,16 +543,70 @@ const asRequestError = (
   })
 }
 
-/** Fetch credentials for a request, surfacing a failure through the transport channel. */
+/**
+ * Fetch credentials for a request, surfacing a failure through the transport
+ * channel. The outcome is recorded where `explainCredentialFailure` reads it
+ * (`UnavailableCredential`): the failure that may pass, or none once a
+ * credential was fetched.
+ */
 const freshCredentials = <C>(
   creds: CredentialCache<C>,
   req: HttpClientRequest.HttpClientRequest,
 ): Effect.Effect<C, HttpClientError> =>
-  creds.getFresh.pipe(Effect.mapError((cause) => asRequestError(req, cause)))
+  Effect.gen(function* () {
+    const slot = yield* UnavailableCredential
+    return yield* creds.getFresh.pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (Option.isSome(slot)) slot.value.failure = Option.none()
+        }),
+      ),
+      Effect.tapError((cause) =>
+        Effect.sync(() => {
+          if (Option.isNone(slot)) return
+          if (cause._tag === "CredentialRefreshUnavailable") slot.value.failure = Option.some(cause)
+          else slot.value.failure = Option.none()
+        }),
+      ),
+      Effect.mapError((cause) => asRequestError(req, cause)),
+    )
+  })
+
+/**
+ * Where one explained SDK call records the credential failure that may pass
+ * which its last credential fetch met; none when the fetch passed.
+ */
+const UnavailableCredential = Context.Reference<
+  Option.Option<{ failure: Option.Option<CredentialRefreshUnavailable> }>
+>("@gent/extensions/src/providers/UnavailableCredential", {
+  defaultValue: () => Option.none(),
+})
 
 /** True when the SDK failed a request before it was sent: the credential is one cause. */
 const isUnbuiltRequest = (error: AiError.AiError): boolean =>
   error.reason._tag === "NetworkError" && error.reason.reason === "EncodeError"
+
+/** True when the SDK failed a request on its transport: a credential that may pass is one cause. */
+const isTransportFailure = (error: AiError.AiError): boolean =>
+  error.reason._tag === "NetworkError" && error.reason.reason === "TransportError"
+
+/**
+ * A request whose credential fetch failed in a way that may pass, as itself:
+ * still retryable, with the credential's own message and no network hint. It
+ * names no proved reason, so no slot is set aside for it.
+ */
+const unavailableCredentialError = (
+  error: AiError.AiError,
+  failure: CredentialRefreshUnavailable,
+): AiError.AiError =>
+  AiError.make({
+    module: error.module,
+    method: error.method,
+    reason: new AiError.InternalProviderError({
+      description: failure.message,
+      metadata: credentialFailureMetadata(new ProviderAuthError({ message: failure.message })),
+    }),
+  })
 
 /**
  * Give a request that failed on its credential the credential's own message.
@@ -564,8 +619,34 @@ const isUnbuiltRequest = (error: AiError.AiError): boolean =>
  * failure becomes an `AuthenticationError` that carries it in its metadata,
  * and the loop shows the user its own message. Any other result keeps the
  * SDK error.
+ *
+ * A failure that may pass crosses the SDK as a `TransportError`, which the
+ * SDK reads as the network's and words so. When the request's own last
+ * credential fetch met such a failure, that failure is the request's: it
+ * fails as itself (`unavailableCredentialError`), retryable still, with no
+ * second fetch.
  */
 export const explainCredentialFailure =
+  <C>(creds: CredentialCache<C>) =>
+  <A>(effect: Effect.Effect<A, AiError.AiError>): Effect.Effect<A, AiError.AiError> =>
+    Effect.suspend(() => {
+      const slot = { failure: Option.none<CredentialRefreshUnavailable>() }
+      return effect.pipe(
+        Effect.provideService(UnavailableCredential, Option.some(slot)),
+        Effect.catchIf(isTransportFailure, (error) =>
+          Effect.fail(
+            Option.match(slot.failure, {
+              onNone: () => error,
+              onSome: (failure) => unavailableCredentialError(error, failure),
+            }),
+          ),
+        ),
+        explainUnbuilt(creds),
+      )
+    })
+
+/** A request that failed before it was sent, when the credential fails for good, as that failure. */
+const explainUnbuilt =
   <C>(creds: CredentialCache<C>) =>
   <A>(effect: Effect.Effect<A, AiError.AiError>): Effect.Effect<A, AiError.AiError> =>
     effect.pipe(

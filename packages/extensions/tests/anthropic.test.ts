@@ -5353,7 +5353,7 @@ describe("linked rotation: a held rotation gent cannot read", () => {
   )
 })
 
-describe("linked rotation: a busy credential store", () => {
+describe("linked rotation: failures that may pass", () => {
   it.scopedLive(
     "a linked refresh that times out waiting for the store's lock may pass, and spends nothing",
     () =>
@@ -5383,6 +5383,32 @@ describe("linked rotation: a busy credential store", () => {
               error.message.includes("no token was spent"),
           ),
         ).toBe(true)
+        expect(writesOf(keychain.calls)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a linked source that cannot be read fails the request with its own reason, no network hint, and may pass",
+    () =>
+      Effect.gen(function* () {
+        // A torn keychain entry proves nothing: the request fails, to be tried again.
+        const keychain = fakeKeychain([[LINKED_SERVICE, { account: "alice", blob: "{torn" }]])
+        const endpoint = numberedEndpoint()
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const result = yield* requestFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          endpoint.respond,
+        )
+        expect(result.sent).toEqual([])
+        expect(Option.map(result.error, (error) => error.isRetryable)).toEqual(Option.some(true))
+        const message = Option.match(result.error, {
+          onNone: () => "answered",
+          onSome: (error) => error.message,
+        })
+        expect(message).toContain(`Claude Code's login on ${LINKED_DIRECTORY} could not be read`)
+        expect(message).toContain("no token was spent")
+        expect(message).not.toContain("Check your network connection")
         expect(writesOf(keychain.calls)).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
