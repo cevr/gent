@@ -173,6 +173,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import {
   type ApiClassContribution,
+  type AuthMetadata,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
   ProviderStopReason,
@@ -2071,7 +2072,8 @@ export const bunDriverHostServices: Effect.Effect<Context.Context<Crypto.Crypto 
 /**
  * The language model a turn resolves for `modelId` through the production
  * resolver, from `modelDrivers` and an auth store holding the API keys in
- * `stored` (store key → key), plus optional slot-bound OAuth rows. It resolves
+ * `stored` (store key → key), plus optional slot-bound OAuth rows (with the
+ * `metadata` their sign-in stored, such as a linked directory). It resolves
  * `credentialSlot` when supplied, else the legacy default. A driver test sends a request over
  * a fake fetch to see which credential a sign-in sends; a failed resolution
  * is a defect. The resolver reads `catalog` (usually `fixtureModelCatalog()`)
@@ -2085,6 +2087,7 @@ interface StoredCredentialModelInput {
     readonly provider: string
     readonly slot?: CredentialSlot
     readonly credential: StoredOAuthCredentials
+    readonly metadata?: AuthMetadata
   }>
   readonly credentialSlot?: CredentialSlot
   readonly modelId: string
@@ -2120,7 +2123,11 @@ export function storedCredentialModel(
       for (const entry of input.oauth ?? []) {
         yield* auth.set(
           entry.provider,
-          AuthInfo.cases.Oauth.make({ type: "oauth", ...entry.credential }),
+          AuthInfo.cases.Oauth.make({
+            type: "oauth",
+            ...entry.credential,
+            ...omitUndefined({ metadata: entry.metadata }),
+          }),
           entry.slot,
         )
       }

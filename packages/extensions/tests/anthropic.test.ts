@@ -3,7 +3,6 @@ import { BunSqlite } from "@gent/core/host-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   makeAnthropicCredentialCache,
-  AnthropicExtension,
   type AnthropicCredentialIO,
   type AnthropicKeychainEnv,
   AnthropicPlatform,
@@ -39,8 +38,9 @@ import {
   Path,
   PlatformError,
   Ref,
-  Result,
+  Predicate,
   Schema,
+  Sink,
   Stream,
   SynchronizedRef,
 } from "effect"
@@ -51,15 +51,12 @@ import { ChildProcessSpawner } from "effect/process"
 import {
   captureProviderStopReason,
   storedCredentialModel,
-  createRpcHarness,
   createRpcClient,
   ConfigService,
   modelCatalogFixture,
   BunGentPlatformLive,
   BunProviderLockLive,
-  LanguageModelLayers,
   testAgent,
-  textStep,
   fixtureModelCatalog,
   testHostFacts,
   hostContextUpdateText,
@@ -84,9 +81,7 @@ import {
   type ProviderHints,
   SessionId,
   ProviderAuthInfo,
-  type StoredOAuthCredentials,
   type TurnNotice,
-  type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
 import { monitorMessage, WakeEntry, wakeTurnNotice } from "../src/wake.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
@@ -3923,326 +3918,740 @@ describe("Anthropic reset time", () => {
   )
 })
 
-describe("named Anthropic directory import", () => {
-  it.scopedLive("imports only the requested directory through RPC", () =>
+// ── linked Claude Code directories ──────────────────────────────────────────
+
+/** `sha256("/nonexistent/gent-link/claude-personal")` starts `60475e44`: the service Claude Code names for it. */
+const LINKED_DIRECTORY = "/nonexistent/gent-link/claude-personal"
+const LINKED_SERVICE = "Claude Code-credentials-60475e44"
+const PRIMARY_SERVICE = "Claude Code-credentials"
+const TOKEN_URL = "https://claude.ai/v1/oauth/token"
+const LINKED_SLOT = CredentialSlot.make("personal")
+
+/** A Claude Code login blob, as Claude Code stores it, with a field gent must keep. */
+const claudeBlob = (access: string, expiresAt: number) =>
+  encodeExternalJson({
+    claudeAiOauth: {
+      accessToken: access,
+      refreshToken: `${access}-refresh`,
+      expiresAt,
+      subscriptionType: "max",
+    },
+  })
+
+/** The answer of a process that exits with `exitCode`, printing `stdout` and `stderr`. */
+const processAnswer = (exitCode: number, stdout = "", stderr = "") =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    stdin: Sink.drain,
+    stdout: Stream.make(new TextEncoder().encode(stdout)),
+    stderr: Stream.make(new TextEncoder().encode(stderr)),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+    unref: Effect.succeed(Effect.void),
+  })
+
+interface KeychainEntry {
+  readonly account: string
+  readonly blob: string
+}
+
+/** The value after `flag` in `args`; empty when the flag is absent. */
+const flagValue = (args: ReadonlyArray<string>, flag: string): string =>
+  args[args.indexOf(flag) + 1] ?? ""
+
+/**
+ * A fake `security` over an in-memory keychain, as the injected spawner of a
+ * driver: it records every process the driver starts, and answers as macOS
+ * does. `find-generic-password -s S -w` prints the entry's blob (exit 44 when
+ * there is none), `find-generic-password -s S` prints its attributes, and
+ * `add-generic-password -U` updates the entry of the same account, or adds a
+ * second one under another. Any other command (`claude`) fails, recorded.
+ */
+const fakeKeychain = (initial: ReadonlyArray<readonly [string, KeychainEntry]>) => {
+  const entries = new Map<string, Array<KeychainEntry>>(
+    initial.map(([service, entry]) => [service, [entry]]),
+  )
+  const calls: Array<ReadonlyArray<string>> = []
+  let refuseWrites = false
+  const answer = (command: string, args: ReadonlyArray<string>) => {
+    if (command !== "security") return processAnswer(1, "", `${command}: refused by the test`)
+    const service = flagValue(args, "-s")
+    const held = entries.get(service) ?? []
+    const first = held[0]
+    if (args[0] === "find-generic-password") {
+      if (Predicate.isUndefined(first)) {
+        return processAnswer(44, "", "The specified item could not be found in the keychain.")
+      }
+      if (args.includes("-w")) return processAnswer(0, `${first.blob}\n`)
+      return processAnswer(
+        0,
+        `attributes:\n    "acct"<blob>="${first.account}"\n    "svce"<blob>="${service}"\n`,
+      )
+    }
+    if (args[0] === "add-generic-password") {
+      if (refuseWrites) return processAnswer(1, "", "write refused")
+      const account = flagValue(args, "-a")
+      const next = { account, blob: flagValue(args, "-w") }
+      const index = held.findIndex((entry) => entry.account === account)
+      if (index >= 0 && args.includes("-U")) held[index] = next
+      else held.push(next)
+      entries.set(service, held)
+      return processAnswer(0)
+    }
+    return processAnswer(1, "", "unknown security command")
+  }
+  return {
+    calls,
+    entries,
+    spawner: ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        if (command._tag !== "StandardCommand") return processAnswer(1)
+        calls.push([command.command, ...command.args])
+        return answer(command.command, command.args)
+      }),
+    ),
+    /** Claude Code writes `entry` to `service`, as its own refresh or sign-in does. */
+    write: (service: string, entry: KeychainEntry) =>
+      Effect.sync(() => {
+        entries.set(service, [entry])
+      }),
+    refuseWrites: () => {
+      refuseWrites = true
+    },
+  }
+}
+
+/** The `security` calls that name `service`. */
+const callsOn = (calls: ReadonlyArray<ReadonlyArray<string>>, service: string) =>
+  calls.filter((call) => call.includes(service))
+
+/** The driver over `platform` with `spawner` as its only process host, as setup builds it. */
+const linkedDriver = (
+  platform: "darwin" | "linux",
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+) =>
+  Effect.gen(function* () {
+    const services = Context.add(
+      yield* driverServices(
+        AnthropicPlatform.of({ platform, home: "/nonexistent/gent-link-home", env: {} }),
+      ),
+      ChildProcessSpawner.ChildProcessSpawner,
+      spawner,
+    )
+    return buildAnthropicModelDriverLive(
+      yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+      Option.none(),
+      services,
+      "1h",
+    )
+  })
+type LinkedDriver = Effect.Success<ReturnType<typeof linkedDriver>>
+
+/** The sign-in a linked slot stores: the directory, and no token gent ever reads. */
+const linkedSignIn = (
+  directory: string,
+  signedInAt = 1,
+  slot: CredentialSlot = LINKED_SLOT,
+): ProviderAuthInfo =>
+  ProviderAuthInfo.cases.Oauth.make({
+    slot,
+    signedInAt,
+    metadata: { directory },
+    update: () => Effect.die(new Error("a linked slot never reads the gent store")),
+  })
+
+/** The token endpoint rotates a refresh token; `during` runs while the refresh is in flight. */
+const rotatingEndpoint =
+  (during: Effect.Effect<void> = Effect.void): FakeResponder =>
+  (request) => {
+    if (request.url !== TOKEN_URL) return anthropicHappyResponse()
+    return during.pipe(
+      Effect.as({
+        status: 200,
+        body: encodeExternalJson({
+          access_token: "fake-rotated-access",
+          refresh_token: "fake-rotated-refresh",
+          expires_in: 3600,
+        }),
+      }),
+    )
+  }
+
+/** The refresh token a token request spends; empty when it names none. */
+const refreshTokenOf = (request: { readonly body?: string }) =>
+  new URLSearchParams(request.body ?? "").get("refresh_token") ?? ""
+
+/** Resolve `authInfo` through `driver` and send one request on it; what went out. */
+const sendThrough = (driver: LinkedDriver, authInfo: ProviderAuthInfo, responder: FakeResponder) =>
+  Effect.gen(function* () {
+    const state = makeFakeFetchState()
+    const model = yield* driver
+      .resolveModel("claude-opus-4-6", authInfo)
+      .pipe(Effect.provide(fakeFetchLayer(state, responder)))
+    yield* oneGenerate(model, state, responder)
+    return {
+      authorization: state.captured.filter((request) => request.url !== TOKEN_URL).at(-1)?.headers[
+        "authorization"
+      ],
+      refreshTokens: state.captured
+        .filter((request) => request.url === TOKEN_URL)
+        .map(refreshTokenOf),
+    }
+  })
+
+/** The `ProviderAuthError` `driver` fails to resolve `authInfo` with; none when it resolves. */
+const resolveFailure = (
+  driver: LinkedDriver,
+  authInfo: ProviderAuthInfo,
+  responder: FakeResponder = rotatingEndpoint(),
+) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      driver
+        .resolveModel("claude-opus-4-6", authInfo)
+        .pipe(Effect.provide(fakeFetchLayer(makeFakeFetchState(), responder))),
+    )
+    if (Exit.isSuccess(exit)) return Option.none<ProviderAuthError>()
+    return Cause.findErrorOption(exit.cause).pipe(Option.filter(Schema.is(ProviderAuthError)))
+  })
+
+/** A Claude Code config directory under `home` holding `blob` as its login. */
+const scratchDirectory = (home: string, name: string, blob: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const directory = path.join(home, name)
+    yield* fs.makeDirectory(directory)
+    if (Option.isSome(blob)) {
+      yield* fs.writeFileString(path.join(directory, ".credentials.json"), blob.value)
+    }
+    return { directory, file: path.join(directory, ".credentials.json") }
+  })
+
+describe("linked Claude Code directory", () => {
+  it.scopedLive(
+    "a linked slot reads the keychain service named for its directory, and its request carries that token",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-linked", now + 3600000) }],
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", now + 3600000) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
+        expect(keychain.calls).toContainEqual([
+          "security",
+          "find-generic-password",
+          "-s",
+          LINKED_SERVICE,
+          "-w",
+        ])
+        expect(callsOn(keychain.calls, PRIMARY_SERVICE)).toEqual([])
+        expect(keychain.calls.every((call) => call[0] === "security")).toBe(true)
+        expect(sent.authorization).toBe("Bearer fake-linked")
+        expect(sent.refreshTokens).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a linked slot's refresh writes the rotated token back to the same keychain entry, and never runs the claude CLI",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
+        expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+        expect(sent.authorization).toBe("Bearer fake-rotated-access")
+        // The account comes from the same service, and `-U` updates its entry.
+        expect(keychain.calls).toContainEqual([
+          "security",
+          "find-generic-password",
+          "-s",
+          LINKED_SERVICE,
+        ])
+        const writes = keychain.calls.filter((call) => call[1] === "add-generic-password")
+        expect(writes.length).toBe(1)
+        const write = writes[0] ?? []
+        expect(write.slice(0, 6)).toEqual([
+          "security",
+          "add-generic-password",
+          "-s",
+          LINKED_SERVICE,
+          "-a",
+          "alice",
+        ])
+        expect(write.slice(6, 7)).toEqual(["-w"])
+        expect(write.slice(8)).toEqual(["-U"])
+        const stored = keychain.entries.get(LINKED_SERVICE) ?? []
+        expect(stored.map((entry) => entry.account)).toEqual(["alice"])
+        expect(stored[0]?.blob).toBe(write[7])
+        expect(stored[0]?.blob).toContain("fake-rotated-access")
+        expect(stored[0]?.blob).toContain("fake-rotated-refresh")
+        // Claude Code's own fields stay in the blob.
+        expect(stored[0]?.blob).toContain('"subscriptionType":"max"')
+        expect(callsOn(keychain.calls, PRIMARY_SERVICE)).toEqual([])
+        expect(keychain.calls.some((call) => call[0] === "claude")).toBe(false)
+        expect(keychain.entries.get(PRIMARY_SERVICE)?.[0]?.blob).toBe(claudeBlob("fake-primary", 0))
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("off darwin a linked slot reads and writes the directory's .credentials.json", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
       const home = yield* fs.makeTempDirectoryScoped()
-      const directory = path.join(home, "second")
-      yield* fs.makeDirectory(directory)
-      yield* fs.writeFileString(
-        path.join(directory, ".credentials.json"),
-        encodeExternalJson({
-          claudeAiOauth: {
-            accessToken: "fake-second-access",
-            refreshToken: "fake-second-refresh",
-            expiresAt: (yield* Clock.currentTimeMillis) + 3600000,
-          },
-        }),
-      )
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-      const { client, sessionId } = yield* createRpcHarness({
-        agents: [testAgent],
-        extensionInputs: [AnthropicExtension],
-        providerLayer,
+      const linked = yield* scratchDirectory(
         home,
-      })
-      const methods = yield* client.auth.listMethods({ sessionId })
-      expect(methods["anthropic"]?.[2]?.prompts?.[0]?.key).toBe("directory")
-      // A refresh rotates the token, so a copy that two programs refresh
-      // signs one of them out: the import asks for a directory no live
-      // Claude Code uses, and never writes it.
-      expect(methods["anthropic"]?.[2]?.prompts?.[0]?.label).toContain("only for gent")
-      const source = yield* fs.readFileString(path.join(directory, ".credentials.json"))
-      const slot = CredentialSlot.make("personal")
-      const imported = yield* client.auth.authorize({
-        sessionId,
-        provider: "anthropic",
-        method: 2,
-        slot,
-        inputs: { directory },
-      })
-      expect(imported?.instructions).toContain("gent refreshes it alone")
-      expect(imported?.instructions).toContain("do not run Claude Code on that directory again")
-      expect(yield* fs.readFileString(path.join(directory, ".credentials.json"))).toBe(source)
-      const rows = yield* client.auth.listProviders({ sessionId })
-      const row = rows.find((row) => row.provider === "anthropic")
-      expect(
-        row?.credentials?.some(
-          (entry) => entry.slot === slot && entry.hasKey && entry.authType === "oauth",
-        ),
-      ).toBe(true)
-      expect(row?.hasKey).toBe(false)
-      const refused = yield* Effect.exit(
-        client.auth.authorize({
-          sessionId,
-          provider: "anthropic",
-          method: 0,
-          slot: CredentialSlot.make("other"),
-        }),
+        "claude-personal",
+        Option.some(claudeBlob("fake-expired", 0)),
       )
-      expect(Exit.isFailure(refused)).toBe(true)
-      const missing = yield* Effect.exit(
-        client.auth.authorize({
-          sessionId,
-          provider: "anthropic",
-          method: 2,
-          slot: CredentialSlot.make("missing"),
-          inputs: { directory: path.join(home, "missing") },
-        }),
-      )
-      expect(Exit.isFailure(missing)).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
-  )
-})
-
-describe("named Anthropic credential cache", () => {
-  it.live("a label that holds another sign-in is never answered by the warm cell of the last", () =>
-    Effect.gen(function* () {
-      // The store as the request's `update` reads it, label by label.
-      const store = new Map<CredentialSlot, StoredOAuthCredentials>()
-      const slotA = CredentialSlot.make("a")
-      const updateFor =
-        (slot: CredentialSlot): UpdateStoredOAuth =>
-        (f) =>
-          Effect.gen(function* () {
-            const [result, next] = yield* f(Option.fromUndefinedOr(store.get(slot)))
-            if (Option.isSome(next)) store.set(slot, next.value)
-            return result
-          })
-      const signIn = (access: string, signedInAt: number) => {
-        store.set(slotA, { access, refresh: `${access}-refresh`, expires: FUTURE_MS })
-        return ProviderAuthInfo.cases.Oauth.make({
-          slot: slotA,
-          update: updateFor(slotA),
-          signedInAt,
-        })
-      }
-      const driver = yield* buildAnthropicModelDriver(
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
-        Option.none(),
-      )
-      const sent = (authInfo: ProviderAuthInfo) =>
-        Effect.gen(function* () {
-          const state = makeFakeFetchState()
-          yield* runOne(yield* driver.resolveModel("claude-opus-4-6", authInfo), state)
-          return state.captured.at(-1)?.headers["authorization"]
-        })
-      // A request on `a` warms its cell with the first account.
-      expect(yield* sent(signIn("fake-first", 1))).toBe("Bearer fake-first")
-      // Within the cell's lifetime, `a` is renamed away and another
-      // credential is renamed into it, with its own sign-in stamp.
-      expect(yield* sent(signIn("fake-second", 2))).toBe("Bearer fake-second")
-    }).pipe(Effect.timeout("8 seconds")),
-  )
-
-  it.scopedLive("named refresh uses only direct OAuth and never the primary source or CLI", () =>
-    Effect.gen(function* () {
-      let spawned = 0
-      const services = Context.add(
-        yield* driverServices(
-          AnthropicPlatform.of({
-            platform: "linux",
-            home: "/nonexistent/gent-named-refresh",
-            env: {},
-          }),
-        ),
-        ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make(() =>
-          Effect.sync(() => {
-            spawned++
-          }).pipe(Effect.andThen(Effect.die("named refresh forbids CLI"))),
-        ),
-      )
-      const driver = buildAnthropicModelDriverLive(
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
-        Option.none(),
-        services,
-        "1h",
-      )
-      const state = makeFakeFetchState()
-      const fetch = fakeFetchLayer(state, (request) => {
-        const refresh = new URLSearchParams(request.body ?? "").get("refresh_token")
-        if (refresh === "fake-revoked")
-          return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
-        return {
-          status: 200,
-          body: encodeExternalJson({
-            access_token: "fake-rotated-access",
-            refresh_token: "fake-rotated-refresh",
-            expires_in: 3600,
-          }),
-        }
-      })
-      for (const [slot, token, success] of [
-        [CredentialSlot.make("personal"), "fake-direct", true],
-        [CredentialSlot.make("revoked"), "fake-revoked", false],
-      ] as const) {
-        const model = storedCredentialModel({
-          modelDrivers: [driver],
-          stored: {},
-          oauth: [
-            {
-              provider: "anthropic",
-              slot,
-              credential: { access: "fake-expired", refresh: token, expires: 0 },
-            },
-          ],
-          modelId: "anthropic/claude-opus-4-6",
-          catalog: fixtureModelCatalog(),
-          credentialSlot: slot,
-        })
-        const result = yield* Effect.exit(Layer.build(model).pipe(Effect.provide(fetch)))
-        expect(Exit.isSuccess(result)).toBe(success)
-        if (Exit.isFailure(result)) {
-          const defect = Cause.findDefect(result.cause)
-          // The token endpoint refused it: a turn may move to the next credential.
-          expect(
-            Result.isSuccess(defect) &&
-              Schema.is(ProviderAuthError)(defect.success) &&
-              defect.success.message.includes("import it again") &&
-              defect.success.credentialFailure === "Rejected",
-          ).toBe(true)
-        }
-      }
-      expect(state.captured.length).toBe(2)
-      expect(
-        state.captured.every((request) => request.url === "https://claude.ai/v1/oauth/token"),
-      ).toBe(true)
-      expect(
-        new URLSearchParams(state.captured[0]?.body ?? "").get("refresh_token") === "fake-direct",
-      ).toBe(true)
-      expect(
-        new URLSearchParams(state.captured[1]?.body ?? "").get("refresh_token") === "fake-revoked",
-      ).toBe(true)
-      expect(spawned).toBe(0)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
-  )
-
-  it.scopedLive("a named refresh reply without a token leaves the credential unmarked", () =>
-    Effect.gen(function* () {
-      const driver = buildAnthropicModelDriverLive(
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
-        Option.none(),
-        yield* driverServices(
-          AnthropicPlatform.of({
-            platform: "linux",
-            home: "/nonexistent/gent-named-garbled",
-            env: {},
-          }),
-        ),
-        "1h",
-      )
-      // The token endpoint answers 200 with no access token: a parse fault.
-      const fetch = fakeFetchLayer(makeFakeFetchState(), () => ({
-        status: 200,
-        body: encodeExternalJson({ token_type: "bearer" }),
-      }))
-      const slot = CredentialSlot.make("personal")
-      const model = storedCredentialModel({
-        modelDrivers: [driver],
-        stored: {},
-        oauth: [
-          {
-            provider: "anthropic",
-            slot,
-            credential: { access: "fake-expired", refresh: "fake-garbled", expires: 0 },
-          },
-        ],
-        modelId: "anthropic/claude-opus-4-6",
-        catalog: fixtureModelCatalog(),
-        credentialSlot: slot,
-      })
-      const result = yield* Effect.exit(Layer.build(model).pipe(Effect.provide(fetch)))
-      expect(Exit.isFailure(result)).toBe(true)
-      if (Exit.isSuccess(result)) return
-      const defect = Cause.findDefect(result.cause)
-      // The reply proves nothing about the credential: the turn stays on it,
-      // and the text names the reply, not a refusal the user must answer
-      // with a new import.
-      expect(Result.isSuccess(defect) && Schema.is(ProviderAuthError)(defect.success)).toBe(true)
-      if (Result.isFailure(defect) || !Schema.is(ProviderAuthError)(defect.success)) return
-      expect(defect.success.credentialFailure).toBeUndefined()
-      expect(defect.success.message).toBe(
-        "Imported Claude Code credential refresh failed: OAuth refresh response missing access_token",
-      )
+      const processes = fakeKeychain([])
+      const driver = yield* linkedDriver("linux", processes.spawner)
+      const sent = yield* sendThrough(driver, linkedSignIn(linked.directory), rotatingEndpoint())
+      expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+      expect(sent.authorization).toBe("Bearer fake-rotated-access")
+      const written = yield* fs.readFileString(linked.file)
+      expect(written).toContain("fake-rotated-access")
+      expect(written).toContain("fake-rotated-refresh")
+      expect(written).toContain('"subscriptionType":"max"')
+      expect((yield* fs.stat(linked.file)).mode & 0o777).toBe(0o600)
+      expect(processes.calls).toEqual([])
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
-    "a warm named slot never serves an expired or missing slot, or invokes the primary CLI",
+    "linking stores the directory and no token, and refuses a relative or unreadable source",
     () =>
       Effect.gen(function* () {
-        let spawned = 0
-        const guard = ChildProcessSpawner.make(() =>
-          Effect.sync(() => {
-            spawned++
-          }).pipe(Effect.andThen(Effect.die("named credentials must not invoke a process"))),
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        // An expired login links: the first request refreshes it.
+        const linked = yield* scratchDirectory(
+          home,
+          "claude-personal",
+          Option.some(claudeBlob("fake-expired", 0)),
         )
-        const services = Context.add(
-          yield* driverServices(
-            AnthropicPlatform.of({
-              platform: "linux",
-              home: "/nonexistent/gent-named-primary",
-              env: {},
+        const empty = yield* scratchDirectory(home, "claude-empty", Option.none())
+        const before = yield* fs.readFileString(linked.file)
+        const persisted: Array<unknown> = []
+        const link = (driver: LinkedDriver, directory: string) =>
+          Effect.gen(function* () {
+            const authorize = driver.auth?.authorize
+            if (Predicate.isUndefined(authorize)) return yield* Effect.die("no authorize")
+            return yield* authorize({
+              sessionId: SessionId.make("link"),
+              methodIndex: 2,
+              authorizationId: "link",
+              slot: LINKED_SLOT,
+              inputs: { directory },
+              persist: (auth) =>
+                Effect.sync(() => {
+                  persisted.push(auth)
+                }),
+            })
+          })
+        const linux = yield* linkedDriver("linux", fakeKeychain([]).spawner)
+        expect(linux.auth?.methods[2]?.prompts?.[0]?.key).toBe("directory")
+        expect(linux.auth?.methods[2]?.credentialTarget).toBe("named")
+        // A trailing separator is no other directory.
+        const done = yield* link(linux, `${linked.directory}${path.sep}`)
+        expect(Option.map(done, (result) => result.method)).toEqual(Option.some("done"))
+        expect(persisted).toEqual([
+          {
+            type: "oauth",
+            access: "",
+            refresh: "",
+            expires: 0,
+            metadata: { directory: linked.directory },
+          },
+        ])
+        // The link reads the source and never writes it.
+        expect(yield* fs.readFileString(linked.file)).toBe(before)
+        for (const refused of ["claude-personal", empty.directory]) {
+          const failure = yield* Effect.flip(link(linux, refused))
+          expect(Schema.is(ProviderAuthError)(failure)).toBe(true)
+        }
+        expect(persisted.length).toBe(1)
+        // On darwin the source is the directory's keychain service.
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-linked", 0) }],
+        ])
+        const darwin = yield* linkedDriver("darwin", keychain.spawner)
+        yield* link(darwin, `${LINKED_DIRECTORY}/`)
+        expect(persisted.at(-1)).toEqual({
+          type: "oauth",
+          access: "",
+          refresh: "",
+          expires: 0,
+          metadata: { directory: LINKED_DIRECTORY },
+        })
+        expect(keychain.calls).toEqual([
+          ["security", "find-generic-password", "-s", LINKED_SERVICE, "-w"],
+        ])
+        const unlinked = yield* Effect.flip(link(darwin, "/nonexistent/gent-link/claude-none"))
+        expect(Schema.is(ProviderAuthError)(unlinked)).toBe(true)
+        expect(persisted.length).toBe(2)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a named slot stored without a directory fails closed and asks for a link", () =>
+    Effect.gen(function* () {
+      const keychain = fakeKeychain([
+        [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-linked", 0) }],
+        [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", 0) }],
+      ])
+      const driver = yield* linkedDriver("darwin", keychain.spawner)
+      // The owned copy an older gent imported: tokens in the store, no directory.
+      const owned = ProviderAuthInfo.cases.Oauth.make({
+        slot: LINKED_SLOT,
+        signedInAt: 1,
+        update: () => Effect.die(new Error("an owned copy is never refreshed")),
+      })
+      let refreshes = 0
+      const failure = yield* resolveFailure(driver, owned, () => {
+        refreshes++
+        return anthropicHappyResponse()
+      })
+      expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
+        Option.some("Unavailable"),
+      )
+      expect(
+        Option.exists(failure, (error) =>
+          error.message.includes("link the directory again in /auth"),
+        ),
+      ).toBe(true)
+      expect(refreshes).toBe(0)
+      expect(keychain.calls).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "the default slot reads and writes only the unsuffixed Claude Code-credentials entry",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-linked", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sent = yield* sendThrough(driver, makeOAuthInfo(), rotatingEndpoint())
+        expect(sent.authorization).toBe("Bearer fake-rotated-access")
+        expect(keychain.calls.length > 0).toBe(true)
+        expect(
+          keychain.calls.every(
+            (call) => call[0] === "security" && flagValue(call, "-s") === PRIMARY_SERVICE,
+          ),
+        ).toBe(true)
+        expect(keychain.calls).toContainEqual([
+          "security",
+          "find-generic-password",
+          "-s",
+          PRIMARY_SERVICE,
+          "-w",
+        ])
+        expect(
+          keychain.calls
+            .filter((call) => call[1] === "add-generic-password")
+            .map((call) => call[3]),
+        ).toEqual([PRIMARY_SERVICE])
+        expect(keychain.entries.get(PRIMARY_SERVICE)?.[0]?.blob).toContain("fake-rotated-access")
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toBe(claudeBlob("fake-linked", 0))
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked Claude Code write-back", () => {
+  it.scopedLive(
+    "a refresh Claude Code wrote between gent's read and its write is adopted, never overwritten",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const theirs = { account: "alice", blob: claudeBlob("fake-claude-code", now + 3600000) }
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        // Claude Code refreshes the same entry while gent's refresh is in flight.
+        const sent = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          rotatingEndpoint(keychain.write(LINKED_SERVICE, theirs)),
+        )
+        expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+        expect(keychain.calls.some((call) => call[1] === "add-generic-password")).toBe(false)
+        expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
+        // gent serves the newer login it found, not the rotation it dropped.
+        expect(sent.authorization).toBe("Bearer fake-claude-code")
+        const again = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
+        expect(again.authorization).toBe("Bearer fake-claude-code")
+        expect(again.refreshTokens).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "off darwin a refresh Claude Code wrote to the file during gent's refresh is adopted, never overwritten",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const now = yield* Clock.currentTimeMillis
+        const linked = yield* scratchDirectory(
+          home,
+          "claude-personal",
+          Option.some(claudeBlob("fake-expired", 0)),
+        )
+        const theirs = claudeBlob("fake-claude-code", now + 3600000)
+        const driver = yield* linkedDriver("linux", fakeKeychain([]).spawner)
+        const sent = yield* sendThrough(
+          driver,
+          linkedSignIn(linked.directory),
+          rotatingEndpoint(fs.writeFileString(linked.file, theirs).pipe(Effect.orDie)),
+        )
+        expect(sent.refreshTokens).toEqual(["fake-expired-refresh"])
+        expect(yield* fs.readFileString(linked.file)).toBe(theirs)
+        expect(sent.authorization).toBe("Bearer fake-claude-code")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a failed write-back leaves the keychain entry untouched and serves the rotated token from memory",
+    () =>
+      Effect.gen(function* () {
+        const original = { account: "alice", blob: claudeBlob("fake-expired", 0) }
+        const keychain = fakeKeychain([[LINKED_SERVICE, original]])
+        keychain.refuseWrites()
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sent = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
+        // The write was tried, and refused: the entry is as it was.
+        expect(keychain.calls.filter((call) => call[1] === "add-generic-password").length).toBe(1)
+        expect(keychain.entries.get(LINKED_SERVICE)).toEqual([original])
+        // The endpoint spent the old refresh token: the rotation is kept in
+        // memory and serves, and no second refresh spends it again.
+        expect(sent.authorization).toBe("Bearer fake-rotated-access")
+        const again = yield* sendThrough(driver, linkedSignIn(LINKED_DIRECTORY), rotatingEndpoint())
+        expect(again.authorization).toBe("Bearer fake-rotated-access")
+        expect(again.refreshTokens).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a write-back to an entry Claude Code removed during the refresh writes nothing and keeps the rotation",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        // Claude Code signs out of the directory while gent refreshes.
+        const signOut = Effect.sync(() => {
+          keychain.entries.delete(LINKED_SERVICE)
+        })
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sent = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          rotatingEndpoint(signOut),
+        )
+        expect(keychain.calls.some((call) => call[1] === "add-generic-password")).toBe(false)
+        expect(keychain.entries.has(LINKED_SERVICE)).toBe(false)
+        expect(sent.authorization).toBe("Bearer fake-rotated-access")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked Claude Code credential cache", () => {
+  it.scopedLive("a label linked again is never answered by the warm cell of the last link", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const now = yield* Clock.currentTimeMillis
+      const first = yield* scratchDirectory(
+        home,
+        "claude-first",
+        Option.some(claudeBlob("fake-first", now + 3600000)),
+      )
+      const second = yield* scratchDirectory(
+        home,
+        "claude-second",
+        Option.some(claudeBlob("fake-second", now + 3600000)),
+      )
+      const driver = yield* linkedDriver("linux", fakeKeychain([]).spawner)
+      const sent = (authInfo: ProviderAuthInfo) =>
+        sendThrough(driver, authInfo, rotatingEndpoint()).pipe(
+          Effect.map((result) => result.authorization),
+        )
+      // A request on the label warms its cell with the first directory's login.
+      expect(yield* sent(linkedSignIn(first.directory, 1))).toBe("Bearer fake-first")
+      // Within the cell's lifetime the label is linked to another directory,
+      // with its own sign-in stamp.
+      expect(yield* sent(linkedSignIn(second.directory, 2))).toBe("Bearer fake-second")
+      // Linked back to the first directory, after Claude Code signed in there
+      // again: the new link reads it anew.
+      yield* fs.writeFileString(first.file, claudeBlob("fake-first-again", now + 3600000))
+      expect(yield* sent(linkedSignIn(first.directory, 3))).toBe("Bearer fake-first-again")
+      // The default cell is no linked slot's, nor a linked slot the default's.
+      const keychain = fakeKeychain([
+        [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", now + 3600000) }],
+        [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-linked", now + 3600000) }],
+      ])
+      const darwin = yield* linkedDriver("darwin", keychain.spawner)
+      const viaDarwin = (authInfo: ProviderAuthInfo) =>
+        sendThrough(darwin, authInfo, rotatingEndpoint()).pipe(
+          Effect.map((result) => result.authorization),
+        )
+      expect(yield* viaDarwin(makeOAuthInfo())).toBe("Bearer fake-primary")
+      expect(yield* viaDarwin(linkedSignIn(LINKED_DIRECTORY))).toBe("Bearer fake-linked")
+      expect(yield* viaDarwin(makeOAuthInfo())).toBe("Bearer fake-primary")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a linked refresh the token endpoint refuses is rejected, and never reaches the primary entry or the CLI",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-revoked", 0) }],
+          [PRIMARY_SERVICE, { account: "alice", blob: claudeBlob("fake-primary", 0) }],
+        ])
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const sentTokens: Array<string> = []
+        const failure = yield* resolveFailure(driver, linkedSignIn(LINKED_DIRECTORY), (request) => {
+          sentTokens.push(refreshTokenOf(request))
+          return { status: 400, body: encodeExternalJson({ error: "invalid_grant" }) }
+        })
+        // The token endpoint refused it: a turn may move to the next credential.
+        expect(Option.map(failure, (error) => error.credentialFailure)).toEqual(
+          Option.some("Rejected"),
+        )
+        expect(
+          Option.exists(failure, (error) =>
+            error.message.includes(`CLAUDE_CONFIG_DIR=${LINKED_DIRECTORY}`),
+          ),
+        ).toBe(true)
+        expect(sentTokens).toEqual(["fake-revoked-refresh"])
+        expect(callsOn(keychain.calls, PRIMARY_SERVICE)).toEqual([])
+        expect(keychain.calls.every((call) => call[0] === "security")).toBe(true)
+        expect(keychain.calls.some((call) => call[1] === "add-generic-password")).toBe(false)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a linked refresh reply without a token leaves the credential unmarked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const linked = yield* scratchDirectory(
+        home,
+        "claude-garbled",
+        Option.some(claudeBlob("fake-garbled", 0)),
+      )
+      const driver = yield* linkedDriver("linux", fakeKeychain([]).spawner)
+      // The token endpoint answers 200 with no access token: a parse fault.
+      const failure = yield* resolveFailure(driver, linkedSignIn(linked.directory), () => ({
+        status: 200,
+        body: encodeExternalJson({ token_type: "bearer" }),
+      }))
+      // The reply proves nothing about the credential: the turn stays on it,
+      // and the text names the reply.
+      expect(
+        Option.exists(failure, (error) => Predicate.isUndefined(error.credentialFailure)),
+      ).toBe(true)
+      expect(
+        Option.exists(failure, (error) =>
+          error.message.includes("OAuth refresh response missing access_token"),
+        ),
+      ).toBe(true)
+      // The directory keeps the login it had.
+      expect(yield* fs.readFileString(linked.file)).toBe(claudeBlob("fake-garbled", 0))
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a warm linked slot never serves an expired, unlinked or missing slot, or runs a process",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const now = yield* Clock.currentTimeMillis
+        const work = yield* scratchDirectory(
+          home,
+          "claude-work",
+          Option.some(claudeBlob("fake-work", now + 3600000)),
+        )
+        // Expired, and with no refresh token to rotate.
+        const spent = yield* scratchDirectory(
+          home,
+          "claude-spent",
+          Option.some(
+            encodeExternalJson({
+              claudeAiOauth: { accessToken: "fake-spent", refreshToken: "", expiresAt: 0 },
             }),
           ),
-          ChildProcessSpawner.ChildProcessSpawner,
-          guard,
         )
+        const signedOut = yield* scratchDirectory(home, "claude-signed-out", Option.none())
+        const processes = fakeKeychain([])
         // One real builder survives all resolutions, exactly as an extension profile does.
-        const driver = buildAnthropicModelDriverLive(
-          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
-            EMPTY_CREDENTIAL_CELL,
-          ),
-          Option.none(),
-          services,
-          "1h",
-        )
-        const work = CredentialSlot.make("work")
-        const personal = CredentialSlot.make("personal")
+        const driver = yield* linkedDriver("linux", processes.spawner)
+        const unread = { access: "", refresh: "", expires: 0 }
+        const linkedRow = (slot: string, directory: string) => ({
+          provider: "anthropic",
+          slot: CredentialSlot.make(slot),
+          credential: unread,
+          metadata: { directory },
+        })
         const oauth = [
+          linkedRow("work", work.directory),
+          linkedRow("spent", spent.directory),
+          linkedRow("gone", signedOut.directory),
+          // An owned copy an older gent imported: tokens, and no directory.
           {
             provider: "anthropic",
-            slot: work,
-            credential: {
-              access: "fake-work",
-              refresh: "fake-work-refresh",
-              expires: (yield* Clock.currentTimeMillis) + 3600000,
-            },
-          },
-          {
-            provider: "anthropic",
-            slot: personal,
-            credential: { access: "fake-expired", refresh: "", expires: 0 },
+            slot: CredentialSlot.make("owned"),
+            credential: { access: "fake-owned", refresh: "fake-owned-refresh", expires: 0 },
           },
         ]
         for (const [slot, success] of [
-          [work, true],
-          [personal, false],
-          [CredentialSlot.make("missing"), false],
+          ["work", true],
+          ["spent", false],
+          ["gone", false],
+          ["owned", false],
+          ["missing", false],
+          ["work", true],
         ] as const) {
+          const state = makeFakeFetchState()
           const model = storedCredentialModel({
             modelDrivers: [driver],
             stored: {},
             oauth,
             modelId: "anthropic/claude-opus-4-6",
             catalog: fixtureModelCatalog(),
-            credentialSlot: slot,
+            credentialSlot: CredentialSlot.make(slot),
           })
-          const result = yield* Effect.exit(Layer.build(model))
-          expect(Exit.isSuccess(result)).toBe(success)
+          const result = yield* Effect.exit(
+            Layer.build(model).pipe(Effect.provide(fakeFetchLayer(state, rotatingEndpoint()))),
+          )
+          expect([slot, Exit.isSuccess(result)]).toEqual([slot, success])
+          // No slot that fails ever reaches the token endpoint with another's token.
+          expect(state.captured).toEqual([])
         }
-        expect(spawned).toBe(0)
+        expect(processes.calls).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 
-// ── named import commit ─────────────────────────────────────────────────────
+// ── link commit ─────────────────────────────────────────────────────────────
 
-/** Actual RPC profile and its exact registered builder/cells; only filesystem I/O is gated. */
-const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.none<string>()) =>
+/**
+ * Actual RPC profile and its exact registered builder/cells; only filesystem
+ * I/O is gated. `importFrom` links the label to a Claude Code config directory.
+ */
+const linkCommitRig = (sharedDirectory: Option.Option<string> = Option.none<string>()) =>
   Effect.gen(function* () {
     const disk = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -4302,13 +4711,13 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
     const platform = Layer.succeedContext(Context.add(basePlatform, FileSystem.FileSystem, fs))
     const ready = yield* Deferred.make<ReturnType<typeof buildAnthropicModelDriverLive>>()
     const extension = defineExtension({
-      id: "@test/named-import-commit",
+      id: "@test/link-commit",
       setup: Effect.gen(function* () {
         const host = yield* ExtensionHost
         const services = Context.add(
           yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
           ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("named import forbids CLI")),
+          ChildProcessSpawner.make(() => Effect.die("a link runs no process")),
         ).pipe(Context.add(FileSystem.FileSystem, fs))
         const driver = buildAnthropicModelDriverLive(
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -4397,56 +4806,89 @@ const namedImportCommitRig = (sharedDirectory: Option.Option<string> = Option.no
     }
   })
 
-describe("named import persistence and publication", () => {
+describe("link persistence and publication", () => {
   it.scopedLive(
-    "named imports cancel before commit while actual provider or SQLite locks are held",
+    "a link through RPC lists its label as a signed-in OAuth credential, and refuses a named sign-in that links nothing",
     () =>
       Effect.gen(function* () {
-        for (const separateHost of [false, true]) {
-          const rig = yield* namedImportCommitRig()
-          let owner = rig
-          if (separateHost) owner = yield* namedImportCommitRig(Option.some(rig.authDirectory))
-          const holdSlot = CredentialSlot.make("holding")
-          const holdingFile = rig.authDirectory + "/.slots/anthropic/holding"
-          const landed = yield* Deferred.make<void>()
-          const release = yield* Deferred.make<void>()
-          yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
-          owner.gateRename((file) => {
-            if (file !== holdingFile) return Effect.void
-            return Deferred.completeWith(landed, Effect.void).pipe(
-              Effect.andThen(Deferred.await(release)),
-            )
-          })
-          const holding = yield* owner.importSlot(owner.sourceB, holdSlot).pipe(Effect.forkScoped)
-          yield* Deferred.await(landed)
-          const before = yield* rig.disk.readFileString(rig.credentialFile)
-          const count = yield* Ref.get(rig.renames)
-          const reading = yield* Deferred.make<void>()
-          rig.gateReadComplete((file) => {
-            if (file !== rig.sourceB + "/.credentials.json") return Effect.void
-            return Deferred.completeWith(reading, Effect.void)
-          })
-          const waiting = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
-          yield* Deferred.await(reading)
-          yield* Effect.yieldNow
-          const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
-          yield* Deferred.completeWith(release, Effect.void)
-          yield* Fiber.join(holding)
-          owner.gateRename(() => Effect.void)
-          rig.gateReadComplete(() => Effect.void)
-          expect(Option.isSome(ended)).toBe(true)
-          expect(yield* Ref.get(rig.renames)).toBe(count)
-          expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
-          expect(yield* rig.requestUses("fake-a")).toBe(true)
-          yield* rig.importFrom(rig.sourceB)
-          expect(yield* rig.requestUses("fake-b")).toBe(true)
-        }
-      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+        const rig = yield* linkCommitRig()
+        const methods = yield* rig.client.auth.listMethods({ sessionId: rig.sessionId })
+        expect(methods["anthropic"]?.[2]?.prompts?.[0]?.key).toBe("directory")
+        expect(methods["anthropic"]?.[2]?.prompts?.[0]?.label).toContain("CLAUDE_CONFIG_DIR")
+        const linked = yield* rig.importFrom(rig.sourceB)
+        expect(linked?.instructions).toContain(`Linked ${rig.sourceB}`)
+        const rows = yield* rig.client.auth.listProviders({ sessionId: rig.sessionId })
+        const row = rows.find((entry) => entry.provider === "anthropic")
+        expect(
+          row?.credentials?.some(
+            (entry) => entry.slot === rig.slot && entry.hasKey && entry.authType === "oauth",
+          ),
+        ).toBe(true)
+        expect(row?.hasKey).toBe(false)
+        const named = yield* Effect.exit(
+          rig.client.auth.authorize({
+            sessionId: rig.sessionId,
+            provider: "anthropic",
+            method: 0,
+            slot: CredentialSlot.make("other"),
+          }),
+        )
+        expect(Exit.isFailure(named)).toBe(true)
+        const missing = yield* Effect.exit(
+          rig.importSlot(rig.home + "/missing", CredentialSlot.make("missing")),
+        )
+        expect(Exit.isFailure(missing)).toBe(true)
+        expect(yield* rig.requestUses("fake-b")).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("an interrupted landed replacement never leaves the old warm account serving", () =>
+  it.scopedLive("links cancel before commit while actual provider or SQLite locks are held", () =>
     Effect.gen(function* () {
-      const rig = yield* namedImportCommitRig()
+      for (const separateHost of [false, true]) {
+        const rig = yield* linkCommitRig()
+        let owner = rig
+        if (separateHost) owner = yield* linkCommitRig(Option.some(rig.authDirectory))
+        const holdSlot = CredentialSlot.make("holding")
+        const holdingFile = rig.authDirectory + "/.slots/anthropic/holding"
+        const landed = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+        owner.gateRename((file) => {
+          if (file !== holdingFile) return Effect.void
+          return Deferred.completeWith(landed, Effect.void).pipe(
+            Effect.andThen(Deferred.await(release)),
+          )
+        })
+        const holding = yield* owner.importSlot(owner.sourceB, holdSlot).pipe(Effect.forkScoped)
+        yield* Deferred.await(landed)
+        const before = yield* rig.disk.readFileString(rig.credentialFile)
+        const count = yield* Ref.get(rig.renames)
+        const reading = yield* Deferred.make<void>()
+        rig.gateReadComplete((file) => {
+          if (file !== rig.sourceB + "/.credentials.json") return Effect.void
+          return Deferred.completeWith(reading, Effect.void)
+        })
+        const waiting = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+        yield* Deferred.await(reading)
+        yield* Effect.yieldNow
+        const ended = yield* Fiber.interrupt(waiting).pipe(Effect.timeoutOption("300 millis"))
+        yield* Deferred.completeWith(release, Effect.void)
+        yield* Fiber.join(holding)
+        owner.gateRename(() => Effect.void)
+        rig.gateReadComplete(() => Effect.void)
+        expect(Option.isSome(ended)).toBe(true)
+        expect(yield* Ref.get(rig.renames)).toBe(count)
+        expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+        expect(yield* rig.requestUses("fake-a")).toBe(true)
+        yield* rig.importFrom(rig.sourceB)
+        expect(yield* rig.requestUses("fake-b")).toBe(true)
+      }
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("15 seconds")),
+  )
+
+  it.scopedLive("an interrupted landed link never leaves the old link's warm account serving", () =>
+    Effect.gen(function* () {
+      const rig = yield* linkCommitRig()
       const before = yield* rig.disk.readFileString(rig.credentialFile)
       const landed = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
@@ -4469,37 +4911,39 @@ describe("named import persistence and publication", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("early source cancellation writes nothing and releases the named cell", () =>
-    Effect.gen(function* () {
-      const rig = yield* namedImportCommitRig()
-      const before = yield* rig.disk.readFileString(rig.credentialFile)
-      const count = yield* Ref.get(rig.renames)
-      const reading = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
-      rig.gateRead((file) => {
-        if (file !== rig.sourceB + "/.credentials.json") return Effect.void
-        return Deferred.completeWith(reading, Effect.void).pipe(
-          Effect.andThen(Deferred.await(release)),
-        )
-      })
-      const replacing = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
-      yield* Deferred.await(reading)
-      const ended = yield* Fiber.interrupt(replacing).pipe(Effect.timeoutOption("300 millis"))
-      yield* Deferred.completeWith(release, Effect.void)
-      rig.gateRead(() => Effect.void)
-      expect(Option.isSome(ended)).toBe(true)
-      expect(yield* Ref.get(rig.renames)).toBe(count)
-      expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
-      expect(yield* rig.requestUses("fake-a")).toBe(true)
-      yield* rig.importFrom(rig.sourceB)
-      expect(yield* rig.requestUses("fake-b")).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a link cancelled while reading its source writes nothing and releases the cell",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* linkCommitRig()
+        const before = yield* rig.disk.readFileString(rig.credentialFile)
+        const count = yield* Ref.get(rig.renames)
+        const reading = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
+        rig.gateRead((file) => {
+          if (file !== rig.sourceB + "/.credentials.json") return Effect.void
+          return Deferred.completeWith(reading, Effect.void).pipe(
+            Effect.andThen(Deferred.await(release)),
+          )
+        })
+        const replacing = yield* rig.importFrom(rig.sourceB).pipe(Effect.forkScoped)
+        yield* Deferred.await(reading)
+        const ended = yield* Fiber.interrupt(replacing).pipe(Effect.timeoutOption("300 millis"))
+        yield* Deferred.completeWith(release, Effect.void)
+        rig.gateRead(() => Effect.void)
+        expect(Option.isSome(ended)).toBe(true)
+        expect(yield* Ref.get(rig.renames)).toBe(count)
+        expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+        expect(yield* rig.requestUses("fake-a")).toBe(true)
+        yield* rig.importFrom(rig.sourceB)
+        expect(yield* rig.requestUses("fake-b")).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("cancellation while the actual named cell is held performs no second write", () =>
+  it.scopedLive("a link cancelled while the linked cell is held performs no second write", () =>
     Effect.gen(function* () {
-      const rig = yield* namedImportCommitRig()
+      const rig = yield* linkCommitRig()
       const landed = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
       yield* Effect.addFinalizer(() => Deferred.completeWith(release, Effect.void))
@@ -4533,18 +4977,20 @@ describe("named import persistence and publication", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("failed real persistence leaves the old warm cell and stored entry intact", () =>
-    Effect.gen(function* () {
-      const rig = yield* namedImportCommitRig()
-      const before = yield* rig.disk.readFileString(rig.credentialFile)
-      rig.failRename(true)
-      const failed = yield* Effect.exit(rig.importFrom(rig.sourceB))
-      expect(Exit.isFailure(failed)).toBe(true)
-      expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
-      expect(yield* rig.requestUses("fake-a")).toBe(true)
-      rig.failRename(false)
-      yield* rig.importFrom(rig.sourceB)
-      expect(yield* rig.requestUses("fake-b")).toBe(true)
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a link whose persistence fails leaves the old warm cell and stored link intact",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* linkCommitRig()
+        const before = yield* rig.disk.readFileString(rig.credentialFile)
+        rig.failRename(true)
+        const failed = yield* Effect.exit(rig.importFrom(rig.sourceB))
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect((yield* rig.disk.readFileString(rig.credentialFile)) === before).toBe(true)
+        expect(yield* rig.requestUses("fake-a")).toBe(true)
+        rig.failRename(false)
+        yield* rig.importFrom(rig.sourceB)
+        expect(yield* rig.requestUses("fake-b")).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
   )
 })

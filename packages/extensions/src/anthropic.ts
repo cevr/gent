@@ -35,9 +35,8 @@ import {
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
+  type CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
-  type UpdateStoredOAuth,
-  type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
   acceptedEfforts,
@@ -55,8 +54,6 @@ import {
   catalogModels,
   type CredentialCache,
   CredentialCacheCell,
-  credentialCells,
-  replaceHeldCredential,
   type CredentialCacheCellRef,
   type CredentialFailure,
   checkCredentials,
@@ -528,12 +525,90 @@ const requestModelId = (req: HttpClientRequest.HttpClientRequest): string =>
     Option.getOrElse(() => "unknown"),
   )
 
-// ── oauth credentials file ──────────────────────────────────────────────────
+// ── oauth sources ───────────────────────────────────────────────────────────
 
-const credentialsFilePath = (home: string) =>
+/** The keychain service Claude Code stores its primary account under. */
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+/**
+ * Where a Claude Code login lives: what a slot's credential is read from, and
+ * what its refresh writes back to. The read, the refresh and the write-back
+ * all derive from it.
+ *
+ * - `Primary` — Claude Code's own account, the default slot's: the
+ *   unsuffixed keychain service on darwin, with `~/.claude/.credentials.json`
+ *   as its fallback, and the `claude` CLI as the last refresh.
+ * - `ConfigDir` — a config directory Claude Code runs on (its
+ *   `CLAUDE_CONFIG_DIR`), linked to a named slot. On darwin its own keychain
+ *   service (`service`, see `linkedSource`), elsewhere
+ *   `<directory>/.credentials.json`. There is no fallback, so the read and
+ *   the write-back meet one entry, and no CLI: the `claude` CLI refreshes the
+ *   primary account, not this one.
+ *
+ * Claude Code refreshes the same entry. Both programs read it before they
+ * refresh and write it back with a compare-and-swap (`compareAndWrite`), so
+ * neither signs the other out.
+ */
+const ClaudeCodeSource = Schema.TaggedUnion({
+  Primary: {},
+  ConfigDir: { directory: Schema.String, service: Schema.String },
+})
+type ClaudeCodeSource = typeof ClaudeCodeSource.Type
+type LinkedSource = typeof ClaudeCodeSource.cases.ConfigDir.Type
+
+const PRIMARY_SOURCE: ClaudeCodeSource = ClaudeCodeSource.cases.Primary.make({})
+
+/**
+ * The source of the Claude Code config directory `input`: the directory as
+ * `path.resolve` gives it (no trailing separator), and the keychain service
+ * Claude Code names for it, `Claude Code-credentials-` and the first 8 hex of
+ * the SHA-256 of that path. A path that is not absolute is refused: it names
+ * no one directory.
+ */
+const linkedSource = (
+  input: string,
+): Effect.Effect<LinkedSource, ProviderAuthError, Crypto.Crypto | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    return path.join(home, ".claude", ".credentials.json")
+    if (!path.isAbsolute(input)) {
+      return yield* new ProviderAuthError({
+        message: "Linking a Claude Code directory needs its absolute path",
+      })
+    }
+    const directory = path.resolve(input)
+    const digest = yield* sha256Hex(directory)
+    return ClaudeCodeSource.cases.ConfigDir.make({
+      directory,
+      service: `${CLAUDE_KEYCHAIN_SERVICE}-${digest.slice(0, 8)}`,
+    })
+  })
+
+/** The keychain service `source` reads and writes on darwin. */
+const keychainService = (source: ClaudeCodeSource): string =>
+  ClaudeCodeSource.match(source, {
+    Primary: () => CLAUDE_KEYCHAIN_SERVICE,
+    ConfigDir: (linked) => linked.service,
+  })
+
+/** What a user does when `source` no longer holds a usable sign-in. */
+const signInHint = (source: ClaudeCodeSource): string =>
+  ClaudeCodeSource.match(source, {
+    Primary: () => CLAUDE_SIGN_IN_HINT,
+    ConfigDir: (linked) =>
+      `Sign in again with Claude Code on that directory (CLAUDE_CONFIG_DIR=${linked.directory}); gent reads the new login from it.`,
+  })
+
+// ── oauth credentials file ──────────────────────────────────────────────────
+
+/** The credentials file of `source`: `~/.claude/.credentials.json`, or the linked directory's own. */
+const credentialsFilePath = (source: ClaudeCodeSource) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const platform = yield* AnthropicPlatform
+    return ClaudeCodeSource.match(source, {
+      Primary: () => path.join(platform.home, ".claude", ".credentials.json"),
+      ConfigDir: (linked) => path.join(linked.directory, ".credentials.json"),
+    })
   })
 
 const credentialFileDeadline = <A, R>(io: Effect.Effect<A, ProviderAuthError, R>) =>
@@ -544,39 +619,55 @@ const credentialFileDeadline = <A, R>(io: Effect.Effect<A, ProviderAuthError, R>
     }),
   )
 
-const readCredentialsFile: Effect.Effect<
+/**
+ * Read the credentials file of `source`. A linked directory with no file
+ * holds no login: that failure says so (`Unavailable`), so a turn may move
+ * on. The primary file's failures carry no reason, as before links.
+ */
+const readCredentialsFile = (
+  source: ClaudeCodeSource,
+): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
-  const platform = yield* AnthropicPlatform
-  const fs = yield* FileSystem.FileSystem
-  const credentialsFile = yield* credentialsFilePath(platform.home)
-  const exists = yield* fs.exists(credentialsFile).pipe(
-    Effect.mapError(
-      (e) =>
-        new ProviderAuthError({
-          message: `Failed to read Claude credentials file: ${e.message}`,
-          cause: e,
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const credentialsFile = yield* credentialsFilePath(source)
+    const exists = yield* fs.exists(credentialsFile).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read Claude credentials file: ${e.message}`,
+            cause: e,
+          }),
+      ),
+    )
+    if (!exists) {
+      return yield* new ProviderAuthError({
+        message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
+        ...omitUndefined({
+          credentialFailure: Option.getOrUndefined(missingLoginFailure(source)),
         }),
-    ),
-  )
-  if (!exists) {
-    return yield* new ProviderAuthError({
-      message: `Failed to read Claude credentials file: Credentials file not found: ${credentialsFile}`,
-    })
-  }
-  const raw = yield* fs.readFileString(credentialsFile).pipe(
-    Effect.mapError(
-      (e) =>
-        new ProviderAuthError({
-          message: `Failed to read Claude credentials file: ${e.message}`,
-          cause: e,
-        }),
-    ),
-  )
-  return yield* decodeCredentials(raw)
-}).pipe(credentialFileDeadline)
+      })
+    }
+    const raw = yield* fs.readFileString(credentialsFile).pipe(
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read Claude credentials file: ${e.message}`,
+            cause: e,
+          }),
+      ),
+    )
+    return yield* decodeCredentials(raw)
+  }).pipe(credentialFileDeadline)
+
+/** The reason a missing login gives: a linked source that holds none cannot serve; the primary's carries none. */
+const missingLoginFailure = (source: ClaudeCodeSource): Option.Option<"Unavailable"> => {
+  if (source._tag === "ConfigDir") return Option.some("Unavailable")
+  return Option.none()
+}
 
 /** Two stored credentials, or their absence, are the same sign-in at the same rotation. */
 const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
@@ -643,15 +734,15 @@ const compareAndWrite = <E, R>(
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
   base: RefreshBase,
+  source: ClaudeCodeSource,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
   AnthropicPlatform | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
     const fs = yield* FileSystem.FileSystem
-    const credentialsFile = yield* credentialsFilePath(platform.home)
+    const credentialsFile = yield* credentialsFilePath(source)
     const mapFsError = (e: { readonly message: string }) =>
       new ProviderAuthError({
         message: `Failed to write Claude credentials file: ${e.message}`,
@@ -670,9 +761,6 @@ const writeCredentialsFile = (
   }).pipe(credentialFileDeadline)
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
-
-/** The keychain service Claude Code stores its primary account under. */
-const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
   "ClaudeKeychainNotFoundError",
@@ -722,13 +810,16 @@ const spawnSecurity = (
     })
   })
 
-const readFromKeychain: Effect.Effect<
+const readFromKeychain = (
+  service: string,
+): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError | ClaudeKeychainNotFoundError,
   ChildProcessSpawner.ChildProcessSpawner
-> = spawnSecurity(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"]).pipe(
-  Effect.flatMap(decodeCredentials),
-)
+> =>
+  spawnSecurity(["find-generic-password", "-s", service, "-w"]).pipe(
+    Effect.flatMap(decodeCredentials),
+  )
 
 /**
  * Discover the macOS username stored on a keychain entry. The Claude
@@ -768,43 +859,103 @@ const writeKeychainEntry = (
         }),
       )
     }),
-    Effect.catchTag("ProcessError", (e) =>
-      Effect.fail(
+    // A spawn failure's message and cause name the command line, and the
+    // command line carries the credential blob: neither reaches the error.
+    Effect.catchTag("ProcessError", (e) => {
+      let reason = "did not run"
+      if (e.timedOut === true) reason = "timed out"
+      return Effect.fail(
         new ProviderAuthError({
-          message: `Failed to write Claude credentials to Keychain: ${e.message}`,
-          cause: e,
+          message: `Failed to write Claude credentials to Keychain: security add-generic-password ${reason}`,
         }),
-      ),
-    ),
+      )
+    }),
   )
 
 // ── oauth accounts ──────────────────────────────────────────────────────────
 
 /**
- * Read Claude Code's primary-account credentials: the keychain on darwin,
- * falling back to `~/.claude/.credentials.json` when the keychain has no
- * entry; that file alone elsewhere, mirroring the CLI.
+ * Read the credentials of `source`. The primary account: the keychain on
+ * darwin, falling back to `~/.claude/.credentials.json` when the keychain has
+ * no entry; that file alone elsewhere, mirroring the CLI. A linked directory:
+ * its own keychain service on darwin, with no fallback (a missing entry holds
+ * no login, `Unavailable`); its own `.credentials.json` elsewhere.
  */
-const readClaudeCodeCredentials: Effect.Effect<
+const readClaudeCodeCredentials = (
+  source: ClaudeCodeSource,
+): Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
-  const platform = yield* AnthropicPlatform
-  if (platform.platform !== "darwin") {
-    return yield* readCredentialsFile
-  }
-  return yield* readFromKeychain.pipe(
-    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile),
-  )
-})
+> =>
+  Effect.gen(function* () {
+    const platform = yield* AnthropicPlatform
+    if (platform.platform !== "darwin") {
+      return yield* readCredentialsFile(source)
+    }
+    const service = keychainService(source)
+    return yield* readFromKeychain(service).pipe(
+      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
+        ClaudeCodeSource.match(source, {
+          Primary: () => readCredentialsFile(source),
+          ConfigDir: () =>
+            Effect.fail(
+              new ProviderAuthError({
+                message: `No Claude Code login in keychain service ${service}`,
+                credentialFailure: "Unavailable",
+              }),
+            ),
+        }),
+      ),
+    )
+  })
 
 /**
- * Persist refreshed credentials back to the primary keychain entry
- * (or `~/.claude/.credentials.json` on non-darwin). Without
- * this, every direct OAuth refresh is wasted — the next read pulls
- * the stale `accessToken` straight back from disk/keychain. The
- * `acct` field is preserved by reading the existing entry first.
+ * Write a linked directory's refreshed credentials back to its keychain
+ * service, under the account (`acct`) that service already holds: a write
+ * under another account would add a second entry, not update this one. With
+ * no account found, nothing is written.
+ *
+ * The account is read first, so the compare-and-swap's re-read and its
+ * write (`add-generic-password -U`) follow each other directly: Claude Code
+ * refreshes this entry too, and a refresh it wrote before the re-read wins
+ * (`Superseded`). The keychain offers no atomic swap; this keeps the window
+ * between the check and the write to the two `security` calls.
+ */
+const writeBackLinkedKeychain = (
+  creds: ClaudeCredentials,
+  base: RefreshBase,
+  source: LinkedSource,
+): Effect.Effect<WriteBack, ProviderAuthError, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const account = yield* getKeychainAccountName(source.service)
+    if (Option.isNone(account)) {
+      return yield* new ProviderAuthError({
+        message: `Cannot write back: no account on keychain entry ${source.service}`,
+      })
+    }
+    const raw = yield* spawnSecurity(["find-generic-password", "-s", source.service, "-w"]).pipe(
+      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
+        Effect.fail(
+          new ProviderAuthError({
+            message: `Cannot write back: no keychain entry for ${source.service}`,
+          }),
+        ),
+      ),
+    )
+    return yield* compareAndWrite(raw, creds, base, (blob) =>
+      writeKeychainEntry(source.service, account.value, blob),
+    )
+  })
+
+/**
+ * Persist refreshed credentials back to the entry of `source` they were read
+ * from: the primary keychain entry (or `~/.claude/.credentials.json` on
+ * non-darwin), or the linked directory's own entry. Without this, every
+ * direct OAuth refresh is wasted — the next read pulls the stale
+ * `accessToken` straight back from disk/keychain, and the program that
+ * shares the entry holds a spent refresh token. The `acct` field is
+ * preserved by reading the existing entry first.
  *
  * The write is a compare-and-swap: it re-reads the stored blob and writes
  * only while it still holds the credential whose refresh token was sent, or
@@ -819,6 +970,7 @@ const readClaudeCodeCredentials: Effect.Effect<
 const writeBackCredentials = (
   creds: ClaudeCredentials,
   base: RefreshBase,
+  source: ClaudeCodeSource,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -827,8 +979,9 @@ const writeBackCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds, base)
+      return yield* writeCredentialsFile(creds, base, source)
     }
+    if (source._tag === "ConfigDir") return yield* writeBackLinkedKeychain(creds, base, source)
 
     // A read failure surfaces as a typed error, so the refresh call site
     // warns instead of reporting a keychain fault as a successful update.
@@ -975,9 +1128,16 @@ const spawnClaudeCli = (
  *
  * The failure is `CredentialRefreshUnavailable` when the token endpoint
  * was unreachable and the CLI fallback also failed, so the loop retries.
+ *
+ * A linked directory (`ConfigDir`) refreshes the same way from its own
+ * entry, but never through the CLI, which refreshes the primary account.
+ * When both direct attempts fail it fails with their reasons: a refusal the
+ * endpoint answered for every token is `Rejected`, and a directory with no
+ * login and no held token is `Unavailable`.
  */
 const refreshClaudeCodeCredentials = (
   held: Option.Option<ClaudeCredentials>,
+  source: ClaudeCodeSource,
 ): Effect.Effect<
   ClaudeCredentials,
   CredentialFailure,
@@ -992,10 +1152,12 @@ const refreshClaudeCodeCredentials = (
     // them instead of only the last one.
     const failures: Array<string> = []
     let endpointUnavailable = false
-    const current = yield* Effect.exit(readClaudeCodeCredentials)
+    const current = yield* Effect.exit(readClaudeCodeCredentials(source))
+    let readFailure = Option.none<ProviderAuthError>()
     if (Exit.isFailure(current)) {
+      readFailure = Cause.findErrorOption(current.cause)
       failures.push(
-        Option.match(Cause.findErrorOption(current.cause), {
+        Option.match(readFailure, {
           onNone: () => "keychain read failed",
           onSome: (error) => error.message,
         }),
@@ -1011,8 +1173,9 @@ const refreshClaudeCodeCredentials = (
           all.findIndex((other) => other.refreshToken === candidate.refreshToken) === index,
       )
     if (candidates.length === 0) failures.push("no stored refresh token")
+    let everyTokenRejected = candidates.length > 0
     for (const sent of candidates) {
-      const refreshed = yield* Effect.exit(rotateAndWriteBack({ read, sent }))
+      const refreshed = yield* Effect.exit(rotateAndWriteBack({ read, sent }, source))
       if (Exit.isSuccess(refreshed)) return refreshed.value
       const error = Cause.findErrorOption(refreshed.cause)
       failures.push(
@@ -1021,11 +1184,34 @@ const refreshClaudeCodeCredentials = (
           onSome: (e) => e.message,
         }),
       )
+      if (
+        !Option.exists(
+          error,
+          (e) => e._tag === "ProviderAuthError" && e.credentialFailure === "Rejected",
+        )
+      ) {
+        everyTokenRejected = false
+      }
       // An unreachable endpoint rejects every token alike; stop here.
       if (Option.isSome(error) && error.value._tag === "CredentialRefreshUnavailable") {
         endpointUnavailable = true
         break
       }
+    }
+    if (source._tag === "ConfigDir") {
+      const message = failures.join("; ")
+      if (endpointUnavailable) return yield* new CredentialRefreshUnavailable({ message })
+      let credentialFailure = Option.none<NonNullable<ProviderAuthError["credentialFailure"]>>()
+      if (everyTokenRejected) credentialFailure = Option.some("Rejected")
+      if (candidates.length === 0) {
+        credentialFailure = Option.flatMap(readFailure, (failure) =>
+          Option.fromUndefinedOr(failure.credentialFailure),
+        )
+      }
+      return yield* new ProviderAuthError({
+        message,
+        ...omitUndefined({ credentialFailure: Option.getOrUndefined(credentialFailure) }),
+      })
     }
     // Direct path failed — fall back to the CLI spawn (second attempt
     // historically helps when the first invocation kicks a stale-token
@@ -1036,7 +1222,7 @@ const refreshClaudeCodeCredentials = (
     const platform = yield* AnthropicPlatform
     return yield* spawnClaudeCli(platform.home).pipe(
       Effect.retry({ times: 1 }),
-      Effect.andThen(readClaudeCodeCredentials),
+      Effect.andThen(readClaudeCodeCredentials(source)),
       Effect.mapError((cause): CredentialFailure => {
         const message = `${failures.join("; ")}; CLI fallback: ${cause.message}`
         if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
@@ -1055,12 +1241,13 @@ const refreshClaudeCodeCredentials = (
  * deadlines; the step waits for them before cancellation surfaces.
  *
  * The write-back is best-effort so later processes pick up the new token. A
- * failed write-back does not lose the refresh: the caller has it in memory.
+ * failed write-back does not lose the refresh: the caller has it in memory,
+ * and the entry stays as it was.
  */
-const rotateAndWriteBack = (base: RefreshBase) =>
+const rotateAndWriteBack = (base: RefreshBase, source: ClaudeCodeSource) =>
   Effect.gen(function* () {
     const refreshed = yield* refreshViaOAuthClient(base.sent.refreshToken)
-    const outcome = yield* writeBackCredentials(refreshed, base).pipe(
+    const outcome = yield* writeBackCredentials(refreshed, base, source).pipe(
       Effect.catchEager((e: ProviderAuthError) =>
         Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
           Effect.annotateLogs({ error: String(e) }),
@@ -1105,18 +1292,21 @@ type CredentialIO = Effect.Effect<
 
 /** IO the service depends on, lifted out so tests can drive it without spawning `security` or touching the keychain. */
 export interface AnthropicCredentialIO {
-  /** Read the primary account's stored creds. */
+  /** Read the source's stored creds. */
   readonly read: CredentialIO
-  /** Refresh the primary account's creds via OAuth or CLI fallback; `held` is the cached credential. */
+  /** Refresh the source's creds via OAuth (or, for the primary account, the CLI fallback); `held` is the cached credential. */
   readonly refresh: (
     held: Option.Option<ClaudeCredentials>,
   ) => Effect.Effect<ClaudeCredentials, CredentialFailure, AnthropicCredentialIORequirements>
 }
 
-const realIO: AnthropicCredentialIO = {
-  read: readClaudeCodeCredentials,
-  refresh: refreshClaudeCodeCredentials,
-}
+/** The real IO of one Claude Code source: its read, and its refresh that writes back to it. */
+const sourceIO = (source: ClaudeCodeSource): AnthropicCredentialIO => ({
+  read: readClaudeCodeCredentials(source),
+  refresh: (held) => refreshClaudeCodeCredentials(held, source),
+})
+
+const realIO: AnthropicCredentialIO = sourceIO(PRIMARY_SOURCE)
 
 /**
  * What the driver runs on: the host's files, paths, processes, crypto and HTTP client, captured
@@ -1142,9 +1332,26 @@ export const makeAnthropicCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
+  makeSourceCredentialCache(cellRef, io, PRIMARY_SOURCE)
+
+/**
+ * The credential cache over the Claude Code login of `source`, read and
+ * refreshed through `io`. The source is the truth: once the cache TTL lapses
+ * the cache re-reads it, so a refresh Claude Code wrote there is adopted.
+ */
+const makeSourceCredentialCache = (
+  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  io: AnthropicCredentialIO,
+  source: ClaudeCodeSource,
+): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
   Effect.gen(function* () {
     const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
     const read = io.read.pipe(Effect.provideContext(ioContext))
+    const hint = signInHint(source)
+    const subject = ClaudeCodeSource.match(source, {
+      Primary: () => "Claude Code",
+      ConfigDir: (linked) => `Claude Code on ${linked.directory}`,
+    })
     const cache = yield* makeCredentialCache<ClaudeCredentials>({
       label: "Anthropic",
       credentials: ClaudeCredentials,
@@ -1155,142 +1362,56 @@ export const makeAnthropicCredentialCache = (
       read: Option.some(() => Effect.option(read)),
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
-      // gets the generic hint.
+      // gets the generic hint. A linked directory's failure keeps the
+      // reason it proved, so an unpinned turn moves past a refused login.
       refresh: (held) =>
         Effect.gen(function* () {
           const refreshed = yield* io.refresh(held).pipe(
             Effect.provideContext(ioContext),
             Effect.mapError((cause): CredentialFailure => {
               if (cause._tag === "CredentialRefreshUnavailable") return cause
+              const message = `${subject} sign-in failed: ${cause.message}. ${hint}`
+              if (source._tag === "Primary") return new ProviderAuthError({ message, cause })
               return new ProviderAuthError({
-                message: `Claude Code sign-in failed: ${cause.message}. ${CLAUDE_SIGN_IN_HINT}`,
-                cause,
+                message,
+                ...omitUndefined({ credentialFailure: cause.credentialFailure }),
               })
             }),
           )
           const now = yield* Clock.currentTimeMillis
           if (freshEnoughAt(refreshed.expiresAt, now)) return refreshed
           return yield* new ProviderAuthError({
-            message: `Claude Code credentials are expired. ${CLAUDE_SIGN_IN_HINT}`,
+            message: `${subject} credentials are expired. ${hint}`,
           })
         }),
-      // The keychain is the source of truth, and the refresh writes it.
-      // The stored `oauth` entry only selects this path; nothing reads its
-      // tokens, so a refresh is not written there.
+      // The source is the truth, and the refresh writes it. The stored
+      // `oauth` entry only selects this path (and, for a link, names the
+      // directory); nothing reads its tokens, so a refresh is not written
+      // there.
       store: Option.none(),
     })
     return cache
   })
 
-/** Named imports belong to Gent, never to the primary external source. */
-const buildNamedCredentialCache = (
-  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  signIn: { readonly update: UpdateStoredOAuth; readonly signedInAt?: number },
-  services: AnthropicDriverServices,
-) =>
-  makeCredentialCache<ClaudeCredentials>({
-    label: "Imported Claude Code",
-    credentials: ClaudeCredentials,
-    cellRef,
-    expiresAt: (creds) => creds.expiresAt,
-    refresh: (held) =>
-      Effect.gen(function* () {
-        if (Option.isNone(held) || held.value.refreshToken === "") {
-          return yield* new ProviderAuthError({
-            message: "Imported Claude Code credential unavailable; import it again",
-            credentialFailure: "Unavailable",
-          })
-        }
-        return yield* refreshViaOAuthClient(held.value.refreshToken).pipe(
-          Effect.provideContext(services),
-          Effect.catchTags({
-            // Only a refusal the token endpoint answered proves the credential
-            // is gone and asks for a new import; an unreadable reply keeps the
-            // turn on it and names the reply.
-            ProviderAuthError: (failed) => {
-              if (failed.credentialFailure === "Rejected") {
-                return Effect.fail(
-                  new ProviderAuthError({
-                    message: "Imported Claude Code credential rejected; import it again",
-                    credentialFailure: "Rejected",
-                  }),
-                )
-              }
-              return Effect.fail(
-                new ProviderAuthError({
-                  message: `Imported Claude Code credential refresh failed: ${failed.message}`,
-                  ...omitUndefined({ credentialFailure: failed.credentialFailure }),
-                }),
-              )
-            },
-            CredentialRefreshUnavailable: () =>
-              Effect.fail(
-                new CredentialRefreshUnavailable({
-                  message: "Imported Claude Code credential refresh unavailable; retry later",
-                }),
-              ),
-          }),
-        )
-      }),
-    read: Option.none(),
-    store: Option.some({
-      update: <A, E>(
-        f: (
-          stored: Option.Option<ClaudeCredentials>,
-        ) => Effect.Effect<readonly [A, Option.Option<ClaudeCredentials>], E>,
-      ) =>
-        signIn.update((stored) =>
-          Effect.map(
-            f(
-              Option.map(stored, (value) => ({
-                accessToken: value.access,
-                refreshToken: value.refresh,
-                expiresAt: value.expires,
-              })),
-            ),
-            (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
-              pair[0],
-              Option.map(pair[1], (value) => ({
-                access: value.accessToken,
-                refresh: value.refreshToken,
-                expires: value.expiresAt,
-              })),
-            ],
-          ),
-        ),
-      same: (a, b) => a.refreshToken === b.refreshToken,
-      ...omitUndefined({ signedInAt: signIn.signedInAt }),
+/**
+ * A named slot's sign-in is a link to a Claude Code config directory: the
+ * record names the directory (`metadata.directory`) and holds no token. A
+ * record with no directory is an owned copy an older gent imported; it fails
+ * closed and asks for a link, and its tokens are never refreshed.
+ */
+const linkedDirectory = (
+  signIn: { readonly metadata?: Readonly<Record<string, string>> },
+  slot: CredentialSlot,
+): Effect.Effect<string, ProviderAuthError> => {
+  const directory = signIn.metadata?.["directory"]
+  if (Predicate.isNotUndefined(directory) && directory !== "") return Effect.succeed(directory)
+  return Effect.fail(
+    new ProviderAuthError({
+      message: `Anthropic credential "${slot}" links no Claude Code directory: link the directory again in /auth`,
+      credentialFailure: "Unavailable",
     }),
-  })
-
-/** Explicit directory import never falls back to a keychain or another home. */
-const readImportedCredentials = (
-  directory: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    if (!path.isAbsolute(directory))
-      return yield* new ProviderAuthError({
-        message: "Claude Code import needs an absolute directory",
-      })
-    const fs = yield* FileSystem.FileSystem
-    const raw = yield* fs.readFileString(path.join(directory, ".credentials.json")).pipe(
-      Effect.mapError(
-        () =>
-          new ProviderAuthError({
-            message: "Claude Code import source unavailable; choose a directory with a login",
-          }),
-      ),
-    )
-    return yield* decodeCredentials(raw).pipe(
-      Effect.mapError(
-        () =>
-          new ProviderAuthError({
-            message: "Claude Code import source invalid; sign in there again",
-          }),
-      ),
-    )
-  }).pipe(credentialFileDeadline)
+  )
+}
 
 // ── keychain client ─────────────────────────────────────────────────────────
 
@@ -3123,7 +3244,33 @@ export const buildAnthropicModelDriver = (
   services: AnthropicDriverServices,
   promptCacheTtl: PromptCacheTtl,
 ): ModelDriverContribution & Required<Pick<ModelDriverContribution, "resolveModel">> => {
-  const cellFor = credentialCells(credentialCellRef)
+  // A linked slot's warm cell serves one link alone: the sign-in stamp and
+  // the directory it was read for. A label linked again, by this process or
+  // another, gets a new stamp, so it reads its new directory and is never
+  // answered by the last one's warm token. A request still on the old link
+  // takes a cell of its own; no cell ever holds two links' tokens.
+  const linkedCells = new Map<
+    CredentialSlot,
+    { readonly link: string; readonly cell: CredentialCacheCellRef<ClaudeCredentials> }
+  >()
+  const linkedCell = (slot: CredentialSlot, link: string) => {
+    const held = linkedCells.get(slot)
+    if (Predicate.isNotUndefined(held) && held.link === link) return held.cell
+    const cell =
+      SynchronizedRef.makeUnsafe<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+    linkedCells.set(slot, { link, cell })
+    return cell
+  }
+  /** The credential cache of a named slot: the Claude Code directory its sign-in links. */
+  const buildLinkedCredentialCache = (
+    signIn: { readonly metadata?: Readonly<Record<string, string>>; readonly signedInAt?: number },
+    slot: CredentialSlot,
+  ) =>
+    Effect.gen(function* () {
+      const source = yield* linkedSource(yield* linkedDirectory(signIn, slot))
+      const cell = linkedCell(slot, `${signIn.signedInAt ?? "unstamped"}\u0000${source.directory}`)
+      return yield* makeSourceCredentialCache(cell, sourceIO(source), source)
+    }).pipe(Effect.provideContext(services))
   return {
     id: "anthropic",
     name: "Anthropic",
@@ -3174,10 +3321,15 @@ export const buildAnthropicModelDriver = (
           // The credential cache is built over the extension-closure-owned
           // cell, so credential reuse survives. The credentials are checked before the
           // layer exists, so an expired sign-in fails with its own message.
+          // The default slot is Claude Code's own account; a named slot is
+          // the Claude Code directory it links.
           const slot = auth.value.slot ?? DEFAULT_CREDENTIAL_SLOT
-          let cacheEffect = buildLiveCredentialCache(cellFor(slot), services)
+          let cacheEffect: Effect.Effect<
+            CredentialCache<ClaudeCredentials>,
+            ProviderAuthError
+          > = buildLiveCredentialCache(credentialCellRef, services)
           if (slot !== DEFAULT_CREDENTIAL_SLOT) {
-            cacheEffect = buildNamedCredentialCache(cellFor(slot), auth.value, services)
+            cacheEffect = buildLinkedCredentialCache(auth.value, slot)
           }
           const creds = yield* cacheEffect
           yield* checkCredentials(creds)
@@ -3214,16 +3366,15 @@ export const buildAnthropicModelDriver = (
         AuthMethod.make({ type: "api", label: "Manually enter API key" }),
         AuthMethod.make({
           type: "oauth",
-          label: "Claude Code directory import",
+          label: "Link a Claude Code config directory",
           credentialTarget: "named",
-          // A refresh rotates the refresh token: a copy that Claude Code and
-          // gent both refresh signs one of them out. The import owns its
-          // copy alone and never writes the directory back, so the
-          // directory must be one only this import uses.
+          // The link stores the directory, never a token: each request reads
+          // the login Claude Code keeps for that directory, and a refresh
+          // writes the new token back to it, so both stay signed in.
           prompts: [
             {
               key: "directory",
-              label: "Absolute Claude Code directory, signed in only for gent",
+              label: "Absolute Claude Code config directory (the CLAUDE_CONFIG_DIR it runs with)",
             },
           ],
         }),
@@ -3234,52 +3385,55 @@ export const buildAnthropicModelDriver = (
           if (ctx.methodIndex === 2) {
             if (slot === DEFAULT_CREDENTIAL_SLOT)
               return yield* new ProviderAuthError({
-                message: "Directory import needs a named credential slot",
+                message: "Linking a Claude Code directory needs a named credential slot",
               })
-            const directory = ctx.inputs?.["directory"]
-            if (Predicate.isUndefined(directory))
+            const input = ctx.inputs?.["directory"]
+            if (Predicate.isUndefined(input))
               return yield* new ProviderAuthError({
-                message: "Claude Code import needs an absolute directory",
+                message: "Linking a Claude Code directory needs its absolute path",
               })
-            const creds = yield* readImportedCredentials(directory).pipe(
-              Effect.provideContext(services),
-            )
-            if (!freshEnoughAt(creds.expiresAt, yield* Clock.currentTimeMillis))
-              return yield* new ProviderAuthError({
-                message: "Claude Code import source expired; sign in there again",
-              })
-            yield* replaceHeldCredential(ClaudeCredentials, cellFor(slot), creds, (onPersisted) =>
-              ctx.persist(
-                {
-                  type: "oauth",
-                  access: creds.accessToken,
-                  refresh: creds.refreshToken,
-                  expires: creds.expiresAt,
-                },
-                onPersisted,
+            const source = yield* linkedSource(input)
+            // Read once: the directory must hold a login that decodes. An
+            // expired one is linked all the same; the first request
+            // refreshes it. The reason names no token.
+            yield* readClaudeCodeCredentials(source).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAuthError({
+                    message: `No Claude Code login to link in ${source.directory}: ${cause.message}`,
+                  }),
               ),
             )
+            // No token is stored: gent's store holds no secret it does not
+            // read, and an older gent that reads this record finds no
+            // refresh token, so it fails closed instead of refreshing a copy.
+            yield* ctx.persist({
+              type: "oauth",
+              access: "",
+              refresh: "",
+              expires: 0,
+              metadata: { directory: source.directory },
+            })
             return Option.some({
               url: "",
               method: "done" as const,
-              instructions:
-                "Imported into gent: gent refreshes it alone from now on. To keep both signed in, do not run Claude Code on that directory again; a refresh there signs gent out, and gent's refresh signs it out.",
+              instructions: `Linked ${source.directory}: gent reads the login Claude Code keeps there and writes each refresh back to it, so gent and Claude Code on that directory stay signed in together.`,
             })
           }
           if (ctx.methodIndex !== 0) return Option.none()
           if (slot !== DEFAULT_CREDENTIAL_SLOT)
             return yield* new ProviderAuthError({
-              message: "Named Claude Code credentials require directory import",
+              message: "A named Claude Code credential links a Claude Code config directory",
             })
           // The cell owns sign-in and refresh together. A spent token's rotation
           // reaches the cell before cancellation or a persistence failure surfaces.
           return yield* Effect.uninterruptibleMask((restore) =>
             SynchronizedRef.modifyEffect(credentialCellRef, () =>
               Effect.gen(function* () {
-                let creds = yield* restore(readClaudeCodeCredentials)
+                let creds = yield* restore(readClaudeCodeCredentials(PRIMARY_SOURCE))
                 const now = yield* Clock.currentTimeMillis
                 if (!freshEnoughAt(creds.expiresAt, now)) {
-                  creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
+                  creds = yield* refreshClaudeCodeCredentials(Option.none(), PRIMARY_SOURCE).pipe(
                     Effect.mapError((cause) => {
                       if (cause._tag === "ProviderAuthError") return cause
                       return new ProviderAuthError({ message: cause.message, cause })
