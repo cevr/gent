@@ -1427,6 +1427,20 @@ class SharedBuild implements Equal.Equal {
   }
 }
 
+/**
+ * The shared build a failed close belongs to, carried on each reason of the
+ * failure (`Cause.annotate`), so the log of a close names its extension,
+ * scope and build key, whichever scope's close reached it.
+ */
+class SharedBuildOwner extends Context.Service<
+  SharedBuildOwner,
+  {
+    readonly extensionId: ExtensionId
+    readonly scope: "server" | "process"
+    readonly key: string
+  }
+>()("@gent/core/src/runtime/extension-host/SharedBuildOwner") {}
+
 // ── host-platform ───────────────────────────────────────────────────────────
 
 export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, never, GentPlatform> =
@@ -2914,15 +2928,29 @@ export class SessionProfileCache extends Context.Service<
         // last profile holding it lets go (an idle time of zero). A build
         // that fails is held by no profile once its asker lets go, so the
         // next one to ask builds again. Builds of different keys never wait
-        // on each other.
+        // on each other. Each build goes into a child of its entry's scope,
+        // which the entry closes first: a failure of that close carries the
+        // build's owner (`SharedBuildOwner`), so `closeAll` names it.
         const builds = yield* RcMap.make({
           lookup: (build: SharedBuild) =>
-            Effect.flatMap(Effect.scope, (scope) =>
-              Layer.build(buildResourceLayer([build.extension], build.scope)).pipe(
+            Effect.gen(function* () {
+              const entry = yield* Effect.scope
+              const own = yield* Scope.fork(entry)
+              const owner = Context.make(SharedBuildOwner, {
+                extensionId: build.extension.manifest.id,
+                scope: build.scope,
+                key: build.key,
+              })
+              yield* Scope.addFinalizerExit(entry, (exit) =>
+                Scope.close(own, exit).pipe(
+                  Effect.catchCause((cause) => Effect.failCause(Cause.annotate(cause, owner))),
+                ),
+              )
+              return yield* Layer.build(buildResourceLayer([build.extension], build.scope)).pipe(
                 Effect.provideContext(build.context),
-                Effect.provideService(Scope.Scope, scope),
-              ),
-            ),
+                Effect.provideService(Scope.Scope, own),
+              )
+            }),
         })
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
@@ -3059,21 +3087,59 @@ export class SessionProfileCache extends Context.Service<
          * Close each scope with its exit, in order, each whatever the closes
          * before it did: a finalizer that dies fails its own scope's close
          * only, and every later scope still closes. Once all have run, the
-         * failures are logged together, not raised: they are extensions'
-         * failures, and the resolve or release that closes these scopes has
-         * done its own work (a stored profile stays good).
+         * failures are logged, one line per shared build they belong to, with
+         * its extension, scope and key (`SharedBuildOwner`), and one line for
+         * the rest. A lenient root goes on: they are extensions' failures, and
+         * the resolve or release that closes these scopes has done its own
+         * work (a stored profile stays good). A strict root
+         * (`failOnExtensionFailure`) then raises them together, so a failed
+         * extension is a defect that names it, at retire as at build.
          */
         const closeAll = (
           scopes: ReadonlyArray<readonly [Scope.Closeable, Exit.Exit<unknown, unknown>]>,
         ) =>
           Effect.forEach(scopes, ([scope, exit]) => Effect.exit(Scope.close(scope, exit))).pipe(
             Effect.flatMap((closed) => {
-              const failures = closed.filter(Exit.isFailure)
-              if (failures.length === 0) return Effect.void
-              return Effect.logError("session-profile.close-failed").pipe(
-                Effect.annotateLogs({
-                  error: failures.map((failure) => Cause.pretty(failure.cause)).join("\n"),
-                }),
+              const reasons = closed.flatMap((exit) => {
+                if (Exit.isSuccess(exit)) return []
+                return exit.cause.reasons
+              })
+              if (reasons.length === 0) return Effect.void
+              const byOwner = new Map<
+                string,
+                {
+                  readonly owner: Option.Option<SharedBuildOwner["Service"]>
+                  readonly reasons: Array<(typeof reasons)[number]>
+                }
+              >()
+              for (const reason of reasons) {
+                const owner = Context.getOption(Cause.reasonAnnotations(reason), SharedBuildOwner)
+                const key = Option.match(owner, { onNone: () => "", onSome: (found) => found.key })
+                const group = byOwner.get(key) ?? { owner, reasons: [] }
+                group.reasons.push(reason)
+                byOwner.set(key, group)
+              }
+              return Effect.forEach(byOwner.values(), (group) =>
+                Effect.logError("session-profile.close-failed").pipe(
+                  Effect.annotateLogs({
+                    ...Option.match(group.owner, {
+                      onNone: () => ({}),
+                      onSome: (owner) => ({
+                        extensionId: owner.extensionId,
+                        scope: owner.scope,
+                        key: owner.key,
+                      }),
+                    }),
+                    error: Cause.pretty(Cause.fromReasons(group.reasons)),
+                  }),
+                ),
+              ).pipe(
+                Effect.andThen(
+                  Effect.suspend(() => {
+                    if (!config.failOnExtensionFailure) return Effect.void
+                    return Effect.failCause(Cause.fromReasons(reasons))
+                  }),
+                ),
               )
             }),
           )
@@ -3238,6 +3304,10 @@ export class SessionProfileCache extends Context.Service<
          * finalizers under the lock; it closes after the new pass holds its
          * builds either way. A build's own acquisition, and its rollback when
          * that fails, still run under the lock, in the build the pass awaits.
+         * So a process Resource must not resolve or reload its own place from
+         * those, and a server Resource must not resolve or reload any place: a
+         * server Resource has no place, and every place that awaits its build
+         * holds its own lock.
          */
         const holdResources = (
           place: string,
@@ -3558,8 +3628,8 @@ export class SessionProfileCache extends Context.Service<
             // profiles close after the lock is let go, however the step
             // ended, so an extension finalizer that resolves this place again
             // finds the lock free. Each closes on its own; a finalizer that
-            // dies is logged and fails neither the other closes nor this
-            // resolve, whose profile is stored.
+            // dies is logged and fails neither the other closes nor, in a
+            // lenient root, this resolve, whose profile is stored (`closeAll`).
             const entry = yield* Effect.uninterruptibleMask((restore) =>
               Scope.addFinalizer(
                 callerScope,

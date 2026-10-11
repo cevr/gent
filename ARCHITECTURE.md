@@ -572,11 +572,16 @@ interrupt leaves a hold behind. A profile build closes the scopes it lets go
 of (a hold that failed or was interrupted, a pass a later pass replaced, the
 whole profile when its build fails) only after the place's lock is let go, as
 a retired profile's, so letting go of a build never runs its finalizers under
-the lock. Each closes on its own: a finalizer that dies is logged and stops no
-other close, and fails no resolve. A build's own acquisition, and its rollback
-when that acquisition fails, still run while the resolve that awaits the build
-holds the place's lock, so a Resource must not resolve or reload its own place
-from those.
+the lock. Each closes on its own: a finalizer that dies stops no other close.
+Once every close has run, each failure is logged with the shared build it
+belongs to (its extension id, scope and build key, carried on the failure by
+the build's own scope, `SharedBuildOwner`); a lenient root fails no resolve
+with it, and a test root raises them together (below). A build's own
+acquisition, and its rollback when that acquisition fails, still run while the
+resolve that awaits the build holds the place's lock. So a process Resource
+must not resolve or reload its own place from those, and a server Resource
+must not resolve or reload any place: a server Resource has no place, and
+every place that awaits its build holds its own lock.
 
 A profile builds every extension's server Resources first, in resolution
 order. A server build reads the host's services only, so its key is its
@@ -690,7 +695,9 @@ The production server uses one live profile owner:
   Layer, Scope and finalization; effect-encore owns durable actor commands and
   recovery. Test roots
   (`createE2ELayer`) set `failOnExtensionFailure`, so a failed extension is a
-  defect that names it; `allowFailedExtensions: true` keeps a failure-path
+  defect that names it, at build and at retire: a finalizer that dies when its
+  build is let go fails the resolve or release that let go of it, once every
+  close has run; `allowFailedExtensions: true` keeps a failure-path
   test running. The harness loads every `extensionInputs`/`extensions` entry
   at builtin scope; a scope test builds its profile from `LoadedExtension`s
   and passes it as `sessionProfileCacheLayer`.

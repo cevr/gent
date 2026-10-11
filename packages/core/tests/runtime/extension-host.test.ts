@@ -599,6 +599,51 @@ const startResource = (id: string, start: Effect.Effect<void>) =>
     ),
   })
 
+/**
+ * A builtin with a server and a process Resource. Armed, the process
+ * Resource's finalizer dies once; the server Resource's records its close.
+ * Disabling the extension lets go of both: the process build first.
+ */
+const dyingCloseExtension = () => {
+  const closed: Array<string> = []
+  const state = { armed: false, died: 0, closed }
+  const extension = defineExtension({
+    id: "close-dying",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "resource",
+        defineResource({
+          id: "close-dying/server",
+          scope: "server",
+          layer: Layer.effect(
+            ServerResourceProbe,
+            Effect.addFinalizer(() => Effect.sync(() => state.closed.push("server"))).pipe(
+              Effect.as(ServerResourceProbe.of({ build: 1 })),
+            ),
+          ),
+        }),
+        defineResource({
+          id: "close-dying/process",
+          scope: "process",
+          layer: Layer.effect(
+            SessionProfileStartProbe,
+            Effect.addFinalizer(() =>
+              Effect.suspend(() => {
+                if (!state.armed) return Effect.void
+                state.armed = false
+                state.died += 1
+                return Effect.die("finalizer broke")
+              }),
+            ).pipe(Effect.as(SessionProfileStartProbe.of({ value: "dying" }))),
+          ),
+        }),
+      )
+    }),
+  })
+  return { state, extension }
+}
+
 const makeCacheLayer = (params: {
   readonly cwd: string
   readonly home: string
@@ -1592,6 +1637,110 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A strict root reports a finalizer that dies at retire as it reports a
+  // build that fails: the resolve that lets go of the build dies with the
+  // finalizer's defect, but only after every other close ran (the server
+  // build, released after the process build, still closes).
+  it.scopedLive(
+    "a finalizer that dies when its build is let go fails the resolve in a strict root, after every close ran",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-close-strict-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const userConfig = path.join(home, ".gent", "config.json")
+        yield* Effect.forEach([path.dirname(userConfig), launch], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        const closing = dyingCloseExtension()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* resolve
+          closing.state.armed = true
+          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["close-dying"] }))
+          const retiring = yield* Effect.exit(resolve)
+          expect(closing.state.died).toBe(1)
+          expect(Exit.isFailure(retiring)).toBe(true)
+          if (Exit.isFailure(retiring)) {
+            expect(Cause.squash(retiring.cause)).toBe("finalizer broke")
+          }
+          expect(closing.state.closed).toEqual(["server"])
+          // The profile it stored stays good: the next resolve reads it.
+          const next = yield* Effect.exit(resolve)
+          expect(Exit.isSuccess(next)).toBe(true)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [closing.extension] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A lenient root goes on past a close that fails, and its log names the
+  // shared build the close belongs to.
+  it.scopedLive("a close that fails names its extension, scope and key", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-close-named-" })
+      const home = path.join(directory, "home")
+      const launch = path.join(directory, "launch")
+      const userConfig = path.join(home, ".gent", "config.json")
+      yield* Effect.forEach([path.dirname(userConfig), launch], (dir) =>
+        fs.makeDirectory(dir, { recursive: true }),
+      )
+      const closing = dyingCloseExtension()
+      const logs: Array<{ readonly message: string; readonly annotations: object }> = []
+      const capture = Logger.make(({ message, fiber }) => {
+        let rendered = String(message)
+        if (Array.isArray(message)) rendered = message.join(" ")
+        logs.push({
+          message: rendered,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+        })
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(launch))
+        yield* resolve
+        closing.state.armed = true
+        yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["close-dying"] }))
+        const retiring = yield* Effect.exit(resolve)
+        expect(closing.state.died).toBe(1)
+        expect(Exit.isSuccess(retiring)).toBe(true)
+        expect(closing.state.closed).toEqual(["server"])
+        const failed = logs.filter((log) => log.message.includes("session-profile.close-failed"))
+        expect(failed).toHaveLength(1)
+        expect(failed[0]?.annotations).toMatchObject({
+          extensionId: "close-dying",
+          scope: "process",
+          key: expect.stringContaining("builtin:close-dying:"),
+          error: expect.stringContaining("finalizer broke"),
+        })
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        Effect.provide(
+          Layer.mergeAll(
+            makeCacheLayer({
+              cwd: launch,
+              home,
+              extensions: [closing.extension],
+              allowFailedExtensions: true,
+            }),
+            Logger.layer([capture]),
+            Layer.succeed(References.MinimumLogLevel, "Info"),
+          ),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   // A resolve interrupted while it waits on a build only it holds lets go of
