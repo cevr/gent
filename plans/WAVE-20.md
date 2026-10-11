@@ -1184,7 +1184,7 @@ Implementation notes:
 - Added `packages/tooling/src/suppression-inventory.ts` and
   `check-suppression-inventory.ts`.
 - Guard fails `@ts-ignore`, direct `as any`, `as unknown as
-ExtensionHostContext`, block `eslint-disable`, and `@effect-diagnostics`
+  ExtensionHostContext`, block `eslint-disable`, and `@effect-diagnostics`
   outside the reviewed file inventory.
 - Wired the guard into root `bun run lint` and added fixture coverage in
   `packages/tooling/tests/suppression-inventory.test.ts`.
@@ -1563,7 +1563,7 @@ Closure:
   merge `3f26aaf Merge pull request #27 from cevr/changeset-release/main`.
 - Upstream `effect-encore` handler-context/state/storage fixes landed and the
   SQL storage release merged in `c7f4f94 Merge pull request #20 from
-cevr/changeset-release/main`.
+  cevr/changeset-release/main`.
 - Gent adopted the upstream primitives, removed the local actor/state
   workarounds, narrowed the public extension API, moved extension tests to
   `@gent/extensions`, split god tests, added RPC/model-turn acceptance

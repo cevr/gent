@@ -39,6 +39,7 @@ import {
   tailChars,
   tool,
   type TurnAfterInput,
+  type TurnNotice,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
@@ -371,11 +372,23 @@ type NoticeEntry = Extract<WakeEntry, { readonly _tag: "notice" }>
 const noticeKey = (notice: NoticeEntry) => `${notice.wakeId}@${notice.firedAt}`
 
 /**
- * Every notice as one turn notice; none gives none. The projection runs on
- * every step, so the notice stays for the whole turn; nothing is cleared
- * here. Only the notices a step showed clear, and only when the turn
- * answered: a notice written after the turn's last step read the file stays
- * for the next turn.
+ * The fires nobody answered as one turn notice. It is untrusted: each line
+ * holds the note the model wrote, and a monitor's holds its command and the
+ * command's output.
+ */
+export const wakeTurnNotice = (notices: ReadonlyArray<NoticeEntry>): TurnNotice => ({
+  id: "wake-notices",
+  keys: notices.map(noticeKey),
+  content: `# Notices\n\nThese fired while you were idle; nothing has answered them yet.\n\n${notices.map((notice) => `- ${notice.content}`).join("\n")}`,
+  trusted: false,
+})
+
+/**
+ * Every notice as one turn notice (`wakeTurnNotice`); none gives none. The
+ * projection runs on every step, so the notice stays for the whole turn;
+ * nothing is cleared here. Only the notices a step showed clear, and only
+ * when the turn answered: a notice written after the turn's last step read
+ * the file stays for the next turn.
  */
 const turnNotices = Effect.fn("WakeTool.notices")(function* () {
   const notices = (yield* store.read()).flatMap((entry) => {
@@ -383,13 +396,7 @@ const turnNotices = Effect.fn("WakeTool.notices")(function* () {
     return []
   })
   if (notices.length === 0) return []
-  return [
-    {
-      id: "wake-notices",
-      keys: notices.map(noticeKey),
-      content: `# Notices\n\nThese fired while you were idle; nothing has answered them yet.\n\n${notices.map((notice) => `- ${notice.content}`).join("\n")}`,
-    },
-  ]
+  return [wakeTurnNotice(notices)]
 })
 
 /**

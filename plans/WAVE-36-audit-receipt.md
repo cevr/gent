@@ -64,8 +64,8 @@ Wave 37 is needed (19 P1s, no P0s). No emergency.
     in `plans/WAVE-37.md` C10.
 - **L2-P1-4** — `packages/core/src/server/rpc-handlers.ts:258-415` —
   `branch.create / branch.switch / branch.fork / steer.command /
-queue.drain / queue.get / interaction.respondInteraction /
-session.updateReasoningLevel / session.watchRuntime / session.events`
+  queue.drain / queue.get / interaction.respondInteraction /
+  session.updateReasoningLevel / session.watchRuntime / session.events`
   lack `withWideEvent(rpcBoundary(...))` while `session.delete` and
   `message.send` have them. Inconsistent tracing at the RPC edge.
   Fix: extend the existing `rpcBoundary` envelope to every state-
@@ -260,7 +260,7 @@ session.updateReasoningLevel / session.watchRuntime / session.events`
   `removeRule` have zero production callers, only tests. Drop and
   expose `Live(initialRules)` only.
 - `server/connection-tracker.ts:29` — `ConnectionTracker.Test = () =>
-ConnectionTracker.Live` has zero callers; violates the CLAUDE.md
+  ConnectionTracker.Live` has zero callers; violates the CLAUDE.md
   "only add a Test layer when there's a real alternative
   implementation" rule. Delete.
 - `domain/auth.ts:218` — `AuthGuard.requiredProviders` is an internal

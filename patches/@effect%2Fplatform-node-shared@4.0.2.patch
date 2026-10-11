@@ -1,5 +1,5 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
-index ecb6729d62a1eaa3e6ee621552c027f634bd2581..61126cf3b23c15d6e8bc83ce9e62e40c458f1320 100644
+index b3e4deaa75124184262437280a97bad2b9e07c9d..021a41a0f401e281b9035e2c14100abbedaf4fce 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
 @@ -214,6 +214,11 @@ const make = /*#__PURE__*/Effect.gen(function* () {
@@ -15,10 +15,10 @@ index ecb6729d62a1eaa3e6ee621552c027f634bd2581..61126cf3b23c15d6e8bc83ce9e62e40c
          evaluate: () => childProcess.stdin,
          onError: error => toPlatformError("fromWritable(stdin)", toError(error), command),
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
-index e5f7a0dd7eb1e5fbca2b1b17eb761bd80c11280b..6f25565bb1c81b8d96252c818423df70ea4c67fb 100644
+index f15aa85d65f52c3f79e7a78403897c9c32eaa521..18564daf6cdafa51b84404d92bf29b5f57a7b0d2 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
-@@ -299,6 +299,11 @@ const make = Effect.gen(function*() {
+@@ -300,6 +300,11 @@ const make = Effect.gen(function*() {
        // sink that will attached to the process handle
        let sink: Sink.Sink<void, unknown, never, PlatformError.PlatformError> = Sink.drain
        if (Predicate.isNotNull(childProcess.stdin)) {

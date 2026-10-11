@@ -1554,9 +1554,11 @@ describe("OpenAI cache routing", () => {
   )
 
   // An effort change rides as a `configuration_update` item; the top level
-  // keeps the effort the conversation ran at before the change.
+  // keeps the effort the conversation ran at before the change. The SDK
+  // does not say the model takes a system message in its history, so the
+  // turn notice goes as a user message, and the change after it.
   it.live(
-    "OAuth requests carry an effort change as a configuration update before the turn notice",
+    "OAuth requests carry an effort change as a configuration update after the turn notice",
     () =>
       Effect.gen(function* () {
         const { driver } = yield* makeDriver({
@@ -1600,7 +1602,7 @@ describe("OpenAI cache routing", () => {
         expect(body.reasoning.effort).toBe("high")
         expect(
           body.input.map((item) => item.role ?? `${item.type}:${item.reasoning?.effort ?? "-"}`),
-        ).toEqual(["user", "assistant", "user", "configuration_update:low", "developer"])
+        ).toEqual(["user", "assistant", "user", "user", "configuration_update:low"])
       }),
   )
 })

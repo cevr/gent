@@ -1,407 +1,7 @@
-diff --git a/chunk-bun-j2z63cdy.js b/chunk-bun-j2z63cdy.js
-index f54fc0d21751a43caeda1ad48a973c2e8e83aac0..1c4aa6f2eb06a75597025e1d9d39b161cbd94b01 100644
---- a/chunk-bun-j2z63cdy.js
-+++ b/chunk-bun-j2z63cdy.js
-@@ -6506,6 +6506,7 @@ var ANSI = {
-   clearSavedLines: "\x1B[3J",
-   scrollDown: (lines) => `\x1B[${lines}T`,
-   scrollUp: (lines) => `\x1B[${lines}S`,
-+  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
-   moveCursor: (row, col) => `\x1B[${row};${col}H`,
-   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
-   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
-@@ -7284,7 +7285,9 @@ class CliRenderer2 extends EventEmitter5 {
-   _splitHeight = 0;
-   renderOffset = 0;
-   splitTailColumn = 0;
-+  parkedSplitScrollback = null;
-   pendingSplitFooterTransition = null;
-+  pendingSplitFramePrefix = "";
-   forceFullRepaintRequested = false;
-   maxSplitCommitsPerFrame = 8;
-   _terminalWidth = 0;
-@@ -7995,6 +7998,15 @@ Captured external output:
-       const previousSurfaceTopLine = this.renderOffset + 1;
-       const previousSurfaceHeight = this._splitHeight;
-       this.clearPendingSplitFooterTransition();
-+      const parked = this.parkedSplitScrollback;
-+      if (parked !== null) {
-+        this.parkedSplitScrollback = null;
-+        this.lib.setRenderOffset(this.rendererPtr, parked.renderOffset);
-+        this.syncSplitScrollback();
-+        this.forceFullRepaintRequested = true;
-+        this.requestRender();
-+        return;
-+      }
-       this.resetSplitScrollback(this.getSplitCursorSeedRows());
-       if (previousMode === "passthrough" && this._terminalIsSetup) {
-         const nextSurfaceTopLine = this.renderOffset + 1;
-@@ -8468,15 +8480,15 @@ Captured external output:
-     if (!this._terminalIsSetup || this._controlState === "explicit_suspended" /* EXPLICIT_SUSPENDED */) {
-       throw new Error("resetSplitFooterForReplay requires an active terminal");
-     }
--    this.flushPendingSplitOutputBeforeTransition(true);
-     this.externalOutputQueue.clear();
-+    this.applyPendingExternalOutputModeIfReady();
-     this.abortSplitStartupCursorSeed();
-     this.clearPendingSplitFooterTransition();
-     this.resetSplitScrollback();
-     this.currentRenderBuffer.clear(this.backgroundColor);
-     this.nextRenderBuffer.clear(this.backgroundColor);
-     this.forceFullRepaintRequested = true;
--    this.writeOut(ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home);
-+    this.pendingSplitFramePrefix += ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home;
-     this.requestRender();
-   }
-   getSnapshotWidth(value, fallback) {
-@@ -8652,8 +8664,39 @@ Captured external output:
-     }
-     return commits;
-   }
-+  splitFrameAdmitsViewportScroll() {
-+    const feed = this._feed;
-+    if (feed === null) {
-+      return true;
-+    }
-+    this.lib.streamCommit(feed.streamPtr);
-+    return !feed.isBackpressured();
-+  }
-+  openSplitFrame() {
-+    const transition = this.pendingSplitFooterTransition;
-+    const lines = transition?.scrollLines ?? 0;
-+    const scrolls = !(transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine);
-+    const prefix = this.pendingSplitFramePrefix;
-+    if (!scrolls && prefix === "") {
-+      return true;
-+    }
-+    if (!this.splitFrameAdmitsViewportScroll()) {
-+      return false;
-+    }
-+    this.pendingSplitFramePrefix = "";
-+    this.writeOut("\x1B[?2026h" + prefix + (scrolls ? ANSI.scrollIntoHistory(lines, this._terminalHeight) : ""));
-+    if (scrolls) {
-+      this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
-+    }
-+    return true;
-+  }
-   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
--    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
-+    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
-+    if (!this.openSplitFrame()) {
-+      this.scheduleRenderAfterFeedIdle();
-+      return "backpressured";
-+    }
-+    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
-     let hasCommittedOutput = false;
-     const lastCommitIndex = commits.length - 1;
-     let acceptedCommits = 0;
-@@ -8768,6 +8811,7 @@ Captured external output:
-     this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
-   }
-   resetSplitScrollback(seedRows = 0) {
-+    this.parkedSplitScrollback = null;
-     this.splitTailColumn = 0;
-     this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
-   }
-@@ -8792,8 +8836,10 @@ Captured external output:
-     const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
-     if (!splitActive) {
-       this.clearPendingSplitFooterTransition();
--      this.splitTailColumn = 0;
--      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      if (this.parkedSplitScrollback === null) {
-+        this.splitTailColumn = 0;
-+        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      }
-       this.renderOffset = 0;
-       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
-       return;
-@@ -8802,8 +8848,10 @@ Captured external output:
-       this.syncSplitScrollback();
-     } else {
-       this.clearPendingSplitFooterTransition();
--      this.splitTailColumn = 0;
--      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      if (this.parkedSplitScrollback === null) {
-+        this.splitTailColumn = 0;
-+        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      }
-       this.renderOffset = this.getSplitPinnedRenderOffset();
-       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
-     }
-@@ -8847,6 +8895,11 @@ Captured external output:
-     if (terminalWritable && prevSplitHeight > 0) {
-       this.flushPendingSplitOutputBeforeTransition();
-     }
-+    if (prevScreenMode === "split-footer" && prevSplitHeight > 0 && nextUseAlternateScreen) {
-+      this.parkedSplitScrollback = { renderOffset: this.renderOffset };
-+    } else if (screenMode !== "split-footer" && !nextUseAlternateScreen) {
-+      this.parkedSplitScrollback = null;
-+    }
-     const previousSurfaceTopLine = this.renderOffset + 1;
-     const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
-     const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
-@@ -8868,6 +8921,10 @@ Captured external output:
-     const splitFooterSurfaceMovesDown = nextSplitSurfaceOffset > splitTransitionSourceSurfaceOffset;
-     const splitFooterSurfaceLeavesStaleRows = splitFooterSurfaceMovesDown || shrinkingSplitFooter;
-     const shouldClearSplitSurfaceRowsImmediately = terminalWritable && !terminalScreenModeChanged && !shouldDeferSplitFooterResizeTransition && splitFooterSurfaceLeavesStaleRows && nextSplitHeight > 0;
-+    if (terminalWritable && !shouldDeferSplitFooterResizeTransition && this.pendingSplitFramePrefix !== "") {
-+      this.writeOut(this.pendingSplitFramePrefix);
-+      this.pendingSplitFramePrefix = "";
-+    }
-     if (terminalWritable && leavingSplitFooter) {
-       this.clearPendingSplitFooterTransition();
-       this.renderOffset = 0;
-@@ -8880,7 +8937,7 @@ Captured external output:
-         this.writeOut(scrollDown);
-       } else if (splitViewportScrollLines > 0) {
-         const additionalLines = splitViewportScrollLines;
--        const scrollUp = ANSI.scrollUp(additionalLines);
-+        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
-         this.writeOut(scrollUp);
-       }
-     }
-@@ -8929,6 +8986,9 @@ Captured external output:
-     if (terminalScreenModeChanged) {
-       if (terminalWritable) {
-         this.lib.suspendRenderer(this.rendererPtr);
-+        if (this.parkedSplitScrollback !== null && !nextUseAlternateScreen) {
-+          this.writeOut(ANSI.moveCursor(this.parkedSplitScrollback.renderOffset + 1, 1));
-+        }
-         this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
-         this.pendingSuspendedTerminalSetup = false;
-       } else {
-@@ -9543,6 +9603,7 @@ Captured external output:
-       }
-       return;
-     }
-+    this.parkedSplitScrollback = null;
-     if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
-       this.flushPendingSplitOutputBeforeTransition();
-     }
-@@ -9569,7 +9630,7 @@ Captured external output:
-       }
-       if (clearStart !== null) {
-         const flush = ANSI.moveCursorAndClear(clearStart, 1);
--        this.writeOut(flush);
-+        this.pendingSplitFramePrefix += flush;
-       }
-       this.currentRenderBuffer.clear(this.backgroundColor);
-     }
-@@ -10193,6 +10254,9 @@ Captured external output:
-         return "rendered";
-       }
-       const force = this.forceFullRepaintRequested;
-+      if (!this.openSplitFrame()) {
-+        return this.handleNativeRenderRejection(NATIVE_RENDER_STATUS_SKIPPED);
-+      }
-       const nativeStatus = this.lib.render(this.rendererPtr, force);
-       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
-         return this.handleNativeRenderRejection(nativeStatus);
-diff --git a/chunk-node-wp7ct2m6.js b/chunk-node-wp7ct2m6.js
-index 318b15fdf42c2f5bde107df8c910aac9c652c6c7..89cb7f9b0e5e6b0cc97943eea263f57d75377d71 100644
---- a/chunk-node-wp7ct2m6.js
-+++ b/chunk-node-wp7ct2m6.js
-@@ -6505,6 +6505,7 @@ var ANSI = {
-   clearSavedLines: "\x1B[3J",
-   scrollDown: (lines) => `\x1B[${lines}T`,
-   scrollUp: (lines) => `\x1B[${lines}S`,
-+  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
-   moveCursor: (row, col) => `\x1B[${row};${col}H`,
-   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
-   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
-@@ -7283,7 +7284,9 @@ class CliRenderer2 extends EventEmitter5 {
-   _splitHeight = 0;
-   renderOffset = 0;
-   splitTailColumn = 0;
-+  parkedSplitScrollback = null;
-   pendingSplitFooterTransition = null;
-+  pendingSplitFramePrefix = "";
-   forceFullRepaintRequested = false;
-   maxSplitCommitsPerFrame = 8;
-   _terminalWidth = 0;
-@@ -7994,6 +7997,15 @@ Captured external output:
-       const previousSurfaceTopLine = this.renderOffset + 1;
-       const previousSurfaceHeight = this._splitHeight;
-       this.clearPendingSplitFooterTransition();
-+      const parked = this.parkedSplitScrollback;
-+      if (parked !== null) {
-+        this.parkedSplitScrollback = null;
-+        this.lib.setRenderOffset(this.rendererPtr, parked.renderOffset);
-+        this.syncSplitScrollback();
-+        this.forceFullRepaintRequested = true;
-+        this.requestRender();
-+        return;
-+      }
-       this.resetSplitScrollback(this.getSplitCursorSeedRows());
-       if (previousMode === "passthrough" && this._terminalIsSetup) {
-         const nextSurfaceTopLine = this.renderOffset + 1;
-@@ -8467,15 +8479,15 @@ Captured external output:
-     if (!this._terminalIsSetup || this._controlState === "explicit_suspended" /* EXPLICIT_SUSPENDED */) {
-       throw new Error("resetSplitFooterForReplay requires an active terminal");
-     }
--    this.flushPendingSplitOutputBeforeTransition(true);
-     this.externalOutputQueue.clear();
-+    this.applyPendingExternalOutputModeIfReady();
-     this.abortSplitStartupCursorSeed();
-     this.clearPendingSplitFooterTransition();
-     this.resetSplitScrollback();
-     this.currentRenderBuffer.clear(this.backgroundColor);
-     this.nextRenderBuffer.clear(this.backgroundColor);
-     this.forceFullRepaintRequested = true;
--    this.writeOut(ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home);
-+    this.pendingSplitFramePrefix += ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home;
-     this.requestRender();
-   }
-   getSnapshotWidth(value, fallback) {
-@@ -8651,8 +8663,39 @@ Captured external output:
-     }
-     return commits;
-   }
-+  splitFrameAdmitsViewportScroll() {
-+    const feed = this._feed;
-+    if (feed === null) {
-+      return true;
-+    }
-+    this.lib.streamCommit(feed.streamPtr);
-+    return !feed.isBackpressured();
-+  }
-+  openSplitFrame() {
-+    const transition = this.pendingSplitFooterTransition;
-+    const lines = transition?.scrollLines ?? 0;
-+    const scrolls = !(transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine);
-+    const prefix = this.pendingSplitFramePrefix;
-+    if (!scrolls && prefix === "") {
-+      return true;
-+    }
-+    if (!this.splitFrameAdmitsViewportScroll()) {
-+      return false;
-+    }
-+    this.pendingSplitFramePrefix = "";
-+    this.writeOut("\x1B[?2026h" + prefix + (scrolls ? ANSI.scrollIntoHistory(lines, this._terminalHeight) : ""));
-+    if (scrolls) {
-+      this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
-+    }
-+    return true;
-+  }
-   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
--    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
-+    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
-+    if (!this.openSplitFrame()) {
-+      this.scheduleRenderAfterFeedIdle();
-+      return "backpressured";
-+    }
-+    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
-     let hasCommittedOutput = false;
-     const lastCommitIndex = commits.length - 1;
-     let acceptedCommits = 0;
-@@ -8767,6 +8810,7 @@ Captured external output:
-     this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
-   }
-   resetSplitScrollback(seedRows = 0) {
-+    this.parkedSplitScrollback = null;
-     this.splitTailColumn = 0;
-     this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
-   }
-@@ -8791,8 +8835,10 @@ Captured external output:
-     const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
-     if (!splitActive) {
-       this.clearPendingSplitFooterTransition();
--      this.splitTailColumn = 0;
--      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      if (this.parkedSplitScrollback === null) {
-+        this.splitTailColumn = 0;
-+        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      }
-       this.renderOffset = 0;
-       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
-       return;
-@@ -8801,8 +8847,10 @@ Captured external output:
-       this.syncSplitScrollback();
-     } else {
-       this.clearPendingSplitFooterTransition();
--      this.splitTailColumn = 0;
--      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      if (this.parkedSplitScrollback === null) {
-+        this.splitTailColumn = 0;
-+        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
-+      }
-       this.renderOffset = this.getSplitPinnedRenderOffset();
-       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
-     }
-@@ -8846,6 +8894,11 @@ Captured external output:
-     if (terminalWritable && prevSplitHeight > 0) {
-       this.flushPendingSplitOutputBeforeTransition();
-     }
-+    if (prevScreenMode === "split-footer" && prevSplitHeight > 0 && nextUseAlternateScreen) {
-+      this.parkedSplitScrollback = { renderOffset: this.renderOffset };
-+    } else if (screenMode !== "split-footer" && !nextUseAlternateScreen) {
-+      this.parkedSplitScrollback = null;
-+    }
-     const previousSurfaceTopLine = this.renderOffset + 1;
-     const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
-     const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
-@@ -8867,6 +8920,10 @@ Captured external output:
-     const splitFooterSurfaceMovesDown = nextSplitSurfaceOffset > splitTransitionSourceSurfaceOffset;
-     const splitFooterSurfaceLeavesStaleRows = splitFooterSurfaceMovesDown || shrinkingSplitFooter;
-     const shouldClearSplitSurfaceRowsImmediately = terminalWritable && !terminalScreenModeChanged && !shouldDeferSplitFooterResizeTransition && splitFooterSurfaceLeavesStaleRows && nextSplitHeight > 0;
-+    if (terminalWritable && !shouldDeferSplitFooterResizeTransition && this.pendingSplitFramePrefix !== "") {
-+      this.writeOut(this.pendingSplitFramePrefix);
-+      this.pendingSplitFramePrefix = "";
-+    }
-     if (terminalWritable && leavingSplitFooter) {
-       this.clearPendingSplitFooterTransition();
-       this.renderOffset = 0;
-@@ -8879,7 +8936,7 @@ Captured external output:
-         this.writeOut(scrollDown);
-       } else if (splitViewportScrollLines > 0) {
-         const additionalLines = splitViewportScrollLines;
--        const scrollUp = ANSI.scrollUp(additionalLines);
-+        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
-         this.writeOut(scrollUp);
-       }
-     }
-@@ -8928,6 +8985,9 @@ Captured external output:
-     if (terminalScreenModeChanged) {
-       if (terminalWritable) {
-         this.lib.suspendRenderer(this.rendererPtr);
-+        if (this.parkedSplitScrollback !== null && !nextUseAlternateScreen) {
-+          this.writeOut(ANSI.moveCursor(this.parkedSplitScrollback.renderOffset + 1, 1));
-+        }
-         this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
-         this.pendingSuspendedTerminalSetup = false;
-       } else {
-@@ -9542,6 +9602,7 @@ Captured external output:
-       }
-       return;
-     }
-+    this.parkedSplitScrollback = null;
-     if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
-       this.flushPendingSplitOutputBeforeTransition();
-     }
-@@ -9568,7 +9629,7 @@ Captured external output:
-       }
-       if (clearStart !== null) {
-         const flush = ANSI.moveCursorAndClear(clearStart, 1);
--        this.writeOut(flush);
-+        this.pendingSplitFramePrefix += flush;
-       }
-       this.currentRenderBuffer.clear(this.backgroundColor);
-     }
-@@ -10192,6 +10253,9 @@ Captured external output:
-         return "rendered";
-       }
-       const force = this.forceFullRepaintRequested;
-+      if (!this.openSplitFrame()) {
-+        return this.handleNativeRenderRejection(NATIVE_RENDER_STATUS_SKIPPED);
-+      }
-       const nativeStatus = this.lib.render(this.rendererPtr, force);
-       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
-         return this.handleNativeRenderRejection(nativeStatus);
-diff --git a/chunk-bun-sjw2d9bq.js b/chunk-bun-sjw2d9bq.js
-index a28320a281f82eea0833ad1f5868d0f8c74c9602..517a2ecc3462fcfa56ab709c25295eecda4b2fa6 100644
---- a/chunk-bun-sjw2d9bq.js
-+++ b/chunk-bun-sjw2d9bq.js
+diff --git a/chunk-bun-6rvkxs1v.js b/chunk-bun-6rvkxs1v.js
+index 4b632a668bbee5a038fd6eb169140c736d6b89c9..ccdc08c4a97fbd41117d9aed9df4b573c77f7323 100644
+--- a/chunk-bun-6rvkxs1v.js
++++ b/chunk-bun-6rvkxs1v.js
 @@ -11386,6 +11386,67 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
    return packed;
  }
@@ -478,7 +78,7 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..517a2ecc3462fcfa56ab709c25295eec
    get ptr() {
      return this.bufferPtr;
    }
-@@ -11638,18 +11700,25 @@ class OptimizedBuffer2 {
+@@ -11644,18 +11706,25 @@ class OptimizedBuffer2 {
      const style = parseBorderStyle2(options.borderStyle, "single");
      const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
      const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
@@ -490,8 +90,8 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..517a2ecc3462fcfa56ab709c25295eec
    }
    pushScissorRect(x, y, width, height) {
      this.guard();
-+    this._scissorRects.push(intersectScissorRect({ x, y, width, height }, this._scissorRects.at(-1)));
-     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height);
++    this._scissorRects.push(intersectScissorRect({ x, y, width: Math.max(0, width), height: Math.max(0, height) }, this._scissorRects.at(-1)));
+     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, Math.max(0, width), Math.max(0, height));
    }
    popScissorRect() {
      this.guard();
@@ -504,10 +104,410 @@ index a28320a281f82eea0833ad1f5868d0f8c74c9602..517a2ecc3462fcfa56ab709c25295eec
      this.lib.bufferClearScissorRects(this.bufferPtr);
    }
    pushOpacity(opacity) {
-diff --git a/chunk-node-80p7e6t6.js b/chunk-node-80p7e6t6.js
-index 82915fa04684c45affab3b7297e8917f89dc5dc6..06a6e0ed1d111c0aae3104e03a7d9ee884106957 100644
---- a/chunk-node-80p7e6t6.js
-+++ b/chunk-node-80p7e6t6.js
+diff --git a/chunk-bun-h3ggawd9.js b/chunk-bun-h3ggawd9.js
+index 4808e75d8fac63fbf1727f79d56f8045f2593c74..6f29773b952b0dbec3755c100b0cb784b265e982 100644
+--- a/chunk-bun-h3ggawd9.js
++++ b/chunk-bun-h3ggawd9.js
+@@ -6506,6 +6506,7 @@ var ANSI = {
+   clearSavedLines: "\x1B[3J",
+   scrollDown: (lines) => `\x1B[${lines}T`,
+   scrollUp: (lines) => `\x1B[${lines}S`,
++  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
+   moveCursor: (row, col) => `\x1B[${row};${col}H`,
+   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
+   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
+@@ -7286,7 +7287,9 @@ class CliRenderer2 extends EventEmitter5 {
+   _splitHeight = 0;
+   renderOffset = 0;
+   splitTailColumn = 0;
++  parkedSplitScrollback = null;
+   pendingSplitFooterTransition = null;
++  pendingSplitFramePrefix = "";
+   forceFullRepaintRequested = false;
+   maxSplitCommitsPerFrame = 8;
+   _terminalWidth = 0;
+@@ -7997,6 +8000,15 @@ Captured external output:
+       const previousSurfaceTopLine = this.renderOffset + 1;
+       const previousSurfaceHeight = this._splitHeight;
+       this.clearPendingSplitFooterTransition();
++      const parked = this.parkedSplitScrollback;
++      if (parked !== null) {
++        this.parkedSplitScrollback = null;
++        this.lib.setRenderOffset(this.rendererPtr, parked.renderOffset);
++        this.syncSplitScrollback();
++        this.forceFullRepaintRequested = true;
++        this.requestRender();
++        return;
++      }
+       this.resetSplitScrollback(this.getSplitCursorSeedRows());
+       if (previousMode === "passthrough" && this._terminalIsSetup) {
+         const nextSurfaceTopLine = this.renderOffset + 1;
+@@ -8470,15 +8482,15 @@ Captured external output:
+     if (!this._terminalIsSetup || this._controlState === "explicit_suspended" /* EXPLICIT_SUSPENDED */) {
+       throw new Error("resetSplitFooterForReplay requires an active terminal");
+     }
+-    this.flushPendingSplitOutputBeforeTransition(true);
+     this.externalOutputQueue.clear();
++    this.applyPendingExternalOutputModeIfReady();
+     this.abortSplitStartupCursorSeed();
+     this.clearPendingSplitFooterTransition();
+     this.resetSplitScrollback();
+     this.currentRenderBuffer.clear(this.backgroundColor);
+     this.nextRenderBuffer.clear(this.backgroundColor);
+     this.forceFullRepaintRequested = true;
+-    this.writeOut(ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home);
++    this.pendingSplitFramePrefix += ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home;
+     this.requestRender();
+   }
+   getSnapshotWidth(value, fallback) {
+@@ -8654,8 +8666,39 @@ Captured external output:
+     }
+     return commits;
+   }
++  splitFrameAdmitsViewportScroll() {
++    const feed = this._feed;
++    if (feed === null) {
++      return true;
++    }
++    this.lib.streamCommit(feed.streamPtr);
++    return !feed.isBackpressured();
++  }
++  openSplitFrame() {
++    const transition = this.pendingSplitFooterTransition;
++    const lines = transition?.scrollLines ?? 0;
++    const scrolls = !(transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine);
++    const prefix = this.pendingSplitFramePrefix;
++    if (!scrolls && prefix === "") {
++      return true;
++    }
++    if (!this.splitFrameAdmitsViewportScroll()) {
++      return false;
++    }
++    this.pendingSplitFramePrefix = "";
++    this.writeOut("\x1B[?2026h" + prefix + (scrolls ? ANSI.scrollIntoHistory(lines, this._terminalHeight) : ""));
++    if (scrolls) {
++      this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
++    }
++    return true;
++  }
+   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
+-    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
++    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
++    if (!this.openSplitFrame()) {
++      this.scheduleRenderAfterFeedIdle();
++      return "backpressured";
++    }
++    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
+     let hasCommittedOutput = false;
+     const lastCommitIndex = commits.length - 1;
+     let acceptedCommits = 0;
+@@ -8770,6 +8813,7 @@ Captured external output:
+     this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
+   }
+   resetSplitScrollback(seedRows = 0) {
++    this.parkedSplitScrollback = null;
+     this.splitTailColumn = 0;
+     this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
+   }
+@@ -8794,8 +8838,10 @@ Captured external output:
+     const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
+     if (!splitActive) {
+       this.clearPendingSplitFooterTransition();
+-      this.splitTailColumn = 0;
+-      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      if (this.parkedSplitScrollback === null) {
++        this.splitTailColumn = 0;
++        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      }
+       this.renderOffset = 0;
+       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
+       return;
+@@ -8804,8 +8850,10 @@ Captured external output:
+       this.syncSplitScrollback();
+     } else {
+       this.clearPendingSplitFooterTransition();
+-      this.splitTailColumn = 0;
+-      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      if (this.parkedSplitScrollback === null) {
++        this.splitTailColumn = 0;
++        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      }
+       this.renderOffset = this.getSplitPinnedRenderOffset();
+       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
+     }
+@@ -8849,6 +8897,11 @@ Captured external output:
+     if (terminalWritable && prevSplitHeight > 0) {
+       this.flushPendingSplitOutputBeforeTransition();
+     }
++    if (prevScreenMode === "split-footer" && prevSplitHeight > 0 && nextUseAlternateScreen) {
++      this.parkedSplitScrollback = { renderOffset: this.renderOffset };
++    } else if (screenMode !== "split-footer" && !nextUseAlternateScreen) {
++      this.parkedSplitScrollback = null;
++    }
+     const previousSurfaceTopLine = this.renderOffset + 1;
+     const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
+     const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
+@@ -8870,6 +8923,10 @@ Captured external output:
+     const splitFooterSurfaceMovesDown = nextSplitSurfaceOffset > splitTransitionSourceSurfaceOffset;
+     const splitFooterSurfaceLeavesStaleRows = splitFooterSurfaceMovesDown || shrinkingSplitFooter;
+     const shouldClearSplitSurfaceRowsImmediately = terminalWritable && !terminalScreenModeChanged && !shouldDeferSplitFooterResizeTransition && splitFooterSurfaceLeavesStaleRows && nextSplitHeight > 0;
++    if (terminalWritable && !shouldDeferSplitFooterResizeTransition && this.pendingSplitFramePrefix !== "") {
++      this.writeOut(this.pendingSplitFramePrefix);
++      this.pendingSplitFramePrefix = "";
++    }
+     if (terminalWritable && leavingSplitFooter) {
+       this.clearPendingSplitFooterTransition();
+       this.renderOffset = 0;
+@@ -8882,7 +8939,7 @@ Captured external output:
+         this.writeOut(scrollDown);
+       } else if (splitViewportScrollLines > 0) {
+         const additionalLines = splitViewportScrollLines;
+-        const scrollUp = ANSI.scrollUp(additionalLines);
++        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
+         this.writeOut(scrollUp);
+       }
+     }
+@@ -8931,6 +8988,9 @@ Captured external output:
+     if (terminalScreenModeChanged) {
+       if (terminalWritable) {
+         this.lib.suspendRenderer(this.rendererPtr);
++        if (this.parkedSplitScrollback !== null && !nextUseAlternateScreen) {
++          this.writeOut(ANSI.moveCursor(this.parkedSplitScrollback.renderOffset + 1, 1));
++        }
+         this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
+         this.pendingSuspendedTerminalSetup = false;
+       } else {
+@@ -9545,6 +9605,7 @@ Captured external output:
+       }
+       return;
+     }
++    this.parkedSplitScrollback = null;
+     if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
+       this.flushPendingSplitOutputBeforeTransition();
+     }
+@@ -9571,7 +9632,7 @@ Captured external output:
+       }
+       if (clearStart !== null) {
+         const flush = ANSI.moveCursorAndClear(clearStart, 1);
+-        this.writeOut(flush);
++        this.pendingSplitFramePrefix += flush;
+       }
+       this.currentRenderBuffer.clear(this.backgroundColor);
+     }
+@@ -10195,6 +10256,9 @@ Captured external output:
+         return "rendered";
+       }
+       const force = this.forceFullRepaintRequested;
++      if (!this.openSplitFrame()) {
++        return this.handleNativeRenderRejection(NATIVE_RENDER_STATUS_SKIPPED);
++      }
+       const nativeStatus = this.lib.render(this.rendererPtr, force);
+       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
+         return this.handleNativeRenderRejection(nativeStatus);
+diff --git a/chunk-node-kc1sqq2a.js b/chunk-node-kc1sqq2a.js
+index 8a014caa43ae6edb6118dd803ab8553bc917a6e6..e9766263559d7c493acc1c1aedc27ee20c0d1de4 100644
+--- a/chunk-node-kc1sqq2a.js
++++ b/chunk-node-kc1sqq2a.js
+@@ -6505,6 +6505,7 @@ var ANSI = {
+   clearSavedLines: "\x1B[3J",
+   scrollDown: (lines) => `\x1B[${lines}T`,
+   scrollUp: (lines) => `\x1B[${lines}S`,
++  scrollIntoHistory: (lines, height) => `\x1B7\x1B[${height};1H${"\n".repeat(lines)}\x1B8`,
+   moveCursor: (row, col) => `\x1B[${row};${col}H`,
+   moveCursorAndClear: (row, col) => `\x1B[${row};${col}H\x1B[J`,
+   setRgbBackground: (r, g, b) => `\x1B[48;2;${r};${g};${b}m`,
+@@ -7285,7 +7286,9 @@ class CliRenderer2 extends EventEmitter5 {
+   _splitHeight = 0;
+   renderOffset = 0;
+   splitTailColumn = 0;
++  parkedSplitScrollback = null;
+   pendingSplitFooterTransition = null;
++  pendingSplitFramePrefix = "";
+   forceFullRepaintRequested = false;
+   maxSplitCommitsPerFrame = 8;
+   _terminalWidth = 0;
+@@ -7996,6 +7999,15 @@ Captured external output:
+       const previousSurfaceTopLine = this.renderOffset + 1;
+       const previousSurfaceHeight = this._splitHeight;
+       this.clearPendingSplitFooterTransition();
++      const parked = this.parkedSplitScrollback;
++      if (parked !== null) {
++        this.parkedSplitScrollback = null;
++        this.lib.setRenderOffset(this.rendererPtr, parked.renderOffset);
++        this.syncSplitScrollback();
++        this.forceFullRepaintRequested = true;
++        this.requestRender();
++        return;
++      }
+       this.resetSplitScrollback(this.getSplitCursorSeedRows());
+       if (previousMode === "passthrough" && this._terminalIsSetup) {
+         const nextSurfaceTopLine = this.renderOffset + 1;
+@@ -8469,15 +8481,15 @@ Captured external output:
+     if (!this._terminalIsSetup || this._controlState === "explicit_suspended" /* EXPLICIT_SUSPENDED */) {
+       throw new Error("resetSplitFooterForReplay requires an active terminal");
+     }
+-    this.flushPendingSplitOutputBeforeTransition(true);
+     this.externalOutputQueue.clear();
++    this.applyPendingExternalOutputModeIfReady();
+     this.abortSplitStartupCursorSeed();
+     this.clearPendingSplitFooterTransition();
+     this.resetSplitScrollback();
+     this.currentRenderBuffer.clear(this.backgroundColor);
+     this.nextRenderBuffer.clear(this.backgroundColor);
+     this.forceFullRepaintRequested = true;
+-    this.writeOut(ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home);
++    this.pendingSplitFramePrefix += ANSI.resetScrollRegion + ANSI.reset + ANSI.home + ANSI.clearScreen + (options.clearSavedLines ? ANSI.clearSavedLines : "") + ANSI.home;
+     this.requestRender();
+   }
+   getSnapshotWidth(value, fallback) {
+@@ -8653,8 +8665,39 @@ Captured external output:
+     }
+     return commits;
+   }
++  splitFrameAdmitsViewportScroll() {
++    const feed = this._feed;
++    if (feed === null) {
++      return true;
++    }
++    this.lib.streamCommit(feed.streamPtr);
++    return !feed.isBackpressured();
++  }
++  openSplitFrame() {
++    const transition = this.pendingSplitFooterTransition;
++    const lines = transition?.scrollLines ?? 0;
++    const scrolls = !(transition === null || transition.mode !== "viewport-scroll" || lines <= 0 || transition.sourceTopLine <= transition.targetTopLine);
++    const prefix = this.pendingSplitFramePrefix;
++    if (!scrolls && prefix === "") {
++      return true;
++    }
++    if (!this.splitFrameAdmitsViewportScroll()) {
++      return false;
++    }
++    this.pendingSplitFramePrefix = "";
++    this.writeOut("\x1B[?2026h" + prefix + (scrolls ? ANSI.scrollIntoHistory(lines, this._terminalHeight) : ""));
++    if (scrolls) {
++      this.setPendingSplitFooterTransition({ ...transition, sourceTopLine: transition.targetTopLine });
++    }
++    return true;
++  }
+   flushPendingSplitCommits(forceFooterRepaint = false, drainAll = false) {
+-    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
++    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
++    if (!this.openSplitFrame()) {
++      this.scheduleRenderAfterFeedIdle();
++      return "backpressured";
++    }
++    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
+     let hasCommittedOutput = false;
+     const lastCommitIndex = commits.length - 1;
+     let acceptedCommits = 0;
+@@ -8769,6 +8812,7 @@ Captured external output:
+     this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
+   }
+   resetSplitScrollback(seedRows = 0) {
++    this.parkedSplitScrollback = null;
+     this.splitTailColumn = 0;
+     this.renderOffset = this.lib.resetSplitScrollback(this.rendererPtr, seedRows, this.getSplitPinnedRenderOffset());
+   }
+@@ -8793,8 +8837,10 @@ Captured external output:
+     const splitActive = this._screenMode === "split-footer" && this._splitHeight > 0;
+     if (!splitActive) {
+       this.clearPendingSplitFooterTransition();
+-      this.splitTailColumn = 0;
+-      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      if (this.parkedSplitScrollback === null) {
++        this.splitTailColumn = 0;
++        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      }
+       this.renderOffset = 0;
+       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
+       return;
+@@ -8803,8 +8849,10 @@ Captured external output:
+       this.syncSplitScrollback();
+     } else {
+       this.clearPendingSplitFooterTransition();
+-      this.splitTailColumn = 0;
+-      this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      if (this.parkedSplitScrollback === null) {
++        this.splitTailColumn = 0;
++        this.lib.resetSplitScrollback(this.rendererPtr, 0, 0);
++      }
+       this.renderOffset = this.getSplitPinnedRenderOffset();
+       this.lib.setRenderOffset(this.rendererPtr, this.renderOffset);
+     }
+@@ -8848,6 +8896,11 @@ Captured external output:
+     if (terminalWritable && prevSplitHeight > 0) {
+       this.flushPendingSplitOutputBeforeTransition();
+     }
++    if (prevScreenMode === "split-footer" && prevSplitHeight > 0 && nextUseAlternateScreen) {
++      this.parkedSplitScrollback = { renderOffset: this.renderOffset };
++    } else if (screenMode !== "split-footer" && !nextUseAlternateScreen) {
++      this.parkedSplitScrollback = null;
++    }
+     const previousSurfaceTopLine = this.renderOffset + 1;
+     const shouldDeferSplitFooterResizeTransition = this._terminalIsSetup && prevScreenMode === "split-footer" && screenMode === "split-footer" && this._externalOutputMode === "capture-stdout" && prevSplitHeight > 0 && nextSplitHeight > 0 && !terminalScreenModeChanged;
+     const splitStartupSeedBlocksFirstNativeFrame = this.pendingSplitStartupCursorSeed && this.splitStartupSeedTimeoutId !== null;
+@@ -8869,6 +8922,10 @@ Captured external output:
+     const splitFooterSurfaceMovesDown = nextSplitSurfaceOffset > splitTransitionSourceSurfaceOffset;
+     const splitFooterSurfaceLeavesStaleRows = splitFooterSurfaceMovesDown || shrinkingSplitFooter;
+     const shouldClearSplitSurfaceRowsImmediately = terminalWritable && !terminalScreenModeChanged && !shouldDeferSplitFooterResizeTransition && splitFooterSurfaceLeavesStaleRows && nextSplitHeight > 0;
++    if (terminalWritable && !shouldDeferSplitFooterResizeTransition && this.pendingSplitFramePrefix !== "") {
++      this.writeOut(this.pendingSplitFramePrefix);
++      this.pendingSplitFramePrefix = "";
++    }
+     if (terminalWritable && leavingSplitFooter) {
+       this.clearPendingSplitFooterTransition();
+       this.renderOffset = 0;
+@@ -8881,7 +8938,7 @@ Captured external output:
+         this.writeOut(scrollDown);
+       } else if (splitViewportScrollLines > 0) {
+         const additionalLines = splitViewportScrollLines;
+-        const scrollUp = ANSI.scrollUp(additionalLines);
++        const scrollUp = ANSI.scrollIntoHistory(additionalLines, this._terminalHeight);
+         this.writeOut(scrollUp);
+       }
+     }
+@@ -8930,6 +8987,9 @@ Captured external output:
+     if (terminalScreenModeChanged) {
+       if (terminalWritable) {
+         this.lib.suspendRenderer(this.rendererPtr);
++        if (this.parkedSplitScrollback !== null && !nextUseAlternateScreen) {
++          this.writeOut(ANSI.moveCursor(this.parkedSplitScrollback.renderOffset + 1, 1));
++        }
+         this.lib.setupTerminal(this.rendererPtr, nextUseAlternateScreen);
+         this.pendingSuspendedTerminalSetup = false;
+       } else {
+@@ -9544,6 +9604,7 @@ Captured external output:
+       }
+       return;
+     }
++    this.parkedSplitScrollback = null;
+     if (this._terminalIsSetup && this._controlState !== "explicit_suspended" /* EXPLICIT_SUSPENDED */ && !this.isSplitCursorSeedFrameBlocked()) {
+       this.flushPendingSplitOutputBeforeTransition();
+     }
+@@ -9570,7 +9631,7 @@ Captured external output:
+       }
+       if (clearStart !== null) {
+         const flush = ANSI.moveCursorAndClear(clearStart, 1);
+-        this.writeOut(flush);
++        this.pendingSplitFramePrefix += flush;
+       }
+       this.currentRenderBuffer.clear(this.backgroundColor);
+     }
+@@ -10194,6 +10255,9 @@ Captured external output:
+         return "rendered";
+       }
+       const force = this.forceFullRepaintRequested;
++      if (!this.openSplitFrame()) {
++        return this.handleNativeRenderRejection(NATIVE_RENDER_STATUS_SKIPPED);
++      }
+       const nativeStatus = this.lib.render(this.rendererPtr, force);
+       if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
+         return this.handleNativeRenderRejection(nativeStatus);
+diff --git a/chunk-node-tfvyz31s.js b/chunk-node-tfvyz31s.js
+index dc346fd4b1680151772e7979d8e699ec9e6c2c8a..ef922c87e5778f988b64a64c25a9f39cfdcbcdf5 100644
+--- a/chunk-node-tfvyz31s.js
++++ b/chunk-node-tfvyz31s.js
 @@ -11368,6 +11368,67 @@ function packDrawOptions(border, shouldFill, titleAlignment, bottomTitleAlignmen
    return packed;
  }
@@ -584,7 +584,7 @@ index 82915fa04684c45affab3b7297e8917f89dc5dc6..06a6e0ed1d111c0aae3104e03a7d9ee8
    get ptr() {
      return this.bufferPtr;
    }
-@@ -11620,18 +11682,25 @@ class OptimizedBuffer2 {
+@@ -11626,18 +11688,25 @@ class OptimizedBuffer2 {
      const style = parseBorderStyle2(options.borderStyle, "single");
      const borderChars = options.customBorderChars ?? BorderCharArrays2[style];
      const packedOptions = packDrawOptions(options.border, options.shouldFill ?? false, options.titleAlignment || "left", options.bottomTitleAlignment || "left");
@@ -596,8 +596,8 @@ index 82915fa04684c45affab3b7297e8917f89dc5dc6..06a6e0ed1d111c0aae3104e03a7d9ee8
    }
    pushScissorRect(x, y, width, height) {
      this.guard();
-+    this._scissorRects.push(intersectScissorRect({ x, y, width, height }, this._scissorRects.at(-1)));
-     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, width, height);
++    this._scissorRects.push(intersectScissorRect({ x, y, width: Math.max(0, width), height: Math.max(0, height) }, this._scissorRects.at(-1)));
+     this.lib.bufferPushScissorRect(this.bufferPtr, x, y, Math.max(0, width), Math.max(0, height));
    }
    popScissorRect() {
      this.guard();

@@ -400,7 +400,7 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   column 2 and hangs its text at column 4.
 - **Thread round end** (`session-tools.client.tsx`). A `thread.start` with
   `notify: "starter"` settles at once (its row reads `thread <id> · result
-arrives as a message`; any other start, `· replies stay in the thread`),
+  arrives as a message`; any other start, `· replies stay in the thread`),
   and each round's answer arrives later as a `thread-round-end` message.
   Collapsed is one line at column 2,
   `◆ <thread's name> · completed · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
@@ -422,18 +422,18 @@ arrives as a message`; any other start, `· replies stay in the thread`),
   colour; its call rows colour only their outcome words, as a run's rows do.
 - **Connection notice** (`ConnectionWidget` in `app.tsx`). Collapsed is one
   line that counts the issues (`• connection · 6 model catalogs unavailable ·
-ctrl+o`), with a tree row for each failed extension; preview and full list
+  ctrl+o`), with a tree row for each failed extension; preview and full list
   every issue on its own row. It is in the live tail, so a level change costs
   no replay.
 - **Session rows** (`SessionEventIndicator`). Each sits at column 2 under its
   own glyph and hangs a wrapped line at column 4: `✻` the turn line, `✗` an
   error, `■ Interrupted · what should gent do instead?` in the warning colour,
   `↻` a retry, a notice's own glyph. The turn line is `✻ Worked for 1m 48s ·
-2 retries · ↑38k ↓2.1k · $0.04` (`formatTurnLine`), muted, one blank row
+  2 retries · ↑38k ↓2.1k · $0.04` (`formatTurnLine`), muted, one blank row
   above; the retry slot is there only when a provider call was retried, and
   preview and full add `· N steps`. Narrow, its parts drop from the right and
   the time stays. A settled retry is hidden at collapsed and reads `↻ Retried
-1/3 · <reason>` from preview on, where it happened, inside the run it
+  1/3 · <reason>` from preview on, where it happened, inside the run it
   split nothing of. Below full, an error over four lines shows four, then
   `… +N lines (ctrl+o)`.
 - **Activity row.** A running call reads in the words its row will use once

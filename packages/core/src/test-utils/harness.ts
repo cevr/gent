@@ -124,6 +124,7 @@ import {
   ToolRunner,
 } from "../runtime/tools.js"
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/turn.js"
+import { isHostContextUpdate } from "../runtime/model-context.js"
 import { SessionRuntime } from "../runtime/session.js"
 import {
   type AgentLoopClientServices,
@@ -2350,14 +2351,28 @@ export const interruptAtEachStep = <A, E, R, E2, R2, ES, RS>(
  * A step's request as the runtime builds it: the system prompt it opens
  * with (its cache blocks, and the blocks joined as the one prompt text), and
  * the turn notices it places after the conversation (empty when the step
- * carries none).
+ * carries none), whether they went as a system message or as the user
+ * message that carries one (`promptForModel`), unwrapped.
  */
 export const turnRequestText = (prompt: Prompt.Prompt) => {
   const systemAt = (index: number) =>
     Option.fromUndefinedOr(prompt.content[index]).pipe(
       Option.flatMap((message) => {
-        if (message.role !== "system") return Option.none()
-        return Option.some(message.content)
+        if (message.role === "system") return Option.some(message.content)
+        if (!isHostContextUpdate(message)) return Option.none()
+        const text = message.content.flatMap((part) => {
+          if (part.type !== "text") return []
+          return [part.text]
+        })
+        return Option.some(
+          text
+            .join("")
+            .replace(/^<host-context-update>\n/, "")
+            .replace(/\n<\/host-context-update>$/, "")
+            .replaceAll("&lt;", "<")
+            .replaceAll("&gt;", ">")
+            .replaceAll("&amp;", "&"),
+        )
       }),
     )
   let leading = prompt.content.findIndex((message) => message.role !== "system")
@@ -2425,11 +2440,25 @@ const testStream = (
   stream: (
     options: ProviderOptions,
   ) => Effect.Effect<Stream.Stream<LanguageModelStreamPart, AiError.AiError>, AiError.AiError>,
-): Layer.Layer<LanguageModel.LanguageModel> =>
-  makeLanguageModelLayer({
+  model: { readonly supportsSystemMessagesInHistory?: boolean } = {},
+): Layer.Layer<LanguageModel.LanguageModel> => {
+  const scripted = makeLanguageModelLayer({
     streamText: (options) => stream(options).pipe(Stream.unwrap),
     generateText: () => Effect.succeed("test response"),
   })
+  // A model that says whether it takes a system message in its history, as a provider SDK's does.
+  return Option.match(Option.fromUndefinedOr(model.supportsSystemMessagesInHistory), {
+    onNone: () => scripted,
+    onSome: (takes) =>
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const scriptedModel = yield* LanguageModel.LanguageModel
+          return { ...scriptedModel, supportsSystemMessagesInHistory: Effect.succeed(takes) }
+        }),
+      ).pipe(Layer.provide(scripted)),
+  })
+}
 
 /** One layer value, so every test that provides it shares its memoized build. */
 const failingLayer = makeLanguageModelLayer({

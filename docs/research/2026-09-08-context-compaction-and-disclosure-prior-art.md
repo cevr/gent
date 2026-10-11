@@ -55,7 +55,7 @@ Date: 2026-09-08. Sources: Prime Agent at `9c8230d`, Codex at `c7f81af`, gent at
   thinking off; earlier side turns replay after the clone; nothing persists
   (`src/core/side-question.ts:48-110`). Instruction text at `:29`.
 - Goals: durable state `{status, objective, tokenBudget, tokensUsed,
-timeUsedSeconds, continuationsUsed}` (`src/core/goals.ts:14-26`). After an
+  timeUsedSeconds, continuationsUsed}` (`src/core/goals.ts:14-26`). After an
   ordinary assistant turn an active goal enqueues a `<goal_context>` user
   message (`agent-session.ts:1384`, `:2184-2211`); the prompt text is at
   `goals.ts:207-230`. Only `goal.complete()` from the kernel ends it

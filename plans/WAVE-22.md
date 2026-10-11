@@ -161,7 +161,7 @@ Implementation notes:
 - Server/per-cwd profile paths and ephemeral child paths already shared
   `buildExtensionLayers`; the remaining duplication was lifecycle ownership.
 - Ephemeral child runtimes now call `buildExtensionLayers(resolved, {
-lifecycle: "skip" })`: child resource services still rebuild against child
+  lifecycle: "skip" })`: child resource services still rebuild against child
   storage, but process resource `start`/`stop` hooks remain owned by profile
   resolution.
 - Added a regression proving an ephemeral child can use a resource-backed tool

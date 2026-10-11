@@ -107,11 +107,14 @@ export default defineExtension({
           // conversation: a prompt section that changed would make the next
           // step write the agent block and the whole conversation again.
           // Every step shows them; the extension never clears them as read.
+          // The model wrote the notes, so the notice is untrusted: it goes
+          // as a user message, never with a system message's priority.
           notices: [
             {
               id: "session-notes",
               content: notes.map((note) => `- ${note}`).join("\n"),
               keys: [],
+              trusted: false,
             },
           ],
         }

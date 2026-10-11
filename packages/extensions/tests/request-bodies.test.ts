@@ -811,9 +811,12 @@ const SESSION_REQUESTS: ReadonlyArray<{
 /**
  * The effort each assistant run of the body, then its reply, runs at, as the
  * provider applies the body: the top level first. A Messages effort marker
- * takes effect from the next user turn; a Responses `configuration_update`
- * at once (Codex sends one right before the request it changes,
- * `codex-rs/core/src/session/turn.rs`).
+ * right after a user turn with new input sets the effort of the reply to it;
+ * anywhere else it takes effect from the next user turn with new input, and
+ * a turn of tool results only is none
+ * (platform.claude.com/docs/en/build-with-claude/effort, read 2026-10-11). A
+ * Responses `configuration_update` takes effect at once (Codex sends one
+ * right before the request it changes, `codex-rs/core/src/session/turn.rs`).
  */
 const appliedEfforts = (body: Schema.JsonObject): ReadonlyArray<string> => {
   let markers: "next-user-turn" | "at-once" = "next-user-turn"
@@ -822,14 +825,17 @@ const appliedEfforts = (body: Schema.JsonObject): ReadonlyArray<string> => {
   let pending = applied
   const runs: Array<string> = []
   let inRun = false
-  for (const kind of itemKinds(body)) {
+  let afterNewInput = false
+  for (const item of conversationOf(body)) {
+    const kind = itemKind(item)
     if (kind.startsWith("effort:")) {
       pending = kind.slice("effort:".length)
-      if (markers === "at-once") applied = pending
+      if (markers === "at-once" || afterNewInput) applied = pending
       continue
     }
+    afterNewInput = markers === "next-user-turn" && carriesNewInput(item)
     if (kind === "user" || kind === "function_call_output") {
-      if (markers === "next-user-turn") applied = pending
+      if (afterNewInput) applied = pending
       inRun = false
       continue
     }
@@ -897,19 +903,29 @@ const topLevelOf = (body: Schema.JsonObject): Schema.Json =>
     ),
   )
 
+/** A conversation item by its role or type; an effort marker as `effort:<level>`. */
+const itemKind = (item: Schema.Json): string => {
+  if (!isObject(item)) return "?"
+  const config = item["output_config"] ?? item["reasoning"]
+  if (isObject(config) && Predicate.isString(config["effort"])) return `effort:${config["effort"]}`
+  const role = item["role"]
+  if (Predicate.isString(role)) return role
+  const type = item["type"]
+  if (Predicate.isString(type)) return type
+  return "?"
+}
+
 /** Each conversation item by its role or type; an effort marker as `effort:<level>`. */
 const itemKinds = (body: Schema.JsonObject): ReadonlyArray<string> =>
-  conversationOf(body).map((item) => {
-    if (!isObject(item)) return "?"
-    const config = item["output_config"] ?? item["reasoning"]
-    if (isObject(config) && Predicate.isString(config["effort"]))
-      return `effort:${config["effort"]}`
-    const role = item["role"]
-    if (Predicate.isString(role)) return role
-    const type = item["type"]
-    if (Predicate.isString(type)) return type
-    return "?"
-  })
+  conversationOf(body).map(itemKind)
+
+/** True for a Messages user turn with new input: a block that answers no tool call. */
+const carriesNewInput = (item: Schema.Json): boolean => {
+  if (!isObject(item) || item["role"] !== "user") return false
+  const content = item["content"]
+  if (!isList(content)) return true
+  return content.some((block) => !isObject(block) || block["type"] !== "tool_result")
+}
 
 /** The effort the body's top level names. */
 const topLevelEffort = (body: Schema.JsonObject): string => {
@@ -1045,26 +1061,39 @@ describe("effort changes", () => {
   it.live("a change a Messages reply cannot take in time sends the plain request", () =>
     Effect.gen(function* () {
       const route = yield* routeNamed("anthropic")
-      // A marker after the tool result takes effect only at the next user
-      // turn, after the reply; a prompt merged into the tool result before
-      // it has no user turn of its own to precede.
-      const merged: Prompt.RawInput = [
-        ...Prompt.make(sessionPrompt(4)).content,
-        ...Prompt.make([{ role: "user", content: "Stop and summarize." }]).content,
-      ]
-      const cases: ReadonlyArray<readonly [string, Prompt.RawInput]> = [
-        ["after a tool result", sessionPrompt(4)],
-        ["a prompt merged into a tool result", merged],
-      ]
-      for (const [reason, prompt] of cases) {
-        const hints = sessionHints("high", [Option.some("low")])
-        const { reasoningHistory: _history, ...plain } = hints
-        const carried = bodyOf(yield* captureRequest(route, "claude-fable-5-1", hints, prompt))
-        const without = bodyOf(yield* captureRequest(route, "claude-fable-5-1", plain, prompt))
-        expect([reason, carried]).toEqual([reason, without])
-        expect([reason, appliedEfforts(carried)]).toEqual([reason, ["high", "high"]])
-      }
+      // A marker after a turn of tool results only takes effect at the next
+      // user turn with new input, after the reply.
+      const hints = sessionHints("high", [Option.some("low")])
+      const { reasoningHistory: _history, ...plain } = hints
+      const prompt = sessionPrompt(4)
+      const carried = bodyOf(yield* captureRequest(route, "claude-fable-5-1", hints, prompt))
+      const without = bodyOf(yield* captureRequest(route, "claude-fable-5-1", plain, prompt))
+      expect(carried).toEqual(without)
+      expect(appliedEfforts(carried)).toEqual(["high", "high"])
     }).pipe(Effect.timeout("30 seconds")),
+  )
+
+  it.live(
+    "a change for the reply to a prompt merged into a tool result goes as a marker right after it, so the top level keeps the cached effort",
+    () =>
+      Effect.gen(function* () {
+        const route = yield* routeNamed("anthropic")
+        const merged: Prompt.RawInput = [
+          ...Prompt.make(sessionPrompt(4)).content,
+          ...Prompt.make([{ role: "user", content: "Stop and summarize." }]).content,
+        ]
+        const carried = bodyOf(
+          yield* captureRequest(
+            route,
+            "claude-fable-5-1",
+            sessionHints("high", [Option.some("low")]),
+            merged,
+          ),
+        )
+        expect(topLevelEffort(carried)).toBe("low")
+        expect(itemKinds(carried).slice(-2)).toEqual(["user", "effort:high"])
+        expect(appliedEfforts(carried)).toEqual(["low", "high"])
+      }).pipe(Effect.timeout("30 seconds")),
   )
 
   it.live(

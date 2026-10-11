@@ -598,7 +598,11 @@ const afterSenderTurn = (input: Pick<TurnAfterInput, "interrupted" | "readNotice
   return settleSentTurns(input.readNotices)
 }
 
-/** The child turns the sender's interrupt stopped, as one notice for its next turn. */
+/**
+ * The child turns the sender's interrupt stopped, as one notice for its next
+ * turn. It is untrusted: a line holds the child session's name, which a
+ * model or a user wrote.
+ */
 const stoppedTurnNotices = Effect.fn("SessionTools.stoppedTurnNotices")(function* () {
   const ctx = yield* ExtensionContext
   const stopped = (yield* Ref.get(yield* SentTurns)).stopped.filter(sentBy(ctx))
@@ -615,6 +619,7 @@ const stoppedTurnNotices = Effect.fn("SessionTools.stoppedTurnNotices")(function
       id: "session-send-stopped",
       keys: stopped.map((turn) => turn.messageId),
       content: `# Stopped child turns\n\nThe user interrupted your turn, and that stopped what your session.send messages had started in these children: a turn a message opened was stopped, or a message no step had read yet was taken back. Nothing runs from them, and no answer will come from them. Tell the user which children stopped; send to them again only when the user asks for it.\n\n${[...new Set(lines)].join("\n")}`,
+      trusted: false,
     },
   ]
 })

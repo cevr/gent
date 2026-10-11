@@ -62,7 +62,11 @@ export {
   toolCallStep,
 } from "../runtime/provider.js"
 export {
+  hostContextUpdateText,
+  isHostContextUpdate,
   KNOWN_IMAGE_COSTS,
+  promptForModel,
+  toPrompt,
   turnNoticesText,
   windowMarkerMessage,
 } from "../runtime/model-context.js"

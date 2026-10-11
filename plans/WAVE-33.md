@@ -361,7 +361,7 @@ ceremony.
     `makeProviderAuth(driverRegistry)` collapsed into the `Live` body;
     yields `DriverRegistry`, `Auth`, `GentPlatform` inside.
     `model-resolver.ts`: `resolveProviderModel(authStore, defaultRegistry,
-request)` reduced to `(request)`; yields `Auth` + `DriverRegistry`
+    request)` reduced to `(request)`; yields `Auth` + `DriverRegistry`
     inside. `Live` snapshots that pair via `Effect.context<...>()` and
     closes per-call resolve effects with `Effect.provideContext`.
   - Sub-batch 2 (`f3520cf5`) — 11 receipt-listed helpers converted to

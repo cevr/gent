@@ -471,7 +471,7 @@ Verification: tracing assertions, `bun run gate`.
 Sub-commits:
 
 - **C12.1** — Replace `resetIncompatibleStorageSchema` with `SqliteMigrator.layer({
-loader: Migrator.fromArray([Migration1, Migration2, ...]) })`. Each migration
+  loader: Migrator.fromArray([Migration1, Migration2, ...]) })`. Each migration
   is a `Migrator.make` value with explicit forward SQL.
 - **C12.2** — Delete `CORE_SCHEMA_VERSION` and the destructive drop logic.
 - **C12.3** — Reset local development DBs in the wave's release notes (no

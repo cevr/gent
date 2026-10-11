@@ -167,6 +167,7 @@ export {
   SessionReachError,
   type ExtensionContextService,
   type ExtensionModelsService,
+  type TurnNotice,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // `runProcess` runs a command to completion over the Effect `ChildProcessSpawner`.

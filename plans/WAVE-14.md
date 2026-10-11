@@ -794,7 +794,7 @@ not migration-era optimism.
 - Batch 14 implemented:
   - Replaced the fluent `RuntimeComposer` API with explicit
     `buildEphemeralRuntime({ parent, parentServices, overrides,
-extensionLayers })`.
+    extensionLayers })`.
   - Kept storage sub-Tag omission, EventPublisher/BuiltinEventSink family
     omission, `Layer.CurrentMemoMap` stripping, `Layer.fresh`, child override
     merge-last behavior, and `ServerProfile` proof-of-origin.

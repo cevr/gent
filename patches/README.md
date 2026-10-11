@@ -6,7 +6,7 @@ until it is regenerated for the new release. The Effect patches follow
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
-## `@opentui/core@0.5.14`
+## `@opentui/core@0.5.17`
 
 The split footer forgets its history state when it leaves for the alternate
 screen. `syncSplitFooterState` resets the native split scrollback (its row
@@ -47,7 +47,7 @@ saves them before the draw and puts back each one the draw changed to a
 border glyph. Only the fast path writes there, and only with no grapheme or
 link in the buffer, so a saved cell holds no grapheme reference. The other
 paths and the titles (`drawText`) already respect the scissor. The Bun and
-Node buffer bundles (`chunk-bun-sjw2d9bq.js`, `chunk-node-80p7e6t6.js`) get
+Node buffer bundles (`chunk-bun-6rvkxs1v.js`, `chunk-node-tfvyz31s.js`) get
 the same change. "box borders under a scissor" in `apps/tui/tests/ui.test.tsx`
 (left, centered, right and wide-character titles, nested scissors, a solid
 background) and "a prompt cut by history draws its rail only beside its own
@@ -67,7 +67,7 @@ row, so the native frame keeps its row accounting (`noteViewportScroll`) and
 writes no `CSI S`. The immediate scroll in `applyScreenMode` uses the same
 line feeds (`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
 (`codex-rs/tui/src/tui/scrollback.rs`, `grow_viewport`). The renderer bundles
-(`chunk-bun-j2z63cdy.js`, `chunk-node-wp7ct2m6.js`) get the same change. "a
+(`chunk-bun-h3ggawd9.js`, `chunk-node-kc1sqq2a.js`) get the same change. "a
 long session's retried multiline prompt keeps every prompt and answer row
 once at 45x15" in `packages/e2e/tests/scrollback.test.ts` covers it.
 
@@ -125,35 +125,43 @@ frame. Checked on 2026-10-04: `main` after 0.5.14 still resets the state,
 its `drawVisibleBox` border fast path still writes past the scissor, and
 `applyPendingSplitFooterTransition` still writes `CSI S`. Checked on
 2026-10-05 (`main` at 684d70ce): `resetSplitFooterForReplay` still writes
-its clear at once.
+its clear at once. Rechecked on 2026-10-10: 0.5.17 changes none of these paths.
+It clamps a negative scissor size before the native push, and the patch's
+`_scissorRects` copy takes the same clamped size. 0.6.0 moves layout and
+paint into native code, and its split footer still resets the history state
+and writes the replay clear at once; gent stays on 0.5.
 
-## `@effect/ai-anthropic@4.0.0`
+## `@effect/ai-anthropic@4.0.2`
 
-`prepareMessages` sets the request's `system` field from each system group
-it meets, so a system message after the first message replaces the system
-prompt. gent sends the runtime's turn notices as such a later system
-message; in `system` they would change the cached prompt prefix every turn
-and lose their place in the conversation.
+`transformToolCallParams` fails the reply with `ToolNotFoundError` when the
+model calls a tool the request did not declare. The patch passes the call
+on as the model wrote it, as `@effect/ai-openai@4.0.2` below does: the
+loop's tool runner answers it. Remove it with `effect@4.0.2`'s
+undeclared-name part. It patches `dist` only; the shipped `src` copy keeps
+the upstream text.
 
-The patch keeps the first system group in `system` and sends a later one,
-in place, as a user message whose text blocks read
-`<host-context-update>\n…\n</host-context-update>`, with `&`, `<` and `>`
-escaped so the text cannot close the wrapper. The opening is
-`HOST_CONTEXT_UPDATE_OPEN` in `packages/extensions/src/providers.ts`. Both
-Messages drivers (`anthropic.ts`, and `opencode.ts` for its Messages models)
-read it through `isHostContextUpdate` there to keep the cache marker off
-these blocks.
+A later system message (the runtime's turn notices) needs no patch. 4.0.2
+keeps later system messages as `system` messages in history for a model
+that takes one (`supportsMidConversationSystemMessages` in its capability
+table, which `LanguageModel` reports as `supportsSystemMessagesInHistory`)
+when each has a place: after a user turn, and last or before an assistant
+turn. Otherwise, for a model the table marks false or when any one of them
+cannot be placed, it appends every one of them to the top-level `system`,
+which would change the cached prefix each turn. Core decides the role
+before the SDK sees the prompt (`promptForModel` in
+`packages/core/src/runtime/model-context.ts`): a later system message
+stays one only when its text is wholly gent's own, the model reports the
+capability, and it has a place; every other goes as a
+`<host-context-update>` user message at its place, the bytes this patch
+built through 2026-10-11, so the SDK never moves one. The OpenCode
+gateways' Messages models set `midConversationSystemMessages: false`, so
+they get the same form. The table is optimistic: an id it does not know
+counts as taking a later system message. A new Claude model that does not
+would refuse a trusted notice with a 400 where the old wrap always worked,
+so recheck the table on each SDK bump (4.0.3 is held back: it needs
+`effect` 4.0.3).
 
-The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.0` below does.
-
-Remove the system part when the SDK keeps a later system message in place,
-and the undeclared-name part with `effect@4.0.0`'s. Rechecked on
-2026-10-01: 4.0.0 still replaces `system`, so the patch was regenerated for
-that release. It patches `dist` only; the shipped `src` copy keeps the
-upstream text.
-
-## `@effect/ai-openai-compat@4.0.0`
+## `@effect/ai-openai-compat@4.0.2`
 
 The SDK reads a model's reasoning from a Chat Completions reply
 (`reasoning_content`), but never sends it back. The prompt conversion drops
@@ -176,15 +184,15 @@ the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.
 
 The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.0` below does.
+`@effect/ai-openai@4.0.2` below does.
 
 Remove the reasoning part when the SDK sends the reasoning back itself, and
-the undeclared-name part with `effect@4.0.0`'s. Rechecked on
-2026-10-01: 4.0.0 still drops reasoning without an item id, so the patch was
+the undeclared-name part with `effect@4.0.2`'s. Rechecked on
+2026-10-10: 4.0.2 still drops reasoning without an item id, so the patch was
 regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
 `src` copy keeps the upstream text.
 
-## `@effect/platform-node-shared@4.0.0`
+## `@effect/platform-node-shared@4.0.2`
 
 The child process spawner runs a `stdin` stream into the child through a
 sink that listens for the writable's `error` event only while it runs. A
@@ -202,10 +210,9 @@ it runs; the child's exit code reports a child that left early. `src` and
 fails with `EPIPE`; a reader who quits the pager early meets the same race.
 
 Remove this patch when an `@effect/platform-node-shared` release keeps a
-listener on the child's stdin. Checked on 2026-10-04: 4.0.0, the latest
-release, has none.
+listener on the child's stdin. Checked on 2026-10-10: 4.0.2 has none.
 
-## `effect@4.0.0`
+## `effect@4.0.2`
 
 `LanguageModel.streamText` and `generateText` with
 `disableToolCallResolution: true` decode each tool call's parameters against
@@ -255,15 +262,14 @@ advertises no tool" in the same test file covers it.
 Remove this patch when an Effect release, with tool call resolution off,
 decodes tool call parameters as opaque and decodes a call to an undeclared
 name, in both `generateText` and `streamText`, and with a toolkit, an empty
-toolkit, and no toolkit. Checked on 2026-10-04: 4.0.0, the latest release,
-does neither. It
+toolkit, and no toolkit. Checked on 2026-10-10: 4.0.2 does neither. It
 patches `dist` only; the shipped `src` copy keeps the upstream text.
 
-## `@effect/ai-openai@4.0.0`
+## `@effect/ai-openai@4.0.2`
 
 `transformToolCallParams` fails the reply with `ToolNotFoundError` when a
 call names a tool the request did not declare. The patch passes that call on
 with its parameters as the model wrote them; the tool runner answers it
-(`effect@4.0.0` above). Remove this patch with that one's undeclared-name
-part. Checked on 2026-10-04: 4.0.0, the latest release, fails the reply. It
+(`effect@4.0.2` above). Remove this patch with that one's undeclared-name
+part. Checked on 2026-10-10: 4.0.2 fails the reply. It
 patches `dist` only; the shipped `src` copy keeps the upstream text.

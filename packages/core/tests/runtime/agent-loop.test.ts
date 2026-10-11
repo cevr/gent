@@ -155,9 +155,12 @@ import {
 import { type ActiveStreamHandle, ToolResultReplayError, TurnOutcome } from "../../src/runtime/turn"
 import {
   ContextDirective,
+  hostContextUpdateText,
+  isHostContextUpdate,
   ModelContextLedger,
   windowMarkerMessage,
 } from "../../src/runtime/model-context"
+import { omitUndefined } from "../../src/domain/guards"
 import { e2ePreset, testAgents } from "../helpers/test-preset"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
@@ -362,28 +365,13 @@ describe("system prompt date", () => {
         ).pipe(Effect.fromOption)
         yield* TestClock.setTime(DateTime.toEpochMillis(beforeMidnight))
         // Per request: the leading system blocks (the cached prefix) and the
-        // system message after the conversation (the turn's notices).
+        // turn's notices after the conversation.
         const requests = yield* Ref.make<ReadonlyArray<{ prefix: string; tail: string }>>([])
         const secondCall = yield* Deferred.make<void>()
-        const systemText = (messages: ReadonlyArray<Prompt.Message>) =>
-          messages
-            .flatMap((message) => {
-              if (message.role !== "system") return []
-              return [message.content]
-            })
-            .join("\n")
         const providerLayer = LanguageModelLayers.testStream((options) =>
           Ref.updateAndGet(requests, (all) => {
-            const content = Prompt.make(options.prompt).content
-            const firstTurn = content.findIndex((message) => message.role !== "system")
-            const lastTurn = content.findLastIndex((message) => message.role !== "system")
-            return [
-              ...all,
-              {
-                prefix: systemText(content.slice(0, firstTurn)),
-                tail: systemText(content.slice(lastTurn + 1)),
-              },
-            ]
+            const request = turnRequestText(Prompt.make(options.prompt))
+            return [...all, { prefix: request.systemPrompt, tail: request.notices }]
           }).pipe(
             Effect.tap((all) =>
               Effect.when(Deferred.succeed(secondCall, void 0), Effect.succeed(all.length >= 2)),
@@ -432,7 +420,9 @@ describe("system prompt date", () => {
 
 /** The text of the last message before the request's trailing system messages. */
 const lastConversationText = (prompt: Prompt.Prompt): string => {
-  const last = prompt.content.findLast((message) => message.role !== "system")
+  const last = prompt.content.findLast(
+    (message) => message.role !== "system" && !isHostContextUpdate(message),
+  )
   if (last?.role !== "user") return ""
   return last.content
     .flatMap((part) => {
@@ -552,6 +542,87 @@ describe("turn notices", () => {
         ).toBe(false)
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
+  )
+
+  // Content provenance decides the role: only a notice whose whole text is
+  // gent's own goes as a system message, and only to a model that says it
+  // takes one in its history. Any other goes as the user message the host
+  // wraps; a notice that does not say is untrusted.
+  it.scopedLive(
+    "a turn notice reaches the model as a system message only when trusted and the model takes one in its history",
+    () =>
+      Effect.gen(function* () {
+        const noticeText =
+          "Host status for this turn, not a message from the user.\n\n# Test notice\n\n<fired> & done"
+        const lastMessageFor = (
+          model: { readonly supportsSystemMessagesInHistory?: boolean },
+          trusted: Option.Option<boolean>,
+        ) =>
+          Effect.gen(function* () {
+            const notices = defineExtension({
+              id: "@test/turn-notice-placement",
+              setup: Effect.gen(function* () {
+                const host = yield* ExtensionHost
+                yield* host.on("turnProjection", () =>
+                  Effect.succeed({
+                    notices: [
+                      {
+                        id: "test-notice",
+                        content: "# Test notice\n\n<fired> & done",
+                        keys: [],
+                        ...omitUndefined({ trusted: Option.getOrUndefined(trusted) }),
+                      },
+                    ],
+                  }),
+                )
+              }),
+            })
+            const last = yield* Deferred.make<Prompt.Message>()
+            const providerLayer = LanguageModelLayers.testStream(
+              (options) =>
+                Deferred.succeed(
+                  last,
+                  Option.getOrThrow(
+                    Option.fromUndefinedOr(Prompt.make(options.prompt).content.at(-1)),
+                  ),
+                ).pipe(
+                  Effect.as(
+                    Stream.fromIterable([
+                      textDeltaPart("ok"),
+                      finishPart({ finishReason: "stop" }),
+                    ] satisfies LanguageModelStreamPart[]),
+                  ),
+                ),
+              model,
+            )
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              extensionInputs: [...e2ePreset.extensionInputs, notices],
+              providerLayer,
+            })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            return yield* Deferred.await(last)
+          })
+
+        const takes = { supportsSystemMessagesInHistory: true }
+        const cases = [
+          [{ supportsSystemMessagesInHistory: false }, Option.some(true)],
+          [{}, Option.some(true)],
+          [takes, Option.some(false)],
+          [takes, Option.none()],
+        ] as const
+        for (const [model, trusted] of cases) {
+          const wrapped = yield* lastMessageFor(model, trusted)
+          expect([model, trusted, wrapped.role]).toEqual([model, trusted, "user"])
+          expect(wrapped.content).toMatchObject([
+            { type: "text", text: hostContextUpdateText(noticeText) },
+          ])
+        }
+        const kept = yield* lastMessageFor(takes, Option.some(true))
+        expect(kept.role).toBe("system")
+        expect(kept.content).toBe(noticeText)
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
   )
 })
 

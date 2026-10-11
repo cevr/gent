@@ -114,9 +114,10 @@ updates this list in the same commit.
     it notices the change back. An effort change, or a branch with no settled
     step, writes nothing. A turn runs at one effort: a level set while it
     runs takes effect at the next turn (`atTurnEffort`), where a Claude
-    effort marker takes effect too (from the next user turn; a marker after a
-    tool result would wait past the reply, so such a change sends the plain
-    request). Each step's `StreamEnded.reasoningLevel` receipt
+    effort marker takes effect too (a marker right after a user turn with
+    new input applies to its reply, so the cached prefix holds; one after a
+    turn of tool results only would wait past the reply, so such a change
+    goes at the top level instead). Each step's `StreamEnded.reasoningLevel` receipt
     names the effort that step was sent at, after the clamp; a step that
     named no level to a model that reasons writes `reasoningDefault`
     instead, so "sent at the model's default" reads apart from "unknown"
@@ -761,17 +762,40 @@ only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 
 A `turnProjection` hook returns standing content as `promptSections` and
-show-until-read content as `notices` (`TurnNotice`: id, content, keys). The
-system prompt holds only the sections, so it stays byte-identical while a
-notice comes and goes. Core places the turn's notices after the
-conversation, as one system message at the end of each step's request, and
-stores none (`toPrompt` in `runtime/model-context.ts`). The Anthropic driver
-sends it as a `<host-context-update>` user message, which takes no cache
-marker, so the tail marker stays on the last conversation block; the OpenAI
-driver sends it as a developer message after the conversation, so the prefix
-it caches is unchanged. The message opens with "Host status for this turn,
-not a message from the user." Both drivers send it in a role below the
-system prompt, so a user instruction wins over a notice; the opening line
+show-until-read content as `notices` (`TurnNotice`: id, content, keys,
+trusted). The system prompt holds only the sections, so it stays
+byte-identical while a notice comes and goes. Core places the turn's
+notices after the conversation, as one system message at the end of each
+step's request, and stores none (`toPrompt` in `runtime/model-context.ts`).
+Each step then shapes the request for its model (`promptForModel`).
+Decided by: content provenance decides the role. A system message in
+history is the host's own instruction, and Anthropic lets it override the
+top-level one, so only text that is wholly gent's own may take that role.
+A notice is trusted only when it says so (`trusted: true`) because its
+whole text is gent's own: no command output, file content, tool output,
+model output or other third-party text. Core's date notice is trusted; the
+wake, background job, stopped threads, session and example notes notices embed
+outside text and say `trusted: false`; a notice that does not say, and a
+stored system message, is untrusted. A later system message stays a system
+message only when (1) it is trusted (the notices message is when every
+notice in it is), (2) the model reports `supportsSystemMessagesInHistory:
+true` (a model that does not say counts as false), and (3) it has a place
+the Messages API takes: after a user turn (a tool result counts) and last
+or before an assistant turn. Every other later system message goes as a
+`<host-context-update>` user message at its place, its text escaped and its
+cache marker kept, until each one left has a place, so the request never
+ends on an assistant turn with a notice behind it. Core marks that user
+message in its options (`gent.hostContextUpdate`, with the model's own
+`hostContextUpdateOptions` from its driver class merged in), so a reader
+knows it by its metadata, never by its text: a user may type the wrap. The
+Anthropic driver knows an update by the Messages class's mark, keeps each
+update a user message of its own and puts no tail marker on it or on a
+system message, so the tail marker stays on the last conversation block;
+the OpenAI drivers report no capability, so they get every notice as the
+user message after the conversation, and the prefix they cache is
+unchanged. The message opens with "Host status for this turn, not a
+message from the user." The user form ranks below the system prompt, so a
+user instruction wins over a notice. The opening line
 keeps the model from reading host facts as the user speaking. A notice with
 blank content is dropped, so it is never recorded as shown. The turn ledger records the keys each step's request
 carried, per extension; `turnAfter` hands an extension back its own keys as
@@ -888,7 +912,7 @@ Shape:
   in `packages/extensions/src/threads.ts` and register under
   `@gent/session-tools`, so their messages carry that extension id.
   `thread.start({ task?, name?, agent?, model?, effort?, cwd?, instructions?,
-tools?, notify?, workspace?, fork? })` makes a session spawned under the
+  tools?, notify?, workspace?, fork? })` makes a session spawned under the
   starter (so spawn depth applies) with its own key and fresh context, or the
   starter's current context window with `fork` (the create's
   `historyBranchId`). A named agent is that agent wholly, with its own model
@@ -908,7 +932,7 @@ tools?, notify?, workspace?, fork? })` makes a session spawned under the
   a task and `notify: "starter"`.
   - A round is one turn on the thread's current session, so it reaches the
     thread after a handoff: `thread.send({ thread, message, reply?, notify?
-})` returns `{ round, number }` at admission (`Session.send` `turn`,
+    })` returns `{ round, number }` at admission (`Session.send` `turn`,
     `completion: "admission"`, command and message id
     `thread-round:<round>`, metadata `customType: "thread-round"` with
     `details.round`, `details.createdBy: "agent"` and the starter). The
@@ -944,7 +968,7 @@ tools?, notify?, workspace?, fork? })` makes a session spawned under the
     goes where the first one went; a saved place whose session was deleted
     since is replaced, once, by the starter thread's current place
     (compare-and-swap on the saved session) (`sourceId:
-"thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
+    "thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
     is the service's own. The one writer that marks it delivered publishes it
     to `Threads.subscribeRoundEnds`: one feed per server, since the threads'
     resource is a server resource, and a thread started with `cwd` runs in
@@ -1014,7 +1038,7 @@ tools?, notify?, workspace?, fork? })` makes a session spawned under the
     only its `starter` rounds (the cascade above); a `user` thread runs on,
     and a thread's unattended turns decline their asks (`turnCanAsk`). A
     `delegate` or `worker` thread is denied `thread.start`. The `#
-Sessions` prompt section shows its `thread.*` lines only to an agent that
+    Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
@@ -1128,7 +1152,7 @@ Sessions` prompt section shows its `thread.*` lines only to an agent that
 - local CLI routing uses the shared server lock by default; remote routing is explicit server topology
 - queue ownership is structural
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
-- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call. The drivers pass each call on as the model wrote it and the reply decodes its parameters as opaque (`patches/README.md`: `effect@4.0.0` and the three driver SDKs), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), and a call to a name no extension registers as `Unknown tool: <id>`. The model reads the result on the next step; the stream does not fail and the step is not retried. A turn that advertises no tool sends no toolkit and no `tools` or `tool_choice`, and a call in its reply fails as `Unknown tool: <id>` too (`a turn that advertises no tool`). The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes, and `final step declarations on the wire` the last step's).
+- the tool runner (`runtime/tools.ts`) is the one place that checks a tool call. The drivers pass each call on as the model wrote it and the reply decodes its parameters as opaque (`patches/README.md`: `effect@4.0.2` and the three driver SDKs), so a call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), and a call to a name no extension registers as `Unknown tool: <id>`. The model reads the result on the next step; the stream does not fail and the step is not retried. A turn that advertises no tool sends no toolkit and no `tools` or `tool_choice`, and a call in its reply fails as `Unknown tool: <id>` too (`a turn that advertises no tool`). The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes, and `final step declarations on the wire` the last step's).
 - `convertTools` (`runtime/tools.ts`) declares a tool whose parameters encode to an object with no keys (`Schema.Struct({})`, as `mcp.status`) with the object root `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, for every driver and for every extension's tool. Effect's JSON Schema reads such a schema as any value but `null`: the OpenAI codecs refuse it, so each request that advertised the tool failed, and the Anthropic codec declared `{}`. A tool whose parameters encode to an object that takes keys it does not name (an index signature: a `Schema.Record`, a struct with rest, an MCP input schema without `additionalProperties: false`, or the MCP `AnyInput` fallback) declares its own JSON Schema as an open object (`additionalProperties` holds the value schema) with `strict: false`, for every driver and every extension's tool. The codecs encode such an object as an array of `[key, value]` pairs: the OpenAI codecs refused it, so each request that advertised the tool failed before it was sent, and the Anthropic codec declared an array root. Strict mode needs `additionalProperties: false` on each object, so a strict declaration would tell the model that the tool takes no other key. Effect's `Tool.EmptyParams` form (string keys with `never` values) stays on the codec. Each other tool's declaration is the codec's, as before (`tools that take any key on the wire`). The tool runner decodes a call with the tool's own schema.
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
@@ -1324,8 +1348,8 @@ Sessions` prompt section shows its `thread.*` lines only to an agent that
   carrier like any other effort change. The session metrics keep the newest
   route (`SessionRuntimeMetrics.routed`); while the session runs on that
   virtual model the TUI status row names both (`Auto → Claude Sonnet 5
-(anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
-5`, after the debug mark and the cwd gave way), shows the level in the
+  (anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
+  5`, after the debug mark and the cwd gave way), shows the level in the
   same order after the routed model's clamp, and reads the context gauge
   against the routed model's window. The effort picker lists the routed
   model's levels, and its `default` row names the route's level.
@@ -1438,7 +1462,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   tray, the sessions pane and its round-end row head with, is the start's
   optional `name` on one line (at most 80 units), else the first clause of
   its task's title in whole words, at most 32 units (`Check the greeting
-files`); never the agent's name, since many threads run as `delegate`, and
+  files`); never the agent's name, since many threads run as `delegate`, and
   never the default session name, which marks a session its first message
   still names: a candidate equal to it gives way to the whole title line
   (`childSessionName` in `session-names.ts`), with `thread` when no name is
@@ -1606,10 +1630,10 @@ files`); never the agent's name, since many threads run as `delegate`, and
   Sections order `needs`, `running`, `idle`, `inactive`; the glyph's shape
   says the state (`●` needs you, the `◇◈◆` pulse running, `○` idle, `·`
   inactive) and a needs row says why (`waiting for an answer`, `1 open
-question`). The title counts each state there is (`Sessions · 1 needs you
-· 2 running`). From 100 terminal columns a details column (40% of the
+  question`). The title counts each state there is (`Sessions · 1 needs you
+  · 2 running`). From 100 terminal columns a details column (40% of the
   width, ruled off in `border`) shows the selected row: name, state, `model ·
-effort`, turns · cost · time, cwd, what it does now or the head of its
+  effort`, turns · cost · time, cwd, what it does now or the head of its
   last answer, and its task. The detail is the one per-row snapshot read
   (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and `lastAnswer`);
   under 100 columns the one-line detail stays. While the session in view
@@ -1745,7 +1769,7 @@ section, no notice. Core has no checkpoint concept.
   it. Only the paths not at their target are examined for what stands in the
   way. Each of those holding a file or a link moves aside first, by rename
   in its own directory to `.gent-aside-<16 hex of sha256(request)>-<16 hex of
-sha256(path)>`; what moved is hashed into the store, and an aside whose
+  sha256(path)>`; what moved is hashed into the store, and an aside whose
   bytes `before` lacks moves the `before` ref (old value checked) to a commit
   of the amended tree with the same message, parent the old `before`; only
   then does the aside go. So the bytes the revert takes are the bytes it
@@ -1768,7 +1792,7 @@ sha256(path)>`; what moved is hashed into the store, and an aside whose
   since its target is a conflict. `Finish` writes an unfinished revert; with
   `overwrite` it writes over later edits too, and its `before` keeps them for
   undo. An undo is a revert record whose marks also carry `Gent-Undoes:
-<request>` (additive: an older store has none). `checkpoints.list` names
+  <request>` (additive: an older store has none). `checkpoints.list` names
   the newest revert as `undo` (with its file count) once done, unless it is
   itself a done undo, which leaves nothing to undo (its undo would redo the
   revert; a turn row does that by name), and `Undo` refuses then too; it

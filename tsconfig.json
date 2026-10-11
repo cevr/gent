@@ -32,13 +32,15 @@
         // each global it does not use, so oxlint stays the one owner there
         // too. The style suggestions are off (`strictBooleanExpressions`,
         // `effectMapFlatten`, `missedPipeableOpportunity`, `unnecessaryPipe`,
-        // `unnecessaryPipeChain`), and so is `unstableApiUsage`: gent builds on
-        // the `@stability unstable` surface (ai, sql, process, http, rpc, cli,
-        // socket), pins exact versions and takes each break at the bump. Every
+        // `unnecessaryPipeChain`), and so are `unstableApiUsage` and
+        // `apiStabilityLeak`: gent builds on the `@stability unstable` surface
+        // (ai, sql, process, http, rpc, cli, socket) and exposes it in its own
+        // exports, pins exact versions and takes each break at the bump. Every
         // other diagnostic is an error. A test turns `strictEffectProvide` off:
         // a test layer provides a partial world on purpose.
         "diagnosticSeverity": {
           "anyUnknownInErrorContext": "error",
+          "apiStabilityLeak": "off",
           "asyncFunction": "off",
           "catchAllToMapError": "error",
           "catchUnfailableEffect": "error",
@@ -57,6 +59,7 @@
           "effectMapFlatten": "off",
           "effectMapVoid": "error",
           "effectSucceedWithVoid": "error",
+          "experimentalApiUsage": "error",
           "extendsNativeError": "error",
           "floatingEffect": "error",
           "genericEffectServices": "error",

@@ -658,13 +658,13 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
  *
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
- * whether a notice comes or goes. A later system message is the host
- * speaking, not the user: a driver sends it as a context update after the
- * conversation (the Anthropic driver as a `<host-context-update>` user
- * message, which takes no cache marker; the OpenAI driver as a developer
- * message). Both rank below the system prompt,
- * so a user instruction wins over a notice, and `TURN_NOTICES_HEADING` says
- * the text is the host's.
+ * whether a notice comes or goes. The message is marked trusted when every
+ * notice is (`TurnNotice.trusted`). Only a trusted message may reach a model
+ * as a system message, and only one that takes a system message in its
+ * history; any other goes as a `<host-context-update>` user message
+ * (`promptForModel`), which takes no cache marker. The user form ranks below
+ * the system prompt, so a user instruction wins over a notice, and
+ * `TURN_NOTICES_HEADING` says the text is the host's.
  */
 export const toPrompt = (
   messages: ReadonlyArray<Message>,
@@ -679,11 +679,155 @@ export const toPrompt = (
       return [message, ...Option.toArray(toolImageMessage(message, toolImages))]
     }),
   ]
-  const notices = turnNoticesText(options?.notices ?? [])
-  if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
+  const notices = options?.notices ?? []
+  const noticesText = turnNoticesText(notices)
+  if (Option.isSome(noticesText)) {
+    // The heading is gent's own text: the message is trusted when every notice is.
+    let noticeOptions: Prompt.ProviderOptions = {}
+    if (notices.every((notice) => notice.trusted === true)) noticeOptions = TRUSTED_OPTIONS
+    promptMessages.push(
+      Prompt.systemMessage({ content: noticesText.value, options: noticeOptions }),
+    )
+  }
 
   return Prompt.fromMessages(promptMessages)
 }
+
+// ── later system messages ───────────────────────────────────────────────────
+
+/**
+ * The provider options gent marks its own prompt messages with, under the
+ * `gent` key no provider SDK reads: a later system message whose whole text
+ * is gent's own (`TurnNotice.trusted`), and the user message that carries a
+ * later system message (`promptForModel`).
+ */
+const TRUSTED_OPTIONS = { gent: { trusted: true } }
+const HOST_CONTEXT_UPDATE_OPTIONS = { gent: { hostContextUpdate: true } }
+
+const isTrusted = Schema.is(
+  Schema.Struct({ gent: Schema.Struct({ trusted: Schema.Literal(true) }) }),
+)
+const isHostContextUpdateOptions = Schema.is(
+  Schema.Struct({ gent: Schema.Struct({ hostContextUpdate: Schema.Literal(true) }) }),
+)
+
+/** True for the user message that carries a later system message (`promptForModel`), by its mark. */
+export const isHostContextUpdate = (message: Prompt.Message): boolean =>
+  message.role === "user" && isHostContextUpdateOptions(message.options)
+
+const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
+const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
+
+/**
+ * The user-message text that carries a later system message (`promptForModel`).
+ * The content is escaped, so a notice cannot close the wrap.
+ */
+export const hostContextUpdateText = (content: string): string =>
+  `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
+
+/** `over` merged into `base`, object by object: a key in both with two objects merges them, any other takes `over`'s value. */
+const mergedObjects = (base: Schema.JsonObject, over: Schema.JsonObject): Schema.JsonObject =>
+  Object.fromEntries([
+    ...Object.entries(base),
+    ...Object.entries(over).map(([key, value]): readonly [string, Schema.Json] => [
+      key,
+      Option.match(Option.fromUndefinedOr(base[key]), {
+        onNone: () => value,
+        onSome: (current) => {
+          if (isJsonObject(current) && isJsonObject(value)) return mergedObjects(current, value)
+          return value
+        },
+      }),
+    ]),
+  ])
+
+/**
+ * `message` as the user message that carries it: its text in
+ * `hostContextUpdateText`, its provider options (a cache marker) kept, with
+ * gent's mark and the model's own (`modelOptions`) merged in.
+ */
+const hostContextUpdate = (
+  message: Prompt.SystemMessage,
+  modelOptions: Prompt.ProviderOptions,
+): Prompt.UserMessage =>
+  Prompt.userMessage({
+    content: [Prompt.textPart({ text: hostContextUpdateText(message.content) })],
+    options: mergedObjects(message.options, { ...HOST_CONTEXT_UPDATE_OPTIONS, ...modelOptions }),
+  })
+
+/**
+ * True when the system message at `index` has a place in the conversation
+ * (platform.claude.com/docs/en/build-with-claude/system-messages, read
+ * 2026-10-11): it and the system messages next to it, judged together,
+ * follow a user turn (a tool result is one) and are the last messages or
+ * come right before an assistant turn.
+ */
+const hasPlace = (messages: ReadonlyArray<Prompt.Message>, index: number): boolean => {
+  let first = index
+  while (messages[first - 1]?.role === "system") first -= 1
+  let last = index
+  while (messages[last + 1]?.role === "system") last += 1
+  const before = messages[first - 1]?.role
+  const after = messages[last + 1]?.role
+  return (
+    (before === "user" || before === "tool") &&
+    (Predicate.isUndefined(after) || after === "assistant")
+  )
+}
+
+/**
+ * The prompt with each system message after the conversation began (the
+ * turn's notices, and any system message stored in the conversation) in the
+ * role its provenance and `model` allow. The system messages before the
+ * conversation are the system prompt and stay as they are.
+ *
+ * Decided by: content provenance decides the role. A system message carries
+ * operator priority, so a later one stays a system message only when all of
+ * these hold, and otherwise goes, at its place, as a user message in
+ * `hostContextUpdateText`:
+ *   - its whole text is gent's own (`TurnNotice.trusted`, which `toPrompt`
+ *     marks); a message with no mark is untrusted;
+ *   - the model says it takes a system message in its history
+ *     (`supportsSystemMessagesInHistory`, read in the request's context, so
+ *     a scoped config override counts); a model that does not say is taken
+ *     not to;
+ *   - it has a place (`hasPlace`). A system message after an assistant turn
+ *     (a step resumed after a final reply) has none: the SDK would move
+ *     every later one into the top-level system prompt, and the request
+ *     would end on the assistant turn.
+ * Wrapping one message can take another's place, so the check repeats until
+ * nothing changes. The user form carries gent's mark (`isHostContextUpdate`)
+ * and the model's own options (`modelOptions`, `Model.hostContextUpdateOptions`),
+ * by which its driver tells it from the user's own text.
+ */
+export const promptForModel = (
+  prompt: Prompt.Prompt,
+  model: LanguageModel.LanguageModel,
+  modelOptions: Prompt.ProviderOptions = {},
+): Effect.Effect<Prompt.Prompt> =>
+  Effect.map(model.supportsSystemMessagesInHistory ?? Effect.succeed(false), (inHistory) => {
+    const start = prompt.content.findIndex((message) => message.role !== "system")
+    if (start === -1) return prompt
+    const messages: Array<Prompt.Message> = [...prompt.content]
+    /** Wraps each later system message `keeps` refuses; true when it wrapped one. */
+    const wrapUnless = (keeps: (message: Prompt.SystemMessage, index: number) => boolean) => {
+      let wrapped = false
+      for (const [index, message] of messages.entries()) {
+        if (index < start || message.role !== "system" || keeps(message, index)) continue
+        messages[index] = hostContextUpdate(message, modelOptions)
+        wrapped = true
+      }
+      return wrapped
+    }
+    let changed = wrapUnless((message) => inHistory && isTrusted(message.options))
+    let placing = true
+    while (placing) {
+      placing = wrapUnless((_, index) => hasPlace(messages, index))
+      changed = changed || placing
+    }
+    if (!changed) return prompt
+    return Prompt.fromMessages(messages)
+  })
 
 // ── model-context-window ────────────────────────────────────────────────────
 

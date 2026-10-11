@@ -985,7 +985,7 @@ session to `warehouse-count` (verified in `sessions`), clean exit.
   started; a test store with an empty `subscribe` could never satisfy it, and a
   batched follow-up whose id was absorbed never produced its `TurnCompleted`.
   The one wait is now state-based: `awaitTurnCompletion(handle, baseline,
-messageId)` returns when the loop no longer holds the message (not starting,
+  messageId)` returns when the loop no longer holds the message (not starting,
   running, waiting, or queued), or when the turn or persistence fails.
   `RespondInteraction` shares it. `waitForMessageTurnCompleted`,
   `waitForIdleAfterEpoch`, `TurnBaseline`, and `AgentLoopState.stateEpoch`
@@ -1103,7 +1103,7 @@ messageId)` returns when the loop no longer holds the message (not starting,
   `ModelCompactionFailure` union. The loop used two of them: "is this failure
   recoverable" and "which revision is newest", both derivable by the compactor.
 - The seam now says it: `ModelCompactionError` is `{ modelId, reason,
-recoverable }` and `ModelCompactionResult` carries `revision`. Everything
+  recoverable }` and `ModelCompactionResult` carries `revision`. Everything
   else lives in `packages/extensions/src/compaction/summary-record.ts`; the
   branch-tools barrel drops nine names and gains `UsageSchema`. The TUI never
   imported the core names; it matches the customType string.
@@ -1237,7 +1237,7 @@ recoverable }` and `ModelCompactionResult` carries `revision`. Everything
 
 - `SystemPromptInput.driverSource`, `driverToolSurface`, and `sections`
   were written by the loop and read by no hook; `ExternalDriverContribution.
-toolSurface` was set by no driver. The codemode prompt slot they were
+  toolSurface` was set by no driver. The codemode prompt slot they were
   built for does not exist. All four are gone, with `resolveDriverToolSurface`
   and `ResolvedTurn.driverSource`.
 - `BranchStorage.countMessages`, `SessionStorage.getLastSessionByCwd`, and
@@ -1679,7 +1679,7 @@ User directive: "add durability, read for snapshot is good and lets do
 - `36ac6903` read-only requests. The turn worker holds the side-mutation
   permit for the whole turn, so every extension request blocked until the
   turn ended (the pane showed "loading…" for minutes). `request({ readonly:
-true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
+  true })` skips the permit; `CompiledRpcRegistry.isReadonly` answers the
   handler. Only `ListAgents` is marked; `btw.progress`, `goal.get`, and the
   skills list/get-content requests are candidates not yet marked.
 - `32b84303` live status in the listing. `listActiveLoops` now reads each

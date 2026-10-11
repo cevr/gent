@@ -24,7 +24,7 @@
     "@effect/ai-openai-compat": "catalog:",
     "@effect/ai-typesafe": "catalog:",
     "@gent/core": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "effect-encore": "catalog:",
     "picomatch": "catalog:",
     "yaml": "^2.9.1"

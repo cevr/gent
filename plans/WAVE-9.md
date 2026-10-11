@@ -45,11 +45,11 @@ gated, and reviewed once.
 - **In**: new `domain/actor.ts` (`ActorRef<M>`, `Behavior<M>`,
   `ActorContext<M>`, `ServiceKey<M>`, `tell`, `ask` with default
   5s timeout, `ActorAskTimeout` typed error); new `runtime/extensions/
-actor-engine.ts` (host that spawns + supervises actors per
+  actor-engine.ts` (host that spawns + supervises actors per
   extension per session, takes a `Behavior<M>` and produces an
   `ActorRef<M>`); new `runtime/extensions/receptionist.ts` (typed
   service-key registry, `register(key, ref)` / `find(key) →
-Effect<readonly ref[], never>` / `subscribe(key) → Stream<...>`);
+  Effect<readonly ref[], never>` / `subscribe(key) → Stream<...>`);
   actor persistence path (snapshot `state` + mailbox at the
   existing checkpoint surface so a session restart can rehydrate);
   `defineExtension({ actors: [...] })` loader wiring (loader reads

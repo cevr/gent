@@ -132,7 +132,7 @@ are no longer public exports. Scheduling/serialization concerns stay internal.
 Audit and simplify against this north star:
 
 - A tool body should look like ordinary Effect code: `execute: (params) =>
-Effect.gen(function* () { const ctx = yield* ExtensionContext; ... })`.
+  Effect.gen(function* () { const ctx = yield* ExtensionContext; ... })`.
 - `ctx` must not be threaded through helper calls or function parameters.
 - `capability`, `needs`, and `read`/`write` authority metadata must not be used
   as private access control. If code needs a host primitive, expose the narrow

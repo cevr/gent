@@ -209,6 +209,7 @@ import {
   modelChangeNotice,
   projectContextWindow,
   projectCurrentWindow,
+  promptForModel,
   type PromptCache,
   type StepMeasure,
   toolImagePrompt,
@@ -3259,7 +3260,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     model: modelOption.value,
     directory: yield* toolImageDirectory((yield* RuntimeEnvironment).home),
   })
-  const prompt = toWirePrompt(
+  const transcript = toWirePrompt(
     toPrompt(projection.messages, {
       systemPrompt: resolved.systemPrompt,
       notices: requestNotices(resolved),
@@ -3278,33 +3279,39 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ...modelRequest,
     hints: { ...modelRequest.hints, reasoningHistory },
   }
+  // The prompt gives its later system messages (the notices) the role their
+  // provenance and the resolved model allow (`promptForModel`).
   const wireStream = Stream.unwrap(
-    resolveSelectedModel(stepRequest).pipe(
-      Effect.map((model) => {
-        if (resolved.tools.length > 0) {
-          if (params.finalStep) {
-            return model.streamText({
-              prompt,
-              toolkit: convertTools([...resolved.tools]),
-              toolChoice: "none",
-              disableToolCallResolution: true,
-            })
-          }
-          // The reply decodes against every tool the profile registers;
-          // `oneOf` keeps the request's declarations to the advertised ones,
-          // in their order, so the request is the same bytes.
+    Effect.gen(function* () {
+      const model = yield* resolveSelectedModel(stepRequest)
+      const prompt = yield* promptForModel(
+        transcript,
+        model,
+        modelOption.value.hostContextUpdateOptions,
+      )
+      if (resolved.tools.length > 0) {
+        if (params.finalStep) {
           return model.streamText({
             prompt,
-            toolkit: convertTools([...resolved.replyTools]),
-            toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
+            toolkit: convertTools([...resolved.tools]),
+            toolChoice: "none",
             disableToolCallResolution: true,
           })
         }
-        // No tool goes on the request, but the reply can still call one: the
-        // tool runner answers it (`Unknown tool: <id>`), as for any step.
-        return model.streamText({ prompt, disableToolCallResolution: true })
-      }),
-    ),
+        // The reply decodes against every tool the profile registers;
+        // `oneOf` keeps the request's declarations to the advertised ones,
+        // in their order, so the request is the same bytes.
+        return model.streamText({
+          prompt,
+          toolkit: convertTools([...resolved.replyTools]),
+          toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
+          disableToolCallResolution: true,
+        })
+      }
+      // No tool goes on the request, but the reply can still call one: the
+      // tool runner answers it (`Unknown tool: <id>`), as for any step.
+      return model.streamText({ prompt, disableToolCallResolution: true })
+    }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
   // The raw stop reason the driver reports for this attempt's stream

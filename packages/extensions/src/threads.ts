@@ -1829,7 +1829,8 @@ const STOPPED_THREADS_NOTICE = "threads-stopped"
  * run. A thread is one line however many of its rounds were stopped, the
  * newest stop first, at most `maximumNoticeThreads`; the rest are a count.
  * Every step reads it; an answered turn clears exactly the rounds it showed,
- * and a round the cap left out stays for the next turn.
+ * and a round the cap left out stays for the next turn. It is untrusted: each
+ * line holds the head of a round's message, which a model or a user wrote.
  */
 const stopNotices = Effect.fn("Threads.stopNotices")(function* () {
   const ctx = yield* ExtensionContext
@@ -1860,6 +1861,7 @@ const stopNotices = Effect.fn("Threads.stopNotices")(function* () {
       id: STOPPED_THREADS_NOTICE,
       keys: named.flat().map(stopNoticeKey),
       content: `# Stopped threads\n\nThe user interrupted your turn, and that stopped these threads before their rounds finished. They are not running, and no round end will come from them. Tell the user which threads stopped; send them work again only when the user asks for it.\n\n${lines.join("\n")}`,
+      trusted: false,
     },
   ]
 })

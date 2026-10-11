@@ -760,6 +760,16 @@ export interface TurnNotice {
   readonly content: string
   /** What the notice shows, in the extension's own terms. */
   readonly keys: ReadonlyArray<string>
+  /**
+   * The text's provenance: true only when the whole text is gent's own, with
+   * no command output, file content, tool output, model output, name or
+   * other text from outside. Absent means false. A request whose every
+   * notice is trusted may send them as a system message, on a model that
+   * takes one in its history; any other goes as a user message
+   * (`promptForModel`): a system message carries operator priority, and
+   * outside text must not.
+   */
+  readonly trusted?: boolean
 }
 
 /** Turn-time projection — needs agent/tool context, used during prompt assembly */

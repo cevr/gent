@@ -245,7 +245,7 @@ The library carries weight in two extension sites — these stay:
 2. **The state IS the data.** `Inactive { reason }`,
    `Working { startedAt, iterations, planId, rows[], cooldown }`,
    `AwaitingReview { startedAt, awaitingSince, planId, rows[],
-reviewerCooldown }`. The AwaitingReview-specific `awaitingSince` and
+   reviewerCooldown }`. The AwaitingReview-specific `awaitingSince` and
    `reviewerCooldown` are _meaningless_ in `Working`. The discriminated
    union makes invalid combinations unrepresentable. Flatten to one
    struct + `Phase` tag and you re-introduce the

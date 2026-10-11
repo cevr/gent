@@ -33,6 +33,7 @@ import {
   createRpcClient,
   createRpcHarness,
   finishPart,
+  isHostContextUpdate,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   multiToolCallStep,
@@ -324,10 +325,14 @@ const stalledStream = (text: string, opened: Deferred.Deferred<void>) =>
     Stream.concat(Stream.never),
   )
 
-/** Every text part of the prompt's user and assistant messages, in order. */
+/**
+ * Every text part of the prompt's user and assistant messages, in order. A
+ * turn notice is no part of the conversation, as a system message or as the
+ * user message that carries one.
+ */
 const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
   prompt.content.flatMap((message) => {
-    if (message.role === "system") return []
+    if (message.role === "system" || isHostContextUpdate(message)) return []
     return message.content.flatMap((part) => {
       if (part.type !== "text") return []
       return [part.text]
@@ -1294,28 +1299,39 @@ describe("the starter's interrupt", () => {
           const parentRequests: Array<{
             readonly system: string
             readonly notices: string
+            /** The notices arrived in the `<host-context-update>` user message. */
+            readonly noticesWrapped: boolean
             readonly last: string
           }> = []
-          const providerLayer = LanguageModelLayers.testStream((options) => {
-            const texts = promptTexts(options.prompt)
-            // The thread's stream opens and stalls: it is mid-turn when the
-            // starter is interrupted.
-            if (texts[0]?.endsWith(childTask) === true)
-              return Effect.succeed(stalledStream("working", childStreaming))
-            parentRequests.push({
-              system: systemTextOf(options.prompt),
-              notices: noticeText(options.prompt),
-              last: texts.at(-1) ?? "",
-            })
-            if (parentRequests.length === 1) {
-              return Effect.succeed(toolStep("thread.start", delegated(childTask), "start-1"))
-            }
-            // The starter's turn is still open after the start, so the
-            // interrupt lands on a turn that waits for a running round.
-            if (parentRequests.length === 2)
-              return Effect.succeed(stalledStream("planning", parentStreaming))
-            return Effect.succeed(reply("ack"))
-          })
+          // A model that takes a system message in its history: only the
+          // notice's provenance keeps it out of that role.
+          const providerLayer = LanguageModelLayers.testStream(
+            (options) => {
+              const texts = promptTexts(options.prompt)
+              // The thread's stream opens and stalls: it is mid-turn when the
+              // starter is interrupted.
+              if (texts[0]?.endsWith(childTask) === true)
+                return Effect.succeed(stalledStream("working", childStreaming))
+              parentRequests.push({
+                system: systemTextOf(options.prompt),
+                notices: noticeText(options.prompt),
+                noticesWrapped: Option.exists(
+                  Option.fromUndefinedOr(options.prompt.content.at(-1)),
+                  isHostContextUpdate,
+                ),
+                last: texts.at(-1) ?? "",
+              })
+              if (parentRequests.length === 1) {
+                return Effect.succeed(toolStep("thread.start", delegated(childTask), "start-1"))
+              }
+              // The starter's turn is still open after the start, so the
+              // interrupt lands on a turn that waits for a running round.
+              if (parentRequests.length === 2)
+                return Effect.succeed(stalledStream("planning", parentStreaming))
+              return Effect.succeed(reply("ack"))
+            },
+            { supportsSystemMessagesInHistory: true },
+          )
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
           yield* sendPrompt(harness, "delegate one task")
@@ -1364,6 +1380,9 @@ describe("the starter's interrupt", () => {
           expect(next?.notices).toContain("# Stopped threads")
           expect(next?.notices).toContain(childTask)
           expect(next?.notices).toContain(child.sessionId)
+          // It quotes the round's task, which a model wrote, so it is
+          // untrusted: a user message, never a system message.
+          expect(next?.noticesWrapped).toBe(true)
           // The user's interrupt stopped them: the notice asks for a report, not a restart.
           expect(next?.notices).toContain("Tell the user which threads stopped")
           expect(next?.notices).toContain("only when the user asks for it")

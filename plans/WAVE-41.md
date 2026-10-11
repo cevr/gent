@@ -6,7 +6,7 @@
   ride-along bucket in `plans/WAVE-40-audit-receipt.md`.
 - **HEAD start**: `7dd9eed8` (`docs(plan): close wave 40`).
 - **W40 code closure**: `e41d8a9a` (`fix(runtime): close wave 40
-audit blockers`), with `bun run gate` passed there.
+  audit blockers`), with `bun run gate` passed there.
 - **Execution status**: planned only. Do not start W41 until
   explicitly requested.
 - **Rule**: sub-commit by architecture seam; run gate between logical

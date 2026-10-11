@@ -124,7 +124,7 @@ systems:
   shape, package-shape validator, runtime compiler, and shipped extension
   authoring surface.
 - Migrated shipped extensions and runtime tests to `defineExtension({
-hooks: [hook.*(...)] })`; lifecycle handlers now share one explicit hook
+  hooks: [hook.*(...)] })`; lifecycle handlers now share one explicit hook
   compiler with no legacy compatibility path.
 - Added a guardrail that rejects reintroducing `reactions:` in active source.
 - Updated extension docs, actor docs, package-local agent guidance, and

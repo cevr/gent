@@ -132,7 +132,8 @@ export const dateNotice = (
   today: DateTime.Zoned,
 ): Option.Option<TurnNotice> =>
   Option.liftPredicate(
-    { id: "date", content: dateLine(today), keys: [] },
+    // The date line is gent's own text.
+    { id: "date", content: dateLine(today), keys: [], trusted: true },
     () => DateTime.formatIsoDate(prompted) !== DateTime.formatIsoDate(today),
   )
 
