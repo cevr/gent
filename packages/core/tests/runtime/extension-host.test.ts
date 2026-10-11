@@ -569,6 +569,25 @@ class InterruptAtStep implements Scheduler.Scheduler {
   }
 }
 
+/**
+ * A scheduler under which a fiber never yields on its own: once it runs, it
+ * runs until it suspends (on I/O, a `Deferred`, a lock). Another fiber can
+ * run only after that, so a task it scheduled while this fiber ran sees the
+ * fiber at its next suspension.
+ */
+class RunToSuspension implements Scheduler.Scheduler {
+  readonly executionMode = "async"
+  readonly inner = new Scheduler.MixedScheduler()
+
+  shouldYield(): boolean {
+    return false
+  }
+
+  makeDispatcher(): Scheduler.SchedulerDispatcher {
+    return this.inner.makeDispatcher()
+  }
+}
+
 /** A process resource whose layer runs `start` as it builds. */
 const startResource = (id: string, start: Effect.Effect<void>) =>
   defineResource({
@@ -1463,10 +1482,11 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           )
           // Detached: a resolve wedged on its own lock cannot be interrupted.
           const resolving = yield* Effect.forkDetach(resolve)
-          const ended = yield* Fiber.await(resolving).pipe(Effect.timeout("5 seconds"), Effect.exit)
-          expect(Exit.isSuccess(ended)).toBe(true)
+          // The wait ends, and the resolve it waited on succeeded.
+          const ended = yield* Fiber.await(resolving).pipe(Effect.timeout("5 seconds"))
           expect(reentry.resolved).toBe(true)
-          const kept = yield* resolve
+          expect(Exit.isSuccess(ended)).toBe(true)
+          const kept = yield* ended
           expect(
             kept.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
           ).toMatchObject({ _tag: "Active", reloadFailed: { phase: "startup" } })
@@ -1482,6 +1502,159 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
             }),
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // What a resolve lets go of closes scope by scope: a finalizer that dies
+  // fails only its own close. Here the replaced pass holds a build whose
+  // finalizer dies; the profile the resolve retired still closes after it,
+  // and the resolve, whose profile is stored, succeeds.
+  it.scopedLive(
+    "a finalizer that dies while a resolve lets go stops no other close and fails no resolve",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-dying-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const marks = path.join(directory, "marks")
+        const entry = path.join(home, ".gent", "extensions", "feed.ts")
+        const userConfig = path.join(home, ".gent", "config.json")
+        yield* Effect.forEach([path.dirname(entry), launch, marks], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        // Armed, the next close of a dying build dies once.
+        const dying = { armed: false, died: 0 }
+        const dyingExtension = defineExtension({
+          id: "server-feed-dying",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-feed-dying/reader",
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileStartProbe,
+                  Effect.addFinalizer(() =>
+                    Effect.suspend(() => {
+                      if (!dying.armed) return Effect.void
+                      dying.armed = false
+                      dying.died += 1
+                      return Effect.die("finalizer broke")
+                    }),
+                  ).pipe(Effect.as(SessionProfileStartProbe.of({ value: "dying" }))),
+                ),
+              }),
+            )
+          }),
+        })
+        const open = (version: string) =>
+          Effect.map(fs.readDirectory(marks), (names) =>
+            names.filter((name) => name.startsWith(`${version}-`)),
+          )
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* writeFileAtomic(entry, serverFeedSource("two", { marks, reader: "good" }))
+          yield* resolve
+
+          // "three" fails in the process phase: the pass that held it, and
+          // the dying build over its feed, is replaced by one over "two".
+          yield* writeFileAtomic(entry, serverFeedSource("three", { marks, reader: "broken" }))
+          dying.armed = true
+          const recovered = yield* Effect.exit(resolve)
+          expect(dying.died).toBe(1)
+          expect(Exit.isSuccess(recovered)).toBe(true)
+          const profile = yield* recovered
+          expect(Context.get(profile.layerContext, ServerFeed).version).toBe("two")
+          // The replaced pass closed its other builds: no "three" is open.
+          expect(yield* open("three")).toEqual([])
+
+          // A disable retires the profile that ran "two". It closes only if
+          // the profile the recovering resolve retired closed too.
+          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["server-feed"] }))
+          yield* resolve
+          expect(yield* open("two")).toEqual([])
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: launch,
+              home,
+              extensions: [dyingExtension],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A resolve interrupted while it waits on a build only it holds lets go of
+  // its hold after the place's lock: the build's finalizer, which takes the
+  // same place's lock (`reload`), runs, and the resolve ends.
+  it.scopedLive(
+    "a resolve interrupted on a build only it holds lets go after the place's lock, so the build's finalizer can take it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-held-alone-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        yield* Effect.forEach([home, launch], (dir) => fs.makeDirectory(dir, { recursive: true }))
+        const started = yield* Deferred.make<void>()
+        const reentry = { run: Option.none<Effect.Effect<void>>(), reloaded: false }
+        const waiting = defineExtension({
+          id: "server-held-alone",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-held-alone/reader",
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileStartProbe,
+                  Effect.gen(function* () {
+                    yield* Effect.addFinalizer(() =>
+                      Effect.suspend(() => Option.getOrElse(reentry.run, () => Effect.void)),
+                    )
+                    yield* Deferred.succeed(started, void 0)
+                    return yield* Effect.never
+                  }),
+                ),
+              }),
+            )
+          }),
+        })
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          reentry.run = Option.some(
+            cache.reload(launch, ExtensionId.make("server-held-alone")).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  reentry.reloaded = true
+                }),
+              ),
+            ),
+          )
+          // Detached: a resolve wedged on its own lock cannot be interrupted.
+          const resolving = yield* Effect.forkDetach(Effect.scoped(cache.resolve(launch)))
+          yield* Deferred.await(started)
+          yield* Effect.forkDetach(Fiber.interrupt(resolving))
+          const ended = yield* Fiber.await(resolving).pipe(Effect.timeout("5 seconds"))
+          expect(reentry.reloaded).toBe(true)
+          expect(Exit.isFailure(ended) && Cause.hasInterruptsOnly(ended.cause)).toBe(true)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [waiting] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -1512,14 +1685,12 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         const started = yield* Deferred.make<void>()
         const gate = yield* Deferred.make<void>()
         const builds = yield* Ref.make(0)
-        // How many resolves set the slow extension up, and whether its build closed.
-        const slowState = { setups: 0, closed: false }
+        // Whether the slow build was let go while it waited (its wait
+        // interrupted: no asker held it), and whether it closed once built.
+        const slowState = { dropped: false, closed: false }
         const slow = defineExtension({
           id: "server-slow",
           setup: Effect.gen(function* () {
-            yield* Effect.sync(() => {
-              slowState.setups += 1
-            })
             const host = yield* ExtensionHost
             yield* host.register(
               "resource",
@@ -1528,18 +1699,26 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
                 scope: "server",
                 layer: Layer.effect(
                   ServerResourceProbe,
-                  Effect.acquireRelease(
-                    Effect.gen(function* () {
-                      const build = yield* Ref.updateAndGet(builds, (count) => count + 1)
-                      yield* Deferred.succeed(started, void 0)
-                      yield* Deferred.await(gate)
-                      return ServerResourceProbe.of({ build })
-                    }),
-                    () =>
-                      Effect.sync(() => {
-                        slowState.closed = true
-                      }),
-                  ),
+                  Effect.gen(function* () {
+                    const build = yield* Ref.updateAndGet(builds, (count) => count + 1)
+                    yield* Deferred.succeed(started, void 0)
+                    // Outside the acquisition, so a build no asker holds is
+                    // interrupted here at once.
+                    yield* Deferred.await(gate).pipe(
+                      Effect.onInterrupt(() =>
+                        Effect.sync(() => {
+                          slowState.dropped = true
+                        }),
+                      ),
+                    )
+                    return yield* Effect.acquireRelease(
+                      Effect.sync(() => ServerResourceProbe.of({ build })),
+                      () =>
+                        Effect.sync(() => {
+                          slowState.closed = true
+                        }),
+                    )
+                  }),
                 ),
               }),
             )
@@ -1566,12 +1745,36 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           }),
         })
 
+        // The second asker's last file read before its hold on the slow
+        // build is its `.git` check (an `access`, under `exists`); from there
+        // to its wait on the build it runs in memory. It runs under
+        // `RunToSuspension`, so a task it schedules at that read runs only
+        // once it waits on the build.
+        const secondGit = path.join(second, ".git")
+        const secondWaits = yield* Deferred.make<void>()
+        const wrapFileSystem = (live: FileSystem.FileSystem): FileSystem.FileSystem => ({
+          ...live,
+          access: (file, options) =>
+            live.access(file, options).pipe(
+              Effect.onExit(() => {
+                if (file !== secondGit) return Effect.void
+                return Effect.forkDetach(
+                  Effect.yieldNow.pipe(Effect.andThen(Deferred.succeed(secondWaits, void 0))),
+                )
+              }),
+            ),
+        })
+
         yield* Effect.gen(function* () {
           const cache = yield* SessionProfileCache
           // The first asker starts the slow build.
           const atFirst = yield* Effect.forkChild(Effect.scoped(cache.resolve(first)))
           yield* Deferred.await(started)
-          const atSecond = yield* Effect.forkChild(Effect.scoped(cache.resolve(second)))
+          const atSecond = yield* Effect.forkChild(
+            Effect.scoped(cache.resolve(second)).pipe(
+              Effect.provideService(Scheduler.Scheduler, new RunToSuspension()),
+            ),
+          )
           const other = yield* Effect.scoped(cache.resolve(elsewhere)).pipe(
             Effect.timeout("4 seconds"),
           )
@@ -1579,22 +1782,22 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           expect(Option.isNone(Context.getOption(other.layerContext, ServerResourceProbe))).toBe(
             true,
           )
-          // The second asker set the slow extension up; what it runs after
-          // that up to its wait on the slow build is in memory, so it reaches
-          // the wait within these yields.
-          while (slowState.setups < 2) yield* Effect.yieldNow
-          for (let turn = 0; turn < 100; turn += 1) yield* Effect.yieldNow
+          // The second asker waits on the slow build: interrupting the first
+          // lets go of the first's hold only.
+          yield* Deferred.await(secondWaits)
           yield* Fiber.interrupt(atFirst)
-          expect(slowState.closed).toBe(false)
+          expect(slowState.dropped).toBe(false)
           yield* Deferred.succeed(gate, void 0)
           const two = yield* Fiber.join(atSecond)
           expect(Context.get(two.layerContext, ServerResourceProbe).build).toBe(1)
-          expect(slowState.closed).toBe(false)
+          expect(slowState).toEqual({ dropped: false, closed: false })
           expect(yield* Ref.get(builds)).toBe(1)
         }).pipe(
           Effect.ensuring(Deferred.succeed(gate, void 0)),
           Effect.timeout("15 seconds"),
-          Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [slow, swift] })),
+          Effect.provide(
+            makeCacheLayer({ cwd: first, home, extensions: [slow, swift], wrapFileSystem }),
+          ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
