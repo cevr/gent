@@ -91,7 +91,6 @@ import {
   ScriptedLanguageModel,
   type ScriptedStep,
   signInReady,
-  sourceRotationLock,
   textDeltaPart,
 } from "../runtime/provider.js"
 import {
@@ -179,6 +178,7 @@ import {
   type LockSourceRotation,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
+  type ProviderAuthInfo,
   ProviderStopReason,
   reportProviderStopReason,
 } from "../domain/driver.js"
@@ -2154,22 +2154,96 @@ export function storedCredentialModel(
 }
 
 /**
+ * The rotation lock the production resolver hands a driver of `provider`
+ * with the OAuth sign-in the `Auth` in context holds for it
+ * (`ProviderAuthInfo.Oauth.lockSourceRotation`), as a fixture driver's
+ * `resolveModel` receives it. A store that holds no OAuth sign-in for
+ * `provider` is a defect.
+ */
+export const resolvedRotationLock = (
+  provider: string,
+): Effect.Effect<LockSourceRotation, never, Auth> =>
+  Effect.gen(function* () {
+    const auth = yield* Auth
+    const handed = yield* Ref.make(Option.none<ProviderAuthInfo>())
+    const driver: ModelDriverContribution = {
+      id: provider,
+      name: provider,
+      resolveModel: (_modelName, authInfo) =>
+        Ref.set(handed, Option.fromUndefinedOr(authInfo)).pipe(
+          Effect.as(AiModel.make(provider, "rotation-lock", LanguageModelLayers.failing)),
+        ),
+    }
+    const resolved = resolveExtensions([
+      {
+        manifest: { id: ExtensionId.make("@gent/test/resolved-rotation-lock") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: { modelDrivers: [driver], apiClasses: [] },
+      },
+    ])
+    // The resolver holds no resource, so it outlives the scope its layer is built in.
+    const resolverContext = yield* Effect.scoped(
+      Layer.build(
+        ModelResolver.Live.pipe(
+          Layer.provide(Layer.succeed(Auth, auth)),
+          Layer.provide(ModelCatalogSource.fixed(fixtureModelCatalog())),
+        ),
+      ),
+    )
+    yield* Context.get(resolverContext, ModelResolver)
+      .resolve({ modelId: `${provider}/rotation-lock` })
+      .pipe(
+        Effect.provideService(
+          ExtensionRegistry,
+          ExtensionRegistry.of({ getResolved: () => resolved, providerConfig: Effect.succeed({}) }),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      )
+    const signIn = yield* Ref.get(handed)
+    if (Option.isNone(signIn) || signIn.value._tag !== "Oauth") {
+      return yield* Effect.die(`the resolver handed ${provider} no OAuth sign-in`)
+    }
+    const lock = signIn.value.lockSourceRotation
+    if (Predicate.isUndefined(lock)) {
+      return yield* Effect.die(`the resolver handed ${provider}'s sign-in no rotation lock`)
+    }
+    return lock
+  })
+
+/**
  * The rotation lock one credential store over `authDirectory` gives every
- * OAuth sign-in of `provider` (`ProviderAuthInfo.Oauth.lockSourceRotation`),
- * as the resolver hands it to a driver. Each call opens a new store, as a
- * restart or a second process does: what one store holds only in its memory,
- * another never sees. Its provider lock stays in the process
- * (`ProviderLock.InProcess`), so a test on a `TestClock` never waits on a
- * lock file's poll.
+ * OAuth sign-in of `provider`, taken as the resolver hands it to a driver
+ * (`resolvedRotationLock`): the store holds a fake sign-in for `provider`
+ * first. Each call opens a new store, as a restart or a second process does:
+ * what one store holds only in its memory, another never sees. Its provider
+ * lock stays in the process (`ProviderLock.InProcess`), so a test on a
+ * `TestClock` never waits on a lock file's poll.
  */
 export const storeRotationLock = (
   authDirectory: string,
   provider: string,
 ): Effect.Effect<LockSourceRotation, never, FileSystem.FileSystem | Path.Path> =>
-  // The store holds no resource, so it outlives the scope its layer is built in.
-  Effect.scoped(
-    Layer.build(Auth.Live(authDirectory).pipe(Layer.provide(ProviderLock.InProcess))),
-  ).pipe(Effect.map((context) => sourceRotationLock(Context.get(context, Auth), provider)))
+  Effect.gen(function* () {
+    // The store holds no resource, so it outlives the scope its layer is built in.
+    const context = yield* Effect.scoped(
+      Layer.build(Auth.Live(authDirectory).pipe(Layer.provide(ProviderLock.InProcess))),
+    )
+    const auth = Context.get(context, Auth)
+    yield* auth
+      .set(
+        provider,
+        AuthInfo.cases.Oauth.make({
+          type: "oauth",
+          access: "fake-rotation-lock-access",
+          refresh: "fake-rotation-lock-refresh",
+          expires: 0,
+        }),
+      )
+      .pipe(Effect.orDie)
+    return yield* resolvedRotationLock(provider).pipe(Effect.provideService(Auth, auth))
+  })
 
 /**
  * Run `effect` as a loop step does, listening for the raw stop reason a

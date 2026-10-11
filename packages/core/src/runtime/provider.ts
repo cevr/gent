@@ -1446,7 +1446,7 @@ const toProviderAuthInfo = (
  * the provider's lock, with the store's faults as `ProviderAuthError`, and a
  * lock another holder kept for the whole wait as `CredentialStoreBusy`.
  */
-export const sourceRotationLock =
+const sourceRotationLock =
   (authStore: AuthService, providerId: string): LockSourceRotation =>
   (source) =>
   (use) => {

@@ -65,7 +65,6 @@ import {
   finishPart,
   ProviderLock,
   resolveDriverModel,
-  sourceRotationLock,
   textStep,
   toolCallPart,
 } from "../../src/runtime/provider"
@@ -108,6 +107,7 @@ import {
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
   type ModelCatalogFixtureRequest,
+  resolvedRotationLock,
   testSqliteStorage,
 } from "../../src/test-utils/harness"
 import { ModelCatalogSnapshotStorage } from "../../src/storage/storage"
@@ -1521,6 +1521,21 @@ describe("Auth", () => {
             yield* Layer.build(Auth.Live(dir).pipe(Layer.provide(pollsOnTheClock))),
             Auth,
           )
+          yield* holder.set(
+            "anthropic",
+            AuthInfo.cases.Oauth.make({
+              type: "oauth",
+              access: "fake-access",
+              refresh: "fake-refresh",
+              expires: 0,
+            }),
+          )
+          // The lock the resolver hands a driver with the waiter's sign-in
+          // (`ProviderAuthInfo.Oauth.lockSourceRotation`).
+          const lock = yield* resolvedRotationLock("anthropic").pipe(
+            Effect.provideService(Auth, waiter),
+          )
+          polls = 0
           const source = "fake-source"
           const holding = yield* Deferred.make<boolean>()
           const release = yield* Deferred.make<boolean>()
@@ -1530,13 +1545,9 @@ describe("Auth", () => {
             )
             .pipe(Effect.forkScoped)
           yield* Deferred.await(holding)
-          // The lock a driver's sign-in carries (`ProviderAuthInfo.Oauth.lockSourceRotation`).
           let ran = false
           const waited = yield* Deferred.make<boolean>()
-          const waiting = yield* sourceRotationLock(
-            waiter,
-            "anthropic",
-          )(source)(() =>
+          const waiting = yield* lock(source)(() =>
             Effect.sync(() => {
               ran = true
             }),
