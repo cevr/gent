@@ -564,9 +564,14 @@ different keys never wait on each other: there is no server-wide lock. A
 profile holds each build through a scope of its own, and the build closes when
 the last profile holding it lets go (a profile retires, its build fails or is
 interrupted); an interrupted asker lets go of its own hold only, and a build
-no profile holds any more is interrupted. A build that failed is not kept, so
-the next profile that asks builds again. The reference and its release are
-taken in one step (`RcMap.get`), so no interrupt leaves a hold behind.
+no profile holds any more is interrupted. A build that failed stays only while
+an asker still holds it: every asker that holds it, or asks before the last of
+them lets go, shares its failure, and the first asker after that builds again.
+The reference and its release are taken in one step (`RcMap.get`), so no
+interrupt leaves a hold behind. A profile build closes the scopes it lets go
+of (a pass a later pass replaced, the whole profile when its build fails) only
+after the place's lock is let go, as a retired profile's, so an extension
+finalizer never runs under the lock.
 
 A profile builds every extension's server Resources first, in resolution
 order. A server build reads the host's services only, so its key is its
@@ -581,10 +586,13 @@ key of every server build the profile holds, the identity (scope, id, source,
 file version from `LoadedExtension.version`) of each process-bearing extension
 before it, then its own. So a profile rebuilt for a config edit keeps the
 process Resources the edit leaves alone, and their state with them (an open
-`/btw` fork, the agents-view watchers, a running background job), while an
-edit, reload or disable of an extension with a server Resource builds every
-process Resource of the place again: a process service is never held over a
-server service that closed. Every leaf of a profile reads the services of both
+`/btw` fork, the agents-view watchers, a running background job), while a new
+version (an edit, or a reload that finds changed code) or a disable of an
+extension with a server Resource releases its server build once no profile
+holds it and builds every process Resource of the place again: a process
+service is never held over a server service that closed. A reload that finds
+the code unchanged keeps the version, so it keeps every key and every build.
+Every leaf of a profile reads the services of both
 scopes. A branch Resource keys on what its build reads (`branchResourceKeys`),
 so it is built again when the process Resources it names are.
 

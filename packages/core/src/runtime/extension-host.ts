@@ -2822,6 +2822,12 @@ interface FailedResourcePass {
   readonly cause: Cause.Cause<unknown>
 }
 
+/**
+ * Hands a scope a profile build let go of to `resolve`, which closes it with
+ * `exit` once the place's lock is let go.
+ */
+type AfterLock = (scope: Scope.Closeable, exit: Exit.Exit<unknown, unknown>) => void
+
 /** The lease one `resolve` takes, and whether its caller's scope let go of it. */
 interface CallerLease<Entry> {
   entry: Option.Option<Entry>
@@ -3089,11 +3095,13 @@ export class SessionProfileCache extends Context.Service<
          * before it, so a later extension's service wins exactly as it does in
          * the registry (a compactor joins a chain instead). A process key
          * names what its build reads: the place, every server build the pass
-         * holds, the process-bearing extensions before it, and itself. So an
-         * edit, reload or disable of any extension with a server Resource
-         * builds every process Resource again, and a process service is never
-         * held over a server service that closed. The pass stops at the first
-         * build that fails.
+         * holds, the process-bearing extensions before it, and itself. So a
+         * new version (an edit, or a reload that finds changed code) or a
+         * disable of any extension with a server Resource builds every
+         * process Resource of the place again, and a process service is never
+         * held over a server service that closed; a reload that finds the code
+         * unchanged keeps every key, so it keeps every build. The pass stops
+         * at the first build that fails.
          */
         const holdAttempt = (
           place: string,
@@ -3194,13 +3202,16 @@ export class SessionProfileCache extends Context.Service<
          * most twice (new version, last good version, out), so the passes end.
          * Every pass holds its builds in a child of `profileScope`: closing it
          * lets go of all of them, process builds before the server builds they
-         * read.
+         * read. A pass let go is handed to `afterLock`, which closes it once
+         * the place's lock is let go, so an extension finalizer never runs
+         * under it; it closes after the new pass holds its builds either way.
          */
         const holdResources = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
           profileScope: Scope.Scope,
           restore: Restore,
+          afterLock: AfterLock,
         ): Effect.Effect<HeldProfileResources> =>
           Effect.gen(function* () {
             let effective = extensions
@@ -3215,7 +3226,7 @@ export class SessionProfileCache extends Context.Service<
             while (true) {
               const pass = yield* Scope.fork(profileScope)
               const held = yield* holdAttempt(place, effective, pass, restore)
-              if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
+              if (Option.isSome(previous)) afterLock(previous.value, Exit.void)
               previous = Option.some(pass)
               if (Result.isSuccess(held)) {
                 return {
@@ -3253,7 +3264,8 @@ export class SessionProfileCache extends Context.Service<
          * Build a profile into a new scope. The caller runs this where it
          * cannot be interrupted; only the wait for a resource build and the
          * registry build (`restore`) can be. A failed or interrupted build
-         * closes its scope, which lets go of every build it held.
+         * hands its scope to `afterLock`, whose close lets go of every build
+         * it held once the place's lock is let go.
          */
         const buildProfile = (
           place: string,
@@ -3261,6 +3273,7 @@ export class SessionProfileCache extends Context.Service<
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
           restore: Restore,
+          afterLock: AfterLock,
         ) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
@@ -3270,6 +3283,7 @@ export class SessionProfileCache extends Context.Service<
                 declarations.extensionDeclarations.active,
                 profileScope,
                 restore,
+                afterLock,
               )
               // A config failure is not part of the profile: health reads it
               // live (`configHealthStatuses`), so it clears when the file is
@@ -3313,7 +3327,9 @@ export class SessionProfileCache extends Context.Service<
             }).pipe(
               Effect.provideService(Scope.Scope, profileScope),
               // A failed or interrupted build releases everything it acquired.
-              Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
+              Effect.onError((cause) =>
+                Effect.sync(() => afterLock(profileScope, Exit.failCause(cause))),
+              ),
             )
             return { profile, scope: profileScope }
           })
@@ -3331,6 +3347,7 @@ export class SessionProfileCache extends Context.Service<
           cwd: string,
           fresh: FreshConfig,
           restore: Restore,
+          afterLock: AfterLock,
         ) =>
           Effect.gen(function* () {
             const aliased = Option.flatMap(Option.fromNullishOr(aliases.get(list)), (key) =>
@@ -3358,9 +3375,14 @@ export class SessionProfileCache extends Context.Service<
               aliases.set(list, found.value.key)
               return found.value
             }
-            const built = yield* buildProfile(place, cwd, fresh, declarations, restore).pipe(
-              Effect.orDie,
-            )
+            const built = yield* buildProfile(
+              place,
+              cwd,
+              fresh,
+              declarations,
+              restore,
+              afterLock,
+            ).pipe(Effect.orDie)
             // The build decided by the last good versions as they are now
             // (the place's lock is held). A stored profile with this key
             // decided by the same ones, so it would have been found above:
@@ -3427,6 +3449,12 @@ export class SessionProfileCache extends Context.Service<
             const lease: CallerLease<ProfileEntry> = { entry: Option.none(), released: false }
             // The profiles this resolve superseded, closed after the lock.
             const retired: Array<Scope.Closeable> = []
+            // The scopes the build let go of (a pass a later pass replaced, a
+            // profile whose build failed), closed after the lock too.
+            const letGo: Array<readonly [Scope.Closeable, Exit.Exit<unknown, unknown>]> = []
+            const afterLock: AfterLock = (scope, exit) => {
+              letGo.push([scope, exit])
+            }
             // Finding or building the entry, its lease, and `current` are one
             // step no interrupt can split: an entry stored without its lease
             // and not current would never retire. Only the reads and the
@@ -3454,6 +3482,7 @@ export class SessionProfileCache extends Context.Service<
                   canonicalCwd,
                   fresh,
                   restoreUnderLock,
+                  afterLock,
                 )
                 recordLastGood(place, entry.profile.resolved)
                 if (!lease.released) {
@@ -3476,8 +3505,10 @@ export class SessionProfileCache extends Context.Service<
             // fibers resolved) runs it at once with no lease, and the resolve
             // then takes none. `withPermits` takes the permit and its release
             // in one step, so only the wait for the lock can be interrupted
-            // around it. Retired scopes close after the lock is let go,
-            // however the step ended.
+            // around it. The scopes the build let go of and the retired
+            // profiles close after the lock is let go, however the step
+            // ended, so an extension finalizer that resolves this place again
+            // finds the lock free.
             const entry = yield* Effect.uninterruptibleMask((restore) =>
               Scope.addFinalizer(
                 callerScope,
@@ -3490,7 +3521,11 @@ export class SessionProfileCache extends Context.Service<
                 }),
               ).pipe(
                 Effect.andThen(restore(underLock.pipe(lock.withPermits(1)))),
-                Effect.ensuring(closeRetired(retired)),
+                Effect.ensuring(
+                  Effect.forEach(letGo, ([scope, exit]) => Scope.close(scope, exit), {
+                    discard: true,
+                  }).pipe(Effect.andThen(closeRetired(retired))),
+                ),
               ),
             )
             return entry.profile
