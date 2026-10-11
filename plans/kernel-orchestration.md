@@ -81,7 +81,29 @@ The worker primitive is the existing **thread**, improved, not a new "seat" conc
 - **`thread.round({ round })`** reads a result. `thread.list` and `thread.stop` stay, and `stop` also closes an open round.
 - **The `Threads` service** (a Tag, as `Workspaces` is) carries `start`, `send({ ..., notify })`, `round`, `stop`, and the round-end subscription, for machines.
 - **The running-thread cap** (4) counts threads with an open round, and config can raise it.
-- **Later reduction, not this stage**: `delegate.start` is a thread on the `delegate` agent with one round, `notify: "starter"` and snapshot isolation. Folding it in removes a concept, after machines prove the thread surface.
+- **Delegate folds into threads** in stage 1b (P1b).
+
+### P1b. Delegate folds into threads
+
+A delegate child is a thread: one round on the `delegate` agent, ending with a wake to its starter, and optionally run on a snapshot copy with the parent's history forked in. So `delegate.*` goes, and the thread surface takes the options it alone had:
+
+| `delegate` today                                                   | After the fold                                                                                                                   |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `delegate.start({ task, overrides, isolation: "snapshot", fork })` | `thread.start({ task, agent: "delegate", notify: "starter", workspace: { snapshot: true }, fork: true, model?, effort?, ... })`  |
+| `delegate.list` (`completed` is a turn receipt)                    | `thread.list`, with each thread's open and last round                                                                            |
+| `delegate.cancel`                                                  | `thread.stop`                                                                                                                    |
+| the per-branch JSON registry (`makeBranchStateStore`)              | `thread_rounds`                                                                                                                  |
+| `CHILD_TOOL_DENIALS`                                               | the `delegate` agent's tool denials: `thread.start`, `thread.stop`, `machine.*`                                                  |
+| 4 unfinished children per branch, and 4 running threads            | one cap: open rounds per starter branch                                                                                          |
+| completion message `customType: "child-completion"`                | unchanged: a `notify: "starter"` round end uses the same `customType`, so stored transcripts and the TUI renderer read as before |
+
+- **Persisted format**: the delegate registry files stop being read or written, and their state moves to `thread_rounds`. This is the one non-additive change in the plan, and the owner asked for it (2026-10-11). Personal library, no shims: a delegate child unfinished at the upgrade does not report back, so finish or cancel children before upgrading. Stored sessions, messages and the completion `customType` are untouched.
+- **Old transcripts** keep their `delegate.start` calls. A resumed turn re-delivers results from `tool_call_bindings` and never reruns a tool, so they read as before.
+- **Commits**, each green on the gate:
+  1. threads gain `agent`, `workspace.snapshot`, `fork` and the starter completion, with delegate's tests ported;
+  2. `delegate.ts` and its tools go, and core references move (`agent.ts`, `capability.ts`, `message.ts`, `server.ts`, `provider.ts`);
+  3. the TUI: `delegate.client.tsx` becomes thread rendering;
+  4. prompts and docs: the cell guideline, `@gent/workflows` outcome prompts, the bundled `cost-aware-delegation` reference, the counsel recipe, the gamut testbed, `ARCHITECTURE.md`, `PRIOR_ART.md`, `docs/extensions.md`, `docs/architecture/*`.
 
 ### P2. Rounds as values
 
@@ -150,7 +172,7 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
   - blocking `wait` modes, which break "children wake, never block";
   - caller-supplied `clientRequestId`, since gent derives ids from the tool call;
   - routing as model turns, the cost machines remove.
-- **Where T3 is ahead**: native harnesses. Its Codex reviewer is the Codex app server itself. R1's shadow run measures gent's OpenAI path against it.
+- **Native harnesses, not taken**: T3 drives each vendor's own harness (Claude through the Agent SDK, Codex through its app server). gent is the harness (owner, 2026-10-11), so every worker runs on gent's own drivers.
 - **Where gent is ahead**:
   - state machines;
   - an outbox from day one (T3 tracks it as a follow-up);
@@ -167,6 +189,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a restart in the middle of a round loses no round end;
    - a send to a busy thread is refused, and a retried send returns its round; a round reaches the thread's new session after a handoff;
    - the gate is green.
+     1b. **P1b, the delegate fold.** Done when every ported delegate test passes on threads, `git grep -E 'delegate\.(start|list|cancel)'` finds only plans, research and stored-transcript fixtures, and the gate is green.
 2. **P5 accounts.** Done when an imported `personal` slot resolves from the keychain service, a thread with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
 3. **P3 machines.** A design-mode counsel review of the core activation seam and the schema comes first. Done when:
    - a track machine runs implement, review with changes, implement, review accepted, verify and decide on fake models, with no owner turn between rounds;
@@ -174,10 +197,10 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a command interrupted by a crash moves the run to `ask`;
    - a stale or conflicting answer is refused.
 4. **P4 permits and P6 workspace binding.**
-5. **The library and baton's retirement.** An `/orchestrate` outcome prompt in `@gent/workflows` and the track program as a cell snippet. One real unit runs end to end, with a Codex pane under baton as a shadow reviewer for the first two units.
+5. **The library and baton's retirement.** An `/orchestrate` outcome prompt in `@gent/workflows` and the track program as a cell snippet. One real unit runs end to end.
 
 ## Risks
 
-- R1. Reviewer quality on gent's OpenAI path versus Codex CLI: the shadow run in stage 5 measures it.
+- R1. Reviewer quality is gent's to improve. When the first real units show a reviewer missing a Blocker the owner catches, the fix goes into gent: the `worker` agent's prompt, its tools, or the model and effort settings.
 - R2. Expressiveness: a data machine cannot express every branch. The escape is an `ask` to the orchestrator, which costs a model turn. Watch how often real runs take it.
 - R3. Liveness after a restart depends on the core activation seam (P3). Until it lands, a run resumes when its owner's loop next opens.
