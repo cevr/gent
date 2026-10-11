@@ -149,11 +149,12 @@ export const AgentEvent = Schema.TaggedUnion({
    * `provider`'s pool, at a point where its cache starts over: a new
    * session, a handoff session, a spawned child or a fork, a cold cache, a
    * window handed off inside the turn, a refusal, or a run that fell to an
-   * account outside the pool returning to it (`returned`). Always a pool
-   * account: a fall outside the pool is the walk of the order, not a
-   * placement. The turn (`messageId`) walks from it; a recovered turn reads
-   * its newest one and never places again. Labels only: no account, no
-   * credential.
+   * account outside the pool returning to it (`returned`, at a turn's start
+   * or a window handoff, once a pool account is eligible). Always a pool
+   * account the turn walks from: a fall outside the pool is the walk of the
+   * order, not a placement, and a run that stays there records nothing. The
+   * turn (`messageId`) walks from it; a recovered turn reads its newest one
+   * and never places again. Labels only: no account, no credential.
    */
   CredentialAssigned: {
     sessionId: SessionId,
@@ -161,7 +162,7 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: MessageId,
     provider: ProviderId,
     slot: CredentialSlot,
-    /** The slot the run preferred (its cache's, its parent's, its predecessor's) or the one that refused it. */
+    /** The slot the run preferred (its cache's, its parent's, its predecessor's), the one that refused it, or the one outside the pool it returned from. */
     from: Schema.optional(CredentialSlot),
     reason: Schema.Literals([
       "new",

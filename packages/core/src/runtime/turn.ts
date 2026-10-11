@@ -1916,6 +1916,41 @@ const PLACEMENT_LIVE_WITHOUT_LIFETIME_MS = 3_600_000
 const placementLifetimeMs = (ttlMs: Option.Option<number>) =>
   Option.getOrElse(ttlMs, () => PLACEMENT_LIVE_WITHOUT_LIFETIME_MS)
 
+/**
+ * Where a spread run on `on` stands against its pool at a switch point (a
+ * turn's start, a window handoff). One rule for both: a run on an account
+ * outside the pool (`outside`, the order's walk past every pool account)
+ * stays there, recording nothing, while no pool account is eligible (each
+ * held by a refusal or left by the turn); once one is, it is placed back in
+ * the pool, `returned` from that account. A run in the pool, or on no
+ * account yet, is placed as the switch point says.
+ */
+interface PoolStanding {
+  readonly outside: Option.Option<CredentialSlot>
+  readonly stays: boolean
+}
+
+const poolStanding = Effect.fn("AgentLoop.poolStanding")(function* (params: {
+  readonly placement: CredentialPlacement["Service"]
+  readonly provider: string
+  readonly pool: ReadonlyArray<CredentialSlot>
+  readonly on: Option.Option<CredentialSlot>
+  readonly left: ReadonlySet<CredentialSlot>
+}) {
+  const outside = Option.filter(params.on, (slot) => !params.pool.includes(slot))
+  if (Option.isNone(outside)) {
+    const inPool: PoolStanding = { outside, stays: false }
+    return inPool
+  }
+  const open = yield* params.placement.open({
+    provider: params.provider,
+    pool: params.pool,
+    left: params.left,
+  })
+  const standing: PoolStanding = { outside, stays: !open }
+  return standing
+})
+
 /** Why a spread run is placed, the account it prefers, and the session whose burst it joins. */
 interface RunOrigin {
   readonly reason: CredentialAssigned["reason"]
@@ -3394,8 +3429,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // A window handed off is a cache boundary: the summary stayed on the
   // account that held the window, and the next request of a spread run is
   // placed again, preferring that account. A turn placed at its start
-  // already chose with the cold cache in view. The step's window is the
-  // placed account's: its catalog entry sets the budget and the hints.
+  // already chose with the cold cache in view. A run outside the pool
+  // stands as at a turn's start (`poolStanding`): it stays while no pool
+  // account is eligible, and else returns. The step's window is the placed
+  // account's: its catalog entry sets the budget and the hints.
   let stepWindow = opening
   if (compacted && !params.placed) {
     const order = yield* requestCredentialOrder(
@@ -3412,32 +3449,46 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         (receipt) => receipt.slot,
       )
       const from = Option.orElse(summaryOn, () => cursor.at)
-      const walk = yield* params.placement.place({
+      const standing = yield* poolStanding({
+        placement: params.placement,
         provider,
         pool,
-        sessionId: params.sessionId,
-        preferred: Option.filter(from, (slot) => pool.includes(slot)),
-        starter: Option.none(),
+        on: from,
         left: cursor.passed,
-        ttlMs: cacheLifetimeMs,
       })
-      yield* params.turnLedger.settleCredential(provider, Option.some(walk[0]))
-      yield* publishCredentialAssigned({
-        sessionId: params.sessionId,
-        branchId: params.branchId,
-        messageId: params.messageId,
-        provider,
-        slot: walk[0],
-        from,
-        reason: "compacted",
-      }).pipe(Effect.provideService(EventStore, eventStore))
-      const placedModel = yield* modelRegistry
-        .stamp({ provider: ProviderId.make(provider), slot: walk[0] }, extensionRegistry)
-        .pipe(
-          Effect.flatMap((receipt) => modelRegistry.get(contextModelId, receipt)),
-          Effect.orElseSucceed(() => Option.none<Model>()),
-        )
-      if (Option.isSome(placedModel)) stepWindow = yield* modelWindow(placedModel.value)
+      if (standing.stays) {
+        yield* params.turnLedger.settleCredential(provider, standing.outside)
+      } else {
+        const walk = yield* params.placement.place({
+          provider,
+          pool,
+          sessionId: params.sessionId,
+          preferred: Option.filter(from, (slot) => pool.includes(slot)),
+          starter: Option.none(),
+          left: cursor.passed,
+          ttlMs: cacheLifetimeMs,
+        })
+        yield* params.turnLedger.settleCredential(provider, Option.some(walk[0]))
+        yield* publishCredentialAssigned({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: params.messageId,
+          provider,
+          slot: walk[0],
+          from,
+          reason: Option.match(standing.outside, {
+            onNone: () => "compacted" as const,
+            onSome: () => "returned" as const,
+          }),
+        }).pipe(Effect.provideService(EventStore, eventStore))
+        const placedModel = yield* modelRegistry
+          .stamp({ provider: ProviderId.make(provider), slot: walk[0] }, extensionRegistry)
+          .pipe(
+            Effect.flatMap((receipt) => modelRegistry.get(contextModelId, receipt)),
+            Effect.orElseSucceed(() => Option.none<Model>()),
+          )
+        if (Option.isSome(placedModel)) stepWindow = yield* modelWindow(placedModel.value)
+      }
     }
   }
 
@@ -4305,11 +4356,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * account its cache is on and records nothing; a recovered turn walks the
      * placement it recorded; a pinned run is never placed. A fork takes its
      * parent's account with no ranking, in the pool or not (the parent's own
-     * choice). A run whose last request fell outside the pool stays there
-     * while every pool account is held, and returns to the pool at the first
-     * turn one is not, warm or cold (`returned`): who pays outranks the cache.
-     * A choice outside the pool is the order's walk, not a placement: it
-     * records nothing. True when it placed.
+     * choice). A run whose last request fell outside the pool stands by
+     * `poolStanding`, as at a window handoff: it stays there while no pool
+     * account is eligible, and returns to the pool at the first turn one is,
+     * warm or cold (`returned`, from the account it left): who pays outranks
+     * the cache. A choice outside the pool is the order's walk, not a
+     * placement: it records nothing. True when it placed.
      */
     const placeTurn = Effect.fn("AgentLoop.placeTurn")(function* (params: {
       readonly messageId: MessageId
@@ -4355,12 +4407,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Option.filter(lastReceipt, (receipt) => receipt.provider === provider),
         (receipt) => receipt.slot,
       )
-      // Outside the pool, the run stays only while every pool account is held.
-      const outside = Option.exists(lastSlot, (slot) => !pool.includes(slot))
-      if (outside && !(yield* placement.open({ provider, pool }))) {
+      // Outside the pool, the run stays only while no pool account is eligible.
+      const standing = yield* poolStanding({
+        placement,
+        provider,
+        pool,
+        on: lastSlot,
+        left: cursor.passed,
+      })
+      if (standing.stays) {
         yield* scope.turnLedger.settleCredential(provider, lastSlot)
         return false
       }
+      const outside = Option.isSome(standing.outside)
       const warm = yield* cacheWarm({
         modelId: resolved.modelId,
         ttlMs,
@@ -4372,11 +4431,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* scope.turnLedger.settleCredential(provider, lastSlot)
         return false
       }
-      // A branch that ran a request goes cold; its own account is preferred
-      // only on the same model. A warm one here fell outside the pool.
+      // A run outside the pool returns, warm or cold, ranked afresh. A branch
+      // that ran a request goes cold; its own account is preferred only on
+      // the same model.
       const origin = yield* Option.match(lastCall, {
         onSome: (call) => {
-          if (warm) {
+          if (outside) {
             const back: RunOrigin = {
               reason: "returned",
               preferred: Option.none(),
@@ -4433,7 +4493,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         messageId: params.messageId,
         provider,
         slot,
-        from: origin.preferred,
+        // A return names the account outside the pool it left.
+        from: Option.orElse(standing.outside, () => origin.preferred),
         reason: origin.reason,
       })
       return true

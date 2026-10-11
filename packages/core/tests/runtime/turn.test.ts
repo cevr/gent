@@ -4396,7 +4396,187 @@ describe("credential order", () => {
           expect(placementsOf(events)).toEqual([
             { slot: a, reason: "new", from: "none" },
             { slot: b, reason: "refused", from: a },
-            { slot: a, reason: "returned", from: "none" },
+            { slot: a, reason: "returned", from: c },
+          ])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    /** A sign-in of a, b and c spreading over a and b, sharing `world`'s placement. */
+    const outsideRoot = (
+      world: SpreadWorld,
+      name: string,
+      replies: Readonly<Record<string, Reply>>,
+      history?: ReadonlyArray<number>,
+    ) =>
+      credentialRoot({
+        name,
+        order: [a, b, c],
+        spread: [a, b],
+        stored: keysOf([a, b, c]),
+        replies,
+        storage: world.storage,
+        placement: world.placement,
+        cacheTtlMs: HOUR_MS,
+        ...omitUndefined({ history }),
+      })
+    const heldTenMinutes = () =>
+      failWith(new AiError.RateLimitError({ retryAfter: Duration.minutes(10) }))
+    const compactedOf = (events: ReadonlyArray<AgentEvent>) =>
+      events.flatMap((event) => {
+        if (event._tag !== "ModelContextProjected") return []
+        return [event.compacted]
+      })
+
+    it.live("a cold return to the pool names the account outside the pool it left", () => {
+      const offset = { ms: 0 }
+      return Effect.gen(function* () {
+        const world = yield* spreadWorld
+        const limitedOnce = (slot: string) => (call: number) => {
+          if (call === 0) return heldTenMinutes()
+          return answer(`from ${slot}`)(call)
+        }
+        const root = outsideRoot(world, "billed-fallback-cold", {
+          "sk-a": limitedOnce("a"),
+          "sk-b": limitedOnce("b"),
+          "sk-c": answer("from c"),
+        })
+        yield* runOn(root, "first")
+        // Past both resets and the cache lifetime: a cold turn, back to the pool.
+        offset.ms += 70 * 60_000
+        yield* runOn(root, "second")
+        const events = yield* eventsOf(world, root)
+        expect(root.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-a"])
+        expect(placementsOf(events)).toEqual([
+          { slot: a, reason: "new", from: "none" },
+          { slot: b, reason: "refused", from: a },
+          { slot: a, reason: "returned", from: c },
+        ])
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(Clock.Clock, skewedClock(offset)),
+        Effect.timeout("30 seconds"),
+      )
+    })
+
+    it.live(
+      "a run outside the pool whose window is handed off while every pool account is held stays there, records nothing, and recovers there",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // a and b refuse, and the turn falls to c over a window near full:
+          // its tool step fills it, the summary stays on c, and the process
+          // dies on the step after the handoff.
+          const onC = toolStepThen(60_000, answer("summary"))
+          const first = outsideRoot(
+            world,
+            "outside-handoff-held",
+            {
+              "sk-a": heldTenMinutes,
+              "sk-b": heldTenMinutes,
+              "sk-c": (call) => {
+                if (call === 2) return dyingRequest(out)(call)
+                return onC(call)
+              },
+            },
+            [110_000, 110_000, 110_000],
+          )
+          const second = outsideRoot(world, "outside-handoff-held", {
+            "sk-a": heldTenMinutes,
+            "sk-b": heldTenMinutes,
+            "sk-c": answer("from c"),
+          })
+          const events = yield* dieAndRecover(world, first, second, out)
+          expect(first.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c"])
+          expect(compactedOf(events).slice(0, 2)).toEqual([false, true])
+          // Recovered where the turn was: c, not a and b again.
+          expect(second.sent).toEqual(["sk-c"])
+          // No placement on a held account the turn never sent to after it.
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a later turn outside the pool whose window is handed off while every pool account is held stays there, and one handed off once a pool account is eligible returns",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const history = [110_000, 110_000, 110_000]
+          // The first turn falls to c; the second, 5 minutes on with both
+          // accounts still held, fills its window on c with a tool step.
+          const afterFirst = toolStepThen(60_000, answer("from c"))
+          const held = outsideRoot(
+            world,
+            "outside-handoff-held-later",
+            {
+              "sk-a": heldTenMinutes,
+              "sk-b": heldTenMinutes,
+              "sk-c": (call) => {
+                if (call === 0) return answer("from c")(call)
+                return afterFirst(call - 1)
+              },
+            },
+            history,
+          )
+          yield* Effect.scoped(held.seed.pipe(Effect.provide(held.layer)))
+          yield* runOn(held, "first")
+          offset.ms += 5 * 60_000
+          yield* runOn(held, "second")
+          const heldEvents = yield* eventsOf(world, held)
+          expect(held.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c", "sk-c"])
+          expect(compactedOf(heldEvents)).toEqual([false, false, true])
+          expect(placementsOf(heldEvents)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+          ])
+          expect(heldEvents.filter((event) => event._tag === "ErrorOccurred").length).toBe(2)
+
+          // The same on another server, but the holds lapse while the second
+          // turn's tool step runs: the step after the handoff returns to the pool.
+          const toolStep = toolStepThen(60_000, answer("summary"))
+          const otherWorld = yield* spreadWorld
+          const lapsing = outsideRoot(
+            otherWorld,
+            "outside-handoff-lapsing",
+            {
+              "sk-a": (call) => {
+                if (call === 0) return heldTenMinutes()
+                return answer("from a")(call)
+              },
+              "sk-b": heldTenMinutes,
+              "sk-c": (call) => {
+                if (call === 0) return answer("from c")(call)
+                if (call > 1) return toolStep(call - 1)
+                return Stream.unwrap(
+                  Effect.sync(() => {
+                    offset.ms += 6 * 60_000
+                    return toolStep(0)
+                  }),
+                )
+              },
+            },
+            history,
+          )
+          yield* Effect.scoped(lapsing.seed.pipe(Effect.provide(lapsing.layer)))
+          yield* runOn(lapsing, "first")
+          offset.ms += 5 * 60_000
+          yield* runOn(lapsing, "second")
+          const lapsingEvents = yield* eventsOf(otherWorld, lapsing)
+          expect(lapsing.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c", "sk-a"])
+          expect(compactedOf(lapsingEvents)).toEqual([false, false, true])
+          expect(placementsOf(lapsingEvents)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+            { slot: a, reason: "returned", from: c },
           ])
         }).pipe(
           Effect.scoped,
@@ -4442,7 +4622,7 @@ describe("credential order", () => {
           const events = yield* eventsOf(world, fork)
           expect(parent.sent).toEqual(["sk-c"])
           expect(fork.sent).toEqual(["sk-c", "sk-a"])
-          expect(placementsOf(events)).toEqual([{ slot: a, reason: "returned", from: "none" }])
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "returned", from: c }])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -4656,6 +4836,38 @@ describe("credential order", () => {
               .exists(file)
               .pipe(Effect.repeat({ until: (found) => found, times: 1_000 }))
             expect(written).toBe(true)
+            expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
+          }),
+        )
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    )
+
+    it.effect("a usage ledger write that fails is made again at the next write", () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-spread-ledger-retry-")
+        const fs = yield* FileSystem.FileSystem
+        const dataDir = `${home}/.gent`
+        const file = `${dataDir}/credential-usage.json`
+        const server = CredentialPlacement.Live.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              RuntimeEnvironment.Live({ cwd: home, home }),
+              BunServices.layer,
+              GentPlatform.Test(),
+            ),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+            // The data directory's place holds a file: the write fails.
+            yield* fs.writeFileString(dataDir, "")
+            yield* spend(placement, a, 2, "one-step")
+            yield* placement.flush
+            expect(yield* fs.readFileString(dataDir)).toBe("")
+            yield* fs.remove(dataDir)
+            // No step since the failed write: its buckets are written now.
+            yield* placement.flush
             expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
           }),
         )

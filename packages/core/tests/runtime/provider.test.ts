@@ -5128,18 +5128,22 @@ describe("credential placement", () => {
         yield* TestClock.adjust("5 days")
         yield* TestClock.adjust("1 hour")
         expect(yield* place("fresh", Option.some(a), [])).toBe(c)
-        // The pool is open while any of its accounts is not held.
+        // The pool is open while any of its accounts is neither held nor left by the turn.
         const now = yield* Clock.currentTimeMillis
-        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(true)
+        const open = (left: ReadonlyArray<CredentialSlot>) =>
+          placement.open({ provider: "spread", pool: [a, b], left: new Set(left) })
+        expect(yield* open([])).toBe(true)
+        expect(yield* open([a, b])).toBe(false)
         yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.some(now + 60_000) })
+        expect(yield* open([b])).toBe(false)
         yield* placement.refuse({
           provider: "spread",
           slot: b,
           retryAt: Option.some(now + 120_000),
         })
-        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(false)
+        expect(yield* open([])).toBe(false)
         yield* TestClock.adjust("61 seconds")
-        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(true)
+        expect(yield* open([])).toBe(true)
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
