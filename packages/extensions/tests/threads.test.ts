@@ -510,19 +510,13 @@ describe("threads", () => {
               if (!result.ok) return Effect.die(`thread.start failed: ${result.output}`)
               return decodeStarted(result.output)
             })
-            // Every child's first request is open at the model: none has ended a step.
+            // Every child's first request is open at the model: none has ended
+            // a step, so none has a receipt, and no placement is recorded yet.
             yield* waitFor(rig.threadRequests, (sent) => sent >= 4, 4_000, "the burst's requests")
-            const firstSlots = yield* Effect.forEach(children, (child) =>
-              Effect.map(placementsOf(rig.client, child), (placements) => placements[0]?.slot),
+            const whileOpen = yield* Effect.forEach(children, (child) =>
+              placementsOf(rig.client, child),
             )
-            expect(firstSlots.filter((slot) => slot === b).length).toBe(1)
-            expect(firstSlots.filter((slot) => slot === a).length).toBe(3)
-            const reasons = yield* Effect.forEach(children, (child) =>
-              Effect.map(placementsOf(rig.client, child), (placements) =>
-                placements.map((placement) => placement.reason),
-              ),
-            )
-            expect(reasons).toEqual([["spawned"], ["spawned"], ["spawned"], ["spawned"]])
+            expect(whileOpen).toEqual([[], [], [], []])
             yield* Deferred.succeed(rig.gate, true)
             // Once the child on b ended its first step, b is open again: with
             // three live caches on a and one on b, a child started now goes to b.
@@ -533,6 +527,19 @@ describe("threads", () => {
                 rows.every((row) => row.status === "idle" && row.preview.length > 0),
               "the burst's rounds end",
             )
+            // Each first request went out while all four were open: its receipt
+            // names the account, and its placement is recorded with it.
+            const firstSlots = yield* Effect.forEach(children, (child) =>
+              Effect.map(stepSlots(rig.client, child), (slots) => slots[0]),
+            )
+            expect(firstSlots.filter((slot) => slot === b).length).toBe(1)
+            expect(firstSlots.filter((slot) => slot === a).length).toBe(3)
+            const placed = yield* Effect.forEach(children, (child) =>
+              Effect.map(placementsOf(rig.client, child), (placements) =>
+                placements.map((placement) => `${placement.reason} ${placement.slot}`),
+              ),
+            )
+            expect(placed).toEqual(firstSlots.map((slot) => [`spawned ${slot}`]))
             const late = yield* rig.start(rig.starter, THREAD_TASK)
             const latePlaced = yield* waitFor(
               placementsOf(rig.client, late),
