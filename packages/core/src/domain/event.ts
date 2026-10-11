@@ -18,13 +18,14 @@ import {
 import { Message } from "./message.js"
 import {
   BranchId,
+  CredentialSlot,
   ExtensionId,
   InteractionRequestId,
   MessageId,
   SessionId,
   ToolCallId,
 } from "./ids.js"
-import { ModelAttempts, ModelId, ReasoningEffort } from "./agent.js"
+import { ModelAttempts, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
 
 // ── event ───────────────────────────────────────────────────────────────────
@@ -142,6 +143,24 @@ export const AgentEvent = Schema.TaggedUnion({
      * (absent: the turn names none, as its last request did).
      */
     effortOnly: Schema.optional(Schema.Literal(true)),
+  },
+  /**
+   * A spread run (`providers.<id>.authSpread`) was placed on `slot` of
+   * `provider`'s pool, at a point where its cache starts over: a new
+   * session, a handoff session, a spawned child or a fork, a cold cache, a
+   * window handed off inside the turn, or a refusal. The turn (`messageId`)
+   * walks from it; a recovered turn reads its newest one and never places
+   * again. Labels only: no account, no credential.
+   */
+  CredentialAssigned: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    messageId: MessageId,
+    provider: ProviderId,
+    slot: CredentialSlot,
+    /** The slot the run preferred (its cache's, its parent's, its predecessor's) or the one that refused it. */
+    from: Schema.optional(CredentialSlot),
+    reason: Schema.Literals(["new", "spawned", "fork", "handoff", "compacted", "cold", "refused"]),
   },
   StreamEnded: {
     sessionId: SessionId,
@@ -430,6 +449,8 @@ export const StreamEnded = AgentEvent.cases.StreamEnded
 export type StreamEnded = typeof AgentEvent.cases.StreamEnded.Type
 export const ModelRouted = AgentEvent.cases.ModelRouted
 export type ModelRouted = typeof AgentEvent.cases.ModelRouted.Type
+export const CredentialAssigned = AgentEvent.cases.CredentialAssigned
+export type CredentialAssigned = typeof AgentEvent.cases.CredentialAssigned.Type
 export const TurnCompleted = AgentEvent.cases.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
 export const ModelContextProjected = AgentEvent.cases.ModelContextProjected

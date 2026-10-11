@@ -12,11 +12,14 @@ import {
   Cause,
   Context,
   Deferred,
+  Duration,
   Exit,
   Fiber,
+  FileSystem,
   Predicate,
   Result,
 } from "effect"
+import { TestClock } from "effect/testing"
 import {
   assistantMessageIdForTurn,
   dateFromMillis,
@@ -81,6 +84,8 @@ import {
   Auth,
   AuthApi,
   AuthInfo,
+  CredentialPlacement,
+  makeCredentialPlacement,
   ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
@@ -2449,6 +2454,12 @@ describe("credential order", () => {
     readonly compactor?: ModelContextCompactor["Service"]
     /** The credential the session's run spec pins (`RunSpec.credentialSlot`); default none. */
     readonly pin?: CredentialSlot
+    /** The sign-in's pool (`authSpread`); default none. */
+    readonly spread?: ReadonlyArray<CredentialSlot>
+    /** The server's placement the root's sessions share; default: one in memory per root. */
+    readonly placement?: CredentialPlacement["Service"]
+    /** The model's cache lifetime; default: the catalog names none. */
+    readonly cacheTtlMs?: number
   }
 
   /**
@@ -2464,7 +2475,11 @@ describe("credential order", () => {
     const calls = new Map<string, number>()
     let providerConfig: ProviderConfig = {}
     const setOrder = (order: ReadonlyArray<CredentialSlot>) => {
-      providerConfig = { providers: { [FALLBACK]: { authOrder: order } } }
+      providerConfig = {
+        providers: {
+          [FALLBACK]: { authOrder: order, ...omitUndefined({ authSpread: params.spread }) },
+        },
+      }
     }
     if (Predicate.isNotUndefined(params.order)) setOrder(params.order)
     const driver: ModelDriverContribution = {
@@ -2492,6 +2507,7 @@ describe("credential order", () => {
             provider: ProviderId.make(FALLBACK),
             contextLength,
             pricing,
+            ...omitUndefined({ promptCacheTtlMs: params.cacheTtlMs }),
           }),
         ])
       },
@@ -2564,8 +2580,15 @@ describe("credential order", () => {
         ]),
         Effect.sync(() => providerConfig),
       ),
-      overrides: ModelRegistry.Live.pipe(
-        Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
+      overrides: Layer.mergeAll(
+        ModelRegistry.Live.pipe(
+          Layer.provide(Layer.mergeAll(catalogLayers, ModelCatalogRecord.Live)),
+        ),
+        ...Option.toArray(
+          Option.map(Option.fromUndefinedOr(params.placement), (placement) =>
+            Layer.succeed(CredentialPlacement, placement),
+          ),
+        ),
       ),
     }).pipe(
       Layer.provideMerge(Layer.succeed(ModelContextCompactor, params.compactor ?? rangeCompactor)),
@@ -3716,6 +3739,580 @@ describe("credential order", () => {
       expect(childAgain.sent).toEqual(["sk-a"])
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
+
+  describe("spread", () => {
+    const a = CredentialSlot.make("a")
+    const b = CredentialSlot.make("b")
+    const c = CredentialSlot.make("c")
+    const HOUR_MS = 3_600_000
+    const otherModel = ModelId.make("fallback/other")
+    const keysOf = (slots: ReadonlyArray<CredentialSlot>) =>
+      slots.map((slot) => [slot, apiKey(`sk-${slot}`)] as const)
+    const answers = (slots: ReadonlyArray<CredentialSlot>): Readonly<Record<string, Reply>> =>
+      Object.fromEntries(slots.map((slot) => [`sk-${slot}`, answer(`from ${slot}`)]))
+
+    /** The wall clock moved on by `offset.ms`: a lifetime or a reset lapses without a wait. */
+    const skewedClock = (offset: { ms: number }): Clock.Clock => {
+      const wall = Clock.Clock.defaultValue()
+      const millis = () => wall.currentTimeMillisUnsafe() + offset.ms
+      const nanos = () => wall.currentTimeNanosUnsafe() + BigInt(offset.ms) * 1_000_000n
+      return {
+        currentTimeMillisUnsafe: millis,
+        currentTimeMillis: Effect.sync(millis),
+        currentTimeNanosUnsafe: nanos,
+        currentTimeNanos: Effect.sync(nanos),
+        monotonicTimeNanosUnsafe: () => wall.monotonicTimeNanosUnsafe(),
+        monotonicTimeNanos: wall.monotonicTimeNanos,
+        sleep: (duration) => wall.sleep(duration),
+      }
+    }
+
+    /** Usage another session recorded on `slot`; its cache is gone at once. */
+    const spend = (
+      placement: CredentialPlacement["Service"],
+      slot: CredentialSlot,
+      costUsd: number,
+      session: string,
+    ) =>
+      placement.noteStep({
+        provider: FALLBACK,
+        slot,
+        sessionId: SessionId.make(session),
+        costUsd: Option.some(costUsd),
+        ttlMs: 0,
+      })
+
+    /** One server's durable state and its placement, shared by every root a test runs. */
+    const spreadWorld = Effect.gen(function* () {
+      const storage: CredentialStorage = Layer.succeedContext(
+        yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+      )
+      return { storage, placement: yield* makeCredentialPlacement(Option.none()) }
+    })
+    type SpreadWorld = Effect.Success<typeof spreadWorld>
+
+    /** A root of `world` whose sign-in spreads over `pool` (default `[a, b]`), with a one-hour cache. */
+    const spreadRoot = (
+      world: SpreadWorld,
+      name: string,
+      options: {
+        readonly pool?: ReadonlyArray<CredentialSlot>
+        readonly replies?: Readonly<Record<string, Reply>>
+        readonly pin?: CredentialSlot
+        readonly retry?: Partial<typeof DEFAULT_RETRY_POLICY>
+        readonly held?: Deferred.Deferred<void>
+      } = {},
+    ) => {
+      const pool = options.pool ?? [a, b]
+      return credentialRoot({
+        name,
+        order: pool,
+        spread: pool,
+        stored: keysOf(pool),
+        replies: options.replies ?? answers(pool),
+        storage: world.storage,
+        placement: world.placement,
+        cacheTtlMs: HOUR_MS,
+        ...omitUndefined({ pin: options.pin, retry: options.retry, held: options.held }),
+      })
+    }
+
+    type RootContext = Context.Context<Layer.Success<ReturnType<typeof credentialRoot>["layer"]>>
+    /**
+     * Each root is one process, built once in the test's scope: its sign-ins
+     * are stamped once, so a cache it wrote still stands on its next turn.
+     */
+    const processes = new WeakMap<ReturnType<typeof credentialRoot>, RootContext>()
+    const processOf = (root: ReturnType<typeof credentialRoot>) =>
+      Option.match(Option.fromUndefinedOr(processes.get(root)), {
+        onSome: Effect.succeed,
+        onNone: () =>
+          Layer.build(root.layer).pipe(
+            Effect.tap((context) => Effect.sync(() => processes.set(root, context))),
+          ),
+      })
+
+    const runOn = (root: ReturnType<typeof credentialRoot>, text: string) =>
+      Effect.gen(function* () {
+        const context = yield* processOf(root)
+        yield* Effect.gen(function* () {
+          yield* ensureStorageParents({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+            admission: root.admission,
+          })
+          yield* runAgentLoop(makeMessage(root.sessionId, root.branchId, text), root.admission)
+        }).pipe(Effect.provide(context))
+      })
+
+    const eventsOf = (world: SpreadWorld, root: ReturnType<typeof credentialRoot>) =>
+      Effect.gen(function* () {
+        const envelopes = yield* (yield* EventStorage).listEvents({
+          sessionId: root.sessionId,
+          branchId: root.branchId,
+        })
+        return envelopes.map((envelope) => envelope.event)
+      }).pipe(Effect.provide(world.storage), Effect.orDie)
+
+    const slotsOf = (events: ReadonlyArray<AgentEvent>) =>
+      labelsOf(events).map((label) => label.slot)
+
+    const placementsOf = (events: ReadonlyArray<AgentEvent>) =>
+      events.flatMap((event) => {
+        if (event._tag !== "CredentialAssigned") return []
+        const from = Option.getOrElse(Option.fromUndefinedOr(event.from), () => "none")
+        return [{ slot: event.slot, reason: event.reason, from }]
+      })
+
+    /** A session `root` runs, created as `parent`'s child, or as its handoff with `handoff`. */
+    const createChild = (
+      world: SpreadWorld,
+      root: ReturnType<typeof credentialRoot>,
+      parent: ReturnType<typeof credentialRoot>,
+      handoff: boolean,
+    ) =>
+      Effect.gen(function* () {
+        const now = dateFromMillis(yield* Clock.currentTimeMillis)
+        yield* (yield* SessionStorage).createSession(
+          new Session({
+            id: root.sessionId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
+            createdAt: now,
+            updatedAt: now,
+            admission: root.admission,
+            // A handoff joins its predecessor's thread; a child starts its own.
+            ...omitUndefined({
+              threadId: Option.getOrUndefined(
+                Option.liftPredicate(parent.sessionId, () => handoff),
+              ),
+            }),
+          }),
+        )
+      }).pipe(Effect.provide(world.storage), Effect.orDie)
+
+    /** A step of `root`'s branch that ran on another model, on `slot`. */
+    const stepOnOtherModel = (
+      world: SpreadWorld,
+      root: ReturnType<typeof credentialRoot>,
+      slot: CredentialSlot,
+    ) =>
+      Effect.gen(function* () {
+        yield* (yield* EventStore).append(
+          StreamEnded.make({
+            sessionId: root.sessionId,
+            branchId: root.branchId,
+            messageId: MessageId.make(`${root.sessionId}-other-model`),
+            step: 1,
+            model: otherModel,
+            outcome: "Answered",
+            credential: { provider: fallbackProvider, slot },
+          }),
+        )
+      }).pipe(Effect.provide(Layer.provide(EventStoreLive, world.storage)), Effect.orDie)
+
+    it.live(
+      "a spread run stays on the account its cache is warm on, however uneven the usage",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const root = spreadRoot(world, "warm")
+          yield* runOn(root, "first")
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* spend(world.placement, b, 1, "elsewhere-b")
+          for (const text of ["second", "third", "fourth"]) yield* runOn(root, text)
+          const events = yield* eventsOf(world, root)
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "new", from: "none" }])
+          expect(slotsOf(events)).toEqual([a, a, a, a])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a spread run whose cache went cold stays on its account unless another is used less by more than one session",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const root = spreadRoot(world, "cold")
+          yield* runOn(root, "first")
+          // Past the lifetime, with only this session's own use on a: within one session.
+          offset.ms += 2 * HOUR_MS
+          yield* runOn(root, "second")
+          // Past it again, with a far above b.
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* spend(world.placement, b, 1, "elsewhere-b")
+          offset.ms += 2 * HOUR_MS
+          yield* runOn(root, "third")
+          // The last request ran on another model: its cache is not this model's.
+          yield* stepOnOtherModel(world, root, b)
+          yield* runOn(root, "fourth")
+          const events = yield* eventsOf(world, root)
+          expect(slotsOf(events)).toEqual([a, a, b, b, b])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: a, reason: "cold", from: a },
+            { slot: b, reason: "cold", from: a },
+            { slot: b, reason: "cold", from: "none" },
+          ])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    it.live(
+      "a spread run is placed again after its window is handed off, and the summary stays on the account that holds the window",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const root = spreadRoot(world, "handoff")
+          yield* runOn(root, "first")
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* spend(world.placement, b, 1, "elsewhere-b")
+          // About 150k tokens join the branch: the next turn, warm on a, hands its window off.
+          yield* Effect.gen(function* () {
+            const storage = yield* MessageStorage
+            const now = yield* Clock.currentTimeMillis
+            yield* Effect.forEach(
+              Array.from({ length: 12 }, (_, index) => index),
+              (index) =>
+                storage.createMessage(
+                  Message.cases.regular.make({
+                    id: MessageId.make(`handoff-grown-${index + 1}`),
+                    sessionId: root.sessionId,
+                    branchId: root.branchId,
+                    role: "assistant",
+                    parts: [Prompt.textPart({ text: "x".repeat(50_000) })],
+                    createdAt: dateFromMillis(now + index),
+                  }),
+                ),
+              { discard: true },
+            )
+          }).pipe(Effect.provide(world.storage), Effect.orDie)
+          yield* runOn(root, "second")
+          const events = yield* eventsOf(world, root)
+          // Turn one on a; the summary on a; the step after it placed on b.
+          expect(root.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+          expect(
+            events.flatMap((event) => {
+              if (event._tag !== "ModelContextProjected") return []
+              return [event.compacted]
+            }),
+          ).toEqual([false, true])
+          expect(slotsOf(events)).toEqual([a, b])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "compacted", from: a },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a handoff session starts on its predecessor's account unless another is used less by more than one session",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const predecessor = spreadRoot(world, "predecessor")
+          yield* runOn(predecessor, "first")
+          // b a little above a, with the predecessor's cache live on a: within one session.
+          yield* spend(world.placement, a, 10, "elsewhere-a")
+          yield* spend(world.placement, b, 11, "elsewhere-b")
+          const near = spreadRoot(world, "handoff-near")
+          yield* createChild(world, near, predecessor, true)
+          yield* runOn(near, "continue")
+          // Then a far above b.
+          yield* spend(world.placement, a, 50, "elsewhere-a-again")
+          const far = spreadRoot(world, "handoff-far")
+          yield* createChild(world, far, predecessor, true)
+          yield* runOn(far, "continue")
+          expect(placementsOf(yield* eventsOf(world, near))).toEqual([
+            { slot: a, reason: "handoff", from: a },
+          ])
+          expect(placementsOf(yield* eventsOf(world, far))).toEqual([
+            { slot: b, reason: "handoff", from: a },
+          ])
+          expect(near.sent).toEqual(["sk-a"])
+          expect(far.sent).toEqual(["sk-b"])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a fresh child starts on its parent's account unless another is used less by more than one session",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const parent = spreadRoot(world, "spawner")
+          yield* runOn(parent, "first")
+          yield* spend(world.placement, a, 10, "elsewhere-a")
+          yield* spend(world.placement, b, 11, "elsewhere-b")
+          const near = spreadRoot(world, "child-near")
+          yield* createChild(world, near, parent, false)
+          yield* runOn(near, "task")
+          yield* spend(world.placement, a, 50, "elsewhere-a-again")
+          const far = spreadRoot(world, "child-far")
+          yield* createChild(world, far, parent, false)
+          yield* runOn(far, "task")
+          // A parent whose last request ran on another model names no account.
+          yield* stepOnOtherModel(world, parent, a)
+          const elsewhere = spreadRoot(world, "child-other-model")
+          yield* createChild(world, elsewhere, parent, false)
+          yield* runOn(elsewhere, "task")
+          expect(placementsOf(yield* eventsOf(world, near))).toEqual([
+            { slot: a, reason: "spawned", from: a },
+          ])
+          expect(placementsOf(yield* eventsOf(world, far))).toEqual([
+            { slot: b, reason: "spawned", from: a },
+          ])
+          expect(placementsOf(yield* eventsOf(world, elsewhere))).toEqual([
+            { slot: b, reason: "spawned", from: "none" },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a spread run refused for a rate limit past its retry cap moves at once to the least-used account, and stays there after the reset",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const pool = [a, b, c]
+          // a is unused, c lightly used, b heavily: a run starts on a.
+          yield* spend(world.placement, b, 50, "elsewhere-b")
+          yield* spend(world.placement, c, 5, "elsewhere-c")
+          const replies = {
+            ...answers(pool),
+            "sk-a": () =>
+              failWith(new AiError.RateLimitError({ retryAfter: Duration.minutes(10) })),
+          }
+          const root = spreadRoot(world, "limited", { pool, replies })
+          yield* runOn(root, "first")
+          // Before the reset, a new session is not placed on a.
+          const other = spreadRoot(world, "limited-other", { pool, replies })
+          yield* runOn(other, "first")
+          offset.ms += 11 * 60_000
+          yield* runOn(root, "second")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["sk-a", "sk-c", "sk-c"])
+          expect(slotsOf(events)).toEqual([c, c])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: c, reason: "refused", from: a },
+          ])
+          expect(credentialReport(events).errors).toEqual([
+            {
+              error: `Credential "a" of ${FALLBACK} is rate limited; continuing with "c"`,
+              notice: true,
+            },
+          ])
+          expect(
+            placementsOf(yield* eventsOf(world, other)).map((entry) => entry.slot),
+          ).not.toContain(a)
+          expect(other.sent).not.toContain("sk-a")
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    it.live(
+      "a rate limit that clears within the retry cap retries a spread run on the same account",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const root = spreadRoot(world, "short-limit", {
+            retry: { maxDelay: 1_000 },
+            replies: {
+              ...answers([a, b]),
+              "sk-a": (call) => {
+                if (call === 0) {
+                  return failWith(new AiError.RateLimitError({ retryAfter: Duration.millis(20) }))
+                }
+                return answer("from a")(call)
+              },
+            },
+          })
+          yield* runOn(root, "first")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["sk-a", "sk-a"])
+          expect(credentialReport(events).retries).toBe(1)
+          expect(slotsOf(events)).toEqual([a])
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "new", from: "none" }])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a pinned run ignores the spread: every request on its pin, no placement, and a refusal fails the turn",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          // b far above a: an unpinned run would go to a.
+          yield* spend(world.placement, b, 50, "elsewhere-b")
+          const root = spreadRoot(world, "pinned-spread", {
+            pin: b,
+            replies: {
+              ...answers([a, b]),
+              "sk-b": (call) => {
+                if (call === 0) return answer("from b")(call)
+                return refusal()
+              },
+            },
+          })
+          yield* runOn(root, "first")
+          const second = yield* Effect.exit(runOn(root, "second"))
+          const events = yield* eventsOf(world, root)
+          // The answer and the refused step both on b.
+          expect(root.sent).toEqual(["sk-b", "sk-b"])
+          expect(slotsOf(events)).toEqual([b, b])
+          expect(placementsOf(events)).toEqual([])
+          expect(
+            credentialReport(events).errors.some((entry) => entry.error.includes("continuing")),
+          ).toBe(false)
+          expect(Exit.isSuccess(second)).toBe(true)
+          expect(
+            events.some((event) => event._tag === "ErrorOccurred" && event.notice !== true),
+          ).toBe(true)
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live("a recovered turn walks the placement it recorded and never places again", () =>
+      Effect.gen(function* () {
+        const world = yield* spreadWorld
+        // a far above b: the turn is placed on b.
+        yield* spend(world.placement, a, 50, "elsewhere-a")
+        const held = yield* Deferred.make<void>()
+        const first = spreadRoot(world, "recovered", {
+          held,
+          replies: {
+            ...answers([a, b]),
+            "sk-b": () =>
+              Stream.fromIterable([
+                toolCallPart("hold", {}),
+                finishPart({ finishReason: "tool-calls" }),
+              ]),
+          },
+        })
+        const { sessionId, branchId } = first
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId, admission: first.admission })
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "hello"), first.admission)
+            yield* Deferred.await(held)
+          }),
+        ).pipe(Effect.provide(first.layer))
+        expect(first.sent).toEqual(["sk-b"])
+        // While the process was down, b went far above a.
+        yield* spend(world.placement, b, 500, "elsewhere-b")
+        const before = (yield* eventsOf(world, first)).length
+        const second = spreadRoot(world, "recovered")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* waitFor(
+              eventsOf(world, first),
+              (all) => all.slice(before).some((event) => event._tag === "TurnCompleted"),
+              10_000,
+              "the recovered turn to end",
+            )
+          }),
+        ).pipe(Effect.provide(second.layer))
+        const events = yield* eventsOf(world, first)
+        expect(second.sent).toEqual(["sk-b"])
+        expect(slotsOf(events)).toEqual([b, b])
+        expect(placementsOf(events)).toEqual([{ slot: b, reason: "new", from: "none" }])
+      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "without authSpread each turn starts at the first credential of its authOrder, as before",
+      () =>
+        Effect.gen(function* () {
+          const root = credentialRoot({
+            name: "unspread",
+            order: [a, b],
+            stored: keysOf([a, b]),
+            replies: {
+              "sk-a": (call) => {
+                if (call === 0) return refusal()
+                return answer("from a")(call)
+              },
+              "sk-b": answer("from b"),
+            },
+          })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* root.seed
+              for (const text of ["one", "two"])
+                yield* runAgentLoop(
+                  makeMessage(root.sessionId, root.branchId, text),
+                  root.admission,
+                )
+            }),
+          ).pipe(Effect.provide(root.layer))
+          const events = yield* Ref.get(root.events)
+          expect(root.sent).toEqual(["sk-a", "sk-b", "sk-a"])
+          expect(slotsOf(events)).toEqual([b, a])
+          expect(events.some((event) => event._tag === "CredentialAssigned")).toBe(false)
+        }).pipe(Effect.timeout("30 seconds")),
+    )
+
+    it.effect(
+      "spread usage survives a server restart: the last 7 days of each account's buckets load from the server-wide ledger",
+      () =>
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("gent-spread-ledger-")
+          const server = CredentialPlacement.Live.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                RuntimeEnvironment.Live({ cwd: home, home }),
+                BunServices.layer,
+                GentPlatform.Test(),
+              ),
+            ),
+          )
+          const placeNew = (session: string) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+                const walk = yield* placement.place({
+                  provider: FALLBACK,
+                  pool: [a, b],
+                  sessionId: SessionId.make(session),
+                  preferred: Option.none(),
+                  starter: Option.none(),
+                  left: new Set(),
+                  ttlMs: 0,
+                })
+                return walk[0]
+              }),
+            )
+          // A server with no ledger has nothing on either account: the pool's first.
+          expect(yield* placeNew("before-any-use")).toBe(a)
+          // The first server: heavy use of b eight days ago, then a above b this week.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+              yield* spend(placement, b, 100, "last-week")
+              yield* TestClock.adjust("8 days")
+              yield* spend(placement, a, 10, "this-week-a")
+              yield* spend(placement, b, 1, "this-week-b")
+            }),
+          )
+          // After the restart: this week's buckets, without last week's, put a above b.
+          expect(yield* placeNew("after-restart")).toBe(b)
+          // The ledger holds labels and numbers only.
+          const ledger = yield* (yield* FileSystem.FileSystem).readFileString(
+            `${home}/.gent/credential-usage.json`,
+          )
+          expect(ledger).toContain('"slot":"a"')
+          expect(ledger).not.toContain("sk-")
+        }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    )
+  })
 })
 
 // ── native model compaction ─────────────────────────────────────────────────

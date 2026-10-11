@@ -3179,6 +3179,20 @@ export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(fun
   )
 })
 
+/**
+ * Whether `provider`'s sign-in spreads its unpinned runs over a pool
+ * (`authSpread`). A sign-in whose order cannot be read does not.
+ */
+export const spreadsRuns = (provider: string, registry: ExtensionRegistryService) =>
+  Effect.gen(function* () {
+    const order = yield* credentialOrder(
+      registry.getResolved().modelDrivers,
+      yield* registry.providerConfig,
+      provider,
+    )
+    return Option.isSome(order.pool)
+  }).pipe(Effect.orElseSucceed(() => false))
+
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
   defect: unknown,
@@ -3485,6 +3499,8 @@ interface CredentialPlacementService {
   }) => Effect.Effect<void>
   /** The session's turn ended: a warming guard it holds is released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
+  /** Write the usage ledger now, when anything was recorded since the last write. */
+  readonly flush: Effect.Effect<void>
 }
 
 const UsageBucket = Schema.Struct({
@@ -3503,18 +3519,58 @@ const PlacementLedger = Schema.fromJsonString(Schema.Struct({ buckets: Schema.Ar
 /** Keys of the placement state's maps: fields joined by NUL, which no label or id holds. */
 const placementKey = (...parts: ReadonlyArray<string | number>) => parts.join("\u0000")
 
+/** Where the usage buckets persist: read once at start, replaced whole. Neither fails. */
+interface PlacementLedgerStore {
+  readonly load: Effect.Effect<ReadonlyArray<UsageBucket>>
+  readonly save: (buckets: ReadonlyArray<UsageBucket>) => Effect.Effect<void>
+}
+
 /**
- * The placement state of one server: usage buckets (persisted to `ledger`
- * when one is named, loaded from it here), live caches, held accounts and
- * warming guards (in memory). A missing or undecodable ledger starts at
- * zero and is replaced at the next write; the ledger never fails a turn.
+ * The ledger as the file `file`: numbers and labels, never a credential. A
+ * missing or undecodable file reads as no usage and is replaced at the next
+ * write; a write that fails is logged. The ledger never fails a turn.
  */
-export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(function* (
-  ledger: Option.Option<string>,
-) {
+const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
   const platform = yield* GentPlatform
+  return {
+    load: fs.readFileString(file).pipe(
+      Effect.flatMap(Schema.decodeEffect(PlacementLedger)),
+      Effect.map((read): ReadonlyArray<UsageBucket> => read.buckets),
+      Effect.catch((cause) =>
+        Effect.logDebug("credential-placement.ledger-unread").pipe(
+          Effect.annotateLogs({ error: String(cause) }),
+          Effect.as([]),
+        ),
+      ),
+    ),
+    save: (buckets) =>
+      Effect.gen(function* () {
+        const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets })
+        yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
+        yield* writeFileAtomic(file, text, { mode: 0o600 })
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, pathService),
+        Effect.provideService(GentPlatform, platform),
+        Effect.catch((cause) =>
+          Effect.logWarning("credential-placement.ledger-write-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+          ),
+        ),
+      ),
+  } satisfies PlacementLedgerStore
+})
+
+/**
+ * The placement state of one server: usage buckets (loaded from `ledger`
+ * when one is named, and written back to it as an hour closes and on
+ * `flush`), live caches, held accounts and warming guards (in memory).
+ */
+export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(function* (
+  ledger: Option.Option<PlacementLedgerStore>,
+) {
   const lock = yield* Semaphore.make(1)
   const writeLock = yield* Semaphore.make(1)
   const buckets = new Map<string, UsageBucket>()
@@ -3542,33 +3598,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const [key, entry] of live) if (entry.until <= now) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
   }
-  const provideIo = <A, E>(
-    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | GentPlatform>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, pathService),
-      Effect.provideService(GentPlatform, platform),
-    )
   if (Option.isSome(ledger)) {
-    const loaded = yield* fs.readFileString(ledger.value).pipe(
-      Effect.flatMap(Schema.decodeEffect(PlacementLedger)),
-      Effect.asSome,
-      Effect.catch((cause) =>
-        Effect.logDebug("credential-placement.ledger-unread").pipe(
-          Effect.annotateLogs({ error: String(cause) }),
-          Effect.as(Option.none<typeof PlacementLedger.Type>()),
-        ),
-      ),
-    )
     const first = windowStart(yield* Clock.currentTimeMillis)
-    for (const bucket of Option.match(loaded, { onNone: () => [], onSome: (read) => read.buckets }))
+    for (const bucket of yield* ledger.value.load)
       if (bucket.hour >= first)
         buckets.set(placementKey(bucket.provider, bucket.slot, bucket.hour), bucket)
   }
   const write = Option.match(ledger, {
     onNone: () => Effect.void,
-    onSome: (file) =>
+    onSome: (store) =>
       Effect.gen(function* () {
         // Nothing recorded since the last write: the file already holds it.
         const kept = yield* locked(() => {
@@ -3576,20 +3614,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           dirty = false
           return Option.liftPredicate([...buckets.values()], () => changed)
         })
-        if (Option.isNone(kept)) return
-        const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets: kept.value })
-        yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
-        yield* provideIo(writeFileAtomic(file, text, { mode: 0o600 }))
-      }).pipe(
-        writeLock.withPermits(1),
-        Effect.catch((cause) =>
-          Effect.logWarning("credential-placement.ledger-write-failed").pipe(
-            Effect.annotateLogs({ error: String(cause) }),
-          ),
-        ),
-      ),
+        if (Option.isSome(kept)) yield* store.save(kept.value)
+      }).pipe(writeLock.withPermits(1)),
   })
-  yield* Effect.addFinalizer(() => write)
   const liveOn = (provider: string, slot: CredentialSlot, except: SessionId) => {
     let count = 0
     for (const [key, entry] of live)
@@ -3697,6 +3724,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       locked(() => {
         for (const children of warming.values()) children.delete(sessionId)
       }),
+    flush: write,
   } satisfies CredentialPlacementService
 })
 
@@ -3715,9 +3743,11 @@ export class CredentialPlacement extends Context.Service<
       const { home } = yield* RuntimeEnvironment
       const pathService = yield* Path.Path
       const dataDir = pathService.resolve(yield* resolveDataDir(home))
-      return yield* makeCredentialPlacement(
-        Option.some(pathService.join(dataDir, PLACEMENT_LEDGER_FILE)),
-      )
+      const ledger = yield* placementLedgerFile(pathService.join(dataDir, PLACEMENT_LEDGER_FILE))
+      const placement = yield* makeCredentialPlacement(Option.some(ledger))
+      // A shutdown keeps the hour still open.
+      yield* Effect.addFinalizer(() => placement.flush)
+      return placement
     }),
   )
 }
