@@ -4994,6 +4994,7 @@ describe("credential placement", () => {
       expect(
         rankPlacement({
           slots: [row(a, 6, 1), row(b, 2, 0)],
+          spent: 8,
           sessions: 4,
           preferred: Option.none(),
         }),
@@ -5002,6 +5003,7 @@ describe("credential placement", () => {
       expect(
         rankPlacement({
           slots: [row(a, 4, 0), row(b, 2, 0)],
+          spent: 6,
           sessions: 2,
           preferred: Option.some(a),
         }),
@@ -5010,22 +5012,46 @@ describe("credential placement", () => {
       expect(
         rankPlacement({
           slots: [row(a, 6, 1), row(b, 2, 0)],
+          spent: 8,
           sessions: 4,
           preferred: Option.some(a),
+        }),
+      ).toEqual([b, a])
+      // The unit reads the provider's whole spend, not only the rows the
+      // table may choose: $40 over 4 sessions is a $10 unit, so b's $3 is
+      // 0.3 of a session over a's $1, and b, preferred, stays.
+      expect(
+        rankPlacement({
+          slots: [row(a, 1, 0), row(b, 3, 0)],
+          spent: 40,
+          sessions: 4,
+          preferred: Option.some(b),
         }),
       ).toEqual([b, a])
       // Live sessions count before their usage lands: a burst spreads.
       expect(
         rankPlacement({
           slots: [row(a, 0, 3), row(b, 0, 1)],
+          spent: 0,
           sessions: 0,
           preferred: Option.none(),
         }),
       ).toEqual([b, a])
+      // A spend with no session counted has no unit (never an infinite one):
+      // live sessions alone.
+      expect(
+        rankPlacement({
+          slots: [row(a, 9, 0), row(b, 0, 1)],
+          spent: 9,
+          sessions: 0,
+          preferred: Option.none(),
+        }),
+      ).toEqual([a, b])
       // Ties go by pool order; an empty history scores live sessions alone.
       expect(
         rankPlacement({
           slots: [row(c, 0, 0), row(a, 0, 0), row(b, 0, 0)],
+          spent: 0,
           sessions: 0,
           preferred: Option.none(),
         }),
@@ -5034,6 +5060,7 @@ describe("credential placement", () => {
       expect(
         rankPlacement({
           slots: [row(a, 0, 0, true), row(b, 9, 2), row(c, 3, 0)],
+          spent: 12,
           sessions: 3,
           preferred: Option.some(a),
         }),
@@ -5042,11 +5069,81 @@ describe("credential placement", () => {
       expect(
         rankPlacement({
           slots: [row(a, 0, 0, true), row(b, 0, 0, true)],
+          spent: 0,
           sessions: 0,
           preferred: Option.some(b),
         }),
       ).toEqual([b, a])
     },
+  )
+
+  it.effect(
+    "a session counts in the hour of its latest priced step, a refusal ranks against the provider's whole spend, and a pool is open while any account is not held",
+    () =>
+      Effect.gen(function* () {
+        const placement = yield* makeCredentialPlacement(Option.none())
+        const step = (slot: CredentialSlot, session: string, costUsd: number) =>
+          placement.noteStep({
+            provider: "spread",
+            slot,
+            sessionId: SessionId.make(session),
+            costUsd: Option.some(costUsd),
+            ttlMs: 1,
+          })
+        const place = (
+          session: string,
+          preferred: Option.Option<CredentialSlot>,
+          left: ReadonlyArray<CredentialSlot>,
+        ) =>
+          Effect.map(
+            placement.place({
+              provider: "spread",
+              pool: [a, b, c],
+              sessionId: SessionId.make(session),
+              preferred,
+              starter: Option.none(),
+              left: new Set(left),
+              ttlMs: 1,
+            }),
+            (walk) => walk[0],
+          )
+        // One long session on a, $12 a day for three days, and one on b, $4:
+        // two sessions, $40, a unit of $20.
+        yield* step(a, "long", 12)
+        yield* TestClock.adjust("1 day")
+        yield* step(a, "long", 12)
+        yield* TestClock.adjust("1 day")
+        yield* step(a, "long", 12)
+        yield* step(b, "short", 4)
+        yield* TestClock.adjust("1 second")
+        // a left (refused): b and c rank against the provider's $40, so b's
+        // $4 is 0.2 of a session above c, and b, preferred, stays. Against
+        // the open rows alone ($4, a $2 unit) b would be 2 sessions above c.
+        expect(yield* place("refused", Option.some(b), [a])).toBe(b)
+        // The long session's first day leaves the window. It still counts,
+        // in the hour of its latest step: $28 over two sessions, a $14 unit,
+        // so a's $24 is 1.7 sessions above c, unused, and c wins over a
+        // preferred. Counted only in its first hour, it would be gone: a $28
+        // unit, a 0.9 above c, and a kept.
+        yield* TestClock.adjust("5 days")
+        yield* TestClock.adjust("1 hour")
+        expect(yield* place("fresh", Option.some(a), [])).toBe(c)
+        // The pool is open while any of its accounts is not held.
+        const now = yield* Clock.currentTimeMillis
+        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(true)
+        yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.some(now + 60_000) })
+        yield* placement.refuse({
+          provider: "spread",
+          slot: b,
+          retryAt: Option.some(now + 120_000),
+        })
+        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(false)
+        yield* TestClock.adjust("61 seconds")
+        expect(yield* placement.open({ provider: "spread", pool: [a, b] })).toBe(true)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
+      ),
   )
 
   it.effect("an account refused until its reset is not placed on before then", () =>
