@@ -126,7 +126,7 @@ import { StorageError } from "../../src/domain/errors"
 import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { MinimumLogLevel } from "effect/References"
 import { type Message, messagePartsText } from "../../src/domain/message"
-import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
+import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc contract schemas ────────────────────────────────────────────────────
@@ -4207,6 +4207,80 @@ describe("effort receipt", () => {
         expect(history).toEqual([[], [Option.some("default")]])
       }).pipe(Effect.timeout("8 seconds")),
     ),
+  )
+})
+
+describe("session account", () => {
+  const anthropic = ProviderId.make("anthropic")
+  const a = CredentialSlot.make("a")
+  const b = CredentialSlot.make("b")
+
+  /** A server whose `anthropic` sign-in holds keys `a` and `b`, in `order`. */
+  const accountServer = (order: {
+    readonly authOrder: ReadonlyArray<CredentialSlot>
+    readonly authSpread?: ReadonlyArray<CredentialSlot>
+  }) =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("gent-account-")
+      const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+      yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "fake-a" }), a)
+      yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "fake-b" }), b)
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.succeed(
+          Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+        ),
+      )
+      const { client } = yield* createRpcClient(
+        createE2ELayer({
+          ...e2ePreset,
+          cwd,
+          providerLayer,
+          authLayer: Layer.succeed(Auth, auth),
+          configServiceLayer: ConfigService.Test(
+            new UserConfig({ model: TEST_MODEL_ID, providers: { anthropic: order } }),
+          ),
+        }),
+      )
+      /** A session created with `admission`, read before and after one ended turn. */
+      const ranSession = (admission: {
+        readonly runSpec?: { readonly credentialSlot: CredentialSlot }
+      }) =>
+        Effect.gen(function* () {
+          const created = yield* client.session.create({ cwd, admission })
+          const target = { sessionId: created.sessionId, branchId: created.branchId }
+          const before = yield* client.session.getSnapshot(target)
+          const turnCompleted = yield* client.session.events(target).pipe(
+            Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+            Stream.runHead,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ ...target, content: "hello" })
+          yield* Fiber.join(turnCompleted)
+          const after = yield* client.session.getSnapshot(target)
+          return { before: before.account, after: after.account }
+        })
+      return { ranSession }
+    })
+
+  it.live(
+    "a session snapshot names its account and whether it was pinned, assigned or walked",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const spreadServer = yield* accountServer({ authOrder: [a, b], authSpread: [a, b] })
+          const pinned = yield* spreadServer.ranSession({ runSpec: { credentialSlot: b } })
+          // A pin names its account before any step, and its provider once one went out.
+          expect(pinned.before).toEqual({ slot: b, placement: "pinned" })
+          expect(pinned.after).toEqual({ provider: anthropic, slot: b, placement: "pinned" })
+          const placed = yield* spreadServer.ranSession({})
+          expect(placed.before).toBeUndefined()
+          expect(placed.after?.provider).toBe(anthropic)
+          expect(placed.after?.placement).toBe("assigned")
+          const unspreadServer = yield* accountServer({ authOrder: [a, b] })
+          const unspread = yield* unspreadServer.ranSession({})
+          expect(unspread.after).toEqual({ provider: anthropic, slot: a, placement: "walked" })
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
   )
 })
 

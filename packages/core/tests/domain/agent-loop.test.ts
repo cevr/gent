@@ -1,9 +1,10 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import {
   entityIdOf,
   foldSessionMetrics,
   parseEntityId,
+  sessionAccount,
   stepSessionMetrics,
 } from "../../src/domain/agent-loop"
 import {
@@ -185,6 +186,72 @@ describe("session metrics fold", () => {
     expect(foldSessionMetrics([personal, failed]).lastCredential?.receipt?.slot).toBe(
       CredentialSlot.make("personal"),
     )
+  })
+
+  test("the session account reads pinned from the admission, assigned from the newest placement, and walked otherwise", () => {
+    const anthropic = ProviderId.make("anthropic")
+    const model = ModelId.make("anthropic/claude-sonnet-5-5")
+    const a = CredentialSlot.make("a")
+    const b = CredentialSlot.make("b")
+    const stepOn = (slot: CredentialSlot) =>
+      wrap(
+        AgentEvent.cases.StreamEnded.make({
+          sessionId,
+          branchId,
+          model,
+          outcome: "Answered",
+          credential: { provider: anthropic, slot },
+        }),
+      )
+    const placedOn = (slot: CredentialSlot) =>
+      wrap(
+        AgentEvent.cases.CredentialAssigned.make({
+          sessionId,
+          branchId,
+          messageId: MessageId.make("m"),
+          provider: anthropic,
+          slot,
+          reason: "new",
+        }),
+      )
+    const unpinned = Option.some({})
+    const pinnedTo = (slot: CredentialSlot) => Option.some({ runSpec: { credentialSlot: slot } })
+    const accountOf = (
+      admission: Parameters<typeof sessionAccount>[0],
+      log: ReadonlyArray<{ readonly event: AgentEvent }>,
+    ) => Option.getOrUndefined(sessionAccount(admission, foldSessionMetrics(log)))
+
+    // Nothing ran and nothing was placed: no account.
+    expect(accountOf(Option.none(), [])).toBeUndefined()
+    // A pin reads from the admission alone, before any step.
+    expect(accountOf(pinnedTo(b), [])).toEqual({ slot: b, placement: "pinned" })
+    expect(accountOf(pinnedTo(b), [stepOn(b)])).toEqual({
+      provider: anthropic,
+      slot: b,
+      placement: "pinned",
+    })
+    // Placed, before its first step ends.
+    expect(foldSessionMetrics([placedOn(a)]).placement).toEqual({ provider: anthropic, slot: a })
+    expect(accountOf(unpinned, [placedOn(a)])).toEqual({
+      provider: anthropic,
+      slot: a,
+      placement: "assigned",
+    })
+    // The step went out on the placement.
+    expect(accountOf(unpinned, [placedOn(a), stepOn(a)])?.placement).toBe("assigned")
+    // The newest placement wins.
+    expect(accountOf(unpinned, [placedOn(a), stepOn(a), placedOn(b), stepOn(b)])).toEqual({
+      provider: anthropic,
+      slot: b,
+      placement: "assigned",
+    })
+    // A step that walked off the placement, or a run never placed, walked.
+    expect(accountOf(unpinned, [placedOn(a), stepOn(b)])).toEqual({
+      provider: anthropic,
+      slot: b,
+      placement: "walked",
+    })
+    expect(accountOf(unpinned, [stepOn(a)])?.placement).toBe("walked")
   })
 
   test("a projection's input count waits for its own step, so a model switch never mixes windows", () => {
