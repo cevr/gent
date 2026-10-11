@@ -3047,111 +3047,122 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
     })
   }
-  // Every chat turn passes here before its driver resolves a model, whichever
-  // agent, config or override named it; a classifier's window changes nothing.
-  if (modelOption.value.kind === "classifier") {
-    return yield* new ModelContextCapabilityError({
-      failure: ModelContextCapabilityFailure.cases.ClassifierModel.make({
-        modelId: contextModelId,
+  /**
+   * The step's window as one credential's catalog entry (`model`) reads it:
+   * its limit, its budget, its request hints and its cache lifetime. A spread
+   * run placed again after a handoff reads it again from the placed account.
+   */
+  const modelWindow = Effect.fn("TurnHelpers.modelWindow")(function* (model: Model) {
+    // Every chat turn passes here before its driver resolves a model, whichever
+    // agent, config or override named it; a classifier's window changes nothing.
+    if (model.kind === "classifier") {
+      return yield* new ModelContextCapabilityError({
+        failure: ModelContextCapabilityFailure.cases.ClassifierModel.make({
+          modelId: contextModelId,
+        }),
+      })
+    }
+    // The agent's own window wins over the catalog: config or a run override can shrink it.
+    const contextLimit = Option.getOrUndefined(
+      Option.orElse(Option.fromUndefinedOr(resolved.agent.contextLength), () =>
+        Option.fromUndefinedOr(model.contextLength),
+      ),
+    )
+    if (Predicate.isUndefined(contextLimit)) {
+      return yield* new ModelContextCapabilityError({
+        failure: ModelContextCapabilityFailure.cases.MissingContextLimit.make({
+          modelId: contextModelId,
+        }),
+      })
+    }
+    if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
+      return yield* new ModelContextCapabilityError({
+        failure: ModelContextCapabilityFailure.cases.InvalidContextLimit.make({
+          modelId: contextModelId,
+          reason: "contextLength must be a positive safe integer",
+        }),
+      })
+    }
+    // cache belongs to the model that wrote it: a turn on another model than
+    // the last request reads no cache either way, and handing its window off
+    // for that would surprise the reader who only switched models. The
+    // account does not gate it: the handoff waits for the lifetime to lapse,
+    // and then every account's cache is cold, so a move that the order makes
+    // (a first credential that keeps refusing) hands off as any cold turn does.
+    const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
+    const promptCache = Option.map(
+      Option.all([
+        Option.filter(params.lastCallAtMillis, () => sameModel),
+        promptCacheTtlMsFor(model, resolved.child),
+      ]),
+      ([lastCallAtMillis, ttlMs]): PromptCache => ({
+        lastCallAtMillis,
+        ttlMs,
+        pricing: Option.fromUndefinedOr(model.pricing),
       }),
+    )
+    // The catalog's input cap binds whatever window the agent names: a provider
+    // refuses input past it however large the window is.
+    const inputLimit = Option.fromUndefinedOr(model.inputLimit).pipe(Option.filter(isTokenLimit))
+    const reservedOutputTokens = outputReserveTokens({
+      contextLimitTokens: contextLimit,
+      outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
     })
-  }
-  // The agent's own window wins over the catalog: config or a run override can shrink it.
-  const contextLimit = Option.getOrUndefined(
-    Option.orElse(Option.fromUndefinedOr(resolved.agent.contextLength), () =>
-      Option.fromUndefinedOr(modelOption.value.contextLength),
-    ),
-  )
-  if (Predicate.isUndefined(contextLimit)) {
-    return yield* new ModelContextCapabilityError({
-      failure: ModelContextCapabilityFailure.cases.MissingContextLimit.make({
-        modelId: contextModelId,
+    const budget = ModelContextBudget.make({
+      contextLimitTokens: contextLimit,
+      ...omitUndefined({
+        inputLimitTokens: Option.getOrUndefined(inputLimit),
+        imageCost: model.imageCost,
       }),
+      reservedSystemTokens:
+        resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
+        Option.match(turnNoticesText(requestNotices(resolved)), {
+          onNone: () => 0,
+          onSome: estimateTextTokens,
+        }),
+      reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
+      reservedOutputTokens,
     })
-  }
-  if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) {
-    return yield* new ModelContextCapabilityError({
-      failure: ModelContextCapabilityFailure.cases.InvalidContextLimit.make({
-        modelId: contextModelId,
-        reason: "contextLength must be a positive safe integer",
-      }),
-    })
-  }
-  // A model whose catalog entry names no cache lifetime never goes cold. A
-  // cache belongs to the model that wrote it: a turn on another model than
-  // the last request reads no cache either way, and handing its window off
-  // for that would surprise the reader who only switched models. The
-  // account does not gate it: the handoff waits for the lifetime to lapse,
-  // and then every account's cache is cold, so a move that the order makes
-  // (a first credential that keeps refusing) hands off as any cold turn does.
-  const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
-  const cacheLifetimeMs = placementLifetimeMs(
-    promptCacheTtlMsFor(modelOption.value, resolved.child),
-  )
-  const promptCache = Option.map(
-    Option.all([
-      Option.filter(params.lastCallAtMillis, () => sameModel),
-      promptCacheTtlMsFor(modelOption.value, resolved.child),
-    ]),
-    ([lastCallAtMillis, ttlMs]): PromptCache => ({
-      lastCallAtMillis,
-      ttlMs,
-      pricing: Option.fromUndefinedOr(modelOption.value.pricing),
-    }),
-  )
-  // The catalog's input cap binds whatever window the agent names: a provider
-  // refuses input past it however large the window is.
-  const inputLimit = Option.fromUndefinedOr(modelOption.value.inputLimit).pipe(
-    Option.filter(isTokenLimit),
-  )
-  const reservedOutputTokens = outputReserveTokens({
-    contextLimitTokens: contextLimit,
-    outputLimitTokens: Option.fromUndefinedOr(modelOption.value.outputLimit),
+    const turnHints = {
+      temperature: resolved.temperature,
+      reasoning: resolved.reasoning,
+      // The driver reads the catalog's word on reasoning, not the model name.
+      child: resolved.child,
+      supportsReasoning: model.reasoning,
+      // The request asks for no more output than the budget keeps free, so
+      // input within the budget plus the reply never passes the window.
+      maxTokens: reservedOutputTokens,
+    } satisfies ProviderHints
+    // The receipt names what the driver sends: the same levels, the same clamp.
+    // A request that names no level to a model the catalog says reasons runs
+    // at the model's default, which is not an unknown level.
+    const reasoningLevel: Option.Option<RunEffort> = Option.match(
+      Option.fromUndefinedOr(resolved.reasoning),
+      {
+        onNone: () =>
+          Option.some<RunEffort>("default").pipe(Option.filter(() => model.reasoning === true)),
+        onSome: (level) => effectiveEffort(model, level),
+      },
+    )
+    const modelRequest: ResolveModelRequest = {
+      modelId: resolved.modelId,
+      // The session is the cache key: the next step reads this step's prefix.
+      hints: { ...turnHints, cacheKey: params.sessionId },
+      driverId: Option.getOrUndefined(driverId),
+    }
+    return {
+      model,
+      contextLimit,
+      cacheLifetimeMs: placementLifetimeMs(promptCacheTtlMsFor(model, resolved.child)),
+      promptCache,
+      budget,
+      turnHints,
+      reasoningLevel,
+      modelRequest,
+    }
   })
-  const budget = ModelContextBudget.make({
-    contextLimitTokens: contextLimit,
-    ...omitUndefined({
-      inputLimitTokens: Option.getOrUndefined(inputLimit),
-      imageCost: modelOption.value.imageCost,
-    }),
-    reservedSystemTokens:
-      resolved.systemPrompt.reduce((sum, block) => sum + estimateTextTokens(block), 0) +
-      Option.match(turnNoticesText(requestNotices(resolved)), {
-        onNone: () => 0,
-        onSome: estimateTextTokens,
-      }),
-    reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
-    reservedOutputTokens,
-  })
-  const turnHints = {
-    temperature: resolved.temperature,
-    reasoning: resolved.reasoning,
-    // The driver reads the catalog's word on reasoning, not the model name.
-    child: resolved.child,
-    supportsReasoning: modelOption.value.reasoning,
-    // The request asks for no more output than the budget keeps free, so
-    // input within the budget plus the reply never passes the window.
-    maxTokens: reservedOutputTokens,
-  } satisfies ProviderHints
-  // The receipt names what the driver sends: the same levels, the same clamp.
-  // A request that names no level to a model the catalog says reasons runs
-  // at the model's default, which is not an unknown level.
-  const reasoningLevel: Option.Option<RunEffort> = Option.match(
-    Option.fromUndefinedOr(resolved.reasoning),
-    {
-      onNone: () =>
-        Option.some<RunEffort>("default").pipe(
-          Option.filter(() => modelOption.value.reasoning === true),
-        ),
-      onSome: (level) => effectiveEffort(modelOption.value, level),
-    },
-  )
-  const modelRequest: ResolveModelRequest = {
-    modelId: resolved.modelId,
-    // The session is the cache key: the next step reads this step's prefix.
-    hints: { ...turnHints, cacheKey: params.sessionId },
-    driverId: Option.getOrUndefined(driverId),
-  }
+  const opening = yield* modelWindow(modelOption.value)
+  const { budget, promptCache, turnHints, modelRequest, cacheLifetimeMs } = opening
   // The slot the last request went out with, set as it is chosen: the
   // receipt, the price and a move name that slot, not the one the order
   // would choose now. A config edit changes only the next choice.
@@ -3235,8 +3246,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           notice: true,
         }),
       )
-      if (Option.isSome(order.value.pool)) {
-        yield* params.turnLedger.settleCredential(provider, Option.some(next))
+      if (Option.isNone(order.value.pool)) return true
+      yield* params.turnLedger.settleCredential(provider, Option.some(next))
+      // Past every pool account, the turn walks the rest of the order: no
+      // placement, and the next turn returns to the pool once one is not held.
+      if (order.value.pool.value.includes(next)) {
         yield* publishCredentialAssigned({
           sessionId: params.sessionId,
           branchId: params.branchId,
@@ -3380,7 +3394,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // A window handed off is a cache boundary: the summary stayed on the
   // account that held the window, and the next request of a spread run is
   // placed again, preferring that account. A turn placed at its start
-  // already chose with the cold cache in view.
+  // already chose with the cold cache in view. The step's window is the
+  // placed account's: its catalog entry sets the budget and the hints.
+  let stepWindow = opening
   if (compacted && !params.placed) {
     const order = yield* requestCredentialOrder(
       modelRequest,
@@ -3415,6 +3431,13 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         from,
         reason: "compacted",
       }).pipe(Effect.provideService(EventStore, eventStore))
+      const placedModel = yield* modelRegistry
+        .stamp({ provider: ProviderId.make(provider), slot: walk[0] }, extensionRegistry)
+        .pipe(
+          Effect.flatMap((receipt) => modelRegistry.get(contextModelId, receipt)),
+          Effect.orElseSucceed(() => Option.none<Model>()),
+        )
+      if (Option.isSome(placedModel)) stepWindow = yield* modelWindow(placedModel.value)
     }
   }
 
@@ -3443,14 +3466,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const projection = yield* projectCurrentWindow({
     modelId: contextModelId,
     messages: durableMessages,
-    budget,
+    budget: stepWindow.budget,
     measure: params.measure,
   })
   const handoffMessageId = Option.getOrUndefined(currentHandoffId(finalWindow))
   yield* ledger.recordProjection({
     estimatedTokens: projection.estimatedTokens,
     availableInputTokens: projection.availableInputTokens,
-    contextLimitTokens: contextLimit,
+    contextLimitTokens: stepWindow.contextLimit,
     omittedMessages: projection.omittedMessageIds.length,
     handoffMessageId,
   })
@@ -3463,7 +3486,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       branchId: params.branchId,
       estimatedTokens: projection.estimatedTokens,
       availableInputTokens: projection.availableInputTokens,
-      contextLimitTokens: contextLimit,
+      contextLimitTokens: stepWindow.contextLimit,
       omittedMessages: projection.omittedMessageIds.length,
       handoffMessageId,
       compacted,
@@ -3476,7 +3499,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // result holds only its reference.
   const toolImages = yield* toolImagePrompt({
     messages: projection.messages,
-    model: modelOption.value,
+    model: stepWindow.model,
     directory: yield* toolImageDirectory((yield* RuntimeEnvironment).home),
   })
   const transcript = toWirePrompt(
@@ -3495,8 +3518,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ),
   )
   const stepRequest: ResolveModelRequest = {
-    ...modelRequest,
-    hints: { ...modelRequest.hints, reasoningHistory },
+    ...stepWindow.modelRequest,
+    hints: { ...stepWindow.modelRequest.hints, reasoningHistory },
   }
   // The prompt gives its later system messages (the notices) the role their
   // provenance and the resolved model allow (`promptForModel`).
@@ -3506,7 +3529,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       const prompt = yield* promptForModel(
         transcript,
         model,
-        modelOption.value.hostContextUpdateOptions,
+        stepWindow.model.hostContextUpdateOptions,
       )
       if (resolved.tools.length > 0) {
         if (params.finalStep) {
@@ -3570,9 +3593,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
 
   return {
     compaction,
-    overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
-    cacheLifetimeMs,
-    reasoningLevel,
+    overheadTokens: stepWindow.budget.reservedSystemTokens + stepWindow.budget.reservedToolTokens,
+    cacheLifetimeMs: stepWindow.cacheLifetimeMs,
+    reasoningLevel: stepWindow.reasoningLevel,
     stream: reportedStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -3622,7 +3645,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
                 sessionId: params.sessionId,
                 branchId: params.branchId,
                 modelId: resolved.modelId,
-                reasoningLevel: Option.getOrUndefined(reasoningLevel),
+                reasoningLevel: Option.getOrUndefined(stepWindow.reasoningLevel),
                 activeStream: params.activeStream,
                 // One recovery per refusal: a step that already handed off, or the
                 // last step of the budget, fails the turn as any failure does.
@@ -4058,13 +4081,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly messageId: MessageId
       readonly receipt: CredentialReceipt
       readonly model: Option.Option<ModelIdType>
+      /** The step's `StreamEnded` in the branch's log: a placement after it moved the turn. */
+      readonly eventId: number
+    }
+    /** A placement and where it stands in the branch's log. */
+    interface KnownPlacement {
+      readonly event: CredentialAssigned
+      readonly eventId: number
     }
     /** The newest step credential of each sign-in, with the ones `events` add. */
     const withStepCredentials = (
       known: ReadonlyMap<string, StepCredential>,
       events: ReadonlyArray<EventEnvelope>,
     ): ReadonlyMap<string, StepCredential> => {
-      const added = events.flatMap(({ event }) => {
+      const added = events.flatMap(({ id, event }) => {
         if (event._tag !== "StreamEnded") return []
         return Option.toArray(
           Option.all([
@@ -4075,7 +4105,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               ([messageId, receipt]) =>
                 [
                   receipt.provider,
-                  { messageId, receipt, model: Option.fromUndefinedOr(event.model) },
+                  { messageId, receipt, model: Option.fromUndefinedOr(event.model), eventId: id },
                 ] as const,
             ),
           ),
@@ -4086,15 +4116,21 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     }
     /** The newest placement of each sign-in, with the ones `events` add. */
     const withPlacements = (
-      known: ReadonlyMap<string, CredentialAssigned>,
+      known: ReadonlyMap<string, KnownPlacement>,
       events: ReadonlyArray<EventEnvelope>,
-    ): ReadonlyMap<string, CredentialAssigned> => {
-      const added = events.flatMap(({ event }) => {
+    ): ReadonlyMap<string, KnownPlacement> => {
+      const added = events.flatMap(({ id, event }) => {
         if (event._tag !== "CredentialAssigned") return []
-        return [[event.provider, event] as const]
+        return [[event.provider, { event, eventId: id }] as const]
       })
       if (added.length === 0) return known
       return new Map([...known, ...added])
+    }
+    /** The branch this one was forked from (`branch.fork`): its window was copied from there. */
+    const knownForkSource = (envelope: EventEnvelope): Option.Option<BranchId> => {
+      const { event } = envelope
+      if (event._tag !== "BranchCreated" || event.branchId !== scope.branchId) return Option.none()
+      return Option.fromUndefinedOr(event.parentBranchId)
     }
     interface KnownSteps {
       readonly cursor: number
@@ -4109,7 +4145,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly effortRouted: Option.Option<ModelRouted>
       readonly credentials: ReadonlyMap<string, StepCredential>
       /** The branch's newest `CredentialAssigned` of each sign-in. */
-      readonly placements: ReadonlyMap<string, CredentialAssigned>
+      readonly placements: ReadonlyMap<string, KnownPlacement>
+      /** The branch this one was forked from, when `branch.fork` made it. */
+      readonly forkedFrom: Option.Option<BranchId>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
@@ -4122,7 +4160,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       routed: Option.none<ModelRouted>(),
       effortRouted: Option.none<ModelRouted>(),
       credentials: new Map<string, StepCredential>(),
-      placements: new Map<string, CredentialAssigned>(),
+      placements: new Map<string, KnownPlacement>(),
+      forkedFrom: Option.none<BranchId>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -4160,6 +4199,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         effortRouted: newest(events, knownEffortRoute, known.effortRouted),
         credentials: withStepCredentials(known.credentials, events),
         placements: withPlacements(known.placements, events),
+        forkedFrom: newest(events, knownForkSource, known.forkedFrom),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -4197,18 +4237,40 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       )
       return credentials.filter(({ messageId }) => Option.contains(turn, messageId))
     })
+    /** The account of the newest step in `events` on `provider` and `modelId`. */
+    const newestSlotOn = (
+      events: ReadonlyArray<EventEnvelope>,
+      provider: string,
+      modelId: ModelIdType,
+    ): Option.Option<CredentialSlot> =>
+      Option.fromUndefinedOr(withStepCredentials(new Map(), events).get(provider)).pipe(
+        Option.filter((step) => Option.contains(step.model, modelId)),
+        Option.map((step) => step.receipt.slot),
+      )
     /**
      * Where a spread run with no request on its branch yet comes from, and
      * the account it prefers: the newest receipt of the session it continues
      * (a handoff's predecessor, a spawned child's parent) on the same model.
-     * A spawned child whose window holds a reply copied at create is a fork.
-     * A session with no parent is new.
+     * A spawned child whose window holds a reply copied at create is a fork,
+     * and so is a branch forked from another (`branch.fork`, `forkedFrom`)
+     * whose source ran on the model: its window is that branch's. A session
+     * with no parent is new.
      */
     const runOrigin = Effect.fn("AgentLoop.runOrigin")(function* (params: {
       readonly provider: string
       readonly modelId: ModelIdType
       readonly messages: ReadonlyArray<Message>
+      readonly forkedFrom: Option.Option<BranchId>
     }) {
+      if (Option.isSome(params.forkedFrom)) {
+        const source = yield* eventStorage.listEvents({
+          sessionId: scope.sessionId,
+          branchId: params.forkedFrom.value,
+        })
+        const preferred = newestSlotOn(source, params.provider, params.modelId)
+        const branchFork: RunOrigin = { reason: "fork", preferred, starter: Option.none() }
+        if (Option.isSome(preferred)) return branchFork
+      }
       const session = yield* sessionStorage.getSession(scope.sessionId)
       const parentSessionId = Option.fromUndefinedOr(session?.parentSessionId)
       if (Predicate.isUndefined(session) || Option.isNone(parentSessionId)) {
@@ -4223,12 +4285,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: parentSessionId.value,
         ...omitUndefined({ branchId: session.parentBranchId }),
       })
-      const preferred = Option.fromUndefinedOr(
-        withStepCredentials(new Map(), events).get(params.provider),
-      ).pipe(
-        Option.filter((step) => Option.contains(step.model, params.modelId)),
-        Option.map((step) => step.receipt.slot),
-      )
+      const preferred = newestSlotOn(events, params.provider, params.modelId)
       if (!isSpawnedSession(session)) {
         const handoff: RunOrigin = { reason: "handoff", preferred, starter: Option.none() }
         return handoff
@@ -4247,7 +4304,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * fork, another model, a lapsed lifetime. A warm turn starts on the
      * account its cache is on and records nothing; a recovered turn walks the
      * placement it recorded; a pinned run is never placed. A fork takes its
-     * parent's account with no ranking. True when it placed.
+     * parent's account with no ranking, in the pool or not (the parent's own
+     * choice). A run whose last request fell outside the pool stays there
+     * while every pool account is held, and returns to the pool at the first
+     * turn one is not, warm or cold (`returned`): who pays outranks the cache.
+     * A choice outside the pool is the order's walk, not a placement: it
+     * records nothing. True when it placed.
      */
     const placeTurn = Effect.fn("AgentLoop.placeTurn")(function* (params: {
       readonly messageId: MessageId
@@ -4273,23 +4335,32 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (cursor.settled) return false
       const own = Option.filter(
         Option.fromUndefinedOr(knownSteps.placements.get(provider)),
-        (event) => event.messageId === params.messageId,
+        (placed) => placed.event.messageId === params.messageId,
       )
       if (Option.isSome(own)) {
-        yield* scope.turnLedger.settleCredential(provider, Option.some(own.value.slot))
+        yield* scope.turnLedger.settleCredential(provider, Option.some(own.value.event.slot))
         return false
       }
-      const listed = yield* params.modelRegistry
-        .get(resolved.modelDriver.contextModelId)
-        .pipe(Effect.orElseSucceed(() => Option.none<Model>()))
-      const ttlMs = Option.flatMap(listed, (model) => promptCacheTtlMsFor(model, resolved.child))
       const lastCall = knownSteps.lastCall
-      const lastSlot = Option.flatMap(lastCall, (call) =>
-        Option.map(
-          Option.filter(call.credential, (receipt) => receipt.provider === provider),
-          (receipt) => receipt.slot,
-        ),
+      // The cache lives as long as the account that wrote it lists it.
+      const lastReceipt = Option.flatMap(lastCall, (call) => call.credential)
+      const listedFor = (receipt: Option.Option<CredentialReceipt>) =>
+        params.modelRegistry
+          .get(resolved.modelDriver.contextModelId, Option.getOrUndefined(receipt))
+          .pipe(Effect.orElseSucceed(() => Option.none<Model>()))
+      let listed = yield* listedFor(lastReceipt)
+      if (Option.isNone(listed)) listed = yield* listedFor(Option.none())
+      const ttlMs = Option.flatMap(listed, (model) => promptCacheTtlMsFor(model, resolved.child))
+      const lastSlot = Option.map(
+        Option.filter(lastReceipt, (receipt) => receipt.provider === provider),
+        (receipt) => receipt.slot,
       )
+      // Outside the pool, the run stays only while every pool account is held.
+      const outside = Option.exists(lastSlot, (slot) => !pool.includes(slot))
+      if (outside && !(yield* placement.open({ provider, pool }))) {
+        yield* scope.turnLedger.settleCredential(provider, lastSlot)
+        return false
+      }
       const warm = yield* cacheWarm({
         modelId: resolved.modelId,
         ttlMs,
@@ -4297,42 +4368,64 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         lastCallAtMillis: knownSteps.lastCallAtMillis,
         accountStands: params.accountStands,
       })
-      if (warm) {
+      if (warm && !outside) {
         yield* scope.turnLedger.settleCredential(provider, lastSlot)
         return false
       }
       // A branch that ran a request goes cold; its own account is preferred
-      // only on the same model.
+      // only on the same model. A warm one here fell outside the pool.
       const origin = yield* Option.match(lastCall, {
-        onSome: (call) =>
-          Effect.succeed<RunOrigin>({
+        onSome: (call) => {
+          if (warm) {
+            const back: RunOrigin = {
+              reason: "returned",
+              preferred: Option.none(),
+              starter: Option.none(),
+            }
+            return Effect.succeed(back)
+          }
+          const cold: RunOrigin = {
             reason: "cold",
             preferred: Option.filter(lastSlot, () => call.model === resolved.modelId),
             starter: Option.none(),
-          }),
-        onNone: () =>
-          runOrigin({ provider, modelId: resolved.modelId, messages: resolved.messages }),
-      })
-      const preferred = Option.filter(origin.preferred, (slot) => pool.includes(slot))
-      const slot = yield* Option.match(
-        Option.filter(preferred, () => origin.reason === "fork"),
-        {
-          onSome: Effect.succeed,
-          onNone: () =>
-            Effect.map(
-              placement.place({
-                provider,
-                pool,
-                sessionId: scope.sessionId,
-                preferred,
-                starter: origin.starter,
-                left: cursor.passed,
-                ttlMs: placementLifetimeMs(ttlMs),
-              }),
-              (walk) => walk[0],
-            ),
+          }
+          return Effect.succeed(cold)
         },
+        onNone: () =>
+          runOrigin({
+            provider,
+            modelId: resolved.modelId,
+            messages: resolved.messages,
+            forkedFrom: knownSteps.forkedFrom,
+          }),
+      })
+      // A fork stays where its window is, before any pool rule: a slot of
+      // the order outside the pool is its parent's own choice (a pin, a fall).
+      const forkSlot = Option.filter(
+        origin.preferred,
+        (slot) => origin.reason === "fork" && order.value.slots.includes(slot),
       )
+      if (Option.isSome(forkSlot) && !pool.includes(forkSlot.value)) {
+        yield* scope.turnLedger.settleCredential(provider, forkSlot)
+        return false
+      }
+      const preferred = Option.filter(origin.preferred, (slot) => pool.includes(slot))
+      const slot = yield* Option.match(forkSlot, {
+        onSome: Effect.succeed,
+        onNone: () =>
+          Effect.map(
+            placement.place({
+              provider,
+              pool,
+              sessionId: scope.sessionId,
+              preferred,
+              starter: origin.starter,
+              left: cursor.passed,
+              ttlMs: placementLifetimeMs(ttlMs),
+            }),
+            (walk) => walk[0],
+          ),
+      })
       yield* scope.turnLedger.settleCredential(provider, Option.some(slot))
       yield* publishCredentialAssigned({
         sessionId: scope.sessionId,
@@ -6165,9 +6258,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // The turn's place in each credential order lives in memory; after a
         // restart the receipts of the steps it ran say where it stood, as
         // `ModelRouted` says where its route stood. They win over the parent's.
+        // A placement of the turn after its newest receipt (a refusal's move,
+        // a handoff's) moved it: it resumes on the placed account, which
+        // `placeTurn` settles, never on the one it left.
         const knownCredentials = knownSteps.credentials
-        for (const { messageId, receipt } of knownCredentials.values()) {
+        for (const { messageId, receipt, eventId } of knownCredentials.values()) {
           if (messageId !== state.message.id) continue
+          const movedSince = Option.exists(
+            Option.fromUndefinedOr(knownSteps.placements.get(receipt.provider)),
+            (placed) => placed.event.messageId === messageId && placed.eventId > eventId,
+          )
+          if (movedSince) continue
           yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
         }
 

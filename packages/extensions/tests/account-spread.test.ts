@@ -355,10 +355,12 @@ const historyOf = (
 /** What one run of the workload measured. */
 interface RunResult {
   readonly records: ReadonlyArray<RequestRecord>
-  /** Each session's events, by its name in the workload. */
+  /** Each session's events, and the label of each user message, by its name in the workload. */
   readonly sessions: ReadonlyArray<{
     readonly name: string
     readonly events: ReadonlyArray<EventEnvelope>
+    /** A user message's id → the first line of its text: the label the fake records. */
+    readonly labels: ReadonlyMap<string, string>
   }>
 }
 
@@ -466,6 +468,11 @@ const runWorkload = (order: {
     const r2: SessionKey = yield* client.session.create({ cwd })
     yield* turn(r2, "R2-1")
     yield* turn(r2, REFUSED_TURN)
+    // 7. A small session's two turns: the second is warm and cheap, so a
+    // move in it shows as a small write.
+    const r3: SessionKey = yield* client.session.create({ cwd })
+    yield* turn(r3, "R3-1")
+    yield* turn(r3, "R3-2")
 
     const named: ReadonlyArray<readonly [string, SessionKey]> = [
       ["R1", r1],
@@ -473,9 +480,27 @@ const runWorkload = (order: {
       ...fork.map((child): readonly [string, SessionKey] => ["F1", child]),
       ["H1", h1],
       ["R2", r2],
+      ["R3", r3],
     ]
     const sessions = yield* Effect.forEach(named, ([name, key]) =>
-      Effect.map(historyOf(client, key), (events) => ({ name, events })),
+      Effect.gen(function* () {
+        const events = yield* historyOf(client, key)
+        const messages = yield* client.message.list({ branchId: key.branchId })
+        const labels = new Map(
+          messages
+            .filter((message) => message.role === "user")
+            .map((message): readonly [string, string] => [
+              message.id,
+              firstLine(
+                message.parts.flatMap((part) => {
+                  if (part.type !== "text") return []
+                  return [part.text]
+                })[0] ?? "",
+              ),
+            ]),
+        )
+        return { name, events, labels }
+      }),
     )
     const result: RunResult = { records: [...world.records], sessions }
     return result
@@ -492,6 +517,41 @@ const stepSlots = (events: ReadonlyArray<EventEnvelope>) =>
 
 const sumOf = (records: ReadonlyArray<RequestRecord>, field: (record: RequestRecord) => number) =>
   records.reduce((sum, record) => sum + field(record), 0)
+
+/**
+ * Each session's steps stay on one account but where its cache starts over
+ * by evidence the placement does not write: the first request of a turn
+ * whose request the fake refused, or the step after a window handoff
+ * (`ModelContextProjected { compacted: true }`).
+ */
+const expectNoUnexplainedMove = (run: RunResult) => {
+  const refusedLabels = new Set(
+    run.records.filter((record) => record.refused).map((record) => record.label),
+  )
+  for (const session of run.sessions) {
+    let last = Option.none<string>()
+    let exempt = false
+    const turns = new Set<string>()
+    for (const { event } of session.events) {
+      if (event._tag === "ModelContextProjected" && event.compacted) exempt = true
+      if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) continue
+      const turn = event.messageId ?? ""
+      const label = session.labels.get(turn) ?? ""
+      if (!turns.has(turn) && refusedLabels.has(label)) exempt = true
+      turns.add(turn)
+      const slot = event.credential.slot
+      if (Option.isSome(last) && last.value !== slot) {
+        expect({ session: session.name, label, exempt }).toEqual({
+          session: session.name,
+          label,
+          exempt: true,
+        })
+      }
+      last = Option.some(slot)
+      exempt = false
+    }
+  }
+}
 
 describe("account spread", () => {
   it.effect(
@@ -542,16 +602,18 @@ describe("account spread", () => {
           const answered = (run: RunResult) => run.records.filter((record) => !record.refused)
           const writes = (run: RunResult) => sumOf(answered(run), (record) => record.charge.write)
           const reads = (run: RunResult) => sumOf(answered(run), (record) => record.charge.read)
-          const systemWritesOn = (run: RunResult, account: string) =>
-            sumOf(
-              answered(run).filter((record) => record.account === account),
-              (record) => record.charge.systemWrite,
-            )
+          // The system-prefix part of the writes; the rest is the conversation's.
+          const prefixWrites = (run: RunResult) =>
+            sumOf(answered(run), (record) => record.charge.systemWrite)
+          /** The requests that wrote a system prefix. */
+          const prefixWriters = (run: RunResult) =>
+            answered(run).filter((record) => record.charge.systemWrite > 0)
           const W_off = writes(off)
           const W_on = writes(on)
-          const PW_on_b = systemWritesOn(on, b)
+          const PW_off = prefixWrites(off)
+          const PW_on = prefixWrites(on)
           yield* Console.log(
-            `W_off ${W_off} W_on ${W_on} R_off ${reads(off)} R_on ${reads(on)} PW_on(b) ${PW_on_b}`,
+            `W_off ${W_off} W_on ${W_on} PW_off ${PW_off} PW_on ${PW_on} R_off ${reads(off)} R_on ${reads(on)} prefixes_off ${prefixWriters(off).length} prefixes_on ${prefixWriters(on).length}`,
           )
           for (const [label, run] of [
             ["off", off],
@@ -580,40 +642,97 @@ describe("account spread", () => {
           expect(servedBy(a)).toBeGreaterThanOrEqual(2)
           expect(servedBy(b)).toBeGreaterThanOrEqual(2)
 
-          // 4. Cache writes: at most one more system prefix per added account.
-          expect(W_on).toBeLessThanOrEqual(W_off + PW_on_b)
+          // 4. Cache writes: no more conversation writes than without the
+          // spread, each system prefix (per account) written once, and at most
+          // one more prefix written per added account.
+          expect(W_on - PW_on).toBeLessThanOrEqual(W_off - PW_off)
           for (const run of [off, on]) {
-            const written = answered(run)
-              .filter((record) => record.charge.systemWrite > 0)
-              .map((record) => record.charge.systemKey)
+            const written = prefixWriters(run).map((record) => record.charge.systemKey)
             expect(new Set(written).size).toBe(written.length)
           }
+          expect(prefixWriters(on).length).toBeLessThanOrEqual(prefixWriters(off).length + 1)
 
-          // 5. No mid-cache move but for the rate limit, and a handoff's own placement.
-          for (const session of on.sessions) {
-            let last = Option.none<string>()
-            let moved = false
-            for (const { event } of session.events) {
-              if (
-                event._tag === "CredentialAssigned" &&
-                (event.reason === "compacted" || event.reason === "refused")
-              ) {
-                moved = true
-              }
-              if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.credential)) continue
-              const slot = event.credential.slot
-              if (Option.isSome(last) && last.value !== slot) {
-                expect({ session: session.name, moved }).toEqual({
-                  session: session.name,
-                  moved: true,
-                })
-              }
-              last = Option.some(slot)
-              moved = false
-            }
-          }
+          // 5. No mid-cache move but where the cache starts over by evidence
+          // the placement does not write.
+          expectNoUnexplainedMove(on)
         }).pipe(Effect.timeout("60 seconds")),
       ),
     90_000,
+  )
+
+  it.live(
+    "a branch forked from a spread session runs its first turn on the account that holds its copied window",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = yield* makeSpreadWorld(BURST_SIZE)
+          const cwd = yield* makeTempDirectoryScoped("gent-spread-branch-fork-")
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            cwd,
+            resolver: "drivers",
+            models: "catalog",
+            providerLayer: LanguageModelLayers.testStream(() => Effect.die("no scripted model")),
+            authLayer: apiKeyAuth([
+              [SPREAD, a, "key-a"],
+              [SPREAD, b, "key-b"],
+            ]),
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: SPREAD_MODEL,
+                providers: { [SPREAD]: { authOrder: [a, b], authSpread: [a, b] } },
+              }),
+            ),
+            extensionInputs: [
+              AgentsExtension,
+              SessionToolsExtension,
+              CompactionExtension,
+              world.extension,
+            ],
+          })
+          const { client } = harness
+          const root: SessionKey = { sessionId: harness.sessionId, branchId: harness.branchId }
+          const ended = new Map<string, number>()
+          const turn = (target: SessionKey, content: string) =>
+            Effect.gen(function* () {
+              const earlier = ended.get(target.branchId) ?? 0
+              const done = yield* client.session.events(target).pipe(
+                Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+                Stream.drop(earlier),
+                Stream.runHead,
+                Effect.forkScoped,
+              )
+              yield* client.message.send({ ...target, content })
+              yield* Fiber.join(done)
+              ended.set(target.branchId, earlier + 1)
+            })
+          yield* turn(root, bulk("P-1"))
+          yield* turn(root, bulk("P-2"))
+          const last = (yield* client.message.list({ branchId: root.branchId })).at(-1)
+          if (Predicate.isUndefined(last)) return yield* Effect.die("the root has no message")
+          // The root's cache lives on a: ranked, a fresh run would go to b.
+          const { branchId } = yield* client.branch.fork({
+            sessionId: root.sessionId,
+            fromBranchId: root.branchId,
+            atMessageId: last.id,
+          })
+          const forked: SessionKey = { sessionId: root.sessionId, branchId }
+          yield* turn(forked, "P-fork")
+          const rootEvents = yield* historyOf(client, root)
+          const forkEvents = yield* historyOf(client, forked)
+          expect(stepSlots(rootEvents)).toEqual([a, a])
+          expect(stepSlots(forkEvents)).toEqual([a])
+          expect(
+            forkEvents.flatMap(({ event }) => {
+              if (event._tag !== "CredentialAssigned") return []
+              return [{ slot: event.slot, reason: event.reason }]
+            }),
+          ).toEqual([{ slot: a, reason: "fork" }])
+          // The fork's request read the copied window from a's cache.
+          const forkRequest = world.records.find((record) => record.label === "P-fork")
+          expect(forkRequest?.charge.read).toBeGreaterThan(0)
+        }).pipe(Effect.timeout("30 seconds")),
+      ),
+    45_000,
   )
 })
