@@ -939,10 +939,13 @@ interface TurnLedger {
   /**
    * A step's receipt names `slot` of `provider`: the placement waiting on
    * that account, recorded with this receipt if a request went out there.
-   * The placement waits no more either way: a receipt whose step sent
-   * nothing (stopped by the stop or the model-call budget, or failed before
-   * the provider answered) ends its turn's walk there, and one waiting on
-   * another account served no request.
+   * The placement waits no more either way. A receipt whose step had no
+   * answered request drops it: a step stopped by the stop or the model-call
+   * budget, or failed before the provider answered, ends the turn there,
+   * but a step the provider answered with no part (an empty reply) lets the
+   * turn go on, and a later answered request on that account then records
+   * nothing. That only under-records. One waiting on another account served
+   * no request.
    */
   readonly takePlacement: (
     provider: string,
@@ -2056,7 +2059,8 @@ const poolStanding = Effect.fn("AgentLoop.poolStanding")(function* (params: {
  * response the request got (a refusal, a rate limit, an exhausted quota), so
  * the request went out. A failure with none behind it (a credential that
  * fails as the request is signed, a lost connection, a prompt or toolkit
- * failure) proves nothing went out.
+ * failure, a re-sign that fails after an answered 401) does not prove a
+ * request went out, so it marks nothing.
  */
 // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
 const providerAnswered = (error: unknown): boolean =>
@@ -4504,12 +4508,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * account its cache is on and records nothing; a turn with a receipt of
      * its own (one recovered after a restart) walks from that receipt's
      * account and is never placed again at its start, unless its order no
-     * longer names that account (then it is placed, or, while no pool
-     * account is eligible, stays outside the pool on its order's first
-     * account past it); a pinned run is never placed. The placement is
+     * longer names that account (then the ranking places it, every pool
+     * account held or not); a pinned run is never placed. The placement is
      * recorded with the receipt of the first request that went out on its
-     * account, one the provider answered (`makePublishReceipt`), never before. A fork takes its
-     * parent's account with no ranking, in the pool or not (the parent's own
+     * account, one the provider answered (`makePublishReceipt`), never
+     * before. A fork takes its parent's account with no ranking, in the pool or not (the parent's own
      * choice). A run whose last request fell outside the pool stands by
      * `poolStanding`, as at a window handoff: it stays there while no pool
      * account is eligible, and returns to the pool at the first turn one is,
@@ -4560,7 +4563,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Option.filter(lastReceipt, (receipt) => receipt.provider === provider),
         (receipt) => receipt.slot,
       )
-      // Outside the pool, the run stays only while no pool account is eligible.
+      // Outside the pool, the run stays only while no pool account is
+      // eligible, on the account it runs on. A turn resumed on an account its
+      // order no longer names has none to stay on: the ranking places it,
+      // held accounts or not, and the decision is recorded with its first
+      // answered request's receipt.
       const standing = yield* poolStanding({
         placement,
         provider,
@@ -4568,22 +4575,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         on: lastSlot,
         left: cursor.passed,
       })
-      if (Option.exists(standing, (found) => found.stays)) {
-        if (!resumedOffOrder) {
-          yield* scope.turnLedger.settleCredential(provider, lastSlot)
-          return false
-        }
-        // Resumed on an account its order no longer names, the turn stays
-        // outside the pool on the order's first account past it. With none,
-        // it has no account outside the pool to stay on: the ranking places
-        // it, and the decision is recorded with its first request's receipt.
-        const pastPool = order.value.slots.find(
-          (slot) => !pool.includes(slot) && !cursor.passed.has(slot),
-        )
-        if (Predicate.isNotUndefined(pastPool)) {
-          yield* scope.turnLedger.settleCredential(provider, Option.some(pastPool))
-          return false
-        }
+      if (Option.exists(standing, (found) => found.stays) && !resumedOffOrder) {
+        yield* scope.turnLedger.settleCredential(provider, lastSlot)
+        return false
       }
       // A run still outside the pool here returns, from that account.
       const returnedFrom = Option.map(standing, (found) => found.slot)
