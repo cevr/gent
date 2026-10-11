@@ -682,11 +682,11 @@ describe("account spread", () => {
           // Off: every request on `a`; on: `b` serves sessions too.
           expect(off.records.every((record) => record.account === a)).toBe(true)
           expect(on.records.some((record) => record.account === b)).toBe(true)
-          // The spread's whole cost is `b`'s system prefix, written once.
+          // The spread's whole cost is `b`'s system prefix, written once: the
+          // conversation writes match, so W_on − W_off = PW_on − PW_off.
           expect(writes(on) - prefixWrites(on)).toBe(writes(off) - prefixWrites(off))
           expectPrefixesOnce([off, on])
           expect(prefixWriters(on).length).toBe(prefixWriters(off).length + 1)
-          expect(writes(on) - writes(off)).toBe(prefixWrites(on) - prefixWrites(off))
           expectNoUnexplainedMove(on)
         }).pipe(Effect.timeout("60 seconds")),
       ),
