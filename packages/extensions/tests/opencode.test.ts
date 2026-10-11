@@ -10,7 +10,6 @@ import { BunCrypto } from "@effect/platform-bun"
 import {
   defineExtension,
   ExtensionHost,
-  hostContextUpdateText,
   type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
@@ -19,6 +18,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
+  hostContextUpdateText,
   LanguageModelLayers,
   listModelCatalog,
   MODEL_CATALOG_FIXTURE,
@@ -307,9 +307,12 @@ const generate = (
   hints: ProviderHints = {},
   prompt: Prompt.RawInput = "hi",
 ) =>
-  resolveOn(driver, modelName, apiAuth, hints).pipe(
-    Effect.flatMap((model) => oneGenerate(model, state, gatewayReply, prompt)),
-  )
+  Effect.gen(function* () {
+    // The prompt as the turn sends it: a host context update carries the listed model's mark.
+    const listed = (yield* listOn(driver)).find((model) => model.id.endsWith(`/${modelName}`))
+    const model = yield* resolveOn(driver, modelName, apiAuth, hints)
+    yield* oneGenerate(model, state, gatewayReply, prompt, listed?.hostContextUpdateOptions)
+  })
 
 const RequestBody = Schema.fromJsonString(Schema.JsonObject)
 

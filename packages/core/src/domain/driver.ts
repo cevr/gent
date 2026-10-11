@@ -29,6 +29,7 @@ import {
   type ImageLimit,
   type ImagePartOptions,
   Model,
+  type PromptOptions,
   ModelId,
   ProviderId,
   ReasoningEffort,
@@ -645,7 +646,7 @@ export const acceptedEfforts = (entry: CatalogModel): ReadonlyArray<ReasoningEff
 /** What an API class decides about a catalog model it speaks (`modelFromCatalog`). */
 export type CatalogPlan = Pick<
   ApiClassContribution,
-  "efforts" | "imageLimit" | "imageCost" | "imagePartOptions"
+  "efforts" | "imageLimit" | "imageCost" | "imagePartOptions" | "hostContextUpdateOptions"
 >
 
 /**
@@ -655,7 +656,8 @@ export type CatalogPlan = Pick<
  * effort levels (`Model.efforts`; by default the catalog's effort list),
  * carry at most the class's tool images (`Model.imageLimit`), and count and
  * send each image as the class does (`Model.imageCost`,
- * `Model.imagePartOptions`).
+ * `Model.imagePartOptions`), and mark a host context update as the class's
+ * driver reads it (`Model.hostContextUpdateOptions`).
  */
 export const modelFromCatalog = (
   providerId: string,
@@ -684,6 +686,7 @@ export const modelFromCatalog = (
       imageLimit: apiClass.imageLimit,
       imageCost: apiClass.imageCost?.(entry),
       imagePartOptions: apiClass.imagePartOptions,
+      hostContextUpdateOptions: apiClass.hostContextUpdateOptions,
       efforts: Option.getOrUndefined(Option.liftPredicate(levels, (each) => each.length > 0)),
     }),
   })
@@ -784,6 +787,12 @@ export interface ApiClassContribution {
    * (`Model.imagePartOptions`): the detail its `imageCost` counts at.
    */
   readonly imagePartOptions?: ImagePartOptions
+  /**
+   * The provider options the user message that carries a later system
+   * message adds in this class's requests (`Model.hostContextUpdateOptions`):
+   * the mark the class's driver tells it from the user's own text by.
+   */
+  readonly hostContextUpdateOptions?: PromptOptions
   readonly resolveModel: (
     request: ApiClassRequest,
   ) => Effect.Effect<ProviderResolution, DriverError>

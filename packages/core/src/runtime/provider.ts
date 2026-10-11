@@ -4433,15 +4433,10 @@ export const makeLanguageModelLayer = (params: {
     options: ProviderOptions,
   ) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
   readonly generateText: (options: ProviderOptions) => Effect.Effect<string, AiError.AiError>
-  /** Whether the model takes a system message in its history; unsaid when absent. */
-  readonly supportsSystemMessagesInHistory?: boolean
 }): Layer.Layer<LanguageModel.LanguageModel> =>
   Layer.effect(
     LanguageModel.LanguageModel,
     LanguageModel.make({
-      supportsSystemMessagesInHistory: Option.getOrUndefined(
-        Option.map(Option.fromUndefinedOr(params.supportsSystemMessagesInHistory), Effect.succeed),
-      ),
       generateText: (options) =>
         params
           .generateText(options)

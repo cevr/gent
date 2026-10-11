@@ -169,6 +169,7 @@ export {
   SessionReachError,
   type ExtensionContextService,
   type ExtensionModelsService,
+  type TurnNotice,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // `runProcess` runs a command to completion over the Effect `ChildProcessSpawner`.
@@ -190,8 +191,6 @@ export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../d
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // A context window's marker, as the runtime wrote it; a copy of its notice is no marker.
 export { contextWindowOf } from "../runtime/model-context.js"
-// A later system message core sends a model as a user message: a driver keeps its cache markers off it.
-export { hostContextUpdateText, isHostContextUpdateText } from "../runtime/model-context.js"
 // A tool hands the model an image by reference: save its bytes, put the `ToolImage` in the output.
 export { saveToolImage, ToolImage, ToolImageError, toolImageFile } from "../runtime/tool-image.js"
 // Launched from home, the project's `.gent` is the user's; every reader of project files asks this.

@@ -89,12 +89,13 @@ export const ImageCost = Schema.TaggedUnion({
 })
 export type ImageCost = typeof ImageCost.Type
 
+/** Provider options a prompt message or part carries, by provider (`Prompt.ProviderOptions`). */
+export const PromptOptions = Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Json))
+export type PromptOptions = typeof PromptOptions.Type
+
 /** Provider options an image part of a request carries, by provider (`Prompt.FilePart.options`). */
-export const ImagePartOptions = Schema.Record(
-  Schema.String,
-  Schema.Record(Schema.String, Schema.Json),
-)
-export type ImagePartOptions = typeof ImagePartOptions.Type
+export const ImagePartOptions = PromptOptions
+export type ImagePartOptions = PromptOptions
 
 // Model - individual model from a provider (built-in or custom)
 
@@ -152,6 +153,14 @@ export class Model extends Schema.Class<Model>("Model")({
    * detail its `imageCost` assumes, so the estimate and the request agree.
    */
   imagePartOptions: Schema.optional(ImagePartOptions),
+  /**
+   * The provider options the user message that carries a later system
+   * message adds (`promptForModel`), as the model's API class says
+   * (`ApiClassContribution.hostContextUpdateOptions`): the mark its driver
+   * tells that message from the user's own text by, on a wire that keeps no
+   * other trace of gent's own mark. Absent: nothing added.
+   */
+  hostContextUpdateOptions: Schema.optional(PromptOptions),
   /**
    * How long the provider keeps a request's prompt cached after the request,
    * in milliseconds, as the model's driver says. A turn that starts on a large

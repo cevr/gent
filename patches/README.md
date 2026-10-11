@@ -141,17 +141,25 @@ undeclared-name part. It patches `dist` only; the shipped `src` copy keeps
 the upstream text.
 
 A later system message (the runtime's turn notices) needs no patch. 4.0.2
-keeps it a `system` message in history for a model that takes one
-(`supportsMidConversationSystemMessages`, which `LanguageModel`
-reports as `supportsSystemMessagesInHistory`) and appends it to the
-top-level `system` for the others (Claude Sonnet 4.6, Opus 4.7, Sonnet 5),
-which would change the cached prefix each turn. Core reads that capability
-and sends such a message to a model without it as a
-`<host-context-update>` user message, at its place
-(`promptForModel` in `packages/core/src/runtime/model-context.ts`), the
-bytes this patch built through 2026-10-11. The OpenCode gateways' Messages
-models set `midConversationSystemMessages: false`, so they get the same
-form.
+keeps later system messages as `system` messages in history for a model
+that takes one (`supportsMidConversationSystemMessages` in its capability
+table, which `LanguageModel` reports as `supportsSystemMessagesInHistory`)
+when each has a place: after a user turn, and last or before an assistant
+turn. Otherwise, for a model the table marks false or when any one of them
+cannot be placed, it appends every one of them to the top-level `system`,
+which would change the cached prefix each turn. Core decides the role
+before the SDK sees the prompt (`promptForModel` in
+`packages/core/src/runtime/model-context.ts`): a later system message
+stays one only when its text is wholly gent's own, the model reports the
+capability, and it has a place; every other goes as a
+`<host-context-update>` user message at its place, the bytes this patch
+built through 2026-10-11, so the SDK never moves one. The OpenCode
+gateways' Messages models set `midConversationSystemMessages: false`, so
+they get the same form. The table is optimistic: an id it does not know
+counts as taking a later system message. A new Claude model that does not
+would refuse a trusted notice with a 400 where the old wrap always worked,
+so recheck the table on each SDK bump (4.0.3 is held back: it needs
+`effect` 4.0.3).
 
 ## `@effect/ai-openai-compat@4.0.2`
 

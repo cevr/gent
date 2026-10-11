@@ -25,7 +25,6 @@ import {
   catalogModelEntry,
   type CatalogPlan,
   clampEffort,
-  isRecordArray,
   type JsonRecord,
   Model,
   omitUndefined,
@@ -38,7 +37,6 @@ import {
   type ReasoningEffort,
   type ReasoningOption,
   type RunEffort,
-  isHostContextUpdateText,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -1356,21 +1354,6 @@ export const writesPromptCache = (hints: Option.Option<ProviderHints>): boolean 
 /** True for a content block that takes `cache_control`. */
 export const isCacheableBlock = (block: JsonRecord): boolean =>
   CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
-
-/**
- * True for a user message that carries a later system message (core's
- * `promptForModel` wraps one for a model that takes none in its history),
- * not the conversation.
- */
-export const isHostContextUpdate = (message: JsonRecord): boolean => {
-  const content = message["content"]
-  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
-  return content.every(isHostContextUpdateBlock)
-}
-
-/** True for a text block that carries a later system message (`hostContextUpdateText`). */
-export const isHostContextUpdateBlock = (block: JsonRecord): boolean =>
-  block["type"] === "text" && isHostContextUpdateText(block["text"])
 
 // ── api keys ────────────────────────────────────────────────────────────────
 

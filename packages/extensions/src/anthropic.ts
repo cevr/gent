@@ -77,8 +77,6 @@ import {
   authorizedClient,
   freshEnoughAt,
   isCacheableBlock,
-  isHostContextUpdate,
-  isHostContextUpdateBlock,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -1613,9 +1611,10 @@ export const transformPayload = (
  *   2. the last cacheable block of the last conversation message, so each
  *      step reads the previous step's conversation back from the cache. A
  *      later system message after it (the runtime's turn notices: a system
- *      message the SDK places in the conversation, or a
- *      `<host-context-update>` user message core wrapped it in for a model
- *      that takes none there) takes no marker. It changes from turn to turn,
+ *      message the SDK places in the conversation, or the
+ *      `<host-context-update>` user message core wraps it in, which the
+ *      driver knows by its mark, `flagHostContextUpdates`) takes no
+ *      marker. It changes from turn to turn,
  *      so a marker on it would write an entry no later request reads, and
  *      the next step would find no entry at the conversation's end. An
  *      effort marker (`effortMarker`), a system message too, has no content
@@ -2114,20 +2113,25 @@ const anthropicClientLayer = <R>(
         (request: HttpClientRequest.HttpClientRequest) =>
           Option.match(requestJsonObject(request), {
             onNone: () => Effect.succeed(request),
-            onSome: (payload) =>
-              path
-                .payload(applyRequestPlan(withHostContextUpdatesApart(payload), plan, carrier))
+            onSome: (payload) => {
+              const flagged = flagHostContextUpdates(payload)
+              return path
+                .payload(applyRequestPlan(separateHostContextUpdates(flagged), plan, carrier))
                 .pipe(
                   Effect.provideContext(pathContext),
                   Effect.map((body) => {
-                    let rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
+                    let rewritten = HttpClientRequest.bodyJsonUnsafe(
+                      request,
+                      unflagHostContextUpdates(body),
+                    )
                     if (bindsThinking(body)) rewritten = withBeta(rewritten, THINKING_BINDING_BETA)
                     if (carriesEffortMarker(body)) {
                       rewritten = withBeta(rewritten, MID_CONVERSATION_EFFORT_BETA)
                     }
                     return rewritten
                   }),
-                ),
+                )
+            },
           }),
       )
       const replies = Layer.effect(
@@ -2750,17 +2754,83 @@ const withBeta = (
   return HttpClientRequest.setHeader(request, "anthropic-beta", [...current, beta].join(","))
 }
 
+// ── host context updates ──
+//
+// Core sends a later system message it may not send as one (a turn notice
+// with outside text, or one to a model that takes none in its history) as a
+// `<host-context-update>` user message (`promptForModel`), marked with the
+// Messages class's own options (`MESSAGES_CLASS.hostContextUpdateOptions`):
+// gent's key in the block's `cache_control`, the one part option the SDK
+// carries to the wire, beside any cache marker the message had. The driver
+// knows an update by that mark, never by its text: a user may type the wrap.
+
+/** The key of gent's mark in an update's `cache_control`, and of the flag its block carries while the driver rewrites the body. */
+const HOST_CONTEXT_UPDATE_MARK = "gent_host_context_update"
+
+/** The payload with `rewrite` applied to each block of each message's content. */
+const mapMessageBlocks = (
+  payload: JsonRecord,
+  rewrite: (block: JsonRecord) => JsonRecord,
+): JsonRecord => {
+  const messages = payload["messages"]
+  if (!isRecordArray(messages)) return payload
+  return {
+    ...payload,
+    messages: messages.map((message) => {
+      const content = message["content"]
+      if (!isRecordArray(content)) return message
+      return { ...message, content: content.map(rewrite) }
+    }),
+  }
+}
+
+/** `record` without `key`, its other keys in their order. */
+const withoutKey = (record: JsonRecord, key: string): JsonRecord =>
+  Object.fromEntries(Object.entries(record).filter(([each]) => each !== key))
+
+/**
+ * The payload with each block of a host context update flagged and its mark
+ * taken out of `cache_control`: the cache marker it had stays, and a block
+ * with none has the SDK's empty `cache_control` again.
+ */
+const flagHostContextUpdates = (payload: JsonRecord): JsonRecord =>
+  mapMessageBlocks(payload, (block) => {
+    const control = block["cache_control"]
+    if (!isRecord(control) || control[HOST_CONTEXT_UPDATE_MARK] !== true) return block
+    const marker = Option.liftPredicate(
+      withoutKey(control, HOST_CONTEXT_UPDATE_MARK),
+      (rest) => Object.keys(rest).length > 0,
+    )
+    return { ...block, cache_control: Option.getOrNull(marker), [HOST_CONTEXT_UPDATE_MARK]: true }
+  })
+
+/** The payload without the flags `flagHostContextUpdates` set: the wire never carries them. */
+const unflagHostContextUpdates = (payload: JsonRecord): JsonRecord =>
+  mapMessageBlocks(payload, (block) => {
+    if (!(HOST_CONTEXT_UPDATE_MARK in block)) return block
+    return withoutKey(block, HOST_CONTEXT_UPDATE_MARK)
+  })
+
+/** True for a block of a host context update (`flagHostContextUpdates`). */
+const isHostContextUpdateBlock = (block: JsonRecord): boolean =>
+  block[HOST_CONTEXT_UPDATE_MARK] === true
+
+/** True for a user message that is a host context update, not the conversation. */
+const isHostContextUpdate = (message: JsonRecord): boolean => {
+  const content = message["content"]
+  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
+  return content.every(isHostContextUpdateBlock)
+}
+
 /**
  * The payload with each host context update its own user message, as the
- * wire had it when the SDK built them: core sends a later system message to
- * a model that takes none in its history as a user message
- * (`promptForModel`), and the SDK joins adjacent user and tool messages into
- * one. Each run of updates in a user message, and each run of the rest, goes
- * apart again, so the conversation before an update keeps its bytes and
- * takes the tail marker, and an effort marker lands where it would without
- * the update.
+ * wire had it when the SDK built them: the SDK joins adjacent user and tool
+ * messages into one. Each update, and each run of the rest, goes apart
+ * again, so the conversation before an update keeps its bytes and takes the
+ * tail marker, and an effort marker lands where it would without the update.
+ * A message with no update keeps its blocks together.
  */
-const withHostContextUpdatesApart = (payload: JsonRecord): JsonRecord => {
+const separateHostContextUpdates = (payload: JsonRecord): JsonRecord => {
   const messages = payload["messages"]
   if (!isRecordArray(messages)) return payload
   return {
@@ -2774,7 +2844,8 @@ const withHostContextUpdatesApart = (payload: JsonRecord): JsonRecord => {
         const first = run?.[0]
         const sameRun =
           Predicate.isNotUndefined(first) &&
-          isHostContextUpdateBlock(first) === isHostContextUpdateBlock(block)
+          !isHostContextUpdateBlock(first) &&
+          !isHostContextUpdateBlock(block)
         if (Predicate.isNotUndefined(run) && sameRun) run.push(block)
         else runs.push([block])
       }
@@ -2844,20 +2915,34 @@ const carriesToolResult = (message: JsonRecord): boolean => {
   return isRecordArray(content) && content.some((block) => block["type"] === "tool_result")
 }
 
+/** True for a user turn with new input: a block that answers no tool call. */
+const carriesNewInput = (message: JsonRecord): boolean => {
+  const content = message["content"]
+  return (
+    message["role"] === "user" &&
+    isRecordArray(content) &&
+    content.some((block) => block["type"] !== "tool_result")
+  )
+}
+
 /**
- * The messages with a marker at each effort change. A marker takes effect
- * from the next user turn (platform.claude.com/docs/en/build-with-claude/effort,
- * read 2026-10-04), so a change at run `k` goes before the user turn after
- * run `k - 1`; a user turn that answers a tool call keeps its place right
- * after the call, so the marker goes after it, and it takes effect at run `k`
- * only when another user turn follows before that run. The place depends only
- * on the messages up to that turn, so the next request has the marker at the
- * same place. None, so the request is plain and its top level names the
- * reply's effort, when the assistant turns do not match the receipts' runs
- * (the SDK merged or dropped one), or a change would take effect only after
- * its run: a change right after a tool result, a prompt the SDK merged into
- * the tool result before it, or a tool result followed only by a system
- * message the SDK keeps in the conversation (a turn notice).
+ * The messages with a marker at each effort change
+ * (platform.claude.com/docs/en/build-with-claude/effort, "Per-message
+ * effort", read 2026-10-11). A marker right after a user turn with new input
+ * sets the effort of the reply to that turn; anywhere else it takes effect
+ * from the next user turn with new input, and a turn of tool results only is
+ * none. So a change at run `k` goes before the user turn after run `k - 1`;
+ * a user turn that answers a tool call keeps its place right after the call,
+ * so the marker goes after it, where it applies to run `k` when that turn
+ * also carries new input (a prompt the SDK merged into the tool result), or
+ * when a user turn with new input follows before the run. The place depends
+ * only on the messages up to that turn, so the next request has the marker
+ * at the same place. None, so the request is plain and its top level names
+ * the reply's effort, when the assistant turns do not match the receipts'
+ * runs (the SDK merged or dropped one), or a change would take effect only
+ * after its run: a turn of tool results only followed by no user turn with
+ * new input (at most a system message the SDK keeps in the conversation, a
+ * turn notice).
  */
 const withEffortMarkers = (
   messages: ReadonlyArray<JsonRecord>,
@@ -2874,16 +2959,17 @@ const withEffortMarkers = (
     if (Predicate.isUndefined(previous)) return Option.none()
     const turn = messages[previous + 1]
     if (Predicate.isUndefined(turn)) return Option.none()
+    const answers = carriesToolResult(turn)
     let place = previous + 1
-    if (carriesToolResult(turn)) place = previous + 2
+    if (answers) place = previous + 2
     // The run starts at its assistant message, or the reply at the end.
     const run = Option.getOrElse(
       Option.fromUndefinedOr(assistants[change.run]),
       () => messages.length,
     )
-    // A system message the SDK keeps in the conversation (a turn notice) is no user turn.
-    const turns = messages.slice(place, run)
-    if (!turns.some((message) => message["role"] === "user")) return Option.none()
+    const appliesToRun =
+      (answers && carriesNewInput(turn)) || messages.slice(place, run).some(carriesNewInput)
+    if (!appliesToRun) return Option.none()
     places.set(place, change.effort)
   }
   const result: Array<JsonRecord> = []
@@ -2892,6 +2978,9 @@ const withEffortMarkers = (
     if (Predicate.isNotUndefined(effort)) result.push(effortMarker(effort))
     result.push(message)
   }
+  // A change for the reply after a turn that merged a prompt into its tool result goes last.
+  const last = places.get(messages.length)
+  if (Predicate.isNotUndefined(last)) result.push(effortMarker(last))
   return Option.some(result)
 }
 
@@ -3001,6 +3090,8 @@ export const MESSAGES_CLASS: ApiClassContribution = {
   // (3,888 tokens for 2000x1500) where older models scale down to about 1,600, so no cap
   // applies: every model is bounded, and an older one is overcounted (compaction comes early).
   imageCost: () => ({ _tag: "Pixels", pixelsPerToken: 750 }),
+  // The mark the driver knows a host context update by (`flagHostContextUpdates`).
+  hostContextUpdateOptions: { anthropic: { cacheControl: { [HOST_CONTEXT_UPDATE_MARK]: true } } },
   resolveModel: (request) =>
     Effect.map(loadAnthropicSdk, (sdk) =>
       AiModel.make(

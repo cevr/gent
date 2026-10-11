@@ -106,7 +106,11 @@ import {
   admitChildSessionDepth,
   makeRequestDeduper,
 } from "../../src/runtime/session"
-import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
+import {
+  isHostContextUpdate,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "../../src/runtime/model-context"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
 import { SqlClient } from "effect/sql"
@@ -254,11 +258,13 @@ const createSessionBranchWithIds = (input: {
     )
     return input
   })
+/** The latest user message's text; a turn notice the host wraps as one is not the user's. */
 const latestUserText = (request: { readonly prompt: Prompt.RawInput }) =>
   (() => {
     const latest = [...Prompt.make(request.prompt).content]
       .reverse()
-      .find((message) => message.role === "user")
+      .filter((message) => message.role === "user")
+      .find((message) => !isHostContextUpdate(message))
     if (Predicate.isUndefined(latest)) return ""
     return latest.content
       .filter((part): part is Prompt.TextPart => part.type === "text")

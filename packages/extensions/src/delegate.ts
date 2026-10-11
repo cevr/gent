@@ -1227,7 +1227,8 @@ const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNotice
  * parent's next turn believes they still run. A child is one line however
  * often it was stopped, the newest first, at most `maximumNoticeChildren`;
  * the rest are a count. Every step reads it; an answered turn clears exactly
- * the rows it showed, and a row the cap left out stays for the next turn.
+ * the rows it showed, and a row the cap left out stays for the next turn. It
+ * is untrusted: each line holds the task the model wrote for the child.
  *
  * The read takes the registry lock. A completion delivered over a stop's
  * claim is sent before its row is written, and the turn it wakes must not
@@ -1261,6 +1262,7 @@ const stopNotices = Effect.fn("Delegate.stopNotices")(function* () {
       id: "delegate-stopped",
       keys: named.flat().map(stopNoticeKey),
       content: `# Stopped children\n\nThe user interrupted your turn, and that stopped these children before they finished. They are not running, and no completion will come from them. Tell the user which children stopped; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
+      trusted: false,
     },
   ]
 })

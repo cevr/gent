@@ -152,17 +152,19 @@ export const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
  * Drives one `LanguageModel.generateText({prompt})` through `layer` with
  * `FetchHttpClient.Fetch` overridden to capture into `state` and reply via
  * `responder`, on the prompt as the turn sends it to the model
- * (`promptForModel`). A test yields it inside its own Effect, so it composes
- * with `Effect.exit`, `TestClock` and the rest; a failure is a defect.
+ * (`promptForModel`, with the model's `hostContextUpdateOptions`). A test
+ * yields it inside its own Effect, so it composes with `Effect.exit`,
+ * `TestClock` and the rest; a failure is a defect.
  */
 export const oneGenerate = (
   layer: Layer.Layer<LanguageModel.LanguageModel>,
   state: FakeFetchState,
   responder: FakeResponder,
   prompt: Prompt.RawInput = "hi",
+  hostContextUpdateOptions: Prompt.ProviderOptions = {},
 ): Effect.Effect<void> =>
   LanguageModel.LanguageModel.pipe(
-    Effect.flatMap((model) => promptForModel(Prompt.make(prompt), model)),
+    Effect.flatMap((model) => promptForModel(Prompt.make(prompt), model, hostContextUpdateOptions)),
     Effect.flatMap((sent) => LanguageModel.generateText({ prompt: sent })),
     Effect.asVoid,
     Effect.provide(Layer.provideMerge(layer, fakeFetchLayer(state, responder))),

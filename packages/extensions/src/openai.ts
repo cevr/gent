@@ -1398,8 +1398,11 @@ const isModelItem = (item: Schema.Json): boolean => {
  * at an earlier run goes right before the run's first item, so after the
  * tool outputs or the user turn before it, never between a call and its
  * output. A change for the reply the request asks for goes at the end of the
- * conversation, before the trailing system and developer items (the turn
- * notices, which the next request does not repeat). The item holds until a
+ * conversation, before any trailing system and developer items, which the
+ * next request may not repeat. Core sends none to an OpenAI model: its SDK
+ * does not say the model takes a system message in its history, so a turn
+ * notice goes as a user message (`promptForModel`), and the change after
+ * it. The item holds until a
  * later one overrides it. The body is unchanged when its model runs do not
  * match the receipts' runs.
  */

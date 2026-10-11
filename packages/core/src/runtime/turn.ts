@@ -3279,12 +3279,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ...modelRequest,
     hints: { ...modelRequest.hints, reasoningHistory },
   }
-  // The prompt places its later system messages (the notices) as the
-  // resolved model takes them (`promptForModel`).
+  // The prompt gives its later system messages (the notices) the role their
+  // provenance and the resolved model allow (`promptForModel`).
   const wireStream = Stream.unwrap(
     Effect.gen(function* () {
       const model = yield* resolveSelectedModel(stepRequest)
-      const prompt = yield* promptForModel(transcript, model)
+      const prompt = yield* promptForModel(
+        transcript,
+        model,
+        modelOption.value.hostContextUpdateOptions,
+      )
       if (resolved.tools.length > 0) {
         if (params.finalStep) {
           return model.streamText({

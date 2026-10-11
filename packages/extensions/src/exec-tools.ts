@@ -1269,7 +1269,11 @@ const noticeCommand = (command: string) => {
   return `${headChars(line, maximumNoticeCommandChars - 1)}…`
 }
 
-/** One notice naming at most `maximumNoticeJobs` jobs, the rest a count; none for no jobs. */
+/**
+ * One notice naming at most `maximumNoticeJobs` jobs, the rest a count; none
+ * for no jobs. It is untrusted: each line holds a command the model wrote,
+ * and a finished job's holds the command's output.
+ */
 const jobNotice = <J extends { readonly toolCallId: ToolCallId }>(
   jobs: ReadonlyArray<J>,
   params: {
@@ -1290,6 +1294,7 @@ const jobNotice = <J extends { readonly toolCallId: ToolCallId }>(
       id: params.id,
       keys: named.map((job) => job.toolCallId),
       content: `${params.intro}\n\n${lines.join("\n")}`,
+      trusted: false,
     },
   ]
 }

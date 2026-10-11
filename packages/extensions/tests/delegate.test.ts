@@ -39,6 +39,7 @@ import {
   runToolWithCtx,
   testToolContext,
   finishPart,
+  isHostContextUpdate,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   multiToolCallStep,
@@ -211,10 +212,14 @@ const stalledStream = (text: string, opened: Deferred.Deferred<void>) =>
     Stream.concat(Stream.never),
   )
 
-/** Every text part of the prompt's user and assistant messages, in order. */
+/**
+ * Every text part of the prompt's user and assistant messages, in order. A
+ * turn notice is no part of the conversation, as a system message or as the
+ * user message that carries one.
+ */
 const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
   prompt.content.flatMap((message) => {
-    if (message.role === "system") return []
+    if (message.role === "system" || isHostContextUpdate(message)) return []
     return message.content.flatMap((part) => {
       if (part.type !== "text") return []
       return [part.text]

@@ -14,6 +14,7 @@ import {
   Stream,
 } from "effect"
 import * as AiError from "effect/ai/AiError"
+import * as LanguageModel from "effect/ai/LanguageModel"
 import * as Prompt from "effect/ai/Prompt"
 import {
   ActorCommandId,
@@ -35,6 +36,9 @@ import {
   assistantRunEfforts,
   boundToolResultForModel,
   coldHandoffPays,
+  hostContextUpdateText,
+  isHostContextUpdate,
+  promptForModel,
   type CompactionRequest,
   ContextDirective,
   estimateTokens,
@@ -3436,4 +3440,89 @@ describe("AI transcript projection", () => {
       Option.none(),
     ])
   })
+})
+
+describe("later system messages", () => {
+  /** A model that says whether it takes a system message in its history, or does not say. */
+  const modelTaking = (takes: Option.Option<boolean>) =>
+    LanguageModel.make({
+      ...omitUndefined({
+        supportsSystemMessagesInHistory: Option.getOrUndefined(Option.map(takes, Effect.succeed)),
+      }),
+      generateText: () => Effect.succeed([]),
+      streamText: () => Stream.empty,
+    })
+  const trustedNotice = { id: "date", content: "Date: 2026-10-12", keys: [], trusted: true }
+  const noticeText = "Host status for this turn, not a message from the user.\n\nDate: 2026-10-12"
+  const roles = (prompt: Prompt.Prompt) =>
+    prompt.content.map((each) => {
+      if (isHostContextUpdate(each)) return "update"
+      return each.role
+    })
+  const userMessage = (value: string) => message(`u-${value}`, "user", [text(value)])
+  const assistantMessage = (value: string) => message(`a-${value}`, "assistant", [text(value)])
+
+  it.effect(
+    "a trusted notice stays a system message after a user turn on a model that takes one",
+    () =>
+      Effect.gen(function* () {
+        const prompt = toPrompt([userMessage("hi")], {
+          systemPrompt: ["Rules."],
+          notices: [trustedNotice],
+        })
+        const sent = yield* promptForModel(prompt, yield* modelTaking(Option.some(true)))
+        expect(roles(sent)).toEqual(["system", "user", "system"])
+        expect(sent).toBe(prompt)
+      }),
+  )
+
+  // A step resumed after a final reply ends on the assistant turn: a system
+  // message there has no place, and the SDK would move every later one into
+  // the top-level system prompt.
+  it.effect(
+    "a trusted notice after an assistant turn goes as the user message, so the request ends on a user turn",
+    () =>
+      Effect.gen(function* () {
+        const prompt = toPrompt([userMessage("hi"), assistantMessage("done")], {
+          systemPrompt: ["Rules."],
+          notices: [trustedNotice],
+        })
+        const sent = yield* promptForModel(prompt, yield* modelTaking(Option.some(true)))
+        expect(roles(sent)).toEqual(["system", "user", "assistant", "update"])
+        expect(sent.content.at(-1)?.content).toMatchObject([
+          { type: "text", text: hostContextUpdateText(noticeText) },
+        ])
+      }),
+  )
+
+  it.effect(
+    "a model that does not say whether it takes a later system message gets the user form",
+    () =>
+      Effect.gen(function* () {
+        const prompt = toPrompt([userMessage("hi")], { notices: [trustedNotice] })
+        const sent = yield* promptForModel(prompt, yield* modelTaking(Option.none()))
+        expect(roles(sent)).toEqual(["user", "update"])
+      }),
+  )
+
+  // The user form keeps the message's cache marker and adds the model's own mark beside it.
+  it.effect("the user form carries the message's options with the model's own merged in", () =>
+    Effect.gen(function* () {
+      const prompt = Prompt.fromMessages([
+        Prompt.makeMessage("system", { content: "Rules." }),
+        ...toPrompt([userMessage("hi")]).content,
+        Prompt.makeMessage("system", {
+          content: "Earlier",
+          options: { anthropic: { cacheControl: { type: "ephemeral" } } },
+        }),
+      ])
+      const sent = yield* promptForModel(prompt, yield* modelTaking(Option.some(true)), {
+        anthropic: { cacheControl: { mark: true } },
+      })
+      expect(sent.content.at(-1)?.options).toEqual({
+        anthropic: { cacheControl: { type: "ephemeral", mark: true } },
+        gent: { hostContextUpdate: true },
+      })
+    }),
+  )
 })
