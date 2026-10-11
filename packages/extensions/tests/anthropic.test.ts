@@ -5353,6 +5353,67 @@ describe("linked rotation: a held rotation gent cannot read", () => {
         expect(yield* fs.readFileString(aside)).toBe("{torn")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
+
+  it.scopedLive(
+    "a move aside whose record cannot be written keeps one sibling however often it is retried, and lands on it once the disk takes writes",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const authDirectory = path.join(yield* fs.makeTempDirectoryScoped(), "auth")
+        const rotations = path.join(authDirectory, ".rotations", "anthropic")
+        const file = path.join(rotations, LINKED_KEY)
+        yield* fs.makeDirectory(rotations, { recursive: true })
+        yield* fs.writeFileString(file, "{torn")
+        // A disk that admits a new name but not new bytes in the rotations
+        // directory, as a full one can: the link lands, the staged record fails.
+        const recordsFail: FileSystem.FileSystem = {
+          ...fs,
+          writeFileString: (target, data, options) => {
+            if (path.dirname(target) === rotations) {
+              return fs.writeFileString(path.join(authDirectory, "absent", "staged"), data)
+            }
+            return fs.writeFileString(target, data, options)
+          },
+        }
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = numberedEndpoint()
+        const store = {
+          lockSourceRotation: yield* storeRotationLock(authDirectory, "anthropic").pipe(
+            Effect.provideService(FileSystem.FileSystem, recordsFail),
+          ),
+        }
+        const signIn = linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, store)
+        const siblings = fs
+          .readDirectory(rotations)
+          .pipe(Effect.map((names) => names.filter((name) => name !== LINKED_KEY)))
+        for (let request = 1; request <= 3; request++) {
+          const driver = yield* linkedDriver("darwin", keychain.spawner)
+          const failure = yield* resolveFailure(driver, signIn, endpoint.respond)
+          expect(Option.exists(failure, (error) => error.message.includes(file))).toBe(true)
+          expect(yield* fs.readFileString(file)).toBe("{torn")
+          expect((yield* siblings).length).toBe(1)
+        }
+        const kept = yield* siblings
+        const aside = path.join(rotations, kept[0] ?? "")
+        expect(yield* fs.readFileString(aside)).toBe("{torn")
+        // The disk takes writes again: the next move records that same sibling.
+        const restored = {
+          lockSourceRotation: yield* storeRotationLock(authDirectory, "anthropic"),
+        }
+        const landed = yield* resolveFailure(
+          yield* linkedDriver("darwin", keychain.spawner),
+          linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, restored),
+          endpoint.respond,
+        )
+        expect(Option.exists(landed, (error) => error.message.includes(aside))).toBe(true)
+        expect(yield* siblings).toEqual(kept)
+        expect(yield* fs.readFileString(aside)).toBe("{torn")
+        expect(writesOf(keychain.calls)).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
 })
 
 describe("linked rotation: failures that may pass", () => {

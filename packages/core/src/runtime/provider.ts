@@ -602,10 +602,35 @@ export class Auth extends Context.Service<Auth, AuthService>()(
         const decodeRotation = Schema.decodeEffect(rotationCodec)
         const encodeRotation = Schema.encodeEffect(rotationCodec)
         const movedAsideFailure = "Failed to move a held token rotation aside"
-        // A second name for `file` beside it, `<file>.undecodable-<epoch ms>`,
+        // A name `<file>.undecodable-…` beside `file` that is already the same
+        // file (its device and inode): a link an earlier move made before its
+        // record failed to land, or before its process ended.
+        const linkedAside = (file: string) =>
+          Effect.gen(function* () {
+            const info = yield* fs.stat(file)
+            if (Option.isNone(info.ino)) return Option.none<string>()
+            const inode = info.ino.value
+            const directory = pathService.dirname(file)
+            const prefix = `${pathService.basename(file)}.undecodable-`
+            for (const name of yield* fs.readDirectory(directory)) {
+              if (!name.startsWith(prefix)) continue
+              const aside = pathService.join(directory, name)
+              const sibling = yield* Effect.option(fs.stat(aside))
+              const same = Option.exists(
+                sibling,
+                (found) => found.dev === info.dev && Option.contains(found.ino, inode),
+              )
+              if (same) return Option.some(aside)
+            }
+            return Option.none<string>()
+          }).pipe(Effect.mapError(wrap(movedAsideFailure)))
+        // A second name for `file` beside it: the one a link already made, so
+        // a move that is retried leaves one name; else `<file>.undecodable-<epoch ms>`,
         // counted on when a name of that millisecond is taken.
         const linkAside = (file: string) =>
           Effect.gen(function* () {
+            const made = yield* linkedAside(file)
+            if (Option.isSome(made)) return made.value
             const stamp = `${file}.undecodable-${yield* Clock.currentTimeMillis}`
             const attempt = (n: number): Effect.Effect<string, AuthError> => {
               let aside = stamp
@@ -754,7 +779,8 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             // renamed over the first: no step leaves the place empty, where
             // the next read would find nothing held and spend the login the
             // bytes may have replaced. A link that fails changes nothing; a
-            // record that fails leaves the bytes under both names. A link
+            // record that fails leaves the bytes under both names, and the
+            // next move takes that sibling again rather than a new one. A link
             // never replaces a name, so an earlier sibling is never lost.
             moveRotationAside: (provider, source, base) =>
               Effect.gen(function* () {

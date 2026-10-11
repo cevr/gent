@@ -348,7 +348,8 @@ export interface SourceRotation {
    * Move the source's file that does not decode aside, byte for byte, to a
    * sibling it returns, and keep the record of it (`QuarantinedRotation`)
    * with `base` at its place, in one step; with no base, keep nothing there.
-   * A move that fails leaves the file where it is.
+   * A move that fails leaves the file where it is; one that is retried
+   * reuses the sibling an earlier attempt made, so the bytes keep one other name.
    */
   readonly moveAside: (base: Option.Option<string>) => Effect.Effect<string, ProviderAuthError>
 }
