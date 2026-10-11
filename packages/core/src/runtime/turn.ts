@@ -914,7 +914,10 @@ interface CredentialCursor {
   readonly passed: ReadonlySet<CredentialSlot>
   /** The slot a resumed turn ran on, until the next selection reads it. */
   readonly resumedAt: Option.Option<CredentialSlot>
-  /** Where a spread run's walk starts: its placement (`settleCredential`). */
+  /**
+   * Where a spread run's walk stands: its placement (`settleCredential`), the
+   * slot a move settled, or the slot a resumed turn's receipts ran on.
+   */
   readonly at: Option.Option<CredentialSlot>
   /** True once the turn decided where its spread walk starts. */
   readonly settled: boolean
@@ -1063,11 +1066,20 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         const cursor = cursorOf(current, provider)
         if (Option.isNone(cursor.resumedAt)) return [cursor.passed, current]
         // An order that no longer names the slot leaves nothing before it.
-        const before = slots.slice(0, Math.max(slots.indexOf(cursor.resumedAt.value), 0))
+        const index = slots.indexOf(cursor.resumedAt.value)
+        const before = slots.slice(0, Math.max(index, 0))
         const passed: ReadonlySet<CredentialSlot> = new Set([...cursor.passed, ...before])
+        // The walk now stands on the resumed slot, as a live turn's stands on
+        // the slot its last move settled: a handoff or a move reads it there.
+        const at = Option.filter(cursor.resumedAt, () => index >= 0)
         return [
           passed,
-          new Map(current).set(provider, { ...cursor, passed, resumedAt: Option.none() }),
+          new Map(current).set(provider, {
+            ...cursor,
+            passed,
+            resumedAt: Option.none(),
+            at: Option.orElse(at, () => cursor.at),
+          }),
         ]
       }),
     passCredential: (provider, slot) =>
@@ -1917,19 +1929,22 @@ const placementLifetimeMs = (ttlMs: Option.Option<number>) =>
   Option.getOrElse(ttlMs, () => PLACEMENT_LIVE_WITHOUT_LIFETIME_MS)
 
 /**
- * Where a spread run on `on` stands against its pool at a switch point (a
- * turn's start, a window handoff). One rule for both: a run on an account
- * outside the pool (`outside`, the order's walk past every pool account)
- * stays there, recording nothing, while no pool account is eligible (each
- * held by a refusal or left by the turn); once one is, it is placed back in
- * the pool, `returned` from that account. A run in the pool, or on no
- * account yet, is placed as the switch point says.
+ * A spread run on `slot`, an account outside its pool (the order's walk past
+ * every pool account), at a switch point. It `stays` there, recording
+ * nothing, while no pool account is eligible (each held by a refusal or left
+ * by the turn); once one is, it is placed back in the pool, `returned` from
+ * `slot`.
  */
-interface PoolStanding {
-  readonly outside: Option.Option<CredentialSlot>
+interface OutsidePool {
+  readonly slot: CredentialSlot
   readonly stays: boolean
 }
 
+/**
+ * Where a spread run on `on` stands against its pool at a switch point (a
+ * turn's start, a window handoff): one rule for both. None when it is in
+ * the pool, or on no account yet: it is placed as the switch point says.
+ */
 const poolStanding = Effect.fn("AgentLoop.poolStanding")(function* (params: {
   readonly placement: CredentialPlacement["Service"]
   readonly provider: string
@@ -1938,17 +1953,13 @@ const poolStanding = Effect.fn("AgentLoop.poolStanding")(function* (params: {
   readonly left: ReadonlySet<CredentialSlot>
 }) {
   const outside = Option.filter(params.on, (slot) => !params.pool.includes(slot))
-  if (Option.isNone(outside)) {
-    const inPool: PoolStanding = { outside, stays: false }
-    return inPool
-  }
+  if (Option.isNone(outside)) return Option.none<OutsidePool>()
   const open = yield* params.placement.open({
     provider: params.provider,
     pool: params.pool,
     left: params.left,
   })
-  const standing: PoolStanding = { outside, stays: !open }
-  return standing
+  return Option.some<OutsidePool>({ slot: outside.value, stays: !open })
 })
 
 /** Why a spread run is placed, the account it prefers, and the session whose burst it joins. */
@@ -3449,15 +3460,15 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         (receipt) => receipt.slot,
       )
       const from = Option.orElse(summaryOn, () => cursor.at)
-      const standing = yield* poolStanding({
+      const outside = yield* poolStanding({
         placement: params.placement,
         provider,
         pool,
         on: from,
         left: cursor.passed,
       })
-      if (standing.stays) {
-        yield* params.turnLedger.settleCredential(provider, standing.outside)
+      if (Option.exists(outside, (standing) => standing.stays)) {
+        yield* params.turnLedger.settleCredential(provider, from)
       } else {
         const walk = yield* params.placement.place({
           provider,
@@ -3476,7 +3487,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           provider,
           slot: walk[0],
           from,
-          reason: Option.match(standing.outside, {
+          reason: Option.match(outside, {
             onNone: () => "compacted" as const,
             onSome: () => "returned" as const,
           }),
@@ -4415,11 +4426,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         on: lastSlot,
         left: cursor.passed,
       })
-      if (standing.stays) {
+      if (Option.exists(standing, (found) => found.stays)) {
         yield* scope.turnLedger.settleCredential(provider, lastSlot)
         return false
       }
-      const outside = Option.isSome(standing.outside)
+      // A run still outside the pool here returns, from that account.
+      const returnedFrom = Option.map(standing, (found) => found.slot)
+      const outside = Option.isSome(returnedFrom)
       const warm = yield* cacheWarm({
         modelId: resolved.modelId,
         ttlMs,
@@ -4494,7 +4507,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         provider,
         slot,
         // A return names the account outside the pool it left.
-        from: Option.orElse(standing.outside, () => origin.preferred),
+        from: Option.orElse(returnedFrom, () => origin.preferred),
         reason: origin.reason,
       })
       return true
@@ -4973,17 +4986,25 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       // The step's account serves the session's cache now, and its price
       // counts toward that account's usage. Any end releases the warming
-      // guard a fresh child holds.
+      // guard a fresh child holds. The cache there lives as long as that
+      // account lists it, also when a refusal moved the step to it.
       const notePlacedStep = (costUsd: Option.Option<number>) =>
         Effect.gen(function* () {
           const credential = yield* source.credential
           if (Option.isNone(credential)) return
+          const listed = yield* (yield* ModelRegistry)
+            .get(params.resolved.modelDriver.contextModelId, credential.value)
+            .pipe(Effect.orElseSucceed(() => Option.none<Model>()))
           yield* placement.noteStep({
             provider: credential.value.provider,
             slot: credential.value.slot,
             sessionId: scope.sessionId,
             costUsd,
-            ttlMs: source.cacheLifetimeMs,
+            ttlMs: Option.match(listed, {
+              onNone: () => source.cacheLifetimeMs,
+              onSome: (model) =>
+                placementLifetimeMs(promptCacheTtlMsFor(model, params.resolved.child)),
+            }),
           })
         })
 
