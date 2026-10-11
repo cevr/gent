@@ -352,10 +352,10 @@ Kept here so the next pass starts from them, not from a fresh survey. Each
 names the decision that left it open.
 
 - **Typed fan-in for children (ledger A3) is rejected, not open.** A
-  `delegate.start` returns at admission and the child's completion arrives
-  as a user message that wakes the parent (gamut run 34: six starts in one
-  cell, six wakes), with `delegate.list` for inspection and `read_session`
-  for the transcript. The model never blocks on a child, as in prime-agent;
+  `thread.start` returns at admission and a `starter` round's end arrives
+  as a user message that wakes the starter (gamut run 34, then on the
+  delegate: six starts in one cell, six wakes), with `thread.list` for
+  inspection and `read_session` for the transcript. The model never blocks on a child, as in prime-agent;
   a `collect` would add a blocking surface the owner rejected on 2026-09-18.
   Reopen only if a run shows a child result needed inside a later cell
   before its message lands.
@@ -814,60 +814,43 @@ Shape:
   asynchronous keep-alive message, so a count that reached zero in between
   would let the reaper take a loop whose woken turn is about to start.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
-- The `@gent/delegate` extension is the helper-agent boundary, built only on the public extension API. Every child is a session in the one runtime, created through the addressed `Session` facade verbs. The delegate owns its own child registry on disk; core carries no runner and no child-run events.
+- Threads (`threads.ts`, under `@gent/session-tools`) are the helper-agent boundary, built only on the public extension API. Every thread is a session in the one runtime, created through the addressed `Session` facade verbs. Threads keep their rounds in their own table (`thread_rounds`); core carries no runner and no child-run events.
 - Child admission uses one shared ancestry check on the `session.create` command
   path (`admitChildSessionDepth`). Missing or incomplete ancestry is an error,
   not root depth. A parent at the depth limit cannot spawn. This check is not a
   concurrency or token budget.
-- The `@gent/delegate` extension admits a child by creating a session through the
-  `Session` facade (the calling session is the parent; it names
-  `parentBranchId`), then `send`ing the
-  child's first message. `delegate.start` returns the handle at admission,
-  keyed by the host tool call id so a replayed call finds its child, and never
-  the answer: the model does not block on a child. The delegate reserves at
-  most four unfinished children per parent branch, counted from its own on-disk
-  registry, not live actors.
-- The delegate keeps one child registry per parent branch as a JSON file under
-  `<data dir>/delegates/<branchId>.json` (the data directory, `resolveDataDir`:
-  `GENT_DATA_DIR`, else `~/.gent`). `delegate.list` reads it; the delegate
-  reconciles it when the parent's loop opens (`loopOpen`), on the parent's
-  first turn in the process, and on every read, so a caller that died between
-  the child's receipt and delivery leaves a child the registry still resolves,
-  never a running one nobody delivers. Reconcile re-sends the start of a child
-  with no receipt. The repeat admits nothing new, but a durable `turn` send
-  reads the target's state first, which opens its loop, so a child the
-  previous process stopped mid-turn resumes and its completion wakes the
-  parent. Without that, a restart left the child stuck and counting toward the
-  cap.
-- One writer settles a child's completion. The delegate's `turnAfter` hook on
-  the child branch delivers every receipt as one idempotent follow-up message
-  on the parent branch (metadata `customType: "child-completion"`, `wake` set
-  so a parent with no prior turn still starts one). Nothing waits on a child.
-- The same hook, read on the parent side, cascades an interrupt: when a turn
-  ends interrupted, every child it started and had not heard from is settled
-  as interrupted and then stopped with `Session.stopMessage` on its start
-  message, outside the registry lock, so a parent Escape stops the whole
-  subtree and no completion message wakes the parent the user just
-  interrupted. A child turn that completed before the stop reached it still
-  holds its loop while its hooks run, so the stop answers true for it too;
-  its own hook delivers the completion over the claim, and reconcile does
-  when that hook failed. A failed stop hands the row back. The hook's child,
-  parent and notice steps each fail alone. The settled row keeps a stop notice (`stopNoticeAt`, additive optional): the
-  delegate's `turnProjection` reads such rows into a `# Stopped children`
-  turn notice (one line per child, newest first, at most eight, then a
-  count), as `@gent/wake` does for a `notify` fire. `turnAfter` removes
-  exactly the rows in `readNotices`, which an answered turn hands back; a
-  notice the turn did not show, because its read failed or the cap left it
-  out, stays. The stop starts no turn; the parent's next turn,
-  whoever starts it, knows the children are not running. The notice asks the
-  model to tell the user which children stopped and to start one again only
-  when the user asks: the user's interrupt stopped them.
-  Prime-agent does not cascade a turn abort; opencode does, and the gamut
-  testbed's six children editing files after an Escape decided it.
-  This cascade is the delegate's and covers the runs `delegate.start` opened;
-  the turns a `session.send` opened are `@gent/session-tools`' cascade (below).
-- `delegate.cancel` stops the child's start message through the facade
-  (`Session.stopMessage`); a finished child is a no-op.
+- `thread.start` admits a thread by creating a session through the `Session`
+  facade (the calling session is the parent; it names `parentBranchId`),
+  then admitting its task as the first round. It returns the handle at
+  admission, keyed by the host tool call id so a replayed call finds its
+  thread, and never the answer: the model does not block on a thread. The
+  running cap and the round table are described under threads (below).
+- The starter's interrupt cascades to the `starter` rounds whose end would
+  wake it: when a turn ends interrupted, its branch's `turnAfter` claims each
+  open `starter` round its thread sent whose wake lands on that branch
+  (marked stopped, with `stop_notice_at`), then stops the round's turn,
+  queued or running, so a starter Escape stops the whole subtree (a thread
+  stopped this way ends its own turn interrupted, and cascades in turn) and
+  no round end wakes the starter the user just interrupted. A `user` or
+  `none` round runs on: it is the user's side thread, or a service's. A
+  round's turn that completed before the stop reached it ends uninterrupted,
+  and its end takes the claim back and wakes the starter as any other. A
+  failed stop hands the claim back and invalidates the reconcile marks. Each
+  round stops on its own, eight at a time. The rows that keep a stop notice
+  are read by the threads' `turnProjection` into a `# Stopped threads` turn
+  notice (one line per thread, newest stop first, at most eight, then a
+  count), as `@gent/wake` does for a `notify` fire (migration
+  `2_thread_round_stop_notices`). `turnAfter` clears exactly the rounds in
+  `readNotices`, which an answered turn hands back; a notice the turn did not
+  show, because its read failed or the cap left it out, stays. The stop
+  starts no turn; the starter's next turn, whoever starts it, knows the
+  threads are not running. The notice asks the model to tell the user which
+  threads stopped and to send them work again only when the user asks: the
+  user's interrupt stopped them. Prime-agent does not cascade a turn abort;
+  opencode does, and the gamut testbed's six children editing files after an
+  Escape decided it. This cascade covers the rounds `thread.start` and
+  `thread.send` opened; the turns a `session.send` opened are
+  `@gent/session-tools`' own cascade (below).
 - Every session can message another: `session.send` (`@gent/session-tools`)
   takes a session id or `parent` and steers an `Interject` with `wake` onto
   the receiver's active branch, carrying `customType: "session-message"` and
@@ -877,21 +860,22 @@ Shape:
   child is recorded in memory (process resource, keyed by child session and
   message id), and the sender's interrupted turn stops each recorded message
   with `Session.stopMessage`; only a stop that answers true becomes a
-  `# Stopped child turns` notice, read and cleared as the delegate's is. A
+  `# Stopped child turns` notice, read and cleared as the threads' is. A
   failed stop is logged and the record stays for the next interrupt. The
   record drops a message when its turn ends, when a step joins it into
   another turn (`turnAfter`'s `joinedMessageIds`), when a stop settles it,
   and when the sender's answered turn finds the child session gone; a
-  restart forgets it. A correction taken back from a child turn the
-  delegate's cascade already stops is the delegate's news: `stopMessage`
-  answers false for it, so the child is named once. A running receiver reads it at
+  restart forgets it. A correction waiting in a thread's round turn that the
+  threads' cascade already stops is the threads' news: that stop runs first
+  in the same `turnAfter`, `stopMessage` then answers false for the
+  correction, and the thread is named once, under `# Stopped threads`. A running receiver reads it at
   its next step; an idle one wakes and answers in a turn of its own. This is
   the child-to-parent channel (a blocked child asks instead of guessing) and
-  the parent-to-child correction in one verb; there is no separate
-  `delegate.send`. Delivery is not bound to the delegate registry, so a
-  message to a finished child wakes it for another turn and no second
-  completion follows. A message from a child adds a line saying the child is
-  still running and this is not its completion. The TUI draws the row as a
+  the parent-to-child correction in one verb; work for a thread goes as a
+  round (`thread.send`). Delivery is not bound to the round table, so a
+  message to a thread whose round ended wakes it for another turn and no
+  second round end follows. A message from a child adds a line saying a
+  thread's answer arrives as its own round-end message and this is not one. The TUI draws the row as a
   muted sender line (`» from your parent "name" · <id>`, the name cut at 32
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
   the header, with or without the child line, so older rows render the same.
@@ -904,17 +888,24 @@ Shape:
   in `packages/extensions/src/threads.ts` and register under
   `@gent/session-tools`, so their messages carry that extension id.
   `thread.start({ task?, name?, agent?, model?, effort?, cwd?, instructions?,
-tools?, notify? })` makes a session spawned under the starter (so spawn
-  depth applies) with its own key, fresh context, and the named agent or the
-  starter's agent and admission, model and reasoning, a run spec of at most
-  32 model attempts; `instructions` add to the run's `systemPromptAddendum`
-  and `tools` narrow it, keeping `thread.reply`. The create's request id is
+tools?, notify?, workspace?, fork? })` makes a session spawned under the
+  starter (so spawn depth applies) with its own key and fresh context, or the
+  starter's current context window with `fork` (the create's
+  `historyBranchId`). A named agent is that agent wholly, with its own model
+  and effort from its definition and config; with none, the thread runs the
+  starter's agent and admission, model and reasoning. `model` and `effort`
+  win over either; the run spec holds at most 32 model attempts;
+  `instructions` add to the run's `systemPromptAddendum` and `tools` narrow
+  it, keeping `thread.reply`. `workspace: { snapshot: true }` runs the
+  thread in a copy of the working tree (Snapshot threads, below). The create's request id is
   `thread:` and 32 hex of SHA-256 over the caller's session, branch and tool
   call id (a request id is matched across the workspace, a tool call id only
   in its session), so a repeated call is one thread. With no `task` the
   thread waits; with one, the task is its first round. The shipped `worker`
-  agent (`promptCache: "session"`, denied `thread.start`, `thread.stop`,
-  `machine.*` and `delegate.*`) is the long-lived thread that takes rounds.
+  agent (`promptCache: "session"`, denied `thread.start`, `thread.stop` and
+  `machine.*`) is the long-lived thread that takes rounds; the shipped
+  `delegate` agent (the same denials) is the one-round subagent, started with
+  a task and `notify: "starter"`.
   - A round is one turn on the thread's current session, so it reaches the
     thread after a handoff: `thread.send({ thread, message, reply?, notify?
 })` returns `{ round, number }` at admission (`Session.send` `turn`,
@@ -944,7 +935,11 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     open round's message id (or a message joined into the turn), records the
     end (the first writer wins), then delivers it: `notify: "user"` (the
     default) tells nobody, the user reads the thread; `"starter"` queues a
-    one-line wake to the starter thread's current session, saved on the row
+    wake to the starter thread's current session that carries the answer
+    (a header that names the thread, its agent, the round and its outcome,
+    then the round's text, then how to read the rest) and the details its
+    row draws (`ThreadRoundEndDetails`: flags, tool counts, last calls,
+    time, bill, error, and a snapshot thread's work), saved on the row
     before the first wake is sent, so a delivery after a crash and a handoff
     goes where the first one went; a saved place whose session was deleted
     since is replaced, once, by the starter thread's current place
@@ -956,13 +951,17 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     another place than its starter. A `loopOpen` reconciles the rounds a
     branch sent or ran whose end is undelivered: a recorded end is
     delivered, a turn with a receipt is recorded from its history
-    (`child-turns.ts`, shared with delegate), and a round with neither is
+    (`child-turns.ts`), and a round with neither is
     re-sent from the starter's side, whether or not the thread's loop is
     open: the repeat admits a round that was never sent and resumes one cut
     short, and a full queue's refusal drops the round as at admission. Each
     round settles on its own: one that fails is logged with its id
     (`threads.reconcile.round-failed`) and the rest go on. The
-    wake's source id makes a second delivery a no-op.
+    wake's source id makes a second delivery a no-op. A branch's turns
+    reconcile too (`turnProjection`): once per branch per process, and again
+    after any threads hook step failed, since a failure invalidates every
+    branch's mark. A round whose thread session was deleted while no process
+    ran is dropped, as the delete hook would have.
   - `thread.round({ round })` reads a round the caller's thread sent: open,
     or ended with its text, reply (null when none was given), flags and
     usage. `thread.reply({ value })` keeps a JSON value on the open round of
@@ -971,7 +970,7 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     refuses a call when no open round there asked for a value: a tool list
     that changed per round would change the request and break the thread's
     cached prompt. The `Threads` service (a Tag other extensions
-    read with `Effect.serviceOption`, as delegate reads `Workspaces`) carries
+    read with `Effect.serviceOption`, as threads read `Workspaces`) carries
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.
     A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
@@ -985,7 +984,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     rest; the agents view reads a `root` the same way), groups it by key, and
     keeps the groups whose first session any session of the caller's thread
     spawned, with each one's status from `listActiveLoops`, its open round,
-    its current session, and the current session's latest reply (one line,
+    its last ended round (`lastRound`: number and flags, so a starter reads
+    whether it was interrupted, stopped or failed), its current session,
+    and the current session's latest reply (one line,
     or 4,000 characters head and tail for one named thread); `read_session`
     reads the rest. `thread.stop` stops each working loop of such a thread,
     closes its open round as stopped (no wake), and refuses any other
@@ -1008,18 +1009,18 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     before a start makes its session, so a start with a task past the cap
     makes no session and names the threads that run, and again in the claim's
     transaction, the read the table holds to. The transcript shows a round's message without its
-    source line on a muted `» task from session` row, as a delegate child's
-    `"child-task"` on `» task from parent` (another session wrote it, so it
-    never takes the reader's rail). The starter's interrupt does not stop a
-    thread, and a thread's unattended turns decline their asks
-    (`turnCanAsk`). A delegate child is denied `thread.start`. The `#
+    source line on a muted `» task from session` row (another session wrote
+    it, so it never takes the reader's rail). The starter's interrupt stops
+    only its `starter` rounds (the cascade above); a `user` thread runs on,
+    and a thread's unattended turns decline their asks (`turnCanAsk`). A
+    `delegate` or `worker` thread is denied `thread.start`. The `#
 Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
   `DEFAULT_SESSION_NAME` to the first line of its branch's first user
   message (the rename cuts a name to 80 characters between code points and
-  trims it), as a delegate child takes
+  trims it), as a thread takes
   its task. No prompt text asks the model to name a session; `rename_session`
   stays for a rename the user asks for, and a name it gave first wins: the
   automatic rename passes `expectedName`, and the rename's write transaction
@@ -1399,59 +1400,61 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 ### Agent Runs
 
-- The `@gent/delegate` extension owns child runs. It is built only on the
-  public extension API — no core runner, no privileged seam. Every child is a
-  session created through the addressed `Session` facade verbs (`create`,
-  whose parent is always the calling session, with `parentBranchId`; `send`,
-  `stop`, `events`, `delete`). The
-  delegate keeps its own child registry as one JSON file per parent branch under
-  `<data dir>/delegates/<branchId>.json`, so a `delegate.list` survives restarts
-  without any `durable_operations` row.
-- Completion has one writer: the delegate's `turnAfter` hook on the child
-  branch delivers every receipt as one ordinary user message on the parent
-  branch (metadata `customType: "child-completion"`) with the outcome and a
-  bounded preview, and the message wakes the parent. Nothing waits on a child.
-  A turn that ended badly also carries the error it ended on (the last
-  non-notice `ErrorOccurred` since the previous receipt, one line of at most
-  1,000 characters) in the text and in the optional `details.error`, so a
-  parent tells a sign-in that will fail again from a flake.
-  Lazy reconcile covers the crash window between the
-  receipt and the hook: the delegate reconciles its registry when the parent's
-  loop opens, on its first turn, and on every `delegate.list`, so a caller that died mid-op leaves a
-  child the registry still resolves, never a running one nobody delivers.
-- The delegate ships three ordinary tools: `delegate.start`,
-  `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. A child's first message opens with `Task from your parent session <id>.` and says where its final reply goes, so the child does not take a bare instruction for an injection. `delegate.start` accepts RunSpec
-  overrides for model, reasoning, tool and path narrowing, and added instructions, and
-  a `context` of `fresh` (the child sees only its todo) or `fork` (the child is
-  created with `historyBranchId` = the caller's branch, so it starts from the
-  caller's current context window). A history copy is settled first: a tool
-  call with no result in the source, such as the `delegate.start` call that is
-  making the fork, is left out with its step, and a result whose call the
-  window cut away is left out too, or the child's first projection would
-  reject the group. `delegate.start` always denies the child the delegation
-  tools and `thread.start`: fan-out is the caller's decision, a project prompt that
-  addresses "the orchestrator" reaches children too, and a child does bounded
-  work for its parent, not unrelated work of its own. A child's session name,
-  which the tray, the sessions pane and its completion row head with, is the
-  start's optional `name` on one line (at most 80 units), else the first clause
-  of its todo's title in whole words, at most 32 units (`Check the greeting
-files`); never the agent's name, since every child runs as `delegate`, and
+- Threads (`threads.ts`, under `@gent/session-tools`) own child runs. They
+  are built only on the public extension API — no core runner, no
+  privileged seam. Every thread is a session created through the addressed
+  `Session` facade verbs (`create`, whose parent is always the calling
+  session, with `parentBranchId`; `send`, `stop`, `events`, `delete`). The
+  rounds live in the server's `thread_rounds` table, so a `thread.list`
+  survives restarts without any `durable_operations` row.
+- A round's end has one writer: the thread's `turnAfter` hook records it, and
+  a `starter` round's end goes as one ordinary user message to the starter
+  (metadata `customType: "thread-round-end"`) that carries the answer, and
+  the message wakes the starter. Nothing waits on a thread. A turn that
+  ended badly also carries the error it ended on (the last non-notice
+  `ErrorOccurred` since the previous receipt, one line of at most 1,000
+  characters) in the text and in the optional `details.error`, so a starter
+  tells a sign-in that will fail again from a flake. Reconcile covers the
+  crash window between the receipt and the hook (threads, above).
+- The thread tools are ordinary tools: `thread.start`, `thread.send`,
+  `thread.list`, `thread.round`, `thread.reply` and `thread.stop`; a
+  correction to a running thread is `session.send`. A round's message opens
+  with `Round <n> from session <id>.` and says where its final reply goes, so
+  the thread does not take a bare instruction for an injection. A `starter`
+  round's text keeps the subagent's guidance: its final text is the result,
+  a blocked turn ends with its question as that text, and any later turn
+  (a wake, a monitor, a goal, a message) reports with `session.send` to
+  `parent`. `thread.start` takes `model`, `effort`, `tools` (narrowing) and
+  `instructions`, and `fork` (the thread is created with `historyBranchId` =
+  the caller's branch, so it starts from the caller's current context
+  window). A history copy is settled first: a tool call with no result in
+  the source, such as the `thread.start` call that is making the fork, is
+  left out with its step, and a result whose call the window cut away is
+  left out too, or the thread's first projection would reject the group. The
+  `delegate` and `worker` agents deny `thread.start` and `thread.stop`:
+  fan-out is the starter's decision, a project prompt that addresses "the
+  orchestrator" reaches threads too, and a thread does bounded work for its
+  starter, not unrelated work of its own. A thread's session name, which the
+  tray, the sessions pane and its round-end row head with, is the start's
+  optional `name` on one line (at most 80 units), else the first clause of
+  its task's title in whole words, at most 32 units (`Check the greeting
+files`); never the agent's name, since many threads run as `delegate`, and
   never the default session name, which marks a session its first message
-  still names: a candidate equal to it gives way to the whole title line. A
-  thread takes its name by the same rule (`childSessionName` in
-  `session-names.ts`), with `thread` when no name is left. Parents read child output through `read_session` on the
-  returned session/branch IDs. The session is the only copy of a child's
-  output; the completion message carries the outcome and a preview.
-- Snapshot children: `delegate.start` takes `isolation` (`shared`, the
-  default, or `snapshot`). `@gent/workspaces` (`packages/extensions/src/workspaces.ts`)
+  still names: a candidate equal to it gives way to the whole title line
+  (`childSessionName` in `session-names.ts`), with `thread` when no name is
+  left. Starters read thread output through `read_session` or
+  `thread.round`. The session is the only copy of a thread's output; the
+  round end carries the outcome and the answer.
+- Snapshot threads: `thread.start` takes `workspace: { snapshot: true }`.
+  `@gent/workspaces` (`packages/extensions/src/workspaces.ts`)
   owns the copies and uses only the public extension API, `runProcess` and
-  the platform services. A path-confined parent run bounds its snapshot
-  child by its scopes in the parent's cwd, so the child's file calls in its
-  copy are refused (decided in the narrow-only batch, Round 6, on least
-  authority): core has no copy relation, and moving a parent's relative
+  the platform services. A path-confined starter run bounds its snapshot
+  thread by its scopes in the starter's cwd, so the thread's file calls in
+  its copy are refused (decided in the narrow-only batch, Round 6, on least
+  authority): core has no copy relation, and moving a starter's relative
   entries into whatever cwd a create names would let a confined run reach
   any directory by naming it. Core has no workspace concept: the seam is
-  `Session.create({ cwd })`, and the child's profile is the copy's.
+  `Session.create({ cwd })`, and the thread's profile is the copy's.
   - The backend: `rift rpc` with `copyAll` (one snapshot, an exact copy) only
     when the origin is a rift workspace on btrfs. Everywhere else, and for any
     rift failure, a detached `git worktree` under `<data dir>/workspaces/worktrees/`
@@ -1475,11 +1478,11 @@ files`); never the agent's name, since every child runs as `delegate`, and
     origin. A repeated start with all four adopts its copy; any other start
     gets its own. A copy bound to one child session is never bound to another,
     and a session whose index names one copy is never bound to another. The
-    delegate's `Session.create` request id is a SHA-256 of the same parent
-    session, parent branch and tool call, and the child's first message is
-    `delegate-start:<child session id>`: core keeps one session per request id
-    and one message per id, so two parents whose tool calls share an id get
-    two children.
+    start's request id is the thread's create key (`thread:` and 32 hex of a
+    SHA-256 of the same starter session, starter branch and tool call), and
+    its first round's message id is `thread-round:<round>`: core keeps one
+    session per request id and one message per id, so two starters whose
+    tool calls share an id get two threads.
   - Records: `<data dir>/workspaces/<name>.json`, under the extension file
     lock, written as `creating` before gent makes anything. The record names
     the real directory that holds the copy (`root`: gent's worktrees
@@ -1509,7 +1512,7 @@ files`); never the agent's name, since every child runs as `delegate`, and
     so does a copy whose base ref was already there, or a rift copy that a
     later step of its making could not finish. Manual removal of a retained
     copy comes with W2 (the copy list, confirmed by the user).
-  - Merge-back is a branch, never a merge. At each child turn end the copy's
+  - Merge-back is a branch, never a merge. At each round's end the copy's
     tree goes on `refs/heads/gent/<name>` of the origin as one commit over the
     base. A worktree shares the origin's objects; for a rift copy gent fetches
     the commit by id into no ref (`--no-write-fetch-head`, then `cat-file -e`
@@ -1517,13 +1520,13 @@ files`); never the agent's name, since every child runs as `delegate`, and
     writes no other ref of the origin. gent moves or deletes the branch
     only with compare-and-swap from the commit it last wrote (the record keeps
     `tip`, and `nextTip` for a write in flight). A branch someone else moved,
-    or one a worktree has checked out, stays as it is: the completion says so,
-    and the work stays in the copy. A turn is collected once: the delegate's
-    completion reads the collect of the child's start turn. The completion
-    names the branch and a diffstat in its text and in `details.workspace`. No
-    model call.
-  - Lifetime is the child session's. The delegate's admission scope closes
-    after the registry write. When the admission fails or is interrupted,
+    or one a worktree has checked out, stays as it is: the round end says so,
+    and the work stays in the copy. A turn is collected once: the round's end
+    reads the collect of the round's turn before it goes out. The round end
+    names the branch and a diffstat in its text and in `details.workspace`.
+    No model call.
+  - Lifetime is the thread session's. The start's scope closes after the
+    copy is bound to the created session. When the start fails or is interrupted,
     storage decides, not what the fiber saw: core can store the session and
     then be interrupted before `Session.create` returns. The finalizer lists
     the parent's sessions (`listSessions({ thread })`) for a child of this
@@ -1553,9 +1556,9 @@ files`); never the agent's name, since every child runs as `delegate`, and
     lists the copy's project extensions and does not build them until the
     owner trusts the copy's directory. No core change makes it follow.
 - The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
-  refreshes on the delegate's and session-tools' `ExtensionStateChanged`
-  pulses (`thread.start` sends the second), matched by
-  `DELEGATE_EXTENSION_ID` and `SESSION_TOOLS_EXTENSION_ID`. Completion rows read the completion message's
+  refreshes on session-tools' `ExtensionStateChanged` pulses (a thread's
+  start, interrupt and round end each send one), matched by
+  `SESSION_TOOLS_EXTENSION_ID`. Round-end rows read the round-end message's
   details. Core publishes no `AgentRun*` events.
 - `ListAgents` lists one row per thread: `buildRowTree` folds the sessions of
   one `sessionThread` key (a handoff chain) into one row with the newest
@@ -1589,9 +1592,10 @@ files`); never the agent's name, since every child runs as `delegate`, and
   thread key, and changes it only for a reply `sessionQuery` keeps
   (`accepted`). Opening the thread, its next turn on any of its sessions, or
   its absence from a whole listing of the root it finished under (no filter)
-  clears it; a filtered listing never does. A delegate child gets none: its completion lands in
-  its parent's transcript, and its row carries the additive `delegate` flag
-  (its admission names the `delegate` agent).
+  clears it; a filtered listing never does. A thread whose latest round
+  reports to its starter (`notify: "starter"`) gets none: its round end lands
+  in the starter's transcript, and its row carries the additive
+  `reportsToStarter` flag, read from its rounds.
 - The Sessions pane is the agent command center, docked like every pane.
   `sectionOf` puts a live loop under `needs` (the wire section widened
   additively) when it waits on the reader: its status is
@@ -1619,7 +1623,7 @@ effort`, turns · cost · time, cwd, what it does now or the head of its
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
   a handoff (`continueThread`) keeps its parent's thread, is not admitted, and
   keeps its parent's depth.
-- Three shipped agents: `main`, the orchestrator; `worker`, the long-lived thread that takes rounds (`threads.ts`); and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits neither its caller's agent nor its model, only its caller run's bound (its tools and paths never exceed its parent run's): its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, effort, prompt addendum) win over both, while its `tools` and `paths` only narrow the definition. The `delegate` agent holds `["*", "!delegate.start", "!delegate.cancel", "!delegate.list", "!thread.start"]`; a call's `tools` narrow those patterns, so it cannot hand a child delegation back. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
+- Three shipped agents: `main`, the orchestrator; and two registered by threads (`threads.ts`): `worker`, the long-lived thread that takes rounds, and `delegate`, the one-round subagent a `thread.start` names with `agent: "delegate"`. A thread that names an agent inherits neither its starter's agent nor its model, only its starter run's bound (its tools and paths never exceed its starter run's): its model and effort come from the named definition, reshaped by `agents.delegate` (or that agent's entry) in `.gent/config.json`, and the start's `model`, `effort` and `instructions` win over both, while its `tools` only narrow the definition. The `delegate` agent holds `["*", "!thread.start", "!thread.stop", "!machine.*"]`; a start's `tools` narrow those patterns, so it cannot hand a thread delegation back. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from until the user merges it. The copy keeps a request the session is still working on, because a question is usually about it; so each question goes to the fork under a header (`forkQuestionText`, `customType: "btw-question"`) that names the session it forked from, says a request with no answer above is that session's work and not the fork's, and asks for changes only when the question does. Without it a fork opened mid-turn took the session's task as its own and did it again in the same working tree. The pane and the fork's transcript row show the question without the header (`forkQuestionBody`). The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource). Each state pulse the follower sends is a stored event on the branch and a re-read of the fork in the open pane, so a fork event that leaves the pane's view as it was pulses nothing, and streamed text pulses at once and then at most once per 250 ms, with the last change always pulsed; Enter on an empty ask line opens the fork as the shell's session, which is `switchSession`, because the fork already is one; `ctrl+o` keeps its one meaning, the transcript's detail level. The open fork per branch is process state; the fork itself is durable and listed with every other child session. `btw.merge` posts one message to the branch (`customType: "btw-merge"`) that names the fork session, its first own message and its last reply by id, with no reply text and no summary call: the branch's model reads the fork with `read_session` from that message when it needs it, so the merge appends a few lines and the cached prefix holds. It is a `steer` with `wake`: a running turn takes it at its next step with no turn of its own, and an idle branch starts the turn the user asked for (a queued follow-up always costs its own turn; a parked steer answers after the user's next message). Its request id is a digest of the fork and the reply, so a repeat posts nothing (`merged: false`) and a later reply merges again. A merge with no open fork, while the fork answers, or before its first reply is refused. The fork stays open and durable after a merge; `/btw` reopens it. In the TUI pane `ctrl+s` merges; its hint shows only once the fork has answered, and the key refuses with a notice before then. A merge closes the pane it was asked from: an answer that lands after the reader switched session, or closed and reopened the pane, leaves the pane in view alone. The fork's name is one line (`forkName` folds whitespace), since the pinned label reads it from the merge's first line. The branch draws the merge as one collapsed row, `↳ merged btw · <question> → <reply>`, queues it as `↳ btw merge · <question>`, and pins it as `merged <fork name>`.
 - Alarms and monitors (`@gent/wake`) live in `<data dir>/wakes/<branchId>.json` (`resolveDataDir(ctx.home)`: `GENT_DATA_DIR`, else `~/.gent`; `ctx.home` is the OS home); timers are branch-scoped. One branch lifecycle permit serializes durable publication, timer installation, re-arm and cancellation; waiting for it is interruptible, then the transfer completes. Cancellation releases the file lock before waiting for stopped timers. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop; a line the session refuses (a full follow-up queue, for one) is logged (`wake.fire.refused`) and stored as a `notice` entry instead, so the fire is not lost. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` turn notice, and `turnAfter` clears exactly the notices in `readNotices`, the ones an answered turn's steps showed (a lost process shows them again), so a failed, interrupted or unanswered turn keeps them, and a notice written after the last step read the file waits for the next turn; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back when the branch's loop opens (the `loopOpen` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once, and a past-due `notify` alarm leaves its notice without a turn). Opening the session is enough; no message is needed. The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The `wake.dismiss` request cancels one entry by id or dismisses one notice, for a client. Auto-resume is an alarm too, opt-in by the user's own `~/.gent/config.json` only (`{ "wake": { "autoResume": { "maxResumes": 3 } } }`; a project file cannot spend the user's money): a `turnAfter` with `retryAt` (a usage limit that resets within 24 h) stores an alarm with an optional `resume` key (`attempt`, `maxResumes`, `resetAt`, the stopped turn's `messageId`; an earlier binary reads a plain alarm), id `resume:<messageId>:<resetAt>` so a repeated turn end stores one, due 30 s after the reset. The attempt comes from the branch's events (`Session.events` up to the marker): the turns a usage limit stopped (a `streamFailed` receipt after an `ErrorOccurred` with `retryAt`) since the last answered receipt, the current one included; an interrupt, a turn that gave up or another failure neither counts nor starts the count again, so a user's own message that the limit stops is the next attempt, and only an answer resets it. Past `maxResumes` (default 3) the turn stores a `notice` instead. A spawned session stores none: its completion carries the error to its parent. A branch whose newest client message carries `metadata.unattended` (a headless run sends `message.send` with `unattended: true`) stores none either: nobody watches the turn a resume would start, and with no row a later fire or re-arm (the server stays up, or a later process opens the branch) has nothing to run. The branch keeps one resume, the latest turn's: every `turnAfter` drops a pending resume another turn armed, so a message the user sends takes its place. The fire queues its line with `ifLatest: <the stopped turn's opener>`, so the loop admits it and starts its turn in one step under its queue permit, or not at all: a message the user sent or a steer they parked since the stop, a queued follow-up, or a turn that runs takes the resume's place, and no send lands between a read and the queue. The row goes either way. The fire holds the alarms' lifecycle permit, as `wake.dismiss` does, so a dismiss during the fire finds no row and answers `dismissed: []`, and the TUI reports `auto-resume already fired`. A fire more than 10 minutes past due (gent was not running at the reset, or the machine slept) stores a `notice` and starts no turn; else it queues one user message, "The usage limit reset at <ISO>. Continue the task where it stopped.", with `details.resume`. A resume never re-runs the failed step: it appends one message, so the cached prefix holds. The TUI tray shows a pending resume first, before the 3-row cap, as `↻ resume at <clock> · in <countdown> · <attempt>/<max> · esc cancel` (the key in the `KeyHints` words, drawn by `KeyHintsText` and kept at every width), and a resume notice as its note and the reset clock; the fired row reads `↻ resumed after the usage limit reset · attempt N`. Esc on an empty idle composer cancels the pending resume through the wake client's `stoppableContribution`, which sends `wake.dismiss`; any client extension can contribute a stoppable. The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - The `bash` tool passes the command unchanged to Bash in both foreground and supervised background modes. Only its explicit `cwd` parameter resolves against the session directory; Bash owns `cd`, expansion, escaping, operators and exit status. The shared process scope still owns the entire process group.
@@ -1659,7 +1663,7 @@ section, no notice. Core has no checkpoint concept.
   write that happens anyway), and a cell operation stores it in its operation
   record (one more SQLite transaction per cell operation).
 - Who captures: a session that is not spawned always does; a spawned one (a
-  delegate child, a `/btw` fork) only where the work tree's store exists, so a
+  thread, a `/btw` fork) only where the work tree's store exists, so a
   snapshot child in its own copy pays nothing.
 - Store: one private bare git repository per work tree,
   `<data dir>/checkpoints/<16 hex of sha256(realpath of the git top)>/`, with
@@ -1696,8 +1700,8 @@ section, no notice. Core has no checkpoint concept.
   branch's parents. A captured turn's change is what the lineage (this
   session and the sessions below it) wrote in its window: from its start to
   the start of the next newer turn with one, or to the store's newest mark
-  (it stands for now: a read writes nothing). So a delegated child's edits
-  after its parent's turn ended count in that turn. The window is cut as a
+  (it stands for now: a read writes nothing). So a delegate thread's edits
+  after its starter's turn ended count in that turn. The window is cut as a
   revert cuts its time (see Revert), by one owner (`lineageChanges`) that
   the list, the patch and the revert share: a newest turn's row counts the
   paths its revert writes back, and an older row its own share of what its
@@ -1829,7 +1833,7 @@ replay also requires a trusted, unchanged saved tool binding.
 Whether a turn can ask comes from its session and its origin, not from a
 stored flag (`turnCanAsk` in `domain/message.ts`): a turn can ask unless its
 session was spawned and no client opened it. A spawned session
-(`isSpawnedSession`) has a parent and starts its own thread: a delegate child
+(`isSpawnedSession`) has a parent and starts its own thread: a started thread
 or a `/btw` fork. A handoff has a parent too, but it joins the parent's
 thread, so it is the user's own conversation; spawn depth counts the same
 rule. Session lineage has two edges in one column pair: a spawn edge (a
@@ -1844,9 +1848,9 @@ would lose its parent and so its parent run's bound, and become an unbounded
 root. Child sessions stored before `bded8dce` carry their parent's
 thread, so they read as handoffs: they ask, do not count toward spawn depth,
 and survive a parent delete (accepted in the pass-10 ledger). A top-level or handoff session's user watches every turn there, so its
-wake, monitor, delegate-completion and slash-command turns ask. In a spawned
+wake, monitor, thread round-end and slash-command turns ask. In a spawned
 session, only a turn a client opened asks (a user who prompts or steers the
-child); a turn its parent's `delegate.start` or `session.send`, a wake or a
+child); a turn its parent's `thread.start`, `thread.send` or `session.send`, a wake or a
 monitor opened declines. `btw` opens each fork turn with `Session.send`, so a
 fork turn declines too: the `/btw` pane shows the fork's reply, not its
 approvals. The origin is trusted: the server stamps
@@ -2002,8 +2006,9 @@ A patch replaces the fields it names; `systemPromptAddendum` appends. A field
 resolves project entry > user entry > extension (`mergeAgentPatches` in
 `mergeConfigs`), and a run's `RunSpec.overrides` (`StoredRunOverrides`, a pick of the patch) wins
 over all (`resolveSessionAgent`), so a workspace pins its orchestrator model
-under `main` and its children's model under `delegate`, and a `delegate.start`
-call can still pick a different model and effort for one child. A run's
+under `main` and its delegate threads' model under `delegate`, and a
+`thread.start` call can still pick a different model and effort for one
+thread. A run's
 `tools` and `paths` do not replace: they narrow (least authority; the
 resolved definition is the bound its author set). The bound is a resolution
 result, never part of a definition: `resolveSessionAgent` gives the reshaped
@@ -2363,7 +2368,7 @@ happens once: neither side sees the other's later writes, and a parent that
 saves only later is not inherited. The cell reads the session and its
 branches through `ExtensionContext.Session` (`getSession`, `listBranches`). A
 worker is kept only after its restore succeeds; a failed restore closes it,
-and the next cell starts a clean one. A delegate child or `/btw` fork starts
+and the next cell starts a clean one. A started thread or `/btw` fork starts
 empty. A reset saves an empty namespace, so a later restart inherits nothing.
 
 `runtime/tools.ts` carries the transcript-owned call address
@@ -2449,7 +2454,7 @@ tool count named. The worker keeps the listing beside the namespace: `reset`
 clears bindings, not the listing, and a snapshot never contains it.
 
 Inside the cell `tools` is a namespace over that catalog: every selected id is
-a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`,
+a callable path, split on `.` (`thread.start` is `tools.thread.start(input)`,
 `must-not-run` is `tools["must-not-run"](input)`). Each node is a Proxy that
 reads the current catalog, so one node can be a tool and a namespace at once
 (`tools.wake(...)` and `tools.wake.cancel(...)`). A call sends the id itself as

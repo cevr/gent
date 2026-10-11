@@ -1012,13 +1012,14 @@ registered agent replaces only the fields it names (`delegate` above keeps
 its tools and changes its model). `systemPromptAddendum` is the one field
 that adds: the entry's text comes after the agent's. Each field resolves
 project config, then user config, then the extension; a run's own overrides
-(the `overrides` of a `delegate.start` call, or `runSpec.overrides` in a
-session's admission) win over all three, except `tools` and `paths`: a run's
-`tools` and `paths` only narrow the agent, never widen it. The resolved
-definition is the bound its author set; a config entry is the author's own
-edit, so it still replaces. A session
+(the `model`, `effort`, `tools` and `instructions` of a `thread.start` call,
+or `runSpec.overrides` in a session's admission) win over all three, except
+`tools` and `paths`: a run's `tools` and `paths` only narrow the agent, never
+widen it. The resolved definition is the bound its author set; a config entry
+is the author's own edit, so it still replaces. A session
 runs as an agent by name: `main` by default, `gent -H --agent painter "..."`
-for a headless run, and `delegate` for every child. Each turn reads the config
+for a headless run, and `delegate` for a delegate thread (`thread.start` with
+`agent: "delegate"`). Each turn reads the config
 files as they are then, so an edit reaches the next turn.
 
 ### Tool patterns
@@ -1058,11 +1059,10 @@ tool rather than every tool. `paths` has no old form. A config file is yours:
 a write by gent (a driver change, an extension toggle) leaves each agent
 entry as you wrote it.
 
-A `delegate.start` call takes the new keys only (`model`, `tools`, `paths`,
-...). A call with `modelId`, `allowedTools` or `deniedTools` fails, and the
-failure names the key to use; it never runs the child without the
-restriction it asked for. Its `tools` and `paths` narrow the `delegate`
-agent (see Paths), so a call cannot hand a child the delegation tools back.
+A `thread.start` call names its run's keys as its own parameters (`model`,
+`effort`, `tools`, `instructions`) and the thread writes them with the new
+keys only. Its `tools` narrow the agent it names (see Paths), so a call
+cannot hand a `delegate` thread `thread.start` back.
 
 A config entry with a key the schema does not name fails to load, and the
 error names the agent and the key: a misspelled `toolz` would otherwise give
@@ -1114,7 +1114,7 @@ session's parent is always the calling session, so a tool in a confined run
 cannot make a session outside its bound by naming a wider parent or none.
 `parentBranchId` names the caller's branch the child hangs under; a branch of
 another session is refused. A session created with a parent (a
-`delegate.start` child included, or a client's `session.create` with
+thread `thread.start` made included, or a client's `session.create` with
 `parentSessionId`) holds a tool only when
 its parent run holds it too, and its file calls must lie in the parent run's
 paths too, whether it names `paths` or not. gent resolves the parent's bound
@@ -1141,8 +1141,8 @@ is no definition to send or register: `AgentDefinition.make` refuses its
 only ever sends definitions.
 
 The admission an extension passes to `ctx.Session.create` is
-`{ agent, runSpec: { overrides } }`; the overrides take the run keys of a
-`delegate.start` call (`model`, `tools`, `paths`, `reasoningEffort`,
+`{ agent, runSpec: { overrides } }`; the overrides take the run keys
+(`model`, `tools`, `paths`, `reasoningEffort`,
 `contextLength`, `maxSteps`, `maxModelAttempts`, `systemPromptAddendum`). A
 tool that starts a confined child on one folder, then hands it its task:
 
@@ -1187,15 +1187,15 @@ where `path` is `path.resolve(cwd, params.path)`, absolute, with `..` resolved
 lexically and links not followed. That shape is stable; the input's `path` is
 what the model wrote, relative or not.
 
-### Snapshot children
+### Snapshot threads
 
-`delegate.start` takes `isolation`. `shared` (the default) runs the child in
-your working tree. `snapshot` runs the child in its own copy of your git
-working tree: the `@gent/workspaces` extension makes the copy, and the child's
-session is created with the copy as its cwd (`Session.create({ cwd })`), so
-every tool of the child works there.
+`thread.start` takes `workspace`. Without it the thread runs in your working
+tree. `workspace: { snapshot: true }` runs the thread in its own copy of your
+git working tree: the `@gent/workspaces` extension makes the copy, and the
+thread's session is created with the copy as its cwd
+(`Session.create({ cwd })`), so every tool of the thread works there.
 
-- The copy holds your working tree as the child starts: your commits, your
+- The copy holds your working tree as the thread starts: your commits, your
   uncommitted changes and your untracked files that git does not ignore.
 - On btrfs, when your repository is a rift workspace, `rift` makes the copy
   (`rift rpc`, one whole-tree snapshot, dependencies and build included).
@@ -1210,13 +1210,13 @@ every tool of the child works there.
   TOML integer `1` (`1.0`, `1e0` and `"1"` are refused, as rift refuses
   them). gent's own git commands run no hook of your repository, and write no
   ref of it but `gent/<name>` and gent's own `refs/gent/base/<name>`.
-- When each child turn ends, the child's work goes back as one commit over
-  the copy as it started (after its hooks), on the branch `gent/<name>` of
-  your repository. The completion names the branch and its diffstat. Nothing
-  merges it: read it with `git show gent/<name>`, and merge, cherry-pick or
-  delete it yourself. gent moves the branch only from the commit it last
-  wrote. If you move the branch or check it out, gent leaves it, the
-  completion says so, and the work stays in the copy.
+- When each of the thread's rounds ends, its work goes back as one commit
+  over the copy as it started (after its hooks), on the branch `gent/<name>`
+  of your repository. The round end names the branch and its diffstat.
+  Nothing merges it: read it with `git show gent/<name>`, and merge,
+  cherry-pick or delete it yourself. gent moves the branch only from the
+  commit it last wrote. If you move the branch or check it out, gent leaves
+  it, the round end says so, and the work stays in the copy.
 - A session delete collects the copy's last work to the branch; the branch
   stays. A worktree copy is then removed. When that collect fails, the work
   cannot go on the branch, or someone moved `refs/gent/base/<name>`, the copy
@@ -1235,21 +1235,21 @@ every tool of the child works there.
   copies. Anything else (a copy of a copy, a moved record, a link where the
   marker goes) is kept, and gent says why.
 - A start is refused outside a git repository, and when less than 2 GB is
-  free where the copy goes or `df` cannot say; start the child with
-  `isolation: "shared"` then.
-- A parent run with `paths` bounds its snapshot child by those paths as they
-  resolve in the parent's cwd, not in the copy: the copy lies outside them,
-  so the child's file tools refuse every path in its copy. gent does not move
-  the parent's paths into the copy, since core cannot tell a copy from any
-  other cwd a create names. Give such a child no `paths` parent, or use
-  `isolation: "shared"`.
+  free where the copy goes or `df` cannot say; start the thread without
+  `workspace` then.
+- A starter run with `paths` bounds its snapshot thread by those paths as
+  they resolve in the starter's cwd, not in the copy: the copy lies outside
+  them, so the thread's file tools refuse every path in its copy. gent does
+  not move the starter's paths into the copy, since core cannot tell a copy
+  from any other cwd a create names. Start such a thread from a run with no
+  `paths`, or without `workspace`.
 
-A copy is not a sandbox. The child's `bash`, the cell and every other tool can
-still reach your repository and every other path, as with `paths`. A snapshot
-keeps the child's ordinary edits out of your working tree; it does not keep a
-command out. The copy is a new directory, so a project trust you gave your
-directory does not reach it: the child does not load your project's
-extensions until you trust the copy's directory too.
+A copy is not a sandbox. The thread's `bash`, the cell and every other tool
+can still reach your repository and every other path, as with `paths`. A
+snapshot keeps the thread's ordinary edits out of your working tree; it does
+not keep a command out. The copy is a new directory, so a project trust you
+gave your directory does not reach it: the thread does not load your
+project's extensions until you trust the copy's directory too.
 
 ## Model router
 

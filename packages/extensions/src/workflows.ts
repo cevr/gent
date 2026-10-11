@@ -1,6 +1,6 @@
 /**
  * Workflow commands as recipes. Each slash command queues a prompt that
- * uses the kernel and host tools without a fixed child-agent sequence.
+ * uses the kernel and host tools without a fixed thread sequence.
  * No orchestration code lives here; the model runs the recipe.
  */
 
@@ -22,9 +22,9 @@ const planRecipe = (input: string, outputPath: string) => {
   return [
     `Plan: ${input}`,
     "Inspect the relevant sources. Produce a scoped implementation plan with commit steps, risks, and verification. Do not implement it yet.",
-    "Use independent child work only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Start delegate threads for independent work only when it adds value. Keep intermediate results in cell bindings or files.",
     `Save the final plan at ${outputPath} with the write tool and atomic: true. This canonical path is on the session server. Confirm the write succeeded and show the path. If the user requests another destination, export a separate copy after the canonical save; an export failure must not undo it.`,
-    "End the save cell before requesting approval with prompt in a separate cell. Read the saved plan for approval. Obtain approval before code changes. If the worker is lost, inspect the saved file or write receipt; do not repeat a write or child run merely to recover context.",
+    "End the save cell before requesting approval with prompt in a separate cell. Read the saved plan for approval. Obtain approval before code changes. If the worker is lost, inspect the saved file or write receipt; do not repeat a write or a thread's round merely to recover context.",
   ].join("\n")
 }
 
@@ -32,7 +32,7 @@ const reviewRecipe = (input: string, outputPath: string) =>
   [
     `Review: ${input || "the most recent changes (git diff)"}`,
     "Read the relevant sources. Report actionable findings with file, line, severity, explanation, and a proposed fix. State when no findings remain. Do not edit source files.",
-    "Use an independent child review when it adds value. Keep intermediate results in cell bindings or files.",
+    "Start an independent review in a delegate thread when it adds value. Keep intermediate results in cell bindings or files.",
     `Write only the final report to ${outputPath} with the write tool and atomic: true. Confirm the save succeeded, then show the findings and server file path.`,
   ].join("\n")
 
@@ -40,12 +40,12 @@ const auditRecipe = (input: string, outputPath: string) =>
   [
     `Audit: ${input || "the current changes (git diff --name-only)"}`,
     "Inspect the relevant sources for material concerns. Report findings with file, line, severity, and evidence. Do not edit source files.",
-    "Delegate independent concerns only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Delegate independent concerns to delegate threads only when it adds value. Keep intermediate results in cell bindings or files.",
     `Write only the final report to ${outputPath} with the write tool and atomic: true. Confirm the save succeeded, then show the findings and server file path. Use prompt mode 'present' if a separate notice helps; it requires no approval.`,
   ].join("\n")
 
 const counselRecipe = (input: string) =>
-  `Get a second opinion on ${input || "the current approach"}: delegate a self-contained question with the approach, alternatives, and tradeoffs. Use a different model with overrides.model when one is available. Report the opinion verbatim, then your response.`
+  `Get a second opinion on ${input || "the current approach"}: start a delegate thread (thread.start with agent "delegate" and notify "starter") on a self-contained question with the approach, alternatives, and tradeoffs, then end the turn; its answer arrives as a message. Use a different model with thread.start's model when one is available. Report the opinion verbatim, then your response.`
 
 const researchRecipe = (input: string) => {
   if (input.length === 0) {
@@ -53,7 +53,7 @@ const researchRecipe = (input: string) => {
   }
   return [
     `Research: ${input}`,
-    "Use primary sources. Read the repositories skill when external source code is needed. Use native Git or package commands through bash and record exact revisions. Delegate independent reading only when it adds value. Keep intermediate results in cell bindings or files.",
+    "Use primary sources. Read the repositories skill when external source code is needed. Use native Git or package commands through bash and record exact revisions. Delegate independent reading to delegate threads only when it adds value. Keep intermediate results in cell bindings or files.",
     "Answer with citations to the sources you read. Separate observed behavior from inference and state any gaps.",
   ].join("\n")
 }

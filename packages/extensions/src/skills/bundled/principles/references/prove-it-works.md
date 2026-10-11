@@ -20,7 +20,7 @@ Code / Features:
 4. For integrations, test the full communication path end-to-end
 
 Delegation: trust artifacts, not self-reports:
-When verifying delegated work, inspect the actual output artifact (git diff, file contents, runtime behavior) — never the delegate's summary. Agents report what they intended, not always what happened.
+When verifying delegated work, inspect the actual output artifact (git diff, file contents, runtime behavior) — never the delegate thread's summary. Agents report what they intended, not always what happened.
 
 Cross-session artifacts: verify before ending:
 Files written during a session can fail to persist (interrupted writes, path errors, tool failures). If an artifact is needed in a future session, verify it exists (`ls` or `Read`) before closing. Unverified writes are lost work.

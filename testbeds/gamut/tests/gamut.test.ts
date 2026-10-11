@@ -138,14 +138,15 @@ describe("gamut preset config", () => {
 })
 
 describe("gamut roster block", () => {
-  test("names the paired worker and the reviewer overrides the orchestrator must pass", () => {
+  test("names the paired worker and the thread.start model and effort the orchestrator must pass", () => {
     const block = rosterBlock(preset)
     expect(block).toContain("paired in `.gent/config.json` as `openai/gpt-6-luna` at `max`")
     expect(block).toContain("Repetitive mechanical changes following an established pattern only")
-    expect(block).toContain("`overrides.model` = `openai/gpt-6-luna`")
-    expect(block).toContain("`overrides.model` = `anthropic/claude-opus-5-5`")
+    expect(block).toContain("`model` = `openai/gpt-6-luna`")
+    expect(block).toContain("`model` = `anthropic/claude-opus-5-5`")
     expect(block).not.toContain("modelId")
-    expect(block).toContain("`overrides.reasoningEffort` = `high`")
+    expect(block).not.toContain("overrides")
+    expect(block).toContain("`effort` = `high`")
   })
 
   test("a rewrite replaces only the block and keeps the prose around it", () => {
@@ -517,11 +518,11 @@ describe("gamut status", () => {
         JSON.stringify({ _tag: "ExtensionStateChanged", extensionId }),
       ])
     expect(extensionPulses(db)).toEqual([])
-    for (const id of ["@gent/delegate", "@gent/btw", "@gent/btw", "@gent/btw"]) pulse(id)
+    for (const id of ["@gent/session-tools", "@gent/btw", "@gent/btw", "@gent/btw"]) pulse(id)
     db.run("INSERT INTO events (event_tag, event_json) VALUES ('StreamStarted', '{}')")
     expect(extensionPulses(db)).toEqual([
       { extension: "@gent/btw", count: 3 },
-      { extension: "@gent/delegate", count: 1 },
+      { extension: "@gent/session-tools", count: 1 },
     ])
   })
 })

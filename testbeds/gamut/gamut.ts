@@ -60,10 +60,11 @@ interface Slot {
 
 /**
  * A preset pins three roles. The orchestrator is agent `main` and the worker
- * is agent `delegate` in `.gent/config.json`: the pairing every child runs
- * under with no override. The reviewer reaches the orchestrator through the
- * roster block in `AGENTS.md`, which tells it what `overrides` to pass on a
- * `delegate.start` call that wants the second opinion.
+ * is agent `delegate` in `.gent/config.json`: the pairing every delegate
+ * thread runs under when its start names no model. The reviewer reaches the
+ * orchestrator through the roster block in `AGENTS.md`, which tells it what
+ * `model` and `effort` to pass on a `thread.start` call that wants the second
+ * opinion.
  */
 interface Preset {
   readonly orchestrator: Slot
@@ -261,8 +262,8 @@ export const rosterBlock = (preset: Preset): string =>
   [
     ROSTER_START,
     `- Worker (fix or feature): the \`delegate\` agent, paired in \`.gent/config.json\` as \`${preset.worker.modelId}\` at \`${preset.worker.reasoningEffort}\`.`,
-    `- Reviewer (second opinion on a diff): \`overrides.model\` = \`${preset.reviewer.modelId}\`, \`overrides.reasoningEffort\` = \`${preset.reviewer.reasoningEffort}\``,
-    "- Repetitive mechanical changes following an established pattern only: `overrides.model` = `openai/gpt-6-luna`, `overrides.reasoningEffort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
+    `- Reviewer (second opinion on a diff): \`model\` = \`${preset.reviewer.modelId}\`, \`effort\` = \`${preset.reviewer.reasoningEffort}\``,
+    "- Repetitive mechanical changes following an established pattern only: `model` = `openai/gpt-6-luna`, `effort` = `max`. Include transformation rules, worked examples, and the validation command in the task.",
     ROSTER_END,
   ].join("\n")
 

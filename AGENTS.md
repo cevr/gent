@@ -97,7 +97,7 @@ packages/core/src/       # Everything non-UI
   extensions/            # Public extension API surface and branch-tool entry points
   server/                # transport contract, commands, queries, handlers, startup wiring
   test-utils/            # Mock layers, sequence recording, step builders, in-process layer
-packages/extensions/     # Shipped extensions (providers, tools, MCP, cell, delegate)
+packages/extensions/     # Shipped extensions (providers, tools, MCP, cell, threads)
 packages/sdk/            # Client wrappers
 packages/tooling/        # gent lint rules and guards
 packages/e2e/            # PTY and server-process lifecycle tests, drive scripts for live checks
