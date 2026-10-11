@@ -2425,10 +2425,12 @@ const testStream = (
   stream: (
     options: ProviderOptions,
   ) => Effect.Effect<Stream.Stream<LanguageModelStreamPart, AiError.AiError>, AiError.AiError>,
+  model?: { readonly supportsSystemMessagesInHistory?: boolean },
 ): Layer.Layer<LanguageModel.LanguageModel> =>
   makeLanguageModelLayer({
     streamText: (options) => stream(options).pipe(Stream.unwrap),
     generateText: () => Effect.succeed("test response"),
+    ...model,
   })
 
 /** One layer value, so every test that provides it shares its memoized build. */

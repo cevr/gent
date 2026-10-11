@@ -133,34 +133,25 @@ and writes the replay clear at once; gent stays on 0.5.
 
 ## `@effect/ai-anthropic@4.0.2`
 
-`prepareMessages` sets the request's `system` field from each system group
-it meets, so a system message after the first message replaces the system
-prompt. gent sends the runtime's turn notices as such a later system
-message; in `system` they would change the cached prompt prefix every turn
-and lose their place in the conversation.
+`transformToolCallParams` fails the reply with `ToolNotFoundError` when the
+model calls a tool the request did not declare. The patch passes the call
+on as the model wrote it, as `@effect/ai-openai@4.0.2` below does: the
+loop's tool runner answers it. Remove it with `effect@4.0.2`'s
+undeclared-name part. It patches `dist` only; the shipped `src` copy keeps
+the upstream text.
 
-The patch keeps the first system group in `system` and sends a later one,
-in place, as a user message whose text blocks read
-`<host-context-update>\n…\n</host-context-update>`, with `&`, `<` and `>`
-escaped so the text cannot close the wrapper. The opening is
-`HOST_CONTEXT_UPDATE_OPEN` in `packages/extensions/src/providers.ts`. Both
-Messages drivers (`anthropic.ts`, and `opencode.ts` for its Messages models)
-read it through `isHostContextUpdate` there to keep the cache marker off
-these blocks.
-
-The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.2` below does.
-
-Remove the system part when the SDK keeps a later system message in place,
-and the undeclared-name part with `effect@4.0.2`'s. Rechecked on
-2026-10-10: 4.0.2 appends a later system group to `system`, which still
-changes the cached prefix. Only for a model marked
-`supportsMidConversationSystemMessages` (or the `midConversationSystemMessages`
-config) does it send the group as a `system` message in history, held until
-the next assistant turn. The patch was regenerated for 4.0.2, and its branch
-for a later group runs before upstream's, so every model gets the user
-message form, as with 4.0.0. It patches `dist` only; the shipped `src` copy
-keeps the upstream text.
+A later system message (the runtime's turn notices) needs no patch. 4.0.2
+keeps it a `system` message in history for a model that takes one
+(`supportsMidConversationSystemMessages`, which `LanguageModel`
+reports as `supportsSystemMessagesInHistory`) and appends it to the
+top-level `system` for the others (Claude Sonnet 4.6, Opus 4.7, Sonnet 5),
+which would change the cached prefix each turn. Core reads that capability
+and sends such a message to a model without it as a
+`<host-context-update>` user message, at its place
+(`promptForModel` in `packages/core/src/runtime/model-context.ts`), the
+bytes this patch built through 2026-10-11. The OpenCode gateways' Messages
+models set `midConversationSystemMessages: false`, so they get the same
+form.
 
 ## `@effect/ai-openai-compat@4.0.2`
 

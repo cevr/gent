@@ -61,6 +61,7 @@ import {
   textStep,
   fixtureModelCatalog,
   testHostFacts,
+  promptForModel,
   turnNoticesText,
 } from "@gent/core/test-utils"
 import { resolveShipped } from "./helpers/api-classes.js"
@@ -70,12 +71,12 @@ import {
   type CredentialFailure,
   CredentialRefreshUnavailable,
   EMPTY_CREDENTIAL_CELL,
-  hostContextUpdateText,
 } from "../src/providers.js"
 import {
   type ExtensionHostService,
   ExtensionHost,
   defineExtension,
+  hostContextUpdateText,
   ProviderAuthError,
   CredentialSlot,
   type ProviderHints,
@@ -1617,17 +1618,27 @@ const runContextRequest = (
   prompt: Prompt.Prompt,
   mode: typeof ContextMode.Type,
 ) => {
-  const request = Match.value(mode).pipe(
-    Match.when("stream", () => LanguageModel.streamText({ prompt }).pipe(Stream.runDrain)),
-    Match.when("object", () =>
-      LanguageModel.generateObject({ prompt, schema: Schema.Struct({ ok: Schema.Boolean }) }).pipe(
-        Effect.asVoid,
+  const request = (turnPrompt: Prompt.Prompt) =>
+    Match.value(mode).pipe(
+      Match.when("stream", () =>
+        LanguageModel.streamText({ prompt: turnPrompt }).pipe(Stream.runDrain),
       ),
-    ),
-    Match.when("text", () => LanguageModel.generateText({ prompt }).pipe(Effect.asVoid)),
-    Match.exhaustive,
-  )
-  return request.pipe(
+      Match.when("object", () =>
+        LanguageModel.generateObject({
+          prompt: turnPrompt,
+          schema: Schema.Struct({ ok: Schema.Boolean }),
+        }).pipe(Effect.asVoid),
+      ),
+      Match.when("text", () =>
+        LanguageModel.generateText({ prompt: turnPrompt }).pipe(Effect.asVoid),
+      ),
+      Match.exhaustive,
+    )
+  // The prompt as the turn sends it to the model (`promptForModel`).
+  return LanguageModel.LanguageModel.pipe(
+    Effect.flatMap((model) => promptForModel(prompt, model)),
+    Effect.flatMap(request),
+  ).pipe(
     Effect.provide(
       Layer.provideMerge(
         layer,
@@ -1759,6 +1770,164 @@ describe("Anthropic chronological context", () => {
       }),
   )
 })
+// ── later system messages ──
+//
+// A system message after the conversation began (a turn notice) goes as the
+// model takes it (`promptForModel`). The bodies a model without system
+// messages in its history must send are recorded from the patched SDK that
+// built the wrap before core did (`@effect/ai-anthropic@4.0.2`, 2026-10-11).
+
+/** The conversation with a notice the caller marks before the last prompt, and a turn notice after it. */
+const laterSystemPrompt = () => {
+  const conversation = cachingConversation({})
+  return Prompt.fromMessages([
+    ...conversation.slice(0, -1),
+    Prompt.makeMessage("system", {
+      content: "Earlier & <status>",
+      options: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    }),
+    ...conversation.slice(-1),
+    Prompt.makeMessage("system", {
+      content: Option.getOrThrow(
+        turnNoticesText([
+          { id: "stopped", content: "# Stopped <children> & </host-context-update>", keys: [] },
+        ]),
+      ),
+    }),
+  ])
+}
+/** The body `modelName` sends for `laterSystemPrompt` in a conversation turn. */
+const laterSystemBody = (modelName: string, authInfo: ProviderAuthInfo) =>
+  sentThroughSignedInDriver(
+    modelName,
+    authInfo,
+    { cacheKey: "session-cache-key" },
+    (model, state) =>
+      generateAsTurn(laterSystemPrompt()).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            model,
+            fakeFetchLayer(state, () => anthropicHappyResponse()),
+          ),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      ),
+  ).pipe(Effect.map((request) => Option.getOrThrow(Option.fromUndefinedOr(request.body))))
+
+const RECORDED_API_KEY_BODY = String.raw`{"model":"claude-sonnet-4-6","max_tokens":128000,"messages":[{"role":"user","content":[{"type":"text","text":"Read a.txt.","cache_control":null}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_read","name":"read","input":{"path":"a.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read","content":"alpha","is_error":false,"cache_control":null}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nEarlier &amp; &lt;status&gt;\n</host-context-update>","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"Now summarize it.","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt; &amp; &lt;/host-context-update&gt;\n</host-context-update>","cache_control":null}]}],"system":[{"type":"text","text":"Stable instructions.","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"name":"read","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"description":"Read a file.","strict":true}],"tool_choice":{"type":"auto"}}`
+const RECORDED_CLAUDE_CODE_BODY = String.raw`{"model":"claude-sonnet-4-6","max_tokens":128000,"messages":[{"role":"user","content":[{"type":"text","text":"Stable instructions.","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"Read a.txt.","cache_control":null}]},{"role":"assistant","content":[{"type":"tool_use","id":"call_read","name":"mcp_Read","input":{"path":"a.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_read","content":"alpha","is_error":false,"cache_control":null}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nEarlier &amp; &lt;status&gt;\n</host-context-update>","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"Now summarize it.","cache_control":{"type":"ephemeral","ttl":"1h"}}]},{"role":"user","content":[{"type":"text","text":"<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped &lt;children&gt; &amp; &lt;/host-context-update&gt;\n</host-context-update>","cache_control":null}]}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.280.b2d; cc_entrypoint=cli; cch=7ddec;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"tools":[{"name":"mcp_Read","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"description":"Read a file.","strict":true}],"tool_choice":{"type":"auto"}}`
+
+const LaterSystemRequest = Schema.fromJsonString(
+  Schema.Struct({
+    system: Schema.Array(Schema.Struct({ text: Schema.String })),
+    messages: Schema.Array(
+      Schema.Struct({
+        role: Schema.String,
+        content: Schema.Array(
+          Schema.Struct({
+            type: Schema.String,
+            text: Schema.optional(Schema.String),
+            cache_control: Schema.optional(Schema.NullOr(Schema.Unknown)),
+          }),
+        ),
+      }),
+    ),
+  }),
+)
+
+/** A message's blocks with their cache marker, if any, as an option. */
+const withMarkerFlags = (message: (typeof LaterSystemRequest.Type)["messages"][number]) =>
+  message.content.map(({ cache_control, ...block }) => ({
+    ...block,
+    marker: Option.fromNullishOr(cache_control),
+  }))
+
+describe("later system messages", () => {
+  it.live(
+    "a model that takes no system message in its history sends each later one as the wrapped user message the patched SDK sent, byte for byte",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* laterSystemBody("claude-sonnet-4-6", makeApiAuthInfo("sk-test"))).toBe(
+          RECORDED_API_KEY_BODY,
+        )
+        expect(yield* laterSystemBody("claude-sonnet-4-6", makeOAuthInfo())).toBe(
+          RECORDED_CLAUDE_CODE_BODY,
+        )
+      }),
+  )
+
+  it.live(
+    "a model that takes system messages in its history keeps each later one a system message, unwrapped, after the conversation",
+    () =>
+      Effect.gen(function* () {
+        for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+          const body = yield* laterSystemBody("claude-opus-5", authInfo)
+          const sent = yield* Schema.decodeEffect(LaterSystemRequest)(body)
+          expect(body).not.toContain("<host-context-update>")
+          expect(sent.system.map((block) => block.text)).not.toContain("Earlier & <status>")
+          expect(sent.messages.map((message) => message.role)).toEqual([
+            "user",
+            "assistant",
+            "user",
+            "user",
+            "system",
+          ])
+          expect(sent.messages.at(-1)?.content.map((block) => block.text)).toEqual([
+            "Earlier & <status>",
+            "Host status for this turn, not a message from the user.\n\n# Stopped <children> & </host-context-update>",
+          ])
+        }
+      }),
+  )
+
+  it.live(
+    "a later system message keeps its cache marker, and the conversation's tail marker stays on the conversation, whether the model takes it in its history or not",
+    () =>
+      Effect.gen(function* () {
+        const ephemeral = { type: "ephemeral", ttl: "1h" }
+        for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+          const wrapped = yield* Schema.decodeEffect(LaterSystemRequest)(
+            yield* laterSystemBody("claude-sonnet-4-6", authInfo),
+          )
+          expect(wrapped.messages.slice(3).map(withMarkerFlags)).toEqual([
+            [
+              {
+                type: "text",
+                text: hostContextUpdateText("Earlier & <status>"),
+                marker: Option.some(ephemeral),
+              },
+            ],
+            [{ type: "text", text: "Now summarize it.", marker: Option.some(ephemeral) }],
+            [
+              {
+                type: "text",
+                text: hostContextUpdateText(
+                  "Host status for this turn, not a message from the user.\n\n# Stopped <children> & </host-context-update>",
+                ),
+                marker: Option.none(),
+              },
+            ],
+          ])
+          const kept = yield* Schema.decodeEffect(LaterSystemRequest)(
+            yield* laterSystemBody("claude-opus-5", authInfo),
+          )
+          expect(kept.messages.slice(3).map(withMarkerFlags)).toEqual([
+            [{ type: "text", text: "Now summarize it.", marker: Option.some(ephemeral) }],
+            [
+              { type: "text", text: "Earlier & <status>", marker: Option.some(ephemeral) },
+              {
+                type: "text",
+                text: "Host status for this turn, not a message from the user.\n\n# Stopped <children> & </host-context-update>",
+                marker: Option.none(),
+              },
+            ],
+          ])
+        }
+      }),
+  )
+})
+
 /** Every `cache_control` marker in a request body, in prefix order (tools, system, messages) whatever the order of its keys. */
 const cacheMarkers = (body: string): ReadonlyArray<string> => {
   const payload = Schema.decodeSync(Schema.fromJsonString(JsonRecordSchema))(body)
@@ -2957,6 +3126,18 @@ const cachingConversation = (
     { role: "user", content: [{ type: "text", text: "Now summarize it." }] },
   ]).content,
 ]
+/** One request on `prompt` as the turn shapes it for the model (`promptForModel`), with the read tool. */
+const generateAsTurn = (prompt: Prompt.Prompt) =>
+  LanguageModel.LanguageModel.pipe(
+    Effect.flatMap((model) => promptForModel(prompt, model)),
+    Effect.flatMap((turnPrompt) =>
+      LanguageModel.generateText({
+        prompt: turnPrompt,
+        toolkit: Toolkit.make(ReadTool),
+        disableToolCallResolution: true,
+      }),
+    ),
+  )
 const runCachingRequest = (
   model: Layer.Layer<LanguageModel.LanguageModel>,
   state: FakeFetchState,
@@ -2965,11 +3146,7 @@ const runCachingRequest = (
   after: ReadonlyArray<Prompt.Message> = [],
   system?: ReadonlyArray<string>,
 ) =>
-  LanguageModel.generateText({
-    prompt: Prompt.fromMessages([...cachingConversation(options, system), ...after]),
-    toolkit: Toolkit.make(ReadTool),
-    disableToolCallResolution: true,
-  }).pipe(
+  generateAsTurn(Prompt.fromMessages([...cachingConversation(options, system), ...after])).pipe(
     Effect.provide(
       Layer.provideMerge(
         model,
@@ -3070,7 +3247,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           const plain = yield* sentFor(authInfo)
           const noticed = yield* sentFor(authInfo, {}, [notice])
           const update = noticed.messages.at(-1)?.content ?? []
-          // The patched SDK builds the same wrap as `hostContextUpdateText`.
+          // Core wraps it for a model that takes no system message in its history.
           expect(update.map((block) => block.text)).toEqual([hostContextUpdateText(notice.content)])
           expect(update[0]?.text).toContain("# Stopped &lt;children&gt;")
           expect(update.some(isMarked)).toBe(false)
@@ -3083,10 +3260,12 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       }),
   )
 
-  // An effort change rides inside the conversation as an effort marker; the
-  // top level keeps the effort the conversation ran at before the change.
+  // An effort marker takes effect from the next user turn. Claude Opus 5
+  // keeps a turn notice a system message, which is no user turn: a marker
+  // after the tool result would change the effort only after this reply, so
+  // the change goes at the top level.
   it.live(
-    "a Claude Code request carries an effort change as a marker after the tool result, before the turn notice",
+    "a Claude Code request sends an effort change at the top level when only a turn notice the model keeps a system message follows the tool result",
     () =>
       Effect.gen(function* () {
         const notice = Prompt.makeMessage("system", {
@@ -3106,7 +3285,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
         )
         const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
         const sent = yield* Schema.decodeEffect(EffortRequest)(body)
-        expect(sent.output_config.effort).toBe("high")
+        expect(sent.output_config.effort).toBe("low")
         expect(
           sent.messages.map((message) =>
             Option.match(Option.fromUndefinedOr(message.output_config), {
@@ -3114,12 +3293,11 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
               onSome: (config) => `${message.role}:${config.effort}`,
             }),
           ),
-        ).toEqual(["user", "assistant", "user", "system:low", "user"])
-        expect(sent.messages[3]?.content).toEqual([])
+        ).toEqual(["user", "assistant", "user", "system"])
         const cached = yield* Schema.decodeEffect(CachedRequest)(body)
         expect(lastMarked(cached.messages[2]?.content ?? [])).toBe(true)
         const betas = (request.headers["anthropic-beta"] ?? "").split(",")
-        expect(betas).toContain("mid-conversation-output-config-2026-07-01")
+        expect(betas).not.toContain("mid-conversation-output-config-2026-07-01")
         expect(betas).toContain("oauth-2025-04-20")
       }),
   )

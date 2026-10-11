@@ -155,6 +155,7 @@ import {
 import { type ActiveStreamHandle, ToolResultReplayError, TurnOutcome } from "../../src/runtime/turn"
 import {
   ContextDirective,
+  hostContextUpdateText,
   ModelContextLedger,
   windowMarkerMessage,
 } from "../../src/runtime/model-context"
@@ -550,6 +551,71 @@ describe("turn notices", () => {
             messagePartsText(message.parts).includes("# Test notice"),
           ),
         ).toBe(false)
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
+  )
+
+  // A model that takes no system message in its history gets the notice as a
+  // user message the host wraps; one that does, or does not say, gets it as
+  // the system message its SDK places.
+  it.scopedLive(
+    "a turn notice reaches the model as the model takes a later system message",
+    () =>
+      Effect.gen(function* () {
+        const noticeText =
+          "Host status for this turn, not a message from the user.\n\n# Test notice\n\n<fired> & done"
+        const notices = defineExtension({
+          id: "@test/turn-notice-placement",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("turnProjection", () =>
+              Effect.succeed({
+                notices: [
+                  { id: "test-notice", content: "# Test notice\n\n<fired> & done", keys: [] },
+                ],
+              }),
+            )
+          }),
+        })
+        const lastMessageFor = (model: { readonly supportsSystemMessagesInHistory?: boolean }) =>
+          Effect.gen(function* () {
+            const last = yield* Deferred.make<Prompt.Message>()
+            const providerLayer = LanguageModelLayers.testStream(
+              (options) =>
+                Deferred.succeed(
+                  last,
+                  Option.getOrThrow(
+                    Option.fromUndefinedOr(Prompt.make(options.prompt).content.at(-1)),
+                  ),
+                ).pipe(
+                  Effect.as(
+                    Stream.fromIterable([
+                      textDeltaPart("ok"),
+                      finishPart({ finishReason: "stop" }),
+                    ] satisfies LanguageModelStreamPart[]),
+                  ),
+                ),
+              model,
+            )
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              extensionInputs: [...e2ePreset.extensionInputs, notices],
+              providerLayer,
+            })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            return yield* Deferred.await(last)
+          })
+
+        const wrapped = yield* lastMessageFor({ supportsSystemMessagesInHistory: false })
+        expect(wrapped.role).toBe("user")
+        expect(wrapped.content).toMatchObject([
+          { type: "text", text: hostContextUpdateText(noticeText) },
+        ])
+        for (const model of [{ supportsSystemMessagesInHistory: true }, {}]) {
+          const kept = yield* lastMessageFor(model)
+          expect(kept.role).toBe("system")
+          expect(kept.content).toBe(noticeText)
+        }
       }).pipe(Effect.timeout("12 seconds")),
     15_000,
   )

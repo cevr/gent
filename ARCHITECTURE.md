@@ -116,7 +116,8 @@ updates this list in the same commit.
     runs takes effect at the next turn (`atTurnEffort`), where a Claude
     effort marker takes effect too (from the next user turn; a marker after a
     tool result would wait past the reply, so such a change sends the plain
-    request). Each step's `StreamEnded.reasoningLevel` receipt
+    request, as it does when only a turn notice the model keeps a system
+    message follows the tool result). Each step's `StreamEnded.reasoningLevel` receipt
     names the effort that step was sent at, after the clamp; a step that
     named no level to a model that reasons writes `reasoningDefault`
     instead, so "sent at the model's default" reads apart from "unknown"
@@ -758,13 +759,22 @@ show-until-read content as `notices` (`TurnNotice`: id, content, keys). The
 system prompt holds only the sections, so it stays byte-identical while a
 notice comes and goes. Core places the turn's notices after the
 conversation, as one system message at the end of each step's request, and
-stores none (`toPrompt` in `runtime/model-context.ts`). The Anthropic driver
-sends it as a `<host-context-update>` user message, which takes no cache
-marker, so the tail marker stays on the last conversation block; the OpenAI
-driver sends it as a developer message after the conversation, so the prefix
-it caches is unchanged. The message opens with "Host status for this turn,
-not a message from the user." Both drivers send it in a role below the
-system prompt, so a user instruction wins over a notice; the opening line
+stores none (`toPrompt` in `runtime/model-context.ts`). Each step then
+shapes the request for its model (`promptForModel`): a model that reports
+`supportsSystemMessagesInHistory: false` (Claude Sonnet 4.6, Opus 4.7,
+Sonnet 5, and the OpenCode gateways' Messages models) gets every system
+message after the conversation begins as a `<host-context-update>` user
+message at its place, its text escaped and its cache marker kept; one that
+takes them, or does not say, keeps a system message, which the Anthropic
+SDK places after the conversation. The Anthropic driver keeps each update a
+user message of its own and puts no tail marker on it or on a system
+message, so the tail marker stays on the last conversation block; the
+OpenAI driver sends the notice as a developer message after the
+conversation, so the prefix it caches is unchanged. The message opens with
+"Host status for this turn, not a message from the user." The user and
+developer forms rank below the system prompt, so a user instruction wins
+over a notice; a system message in history is the host's own instruction,
+and Anthropic lets it override the top-level one. The opening line
 keeps the model from reading host facts as the user speaking. A notice with
 blank content is dropped, so it is never recorded as shown. The turn ledger records the keys each step's request
 carried, per extension; `turnAfter` hands an extension back its own keys as

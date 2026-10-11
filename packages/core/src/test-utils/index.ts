@@ -63,6 +63,7 @@ export {
 } from "../runtime/provider.js"
 export {
   KNOWN_IMAGE_COSTS,
+  promptForModel,
   turnNoticesText,
   windowMarkerMessage,
 } from "../runtime/model-context.js"

@@ -38,6 +38,7 @@ import {
   type ReasoningEffort,
   type ReasoningOption,
   type RunEffort,
+  isHostContextUpdateText,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -1267,29 +1268,6 @@ export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
     }),
 }
 
-// ── host context update ─────────────────────────────────────────────────────
-
-/**
- * A system message after the conversation (the runtime's turn notices) is
- * the host speaking, not the user. An API that takes no system message after
- * the conversation gets it as a user message in this wrap: the Anthropic SDK
- * builds this text from a later system message (`prepareMessages` in
- * `@effect/ai-anthropic`, patched). The Messages drivers read the wrap to keep
- * their cache markers off the update. The content is escaped, so a notice
- * cannot close the wrap.
- */
-const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
-const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
-
-/** The user-message text that carries a later system message. */
-export const hostContextUpdateText = (content: string): string =>
-  `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
-
-/** True for a text block that carries a later system message. */
-const isHostContextUpdateText = Schema.is(
-  Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
-)
-
 // ── transient stream events ─────────────────────────────────────────────────
 //
 // An accepted request can still end with an `error` event inside the stream.
@@ -1379,14 +1357,20 @@ export const writesPromptCache = (hints: Option.Option<ProviderHints>): boolean 
 export const isCacheableBlock = (block: JsonRecord): boolean =>
   CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
 
-/** True for a user message the SDK built from a later system message, not from the conversation. */
+/**
+ * True for a user message that carries a later system message (core's
+ * `promptForModel` wraps one for a model that takes none in its history),
+ * not the conversation.
+ */
 export const isHostContextUpdate = (message: JsonRecord): boolean => {
   const content = message["content"]
   if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
-  return content.every(
-    (block) => block["type"] === "text" && isHostContextUpdateText(block["text"]),
-  )
+  return content.every(isHostContextUpdateBlock)
 }
+
+/** True for a text block that carries a later system message (`hostContextUpdateText`). */
+export const isHostContextUpdateBlock = (block: JsonRecord): boolean =>
+  block["type"] === "text" && isHostContextUpdateText(block["text"])
 
 // ── api keys ────────────────────────────────────────────────────────────────
 

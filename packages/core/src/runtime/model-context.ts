@@ -659,12 +659,12 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
  * The notices change from turn to turn and the rest does not, so they go
  * last: the system prompt and the conversation stay one cacheable prefix
  * whether a notice comes or goes. A later system message is the host
- * speaking, not the user: a driver sends it as a context update after the
- * conversation (the Anthropic driver as a `<host-context-update>` user
- * message, which takes no cache marker; the OpenAI driver as a developer
- * message). Both rank below the system prompt,
- * so a user instruction wins over a notice, and `TURN_NOTICES_HEADING` says
- * the text is the host's.
+ * speaking, not the user. A model that takes a system message in its
+ * history gets it as one, placed by its SDK; another gets it as a
+ * `<host-context-update>` user message (`promptForModel`), which takes no
+ * cache marker; the OpenAI driver sends it as a developer message. The user
+ * and developer forms rank below the system prompt, so a user instruction
+ * wins over a notice, and `TURN_NOTICES_HEADING` says the text is the host's.
  */
 export const toPrompt = (
   messages: ReadonlyArray<Message>,
@@ -684,6 +684,57 @@ export const toPrompt = (
 
   return Prompt.fromMessages(promptMessages)
 }
+
+// ── later system messages ───────────────────────────────────────────────────
+
+const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
+const HOST_CONTEXT_UPDATE_CLOSE = "\n</host-context-update>"
+
+/**
+ * The user-message text that carries a later system message to a model that
+ * takes none in its history (`promptForModel`). The content is escaped, so a
+ * notice cannot close the wrap.
+ */
+export const hostContextUpdateText = (content: string): string =>
+  `${HOST_CONTEXT_UPDATE_OPEN}${content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}${HOST_CONTEXT_UPDATE_CLOSE}`
+
+/** True for a text that carries a later system message (`hostContextUpdateText`). */
+export const isHostContextUpdateText = Schema.is(
+  Schema.String.check(Schema.isStartingWith(HOST_CONTEXT_UPDATE_OPEN)),
+)
+
+/**
+ * The prompt as `model` takes a system message after the conversation began:
+ * the turn's notices, and any system message stored in the conversation. The
+ * system messages before it are the system prompt and stay as they are.
+ *
+ * The model says whether it takes a system message in its history
+ * (`supportsSystemMessagesInHistory`, read in the request's context, so a
+ * scoped config override counts). One that does not (Claude Sonnet 4.6, Opus
+ * 4.7, Sonnet 5) gets each such message as a user message in
+ * `hostContextUpdateText`, at its place, with its provider options (a cache
+ * marker) kept: its SDK would otherwise move the text into the top-level
+ * system prompt, and the cached prefix would change each time a notice came
+ * or went. One that does, or does not say, keeps it a system message, and
+ * its SDK places it.
+ */
+export const promptForModel = (
+  prompt: Prompt.Prompt,
+  model: LanguageModel.LanguageModel,
+): Effect.Effect<Prompt.Prompt> =>
+  Effect.map(model.supportsSystemMessagesInHistory ?? Effect.succeed(true), (inHistory) => {
+    const start = prompt.content.findIndex((message) => message.role !== "system")
+    if (inHistory || start === -1) return prompt
+    return Prompt.fromMessages(
+      prompt.content.map((message, index): Prompt.Message => {
+        if (index < start || message.role !== "system") return message
+        return Prompt.userMessage({
+          content: [Prompt.textPart({ text: hostContextUpdateText(message.content) })],
+          options: message.options,
+        })
+      }),
+    )
+  })
 
 // ── model-context-window ────────────────────────────────────────────────────
 

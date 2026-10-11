@@ -78,6 +78,7 @@ import {
   freshEnoughAt,
   isCacheableBlock,
   isHostContextUpdate,
+  isHostContextUpdateBlock,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -1611,13 +1612,14 @@ export const transformPayload = (
  *      same agent reads the prompt back from this entry;
  *   2. the last cacheable block of the last conversation message, so each
  *      step reads the previous step's conversation back from the cache. A
- *      host context update after it (a later system message, which the SDK
- *      sends as a `<host-context-update>` user message: the runtime's turn
- *      notices) takes no marker. It changes from turn to turn, so a marker
- *      on it would write an entry no later request reads, and the next step
- *      would find no entry at the conversation's end. An effort marker
- *      (`effortMarker`) has no content to mark, so the marker goes on the
- *      message before it;
+ *      later system message after it (the runtime's turn notices: a system
+ *      message the SDK places in the conversation, or a
+ *      `<host-context-update>` user message core wrapped it in for a model
+ *      that takes none there) takes no marker. It changes from turn to turn,
+ *      so a marker on it would write an entry no later request reads, and
+ *      the next step would find no entry at the conversation's end. An
+ *      effort marker (`effortMarker`), a system message too, has no content
+ *      to mark, so the marker goes on the message before it;
  *   3. the end of the shared part of the system prompt: the runtime sends
  *      the prompt as two system blocks, the part a session shares with its
  *      children and then the agent's own part (the children guidance, the
@@ -1948,7 +1950,9 @@ const markCacheBreakpoints = (
   })
   spend(markLastCacheable(prompt.read(), marker), prompt.write)
   markMessage(
-    messages.findLastIndex((message) => !isHostContextUpdate(message) && !isEffortMarker(message)),
+    messages.findLastIndex(
+      (message) => message["role"] !== "system" && !isHostContextUpdate(message),
+    ),
     (content) => markLastCacheable(content, marker),
   )
   const promptBlocks = prompt.read()
@@ -2111,17 +2115,19 @@ const anthropicClientLayer = <R>(
           Option.match(requestJsonObject(request), {
             onNone: () => Effect.succeed(request),
             onSome: (payload) =>
-              path.payload(applyRequestPlan(payload, plan, carrier)).pipe(
-                Effect.provideContext(pathContext),
-                Effect.map((body) => {
-                  let rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
-                  if (bindsThinking(body)) rewritten = withBeta(rewritten, THINKING_BINDING_BETA)
-                  if (carriesEffortMarker(body)) {
-                    rewritten = withBeta(rewritten, MID_CONVERSATION_EFFORT_BETA)
-                  }
-                  return rewritten
-                }),
-              ),
+              path
+                .payload(applyRequestPlan(withHostContextUpdatesApart(payload), plan, carrier))
+                .pipe(
+                  Effect.provideContext(pathContext),
+                  Effect.map((body) => {
+                    let rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
+                    if (bindsThinking(body)) rewritten = withBeta(rewritten, THINKING_BINDING_BETA)
+                    if (carriesEffortMarker(body)) {
+                      rewritten = withBeta(rewritten, MID_CONVERSATION_EFFORT_BETA)
+                    }
+                    return rewritten
+                  }),
+                ),
           }),
       )
       const replies = Layer.effect(
@@ -2745,6 +2751,40 @@ const withBeta = (
 }
 
 /**
+ * The payload with each host context update its own user message, as the
+ * wire had it when the SDK built them: core sends a later system message to
+ * a model that takes none in its history as a user message
+ * (`promptForModel`), and the SDK joins adjacent user and tool messages into
+ * one. Each run of updates in a user message, and each run of the rest, goes
+ * apart again, so the conversation before an update keeps its bytes and
+ * takes the tail marker, and an effort marker lands where it would without
+ * the update.
+ */
+const withHostContextUpdatesApart = (payload: JsonRecord): JsonRecord => {
+  const messages = payload["messages"]
+  if (!isRecordArray(messages)) return payload
+  return {
+    ...payload,
+    messages: messages.flatMap((message): ReadonlyArray<JsonRecord> => {
+      const content = message["content"]
+      if (message["role"] !== "user" || !isRecordArray(content)) return [message]
+      const runs: Array<Array<JsonRecord>> = []
+      for (const block of content) {
+        const run = runs.at(-1)
+        const first = run?.[0]
+        const sameRun =
+          Predicate.isNotUndefined(first) &&
+          isHostContextUpdateBlock(first) === isHostContextUpdateBlock(block)
+        if (Predicate.isNotUndefined(run) && sameRun) run.push(block)
+        else runs.push([block])
+      }
+      if (runs.length <= 1) return [message]
+      return runs.map((run) => ({ ...message, content: run }))
+    }),
+  }
+}
+
+/**
  * The payload with the plan's effort and thinking; any `output_config` the
  * SDK set is kept. With effort changes to carry, and a conversation they fit,
  * the top level names the pinned effort and each change is a marker
@@ -2815,8 +2855,9 @@ const carriesToolResult = (message: JsonRecord): boolean => {
  * same place. None, so the request is plain and its top level names the
  * reply's effort, when the assistant turns do not match the receipts' runs
  * (the SDK merged or dropped one), or a change would take effect only after
- * its run: a change right after a tool result, or a prompt the SDK merged into
- * the tool result before it.
+ * its run: a change right after a tool result, a prompt the SDK merged into
+ * the tool result before it, or a tool result followed only by a system
+ * message the SDK keeps in the conversation (a turn notice).
  */
 const withEffortMarkers = (
   messages: ReadonlyArray<JsonRecord>,
@@ -2840,7 +2881,9 @@ const withEffortMarkers = (
       Option.fromUndefinedOr(assistants[change.run]),
       () => messages.length,
     )
-    if (place >= run) return Option.none()
+    // A system message the SDK keeps in the conversation (a turn notice) is no user turn.
+    const turns = messages.slice(place, run)
+    if (!turns.some((message) => message["role"] === "user")) return Option.none()
     places.set(place, change.effort)
   }
   const result: Array<JsonRecord> = []
@@ -2936,6 +2979,12 @@ const makeOauthAnthropicLayer = (
  */
 const MESSAGES_PROMPT_CACHE_TTL: PromptCacheTtl = "5m"
 
+/** A gateway's request: its model takes no system message in its history. */
+const gatewayRequest = (request: AnthropicRequest): AnthropicRequest => ({
+  ...request,
+  config: { ...request.config, midConversationSystemMessages: false },
+})
+
 /**
  * The Anthropic Messages API, for any provider whose models.dev entry names
  * `@ai-sdk/anthropic` (the OpenCode gateways' Claude, MiniMax and Qwen
@@ -2960,8 +3009,12 @@ export const MESSAGES_CLASS: ApiClassContribution = {
         makeApiKeyAnthropicLayer(
           sdk,
           request.model.id,
-          // A gateway names no receipt that it passes the effort marker on.
-          anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL, "none"),
+          // A gateway names no receipt that it passes the effort marker on,
+          // nor a system message inside the conversation (its MiniMax and
+          // Qwen models are no Claude model): core wraps one (`promptForModel`).
+          gatewayRequest(
+            anthropicRequest(request.model, request.hints, MESSAGES_PROMPT_CACHE_TTL, "none"),
+          ),
           request,
         ),
       ),

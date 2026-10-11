@@ -10,6 +10,7 @@ import { BunCrypto } from "@effect/platform-bun"
 import {
   defineExtension,
   ExtensionHost,
+  hostContextUpdateText,
   type ModelDriverContribution,
   ModelId,
   ProviderAuthError,
@@ -854,9 +855,9 @@ describe("OpenCode prompt caching", () => {
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  // The patched SDK sends a system message after the conversation (a turn
-  // notice) as a user message of its own; caching it would spend a marker on
-  // text the next turn does not repeat.
+  // A gateway model takes no system message in its history, so core sends a
+  // turn notice as a user message of its own; caching it would spend a
+  // marker on text the next turn does not repeat.
   it.live("Messages keeps the markers off a turn notice and on the conversation", () =>
     Effect.gen(function* () {
       const { zen } = yield* fixtureDrivers
@@ -870,6 +871,16 @@ describe("OpenCode prompt caching", () => {
       ])
       yield* generate(zen, "claude-opus-5", state, { cacheKey: "s" }, conversation)
       expect((yield* markers(state)).messages).toEqual([[false], [false], [true], [false]])
+      // Claude Opus 5 takes one in its history from Anthropic; a gateway names no such receipt.
+      expect((yield* bodyOf(lastRequest(state)))["messages"]).toMatchObject([
+        { role: "user" },
+        { role: "assistant" },
+        { role: "user" },
+        {
+          role: "user",
+          content: [{ type: "text", text: hostContextUpdateText("the cache is cold") }],
+        },
+      ])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
