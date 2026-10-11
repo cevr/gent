@@ -2794,7 +2794,8 @@ const ThreadRow = Schema.Struct({
   preview: Schema.String,
   /**
    * The account (credential label) the current session runs on. Absent
-   * before its first step or placement. Flat, as every row field is: the
+   * until the session has a pin or its last step's receipt names an
+   * account; a placement alone names none. Flat, as every row field is: the
    * row's type renders whole within the cell's signature bound.
    */
   account: Schema.optionalKey(Schema.String),

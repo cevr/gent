@@ -197,7 +197,8 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
    * not maintain their own cost/model bookkeeping. */
   metrics: SessionRuntimeMetrics,
   /** The account the session runs on, and whether it was pinned, assigned or
-   * walked (`sessionAccount`). Absent before its first step or placement. */
+   * walked (`sessionAccount`). Absent until the session has a pin or its last
+   * step's receipt names an account; a placement alone names none. */
   account: Schema.optional(SessionAccount),
 }) {}
 

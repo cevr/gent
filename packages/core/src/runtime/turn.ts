@@ -105,6 +105,7 @@ import {
   RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
+import * as AiError from "effect/ai/AiError"
 import {
   credentialFailureMessage,
   isWindowFullStopReason,
@@ -929,17 +930,19 @@ interface TurnLedger {
    */
   readonly placeCredential: (provider: string, placed: CredentialDecision) => Effect.Effect<void>
   /**
-   * A request on `slot` of `provider` went out: its stream opened. A
-   * placement waiting on that account can be recorded from now on.
+   * A request on `slot` of `provider` went out: the provider answered it (a
+   * part arrived, or a failure with its response). A placement waiting on
+   * that account can be recorded from now on; one waiting on another
+   * account cannot, by a request that did not go out on it.
    */
   readonly noteDispatched: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
   /**
    * A step's receipt names `slot` of `provider`: the placement waiting on
-   * that account, recorded with this receipt once a request went out there.
-   * A receipt whose step never sent its request (stopped, or refused by the
-   * model-call budget, before its stream opened) records nothing, and the
-   * placement goes on waiting. One waiting on another account waits no
-   * more: its account served no request.
+   * that account, recorded with this receipt if a request went out there.
+   * The placement waits no more either way: a receipt whose step sent
+   * nothing (stopped by the stop or the model-call budget, or failed before
+   * the provider answered) ends its turn's walk there, and one waiting on
+   * another account served no request.
    */
   readonly takePlacement: (
     provider: string,
@@ -1184,9 +1187,9 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         const cursor = cursorOf(current, provider)
         if (Option.isNone(cursor.pending)) return [Option.none(), current]
         const { dispatched, ...decision } = cursor.pending.value
-        // No request went out on its account yet: it waits for one.
-        if (decision.slot === slot && !dispatched) return [Option.none(), current]
-        const placed = Option.some(decision).pipe(Option.filter(() => decision.slot === slot))
+        const placed = Option.some(decision).pipe(
+          Option.filter(() => decision.slot === slot && dispatched),
+        )
         return [placed, new Map(current).set(provider, { ...cursor, pending: Option.none() })]
       }),
   }
@@ -2047,6 +2050,19 @@ const poolStanding = Effect.fn("AgentLoop.poolStanding")(function* (params: {
   })
   return Option.some<OutsidePool>({ slot: outside.value, stays: !open })
 })
+
+/**
+ * A model stream's failure is the provider's answer: it carries the HTTP
+ * response the request got (a refusal, a rate limit, an exhausted quota), so
+ * the request went out. A failure with none behind it (a credential that
+ * fails as the request is signed, a lost connection, a prompt or toolkit
+ * failure) proves nothing went out.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+const providerAnswered = (error: unknown): boolean =>
+  AiError.isAiError(error) &&
+  "http" in error.reason &&
+  Predicate.isNotUndefined(error.reason.http?.response)
 
 /** Why a spread run is placed, the account it prefers, and the session whose burst it joins. */
 interface RunOrigin {
@@ -3692,10 +3708,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         model,
         stepWindow.model.hostContextUpdateOptions,
       )
-      // The request goes out as its stream opens, on the credential it
-      // resolved with: a placement waiting on that account can be recorded
-      // with this step's receipt. A step stopped before this point (the stop,
-      // the model-call budget, a sign-in that does not resolve) sent nothing.
+      // The request went out once the provider answered it, on the
+      // credential it resolved with: a part arrived, or the stream failed
+      // with the provider's response (`providerAnswered`). A placement
+      // waiting on that account can then be recorded with this step's
+      // receipt. Nothing short of that proves a request left: a step the
+      // stop or the model-call budget ends, a sign-in that fails as the
+      // request is signed, a prompt or toolkit failure, or a connection
+      // that never answers records nothing, which can only under-record.
       const dispatched = Effect.flatMap(credential, (sent) =>
         Effect.forEach(
           Option.toArray(sent),
@@ -3703,34 +3723,42 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           { discard: true },
         ),
       )
+      const answered = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
+        stream.pipe(
+          Stream.onFirst(() => dispatched),
+          Stream.tapError((error) =>
+            Effect.when(
+              dispatched,
+              Effect.sync(() => providerAnswered(error)),
+            ),
+          ),
+        )
       if (resolved.tools.length > 0) {
         if (params.finalStep) {
-          return model
-            .streamText({
+          return answered(
+            model.streamText({
               prompt,
               toolkit: convertTools([...resolved.tools]),
               toolChoice: "none",
               disableToolCallResolution: true,
-            })
-            .pipe(Stream.onStart(dispatched))
+            }),
+          )
         }
         // The reply decodes against every tool the profile registers;
         // `oneOf` keeps the request's declarations to the advertised ones,
         // in their order, so the request is the same bytes.
-        return model
-          .streamText({
+        return answered(
+          model.streamText({
             prompt,
             toolkit: convertTools([...resolved.replyTools]),
             toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
             disableToolCallResolution: true,
-          })
-          .pipe(Stream.onStart(dispatched))
+          }),
+        )
       }
       // No tool goes on the request, but the reply can still call one: the
       // tool runner answers it (`Unknown tool: <id>`), as for any step.
-      return model
-        .streamText({ prompt, disableToolCallResolution: true })
-        .pipe(Stream.onStart(dispatched))
+      return answered(model.streamText({ prompt, disableToolCallResolution: true }))
     }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
@@ -4476,9 +4504,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * account its cache is on and records nothing; a turn with a receipt of
      * its own (one recovered after a restart) walks from that receipt's
      * account and is never placed again at its start, unless its order no
-     * longer names that account; a pinned run is never placed. The placement
-     * is recorded with the receipt of the first request that went out on its
-     * account (`makePublishReceipt`), never before. A fork takes its
+     * longer names that account (then it is placed, or, while no pool
+     * account is eligible, stays outside the pool on its order's first
+     * account past it); a pinned run is never placed. The placement is
+     * recorded with the receipt of the first request that went out on its
+     * account, one the provider answered (`makePublishReceipt`), never before. A fork takes its
      * parent's account with no ranking, in the pool or not (the parent's own
      * choice). A run whose last request fell outside the pool stands by
      * `poolStanding`, as at a window handoff: it stays there while no pool
@@ -4539,8 +4569,21 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         left: cursor.passed,
       })
       if (Option.exists(standing, (found) => found.stays)) {
-        yield* scope.turnLedger.settleCredential(provider, lastSlot)
-        return false
+        if (!resumedOffOrder) {
+          yield* scope.turnLedger.settleCredential(provider, lastSlot)
+          return false
+        }
+        // Resumed on an account its order no longer names, the turn stays
+        // outside the pool on the order's first account past it. With none,
+        // it has no account outside the pool to stay on: the ranking places
+        // it, and the decision is recorded with its first request's receipt.
+        const pastPool = order.value.slots.find(
+          (slot) => !pool.includes(slot) && !cursor.passed.has(slot),
+        )
+        if (Predicate.isNotUndefined(pastPool)) {
+          yield* scope.turnLedger.settleCredential(provider, Option.some(pastPool))
+          return false
+        }
       }
       // A run still outside the pool here returns, from that account.
       const returnedFrom = Option.map(standing, (found) => found.slot)
