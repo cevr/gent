@@ -48,7 +48,12 @@ import {
 import { BranchId, type EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
 import { AgentsExtension } from "../src/agents.js"
 import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
-import { THREAD_ROUND_END_TYPE, THREAD_ROUND_TYPE, Threads } from "../src/threads.js"
+import {
+  THREAD_ROUND_END_TYPE,
+  THREAD_ROUND_TYPE,
+  threadRoundText,
+  Threads,
+} from "../src/threads.js"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── threads ─────────────────────────────────────────────────────────────────
@@ -1541,6 +1546,62 @@ describe("a thread round running when the server stopped", () => {
                 "the starter is idle",
               )
               expect(wakes(snapshot.messages)).toHaveLength(1)
+            }),
+          )
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
+
+  it.live(
+    "a round saved but never sent is sent when the starter opens, though the thread's loop opened first",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const starter: SessionKey = yield* client.session.create({})
+              const impl = yield* startWorker(client, starter, "start-impl")
+              return { starter, impl }
+            }),
+          )
+          // The process died between saving a round and sending its turn.
+          const round = "round-never-sent"
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              const content = threadRoundText({
+                number: 1,
+                starter: first.starter.sessionId,
+                message: "ECHO sent at last",
+                reply: Option.none(),
+                notify: "starter",
+              })
+              yield* sql`
+                INSERT INTO thread_rounds (
+                  round, thread, number, starter_session_id, starter_branch_id, starter_thread,
+                  session_id, branch_id, message_id, content, notify, started_at
+                ) VALUES (
+                  ${round}, ${first.impl.thread}, 1, ${first.starter.sessionId},
+                  ${first.starter.branchId}, ${first.starter.sessionId}, ${first.impl.sessionId},
+                  ${first.impl.branchId}, ${`thread-round:${round}`}, ${content}, 'starter', 0
+                )
+              `
+            }),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              // The thread's loop opens first: idle, with nothing to resume.
+              yield* client.session.getSnapshot(placeOf(first.impl))
+              const woke = yield* waitForWakes(client, first.starter, 1)
+              expect(wakeTexts(woke.messages)[0]).toContain(round)
+              const [read] = yield* call(client, first.starter, [
+                ["thread.round", "read-sent", { round }],
+              ])
+              expect(read?.result).toMatchObject({ status: "ended", text: "sent at last" })
             }),
           )
         }).pipe(Effect.timeout("40 seconds")),

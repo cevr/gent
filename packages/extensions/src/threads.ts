@@ -861,15 +861,6 @@ const admitted = Effect.fn("Threads.admitted")(function* (round: RoundRow) {
   return messages.some((message) => message.id === round.message_id)
 })
 
-/** The thread's branch has a loop in this process: the round on it runs, or resumed. */
-const roundLoopActive = Effect.fn("Threads.roundLoopActive")(function* (round: RoundRow) {
-  const ctx = yield* ExtensionContext
-  const loops = yield* ctx.Session.listActiveLoops
-  return loops.some(
-    (loop) => loop.sessionId === round.session_id && loop.branchId === round.branch_id,
-  )
-})
-
 /**
  * Where a round's end wakes its starter: the starter thread's current
  * session, so a starter that handed off reads it in its new session. The
@@ -999,11 +990,13 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
 /**
  * One round a restart may have left behind. A recorded end is delivered. A
  * turn that ended with no record is read from the thread's history, then
- * recorded and delivered. A turn with no receipt is running, or was cut
- * short: when the thread's branch has no loop in this process, the starter
- * side re-sends the round, whose id admits nothing new, and the thread's
- * loop opens and resumes it; its own hook ends the round. A repeat while
- * the loop runs would wait on it until the round ends.
+ * recorded and delivered. A turn with no receipt is running, was cut short,
+ * or was never sent (the process died between saving the round and sending
+ * it): the starter side re-sends the round. A repeat of its command with
+ * `completion: "admission"` admits nothing new and returns at once, and it
+ * opens the thread's loop, which resumes a turn cut short; a round never
+ * sent is admitted now, though the thread's loop is open and idle. The
+ * turn's own hook ends the round.
  */
 const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   round: RoundRow,
@@ -1026,7 +1019,6 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
     })
   }
   if (!starterSide || Predicate.isNotNull(round.stopped_at)) return
-  if (yield* roundLoopActive(round)) return
   yield* sendRoundTurn(round)
 })
 

@@ -876,7 +876,8 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     drops its round, so the thread is not held busy; the loop keeps the
     refusal under the round's command id, and a repeat gets it again. A retry under the same key is handed its round before the
     busy refusal; it re-sends only a round whose message never reached the
-    branch, since a repeat of a running turn's command waits for that turn.
+    branch. A repeat of a round's command (`completion: "admission"`)
+    admits nothing new and returns at once; it does not wait for the turn.
   - `thread_rounds` (one table in the server's database; its migrations are
     recorded in `thread_migrations`, apart from core's chain) keeps each round: its thread key, the
     session and branch it ran on, the sender and the sender's thread key,
@@ -895,7 +896,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     branch sent or ran whose end is undelivered: a recorded end is
     delivered, a turn with a receipt is recorded from its history
     (`child-turns.ts`, shared with delegate), and a round with neither is
-    re-sent when the thread's branch has no loop, which resumes it. The
+    re-sent from the starter's side, whether or not the thread's loop is
+    open: the repeat admits a round that was never sent and resumes one cut
+    short. The
     wake's source id makes a second delivery a no-op.
   - `thread.round({ round })` reads a round the caller's thread sent: open,
     or ended with its text, reply (null when none was given), flags and
