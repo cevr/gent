@@ -3940,13 +3940,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * spawned child's first turn: the receipts of the parent branch's newest turn. A
      * child runs inside that turn under the same sign-ins, so it starts each
      * order there and never pays again for a refusal the parent proved.
-     * None for any other session.
+     * The receipts prove a refusal only for the order the parent walked: a
+     * child whose pin differs from the parent's (`RunSpec.credentialSlot`,
+     * both none or the same slot) walks another order, so it starts at the
+     * top of its own. None for any other session.
      */
     const parentTurnCredentials = Effect.gen(function* () {
       const session = yield* sessionStorage.getSession(scope.sessionId)
       if (Predicate.isUndefined(session) || !isSpawnedSession(session)) return []
       const { parentSessionId, parentBranchId } = session
       if (Predicate.isUndefined(parentSessionId) || Predicate.isUndefined(parentBranchId)) return []
+      const parent = yield* sessionStorage.getSession(parentSessionId)
+      if (parent?.admission?.runSpec?.credentialSlot !== session.admission?.runSpec?.credentialSlot)
+        return []
       const events = yield* eventStorage.listEvents({
         sessionId: parentSessionId,
         branchId: parentBranchId,

@@ -2827,6 +2827,70 @@ describe("credential order", () => {
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 
+  it.live(
+    "an unpinned child of a pinned parent starts at the top of its own order, not on the parent's pin",
+    () =>
+      Effect.gen(function* () {
+        const keys = [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ] as const
+        const storage: CredentialStorage = Layer.succeedContext(
+          yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+        )
+        const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+        const runOn = (root: ReturnType<typeof credentialRoot>) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* ensureStorageParents({
+                sessionId: root.sessionId,
+                branchId: root.branchId,
+                admission: root.admission,
+              })
+              yield* runAgentLoop(
+                makeMessage(root.sessionId, root.branchId, "hello"),
+                root.admission,
+              )
+            }),
+          ).pipe(Effect.provide(root.layer))
+        // The parent is pinned to personal: its receipts say personal, and
+        // prove nothing about the default it never walked.
+        const parent = credentialRoot({
+          name: "pinned-parent",
+          order,
+          pin: personal,
+          stored: keys,
+          storage,
+          replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
+        })
+        yield* runOn(parent)
+        expect(parent.sent).toEqual(["sk-b"])
+        // A named-agent thread of that parent stores no pin and walks the order.
+        const child = credentialRoot({
+          name: "unpinned-child",
+          order,
+          stored: keys,
+          storage,
+          replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
+        })
+        yield* Effect.gen(function* () {
+          const now = dateFromMillis(yield* Clock.currentTimeMillis)
+          yield* (yield* SessionStorage).createSession(
+            new Session({
+              id: child.sessionId,
+              parentSessionId: parent.sessionId,
+              parentBranchId: parent.branchId,
+              createdAt: now,
+              updatedAt: now,
+              admission: child.admission,
+            }),
+          )
+        }).pipe(Effect.provide(storage), Effect.orDie)
+        yield* runOn(child)
+        expect(child.sent).toEqual(["sk-a"])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
   it.live("an exhausted quota moves the turn on; one that answers stays", () =>
     Effect.gen(function* () {
       const moved = yield* credentialTurn({
