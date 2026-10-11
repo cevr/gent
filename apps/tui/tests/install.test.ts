@@ -617,7 +617,10 @@ const compiled = (version: string): GentBuild => ({ _tag: "Compiled", id: "4f9c2
 /** A scratch home where install.sh installed each of `versions`, in order. */
 const installedHome = (releases: string, versions: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const home = yield* makeTempDirectoryScoped("gent-upgrade-home-")
+    // An upgrade finds its install from its executable's real path: on macOS the temp root is a link.
+    const home = yield* (yield* FileSystem.FileSystem).realPath(
+      yield* makeTempDirectoryScoped("gent-upgrade-home-"),
+    )
     for (const version of versions) {
       const installed = yield* install(home, releases, ["--version", version, "--no-modify-path"])
       expect(installed.exitCode).toBe(0)

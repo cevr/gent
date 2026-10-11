@@ -1310,7 +1310,10 @@ describe("a snapshot child", () => {
       live(
         Effect.gen(function* () {
           const origin = yield* dirtyRepository
-          const home = yield* makeTempDirectoryScoped("ws-home-")
+          // A copy's place is its real path: on macOS the temp root is a link.
+          const home = yield* (yield* FileSystem.FileSystem).realPath(
+            yield* makeTempDirectoryScoped("ws-home-"),
+          )
           const { places, within } = yield* installed(home, { rift: NO_RIFT })
           const stored = yield* Ref.make<ReadonlyArray<Session>>([])
           /** Core stores the session, then the call is interrupted before it returns. */

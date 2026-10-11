@@ -1934,7 +1934,10 @@ export default defineClientExtension("@test/logged", {
 const reloadFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-reload-" })
+  // A build names the files Bun read by their real paths: on macOS the temp root is a link.
+  const root = yield* fs.realPath(
+    yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-reload-" }),
+  )
   const userDir = path.join(root, "home/.gent/extensions")
   const projectDir = path.join(root, "project/.gent/extensions")
   yield* fs.makeDirectory(path.join(userDir, "_lib"), { recursive: true })

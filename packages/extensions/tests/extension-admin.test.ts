@@ -625,8 +625,12 @@ describe("extension admin pane requests", () => {
     "in a trusted project the pane turns off in the project config, and turns on in every config that names it",
     () =>
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
-        const project = yield* makeTempDirectoryScoped("gent-extension-admin-project-")
+        // Trust names a project's canonical root: on macOS the temp root is a link.
+        const project = yield* fs.realPath(
+          yield* makeTempDirectoryScoped("gent-extension-admin-project-"),
+        )
         const server = yield* adminServer({
           cwd: project,
           userConfig: `${encodeJson({ trustedProjects: [project], disabledExtensions: ["@test/other"] })}\n`,

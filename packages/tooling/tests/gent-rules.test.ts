@@ -506,7 +506,10 @@ effectDescribe("custom lint rules", () => {
         const path = yield* Path.Path
         const repo = yield* path.fromFileUrl(new URL("../../..", import.meta.url))
         const held = yield* path.fromFileUrl(new URL("../fixtures/held", import.meta.url))
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-held-shapes-" })
+        // oxlint matches override globs against real paths: on macOS the temp root is a link.
+        const root = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "gent-held-shapes-" }),
+        )
         yield* fs.copy(held, root)
         yield* fs.symlink(path.join(repo, "node_modules"), path.join(root, "node_modules"))
         const configText = yield* fs.readFileString(path.join(repo, ".oxlintrc.json"))

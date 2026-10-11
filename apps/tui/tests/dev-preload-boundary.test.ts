@@ -71,7 +71,8 @@ describe("source run preload", () => {
           const fs = yield* FileSystem.FileSystem
           const path = yield* Path.Path
           const platform = yield* GentPlatform
-          const directory = yield* makeTempDirectoryScoped("gent-dev-preload-")
+          // The cache key names the path Bun loads, the real one: on macOS the temp root is a link.
+          const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-dev-preload-"))
           const firstHome = path.join(directory, "first-home")
           const file = path.join(directory, "probe.tsx")
           const code = `console.log("first")\n`
