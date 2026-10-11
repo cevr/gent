@@ -3405,9 +3405,14 @@ interface PlacementSlot {
   readonly held: boolean
 }
 
-/** One placement's table: the pool in config order, and who prefers what. */
+/** One placement's table: the accounts it may choose in config order, and who prefers what. */
 interface PlacementTable {
   readonly slots: Arr.NonEmptyReadonlyArray<PlacementSlot>
+  /**
+   * The recorded price of the provider's steps in the window, USD, on every
+   * account: the unit's numerator, whichever accounts the table may choose.
+   */
+  readonly spent: number
   /** Distinct sessions with a priced step on the provider in the window. */
   readonly sessions: number
   /** Where the run's cache or its parent's lives, on the same model. */
@@ -3418,15 +3423,19 @@ interface PlacementTable {
  * Where a run goes, as the pool walk its turn takes: the choice first, then
  * the other eligible accounts by score, then the held ones in pool order.
  * `score = load / unit + live`, where a unit is the mean recorded price of a
- * session (with no recorded price, the score is the live sessions alone).
+ * session on the provider (`spent / sessions`; with no recorded price, or no
+ * session counted, the score is the live sessions alone).
  * The preferred account wins while it scores within one session of the
  * lowest; else the lowest wins, ties by pool order. With none eligible, the
  * preferred account, else the pool's first.
  */
 export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
-  const total = table.slots.reduce((sum, entry) => sum + entry.load, 0)
-  // None when nothing priced was recorded: the score is then the live sessions alone.
-  const unit = Option.liftPredicate(total / table.sessions, (mean) => total > 0 && mean > 0)
+  // None when nothing priced was recorded, or no session counted: the score
+  // is then the live sessions alone. Never an infinite or zero unit.
+  const unit = Option.liftPredicate(
+    table.spent / table.sessions,
+    (mean) => mean > 0 && Number.isFinite(mean),
+  )
   const score = (entry: PlacementSlot) =>
     Option.match(unit, { onNone: () => 0, onSome: (mean) => entry.load / mean }) + entry.live
   // A stable sort: equal scores keep pool order.
@@ -3497,6 +3506,11 @@ interface CredentialPlacementService {
     readonly slot: CredentialSlot
     readonly retryAt: Option.Option<number>
   }) => Effect.Effect<void>
+  /** Whether any account of `pool` is not held by a refusal now: a run outside the pool returns to it. */
+  readonly open: (params: {
+    readonly provider: string
+    readonly pool: ReadonlyArray<CredentialSlot>
+  }) => Effect.Effect<boolean>
   /** The session's turn ended: a warming guard it holds is released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
   /** Write the usage ledger now, when anything was recorded since the last write. */
@@ -3509,7 +3523,7 @@ const UsageBucket = Schema.Struct({
   /** Epoch hours. */
   hour: Schema.Int,
   costUsd: Schema.Finite,
-  /** Sessions first counted on the provider in this hour, on this account. */
+  /** Sessions whose latest priced step on the provider fell in this hour, counted on the account it first fell on. */
   sessions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 type UsageBucket = typeof UsageBucket.Type
@@ -3565,8 +3579,9 @@ const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function
 
 /**
  * The placement state of one server: usage buckets (loaded from `ledger`
- * when one is named, and written back to it as an hour closes and on
- * `flush`), live caches, held accounts and warming guards (in memory).
+ * when one is named, and written back to it on `flush`: as each hour
+ * closes and at shutdown, `CredentialPlacement.Live`), live caches, held
+ * accounts and warming guards (in memory).
  */
 export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(function* (
   ledger: Option.Option<PlacementLedgerStore>,
@@ -3574,8 +3589,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const lock = yield* Semaphore.make(1)
   const writeLock = yield* Semaphore.make(1)
   const buckets = new Map<string, UsageBucket>()
-  /** provider, session → the hour the session was last counted in. */
-  const counted = new Map<string, number>()
+  /** provider, session → the bucket (provider, slot, hour) the session is counted in. */
+  const counted = new Map<string, { readonly bucket: string; readonly hour: number }>()
   /** provider, session → where its cache lives and until when. */
   const live = new Map<
     string,
@@ -3585,7 +3600,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const held = new Map<string, number>()
   /** provider, starter, slot → the fresh children warming it. */
   const warming = new Map<string, Set<SessionId>>()
-  let writtenHour = 0
+  /** The session's first step ended, or its turn did: it warms nothing now. */
+  const unguard = (sessionId: SessionId) => {
+    for (const [key, children] of warming) {
+      children.delete(sessionId)
+      if (children.size === 0) warming.delete(key)
+    }
+  }
   /** Buckets changed since the ledger was last written. */
   let dirty = false
   /** One read or change of the state at a time: a burst of placements reads each earlier one. */
@@ -3594,7 +3615,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const trim = (now: number) => {
     const first = windowStart(now)
     for (const [key, bucket] of buckets) if (bucket.hour < first) buckets.delete(key)
-    for (const [key, hour] of counted) if (hour < first) counted.delete(key)
+    for (const [key, entry] of counted) if (entry.hour < first) counted.delete(key)
     for (const [key, entry] of live) if (entry.until <= now) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
   }
@@ -3637,11 +3658,14 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           const open = request.pool.filter((slot) => !request.left.has(slot))
           if (!Arr.isReadonlyArrayNonEmpty(open)) return request.pool
           const first = windowStart(now)
+          // The unit reads every account of the provider, the ones the turn left included.
           let sessions = 0
+          let spent = 0
           const load = new Map<CredentialSlot, number>()
           for (const bucket of buckets.values()) {
             if (bucket.provider !== request.provider || bucket.hour < first) continue
             sessions += bucket.sessions
+            spent += bucket.costUsd
             load.set(bucket.slot, (load.get(bucket.slot) ?? 0) + bucket.costUsd)
           }
           const warmedBySibling = (slot: CredentialSlot) =>
@@ -3658,6 +3682,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               live: liveOn(request.provider, slot, request.sessionId),
               held: held.has(placementKey(request.provider, slot)) || warmedBySibling(slot),
             })),
+            spent,
             sessions,
             preferred: Option.filter(request.preferred, (slot) => !request.left.has(slot)),
           })
@@ -3680,39 +3705,44 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
         const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
-        const closed = yield* locked(() => {
+        yield* locked(() => {
           trim(now)
-          for (const children of warming.values()) children.delete(step.sessionId)
+          unguard(step.sessionId)
           live.set(placementKey(step.provider, step.sessionId), {
             provider: step.provider,
             slot: step.slot,
             until: now + step.ttlMs,
           })
-          if (Option.isSome(step.costUsd)) {
-            const key = placementKey(step.provider, step.slot, hour)
-            const bucket = buckets.get(key) ?? {
-              provider: step.provider,
-              slot: step.slot,
-              hour,
-              costUsd: 0,
-              sessions: 0,
-            }
-            // A session counts once in the window, on the hour of its first priced step.
-            const sessionKey = placementKey(step.provider, step.sessionId)
-            let sessions = bucket.sessions
-            if (!counted.has(sessionKey)) {
-              counted.set(sessionKey, hour)
-              sessions += 1
-            }
-            buckets.set(key, { ...bucket, costUsd: bucket.costUsd + step.costUsd.value, sessions })
-            dirty = true
+          if (Option.isNone(step.costUsd)) return
+          const key = placementKey(step.provider, step.slot, hour)
+          const bucket = buckets.get(key) ?? {
+            provider: step.provider,
+            slot: step.slot,
+            hour,
+            costUsd: 0,
+            sessions: 0,
           }
-          // A bucket of an earlier hour closed: the ledger is written once an hour.
-          const closes = writtenHour !== 0 && hour > writtenHour
-          if (writtenHour === 0 || closes) writtenHour = hour
-          return closes
+          // A session counts once in the window, on the hour of its latest
+          // priced step: a step in a later hour moves its count there, so a
+          // session that runs for days still counts while the window holds it.
+          const sessionKey = placementKey(step.provider, step.sessionId)
+          const earlier = counted.get(sessionKey)
+          let sessions = bucket.sessions
+          if (Predicate.isUndefined(earlier) || earlier.hour < hour) {
+            if (Predicate.isNotUndefined(earlier)) {
+              const before = buckets.get(earlier.bucket)
+              if (Predicate.isNotUndefined(before))
+                buckets.set(earlier.bucket, {
+                  ...before,
+                  sessions: Math.max(before.sessions - 1, 0),
+                })
+            }
+            counted.set(sessionKey, { bucket: key, hour })
+            sessions += 1
+          }
+          buckets.set(key, { ...bucket, costUsd: bucket.costUsd + step.costUsd.value, sessions })
+          dirty = true
         })
-        if (closed) yield* write
       }),
     refuse: (params) =>
       Effect.gen(function* () {
@@ -3720,10 +3750,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const until = Option.getOrElse(params.retryAt, () => now + PLACEMENT_REFUSAL_HOLD_MS)
         yield* locked(() => held.set(placementKey(params.provider, params.slot), until))
       }),
-    release: (sessionId) =>
-      locked(() => {
-        for (const children of warming.values()) children.delete(sessionId)
+    open: (params) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        return yield* locked(() => {
+          trim(now)
+          return params.pool.some((slot) => !held.has(placementKey(params.provider, slot)))
+        })
       }),
+    release: (sessionId) => locked(() => unguard(sessionId)),
     flush: write,
   } satisfies CredentialPlacementService
 })
@@ -3747,6 +3782,16 @@ export class CredentialPlacement extends Context.Service<
       const placement = yield* makeCredentialPlacement(Option.some(ledger))
       // A shutdown keeps the hour still open.
       yield* Effect.addFinalizer(() => placement.flush)
+      // Each hour is written as it closes, whether or not a step follows it.
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            yield* Effect.sleep(Duration.millis(PLACEMENT_BUCKET_MS - (now % PLACEMENT_BUCKET_MS)))
+            yield* placement.flush
+          }),
+        ),
+      )
       return placement
     }),
   )
