@@ -530,9 +530,13 @@ export default defineExtension({
 
 /**
  * A scheduler that counts the steps of one fiber, the one `run` starts, and
- * interrupts it at step `at` (never, when its steps end before). Each fiber
- * yields as the default scheduler yields it, so the steps of two runs of the
- * same code count the same.
+ * interrupts it at step `at` (never, when its steps end before), as an
+ * interrupt from another fiber lands: before that step runs, where the
+ * fiber's interruptibility before it decides. So it yields the fiber there;
+ * an interrupt raised during `shouldYield` without a yield would land after
+ * the step, even a step that entered an uninterruptible region. Each fiber
+ * otherwise yields as the default scheduler yields it, so the steps of two
+ * runs of the same code count the same.
  */
 class InterruptAtStep implements Scheduler.Scheduler {
   readonly executionMode = "async"
@@ -552,7 +556,10 @@ class InterruptAtStep implements Scheduler.Scheduler {
     // By reference: `Equal` compares two fibers by their structure.
     if (Option.exists(this.target, (target) => target === fiber)) {
       this.steps += 1
-      if (this.steps === this.at) fiber.interruptUnsafe()
+      if (this.steps === this.at) {
+        fiber.interruptUnsafe()
+        return true
+      }
     }
     return this.inner.shouldYield(fiber)
   }
@@ -1053,12 +1060,13 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
       }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  // An interrupt can land at any step of a resolve. Wherever it lands up to
-  // the build of the place's process Resource (the place's lock, the setups,
-  // the server phase), the resolve keeps no lock and no hold: another place
-  // and its own place resolve after it.
+  // An interrupt can land at any step of a resolve. Wherever it lands (the
+  // place's lock, the setups, the server phase, the process build, the
+  // registry build after it), the resolve keeps no lock and no hold: another
+  // place and its own place resolve after it, and once its own place's
+  // profile retires, no process build of that place is left open.
   it.scopedLive(
-    "a resolve interrupted at any step up to its process build keeps no lock and no hold",
+    "a resolve interrupted at any step keeps no lock and no hold",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1067,12 +1075,13 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         const home = path.join(directory, "home")
         const place = (name: string) => path.join(directory, name)
         yield* fs.makeDirectory(home, { recursive: true })
-        // The scheduler of the resolve that runs, and the steps it had run
-        // at the setup and at the process build.
+        // The scheduler of the resolve that runs, the steps it had run at
+        // the setup and at the process build, and the open process builds.
         const at = {
           scheduler: new InterruptAtStep(Number.POSITIVE_INFINITY),
           setup: 0,
           processBuild: 0,
+          open: 0,
         }
         const extension = defineExtension({
           id: "interrupt-feed",
@@ -1093,10 +1102,17 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
                 scope: "process",
                 layer: Layer.effect(
                   SessionProfileStartProbe,
-                  Effect.sync(() => {
-                    at.processBuild = at.scheduler.steps
-                    return SessionProfileStartProbe.of({ value: "reader" })
-                  }),
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      at.processBuild = at.scheduler.steps
+                      at.open += 1
+                      return SessionProfileStartProbe.of({ value: "reader" })
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        at.open -= 1
+                      }),
+                  ),
                 ),
               }),
             )
@@ -1118,11 +1134,14 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           yield* Effect.forkChild(at.scheduler.run(resolveIn(place("count")))).pipe(
             Effect.flatMap(Fiber.join),
           )
-          // The count reached past the setups to the process build.
-          const last = at.processBuild
-          expect(last).toBeGreaterThan(at.setup)
+          // The count reached past the setups to the process build, and past
+          // it to the registry build.
+          const last = at.scheduler.steps
+          expect(at.processBuild).toBeGreaterThan(at.setup)
+          expect(last).toBeGreaterThan(at.processBuild)
           const kept: Array<string> = []
           for (let step = 1; step <= last; step += 1) {
+            const before = at.open
             at.scheduler = new InterruptAtStep(step)
             const own = place(`step-${step}`)
             const resolving = yield* Effect.forkChild(at.scheduler.run(resolveIn(own)))
@@ -1138,7 +1157,25 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
               kept.push(`step ${step}: another place does not resolve`)
               break
             }
-            if (!(yield* resolvesIn(own))) kept.push(`step ${step}: its own place does not resolve`)
+            if (!(yield* resolvesIn(own))) {
+              kept.push(`step ${step}: its own place does not resolve`)
+              continue
+            }
+            // Its own place's profile retires: what it held, and anything the
+            // interrupted resolve held of that place, is let go. Only the
+            // other place's process build stays open.
+            yield* fs.makeDirectory(path.join(own, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(own, ".gent", "config.json"),
+              encodeJson({ disabledExtensions: ["interrupt-feed"] }),
+            )
+            if (!(yield* resolvesIn(own))) {
+              kept.push(`step ${step}: its own place does not resolve once disabled`)
+              continue
+            }
+            if (at.open !== before + 1) {
+              kept.push(`step ${step}: ${at.open - before - 1} process build(s) of it left open`)
+            }
           }
           expect(kept).toEqual([])
         }).pipe(
@@ -1150,10 +1187,12 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
   )
 
   // A process build runs over every server service of its profile, a later
-  // extension's too: an edit or a disable of that extension builds it again,
-  // and the server service it read closes with the last profile that held it.
+  // extension's too: a new version (an edit, a reload of changed code) or a
+  // disable of that extension builds it again, and the server service it read
+  // closes with the last profile that held it. A reload of unchanged code
+  // keeps both.
   it.scopedLive(
-    "an edit or a disable of an extension with a server resource closes its service and builds the process resources over it again",
+    "an edit, a reload of changed code or a disable of an extension with a server resource closes its service and builds the process resources over it again",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1199,12 +1238,29 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           expect(one.closed()).toBe(true)
           const two = feed(second)
 
-          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["server-feed"] }))
-          const third = yield* resolve
-          expect(Option.isNone(Context.getOption(third.layerContext, ServerFeed))).toBe(true)
-          expect(seen(third)).toEqual({ version: "none", closed: false })
+          // A reload that finds the code unchanged keeps the version, so it
+          // keeps the server build and every process build over it.
+          yield* cache.reload(launch, ExtensionId.make("server-feed"))
+          const reloaded = yield* resolve
+          expect(reloaded).not.toBe(second)
+          expect(feed(reloaded)).toBe(two)
+          expect(two.closed()).toBe(false)
+          expect(yield* Ref.get(readerBuilds)).toBe(2)
+
+          // A reload that finds changed code is a new version.
+          yield* writeFileAtomic(entry, serverFeedSource("three"))
+          yield* cache.reload(launch, ExtensionId.make("server-feed"))
+          const changed = yield* resolve
+          expect(seen(changed)).toEqual({ version: "three", closed: false })
           expect(two.closed()).toBe(true)
-          expect(yield* Ref.get(readerBuilds)).toBe(3)
+          const three = feed(changed)
+
+          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["server-feed"] }))
+          const disabled = yield* resolve
+          expect(Option.isNone(Context.getOption(disabled.layerContext, ServerFeed))).toBe(true)
+          expect(seen(disabled)).toEqual({ version: "none", closed: false })
+          expect(three.closed()).toBe(true)
+          expect(yield* Ref.get(readerBuilds)).toBe(4)
         }).pipe(
           Effect.timeout("20 seconds"),
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [reader] })),
@@ -1215,7 +1271,9 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
 
   // An extension runs whole or not at all. One whose process Resource fails
   // on its first load fails whole: its server service is not in the profile,
-  // and it closed.
+  // and it closed. Another extension's healthy server build is held by the
+  // new pass before the failed pass lets go of it, so it is built once and
+  // never closed.
   it.scopedLive(
     "an extension whose process resource fails on its first load keeps no server service",
     () =>
@@ -1230,6 +1288,33 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         yield* Effect.forEach([path.dirname(entry), launch, marks], (dir) =>
           fs.makeDirectory(dir, { recursive: true }),
         )
+        const healthyBuilds = { acquired: 0, released: 0 }
+        const healthy = defineExtension({
+          id: "server-healthy",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-healthy/probe",
+                scope: "server",
+                layer: Layer.effect(
+                  ServerResourceProbe,
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      healthyBuilds.acquired += 1
+                      return ServerResourceProbe.of({ build: healthyBuilds.acquired })
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        healthyBuilds.released += 1
+                      }),
+                  ),
+                ),
+              }),
+            )
+          }),
+        })
 
         yield* Effect.gen(function* () {
           const cache = yield* SessionProfileCache
@@ -1240,10 +1325,17 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           ).toMatchObject({ _tag: "Failed", phase: "startup" })
           expect(Option.isNone(Context.getOption(profile.layerContext, ServerFeed))).toBe(true)
           expect(yield* fs.readDirectory(marks)).toEqual([])
+          expect(Context.get(profile.layerContext, ServerResourceProbe).build).toBe(1)
+          expect(healthyBuilds).toEqual({ acquired: 1, released: 0 })
         }).pipe(
           Effect.timeout("20 seconds"),
           Effect.provide(
-            makeCacheLayer({ cwd: launch, home, extensions: [], allowFailedExtensions: true }),
+            makeCacheLayer({
+              cwd: launch,
+              home,
+              extensions: [healthy],
+              allowFailedExtensions: true,
+            }),
           ),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
         )
@@ -1305,11 +1397,102 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
       }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  // Server builds share by key, not by a lock: a place whose profile needs
-  // none of a slow build's keys does not wait for it, and two places that
-  // first need one key at once share its one build.
+  // A pass a later pass replaced closes after the place's lock is let go, as
+  // a retired profile does: a finalizer that resolves the same place finds
+  // the lock free. Here a new version whose process Resource fails falls back
+  // to its last good version; the failed pass held a process build of
+  // another extension over the new version's server service, and that
+  // build's finalizer resolves the place.
   it.scopedLive(
-    "a slow server build blocks no place that does not run it, and two places that first run it at once build it once",
+    "a replaced pass closes after the place's lock, so a finalizer that resolves the same place finishes",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-reenter-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const entry = path.join(home, ".gent", "extensions", "feed.ts")
+        yield* Effect.forEach([path.dirname(entry), launch], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        // Armed, the next close of a reentering build resolves the place once.
+        const reentry = {
+          armed: Option.none<Effect.Effect<void>>(),
+          resolved: false,
+        }
+        const reentering = defineExtension({
+          id: "server-feed-reentering",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-feed-reentering/reader",
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileStartProbe,
+                  Effect.addFinalizer(() =>
+                    Effect.suspend(() => {
+                      const armed = reentry.armed
+                      reentry.armed = Option.none()
+                      return Option.getOrElse(armed, () => Effect.void)
+                    }),
+                  ).pipe(Effect.as(SessionProfileStartProbe.of({ value: "reentering" }))),
+                ),
+              }),
+            )
+          }),
+        })
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* writeFileAtomic(entry, serverFeedSource("two", { reader: "good" }))
+          yield* resolve
+
+          yield* writeFileAtomic(entry, serverFeedSource("three", { reader: "broken" }))
+          reentry.armed = Option.some(
+            resolve.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  reentry.resolved = true
+                }),
+              ),
+            ),
+          )
+          // Detached: a resolve wedged on its own lock cannot be interrupted.
+          const resolving = yield* Effect.forkDetach(resolve)
+          const ended = yield* Fiber.await(resolving).pipe(Effect.timeout("5 seconds"), Effect.exit)
+          expect(Exit.isSuccess(ended)).toBe(true)
+          expect(reentry.resolved).toBe(true)
+          const kept = yield* resolve
+          expect(
+            kept.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
+          ).toMatchObject({ _tag: "Active", reloadFailed: { phase: "startup" } })
+          expect(Context.get(kept.layerContext, ServerFeed).version).toBe("two")
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({
+              cwd: launch,
+              home,
+              extensions: [reentering],
+              allowFailedExtensions: true,
+            }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // Server builds share by key, not by a lock: a place whose profile needs
+  // none of a slow build's keys builds its own while the slow one runs, and
+  // two places that first need one key at once share its one build. An
+  // interrupted asker lets go of its own hold only: the build goes on for
+  // the other.
+  it.scopedLive(
+    "a slow server build blocks no place that does not run it, two places that first run it at once build it once, and interrupting one keeps it for the other",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -1329,9 +1512,14 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         const started = yield* Deferred.make<void>()
         const gate = yield* Deferred.make<void>()
         const builds = yield* Ref.make(0)
+        // How many resolves set the slow extension up, and whether its build closed.
+        const slowState = { setups: 0, closed: false }
         const slow = defineExtension({
           id: "server-slow",
           setup: Effect.gen(function* () {
+            yield* Effect.sync(() => {
+              slowState.setups += 1
+            })
             const host = yield* ExtensionHost
             yield* host.register(
               "resource",
@@ -1340,29 +1528,38 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
                 scope: "server",
                 layer: Layer.effect(
                   ServerResourceProbe,
-                  Effect.gen(function* () {
-                    const build = yield* Ref.updateAndGet(builds, (count) => count + 1)
-                    yield* Deferred.succeed(started, void 0)
-                    yield* Deferred.await(gate)
-                    return ServerResourceProbe.of({ build })
-                  }),
+                  Effect.acquireRelease(
+                    Effect.gen(function* () {
+                      const build = yield* Ref.updateAndGet(builds, (count) => count + 1)
+                      yield* Deferred.succeed(started, void 0)
+                      yield* Deferred.await(gate)
+                      return ServerResourceProbe.of({ build })
+                    }),
+                    () =>
+                      Effect.sync(() => {
+                        slowState.closed = true
+                      }),
+                  ),
                 ),
               }),
             )
           }),
         })
-        const quick = defineExtension({
-          id: "server-quick",
+        // Sorts after `server-slow` (builtins sort by id), so no place that
+        // runs both builds it before the slow build ends: the place that runs
+        // only this one builds it cold while the slow build runs.
+        const swift = defineExtension({
+          id: "server-swift",
           setup: Effect.gen(function* () {
             const host = yield* ExtensionHost
             yield* host.register(
               "resource",
               defineResource({
-                id: "server-quick/feed",
+                id: "server-swift/feed",
                 scope: "server",
                 layer: Layer.succeed(
                   ServerFeed,
-                  ServerFeed.of({ version: "quick", closed: () => false }),
+                  ServerFeed.of({ version: "swift", closed: () => false }),
                 ),
               }),
             )
@@ -1371,27 +1568,33 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
 
         yield* Effect.gen(function* () {
           const cache = yield* SessionProfileCache
+          // The first asker starts the slow build.
           const atFirst = yield* Effect.forkChild(Effect.scoped(cache.resolve(first)))
-          const atSecond = yield* Effect.forkChild(Effect.scoped(cache.resolve(second)))
           yield* Deferred.await(started)
+          const atSecond = yield* Effect.forkChild(Effect.scoped(cache.resolve(second)))
           const other = yield* Effect.scoped(cache.resolve(elsewhere)).pipe(
             Effect.timeout("4 seconds"),
           )
-          expect(Context.get(other.layerContext, ServerFeed).version).toBe("quick")
+          expect(Context.get(other.layerContext, ServerFeed).version).toBe("swift")
           expect(Option.isNone(Context.getOption(other.layerContext, ServerResourceProbe))).toBe(
             true,
           )
+          // The second asker set the slow extension up; what it runs after
+          // that up to its wait on the slow build is in memory, so it reaches
+          // the wait within these yields.
+          while (slowState.setups < 2) yield* Effect.yieldNow
+          for (let turn = 0; turn < 100; turn += 1) yield* Effect.yieldNow
+          yield* Fiber.interrupt(atFirst)
+          expect(slowState.closed).toBe(false)
           yield* Deferred.succeed(gate, void 0)
-          const one = yield* Fiber.join(atFirst)
           const two = yield* Fiber.join(atSecond)
-          expect(Context.get(one.layerContext, ServerResourceProbe)).toBe(
-            Context.get(two.layerContext, ServerResourceProbe),
-          )
+          expect(Context.get(two.layerContext, ServerResourceProbe).build).toBe(1)
+          expect(slowState.closed).toBe(false)
           expect(yield* Ref.get(builds)).toBe(1)
         }).pipe(
           Effect.ensuring(Deferred.succeed(gate, void 0)),
           Effect.timeout("15 seconds"),
-          Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [slow, quick] })),
+          Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [slow, swift] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
