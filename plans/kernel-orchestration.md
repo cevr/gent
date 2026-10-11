@@ -68,7 +68,7 @@ The worker primitive is the existing **thread**, improved, not a new "seat" conc
 - **`thread.start({ task?, name?, model?, effort?, cwd?, instructions?, tools?, agent?, notify?, account? })`**. Defaults are chosen for the cleanest surface; today's behaviour need not survive (no compatibility, see P1b).
   - With no `task` it opens a thread and sends nothing (a worker waiting for its first round).
   - `agent` picks a registered agent. gent registers **`worker`**: `promptCache: "session"`, and tools that deny `thread.start`, `thread.stop`, `machine.*` and `delegate.*`. Owner rule: a long-lived seat that waits between turns keeps the session cache.
-  - `instructions` becomes the run's `systemPromptAddendum`. The create's `requestId` stays `thread:<toolCallId>`.
+  - `instructions` becomes the run's `systemPromptAddendum`. The create's `requestId` is `thread:` and a SHA-256 digest of the calling session, branch and tool call id: a request id is matched across the workspace, and a tool call id is unique only in its session.
 - **`thread.send({ thread, message, reply?, notify? })`** returns `{ round }` at admission, addressed by the thread key, so it reaches the thread's current session after a handoff. It uses `delivery: "turn"`, `commandId: "thread-round:<toolCallId>"` and `completion: "admission"`.
   - A thread runs one round at a time.
   - Only the starter's thread may send.

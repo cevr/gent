@@ -1224,6 +1224,38 @@ describe("thread rounds", () => {
   )
 })
 
+describe("thread round ownership", () => {
+  // A tool call id is unique only in its session: two sessions' calls may share one.
+  it.live(
+    "two sessions' starts under one tool call id make two threads, each under its own starter",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* roundHarness()
+          const first = { sessionId, branchId }
+          const second: SessionKey = yield* client.session.create({})
+          const mine = yield* startWorker(client, first, "start-same")
+          const [theirs] = yield* call(client, second, [
+            [
+              "thread.start",
+              "start-same",
+              { name: "theirs", agent: "worker", task: "ECHO the second session's task" },
+            ],
+          ])
+          expect(theirs?.failed).toBe(false)
+          const started = decodeThread(theirs?.result)
+          expect(started.thread).not.toBe(mine.thread)
+          const session = yield* client.session.get({ sessionId: started.sessionId })
+          expect(session?.parentSessionId).toBe(second.sessionId)
+          // The first session's thread got no round from the second one.
+          const untouched = yield* client.session.getSnapshot(placeOf(mine))
+          expect(untouched.messages).toEqual([])
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+})
+
 // ── rounds: the service ─────────────────────────────────────────────────────
 
 /**

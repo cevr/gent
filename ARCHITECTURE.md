@@ -857,7 +857,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
   starter's agent and admission, model and reasoning, a run spec of at most
   32 model attempts; `instructions` add to the run's `systemPromptAddendum`
   and `tools` narrow it, keeping `thread.reply`. The create's request id is
-  `thread:<toolCallId>`, so a repeated call is one thread. With no `task` the
+  `thread:` and 32 hex of SHA-256 over the caller's session, branch and tool
+  call id (a request id is matched across the workspace, a tool call id only
+  in its session), so a repeated call is one thread. With no `task` the
   thread waits; with one, the task is its first round. The shipped `worker`
   agent (`promptCache: "session"`, denied `thread.start`, `thread.stop`,
   `machine.*` and `delegate.*`) is the long-lived thread that takes rounds.

@@ -1262,7 +1262,12 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
     (text) => text.length > 0,
   )
   // The create is durable-once by its request id, so a repeat of this call
-  // finds its own thread.
+  // finds its own thread. A request id is matched in the whole workspace,
+  // and a tool call id is unique only in its session, so the id digests the
+  // calling session and branch with the key, as a round's does.
+  const requestId = RequestId.make(
+    `thread:${(yield* identityDigest("thread.create", input.key)).slice(0, 32)}`,
+  )
   const create = ctx.Session.create({
     name: threadName(input),
     parentBranchId: ctx.branchId,
@@ -1274,7 +1279,7 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         Option.map(Option.fromUndefinedOr(input.cwd), (cwd) => path.resolve(ctx.cwd, cwd)),
       ),
     }),
-    requestId: RequestId.make(`thread:${input.key}`),
+    requestId,
   })
   // With a task, the cap admits the thread before its session is made. A
   // retry finds its round before the cap and its session after it.
