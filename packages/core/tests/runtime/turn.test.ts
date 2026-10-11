@@ -2405,7 +2405,13 @@ describe("credential order", () => {
         http: { request: httpRequest, response: { status: 401, headers: {} } },
       }),
     )
-  const quotaSpent = () => failWith(new AiError.QuotaExhaustedError({}))
+  /** The provider answered 429: the account's quota is spent. */
+  const quotaSpent = () =>
+    failWith(
+      new AiError.QuotaExhaustedError({
+        http: { request: httpRequest, response: { status: 429, headers: {} } },
+      }),
+    )
   const answer =
     (text: string, usage = { inputTokens: 10, outputTokens: 5 }): Reply =>
     () =>
@@ -4456,8 +4462,14 @@ describe("credential order", () => {
         cacheTtlMs: HOUR_MS,
         ...omitUndefined({ history }),
       })
+    /** The provider answered 429 for ten minutes. */
     const heldTenMinutes = () =>
-      failWith(new AiError.RateLimitError({ retryAfter: Duration.minutes(10) }))
+      failWith(
+        new AiError.RateLimitError({
+          retryAfter: Duration.minutes(10),
+          http: { request: httpRequest, response: { status: 429, headers: {} } },
+        }),
+      )
     const compactedOf = (events: ReadonlyArray<AgentEvent>) =>
       events.flatMap((event) => {
         if (event._tag !== "ModelContextProjected") return []
@@ -5139,6 +5151,62 @@ describe("credential order", () => {
     )
 
     it.live(
+      "a move whose request fails before the provider answers it, as a credential that fails at signing, records no placement, and one the provider refuses records it",
+      () =>
+        Effect.gen(function* () {
+          /**
+           * a refuses; the turn moves to b, the walk's last account, whose
+           * reply is `onB`. The step ends on b's failure: its receipt names b.
+           */
+          const run = (name: string, onB: Reply) =>
+            Effect.gen(function* () {
+              const root = credentialRoot({
+                name,
+                order: [a, b],
+                spread: [a, b],
+                stored: keysOf([a, b]),
+                replies: { "sk-a": refusal, "sk-b": onB },
+                cacheTtlMs: HOUR_MS,
+              })
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  yield* root.seed
+                  yield* runAgentLoop(
+                    makeMessage(root.sessionId, root.branchId, "hello"),
+                    root.admission,
+                  )
+                }),
+              ).pipe(Effect.provide(root.layer))
+              const events = yield* Ref.get(root.events)
+              const ended = events.flatMap((event) => {
+                if (event._tag !== "StreamEnded") return []
+                return [`${event.outcome}:${event.credential?.slot}`]
+              })
+              return { ended, placements: placementsOf(events) }
+            })
+          // b's credential fails as the request is signed, as `authorizedClient`
+          // reports it: an encode failure with no response, so nothing reached
+          // the provider.
+          const unsent = yield* run("signing-fails", () =>
+            failWith(
+              new AiError.NetworkError({
+                reason: "EncodeError",
+                request: httpRequest,
+                description: "the sign-in could not be refreshed",
+              }),
+            ),
+          )
+          expect(unsent).toEqual({ ended: ["Failed:b"], placements: [] })
+          // b's request reached the provider, which refused it: it went out.
+          const refused = yield* run("b-refuses", refusal)
+          expect(refused).toEqual({
+            ended: ["Failed:b"],
+            placements: [{ slot: b, reason: "refused", from: a }],
+          })
+        }).pipe(Effect.timeout("30 seconds")),
+    )
+
+    it.live(
       "a turn recovered after its receipt's account left the pool and order is placed afresh by the ranking, recorded with its first request there",
       () =>
         Effect.gen(function* () {
@@ -5173,6 +5241,60 @@ describe("credential order", () => {
             { slot: c, reason: "returned", from: a },
           ])
           expect(placementsWithoutReceipt(events)).toEqual([])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a turn recovered after its receipt's account left the pool and order, while every pool account is held, stays outside the pool recording nothing, and is placed when its order has no account outside it",
+      () =>
+        Effect.gen(function* () {
+          const d = CredentialSlot.make("d")
+          /**
+           * Turn one is placed on a; turn two runs a tool step there and the
+           * process dies. The restart's pool is [b, c], both held, and its
+           * order is `order`: the recovered turn's events.
+           */
+          const recoverHeld = (name: string, order: ReadonlyArray<CredentialSlot>) =>
+            Effect.gen(function* () {
+              const world = yield* spreadWorld
+              const out = yield* Deferred.make<void>()
+              const first = spreadRoot(world, name, {
+                replies: { "sk-a": answerToolThenDie(out), "sk-b": answer("from b") },
+              })
+              yield* twoTurnsThenDie(first, out)
+              for (const slot of [b, c])
+                yield* world.placement.refuse({ provider: FALLBACK, slot, retryAt: Option.none() })
+              const second = credentialRoot({
+                name,
+                order,
+                spread: [b, c],
+                stored: keysOf(order),
+                replies: answers(order),
+                storage: world.storage,
+                placement: world.placement,
+                cacheTtlMs: HOUR_MS,
+              })
+              const events = yield* dieAndRecoverTail(world, first, second)
+              return { sent: second.sent, slots: slotsOf(events), placements: placementsOf(events) }
+            })
+          // An account past the pool: the turn stays outside it there, as
+          // any run outside the pool does while no pool account is eligible.
+          expect(yield* recoverHeld("recovered-held-outside", [b, c, d])).toEqual({
+            sent: ["sk-d"],
+            slots: [a, a, d],
+            placements: [{ slot: a, reason: "new", from: "none" }],
+          })
+          // The order is the pool: no account outside it to stay on. The
+          // ranking places the turn, and the decision is recorded with b's
+          // receipt, never a walk to b with none.
+          expect(yield* recoverHeld("recovered-held-pool", [b, c])).toEqual({
+            sent: ["sk-b"],
+            slots: [a, a, b],
+            placements: [
+              { slot: a, reason: "new", from: "none" },
+              { slot: b, reason: "returned", from: a },
+            ],
+          })
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -5522,7 +5644,7 @@ describe("credential order", () => {
                 (reason) => !coverage.reasons.has(reason),
               ),
             ).toEqual([])
-          }).pipe(Effect.scoped, Effect.timeout("120 seconds")),
+          }).pipe(Effect.scoped, Effect.timeout("110 seconds")),
         120_000,
       )
     })
@@ -10532,6 +10654,39 @@ describe("a tool call a restart cut short", () => {
 // ── turn ledger ─────────────────────────────────────────────────────────────
 
 describe("turn ledger", () => {
+  it.effect(
+    "a placement is recorded only by a receipt on its account after a request went out there, and waits for no later receipt",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* makeTurnLedger
+        yield* ledger.beginTurn(MessageId.make("ledger-placement"))
+        const provider = "spread"
+        const b = CredentialSlot.make("b")
+        const c = CredentialSlot.make("c")
+        const decision = { slot: b, from: Option.none(), reason: "new" as const }
+        // A request that went out on c does not make b's placement recordable.
+        yield* ledger.placeCredential(provider, decision)
+        yield* ledger.noteDispatched(provider, c)
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.none())
+        // A receipt on another account records nothing, and the placement is gone.
+        yield* ledger.placeCredential(provider, decision)
+        yield* ledger.noteDispatched(provider, b)
+        expect(yield* ledger.takePlacement(provider, c)).toEqual(Option.none())
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.none())
+        // A request went out on b: b's receipt records it, once.
+        yield* ledger.placeCredential(provider, decision)
+        yield* ledger.noteDispatched(provider, b)
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.some(decision))
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.none())
+        // A receipt on b whose request never went out records nothing, and
+        // a later request there does not bring the placement back.
+        yield* ledger.placeCredential(provider, decision)
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.none())
+        yield* ledger.noteDispatched(provider, b)
+        expect(yield* ledger.takePlacement(provider, b)).toEqual(Option.none())
+      }),
+  )
+
   it.effect("a turn that mixes a priced and an unpriced step has no cost", () =>
     Effect.gen(function* () {
       const ledger = yield* makeTurnLedger
