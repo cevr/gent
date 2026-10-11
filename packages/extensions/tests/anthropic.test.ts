@@ -53,6 +53,7 @@ import { ChildProcessSpawner } from "effect/process"
 import {
   captureProviderStopReason,
   storedCredentialModel,
+  storeRotationLock,
   createRpcClient,
   ConfigService,
   modelCatalogFixture,
@@ -4130,7 +4131,7 @@ const linkedSignIn = (
   directory: string,
   signedInAt = 1,
   slot: CredentialSlot = LINKED_SLOT,
-  store: RotationStore = processStore,
+  store: { readonly lockSourceRotation: LockSourceRotation } = processStore,
 ): ProviderAuthInfo =>
   ProviderAuthInfo.cases.Oauth.make({
     slot,
@@ -5127,6 +5128,120 @@ describe("linked rotation: refreshes", () => {
       expect(Option.exists(result.request, (text) => text.includes("503"))).toBe(true)
       expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+/**
+ * gent's credential store over a scratch auth directory whose rotation writes
+ * fail (`.rotations/anthropic` is read-only): a rotation it is given stays in
+ * that store's memory alone. `heldNow` is what the store holds for the linked
+ * directory, read under its lock.
+ */
+const unwritableRotationStore = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const authDirectory = path.join(yield* fs.makeTempDirectoryScoped(), "auth")
+  const rotations = path.join(authDirectory, ".rotations", "anthropic")
+  yield* fs.makeDirectory(rotations, { recursive: true })
+  yield* fs.chmod(rotations, 0o500)
+  // The scope removes the directory at its end, which needs it writable again.
+  yield* Effect.addFinalizer(() => fs.chmod(rotations, 0o700).pipe(Effect.ignore))
+  const lockSourceRotation = yield* storeRotationLock(authDirectory, "anthropic")
+  return {
+    lockSourceRotation,
+    rotationFileExists: fs.exists(path.join(rotations, LINKED_KEY)),
+    heldNow: lockSourceRotation(LINKED_KEY)((held) => held.read),
+  }
+})
+
+/**
+ * A darwin link whose expired login was refreshed once: the keychain refuses
+ * writes and gent's store cannot hold the rotation on disk, so only that
+ * store's memory holds `fake-rotated-1`.
+ */
+const heldInMemoryOnly = Effect.gen(function* () {
+  const store = yield* unwritableRotationStore
+  const keychain = fakeKeychain([
+    [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+  ])
+  keychain.refuseWrites()
+  const endpoint = numberedEndpoint()
+  const driver = yield* linkedDriver("darwin", keychain.spawner)
+  const signIn = linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, store)
+  const first = yield* sendThrough(driver, signIn, endpoint.respond)
+  expect(first.refreshTokens).toEqual(["fake-expired-refresh"])
+  expect(first.authorization).toBe("Bearer fake-rotated-1-access")
+  expect(yield* store.rotationFileExists).toBe(false)
+  return { store, keychain, endpoint, driver, signIn, first }
+})
+
+describe("linked rotation: a store that cannot hold it on disk", () => {
+  it.scopedLive(
+    "a rotation neither gent's store nor the source can take outlives the cache lifetime and a profile rebuild, and the next refresh spends only its own token",
+    () =>
+      runWithTestClock(
+        Effect.gen(function* () {
+          const { keychain, endpoint, driver, signIn, first } = yield* heldInMemoryOnly
+          // The cache lifetime lapses: the source still holds the spent login.
+          yield* TestClock.adjust("31 seconds")
+          const second = yield* sendThrough(driver, signIn, endpoint.respond)
+          expect(second.authorization).toBe("Bearer fake-rotated-1-access")
+          expect(second.refreshTokens).toEqual([])
+          // A profile rebuild: a new driver, its cell empty, over the same store.
+          const rebuilt = yield* linkedDriver("darwin", keychain.spawner)
+          const third = yield* sendThrough(rebuilt, signIn, endpoint.respond)
+          expect(third.authorization).toBe("Bearer fake-rotated-1-access")
+          expect(third.refreshTokens).toEqual([])
+          // The rotation expires: its own token is the one spent.
+          yield* TestClock.adjust("1 hour")
+          const fourth = yield* sendThrough(rebuilt, signIn, endpoint.respond)
+          expect(fourth.refreshTokens).toEqual(["fake-rotated-1-refresh"])
+          expect(fourth.authorization).toBe("Bearer fake-rotated-2-access")
+          const spent = [first, second, third, fourth].flatMap((sent) => sent.refreshTokens)
+          expect(spent.filter((token) => token === "fake-expired-refresh")).toHaveLength(1)
+        }),
+      ).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a rotation held only in this process lands once the source takes writes, and nothing stays held",
+    () =>
+      runWithTestClock(
+        Effect.gen(function* () {
+          const { store, keychain, endpoint, driver, signIn } = yield* heldInMemoryOnly
+          keychain.allowWrites()
+          yield* TestClock.adjust("31 seconds")
+          const next = yield* sendThrough(driver, signIn, endpoint.respond)
+          expect(next.authorization).toBe("Bearer fake-rotated-1-access")
+          expect(next.refreshTokens).toEqual([])
+          expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain(
+            "fake-rotated-1-refresh",
+          )
+          expect(yield* store.heldNow).toEqual(Option.none())
+        }),
+      ).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "a rotation held only in this process is dropped once Claude Code's new login moves the source past its base, which serves",
+    () =>
+      runWithTestClock(
+        Effect.gen(function* () {
+          const { store, keychain, endpoint, driver, signIn } = yield* heldInMemoryOnly
+          const now = yield* Clock.currentTimeMillis
+          const theirs = { account: "alice", blob: claudeBlob("fake-claude-code", now + 3600000) }
+          yield* keychain.write(LINKED_SERVICE, theirs)
+          const writes = writesOf(keychain.calls).length
+          yield* TestClock.adjust("31 seconds")
+          const next = yield* sendThrough(driver, signIn, endpoint.respond)
+          expect(next.authorization).toBe("Bearer fake-claude-code")
+          expect(next.refreshTokens).toEqual([])
+          expect(writesOf(keychain.calls).length).toBe(writes)
+          expect(keychain.entries.get(LINKED_SERVICE)).toEqual([theirs])
+          expect(yield* store.heldNow).toEqual(Option.none())
+          expect(yield* store.rotationFileExists).toBe(false)
+        }),
+      ).pipe(Effect.provide(BunServices.layer)),
   )
 })
 

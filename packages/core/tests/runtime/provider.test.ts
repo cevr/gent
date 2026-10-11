@@ -28,6 +28,7 @@ import {
   type ModelCatalogView,
   type ModelDriverContribution,
   modelFromCatalog,
+  type PendingRotation,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderResolution,
@@ -858,6 +859,85 @@ describe("Auth", () => {
           }),
         ),
       ),
+    )
+
+    it.effect(
+      "a rotation the store cannot write stays held in that store's memory, unseen by another store, until a write lands or it is forgotten",
+      () =>
+        Effect.gen(function* () {
+          // One disk under two stores, as two gent processes open one auth
+          // directory; its rotation writes fail while `failing` holds.
+          const disk = new Map<string, PendingRotation>()
+          const diskWrites: Array<string> = []
+          let failing = true
+          const access = {
+            list: Effect.succeed([]),
+            listSlots: () => Effect.succeed([]),
+            get: () => Effect.succeed(noStoredAuth),
+            set: () => Effect.void,
+            remove: () => Effect.void,
+            getRotation: (_provider: string, source: string) =>
+              Effect.sync(() => Option.fromUndefinedOr(disk.get(source))),
+            setRotation: (
+              _provider: string,
+              source: string,
+              next: Option.Option<PendingRotation>,
+            ) =>
+              Effect.suspend(() => {
+                if (failing) {
+                  return Effect.fail(new AuthError({ message: "the disk refused the write" }))
+                }
+                diskWrites.push(
+                  Option.match(next, { onNone: () => "remove", onSome: () => "hold" }),
+                )
+                if (Option.isSome(next)) disk.set(source, next.value)
+                else disk.delete(source)
+                return Effect.void
+              }),
+          }
+          const store = serializeAuthStore(access)
+          const other = serializeAuthStore(access)
+          const source = "fake-source"
+          const rotation = (token: string) => ({
+            rotation: { access: token, refresh: `${token}-refresh`, expires: 1 },
+            base: "fake-base",
+          })
+          const readOn = (on: AuthService) =>
+            on.withRotation("anthropic", source, (held) => held.read)
+          const writeOn = (on: AuthService, next: Option.Option<PendingRotation>) =>
+            on.withRotation("anthropic", source, (held) => held.write(next))
+
+          // The disk refuses: the write succeeds all the same, held in memory.
+          yield* writeOn(store, Option.some(rotation("fake-r1")))
+          expect(yield* readOn(store)).toEqual(Option.some(rotation("fake-r1")))
+          expect(yield* readOn(other)).toEqual(Option.none())
+          expect(disk.size).toBe(0)
+
+          // The disk takes writes: the next one lands, and memory lets go of it.
+          failing = false
+          yield* writeOn(store, Option.some(rotation("fake-r2")))
+          expect(disk.get(source)).toEqual(rotation("fake-r2"))
+          expect(yield* readOn(other)).toEqual(Option.some(rotation("fake-r2")))
+          // Another store forgets it on disk: this store holds nothing of its own.
+          yield* writeOn(other, Option.none())
+          expect(yield* readOn(store)).toEqual(Option.none())
+
+          // A rotation on disk, a newer one held in memory over a failing disk.
+          yield* writeOn(other, Option.some(rotation("fake-r3")))
+          failing = true
+          yield* writeOn(store, Option.some(rotation("fake-r4")))
+          expect(yield* readOn(store)).toEqual(Option.some(rotation("fake-r4")))
+          // Forgetting it clears the memory alone; the disk keeps what it holds.
+          const writesBefore = diskWrites.length
+          yield* writeOn(store, Option.none())
+          expect(diskWrites.length).toBe(writesBefore)
+          expect(disk.get(source)).toEqual(rotation("fake-r3"))
+          expect(yield* readOn(store)).toEqual(Option.some(rotation("fake-r3")))
+          // With nothing in memory, a forget reaches the disk, and its failure stays a failure.
+          const failed = yield* Effect.exit(writeOn(store, Option.none()))
+          expect(Exit.isFailure(failed)).toBe(true)
+          expect(disk.get(source)).toEqual(rotation("fake-r3"))
+        }),
     )
   })
 

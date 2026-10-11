@@ -303,6 +303,11 @@ export interface AuthService {
    * refreshes of one source, in any profile or any process over the store,
    * never interleave. A rotation is no credential of a label: no listing
    * shows it, and a rename or a removal leaves it.
+   *
+   * A `write` the disk does not take still succeeds: the store holds the
+   * rotation in its memory, and `read` returns it, until a later write lands
+   * or a forget clears it (a forget then leaves the disk as it is). Only this
+   * store sees it, and only while the process runs.
    */
   readonly withRotation: <A, E>(
     provider: string,
@@ -365,6 +370,44 @@ export const serializeAuthStore = (
         ),
       ),
     )
+  // A rotation the disk would not take, held in this store's memory until a
+  // write lands or it is forgotten: a refresh spent the only other copy, so
+  // the rotation outlives a failed write for as long as the process does.
+  // Keyed by provider and source; read and written only under the provider's
+  // lock, inside `withRotation`. Another store, in this process or another,
+  // sees only the disk.
+  const unsaved = new Map<string, PendingRotation>()
+  // A provider id holds no NUL, so the key names one provider and one source.
+  const unsavedKey = (provider: string, source: string) => `${provider}\u0000${source}`
+  const heldRotation = (provider: string, source: string) => {
+    const key = unsavedKey(provider, source)
+    return {
+      read: Effect.suspend(() => {
+        const inMemory = unsaved.get(key)
+        if (Predicate.isNotUndefined(inMemory)) return Effect.succeedSome(inMemory)
+        return store.getRotation(provider, source)
+      }),
+      write: (next: Option.Option<PendingRotation>) =>
+        Effect.suspend((): Effect.Effect<void, AuthError> => {
+          if (Option.isNone(next)) {
+            // Forgetting an unsaved rotation leaves the disk alone: it holds
+            // nothing, an older rotation the next settle forgets, or another
+            // process's newer one, which must stay.
+            if (unsaved.delete(key)) return Effect.void
+            return store.setRotation(provider, source, next)
+          }
+          unsaved.set(key, next.value)
+          return store.setRotation(provider, source, next).pipe(
+            Effect.tap(() => Effect.sync(() => unsaved.delete(key))),
+            Effect.catchTag("AuthError", (error) =>
+              Effect.logWarning("auth.rotation-held-in-memory").pipe(
+                Effect.annotateLogs({ provider, source, error: String(error) }),
+              ),
+            ),
+          )
+        }),
+    }
+  }
   return {
     list: store.list,
     listSlots: store.listSlots,
@@ -419,12 +462,7 @@ export const serializeAuthStore = (
         }),
       ),
     withRotation: (provider, source, use) =>
-      exclusive(provider)(
-        use({
-          read: store.getRotation(provider, source),
-          write: (next) => store.setRotation(provider, source, next),
-        }),
-      ),
+      exclusive(provider)(use(heldRotation(provider, source))),
   }
 }
 
@@ -1312,7 +1350,7 @@ const toProviderAuthInfo = (
  * as a driver reaches them (`LockSourceRotation`): keyed by source, under
  * the provider's lock, with the store's faults as `ProviderAuthError`.
  */
-const sourceRotationLock =
+export const sourceRotationLock =
   (authStore: AuthService, providerId: string): LockSourceRotation =>
   (source) =>
   (use) => {

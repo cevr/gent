@@ -44,6 +44,7 @@ export {
   bunDriverHostServices,
   seedAuthKeys,
   storedCredentialModel,
+  storeRotationLock,
   type SequenceStep,
   systemTextOf,
   turnRequestText,

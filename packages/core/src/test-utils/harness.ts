@@ -86,10 +86,12 @@ import {
   ModelCatalogSource,
   ModelRegistry,
   ModelResolver,
+  ProviderLock,
   type ResolveModelRequest,
   ScriptedLanguageModel,
   type ScriptedStep,
   signInReady,
+  sourceRotationLock,
   textDeltaPart,
 } from "../runtime/provider.js"
 import {
@@ -174,6 +176,7 @@ import * as path from "node:path"
 import {
   type ApiClassContribution,
   type AuthMetadata,
+  type LockSourceRotation,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
   ProviderStopReason,
@@ -2149,6 +2152,24 @@ export function storedCredentialModel(
     Layer.provide(ModelCatalogSource.fixed(input.catalog)),
   )
 }
+
+/**
+ * The rotation lock one credential store over `authDirectory` gives every
+ * OAuth sign-in of `provider` (`ProviderAuthInfo.Oauth.lockSourceRotation`),
+ * as the resolver hands it to a driver. Each call opens a new store, as a
+ * restart or a second process does: what one store holds only in its memory,
+ * another never sees. Its provider lock stays in the process
+ * (`ProviderLock.InProcess`), so a test on a `TestClock` never waits on a
+ * lock file's poll.
+ */
+export const storeRotationLock = (
+  authDirectory: string,
+  provider: string,
+): Effect.Effect<LockSourceRotation, never, FileSystem.FileSystem | Path.Path> =>
+  // The store holds no resource, so it outlives the scope its layer is built in.
+  Effect.scoped(
+    Layer.build(Auth.Live(authDirectory).pipe(Layer.provide(ProviderLock.InProcess))),
+  ).pipe(Effect.map((context) => sourceRotationLock(Context.get(context, Auth), provider)))
 
 /**
  * Run `effect` as a loop step does, listening for the raw stop reason a
