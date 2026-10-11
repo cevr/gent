@@ -6712,7 +6712,7 @@ describe("TUI renderer surfaces", () => {
           id: MessageId.make("agent-queue"),
           content: "AGENT-WAIT",
           createdAt: 0,
-          metadata: { extensionId: "@gent/delegate" },
+          metadata: { extensionId: "@gent/session-tools" },
         }
         const running = {
           _tag: "Running" satisfies "Running",
@@ -6774,7 +6774,7 @@ describe("TUI renderer surfaces", () => {
                 role: "user",
                 parts: [Prompt.textPart({ text: "AGENT-WAIT" })],
                 createdAt: dateFromMillis(1),
-                metadata: { extensionId: "@gent/delegate" },
+                metadata: { extensionId: "@gent/session-tools" },
               }),
             }),
           }),
@@ -7830,14 +7830,15 @@ describe("debug playground", () => {
           expect(frame).toContain(
             "● Read 1 file · searched 1 pattern · ran 1 command · edited 1 file · wrote 1 file",
           )
-          expect(frame).toContain("● Started 2 agents · read 1 session")
+          expect(frame).toContain("● Started 2 threads · read 1 session")
           expect(frame).toContain("Audit lines up")
-          // The child's report is its own muted row, off the reader's rail.
+          // The thread's report is its own muted row, off the reader's rail.
           expect(frame).toContain(
             "  » child explore · 0e493eaf · The double border comes from two surfaces drawing one",
           )
+          // Its round's end heads with the thread's name and how the round ended.
           expect(frame).toContain(
-            "  ◆ explore · Read 4 files · searched 2 patterns · 41s · ↑1.2k ↓300 $0.01",
+            "  ◆ explore · completed · Read 4 files · searched 2 patterns · 41s · ↑1.2k ↓300 $0.01",
           )
           expect(frame).toContain("┃ Review the TUI renderer cleanup")
           expect(frame).not.toContain("┃ » ")

@@ -263,7 +263,7 @@ export const getString = (input: ToolInput, key: string, fallback = ""): string 
 // ── sessions ────────────────────────────────────────────────────────────────
 
 /**
- * A session the reader can return to. A delegate or `/btw` child has a
+ * A session the reader can return to. A thread or a `/btw` child has a
  * parent and its own thread: it is the agent's work, not a conversation the
  * reader left. A handoff has a parent but joins its thread, so it is one.
  */
@@ -708,12 +708,16 @@ function summarizeAskAsync(args: Schema.JsonObject): string {
   })
 }
 
-/** `<name> · <task>`: the start's own name says who, the task what; a start with no name shows its task. */
-function summarizeDelegate(args: Schema.JsonObject): string {
-  const todo = truncate(getStringArg(args, "todo"), 40)
+/**
+ * `<name> · <task>`: the start's own name says who, the task what; a start
+ * with no name shows its task, and one with no task its name.
+ */
+function summarizeThreadStart(args: Schema.JsonObject): string {
+  const task = truncate(getStringArg(args, "task"), 40)
   const name = getStringArg(args, "name").replace(/\s+/g, " ").trim()
-  if (name.length === 0) return todo
-  return `${name} · ${todo}`
+  if (name.length === 0) return task
+  if (task.length === 0) return name
+  return `${name} · ${task}`
 }
 
 type ToolArgFormatter = (args: Schema.JsonObject, place: PathPlace) => string
@@ -738,7 +742,7 @@ const toolArgFormatters = {
     return ""
   },
   grep: summarizeGrep,
-  "delegate.start": summarizeDelegate,
+  "thread.start": summarizeThreadStart,
   ask_user_async: summarizeAskAsync,
   read_session: (args) => truncate(getStringArg(args, "sessionId"), 50),
   handoff: (args) => truncate(getStringArg(args, "reason"), 50),
@@ -1075,7 +1079,7 @@ const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArra
   ],
 ]
 
-/** `.delegate.start` and `["must-not-run"]` name the host tool ids `delegate.start` and `must-not-run`. */
+/** `.thread.start` and `["must-not-run"]` name the host tool ids `thread.start` and `must-not-run`. */
 const hostToolId = (path: string) => {
   const segments = Array.from(
     path.matchAll(/\.([A-Za-z_$][\w$]*)|\[\s*["'`]([^"'`]+)["'`]\s*\]/g),
@@ -1270,7 +1274,6 @@ const TOOL_UNITS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["edit", ["file", "files"]],
   ["write", ["file", "files"]],
   ["bash", ["command", "commands"]],
-  ["delegate.start", ["agent", "agents"]],
   ["thread.start", ["thread", "threads"]],
   ["ask_user", ["question", "questions"]],
   ["ask_user_async", ["question", "questions"]],
@@ -1474,7 +1477,6 @@ const TOOL_VERBS: ReadonlyMap<string, readonly [string, string]> = new Map([
   ["edit", ["Edited", "Editing"]],
   ["write", ["Wrote", "Writing"]],
   ["bash", ["Ran", "Running"]],
-  ["delegate.start", ["Started", "Starting"]],
   ["thread.start", ["Started", "Starting"]],
   ["ask_user", ["Asked", "Asking"]],
   ["ask_user_async", ["Asked", "Asking"]],

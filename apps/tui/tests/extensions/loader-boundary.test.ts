@@ -1819,7 +1819,7 @@ describe("tool renderer reach", () => {
         for (const tool of contributions.tools ?? []) toolIds.add(getToolId(tool))
       }
       expect(loaded.failures).toEqual([])
-      expect(loaded.renderers.has("delegate.start")).toBe(true)
+      expect(loaded.renderers.has("thread.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
     }).pipe(
       Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer)),

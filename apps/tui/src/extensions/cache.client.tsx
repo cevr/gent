@@ -11,7 +11,7 @@ import {
   promptCacheTtlMsFor,
   sameCredential,
 } from "@gent/core/protocol"
-import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
+import { THREAD_ROUND_END_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
   ClientContext,
@@ -36,7 +36,7 @@ import {
  * events (the feed replays them from the start on every mount, so resume
  * derives the same rows) into the misses and why each happened: the cache
  * expired during a long tool call, while the turn waited for an approval,
- * while the reader was idle, before a child's completion or a wake, or after a
+ * while the reader was idle, before a thread's round end or a wake, or after a
  * model switch. A miss inside the cache lifetime with the same model, on a
  * provider that reports cache writes, is a changed prefix: the regression
  * alarm for a moved cache marker. On a provider that caches implicitly and
@@ -97,8 +97,8 @@ export const CacheMissCause = Schema.TaggedUnion({
   Approval: { ms: Schema.Finite },
   /** The cache expired between two steps of a turn with nothing to account for it. */
   Paused: { ms: Schema.Finite },
-  /** A child's completion opened this turn after the cache expired. */
-  Child: { ms: Schema.Finite },
+  /** A thread's round end opened this turn after the cache expired. */
+  Thread: { ms: Schema.Finite },
   /** A wake opened this turn after the cache expired. */
   Wake: { ms: Schema.Finite },
   /** Any other new turn after the cache expired. */
@@ -383,8 +383,8 @@ export const makeCacheScan = (): CacheScan => {
       return CacheMissCause.cases.Paused.make({ ms: gapMs })
     }
     const opener = Option.flatMap(input, (id) => Option.fromUndefinedOr(inputTypes.get(id)))
-    if (Option.contains(opener, CHILD_COMPLETION_TYPE))
-      return CacheMissCause.cases.Child.make({ ms: gapMs })
+    if (Option.contains(opener, THREAD_ROUND_END_TYPE))
+      return CacheMissCause.cases.Thread.make({ ms: gapMs })
     if (Option.contains(opener, WAKE_MESSAGE_TYPE))
       return CacheMissCause.cases.Wake.make({ ms: gapMs })
     return CacheMissCause.cases.Idle.make({ ms: gapMs })
@@ -737,7 +737,7 @@ const causeText = CacheMissCause.match({
   Tool: (cause) => `cache expired during ${formatAge(cause.ms)} ${cause.toolName}`,
   Approval: (cause) => `cache expired waiting ${formatAge(cause.ms)} for approval`,
   Paused: (cause) => `cache expired while the turn paused ${formatAge(cause.ms)}`,
-  Child: (cause) => `cache expired while a child ran ${formatAge(cause.ms)}`,
+  Thread: (cause) => `cache expired while a thread ran ${formatAge(cause.ms)}`,
   Wake: (cause) => `cache expired before the wake, ${formatAge(cause.ms)}`,
   Idle: (cause) => `cache expired after ${formatAge(cause.ms)} idle`,
 })

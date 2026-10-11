@@ -21,7 +21,7 @@ import {
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
-import { childTaskText, threadRoundText } from "@gent/extensions/client"
+import { threadRoundText } from "@gent/extensions/client"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
@@ -138,9 +138,21 @@ describe("windows on a branch", () => {
     ])
   })
 
-  test("previews a child's task, not the line that names its parent", () => {
+  test("previews a delegate thread's task, past its answer and place lines", () => {
     const messages = [
-      message("u1", "user", childTaskText(SessionId.make("parent-1"), "fix the csv quoting"), 1),
+      message(
+        "u1",
+        "user",
+        threadRoundText({
+          number: 1,
+          starter: SessionId.make("parent-1"),
+          message: "fix the csv quoting",
+          reply: Option.none(),
+          notify: "starter",
+          place: Option.some({ cwd: "/copies/csv", branch: "gent/csv" }),
+        }),
+        1,
+      ),
       message("a1", "assistant", "done", 2),
     ]
     expect(windowsOf(session("s1"), branchId, messages).map((window) => window.preview)).toEqual([

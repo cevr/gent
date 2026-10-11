@@ -3,13 +3,16 @@ import { Effect, Option, Schema } from "effect"
 import { createMemo, For, Show } from "solid-js"
 import { splitLines } from "@gent/core/protocol"
 import {
-  CHILD_COMPLETION_TYPE,
-  CHILD_TASK_TYPE,
-  ChildCompletionDetails,
-  childFailureNames,
-  childTaskBody,
-  DELEGATE_EXTENSION_ID,
-  readChildCompletionHeadline,
+  roundFailureNames,
+  SESSION_MESSAGE_TYPE,
+  SESSION_TOOLS_EXTENSION_ID,
+  SessionMessageDetails,
+  sessionMessageBody,
+  THREAD_ROUND_END_TYPE,
+  THREAD_ROUND_TYPE,
+  ThreadRoundEndDetails,
+  threadRoundBody,
+  threadRoundEndAnswer,
 } from "@gent/extensions/client"
 import {
   type ActivityCall,
@@ -46,81 +49,119 @@ import {
   useTheme,
 } from "@gent/tui/extensions"
 
-// ── delegate rows ───────────────────────────────────────────────────────────
-
 /**
- * The `delegate.start` row and the child-completion row.
+ * The `@gent/session-tools` client: the rows of the messages sessions send
+ * each other and of the threads a session starts.
  *
- * A child never blocks its parent: `delegate.start` settles at admission with
- * the child's handle, and the child's result arrives later as a
- * `child-completion` message. Native scrollback commits a row once, so both
- * rows draw only from their own props: the start row a static handle line,
- * the completion row the details the delegate wrote when the child ended.
- * The docked agents pane keeps the live progress of a running child.
+ * - A `session.send` message and a thread's round are `»` rows: another
+ *   session wrote them, so neither draws on the reader's rail.
+ * - The `thread.start` row: a start settles at admission with the thread's
+ *   handle, never its answer.
+ * - The round-end row: a `notify: "starter"` round's end, the message that
+ *   wakes the starter with the thread's answer.
  *
- * The completion row is a node on the transcript's `ctrl+o` ladder, like a
- * tool group: collapsed is its one head line, preview adds the child's last
+ * Native scrollback commits a row once, so each row draws only from its own
+ * props: the start row a static handle line, the round-end row the details
+ * the threads wrote when the round ended. The docked agents pane keeps the
+ * live progress of a running thread.
+ *
+ * The round-end row is a node on the transcript's `ctrl+o` ladder, like a
+ * tool group: collapsed is its one head line, preview adds the round's last
  * calls as a tree and a head of its answer, and full draws every call the
  * details kept and the whole answer.
  */
 
-// ── start row ───────────────────────────────────────────────────────────────
+// ── session message row ─────────────────────────────────────────────────────
 
-const decodeDelegateInput = Schema.decodeUnknownOption(
+/** A message from another session names its sender at the head of its row. */
+const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
+
+/** The sender fits beside the id: an auto-named thread carries its whole task in the name. */
+const SENDER_NAME_MAX_COLUMNS = 32
+
+/** Collapses runs of whitespace, then cuts by terminal columns via `truncate`. */
+const shortName = (name: string): string =>
+  truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
+
+/** Who wrote a sent message, cut to fit beside the relation word and the short session id; empty for no name. */
+const senderName = ({ from }: SessionMessageDetails): string =>
+  Option.match(Option.fromUndefinedOr(from.name), { onNone: () => "", onSome: shortName })
+
+// ── thread.start row ────────────────────────────────────────────────────────
+
+const decodeStartInput = Schema.decodeUnknownOption(
   Schema.Struct({
-    todo: Schema.optional(Schema.String),
+    task: Schema.optional(Schema.String),
     name: Schema.optional(Schema.String),
+    notify: Schema.optional(Schema.String),
   }),
 )
 
-/**
- * The delegated task, after the start's own name when it gave one
- * (`greeting audit · check the greeting files`), cut to 61 columns with the
- * ellipsis, as the header subtitle.
- */
-export const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
-  const decoded = decodeDelegateInput(input)
-  const todo = decoded.pipe(Option.flatMap((inp) => Option.fromNullishOr(inp.todo)))
-  if (Option.isNone(todo)) return Option.none()
-  const text = decoded.pipe(
-    Option.flatMap((inp) => Option.fromNullishOr(inp.name)),
-    Option.map((name) => name.replace(/\s+/g, " ").trim()),
-    Option.filter((name) => name.length > 0),
-    Option.match({
-      onNone: () => todo.value,
-      onSome: (name) => `${name} · ${todo.value}`,
-    }),
+/** A field of the start's input with its whitespace collapsed; none when it is empty. */
+const startField = (input: ToolInput, field: "task" | "name"): Option.Option<string> =>
+  decodeStartInput(input).pipe(
+    Option.flatMap((decoded) => Option.fromNullishOr(decoded[field])),
+    Option.map((text) => text.replace(/\s+/g, " ").trim()),
+    Option.filter((text) => text.length > 0),
   )
+
+/**
+ * The thread's task, after the start's own name when it gave one
+ * (`greeting audit · check the greeting files`), cut to 61 columns with the
+ * ellipsis, as the header subtitle. A start with no task shows its name.
+ */
+export const threadStartSubtitle = (input: ToolInput): Option.Option<string> => {
+  const name = startField(input, "name")
+  const text = Option.match(startField(input, "task"), {
+    onNone: () => name,
+    onSome: (task) =>
+      Option.some(
+        Option.match(name, {
+          onNone: () => task,
+          onSome: (named) => `${named} · ${task}`,
+        }),
+      ),
+  })
   // Cut by grapheme and column, so an emoji at the edge is never split in half.
-  return Option.some(truncate(text, 61))
+  return Option.map(text, (value) => truncate(value, 61))
 }
 
-/** The handle `delegate.start` returns, read leniently from the saved output. */
+/** The handle `thread.start` returns, read leniently from the saved output. */
 const decodeHandle = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
 )
 
-/** One line: the child the call started, or why it did not start. */
+/** Where the thread's answers go: back to this session as a message, or nowhere but the thread. */
+const answerWords = (input: ToolInput): string => {
+  const notify = Option.flatMap(decodeStartInput(input), (decoded) =>
+    Option.fromNullishOr(decoded.notify),
+  )
+  if (Option.contains(notify, "starter")) return "result arrives as a message"
+  return "replies stay in the thread"
+}
+
+/** One line: the thread the call started, or why it did not start. */
 const startLine = (props: ToolRendererProps): string => {
-  if (props.toolCall.status === "running") return "starting a child…"
+  if (props.toolCall.status === "running") return "starting a thread…"
   if (props.toolCall.status === "error") {
-    return Option.getOrElse(failureReason(props.toolCall), () => "the child did not start")
+    return Option.getOrElse(failureReason(props.toolCall), () => "the thread did not start")
   }
+  const words = answerWords(props.toolCall.input)
   return Option.flatMap(Option.fromNullishOr(props.toolCall.output), decodeHandle).pipe(
     Option.match({
-      onNone: () => "result arrives as a message",
-      onSome: (handle) => `child ${shortId(handle.sessionId)} · result arrives as a message`,
+      onNone: () => words,
+      onSome: (handle) => `thread ${shortId(handle.sessionId)} · ${words}`,
     }),
   )
 }
 
-function DelegateStartRow(props: ToolRendererProps) {
+function ThreadStartRow(props: ToolRendererProps) {
   const { theme } = useTheme()
   const line = () => <text style={{ fg: theme.textMuted }}>{startLine(props)}</text>
   return (
     <ToolFrame
-      title="delegate"
-      subtitle={Option.getOrUndefined(delegateSubtitle(props.toolCall.input))}
+      title="thread"
+      subtitle={Option.getOrUndefined(threadStartSubtitle(props.toolCall.input))}
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={line()}
@@ -130,19 +171,12 @@ function DelegateStartRow(props: ToolRendererProps) {
   )
 }
 
-// ── completion row ──────────────────────────────────────────────────────────
+// ── round-end row ───────────────────────────────────────────────────────────
 
-type CompletionDetails = typeof ChildCompletionDetails.Type
-type ChildToolLine = NonNullable<CompletionDetails["tools"]>[number]
+type RoundEndDetails = typeof ThreadRoundEndDetails.Type
+type RoundToolLine = RoundEndDetails["tools"][number]
 
-const decodeCompletionDetails = Schema.decodeUnknownOption(ChildCompletionDetails)
-
-/** The model reads a status header, then the answer after the first blank line. */
-const completionAnswer = (content: string): string => {
-  const start = content.indexOf("\n\n")
-  if (start === -1) return content
-  return content.slice(start + 2)
-}
+const decodeRoundEndDetails = Schema.decodeUnknownOption(ThreadRoundEndDetails)
 
 /** The calls and the answer lines the preview shows; the full level shows them all. */
 const PREVIEW_CALLS = 5
@@ -155,65 +189,50 @@ const FREE_LAST_COLUMN = 1
 const GLYPH_COLUMNS = 2
 /** The fewest columns an error keeps on the head line before the line drops it. */
 const MIN_ERROR_COLUMNS = 4
-/** A child's name keeps at most these columns, as the `»` row's sender does. */
+/** A thread's name keeps at most these columns, as the `»` row's sender does. */
 const NAME_COLUMNS = 32
 
-/** How the child ended: an end the row cannot read never draws the done mark. */
-interface CompletionState {
-  /** The child's session name, else its agent's name. */
+/** Who the thread is, and how its round ended. */
+interface RoundEndState {
+  /** The thread session's name, else its agent's name, else `thread`. */
   readonly name: string
   /** Whether `name` is the session's own: an agent's name needs the id beside it. */
   readonly named: boolean
-  /** How the turn ended badly, in the words the parent model read; empty otherwise. */
-  readonly failure: string
-  readonly ended: "done" | "badly" | "unknown"
+  /** `completed`, or the ways the turn ended badly, in the words the starter's model read. */
+  readonly outcome: string
+  readonly badly: boolean
 }
 
-/**
- * The outcome in the details, else the headline `describeChildCompletion`
- * wrote in the message: rows saved before outcomes were written read it
- * there. A row with neither draws a neutral mark.
- */
-const completionState = (details: CompletionDetails, content: string): CompletionState => {
-  const headline = readChildCompletionHeadline(content)
-  const agent = Option.fromUndefinedOr(details.agentName).pipe(
-    Option.orElse(() => Option.map(headline, (value) => value.agentName)),
-    Option.getOrElse(() => "child"),
-  )
+const roundEndState = (details: RoundEndDetails): RoundEndState => {
   const sessionName = Option.fromUndefinedOr(details.name).pipe(
     Option.map((value) => value.replace(/\s+/g, " ").trim()),
     Option.filter((value) => value.length > 0),
   )
-  const who = {
-    name: Option.getOrElse(sessionName, () => agent),
+  const failures = roundFailureNames(details)
+  const outcome = Option.match(
+    Option.liftPredicate(failures, (names) => names.length > 0),
+    {
+      onNone: () => "completed",
+      onSome: (names) => names.join(", "),
+    },
+  )
+  return {
+    name: Option.getOrElse(sessionName, () =>
+      Option.getOrElse(Option.fromUndefinedOr(details.agentName), () => "thread"),
+    ),
     named: Option.isSome(sessionName),
+    outcome,
+    badly: failures.length > 0,
   }
-  const ended = (failure: string): CompletionState => {
-    if (failure.length > 0) return { ...who, failure, ended: "badly" }
-    return { ...who, failure, ended: "done" }
-  }
-  const outcome = Option.fromUndefinedOr(details.outcome)
-  if (Option.isSome(outcome)) return ended(childFailureNames(outcome.value).join(", "))
-  return Option.match(headline, {
-    onNone: () => ({ ...who, failure: "", ended: "unknown" }),
-    // An older row's headline says `completed`, or `ended (<how>)`.
-    onSome: ({ status }) =>
-      ended(
-        Option.getOrElse(
-          Option.liftPredicate(status, (value) => value !== "completed"),
-          () => "",
-        ),
-      ),
-  })
 }
 
 /**
  * A kept or counted call as the run vocabulary reads it: one op of its tool.
  * The op carries the outcome; the call itself settled, so a failure counts once.
  */
-const childCall = (
+const roundCall = (
   name: string,
-  status: ChildToolLine["status"],
+  status: RoundToolLine["status"],
   summary: string,
 ): ActivityCall => {
   let outcome: ActivityOperation["outcome"] = "succeeded"
@@ -228,34 +247,20 @@ const childCall = (
 }
 
 /**
- * The child's work in the run header's words, fitted to `width` columns:
- * `Read 10 files · ran 4 commands · 1 failed`. The counts hold every call;
- * a row saved before them reads its kept calls when they are all of them,
- * else counts its calls (`14 tools`), since the kept kinds would undercount.
+ * The round's work in the run header's words, fitted to `width` columns:
+ * `Read 10 files · ran 4 commands · 1 failed`. The counts hold every call,
+ * not only the calls the details kept.
  */
 const workSummary = (
-  details: CompletionDetails,
+  details: RoundEndDetails,
   width: number,
-): ReadonlyArray<TextRun<ActivityTone>> => {
-  const tools = details.tools ?? []
-  const counted = Option.fromUndefinedOr(details.toolCounts).pipe(
-    Option.map((counts) =>
-      counts.flatMap((count) =>
-        Array.from({ length: count.count }, () => childCall(count.name, count.status, "")),
-      ),
+): ReadonlyArray<TextRun<ActivityTone>> =>
+  activityHeaderRuns(
+    details.toolCounts.flatMap((count) =>
+      Array.from({ length: count.count }, () => roundCall(count.name, count.status, "")),
     ),
-    Option.orElse(() =>
-      Option.liftPredicate(
-        tools.map((tool) => childCall(tool.name, tool.status, tool.summary)),
-        () => (details.toolCount ?? tools.length) === tools.length,
-      ),
-    ),
+    width,
   )
-  return Option.match(counted, {
-    onNone: () => [{ text: plural(details.toolCount ?? 0, "tool"), tone: "muted" as const }],
-    onSome: (calls) => activityHeaderRuns(calls, width),
-  })
-}
 
 /** The runs' text as one line. */
 const runsText = <Tone,>(runs: ReadonlyArray<TextRun<Tone>>): string =>
@@ -265,25 +270,29 @@ const runsText = <Tone,>(runs: ReadonlyArray<TextRun<Tone>>): string =>
 const nonEmpty = (text: string): Option.Option<string> =>
   Option.liftPredicate(text, (value) => value.length > 0)
 
-/** The first line of a failed child's error; none for a child that completed. */
-const errorLine = (details: CompletionDetails): Option.Option<string> =>
+/** The first line of the error the round's turn ended on; none for a round that completed. */
+const errorLine = (details: RoundEndDetails): Option.Option<string> =>
   Option.fromUndefinedOr(details.error).pipe(
     Option.map((text) => (splitLines(text).find((line) => line.trim().length > 0) ?? "").trim()),
     Option.filter((line) => line.length > 0),
   )
 
+/** The head's hue: the thread's name in the names' colour (Codex draws a nickname in its accent), its work in the run tones, the rest muted. */
+type HeadTone = "name" | ActivityTone
+
 /**
  * The row's head line after its glyph, fitted to `width` columns:
- * `delegate: loader audit · Read 10 files · ran 4 commands · 1 failed · 1m 12s · ↑1.2k ↓300 $0.01`.
- * A child that ended badly says how after its name, and its error ends the
- * line. Where the line is too wide, the error is cut first; then the work's
- * later kinds drop, then the bill, then the time, then the work. How it
- * ended never drops: the name is cut for it. The child's id shows at the
- * full level, or beside an agent's name when the row has no session name.
+ * `loader audit · completed · Read 10 files · ran 4 commands · 1 failed · 1m 12s · ↑1.2k ↓300 $0.01`.
+ * How the round ended follows the name: `completed`, or the ways its turn
+ * ended badly, and then the error it ended on ends the line. Where the line
+ * is too wide, the error is cut first; then the work's later kinds drop,
+ * then the bill, then the time, then the work. How it ended never drops: the
+ * name is cut for it. The thread's id shows at the full level, or beside an
+ * agent's name when the thread has no session name.
  */
-const completionHead = (
-  state: CompletionState,
-  details: CompletionDetails,
+const roundEndHead = (
+  state: RoundEndState,
+  details: RoundEndDetails,
   options: { readonly width: number; readonly open: boolean },
 ): ReadonlyArray<TextRun<HeadTone>> => {
   /** ` · <part>` for a part the line holds; nothing for an empty one. */
@@ -298,23 +307,21 @@ const completionHead = (
       },
     ),
   )
-  const failure = part(state.failure)
+  const outcome = part(state.outcome)
   const name = truncate(state.name, NAME_COLUMNS)
-  const base = `${name}${id}${failure}`
+  const base = `${name}${id}${outcome}`
   if (textWidth(base) > options.width) {
-    const room = Math.max(1, options.width - textWidth(`${id}${failure}`))
+    const room = Math.max(1, options.width - textWidth(`${id}${outcome}`))
     return truncateRuns<HeadTone>(
       [
         { text: truncate(name, room), tone: "name" },
-        { text: `${id}${failure}`, tone: "muted" },
+        { text: `${id}${outcome}`, tone: "muted" },
       ],
       options.width,
     )
   }
   const muted = (text: string): TextRun<HeadTone> => ({ text, tone: "muted" })
-  const time = Option.map(Option.fromUndefinedOr(details.durationMs), (ms) =>
-    formatDuration(ms, "compact"),
-  )
+  const time = formatDuration(details.durationMs, "compact")
   const usage = Option.fromUndefinedOr(details.usage).pipe(
     Option.map((value) =>
       formatUsageStats({ input: value.input, output: value.output, cost: value.costUsd }),
@@ -327,18 +334,18 @@ const completionHead = (
     onNone: () => 0,
     onSome: (text) => 3 + Math.min(MIN_ERROR_COLUMNS, textWidth(text)),
   })
-  // The line opens with the name whole; the child's work draws as a run
+  // The line opens with the name whole; the round's work draws as a run
   // header does (`1 failed` in its tone), the rest muted.
   const join = (
     work: ReadonlyArray<TextRun<ActivityTone>>,
     tail: ReadonlyArray<string>,
   ): ReadonlyArray<TextRun<HeadTone>> => {
-    const runs: Array<TextRun<HeadTone>> = [{ text: name, tone: "name" }, muted(`${id}${failure}`)]
+    const runs: Array<TextRun<HeadTone>> = [{ text: name, tone: "name" }, muted(`${id}${outcome}`)]
     if (work.length > 0) runs.push(muted(" · "), ...work)
     for (const text of tail) runs.push(muted(` · ${text}`))
     return runs.filter((run) => run.text.length > 0)
   }
-  const tails = [[...Option.toArray(time), ...Option.toArray(usage)], Option.toArray(time), []]
+  const tails = [[time, ...Option.toArray(usage)], [time], []]
   let line = join([], [])
   for (const tail of tails) {
     const fixed = textWidth(runsText(join([], tail))) + errorReserve
@@ -362,36 +369,33 @@ const completionHead = (
   })
 }
 
-/** The head's hue: the child's name in the names' colour (Codex draws a nickname in its accent), its work in the run tones, the rest muted. */
-type HeadTone = "name" | ActivityTone
-
 /** The answer's lines, with the blank lines at its end dropped. */
 const answerLines = (content: string): ReadonlyArray<string> => {
-  const lines = splitLines(completionAnswer(content))
+  const lines = splitLines(threadRoundEndAnswer(content))
   let end = lines.length
   while (end > 0 && (lines[end - 1] ?? "").trim().length === 0) end -= 1
   return lines.slice(0, end)
 }
 
 /**
- * The child's calls as run rows, in the run's past-tense words: the calls
+ * The round's calls as run rows, in the run's past-tense words: the calls
  * before the last `max` counted on one row. Below the full level the rows
  * fold a run of one tool and one outcome into one (`Read a.ts, b.ts`), as a
  * tool group's preview does; open, each call is its own row.
  */
-function ChildCallRows(props: {
-  details: CompletionDetails
+function RoundCallRows(props: {
+  details: RoundEndDetails
   max: number
   open: boolean
   width: number
   place: PathPlace
 }) {
   const { theme } = useTheme()
-  const tools = () => (props.details.tools ?? []).slice(-props.max)
-  const earlier = () => Math.max(0, (props.details.toolCount ?? 0) - tools().length)
+  const tools = () => props.details.tools.slice(-props.max)
+  const earlier = () => Math.max(0, props.details.toolCount - tools().length)
   const rows = createMemo(() => {
     const calls = tools().map((tool) =>
-      childCall(tool.name, tool.status, placedSummary(tool.summary, props.place)),
+      roundCall(tool.name, tool.status, placedSummary(tool.summary, props.place)),
     )
     if (props.open) return calls.flatMap((call) => activityRows([call]))
     return activityRows(calls)
@@ -428,23 +432,19 @@ function ChildCallRows(props: {
   )
 }
 
-function ChildCompletionRow(
-  props: MessageRowProps & { details: CompletionDetails; place: PathPlace },
-) {
+function RoundEndRow(props: MessageRowProps & { details: RoundEndDetails; place: PathPlace }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
-  const state = () => completionState(props.details, props.content)
+  const state = () => roundEndState(props.details)
   const glyph = () => {
-    const ended = state().ended
-    if (ended === "badly") return { mark: "✕", color: theme.error }
-    if (ended === "unknown") return { mark: "·", color: theme.textMuted }
+    if (state().badly) return { mark: "✕", color: theme.error }
     return { mark: "◆", color: theme.textMuted }
   }
   const open = () => props.disclosure === "full"
   // The columns right of the row's indent, less the free last column.
   const width = () => dimensions().width - ROW_INDENT - FREE_LAST_COLUMN
   const head = () =>
-    completionHead(state(), props.details, { width: width() - GLYPH_COLUMNS, open: open() })
+    roundEndHead(state(), props.details, { width: width() - GLYPH_COLUMNS, open: open() })
   const headColor = (tone: HeadTone) => {
     if (tone === "name") return theme.info
     return activityToneColor(theme)(tone)
@@ -469,7 +469,7 @@ function ChildCompletionRow(
         <Show when={open() && props.details.error}>
           {(error) => <text style={{ fg: theme.error }}>{error()}</text>}
         </Show>
-        <ChildCallRows
+        <RoundCallRows
           details={props.details}
           max={calls()}
           open={open()}
@@ -508,43 +508,71 @@ function ChildCompletionRow(
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-export default defineClientExtension(DELEGATE_EXTENSION_ID, {
+export default defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const { workspace } = yield* ClientContext
     const place: PathPlace = { cwd: workspace.cwd, home: workspace.home }
     return clientContributions(
-      rendererContribution(["delegate.start"], (props) => <DelegateStartRow {...props} />),
-      // Details that do not decode draw the raw text, off the reader's rail.
-      messageRendererContribution(CHILD_COMPLETION_TYPE, (props) => (
+      // The model reads the header `sessionMessageText` writes, then the
+      // text; the row names the sender at its head and `sessionMessageBody`
+      // removes the header, old rows included, so blank lines in a name or
+      // body stay whole. Details that do not decode draw the raw text under
+      // the bare relation word.
+      messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
         <Show
-          when={Option.getOrUndefined(decodeCompletionDetails(props.details))}
+          when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
           fallback={
             <AgentMessageRow
-              head="child completion"
+              head="session"
               body={props.content}
               images={props.images}
               disclosure={props.disclosure}
             />
           }
         >
-          {(details) => <ChildCompletionRow {...props} details={details()} place={place} />}
+          {(details) => (
+            <AgentMessageRow
+              head={details().from.relation}
+              name={senderName(details())}
+              id={shortId(details().from.sessionId)}
+              body={sessionMessageBody(details().from, props.content)}
+              images={props.images}
+              disclosure={props.disclosure}
+            />
+          )}
         </Show>
       )),
-      // A child's first message is its task under a frame the child's model
-      // reads. Its parent wrote it, so it is the `»` row, not the reader's rail;
-      // the transcript shows the task, and the raw view the frame.
+      // A round is its task under a frame the thread's model reads; the row
+      // shows the task, and the raw view the frame.
       messageRendererContribution(
-        CHILD_TASK_TYPE,
+        THREAD_ROUND_TYPE,
         (props) => (
           <AgentMessageRow
-            head="task from parent"
-            body={childTaskBody(props.content)}
+            head="task from session"
+            body={threadRoundBody(props.content)}
             images={props.images}
             disclosure={props.disclosure}
           />
         ),
-        { prompt: childTaskBody },
+        { prompt: threadRoundBody },
       ),
+      rendererContribution(["thread.start"], (props) => <ThreadStartRow {...props} />),
+      // Details that do not decode draw the raw text, off the reader's rail.
+      messageRendererContribution(THREAD_ROUND_END_TYPE, (props) => (
+        <Show
+          when={Option.getOrUndefined(decodeRoundEndDetails(props.details))}
+          fallback={
+            <AgentMessageRow
+              head="round end"
+              body={props.content}
+              images={props.images}
+              disclosure={props.disclosure}
+            />
+          }
+        >
+          {(details) => <RoundEndRow {...props} details={details()} place={place} />}
+        </Show>
+      )),
     )
   }),
 })

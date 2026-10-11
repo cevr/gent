@@ -414,7 +414,7 @@ export const formatDoctorReport = (report: DoctorReport): string => {
 /**
  * `gent --debug` starts an in-memory server seeded with one sample session:
  * a transcript with the shipped tools' calls and results, the reader's
- * prompts and a steer, delegate rows, and a child's report and completion,
+ * prompts and a steer, `thread.start` rows, and a thread's report and round end,
  * so the session view renders every surface without a live model.
  */
 
@@ -613,13 +613,23 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
       makeText("Pulled adjacent context and kicked off review helpers."),
       makeToolCall({
         id: asToolCallId("dbg-explore"),
-        name: "delegate.start",
-        params: { todo: "Where is the double-border coming from?" },
+        name: "thread.start",
+        params: {
+          task: "Where is the double-border coming from?",
+          name: "explore",
+          agent: "delegate",
+          notify: "starter",
+        },
       }),
       makeToolCall({
         id: asToolCallId("dbg-review"),
-        name: "delegate.start",
-        params: { todo: "Sanity-check the debug session bootstrap.", context: "fork" },
+        name: "thread.start",
+        params: {
+          task: "Sanity-check the debug session bootstrap.",
+          agent: "delegate",
+          notify: "starter",
+          fork: true,
+        },
       }),
       makeToolCall({
         id: asToolCallId("dbg-read-session"),
@@ -636,15 +646,17 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     branchId,
     role: "tool",
     parts: [
-      makeJsonResult(asToolCallId("dbg-explore"), "delegate.start", {
-        requestId: "dbg-explore",
+      makeJsonResult(asToolCallId("dbg-explore"), "thread.start", {
+        thread: "019debe1-0e493eaf",
         sessionId: "019debe1-0e493eaf",
         branchId: "019debe1-0e493eaf-branch",
+        round: { round: "dbg-explore-round-1", number: 1 },
       }),
-      makeJsonResult(asToolCallId("dbg-review"), "delegate.start", {
-        requestId: "dbg-review",
+      makeJsonResult(asToolCallId("dbg-review"), "thread.start", {
+        thread: "019debug1-review",
         sessionId: "019debug1-review",
         branchId: "019debug1-review-branch",
+        round: { round: "dbg-review-round-1", number: 1 },
       }),
       makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
         sessionId: "019debug1-session",
@@ -669,9 +681,9 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     createdAt: nowPlus(-21_000),
   })
 
-  // The explore child's report and its completion, as the session tools and
-  // the delegate store them: the TUI host reads no extension module, so the
-  // custom types and the header the model reads are written out here.
+  // The explore thread's report and its round's end, as the session tools
+  // store them: the TUI host reads no extension module, so the custom types
+  // and the header the model reads are written out here.
   const explore = {
     sessionId: "019debe1-0e493eaf",
     branchId: "019debe1-0e493eaf-branch",
@@ -687,7 +699,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
       makeText(
         [
           `Message from your child "${explore.name}" (session ${explore.sessionId}):`,
-          "A child's completion arrives as its own child-completion message; this message is not one.",
+          "A thread's answer to your round arrives as its own round-end message; this message is not one.",
           "",
           "The double border comes from two surfaces drawing one tool summary.",
           "message-list.tsx draws the group header for the run,",
@@ -712,7 +724,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     createdAt: nowPlus(-18_000),
   })
 
-  const childCompletion = Message.cases.regular.make({
+  const roundEnd = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),
     sessionId,
     branchId,
@@ -720,8 +732,8 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     parts: [
       makeText(
         [
-          `Child agent "explore" completed. requestId dbg-explore; session ${explore.sessionId}; branch ${explore.branchId}.`,
-          "Completion is a turn receipt, not task success. Read the output before relying on it.",
+          `Thread "${explore.name}" (agent delegate) round 1 completed. Thread ${explore.sessionId}; round dbg-explore-round-1; session ${explore.sessionId}; branch ${explore.branchId}.`,
+          "A round's end is a turn receipt, not task success. Read the answer before relying on it.",
           "",
           "The double border is a nested ToolFrame inside the cell body.",
           "FoldOperationsProvider folds consecutive ops of one tool into one frame.",
@@ -729,20 +741,26 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
           "No change needed; the inline view already folds.",
           "Evidence: apps/tui/src/tool-renderers.tsx and apps/tui/src/ui.tsx.",
           "Read 4 files, searched 2 patterns.",
+          "",
+          'thread.round({ round: "dbg-explore-round-1" }) returns its whole text and reply.',
         ].join("\n"),
       ),
     ],
     metadata: {
-      customType: "child-completion",
-      extensionId: "@gent/delegate",
+      customType: "thread-round-end",
+      extensionId: "@gent/session-tools",
       details: {
-        requestId: "dbg-explore",
+        round: "dbg-explore-round-1",
+        thread: explore.sessionId,
+        number: 1,
         sessionId: explore.sessionId,
         branchId: explore.branchId,
-        agentName: "explore",
-        // The child's session name heads the row, as it heads the child's `»` row.
+        agentName: "delegate",
+        // The thread's session name heads the row, as it heads the thread's `»` row.
         name: explore.name,
-        outcome: {},
+        interrupted: false,
+        streamFailed: false,
+        unanswered: false,
         usage: { input: 1200, output: 300, costUsd: 0.0123 },
         tools: [
           { name: "read", summary: "apps/tui/src/tool-renderers.tsx", status: "completed" },
@@ -775,7 +793,7 @@ const writeDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string)
     toolResults2,
     assistant5,
     childReport,
-    childCompletion,
+    roundEnd,
   ]
 
   for (const message of seedMessages) {

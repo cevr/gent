@@ -7,9 +7,9 @@ import { BranchId, Model, ModelId, ProviderId, SessionId } from "@gent/core/prot
 import {
   type AgentRowEntry,
   BTW_EXTENSION_ID,
-  DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
+  threadRoundText,
 } from "@gent/extensions/client"
 import {
   default as agentsExtension,
@@ -498,7 +498,7 @@ describe("Agents pane refresh while open", () => {
   )
 
   it.scopedLive(
-    "a delegate pulse re-reads the open pane under its filter, the tray under none",
+    "a session-tools pulse re-reads the open pane under its filter, the tray under none",
     () =>
       Effect.gen(function* () {
         const asked: Array<string> = []
@@ -536,13 +536,13 @@ describe("Agents pane refresh while open", () => {
 
         pane.open("agents.pane")
         controller.refresh("dep")
-        pulse(DELEGATE_EXTENSION_ID)
+        pulse(SESSION_TOOLS_EXTENSION_ID)
         pulse("@gent/other")
         expect(asked).toEqual(["", "dep", "", "dep", ""])
 
         // Closed, the pulse feeds the tray, which lists the whole subtree.
         pane.close("agents.pane")
-        pulse(DELEGATE_EXTENSION_ID)
+        pulse(SESSION_TOOLS_EXTENSION_ID)
         expect(asked).toEqual(["", "dep", "", "dep", "", ""])
       }).pipe(Effect.timeout("10 seconds")),
   )
@@ -1492,8 +1492,8 @@ describe("agents pane command center", () => {
     provider: ProviderId.make("anthropic"),
   })
   /**
-   * The selected row's live detail: a delegate child parked on an ask, three
-   * turns in. Its first prompt is its task under the parent's frame.
+   * The selected row's live detail: a delegate thread parked on an ask, three
+   * turns in. Its first prompt is its task under the starter's round frame.
    */
   const asking: ExtensionAgentDetail = {
     status: "WaitingForInteraction",
@@ -1504,7 +1504,14 @@ describe("agents pane command center", () => {
     durationMs: 72_000,
     omittedMessages: 0,
     firstPrompt: Option.some(
-      "Task from your parent session main. Your final reply in this turn is your result.\n\nCheck docs/architecture against the code\nThen report.",
+      threadRoundText({
+        number: 1,
+        starter: SessionId.make("main"),
+        message: "Check docs/architecture against the code\nThen report.",
+        reply: Option.none(),
+        notify: "starter",
+        place: Option.none(),
+      }),
     ),
     lastAnswer: Option.some("Which docs folder is current?"),
   }
@@ -2224,24 +2231,26 @@ describe("done threads", () => {
       }).pipe(Effect.timeout("10 seconds")),
   )
 
-  it.scopedLive("a delegate child gets no done row, and a thread that runs again leaves done", () =>
-    Effect.gen(function* () {
-      let section: AgentRowEntry["section"] = "running"
-      const { controller, read } = yield* controllerOver(
-        () => [
-          { ...threadRow("child", section), reportsToStarter: true },
-          threadRow("again", section),
-        ],
-        () => starter,
-      )
-      yield* read("running")
-      section = "idle"
-      yield* read("idle")
-      expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
-      section = "running"
-      yield* read("running again")
-      expect(controller.done()).toEqual([])
-    }).pipe(Effect.timeout("10 seconds")),
+  it.scopedLive(
+    "a thread that reports to its starter gets no done row, and one that runs again leaves done",
+    () =>
+      Effect.gen(function* () {
+        let section: AgentRowEntry["section"] = "running"
+        const { controller, read } = yield* controllerOver(
+          () => [
+            { ...threadRow("child", section), reportsToStarter: true },
+            threadRow("again", section),
+          ],
+          () => starter,
+        )
+        yield* read("running")
+        section = "idle"
+        yield* read("idle")
+        expect(controller.done().map((row) => row.sessionId)).toEqual([SessionId.make("again")])
+        section = "running"
+        yield* read("running again")
+        expect(controller.done()).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
   /** `notes` as one thread over `sessions`, keyed by its first session. */

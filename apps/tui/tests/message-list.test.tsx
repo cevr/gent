@@ -52,12 +52,10 @@ import {
 } from "@gent/core/test-utils"
 import {
   BTW_QUESTION_TYPE,
-  CHILD_COMPLETION_TYPE,
-  CHILD_TASK_TYPE,
-  childTaskText,
   forkQuestionText,
   type SessionMessageDetails,
   sessionMessageText,
+  THREAD_ROUND_END_TYPE,
   THREAD_ROUND_TYPE,
   threadRoundText,
 } from "@gent/extensions/client"
@@ -1023,40 +1021,46 @@ describe("transcript message rows", () => {
   )
 
   it.scopedLive(
-    "a thread's and a delegate child's first message show the task, not its frame",
+    "a side thread's and a delegate thread's first message show the task, not its frame",
     () =>
       Effect.gen(function* () {
-        const task = (id: string, text: string, customType: string): ListMessage => ({
+        const task = (id: string, text: string): ListMessage => ({
           ...userMessage("regular-message", id, text),
-          metadata: { customType },
+          metadata: { customType: THREAD_ROUND_TYPE },
         })
-        const thread = task(
-          "thread-1",
+        const round = (
+          message: string,
+          notify: "user" | "starter",
+          place: Option.Option<{ readonly cwd: string; readonly branch: string }>,
+        ) =>
           threadRoundText({
             number: 1,
             starter: SessionId.make("01a0ca0cb3e7"),
-            message: "Tidy the changelog.",
+            message,
             reply: Option.none(),
-            notify: "user",
-            place: Option.none(),
-          }),
-          THREAD_ROUND_TYPE,
+            notify,
+            place,
+          })
+        const side = task("thread-1", round("Tidy the changelog.", "user", Option.none()))
+        // A delegate round carries two answer lines and a snapshot's place line.
+        const delegated = task(
+          "thread-2",
+          round(
+            "Fix the csv quoting.",
+            "starter",
+            Option.some({ cwd: "/copies/csv", branch: "gent/csv" }),
+          ),
         )
-        const child = task(
-          "child-1",
-          childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting."),
-          CHILD_TASK_TYPE,
-        )
-        const frame = yield* renderLoaded([thread, child])
+        const frame = yield* renderLoaded([side, delegated])
         // Another session wrote each task: neither draws on the reader's rail.
         expect(frame).toContain("  » task from session · Tidy the changelog.")
+        expect(frame).toContain("  » task from session · Fix the csv quoting.")
         expect(frame).not.toContain("Round 1 from session")
-        expect(frame).toContain("  » task from parent · Fix the csv quoting.")
-        expect(frame).not.toContain("Task from your parent session")
+        expect(frame).not.toContain("private copy")
         expect(frame).not.toContain("┃")
-        const expandedFrame = yield* renderLoaded([thread, child], true)
+        const expandedFrame = yield* renderLoaded([side, delegated], true)
         expect(expandedFrame).toContain("Round 1 from session")
-        expect(expandedFrame).toContain("Task from your parent session")
+        expect(expandedFrame).toContain("private copy")
       }),
   )
 
@@ -1378,10 +1382,30 @@ describe("speaker lanes", () => {
     row("legacy", "PROMPT-LEGACY"),
     row("steer", "PROMPT-STEER", { fromClient: true }, "interjection-message"),
     childMessage,
-    row("child-task", childTaskText(SessionId.make("01a0ca0cb3e7"), "Fix the csv quoting."), {
-      customType: CHILD_TASK_TYPE,
-      extensionId: "@gent/delegate",
-    }),
+    row(
+      "round-end",
+      'Thread "csv fix" (agent delegate) round 1 completed.\n\nFixed the quoting.\n\nthread.round({ round: "r1" }) returns its whole text and reply.',
+      {
+        customType: THREAD_ROUND_END_TYPE,
+        extensionId: "@gent/session-tools",
+        details: {
+          round: "r1",
+          thread: "01a0ca0cb3e7",
+          number: 1,
+          sessionId: "01a0ca0cb3e7",
+          branchId: "csv-branch",
+          agentName: "delegate",
+          name: "csv fix",
+          interrupted: false,
+          streamFailed: false,
+          unanswered: false,
+          tools: [],
+          toolCount: 0,
+          toolCounts: [],
+          durationMs: 4_000,
+        },
+      },
+    ),
     row(
       "thread-round",
       threadRoundText({
@@ -1435,7 +1459,7 @@ describe("speaker lanes", () => {
     "┃ PROMPT-LEGACY",
     "┃ PROMPT-STEER",
     "  » child explore · ca0cb3e7",
-    "  » task from parent · Fix the csv",
+    "  ◆ csv fix · completed",
     "  » task from session · Tidy the",
     "  ◷ alarm fired",
     "  ↻ goal continuation",
@@ -3679,15 +3703,29 @@ const cellsOf = (
 
 // ── native transcript footer room ───────────────────────────────────────────
 
-/** A long resumed session: a model switch, four child completions, a cell with two ops. */
+/** A long resumed session: a model switch, four round ends, a cell with two ops. */
 const longHistory = (): SessionItem[] => {
   const childCompletion = (index: number): ListMessage => ({
-    ...assistant(`child-${index}`, `child ${index} finished\nCHILD-${index} answer`),
+    ...assistant(`child-${index}`, `child ${index} finished\n\nCHILD-${index} answer`),
     role: "user",
     segments: absent,
     metadata: {
-      customType: CHILD_COMPLETION_TYPE,
-      details: { sessionId: `child-session-${index}`, agentName: "delegate", outcome: {} },
+      customType: THREAD_ROUND_END_TYPE,
+      details: {
+        round: `round-${index}`,
+        thread: `child-session-${index}`,
+        number: 1,
+        sessionId: `child-session-${index}`,
+        branchId: `child-branch-${index}`,
+        agentName: "delegate",
+        interrupted: false,
+        streamFailed: false,
+        unanswered: false,
+        tools: [],
+        toolCount: 0,
+        toolCounts: [],
+        durationMs: 1_000,
+      },
     },
   })
   const cellWithOps = assistantToolMessage("assistant-cell-ops", {
@@ -6085,10 +6123,10 @@ describe("native transcript commit handover", () => {
 // ── sticky last prompt ──────────────────────────────────────────────────────
 
 describe("sticky last prompt", () => {
-  /** A user-role message an extension sent: a parent's message, a wake, a delegate start. */
+  /** A user-role message an extension sent: a parent's message, a wake, a thread's round. */
   const extensionSent = (id: string, text: string): ListMessage => ({
     ...userMessage("regular-message", id, text),
-    metadata: { extensionId: "@gent/delegate" },
+    metadata: { extensionId: "@gent/session-tools" },
   })
   const reply = (id: string, lines: number): ListMessage => {
     const text = Array.from({ length: lines }, (_, index) => `${id} line ${index + 1}`).join("\n\n")
@@ -6482,8 +6520,8 @@ describe("readerPrompt", () => {
   })
 
   test("a message another agent or an extension sent is not the reader's prompt", () => {
-    // A parent's `session.send`, a delegate start, a wake, a legacy row with no origin.
-    expect(read(user({ extensionId: "@gent/delegate" }))).toBeUndefined()
+    // A parent's `session.send`, a thread's round, a wake, a legacy row with no origin.
+    expect(read(user({ extensionId: "@gent/session-tools" }))).toBeUndefined()
     expect(read(user({ extensionId: "@gent/wake", customType: "wake" }))).toBeUndefined()
     expect(read(user(absent))).toBeUndefined()
   })

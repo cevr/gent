@@ -5,8 +5,6 @@ import {
   type AgentRowEntry,
   AgentsViewRpc,
   BTW_EXTENSION_ID,
-  childTaskBody,
-  DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
   threadRoundBody,
@@ -128,7 +126,7 @@ const TRAY_HINT = `${TRAY_KEY} sessions`
 const TRAY_HINTS = [keyHint(TRAY_KEY, "sessions")]
 const TRAY_MAX_ROWS = 3
 /**
- * Columns of a child's name on the status row; a delegate's name is often its
+ * Columns of a child's name on the status row; a thread's name is often its
  * whole task. At 100 columns the left group has 71 beside the right group
  * (`cache 5m · ctx 0% · $0.002`). The phase, the cwd, `Claude Sonnet 5.5` and
  * the way back take 44 of them, and ` · ↳ child ` 11 more: 16 are left for
@@ -250,8 +248,9 @@ export const trayLines = (
 
 /**
  * A finished side thread reports to no one: its starter is not woken, so the
- * tray says it is done. A delegate child's completion lands in its parent's
- * transcript, so it gets no done row.
+ * tray says it is done. A thread that reports to its starter (`notify:
+ * "starter"`) lands its round's end in the starter's transcript, so it gets
+ * no done row.
  */
 const finishesSilently = (row: AgentRowEntry): boolean =>
   row.sideThread && row.reportsToStarter !== true
@@ -641,14 +640,14 @@ export const makeAgentsController = (
       )
     })
 
-    // A delegate pulse in the current session means its subtree changed; so
-    // does a session-tools pulse, which `thread.start` sends. A BTW pulse
-    // discovers a new fork when complete empty/inactive knowledge stopped
-    // polling; once a child is live, its stream pulses leave the clock in charge.
+    // A session-tools pulse in the current session means its subtree changed:
+    // the threads send one when a thread starts, when a round's end is
+    // delivered and when an interrupt stops rounds. A BTW pulse discovers a
+    // new fork when complete empty/inactive knowledge stopped polling; once a
+    // child is live, its stream pulses leave the clock in charge.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
         if (
-          pulse.extensionId === DELEGATE_EXTENSION_ID ||
           pulse.extensionId === SESSION_TOOLS_EXTENSION_ID ||
           (pulse.extensionId === BTW_EXTENSION_ID &&
             Option.exists(descendants(), (children) =>
@@ -661,8 +660,8 @@ export const makeAgentsController = (
     )
     // A child's own turns raise no event in this session, so while the pane is
     // open or a descendant has a live loop the listing is re-read on a slow
-    // clock. Stored children alone never change on their own: a delegate pulse
-    // announces a new or woken one, so the tray stops polling for them. A
+    // clock. Stored children alone never change on their own: a session-tools
+    // pulse announces a new or woken one, so the tray stops polling for them. A
     // thread's row is live by its newest session, so its section says whether
     // any of its sessions has a loop.
     yield* lifecycle.scoped(
@@ -834,8 +833,8 @@ const rowParts = (head: string, name: string, doing: string, width: number): Row
 }
 
 /**
- * Marks a session spawned beside its parent's work (a delegate child or a
- * `/btw` fork), so side work reads apart from a handoff before opening it.
+ * Marks a session spawned beside its parent's work (a thread or a `/btw`
+ * fork), so side work reads apart from a handoff before opening it.
  */
 const sideThreadMark = (row: AgentRowEntry): string => {
   if (row.sideThread) return "side thread"
@@ -1026,13 +1025,13 @@ const detailLines = (
 }
 
 /**
- * The task a first prompt states: its first line once a child's or a
- * thread's source line is stripped, as the thread view's preview reads it.
+ * The task a first prompt states: its first line once a round's source
+ * lines are stripped, as the thread view's preview reads it.
  */
 const taskLine = (prompt: string): string =>
   Option.getOrElse(
     Option.fromUndefinedOr(
-      threadRoundBody(childTaskBody(prompt))
+      threadRoundBody(prompt)
         .split("\n")
         .find((line) => line.trim().length > 0),
     ),

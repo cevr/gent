@@ -189,7 +189,7 @@ const outcomeOf = (receipt: {
   )
 
 /** How a turn ended badly, in words a model reads; none for a turn that completed. */
-export const childFailureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
+const childFailureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
   const names: Array<string> = []
   if (outcome.interrupted === true) names.push("interrupted")
   if (outcome.streamFailed === true) names.push("model stream failed")
@@ -290,25 +290,7 @@ const describeChildCompletion = (params: {
   ].join("\n")
 }
 
-/**
- * The agent and status words `describeChildCompletion` wrote on the first
- * line. Rows saved before the details carried an outcome read it here.
- */
-export const readChildCompletionHeadline = (
-  text: string,
-): Option.Option<{ readonly agentName: string; readonly status: string }> =>
-  Option.fromNullishOr(
-    /^Child agent "([^"\n]*)" (completed|ended \([^)\n]+\))\. requestId /.exec(text),
-  ).pipe(
-    Option.flatMap(([, agentName, status]) =>
-      Option.all({
-        agentName: Option.fromNullishOr(agentName),
-        status: Option.fromNullishOr(status),
-      }),
-    ),
-  )
-
-export const CHILD_COMPLETION_TYPE = "child-completion"
+const CHILD_COMPLETION_TYPE = "child-completion"
 
 /** One call a child made, as its completion row draws it. */
 const ChildToolLine = Schema.Struct({
@@ -324,7 +306,7 @@ type ChildToolLine = typeof ChildToolLine.Type
  * the row shows. Only the three ids are required: older rows carry nothing
  * else.
  */
-export const ChildCompletionDetails = Schema.Struct({
+const ChildCompletionDetails = Schema.Struct({
   requestId: RequestId,
   sessionId: SessionId,
   branchId: BranchId,
@@ -569,7 +551,7 @@ const deliverCompletion = (
 const CHILD_TASK_PREFIX = "Task from your parent session "
 
 /** `metadata.customType` on a child's first message, the task its parent gave it. */
-export const CHILD_TASK_TYPE = "child-task"
+const CHILD_TASK_TYPE = "child-task"
 
 /**
  * The child's first message names where the task came from. Without it a
@@ -586,7 +568,7 @@ export const CHILD_TASK_TYPE = "child-task"
  * the child's own session cannot ask; the decline's own notes tell the child
  * how to report the ask.
  */
-export const childTaskText = (
+const childTaskText = (
   parentSessionId: SessionId,
   prompt: string,
   place?: { readonly cwd: string; readonly branch: string },
@@ -603,17 +585,6 @@ export const childTaskText = (
     "",
     prompt,
   ].join("\n")
-
-/** The task without its source line; a message that is not a child task is returned whole. */
-export const childTaskBody = (text: string): string =>
-  Option.liftPredicate(text, (value) => value.startsWith(CHILD_TASK_PREFIX)).pipe(
-    Option.flatMap((value) =>
-      Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
-        Option.map((split) => value.slice(split + 2)),
-      ),
-    ),
-    Option.getOrElse(() => text),
-  )
 
 /** The place a snapshot child works in; none for a shared child. */
 const childPlace = (sessionId: SessionId) =>
@@ -1466,7 +1437,7 @@ export const ListChildren = tool({
 // ── extension ───────────────────────────────────────────────────────────────
 
 /** The extension id a client matches state pulses against. */
-export const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
+const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
 
 /**
  * How to work with children. A section, not tool guidelines: in a cell turn

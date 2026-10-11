@@ -651,30 +651,32 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("grep", {}, PLACE)).toBe("")
   })
 
-  test("delegate.start: todo", () => {
-    expect(toolArgSummary("delegate.start", { todo: "find the bug" }, PLACE)).toBe("find the bug")
-    expect(toolArgSummary("delegate.start", {}, PLACE)).toBe("")
+  test("thread.start: task", () => {
+    expect(toolArgSummary("thread.start", { task: "find the bug" }, PLACE)).toBe("find the bug")
+    expect(toolArgSummary("thread.start", {}, PLACE)).toBe("")
   })
 
-  test("delegate.start: truncates long todo text within its 40-column budget", () => {
-    const longTodo = "a".repeat(60)
-    const result = toolArgSummary("delegate.start", { todo: longTodo }, PLACE)
+  test("thread.start: truncates long task text within its 40-column budget", () => {
+    const longTask = "a".repeat(60)
+    const result = toolArgSummary("thread.start", { task: longTask }, PLACE)
     expect(result).toBe(`${"a".repeat(39)}…`)
     expect(Bun.stringWidth(result)).toBe(40)
   })
 
-  // The child's name says who, the task what: `Started greeting audit · check the greeting files`.
-  test("delegate.start: a start's own name leads its task", () => {
+  // The thread's name says who, the task what: `Started greeting audit · check the greeting files`.
+  test("thread.start: a start's own name leads its task", () => {
     expect(
       toolArgSummary(
-        "delegate.start",
-        { todo: "check the greeting files", name: "greeting audit" },
+        "thread.start",
+        { task: "check the greeting files", name: "greeting audit" },
         PLACE,
       ),
     ).toBe("greeting audit · check the greeting files")
-    expect(toolArgSummary("delegate.start", { todo: "find the bug", name: " " }, PLACE)).toBe(
+    expect(toolArgSummary("thread.start", { task: "find the bug", name: " " }, PLACE)).toBe(
       "find the bug",
     )
+    // A worker started with no task is named only.
+    expect(toolArgSummary("thread.start", { name: "implementor" }, PLACE)).toBe("implementor")
   })
 
   test("read_session: session id", () => {
@@ -918,10 +920,10 @@ describe("activityHeaderRuns", () => {
     ).toBe("Read 4 files · ran 1 command · edited 1 file · wrote 1 file")
     expect(
       headerText([
-        cell([op("delegate.start", "compute"), op("delegate.start", "verify")]),
+        cell([op("thread.start", "compute"), op("thread.start", "verify")]),
         cell([op("grep", "/x/ in ."), op("read_session", "s1"), op("mcp.query", "q")]),
       ]),
-    ).toBe("Started 2 agents · searched 1 pattern · read 1 session · mcp.query 1×")
+    ).toBe("Started 2 threads · searched 1 pattern · read 1 session · mcp.query 1×")
     expect(headerText([cell([op("bash", "a"), op("bash", "b")])])).toBe("Ran 2 commands")
     expect(headerText([cell([op("ask_user_async", "cache"), op("bash", "a")])])).toBe(
       "Asked 1 question · ran 1 command",
@@ -1092,7 +1094,7 @@ describe("activity rows", () => {
     expect(
       rows([
         cell([
-          op("delegate.start", "compute"),
+          op("thread.start", "compute"),
           op("write", "out.json"),
           op("ask_user", "pick one"),
           op("mcp.query", "q"),
@@ -1231,14 +1233,14 @@ describe("describeCellCode", () => {
 
   test("names host tools by their id path and skips catalog reads", () => {
     const code = `
-      const spec = tools("delegate.start").parameters
-      const child = await tools.delegate.start({ todo: "x" })
+      const spec = tools("thread.start").parameters
+      const child = await tools.thread.start({ task: "x" })
       await tools["must-not-run"]({})
       await tools("read.then")({})
       await tools.wake.cancel()
     `
     expect(describeCellCode(code)).toEqual([
-      "delegate.start",
+      "thread.start",
       "must-not-run",
       "read.then",
       "wake.cancel",

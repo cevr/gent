@@ -30,7 +30,7 @@ import {
   useTheme,
   widgetContribution,
 } from "@gent/tui/extensions"
-import { childTaskBody, threadRoundBody } from "@gent/extensions/client"
+import { threadRoundBody } from "@gent/extensions/client"
 
 // ── thread pane ─────────────────────────────────────────────────────────────
 
@@ -108,8 +108,8 @@ const sessionLabel = (session: Session): string =>
  * The thread's sessions, oldest first.
  *
  * The server decides membership: sessions carry the thread they belong to, so
- * a compaction handoff stays in the thread it continues and a delegate run or
- * a `/btw` fork sits in its own. Re-deriving that here from
+ * a compaction handoff stays in the thread it continues and a started thread
+ * or a `/btw` fork sits in its own. Re-deriving that here from
  * `parentSessionId` would be a second, weaker copy of the rule — and a wrong
  * one, because a spawn's own handoff shares no parent link with this thread's
  * root and a tree walk would drop it.
@@ -193,9 +193,8 @@ const windowOf = (
         omittedCount: 0,
         preview: Option.match(spoken, {
           onNone: () => "",
-          // A child's or a thread's first message opens with its source; the
-          // preview shows the task.
-          onSome: (message) => firstLine(threadRoundBody(childTaskBody(messageText(message)))),
+          // A thread's round opens with its source; the preview shows the task.
+          onSome: (message) => firstLine(threadRoundBody(messageText(message))),
         }),
         updatedAt: last.createdAt.getTime(),
       }

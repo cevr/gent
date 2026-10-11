@@ -1094,17 +1094,30 @@ export const threadRoundBody = (text: string): string =>
     Option.getOrElse(() => text),
   )
 
-/** How a round ended badly, in words a model reads; none for one that completed. */
-const failureNames = (round: RoundRow): ReadonlyArray<string> => {
+/**
+ * How a round ended badly, in words a model reads; none for one that
+ * completed. The round-end message and its row both say it in these words.
+ */
+export const roundFailureNames = (flags: {
+  readonly interrupted: boolean
+  readonly streamFailed: boolean
+  readonly unanswered: boolean
+}): ReadonlyArray<string> => {
   const names: Array<string> = []
-  if (round.interrupted === 1) names.push("interrupted")
-  if (round.stream_failed === 1) names.push("model stream failed")
-  if (round.unanswered === 1) names.push("no answer produced")
+  if (flags.interrupted) names.push("interrupted")
+  if (flags.streamFailed) names.push("model stream failed")
+  if (flags.unanswered) names.push("no answer produced")
   return names
 }
 
+const roundFlags = (round: RoundRow) => ({
+  interrupted: round.interrupted === 1,
+  streamFailed: round.stream_failed === 1,
+  unanswered: round.unanswered === 1,
+})
+
 const outcomeWords = (round: RoundRow) => {
-  const failures = failureNames(round)
+  const failures = roundFailureNames(roundFlags(round))
   if (failures.length === 0) return "completed"
   return `ended (${failures.join(", ")})`
 }
@@ -1126,7 +1139,7 @@ const replyNote = (round: RoundRow): Option.Option<string> => {
  * everything the row shows: the thread's name and agent, the turn's flags and
  * bill, its last calls and its time, and a snapshot thread's work.
  */
-const ThreadRoundEndDetails = Schema.Struct({
+export const ThreadRoundEndDetails = Schema.Struct({
   round: Schema.String,
   thread: Schema.String,
   number: Schema.Finite,
@@ -1241,6 +1254,20 @@ const roundEndContent = (input: {
     ...Option.toArray(replyNote(round)),
     `thread.round({ round: "${round.round}" }) returns its whole text and reply.`,
   ].join("\n")
+}
+
+/**
+ * The answer a round-end message carries, as its row shows it: the text
+ * between the header's blank line and the blank line before the closing
+ * notes, which hold no blank line of their own. Any other text is returned
+ * whole.
+ */
+export const threadRoundEndAnswer = (content: string): string => {
+  const start = content.indexOf("\n\n")
+  if (start === -1) return content
+  const end = content.lastIndexOf("\n\n")
+  if (end <= start) return content.slice(start + 2)
+  return content.slice(start + 2, end)
 }
 
 /** Admits (or re-sends) a round's turn on the thread. A repeat admits nothing new. */
@@ -1462,6 +1489,9 @@ const deliverRoundEnd = Effect.fn("Threads.deliverRoundEnd")(function* (round: R
     number: round.number,
     notify: round.notify,
   })
+  // The agents tray re-reads on this pulse, so a thread whose round ended
+  // leaves its running place at once.
+  yield* ctx.State.changed().pipe(Effect.ignore)
 })
 
 interface TurnOutcome {

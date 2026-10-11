@@ -38,7 +38,7 @@ import {
   textStep,
   waitFor,
 } from "@gent/core/test-utils"
-import { CHILD_COMPLETION_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
+import { THREAD_ROUND_END_TYPE, WAKE_MESSAGE_TYPE } from "@gent/extensions/client"
 import cacheExtension, {
   CacheClock,
   cacheClock,
@@ -382,10 +382,10 @@ describe("scanCacheMisses", () => {
     }),
   )
 
-  it.live("a turn a child completion opened says the child ran", () =>
+  it.live("a turn a round's end opened says the thread ran", () =>
     Effect.sync(() => {
       const history = cachedFirstStep()
-      history.input(9 * MINUTE, "t2", CHILD_COMPLETION_TYPE)
+      history.input(9 * MINUTE, "t2", THREAD_ROUND_END_TYPE)
       history.step({
         start: 9 * MINUTE + 10 * SECOND,
         end: 10 * MINUTE,
@@ -393,8 +393,9 @@ describe("scanCacheMisses", () => {
         usage: missedStep,
       })
       const miss = onlyMiss(scanCacheMisses(history.envelopes))
-      expect(miss.cause._tag).toBe("Child")
-      expect(missText(miss, 0)).toStartWith("cache expired while a child ran 9m")
+      expect(miss.cause._tag).not.toBe("Idle")
+      expect(miss.cause._tag).toBe("Thread")
+      expect(missText(miss, 0)).toStartWith("cache expired while a thread ran 9m")
     }),
   )
 

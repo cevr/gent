@@ -398,24 +398,28 @@ the tree: one line a child. Full opens the bodies. `esc` collapses.
   preview, `∴ Thought · <first summary> · N summaries`. At full and in the
   transcript view every reasoning block, a run's too, opens under a `∴` at
   column 2 and hangs its text at column 4.
-- **Child completion** (`delegate.client.tsx`). Collapsed is one line at
-  column 2, `◆ <child's session name> · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
-  the name the start gave, else its task's first clause (`Check the greeting
-files`, never `delegate: …`); the start row reads `Started <name> · <task>`;
-  the work in the run header's words (from the details' `toolCounts`, so it
-  counts every call), its time and its bill, and no state word. A child that
-  ended badly draws `✕`, says how after its name (`· model stream failed`)
-  and ends with its error. Narrow, the error is cut first; then the work's
-  later kinds drop, then the bill, then the time, then the work; how it ended
-  never drops, and the name is cut for it. The child's id shows at full, or
-  beside the agent's name on a row saved before the name was. Preview adds
-  the child's last five calls as run rows (`├ … 9 earlier calls`,
+- **Thread round end** (`session-tools.client.tsx`). A `thread.start` with
+  `notify: "starter"` settles at once (its row reads `thread <id> · result
+arrives as a message`; any other start, `· replies stay in the thread`),
+  and each round's answer arrives later as a `thread-round-end` message.
+  Collapsed is one line at column 2,
+  `◆ <thread's name> · completed · Read 10 files · ran 4 commands · 1m 12s · ↑1.2k ↓300 $0.01`:
+  the thread's session name, else its agent's name; the start row reads
+  `Started <name> · <task>`; how the round ended; the work in the run
+  header's words (from the details' `toolCounts`, so it counts every call),
+  its time and its bill. A round that ended badly draws `✕` and says how
+  (`· model stream failed`), then ends with its error. Narrow, the error is
+  cut first; then the work's later kinds drop, then the bill, then the time,
+  then the work; how it ended never drops, and the name is cut for it. The
+  thread's id shows at full, or when the thread has no session name. Preview
+  adds the round's last five calls as run rows (`├ … 9 earlier calls`,
   `└ Read a.ts, b.ts +1`) and a five-line head of its answer. Full draws a
-  row per kept call and the whole answer, muted and hanging at column 4. It
-  draws no user rail and no `●`: a child has its own glyph. The head is muted
-  but the child's name, in the info colour (Codex draws an agent's nickname
-  in its accent), and a bad end's `✕`, in the error colour; its call rows
-  colour only their outcome words, as a run's rows do.
+  row per kept call and the whole answer, muted and hanging at column 4. The
+  receipt line and the `thread.round(…)` pointer the model reads never draw.
+  It draws no user rail and no `●`: a thread has its own glyph. The head is
+  muted but the thread's name, in the info colour (Codex draws an agent's
+  nickname in its accent), and a bad end's `✕` and failures, in the error
+  colour; its call rows colour only their outcome words, as a run's rows do.
 - **Connection notice** (`ConnectionWidget` in `app.tsx`). Collapsed is one
   line that counts the issues (`• connection · 6 model catalogs unavailable ·
 ctrl+o`), with a tree row for each failed extension; preview and full list
@@ -476,7 +480,7 @@ it is, from the metadata alone: a custom type whose
 the reader sent but whose text the model reads is ids), or else a user message
 with the server's client origin (`fromClient`: typed, or a steer that joined
 the running turn). A message another agent or an extension sent (a parent's
-`Session.send`, a wake, a delegate start), a hidden message
+`Session.send`, a wake, a thread's round), a hidden message
 and a row stored before the client origin existed are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
 it. The expanded transcript and overlays pin nothing, and the terminal owns
@@ -588,23 +592,22 @@ connection cut short is no answer, and the reconnect reads it again.
 Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
 builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| Extension ID                              | Where                        | What                                                            |
-| ----------------------------------------- | ---------------------------- | --------------------------------------------------------------- |
-| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`               | Tool renderers, interaction renderers                           |
-| `@gent/skills-ui`                         | `builtins.tsx`               | `$` autocomplete: skills popup                                  |
-| `@gent/files-ui`                          | `builtins.tsx`               | `@` autocomplete: file search popup                             |
-| `@gent/driver-ui`                         | `builtins.tsx`               | `/driver` slash command                                         |
-| `@gent/goal`                              | `builtins.tsx`               | Goal label, goal continuation row                               |
-| `@gent/session-tools`                     | `builtins.tsx`               | Sender row for `session.send`                                   |
-| `@gent/herdr`                             | `builtins.tsx`               | Herdr activity reporter                                         |
-| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray, `↳ child` status label |
-| `@gent/btw`                               | `btw.client.tsx`             | `/btw` fork pane                                                |
-| `@gent/cache`                             | `cache.client.tsx`           | Cache-miss rows, waste total, cache timer                       |
-| `@gent/delegate`                          | `delegate.client.tsx`        | `delegate.start` row, child-completion row                      |
-| `@gent/extension-admin`                   | `extension-admin.client.tsx` | `/extensions` pane: state, version, on/off, reload              |
-| `@gent/git`                               | `git.client.tsx`             | Git labels, `/git` pane, `/diff` to hunk                        |
-| `@gent/thread-view`                       | `thread-view.client.tsx`     | `/thread` pane                                                  |
-| `@gent/wake`                              | `wake.client.tsx`            | Wake alarm tray, fired wake row, resume stop                    |
+| Extension ID                              | Where                        | What                                                                           |
+| ----------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------ |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`               | Tool renderers, interaction renderers                                          |
+| `@gent/skills-ui`                         | `builtins.tsx`               | `$` autocomplete: skills popup                                                 |
+| `@gent/files-ui`                          | `builtins.tsx`               | `@` autocomplete: file search popup                                            |
+| `@gent/driver-ui`                         | `builtins.tsx`               | `/driver` slash command                                                        |
+| `@gent/goal`                              | `builtins.tsx`               | Goal label, goal continuation row                                              |
+| `@gent/session-tools`                     | `session-tools.client.tsx`   | `session.send` sender row, thread round row, `thread.start` row, round-end row |
+| `@gent/herdr`                             | `builtins.tsx`               | Herdr activity reporter                                                        |
+| `@gent/agents-view`                       | `agents.client.tsx`          | Agents pane (the session browser), tray, `↳ child` status label                |
+| `@gent/btw`                               | `btw.client.tsx`             | `/btw` fork pane                                                               |
+| `@gent/cache`                             | `cache.client.tsx`           | Cache-miss rows, waste total, cache timer                                      |
+| `@gent/extension-admin`                   | `extension-admin.client.tsx` | `/extensions` pane: state, version, on/off, reload                             |
+| `@gent/git`                               | `git.client.tsx`             | Git labels, `/git` pane, `/diff` to hunk                                       |
+| `@gent/thread-view`                       | `thread-view.client.tsx`     | `/thread` pane                                                                 |
+| `@gent/wake`                              | `wake.client.tsx`            | Wake alarm tray, fired wake row, resume stop                                   |
 
 Client extensions author against one public entry, `@gent/tui/extensions`
 (`src/extensions.ts`): `defineClientExtension`, `ClientContext`, the
@@ -633,7 +636,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - `useExtensionUI()` provides the resolved contributions (tool renderers excepted: `useToolRenderers()`), the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
 - **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies, and outside the transcript view consecutive ops of one tool fold into one frame. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws, within one 8 KB encoded budget, keys included: the tool, the status, the summary, the scalar input fields (each whole or left out, up to 4 KB), and a bounded output (top-level scalars such as a bash `exitCode`; each string whole, or its head, a marker line and its tail, cut at code points). A cut string has a `cuts` record with its whole line count, the line its tail starts on, and whether its head or tail keeps only part of a line; renderers count and number lines through `outputRows` in `tool-renderers.tsx`, so a cut output draws true counts and line numbers, and marks a part of a line with `…` on the side it lost. A cut array (a grep's matches) draws its whole total and a `· ··· N more matches` gap between its head and tail. Every line count, the cut record's included, uses `lineCount` from `@gent/core/protocol`: a final newline ends the last line. A head or tail that keeps nothing is absent from the excerpt. It draws through its renderer again, with the same collapsed row as before the reload. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
 - A setup that returns a key outside the contribution buckets fails to load with `unknown contribution "<key>"`
-- **Message rows**: `messageRendererContribution(customType, component, { prompt? })` draws the user-role messages whose `metadata.customType` matches exactly. Its props carry the transcript's `disclosure`, so a row folds with `ctrl+o` like every other block (the child completion row does). `prompt(content)` marks the type as a prompt the reader asked though an extension sent it, and gives its text; the transcript pins it (see the sticky prompt above). The component composes a row from `src/ui.tsx`, in one of two lanes. Column 0 and the heavy `┃` rail are the reader's: `UserRow` draws what the reader typed or steered (a delivered steer looks like a typed prompt), and right of the rail every row of the block sits on the reader's surface out to the row's end, as Codex fills its prompt cell (`theme.backgroundPanel`: a theme's own panel, or, when the theme names none, white at 12% over a dark background and black at 4% over a light one; with no padding row; no fill while the terminal's background is unknown, so native history holds until the palette read ends, `paletteSettled`, and a row reaches scrollback with its fill). Everything gent or another agent wrote starts at column 2 behind its own glyph, muted and never bold, wrapped lines hanging at column 4: `AgentMessageRow` for a message another session sent (`» child explore · 0e493eaf · <first line>`, `head` the relation, `name` in the info colour, `id`; five body lines behind `│ ` at preview, the whole body at full), `CollapsedRow` (`glyph`, `label`) for a one-line notice (`↳ answered`, `⇣ context handoff`, `⇄ model changed`, `⧗ 3 of 8 model calls left`, `↻ goal continuation`, `◷ alarm fired`). `message-list.tsx` gives each runtime kind its row (`runtimeRows`, a record over `RuntimeUserMessageType`, so a new kind does not compile without one): `context-window`, `model-change` and `model-attempts` fold to one line, and `continuation`, `max-steps` and `steering` draw by lane; a message with no renderer, and every message in full detail (the raw view), draws by its lane, which the metadata decides and never the text: the reader's (`fromClient`, or an older row with no `customType` and no `extensionId`) is the rail row, any other the `»` row headed by its `extensionId` and `customType`
+- **Message rows**: `messageRendererContribution(customType, component, { prompt? })` draws the user-role messages whose `metadata.customType` matches exactly. Its props carry the transcript's `disclosure`, so a row folds with `ctrl+o` like every other block (the thread round-end row does). `prompt(content)` marks the type as a prompt the reader asked though an extension sent it, and gives its text; the transcript pins it (see the sticky prompt above). The component composes a row from `src/ui.tsx`, in one of two lanes. Column 0 and the heavy `┃` rail are the reader's: `UserRow` draws what the reader typed or steered (a delivered steer looks like a typed prompt), and right of the rail every row of the block sits on the reader's surface out to the row's end, as Codex fills its prompt cell (`theme.backgroundPanel`: a theme's own panel, or, when the theme names none, white at 12% over a dark background and black at 4% over a light one; with no padding row; no fill while the terminal's background is unknown, so native history holds until the palette read ends, `paletteSettled`, and a row reaches scrollback with its fill). Everything gent or another agent wrote starts at column 2 behind its own glyph, muted and never bold, wrapped lines hanging at column 4: `AgentMessageRow` for a message another session sent (`» child explore · 0e493eaf · <first line>`, `head` the relation, `name` in the info colour, `id`; five body lines behind `│ ` at preview, the whole body at full), `CollapsedRow` (`glyph`, `label`) for a one-line notice (`↳ answered`, `⇣ context handoff`, `⇄ model changed`, `⧗ 3 of 8 model calls left`, `↻ goal continuation`, `◷ alarm fired`). `message-list.tsx` gives each runtime kind its row (`runtimeRows`, a record over `RuntimeUserMessageType`, so a new kind does not compile without one): `context-window`, `model-change` and `model-attempts` fold to one line, and `continuation`, `max-steps` and `steering` draw by lane; a message with no renderer, and every message in full detail (the raw view), draws by its lane, which the metadata decides and never the text: the reader's (`fromClient`, or an older row with no `customType` and no `extensionId`) is the rail row, any other the `»` row headed by its `extensionId` and `customType`
 - Status labels (`statusLabelContribution`) draw on the composer's one status row, ordered by `priority`: in the left group after the host's labels, or, with `anchor: "right"`, in the right group before the context gauge and cost. The right group is laid out first and keeps its place on a narrow row. A label, a host's or an extension's, may give a short form (`StatusRowLabel.short`, `StatusLabelItem.short`, ranked by `STATUS_YIELD`, exported from `@gent/tui/extensions`): a group that cannot fit its labels in full takes short forms in rank order (the debug mark, the cwd, the model as `Auto → Sonnet 5`, the idle phase word, the effort as `auto→high`), then gives back each full form that fits again (`fitForms` in `composer.tsx`); what still does not fit truncates. The ranks are an order, not widths: an extension label ranks between two host labels with a fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd and before the model). A hint label names its opening key (`StatusRowLabel.key`, `StatusLabelItem.key`: `←` of `← sessions`), which draws bright as in a hint row. A glance number anchors right (the `@gent/cache` timer); a label that needs more than one row is a widget
 - `transport.selectedModel()` is the model the session in view runs next, as the status row names it: a model switch changes it before any request goes out
 - The status row's effort is the running turn's while a turn runs (`turnReasoningLevel` in `client.tsx`, from the metrics fold's `turnEffort`), and the session's next level (`reasoningLevel`) otherwise: a turn keeps its first step's level, so an `/effort` change shows once the turn completes. On `/effort auto` (`reasoningAuto` in `client.tsx`) the row reads `auto → <level>` with the newest effort route's level (the fold's `effortRouted`), and `auto` before the first route. The effort picker reads the session's setting, and marks its `auto` row (`AUTO_ROW_ID` in `pickers.tsx`, listed after `default` when the model takes any level) while the session is on auto; after an effort route that fell back (`effortFallback` in `client.tsx`, the fold's `effortRouted.fallback`) the `auto` row reads `routes fall back: <reason>`

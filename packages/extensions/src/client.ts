@@ -1,15 +1,3 @@
-// childTaskText has no product reader here: it writes the text childTaskBody
-// reads, so a client test builds a real child task with it, not a copy.
-export {
-  CHILD_COMPLETION_TYPE,
-  CHILD_TASK_TYPE,
-  ChildCompletionDetails,
-  childFailureNames,
-  childTaskBody,
-  childTaskText,
-  DELEGATE_EXTENSION_ID,
-  readChildCompletionHeadline,
-} from "./delegate.js"
 export {
   ASK_USER_INTERACTION_TYPE,
   AskUserAnswers,
@@ -39,7 +27,7 @@ export {
   GoalSnapshot,
   remainingTokens,
 } from "./goal.js"
-// forkQuestionText, like childTaskText, has only a test reader here: it
+// forkQuestionText, like threadRoundText, has only a test reader here: it
 // writes the text forkQuestionBody reads. forkMergeText writes the text
 // forkMergePrompt reads, in the same way.
 export {
@@ -70,6 +58,15 @@ export {
   sessionMessageBody,
   sessionMessageText,
 } from "./session-tools.js"
-// threadRoundText, like childTaskText, has only a test reader here: it writes
-// the text threadRoundBody reads.
-export { THREAD_ROUND_TYPE, threadRoundBody, threadRoundText } from "./threads.js"
+// threadRoundText has only a test reader here: it writes the text
+// threadRoundBody reads, so a client test builds a real round with it, not a
+// copy.
+export {
+  roundFailureNames,
+  THREAD_ROUND_END_TYPE,
+  THREAD_ROUND_TYPE,
+  ThreadRoundEndDetails,
+  threadRoundBody,
+  threadRoundEndAnswer,
+  threadRoundText,
+} from "./threads.js"

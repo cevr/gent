@@ -15,7 +15,6 @@ import {
 } from "effect"
 import {
   type ActiveExtensionSession,
-  AgentMessageRow,
   type AnyExtensionClientModule,
   autocompleteContribution,
   BUILTIN_TOOL_RENDERERS,
@@ -35,14 +34,13 @@ import {
   recordFrecencyPick,
   rendererContribution,
   sessionQuery,
-  shortId,
   statusLabelContribution,
   truncate,
   truncatePath,
 } from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
 import { Socket } from "effect/socket"
-import { createEffect, createRoot, Show } from "solid-js"
+import { createEffect, createRoot } from "solid-js"
 import { AgentName } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
 import {
@@ -51,12 +49,6 @@ import {
   GoalRpc,
   type GoalSnapshot,
   remainingTokens,
-  SESSION_MESSAGE_TYPE,
-  SESSION_TOOLS_EXTENSION_ID,
-  SessionMessageDetails,
-  sessionMessageBody,
-  THREAD_ROUND_TYPE,
-  threadRoundBody,
   FilesRpc,
   SkillsRpc,
   makeStartedMemo,
@@ -65,10 +57,10 @@ import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
 import builtinCache from "./cache.client"
 import builtinCheckpoints from "./checkpoints.client"
-import builtinDelegate from "./delegate.client"
 import builtinExtensionAdmin from "./extension-admin.client"
 import builtinGit from "./git.client"
 import builtinInteractions from "./interaction-tools.client"
+import builtinSessionTools from "./session-tools.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
 
@@ -750,74 +742,6 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
   }),
 })
 
-// ── session message row ─────────────────────────────────────────────────────
-
-/** A message from another session names its sender at the head of its row. */
-const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
-
-/** The sender fits beside the id: an auto-named child carries its whole task in the name. */
-const SENDER_NAME_MAX_COLUMNS = 32
-
-/** Collapses runs of whitespace, then cuts by terminal columns via `truncate`. */
-const shortName = (name: string): string =>
-  truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
-
-/** Who wrote a sent message, cut to fit beside the relation word and the short session id; empty for no name. */
-const senderName = ({ from }: SessionMessageDetails): string =>
-  Option.match(Option.fromUndefinedOr(from.name), { onNone: () => "", onSome: shortName })
-
-/**
- * Another session wrote these, so neither draws on the reader's rail: each is
- * the `»` row, muted and never bold. The model reads the header
- * `sessionMessageText` writes, then the text; the row names the sender at its
- * head and `sessionMessageBody` removes the header, old rows included, so
- * blank lines in a name or body stay whole. Details that do not decode draw
- * the raw text under the bare relation word. A thread's first message is its
- * task under a frame the thread's model reads; the row shows the task.
- */
-const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
-  setup: Effect.succeed(
-    clientContributions(
-      messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
-        <Show
-          when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
-          fallback={
-            <AgentMessageRow
-              head="session"
-              body={props.content}
-              images={props.images}
-              disclosure={props.disclosure}
-            />
-          }
-        >
-          {(details) => (
-            <AgentMessageRow
-              head={details().from.relation}
-              name={senderName(details())}
-              id={shortId(details().from.sessionId)}
-              body={sessionMessageBody(details().from, props.content)}
-              images={props.images}
-              disclosure={props.disclosure}
-            />
-          )}
-        </Show>
-      )),
-      messageRendererContribution(
-        THREAD_ROUND_TYPE,
-        (props) => (
-          <AgentMessageRow
-            head="task from session"
-            body={threadRoundBody(props.content)}
-            images={props.images}
-            disclosure={props.disclosure}
-          />
-        ),
-        { prompt: threadRoundBody },
-      ),
-    ),
-  ),
-})
-
 // ── tool renderer extensions ────────────────────────────────────────────────
 
 /**
@@ -901,7 +825,6 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinBtw,
   builtinCache,
   builtinCheckpoints,
-  builtinDelegate,
   builtinDriver,
   builtinExtensionAdmin,
   builtinFiles,
@@ -910,7 +833,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinWake,
   builtinHerdr,
   builtinInteractions,
-  builtinSessionMessages,
+  builtinSessionTools,
   builtinSkills,
   builtinThreadView,
   builtinTools,
