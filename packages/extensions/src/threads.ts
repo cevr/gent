@@ -46,6 +46,7 @@ import {
   Ref,
   Schema,
   Semaphore,
+  Stream,
 } from "effect"
 import { Hex } from "effect/encoding"
 import { Migrator, SqlClient } from "effect/sql"
@@ -63,15 +64,19 @@ import {
   FollowUpQueueFull,
   headChars,
   headTailChars,
+  initialSessionMetrics,
   latestAssistantText,
   MessageId,
   ModelId,
   omitUndefined,
   ReasoningEffort,
   RequestId,
+  SessionAccount,
+  sessionAccount,
   type SessionReachError,
   SessionId,
   sessionThread,
+  stepSessionMetrics,
   tool,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
@@ -2787,6 +2792,11 @@ const ThreadRow = Schema.Struct({
   ),
   /** The current session's latest reply: one line, or for one named thread its head and tail. */
   preview: Schema.String,
+  /**
+   * The account the current session runs on, and whether it was pinned,
+   * assigned or walked. Absent before its first step or placement.
+   */
+  account: Schema.optionalKey(SessionAccount),
 })
 
 /** A thread runs while any of its sessions' loops works. */
@@ -2809,7 +2819,7 @@ const ThreadListTool = tool({
   id: "thread.list",
   resources: [ThreadsResource],
   description:
-    "List the threads this thread started, from any of its sessions: each one's status, its open round, its last ended round and how it ended, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
+    "List the threads this thread started, from any of its sessions: each one's status, its open round, its last ended round and how it ended, its current session, the account it runs on, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
   params: ThreadListParams,
   output: Schema.Array(ThreadRow),
   execute: Effect.fn("ThreadListTool.execute")(function* (params: typeof ThreadListParams.Type) {
@@ -2835,6 +2845,12 @@ const ThreadListTool = tool({
         })
         const open = yield* rounds.openRound(entry.thread)
         const last = yield* rounds.latestRound(entry.thread, true)
+        // The branch's durable history, folded as it streams: the account its steps went out on.
+        const metrics = yield* ctx.Session.events({ sessionId: current.id, branchId }).pipe(
+          Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+          Stream.runFold(() => initialSessionMetrics, stepSessionMetrics),
+        )
+        const account = sessionAccount(Option.fromUndefinedOr(current.admission), metrics)
         const row: typeof ThreadRow.Type = {
           thread: entry.thread,
           name: current.name ?? "",
@@ -2844,6 +2860,7 @@ const ThreadListTool = tool({
           preview,
           ...omitUndefined({
             agent: current.admission?.agent,
+            account: Option.getOrUndefined(account),
             openRound: Option.getOrUndefined(
               Option.map(open, (round) => ({ round: round.round, number: round.number })),
             ),
