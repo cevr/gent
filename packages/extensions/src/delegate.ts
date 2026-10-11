@@ -27,7 +27,6 @@ import {
   Record,
   Ref,
   Schema,
-  Stream,
   Struct,
 } from "effect"
 import { Hex } from "effect/encoding"
@@ -35,7 +34,6 @@ import {
   ActorCommandId,
   AGENT_PROMPT_PRIORITY,
   AgentDefinition,
-  type AgentEvent,
   AgentName,
   BranchId,
   defineExtension,
@@ -48,7 +46,6 @@ import {
   type SessionReachError,
   headChars,
   headTailChars,
-  isRuntimeUserMessage,
   latestAssistantText,
   type Message,
   MessageId,
@@ -61,7 +58,8 @@ import {
   type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { childSessionName } from "./session-tools.js"
+import { ChildUsage, receiptTotal, startTurnMessages, turnEnd, usageOf } from "./child-turns.js"
+import { childSessionName } from "./session-names.js"
 import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
 
 // Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
@@ -117,18 +115,6 @@ const ChildOutcome = Schema.Struct({
   unanswered: Schema.optionalKey(Schema.Boolean),
 })
 type ChildOutcome = typeof ChildOutcome.Type
-
-/**
- * The child turn's bill. The cache counts and the cost came later: older rows
- * carry only the tokens. A zero cache count and an unpriced model are left out.
- */
-const ChildUsage = Schema.Struct({
-  input: Schema.Finite,
-  output: Schema.Finite,
-  cacheRead: Schema.optionalKey(Schema.Finite),
-  cacheWrite: Schema.optionalKey(Schema.Finite),
-  costUsd: Schema.optionalKey(Schema.Finite),
-})
 
 /** One child known to a parent branch. `completed` is a turn receipt, not task success. */
 export const DelegateEntry = Schema.Struct({
@@ -212,50 +198,6 @@ const startMessageId = (entry: {
   readonly startMessageId?: MessageId
 }) => entry.startMessageId ?? MessageId.make(`delegate-start:${entry.requestId}`)
 
-type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
-const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
-
-interface TurnTarget {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly messageId: MessageId
-}
-
-/** How one turn ended: its receipt, and the error the turn ended on, if any. */
-interface TurnEnd {
-  readonly receipt: TurnCompleted
-  /** The last `ErrorOccurred` after the previous receipt that is not a notice. */
-  readonly error: Option.Option<string>
-}
-
-/**
- * The end of one turn, read from the child's durable history alone. The
- * receipt names only that the stream failed; the error before it says why,
- * and a parent that cannot tell a sign-in failure from a flake starts the
- * same child again.
- */
-const turnEnd = (target: TurnTarget) =>
-  Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const folded = yield* ctx.Session.events(target).pipe(
-      Stream.takeUntil(isSynchronized),
-      Stream.runFold(
-        () => ({ error: Option.none<string>(), end: Option.none<TurnEnd>() }),
-        (state, event) => {
-          if (event._tag === "ErrorOccurred") {
-            if (event.notice === true) return state
-            return { ...state, error: Option.some(event.error) }
-          }
-          if (event._tag !== "TurnCompleted") return state
-          // Each receipt closes its turn: an error before it is not the next turn's.
-          if (event.messageId !== target.messageId) return { ...state, error: Option.none() }
-          return { error: Option.none(), end: Option.some({ receipt: event, error: state.error }) }
-        },
-      ),
-    )
-    return folded.end
-  })
-
 /**
  * The flags a turn raised. Two writers race to record one completion: the
  * child's `turnAfter` hook passes every flag, and reconcile reads the
@@ -276,35 +218,6 @@ const outcomeOf = (receipt: {
     (flag) => flag === true,
   )
 
-/**
- * The row's bill from a complete turn total. The `turnAfter` hook and the
- * `TurnCompleted` receipt race to write it, so both go through here and a zero
- * or an absent value is dropped the same way.
- */
-const usageOf = (usage: Option.Option<TurnUsage["known"]>): Option.Option<typeof ChildUsage.Type> =>
-  Option.map(usage, (value) => ({
-    input: value.inputTokens,
-    output: value.outputTokens,
-    ...Record.filter(
-      { cacheRead: value.cacheReadTokens, cacheWrite: value.cacheWriteTokens },
-      (count) => count > 0,
-    ),
-    ...Option.match(value.costUsd, {
-      onNone: () => ({}),
-      onSome: (costUsd) => ({ costUsd }),
-    }),
-  }))
-
-/** A `TurnCompleted` receipt's total, in the shape the `turnAfter` hook gets. */
-const receiptTotal = (receipt: TurnCompleted): Option.Option<TurnUsage["known"]> =>
-  Option.map(Option.fromUndefinedOr(receipt.usage), (usage) => ({
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    cacheReadTokens: Option.getOrElse(Option.fromUndefinedOr(usage.cacheReadTokens), () => 0),
-    cacheWriteTokens: Option.getOrElse(Option.fromUndefinedOr(usage.cacheWriteTokens), () => 0),
-    costUsd: Option.fromUndefinedOr(receipt.costUsd),
-  }))
-
 /** How a turn ended badly, in words a model reads; none for a turn that completed. */
 export const childFailureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
   const names: Array<string> = []
@@ -323,32 +236,6 @@ const childOutcomeWords = (outcome: ChildOutcome): string => {
   const failures = childFailureNames(outcome)
   if (failures.length === 0) return "completed"
   return `ended (${failures.join(", ")})`
-}
-
-/**
- * The messages of the child's start turn: the start message and every
- * message up to the next one that opened a turn. A forked child's branch
- * begins with a copy of the parent's window; those rows are the parent's,
- * never the child's. The loop's own user-role lines inside the turn (a
- * continuation, the max-steps instruction, a model-change notice, a
- * compaction marker) and a message joined into the running turn open no
- * turn, so the slice reads past them to the child's answer. A later turn (a
- * wake, a queued message, an interjection that woke the child) opens with a
- * user message of its own, and the slice ends there.
- */
-const startTurnMessages = <
-  M extends { readonly id: MessageId } & Parameters<typeof isRuntimeUserMessage>[0],
->(
-  messages: ReadonlyArray<M>,
-  startId: MessageId,
-): ReadonlyArray<M> => {
-  const start = messages.findIndex((message) => message.id === startId)
-  if (start === -1) return []
-  const end = messages
-    .slice(start + 1)
-    .findIndex((message) => message.role === "user" && !isRuntimeUserMessage(message))
-  if (end === -1) return messages.slice(start)
-  return messages.slice(start, start + 1 + end)
 }
 
 /** The child session's name and its branch's start-turn messages, from the session detail. */

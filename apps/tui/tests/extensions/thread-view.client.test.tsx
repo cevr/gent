@@ -21,7 +21,7 @@ import {
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
-import { childTaskText, threadTaskText } from "@gent/extensions/client"
+import { childTaskText, threadRoundText } from "@gent/extensions/client"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
@@ -150,7 +150,18 @@ describe("windows on a branch", () => {
 
   test("previews a thread's task, not the line that names its starter", () => {
     const messages = [
-      message("u1", "user", threadTaskText(SessionId.make("starter-1"), "tidy the changelog"), 1),
+      message(
+        "u1",
+        "user",
+        threadRoundText({
+          number: 1,
+          starter: SessionId.make("starter-1"),
+          message: "tidy the changelog",
+          reply: Option.none(),
+          notify: "user",
+        }),
+        1,
+      ),
       message("a1", "assistant", "done", 2),
     ]
     expect(windowsOf(session("s1"), branchId, messages).map((window) => window.preview)).toEqual([

@@ -9,7 +9,7 @@ import {
   DELEGATE_EXTENSION_ID,
   type ListAgentsInput,
   SESSION_TOOLS_EXTENSION_ID,
-  threadTaskBody,
+  threadRoundBody,
 } from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
@@ -1031,7 +1031,7 @@ const detailLines = (
 const taskLine = (prompt: string): string =>
   Option.getOrElse(
     Option.fromUndefinedOr(
-      threadTaskBody(childTaskBody(prompt))
+      threadRoundBody(childTaskBody(prompt))
         .split("\n")
         .find((line) => line.trim().length > 0),
     ),

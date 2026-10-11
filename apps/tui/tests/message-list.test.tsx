@@ -58,8 +58,8 @@ import {
   forkQuestionText,
   type SessionMessageDetails,
   sessionMessageText,
-  THREAD_TASK_TYPE,
-  threadTaskText,
+  THREAD_ROUND_TYPE,
+  threadRoundText,
 } from "@gent/extensions/client"
 import {
   batch,
@@ -1032,8 +1032,14 @@ describe("transcript message rows", () => {
         })
         const thread = task(
           "thread-1",
-          threadTaskText(SessionId.make("01a0ca0cb3e7"), "Tidy the changelog."),
-          THREAD_TASK_TYPE,
+          threadRoundText({
+            number: 1,
+            starter: SessionId.make("01a0ca0cb3e7"),
+            message: "Tidy the changelog.",
+            reply: Option.none(),
+            notify: "user",
+          }),
+          THREAD_ROUND_TYPE,
         )
         const child = task(
           "child-1",
@@ -1043,12 +1049,12 @@ describe("transcript message rows", () => {
         const frame = yield* renderLoaded([thread, child])
         // Another session wrote each task: neither draws on the reader's rail.
         expect(frame).toContain("  » task from session · Tidy the changelog.")
-        expect(frame).not.toContain("Thread started by session")
+        expect(frame).not.toContain("Round 1 from session")
         expect(frame).toContain("  » task from parent · Fix the csv quoting.")
         expect(frame).not.toContain("Task from your parent session")
         expect(frame).not.toContain("┃")
         const expandedFrame = yield* renderLoaded([thread, child], true)
-        expect(expandedFrame).toContain("Thread started by session")
+        expect(expandedFrame).toContain("Round 1 from session")
         expect(expandedFrame).toContain("Task from your parent session")
       }),
   )
@@ -1375,10 +1381,20 @@ describe("speaker lanes", () => {
       customType: CHILD_TASK_TYPE,
       extensionId: "@gent/delegate",
     }),
-    row("thread-task", threadTaskText(SessionId.make("01a0ca0cb3e7"), "Tidy the changelog."), {
-      customType: THREAD_TASK_TYPE,
-      extensionId: "@gent/session-tools",
-    }),
+    row(
+      "thread-round",
+      threadRoundText({
+        number: 1,
+        starter: SessionId.make("01a0ca0cb3e7"),
+        message: "Tidy the changelog.",
+        reply: Option.none(),
+        notify: "user",
+      }),
+      {
+        customType: THREAD_ROUND_TYPE,
+        extensionId: "@gent/session-tools",
+      },
+    ),
     row("wake", "Alarm w1 fired at 2026-09-15T05:51:35.262Z. Run tests.", {
       customType: "wake",
       extensionId: "@gent/wake",

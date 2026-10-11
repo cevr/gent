@@ -55,8 +55,8 @@ import {
   SESSION_TOOLS_EXTENSION_ID,
   SessionMessageDetails,
   sessionMessageBody,
-  THREAD_TASK_TYPE,
-  threadTaskBody,
+  THREAD_ROUND_TYPE,
+  threadRoundBody,
   FilesRpc,
   SkillsRpc,
   makeStartedMemo,
@@ -803,16 +803,16 @@ const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID,
         </Show>
       )),
       messageRendererContribution(
-        THREAD_TASK_TYPE,
+        THREAD_ROUND_TYPE,
         (props) => (
           <AgentMessageRow
             head="task from session"
-            body={threadTaskBody(props.content)}
+            body={threadRoundBody(props.content)}
             images={props.images}
             disclosure={props.disclosure}
           />
         ),
-        { prompt: threadTaskBody },
+        { prompt: threadRoundBody },
       ),
     ),
   ),

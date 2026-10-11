@@ -3457,7 +3457,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     // The replay test runs the registered thread.start twice with one call id,
     // which no model turn can do; the tool it finds is the erased registration.
-    file: "packages/extensions/tests/session-tools.test.ts",
+    file: "packages/extensions/tests/threads.test.ts",
     text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
   },
   {
