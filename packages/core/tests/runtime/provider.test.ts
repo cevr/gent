@@ -24,6 +24,7 @@ import {
   type ApiClassRequest,
   AuthMethod,
   catalogModelEntry,
+  credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type ModelCatalogView,
@@ -65,6 +66,7 @@ import {
   finishPart,
   ProviderLock,
   resolveDriverModel,
+  retryReason,
   textStep,
   toolCallPart,
 } from "../../src/runtime/provider"
@@ -292,6 +294,37 @@ describe("provider retry", () => {
       expect(Exit.isFailure(yield* Effect.exit(untyped.run))).toBe(true)
       expect(untyped.calls()).toBe(1)
     }),
+  )
+
+  it.effect(
+    "a retry notice reads a credential failure that may pass as its own text, and any other reason as the provider gives it",
+    () =>
+      Effect.sync(() => {
+        const failed = (reason: AiError.AiErrorReason) =>
+          new ProviderError({
+            message: "OpenAiClient.createResponse failed",
+            model: "test",
+            cause: AiError.make({ module: "OpenAiClient", method: "createResponse", reason }),
+          })
+        // The shape a driver gives a refresh that may pass (`explainCredentialFailure`).
+        const unavailable = "ChatGPT token endpoint unavailable: Token refresh failed: 503"
+        const credential = new AiError.InternalProviderError({
+          description: unavailable,
+          metadata: credentialFailureMetadata(new ProviderAuthError({ message: unavailable })),
+        })
+        expect(credential.isRetryable).toBe(true)
+        expect(retryReason(failed(credential))).toBe(unavailable)
+        // A provider's own internal error keeps its reason, prefix and all.
+        const internal = new AiError.InternalProviderError({ description: "upstream exploded" })
+        expect(retryReason(failed(internal))).toBe(internal.message)
+        expect(internal.message).toContain("upstream exploded")
+        const limited = new AiError.RateLimitError({ retryAfter: Duration.zero })
+        expect(retryReason(failed(limited))).toBe(limited.message)
+        // An error with no AiError behind it reads as itself.
+        expect(retryReason(new ProviderError({ message: "socket hang up", model: "test" }))).toBe(
+          "socket hang up",
+        )
+      }),
   )
 
   // A ChatGPT usage limit names its reset in the body, not in a retry-after.

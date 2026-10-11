@@ -68,6 +68,7 @@ import {
   type PersistAuth,
   authMethodAppliesTo,
   type CredentialFailureReason,
+  credentialFailureMessage,
   credentialFailureReason,
   CredentialStoreBusy,
   type CredentialReceipt,
@@ -4353,13 +4354,17 @@ const isRetryable = (
 }
 
 /**
- * What a retry notice says: the provider's reason when an `AiError` carries
- * it (`Rate limit exceeded`), without the SDK's module and method prefix;
- * else the error's own message.
+ * What a retry notice says: a credential failure a driver attached to the
+ * `AiError` as its own text (`credentialFailureMessage`: a store that is
+ * busy, a token endpoint that is down), with no reason prefix such as
+ * `Internal provider error: `; else the provider's reason when an `AiError`
+ * carries it (`Rate limit exceeded`), without the SDK's module and method
+ * prefix; else the error's own message.
  */
 export const retryReason = (error: ProviderError): string => {
-  if (AiError.isAiError(error.cause)) return error.cause.reason.message
-  return error.message
+  const cause = error.cause
+  if (!AiError.isAiError(cause)) return error.message
+  return Option.getOrElse(credentialFailureMessage(cause), () => cause.reason.message)
 }
 
 /** What a proved credential failure says, by its reason. */
