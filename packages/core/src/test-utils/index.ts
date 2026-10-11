@@ -4,6 +4,7 @@
  * assert against. Product code never imports this entry.
  */
 export {
+  apiKeyAuth,
   baseLocalLayer,
   baseLocalLayerWithProvider,
   captureTurnTools,

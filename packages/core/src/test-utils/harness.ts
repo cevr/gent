@@ -1790,6 +1790,13 @@ interface E2ELayerOptions {
    * as signed in, as a scripted model needs no sign-in.
    */
   readonly signIn?: "checked"
+  /**
+   * `"drivers"`: each request resolves through the production resolver
+   * (`ModelResolver.Live`), to its model's registered driver with the
+   * credential its turn chose, as a host's does; `providerLayer` then serves
+   * nothing. Default: every request gets the scripted model.
+   */
+  readonly resolver?: "drivers"
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
   /**
@@ -1907,8 +1914,14 @@ const testModelRegistry = (
   return Option.some(ModelRegistry.Test(models, Option.fromUndefinedOr(config.modelPricing)))
 }
 
-/** The resolver of the test's model; `signIn: "checked"` reads sign-ins as production does. */
-const testModelResolver = (config: Pick<E2ELayerOptions, "providerLayer" | "signIn">) => {
+/**
+ * The resolver of the test's model; `signIn: "checked"` reads sign-ins as
+ * production does, and `resolver: "drivers"` is the production resolver.
+ */
+const testModelResolver = (
+  config: Pick<E2ELayerOptions, "providerLayer" | "signIn" | "resolver">,
+): Layer.Layer<ModelResolver, never, Auth | ModelCatalogSource> => {
+  if (config.resolver === "drivers") return ModelResolver.Live
   if (config.signIn === "checked")
     return LanguageModelLayers.signInCheckedResolver(config.providerLayer)
   return LanguageModelLayers.resolver(config.providerLayer)
@@ -2326,6 +2339,25 @@ export const seedAuthKeys = (directory: string) =>
     yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
     yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
   }).pipe(Effect.scoped)
+
+/**
+ * An in-memory auth store holding one API key per `[provider, slot, key]`:
+ * a root whose requests resolve through the drivers (`resolver: "drivers"`)
+ * hands each driver the key of the slot its turn chose.
+ */
+export const apiKeyAuth = (
+  keys: ReadonlyArray<readonly [provider: string, slot: CredentialSlot, key: string]>,
+): Layer.Layer<Auth> =>
+  Layer.effect(
+    Auth,
+    Effect.gen(function* () {
+      const auth = yield* Auth
+      for (const [provider, slot, key] of keys) {
+        yield* auth.set(provider, AuthApi.make({ type: "api", key }), slot)
+      }
+      return auth
+    }).pipe(Effect.orDie),
+  ).pipe(Layer.provide(Auth.Test()))
 
 class WaitForError extends Schema.TaggedError<WaitForError>()(
   "@gent/core/src/test-utils/harness/WaitForError",
