@@ -127,7 +127,7 @@ its `drawVisibleBox` border fast path still writes past the scissor, and
 2026-10-05 (`main` at 684d70ce): `resetSplitFooterForReplay` still writes
 its clear at once.
 
-## `@effect/ai-anthropic@4.0.0`
+## `@effect/ai-anthropic@4.0.2`
 
 `prepareMessages` sets the request's `system` field from each system group
 it meets, so a system message after the first message replaces the system
@@ -145,15 +145,20 @@ read it through `isHostContextUpdate` there to keep the cache marker off
 these blocks.
 
 The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.0` below does.
+`@effect/ai-openai@4.0.2` below does.
 
 Remove the system part when the SDK keeps a later system message in place,
-and the undeclared-name part with `effect@4.0.0`'s. Rechecked on
-2026-10-01: 4.0.0 still replaces `system`, so the patch was regenerated for
-that release. It patches `dist` only; the shipped `src` copy keeps the
-upstream text.
+and the undeclared-name part with `effect@4.0.2`'s. Rechecked on
+2026-10-10: 4.0.2 appends a later system group to `system`, which still
+changes the cached prefix. Only for a model marked
+`supportsMidConversationSystemMessages` (or the `midConversationSystemMessages`
+config) does it send the group as a `system` message in history, held until
+the next assistant turn. The patch was regenerated for 4.0.2, and its branch
+for a later group runs before upstream's, so every model gets the user
+message form, as with 4.0.0. It patches `dist` only; the shipped `src` copy
+keeps the upstream text.
 
-## `@effect/ai-openai-compat@4.0.0`
+## `@effect/ai-openai-compat@4.0.2`
 
 The SDK reads a model's reasoning from a Chat Completions reply
 (`reasoning_content`), but never sends it back. The prompt conversion drops
@@ -176,15 +181,15 @@ the field the model's models.dev entry names (`interleaved.field`), or drops
 it when the entry names none.
 
 The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.0` below does.
+`@effect/ai-openai@4.0.2` below does.
 
 Remove the reasoning part when the SDK sends the reasoning back itself, and
-the undeclared-name part with `effect@4.0.0`'s. Rechecked on
-2026-10-01: 4.0.0 still drops reasoning without an item id, so the patch was
+the undeclared-name part with `effect@4.0.2`'s. Rechecked on
+2026-10-10: 4.0.2 still drops reasoning without an item id, so the patch was
 regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
 `src` copy keeps the upstream text.
 
-## `@effect/platform-node-shared@4.0.0`
+## `@effect/platform-node-shared@4.0.2`
 
 The child process spawner runs a `stdin` stream into the child through a
 sink that listens for the writable's `error` event only while it runs. A
@@ -202,10 +207,9 @@ it runs; the child's exit code reports a child that left early. `src` and
 fails with `EPIPE`; a reader who quits the pager early meets the same race.
 
 Remove this patch when an `@effect/platform-node-shared` release keeps a
-listener on the child's stdin. Checked on 2026-10-04: 4.0.0, the latest
-release, has none.
+listener on the child's stdin. Checked on 2026-10-10: 4.0.2 has none.
 
-## `effect@4.0.0`
+## `effect@4.0.2`
 
 `LanguageModel.streamText` and `generateText` with
 `disableToolCallResolution: true` decode each tool call's parameters against
@@ -255,15 +259,14 @@ advertises no tool" in the same test file covers it.
 Remove this patch when an Effect release, with tool call resolution off,
 decodes tool call parameters as opaque and decodes a call to an undeclared
 name, in both `generateText` and `streamText`, and with a toolkit, an empty
-toolkit, and no toolkit. Checked on 2026-10-04: 4.0.0, the latest release,
-does neither. It
+toolkit, and no toolkit. Checked on 2026-10-10: 4.0.2 does neither. It
 patches `dist` only; the shipped `src` copy keeps the upstream text.
 
-## `@effect/ai-openai@4.0.0`
+## `@effect/ai-openai@4.0.2`
 
 `transformToolCallParams` fails the reply with `ToolNotFoundError` when a
 call names a tool the request did not declare. The patch passes that call on
 with its parameters as the model wrote them; the tool runner answers it
-(`effect@4.0.0` above). Remove this patch with that one's undeclared-name
-part. Checked on 2026-10-04: 4.0.0, the latest release, fails the reply. It
+(`effect@4.0.2` above). Remove this patch with that one's undeclared-name
+part. Checked on 2026-10-10: 4.0.2 fails the reply. It
 patches `dist` only; the shipped `src` copy keeps the upstream text.

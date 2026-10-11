@@ -1,8 +1,8 @@
 diff --git a/dist/AnthropicLanguageModel.js b/dist/AnthropicLanguageModel.js
-index f6ca03d6bda8eb138eed149b68e42f6e00934362..4654b9a20eaafca2b1143fe73b307fa8881c1615 100644
+index 28f6ac1ace70e2edd920a801a577a965a3c8eaf2..f2ab71095abdd807ff5f3803aef250e304fb27e7 100644
 --- a/dist/AnthropicLanguageModel.js
 +++ b/dist/AnthropicLanguageModel.js
-@@ -279,6 +279,17 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -286,6 +286,17 @@ const prepareMessages = /*#__PURE__*/Effect.fnUntraced(function* ({
      switch (group.type) {
        case "system":
          {
@@ -17,10 +17,10 @@ index f6ca03d6bda8eb138eed149b68e42f6e00934362..4654b9a20eaafca2b1143fe73b307fa8
 +            });
 +            break;
 +          }
-           system = group.messages.map(message => ({
-             type: "text",
-             text: message.content,
-@@ -2167,15 +2178,10 @@ const getOutputFormat = /*#__PURE__*/Effect.fnUntraced(function* ({
+           const target = i === 0 || !inlineSystem ? system : pendingSystem;
+           for (const message of group.messages) {
+             target.push({
+@@ -2229,15 +2240,10 @@ const getOutputFormat = /*#__PURE__*/Effect.fnUntraced(function* ({
  });
  const transformToolCallParams = /*#__PURE__*/Effect.fnUntraced(function* (tools, toolName, toolParams) {
    const tool = tools.find(tool => tool.name === toolName);

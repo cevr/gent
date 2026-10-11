@@ -25,7 +25,7 @@ index c53fc70dc67401d995687f94748d2f2c850c7b24..0befec16ffae42e2b34290e4490a0d6f
      readonly [x: string]: unknown;
  }>;
 diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
-index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7fc61fb36 100644
+index d91900ca1b1b88840dd2d388483de2263f4f2cef..0bfc4d43b109e6819fbd04c048c652a536704aed 100644
 --- a/dist/OpenAiLanguageModel.js
 +++ b/dist/OpenAiLanguageModel.js
 @@ -139,6 +139,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* ({
@@ -73,7 +73,7 @@ index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7
                    if (Predicate.isNotNull(id)) {
                      const message = reasoningMessages[id];
                      if (config.store === true) {
-@@ -902,15 +917,10 @@ const tryToolJsonSchema = (tool, method) => Effect.try({
+@@ -903,15 +918,10 @@ const tryToolJsonSchema = (tool, method) => Effect.try({
  });
  const transformToolCallParams = /*#__PURE__*/Effect.fnUntraced(function* (tools, toolName, toolParams) {
    const tool = tools.find(tool => tool.name === toolName);
@@ -92,7 +92,7 @@ index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7
    }
    if (Tool.isDynamic(tool) && tool.jsonSchema !== undefined) {
      return toolParams;
-@@ -991,8 +1001,8 @@ const prepareTools = /*#__PURE__*/Effect.fnUntraced(function* ({
+@@ -992,8 +1002,8 @@ const prepareTools = /*#__PURE__*/Effect.fnUntraced(function* ({
      toolChoice
    };
  });
@@ -103,7 +103,7 @@ index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7
    const responseFormat = toChatResponseFormat(payload.text?.format);
    const tools = payload.tools !== undefined ? payload.tools.map(toChatTool).filter(tool => tool !== undefined) : [];
    const toolChoice = toChatToolChoice(payload.tool_choice);
-@@ -1139,7 +1149,7 @@ const toChatTool = tool => {
+@@ -1140,7 +1150,7 @@ const toChatTool = tool => {
    }
    return undefined;
  };
@@ -112,7 +112,7 @@ index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7
    if (Predicate.isUndefined(input)) {
      return [];
    }
-@@ -1149,6 +1159,12 @@ const toChatMessages = input => {
+@@ -1150,6 +1160,12 @@ const toChatMessages = input => {
        content: input
      }];
    }
@@ -125,7 +125,7 @@ index 85198f93e653004dcdce833f659bde6eb7e3f2f1..e745178a495d5f3751666724d09d0dd7
    const messages = [];
    for (const item of input) {
      if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
-@@ -1172,6 +1188,48 @@ const toChatMessages = input => {
+@@ -1173,6 +1189,48 @@ const toChatMessages = input => {
    }
    return messages;
  };

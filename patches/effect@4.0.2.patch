@@ -1,5 +1,5 @@
 diff --git a/dist/ai/LanguageModel.js b/dist/ai/LanguageModel.js
-index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3fa72037f 100644
+index 7f167635b527946e5ad65241b12ccd516072fc5b..e143e36a1ebd4f7dcd20fe4fda1bd18fed04fb82 100644
 --- a/dist/ai/LanguageModel.js
 +++ b/dist/ai/LanguageModel.js
 @@ -17,6 +17,7 @@ import * as Prompt from "./Prompt.js";
@@ -10,7 +10,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
  import * as Toolkit from "./Toolkit.js";
  /**
   * Service key for text generation, structured output, and tool calls.
-@@ -414,8 +415,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -407,8 +408,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
            providerOptions.incrementalPrompt = prepared.value.prompt;
          }
        }
@@ -20,7 +20,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
        const content = yield* Schema.decodeEffect(ResponseSchema)(rawContent);
        if (tracker) {
          const responseMetadata = content.find(part => part.type === "response-metadata");
-@@ -446,8 +447,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -439,8 +440,8 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
            providerOptions.incrementalPrompt = prepared.value.prompt;
          }
        }
@@ -30,7 +30,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
        const content = yield* Schema.decodeEffect(ResponseSchema)(rawContent);
        if (tracker) {
          const responseMetadata = content.find(part => part.type === "response-metadata");
-@@ -500,12 +501,14 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -493,12 +494,14 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
          providerOptions.incrementalPrompt = prepared.value.prompt;
        }
      }
@@ -47,7 +47,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
        if (tracker) {
          const responseMetadata = content.find(part => part.type === "response-metadata");
          if (Predicate.isNotUndefined(responseMetadata) && Predicate.isNotUndefined(responseMetadata.id)) {
-@@ -583,8 +586,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -576,8 +579,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
            providerOptions.incrementalPrompt = prepared.value.prompt;
          }
        }
@@ -57,7 +57,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
        return pipe(streamWithNonIncrementalFallback(), Stream.mapArrayEffect(parts => decodeParts(parts).pipe(tracker ? Effect.tap(decodedParts => {
          for (const part of decodedParts) {
            if (part.type === "response-metadata" && Predicate.isNotUndefined(part.id)) {
-@@ -615,8 +617,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -608,8 +610,7 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
            providerOptions.incrementalPrompt = prepared.value.prompt;
          }
        }
@@ -67,7 +67,7 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
        return pipe(streamWithNonIncrementalFallback(), Stream.mapArrayEffect(parts => decodeParts(parts).pipe(tracker ? Effect.tap(decodedParts => {
          for (const part of decodedParts) {
            if (part.type === "response-metadata" && part.id) {
-@@ -682,12 +683,19 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
+@@ -675,12 +676,19 @@ export const make = /*#__PURE__*/Effect.fnUntraced(function* (params) {
          providerOptions.incrementalPrompt = prepared.value.prompt;
        }
      }
@@ -89,12 +89,12 @@ index 7a53537ce4fd85124c45959424e2a9c2e6f17e7c..63025552f534ead218cec739e6f397c3
          for (const part of decodedParts) {
            if (part.type === "response-metadata" && Predicate.isNotUndefined(part.id)) {
              tracker.markParts(providerOptions.prompt.content, part.id);
-@@ -1248,8 +1256,30 @@ const resolveToolCalls = (content, toolkit, messages, concurrency) => {
- // =============================================================================
- // Utilities
- // =============================================================================
--const makeToolkitWithEncodedParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => tool.setParameters(Schema.toEncoded(tool.parametersSchema))));
- const makeToolkitWithOpaqueParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => tool.setParameters(Schema.Unknown)));
+@@ -1252,8 +1260,30 @@ const withParameterMode = (tool, mode) => {
+   }
+   return tools[mode] ??= tool.setParameters(mode === "encoded" ? Schema.toEncoded(tool.parametersSchema) : Schema.Unknown);
+ };
+-const makeToolkitWithEncodedParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => withParameterMode(tool, "encoded")));
+ const makeToolkitWithOpaqueParameters = toolkit => Toolkit.make(...Object.values(toolkit.tools).map(tool => withParameterMode(tool, "opaque")));
 +// A call to a tool the toolkit lacks decodes as a call to that name, so a
 +// caller that resolves tool calls itself answers it.
 +const withCalledTools = (toolkit, parts) => {
