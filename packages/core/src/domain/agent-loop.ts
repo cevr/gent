@@ -5,11 +5,13 @@ import {
   MessageMetadata,
   QueueSnapshot,
   RequesterBranch,
+  type SessionAdmission,
   SteerCommand,
 } from "./message.js"
 import {
   ActorCommandId,
   BranchId,
+  CredentialSlot,
   ExtensionId,
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
@@ -19,7 +21,7 @@ import {
   CurrentWorkspaceId,
   WorkspaceId,
 } from "./ids.js"
-import { ModelAttempts, ModelId, ReasoningEffort } from "./agent.js"
+import { ModelAttempts, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
 import { omitUndefined } from "./guards.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
@@ -184,8 +186,62 @@ export const SessionRuntimeMetrics = Schema.Struct({
   lastCredential: Schema.optional(
     Schema.Struct({ model: ModelId, receipt: Schema.optional(CredentialReceipt) }),
   ),
+  /**
+   * The branch's newest placement of a spread run (`CredentialAssigned`):
+   * the account its turns walk from. Absent for a run never placed.
+   */
+  placement: Schema.optional(Schema.Struct({ provider: ProviderId, slot: CredentialSlot })),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
+
+/**
+ * The account a session runs on, and why: `pinned` by its run spec
+ * (`RunSpec.credentialSlot`), `assigned` by a placement of its spread
+ * sign-in, or `walked` down its sign-in's order. `provider` is absent for a
+ * pin that no step has gone out on yet.
+ */
+export const SessionAccount = Schema.Struct({
+  provider: Schema.optional(ProviderId),
+  slot: CredentialSlot,
+  placement: Schema.Literals(["pinned", "assigned", "walked"]),
+})
+export type SessionAccount = typeof SessionAccount.Type
+
+/**
+ * The session's account, from its admission and its folded metrics: the
+ * pin when the admission names one; else the last step's credential,
+ * `assigned` when the newest placement names it and `walked` when not; else
+ * the placement, before its first step ends; else none.
+ */
+export const sessionAccount = (
+  admission: Option.Option<SessionAdmission>,
+  metrics: SessionRuntimeMetrics,
+): Option.Option<SessionAccount> => {
+  const receipt = Option.fromUndefinedOr(metrics.lastCredential?.receipt)
+  const placement = Option.fromUndefinedOr(metrics.placement)
+  const pin = Option.flatMap(admission, (admitted) =>
+    Option.fromUndefinedOr(admitted.runSpec?.credentialSlot),
+  )
+  if (Option.isSome(pin)) {
+    const provider = Option.getOrUndefined(
+      Option.map(
+        Option.filter(receipt, (last) => last.slot === pin.value),
+        (last) => last.provider,
+      ),
+    )
+    return Option.some({ slot: pin.value, placement: "pinned", ...omitUndefined({ provider }) })
+  }
+  if (Option.isSome(receipt)) {
+    const { provider, slot } = receipt.value
+    const assigned = Option.exists(
+      placement,
+      (placed) => placed.provider === provider && placed.slot === slot,
+    )
+    if (assigned) return Option.some({ provider, slot, placement: "assigned" })
+    return Option.some({ provider, slot, placement: "walked" })
+  }
+  return Option.map(placement, (placed) => ({ ...placed, placement: "assigned" as const }))
+}
 
 // ── State builders ──────────────────────────────────────────────────────────
 
@@ -279,6 +335,8 @@ export const stepSessionMetrics = (
         lastCredential: { model: event.model, ...omitUndefined({ receipt: event.credential }) },
       }
     }
+    case "CredentialAssigned":
+      return { ...metrics, placement: { provider: event.provider, slot: event.slot } }
     default:
       return metrics
   }

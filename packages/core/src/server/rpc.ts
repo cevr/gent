@@ -51,7 +51,11 @@ import {
   SessionAdmission,
   SteerCommand,
 } from "../domain/message.js"
-import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
+import {
+  SessionAccount,
+  SessionRuntimeMetrics,
+  SessionRuntimeStateSchema,
+} from "../domain/agent-loop.js"
 import {
   Rpc,
   RpcClient,
@@ -192,6 +196,9 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
    * model). The server is the authority — clients that hydrate from here do
    * not maintain their own cost/model bookkeeping. */
   metrics: SessionRuntimeMetrics,
+  /** The account the session runs on, and whether it was pinned, assigned or
+   * walked (`sessionAccount`). Absent before its first step or placement. */
+  account: Schema.optional(SessionAccount),
 }) {}
 
 /**

@@ -181,7 +181,11 @@ import {
   RunPathRefusedError,
   scopeReaches,
 } from "../domain/agent.js"
-import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
+import {
+  foldSessionMetrics,
+  type SendUserMessagePayload,
+  sessionAccount,
+} from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
   resolveSessionRoute,
@@ -1313,6 +1317,9 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     defaultReasoningLevel: Option.getOrUndefined(route.defaultReasoningLevel),
     runtime,
     metrics: snapshotState.metrics,
+    account: Option.getOrUndefined(
+      sessionAccount(Option.fromUndefinedOr(session.admission), snapshotState.metrics),
+    ),
   })
 })
 
