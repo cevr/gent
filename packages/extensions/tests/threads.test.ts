@@ -94,7 +94,7 @@ type SessionKey = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
 /** One thread-tool call a scripted model step makes. */
 interface ThreadOp {
-  readonly tool: "thread.start" | "thread.list" | "thread.stop"
+  readonly tool: "thread.start" | "thread.list" | "thread.stop" | "thread.send"
   readonly input: Record<string, string>
   readonly id: string
 }
@@ -106,7 +106,7 @@ interface ThreadOpResult {
   readonly output: string
 }
 
-const THREAD_TOOLS = new Set(["thread.start", "thread.list", "thread.stop"])
+const THREAD_TOOLS = new Set(["thread.start", "thread.list", "thread.stop", "thread.send"])
 
 const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
 const StartedOutput = Schema.fromJsonString(StartedResult)
@@ -469,9 +469,12 @@ describe("threads", () => {
         })
         const stored = yield* rig.client.session.get({ sessionId: handoff.sessionId })
         expect(stored?.admission?.runSpec?.credentialSlot).toBe(CredentialSlot.make("personal"))
-        // The thread's next round runs on its newest session.
+        // The starter's next round goes to the thread, which runs it on its newest session.
         const round = yield* turnEnds(rig.client.session.events(handoff), 1)
-        yield* rig.client.message.send({ ...handoff, content: `${THREAD_TASK} again` })
+        yield* rig.one(
+          rig.starter,
+          rig.op("thread.send", { thread: started.thread, message: `${THREAD_TASK} again` }),
+        )
         yield* Fiber.join(round)
         const slots = yield* stepSlots(rig.client, handoff)
         expect(slots.length).toBeGreaterThan(0)

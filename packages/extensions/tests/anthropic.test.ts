@@ -5140,26 +5140,28 @@ describe("linked rotation: refreshes", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
-  it.scopedLive("an unreachable endpoint keeps the held rotation, and the failure may pass", () =>
-    Effect.gen(function* () {
-      const { driver, store } = yield* heldAfterRefusedWrite
-      let unauthorized = 1
-      const result = yield* sendExpectingFailure(
-        driver,
-        linkedSignIn(LINKED_DIRECTORY),
-        (request) => {
-          if (request.url === TOKEN_URL) return { status: 503, body: "unavailable" }
-          if (unauthorized > 0) {
-            unauthorized -= 1
-            return { status: 401, body: encodeExternalJson({ error: "unauthorized" }) }
-          }
-          return anthropicHappyResponse()
-        },
-      )
-      expect(result.sent).toEqual(["fake-rotated-1-refresh"])
-      expect(Option.exists(result.request, (text) => text.includes("503"))).toBe(true)
-      expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
-    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  it.scopedLive(
+    "a token endpoint answering 503 keeps the held rotation, and the failure may pass",
+    () =>
+      Effect.gen(function* () {
+        const { driver, store } = yield* heldAfterRefusedWrite
+        let unauthorized = 1
+        const result = yield* sendExpectingFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY),
+          (request) => {
+            if (request.url === TOKEN_URL) return { status: 503, body: "unavailable" }
+            if (unauthorized > 0) {
+              unauthorized -= 1
+              return { status: 401, body: encodeExternalJson({ error: "unauthorized" }) }
+            }
+            return anthropicHappyResponse()
+          },
+        )
+        expect(result.sent).toEqual(["fake-rotated-1-refresh"])
+        expect(Option.exists(result.request, (text) => text.includes("503"))).toBe(true)
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 
@@ -5414,9 +5416,9 @@ describe("linked rotation: failures that may pass", () => {
   )
 })
 
-describe("linked rotation: the reviewer's round-2 probes", () => {
+describe("linked rotation: a source that changes or reads torn around a held rotation", () => {
   it.scopedLive(
-    "R2-1: a held rotation refreshed after a failed settle never writes over the login Claude Code wrote meanwhile",
+    "a held rotation refreshed after a failed settle never writes over the login Claude Code wrote meanwhile",
     () =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
@@ -5449,11 +5451,11 @@ describe("linked rotation: the reviewer's round-2 probes", () => {
   )
 
   it.scopedLive(
-    "R2-2: a label linked again, or renamed, meets the held rotation and never resends the spent token",
+    "a label linked again, or renamed, while a rotation is held meets it and never resends the spent token",
     () =>
       Effect.gen(function* () {
+        // The keychain still refuses writes: the rotation stays held throughout.
         const { keychain, driver, endpoint, store } = yield* heldAfterRefusedWrite
-        keychain.allowWrites()
         const relinked = yield* sendThrough(
           driver,
           linkedSignIn(LINKED_DIRECTORY, 2),
@@ -5461,24 +5463,33 @@ describe("linked rotation: the reviewer's round-2 probes", () => {
         )
         expect(relinked.refreshTokens).toEqual([])
         expect(relinked.authorization).toBe("Bearer fake-rotated-1-access")
-        expect(writtenAccess(keychain.calls)).toEqual([
-          "fake-rotated-1-access",
-          "fake-rotated-1-access",
-        ])
-        expect(heldAccess(store)).toEqual([])
-        // A second label on the same directory reads the landed rotation.
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+        // Renamed: a second label with the same stamp and directory.
         const renamed = yield* sendThrough(
           driver,
-          linkedSignIn(LINKED_DIRECTORY, 3, CredentialSlot.make("renamed")),
+          linkedSignIn(LINKED_DIRECTORY, 2, CredentialSlot.make("renamed")),
           endpoint.respond,
         )
         expect(renamed.refreshTokens).toEqual([])
         expect(renamed.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(heldAccess(store)).toEqual(["fake-rotated-1-access"])
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-expired-refresh")
+        // Once the keychain takes writes, the rotation lands, and nothing stays held.
+        keychain.allowWrites()
+        const landed = yield* sendThrough(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 3),
+          endpoint.respond,
+        )
+        expect(landed.refreshTokens).toEqual([])
+        expect(landed.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(heldAccess(store)).toEqual([])
+        expect(keychain.entries.get(LINKED_SERVICE)?.[0]?.blob).toContain("fake-rotated-1-refresh")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
-    "R2-5: a keychain entry that reads torn after the spend keeps the rotation held, and lands it later",
+    "a keychain entry that reads torn after the spend keeps the rotation held, and lands it later",
     () =>
       Effect.gen(function* () {
         const original = { account: "alice", blob: claudeBlob("fake-expired", 0) }
@@ -5517,7 +5528,7 @@ describe("linked rotation: the reviewer's round-2 probes", () => {
   )
 
   it.scopedLive(
-    "R2-6: a credentials file that reads empty after the spend keeps the rotation held, and lands it later",
+    "a credentials file that reads empty after the spend keeps the rotation held, and lands it later",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -5560,8 +5571,12 @@ describe("linked rotation: the reviewer's round-2 probes", () => {
   )
 })
 
-describe("linked rotation: two gent processes on one directory", () => {
-  /** One gent process: its own driver, and its own credential store over the shared auth directory. */
+describe("linked rotation: two credential stores over one auth directory", () => {
+  /**
+   * One credential store as a gent process opens it: its own driver, and its
+   * own store over the shared auth directory. Both run in this process, so
+   * only the store's lock file orders them.
+   */
   const gentProcess = (
     spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
     authDirectory: string,
@@ -5595,7 +5610,7 @@ describe("linked rotation: two gent processes on one directory", () => {
   })
 
   it.scopedLive(
-    "two processes refreshing one expired login at once spend its token once, and both serve the rotation",
+    "two credential stores over one auth directory spend one expired login's token once, and both serve the rotation",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -5627,7 +5642,7 @@ describe("linked rotation: two gent processes on one directory", () => {
   )
 
   it.scopedLive(
-    "a rotation one process holds is landed and served by another, which spends nothing",
+    "a rotation one credential store holds on disk is landed and served by a second store over the same directory, which spends nothing",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -5647,7 +5662,7 @@ describe("linked rotation: two gent processes on one directory", () => {
           endpoint.respond,
         )
         expect(sentBy(first).refreshTokens).toEqual(["fake-expired-refresh"])
-        // The first process's store holds the rotation, owner-only, on disk.
+        // The first store holds the rotation, owner-only, on disk.
         expect(yield* fs.readFileString(rotationFile)).toContain("fake-rotated-1-refresh")
         expect((yield* fs.stat(rotationFile)).mode & 0o777).toBe(0o600)
         keychain.allowWrites()
