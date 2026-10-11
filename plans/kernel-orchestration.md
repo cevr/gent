@@ -19,19 +19,19 @@ A track, once every primitive exists:
 ```js
 await tools.machine.define({
   name: "track",
-  seats: {
+  threads: {
     impl: { model: "anthropic/claude-opus-5-5", effort: "medium" },
     rev: { model: "openai/gpt-6.1-sol", effort: "high" },
   },
   start: "implement",
   states: {
     implement: {
-      seat: "impl",
+      thread: "impl",
       say: "Implement {{input.spec}}. Fix: {{review.findings}} {{verify.output}}",
       next: "review",
     },
     review: {
-      seat: "rev",
+      thread: "rev",
       say: "Review {{input.branch}} against {{input.spec}}",
       on: { accepted: "verify", changes: "implement" },
       maxVisits: 4,
@@ -48,35 +48,44 @@ await tools.machine.define({
 const run = await tools.machine.start({ machine: "track", input: { spec, branch, cwd: rift } })
 ```
 
-The orchestrator starts one run per unit, orders units by their dependencies, and answers `ask` states. Until P3 lands, the same loop runs one step per cell: `seat.send` returns a round handle, the round's end wakes the orchestrator, and its next cell reads `seat.round` and decides. Both modes share P1 and P2.
+The orchestrator starts one run per unit, orders units by their dependencies, and answers `ask` states. Until P3 lands, the same loop runs one step per cell: `thread.send` returns a round handle, the round's end wakes the orchestrator, and its next cell reads `thread.round` and decides. Both modes share P1 and P2.
 
 ## Owner rules this design keeps
 
 - Children wake, never block: no host call holds a turn open for a round. A wait is a durable program's suspension or a wake message.
 - Lean core: every primitive is an extension on `@gent/core/extensions/api`, except where core lacks the capability (P4's server-wide permits, P5's credential pin), and then core gains a general verb, not a feature.
 - Persisted formats change only additively.
-- One concern per file: `seats.ts`, `programs.ts`, each with section banners.
-- Child sessions cache 5 minutes unless their agent keeps the session cache: seats are the long-lived case and keep it.
+- One concern per file: `threads.ts`, `machines.ts`, each with section banners.
+- Child sessions cache 5 minutes unless their agent keeps the session cache: worker threads are the long-lived case and keep it.
 - Ambiguous side effects are never replayed: a crashed command becomes an `ask` (P3).
 
 ## Primitives
 
-### P1. Seats: `@gent/seats`, `packages/extensions/src/seats.ts`
+### P1. Threads take rounds: `@gent/session-tools` threads, moved to `packages/extensions/src/threads.ts`
 
-A seat is a durable child session that takes many rounds.
+The worker primitive is the existing **thread**, improved, not a new "seat" concept (owner, 2026-10-11). A thread already is a child session the starter lists and stops, and its key, the first session's id, survives handoffs. That is what a long-lived worker needs: when its context fills, it hands off and keeps its address. Today a thread is fire-and-forget: it runs as the starter, its replies go to the user, and nothing wakes the starter. It gains:
 
-- **Agent `seat`**, registered by the extension: `promptCache: "session"`, and tools that deny `seat.*` (except `seat.reply`), `machine.*`, `delegate.*` and `thread.start` (as `CHILD_TOOL_DENIALS` does in `delegate.ts`). Builtin, so every cwd's profile knows it.
-- **`seat.open({ name, model, effort?, cwd?, instructions?, tools?, account? })`** returns `{ seat, sessionId, branchId }` at admission. It calls `ctx.Session.create` with `modelId`, `reasoningLevel`, `admission: { agent: "seat", runSpec: { overrides: { systemPromptAddendum, tools } } }`, the cwd, and `requestId: "seat:<toolCallId>"`, which is deterministic inside a cell. It sends no first message. `account` waits for P5. A row goes in `seats`.
-- **`seat.send({ seat, message, reply? })`** returns `{ round }` at admission, with `delivery: "turn"`, `commandId: "seat-round:<toolCallId>"` and `completion: "admission"`. A seat runs one round at a time: a send while a round is open is refused, and the refusal names that round. Only the session that opened a seat may send to it.
-- **Round end**: a `turnAfter` hook matches `messageId` to an open round's commandId. It records `{ text, reply, interrupted, streamFailed, usage, endedAt }` in `seat_rounds`, then queues `{ delivery: "queue", wake: true, sourceId: "seat-round-end:<round>" }` to the opener's branch with a one-line summary and the round id. `loopOpen` reconciles a round that ended while the server was down, by the same `TurnCompleted` fold delegate's `turnEnd` uses.
-- **The `Seats` service** (a Tag, as `Workspaces` is) carries `open`, `send({ ..., notify })`, `round` and `close`, and publishes each round's end to subscribers in the process. The tools call it with `notify: "owner"`; machines call it with `notify: "none"`.
-- **A retry comes before a refusal**: `seat.open`, `seat.send` and `seat.close` first look up what they already admitted under the same request id and return that handle. Only then does the busy-seat refusal apply, so a retried send never refuses itself.
-- **`seat.round({ round })`** returns the stored result. **`seat.list()`** lists the opener's seats with each seat's open round. **`seat.close({ seat })`** stops an open round and marks the seat closed. The session stays readable.
-- Storage: a process Resource owns `seats` and `seat_rounds` (`CREATE TABLE IF NOT EXISTS`, as `exec-tools.ts` does).
+- **`thread.start({ task?, name?, model?, effort?, cwd?, instructions?, tools?, agent?, notify?, account? })`**. Every new field is optional, and the defaults are today's behaviour.
+  - With no `task` it opens a thread and sends nothing (a worker waiting for its first round).
+  - `agent` picks a registered agent. gent registers **`worker`**: `promptCache: "session"`, and tools that deny `thread.start`, `thread.stop`, `machine.*` and `delegate.*`. Owner rule: a long-lived seat that waits between turns keeps the session cache.
+  - `instructions` becomes the run's `systemPromptAddendum`. The create's `requestId` stays `thread:<toolCallId>`.
+- **`thread.send({ thread, message, reply?, notify? })`** returns `{ round }` at admission, addressed by the thread key, so it reaches the thread's current session after a handoff. It uses `delivery: "turn"`, `commandId: "thread-round:<toolCallId>"` and `completion: "admission"`.
+  - A thread runs one round at a time.
+  - Only the starter's thread may send.
+  - A retry under the same request id returns the admitted round before the busy refusal applies.
+- **`notify`**:
+  - `"user"`, today's default: replies go to the user, and nothing wakes the starter.
+  - `"starter"`: the round's end queues `{ delivery: "queue", wake: true, sourceId: "thread-round-end:<round>" }` to the starter with a one-line summary.
+  - `"none"`: only through the service, for machines.
+- **Round end**: a `turnAfter` hook matches the round's commandId and records `{ text, reply, interrupted, streamFailed, usage, endedAt }` in `thread_rounds`. It publishes the end to the `Threads` service's subscribers, then notifies as the round's mode says. `loopOpen` reconciles a round that ended while the server was down, as delegate's `turnEnd` does.
+- **`thread.round({ round })`** reads a result. `thread.list` and `thread.stop` stay, and `stop` also closes an open round.
+- **The `Threads` service** (a Tag, as `Workspaces` is) carries `start`, `send({ ..., notify })`, `round`, `stop`, and the round-end subscription, for machines.
+- **The running-thread cap** (4) counts threads with an open round, and config can raise it.
+- **Later reduction, not this stage**: `delegate.start` is a thread on the `delegate` agent with one round, `notify: "starter"` and snapshot isolation. Folding it in removes a concept, after machines prove the thread surface.
 
 ### P2. Rounds as values
 
-- **Structured reply**: `seat.send`'s optional `reply` describes the value the round must return. For that round the seat gets the tool `seat.reply({ value })`. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
+- **Structured reply**: `thread.send`'s optional `reply` describes the value the round must return. For that round the thread gets the tool `thread.reply({ value })`. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
 - **Usage**: every round records its usage and cost, so a program can budget by them.
 
 ### P3. Machines: `@gent/machines`, `packages/extensions/src/machines.ts`
@@ -92,22 +101,22 @@ A machine is a state machine defined as data. A host interpreter runs it outside
 A machine avoids each of them:
 
 - **Definition**: plain data, checked by an Effect Schema, with no functions.
-  - `seats`: a name mapped to a P1 seat spec.
+  - `threads`: a role name mapped to a P1 thread spec (model, effort, instructions, agent).
   - `states`, each one of four kinds:
-    - `seat`: a round. Its `say` template is filled from the run's context, and the round's `seat.reply` value names the transition: `next` must be one of the state's `on` keys.
+    - `thread`: a round on that role's thread. Its `say` template is filled from the run's context, and the round's `thread.reply` value names the transition: `next` must be one of the state's `on` keys.
     - `run`: a command spawned by the extension, optionally under a P4 permit. Exit 0 takes `pass`, anything else `fail`, and its output tail is saved into the context.
     - `ask`: queues a question to the owner with the allowed answers, and waits.
     - `final`.
-  - `maxVisits` with `exhausted` caps a loop. `fresh: true` on a seat state opens a new seat session for each visit: Prime's verifier, with no memory of earlier rounds.
+  - `maxVisits` with `exhausted` caps a loop. `fresh: true` on a thread state starts a new thread for each visit: Prime's verifier, with no memory of earlier rounds.
   - A template reads `{{input.*}}` and `{{<state>.*}}`, the last reply saved under each state's name. There is no expression language: a branch the data cannot express is an `ask`.
   - `machine.define` writes the definition to `.gent/machines/<name>.json` in the project, so machines are defined once, reviewed, reused and edited like code. A run snapshots its definition when it starts.
 - **Execution**: state C with no source replay.
   - `machine_runs`: the current state, the context as JSON, visit counts, status, and the pending action.
   - `machine_steps`: an append-only log, from which status and audit read.
   - Before dispatching, a step records its next action. Recovery reads that action's receipt:
-    - a seat round recovers by its request id, since P1 makes `seat.send` idempotent on it;
+    - a thread round recovers by its request id, since P1 makes `thread.send` idempotent on it;
     - a command that was running at a crash is ambiguous and is never rerun: the run moves to `ask` with "interrupted".
-- **Authority**: a machine calls no tools. It drives seats through the `Seats` service with `notify: "none"`, so a round's end moves the machine and starts no owner turn. It spawns commands through the platform's `ChildProcessSpawner` in the run's cwd. So it needs no turn-free tool authority, and approvals do not arise. The machine's power is exactly what its states declare.
+- **Authority**: a machine calls no tools. It drives threads through the `Threads` service with `notify: "none"`, so a round's end moves the machine and starts no owner turn. It spawns commands through the platform's `ChildProcessSpawner` in the run's cwd. So it needs no turn-free tool authority, and approvals do not arise. The machine's power is exactly what its states declare.
 - **Ask and answer**: `machine.answer({ run, askId, choice, note? })`. The ask is persisted before it is delivered, through an outbox with a deduplicated `sourceId`. An identical retry succeeds; a different answer to the same ask, or an answer to an ask that has moved on, is refused. The answer returns at admission, and the step runs after it.
 - **Liveness** (Counsel blocker 4, verified: gent has no server-start hook, and an idle loop is put to sleep after one minute):
   - While a run has an open action it holds the owner branch resident, through `Session.holdResident`.
@@ -125,7 +134,7 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 ### P5. Accounts
 
 - **The `~/.claude2` login lives in the keychain**, under `Claude Code-credentials-<first 8 hex of sha256(config dir)>`. On this laptop that is `-3ef2928b` for `$HOME/.claude2`, and there is no `.credentials.json`. The directory import reads that service on darwin and the file elsewhere. Write-back goes to the same entry.
-- **A seat pins its credential slot**: `account` becomes a run override, `credentialSlot`. This is an additive, optional key in `RUN_OVERRIDE_KEYS`, read by the credential order ahead of `authOrder`.
+- **A thread pins its credential slot**: `account` becomes a run override, `credentialSlot`. This is an additive, optional key in `RUN_OVERRIDE_KEYS`, read by the credential order ahead of `authOrder`.
 
 ### P6. Workspaces as tools
 
@@ -136,12 +145,12 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two rounds. Then a merge to `main` by hand.
 
 1. **P1 and P2, step mode.** Done when:
-   - the `createRpcHarness` acceptance passes on `LanguageModelLayers.sequence`: open two seats, then send, round end, wake, `seat.round`, a second round with a `reply`, and `seat.close`;
+   - the `createRpcHarness` acceptance passes on `LanguageModelLayers.sequence`: start two worker threads, then send, round end, wake, `thread.round`, a second round with a `reply`, and `thread.stop`;
    - a restart in the middle of a round loses no round end;
-   - a send to a busy seat is refused;
+   - a send to a busy thread is refused, and a retried send returns its round; a round reaches the thread's new session after a handoff;
    - the gate is green.
-2. **P5 accounts.** Done when an imported `personal` slot resolves from the keychain service, a seat with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
-3. **P3 machines.** A design-mode counsel review of the core activation seat and the schema comes first. Done when:
+2. **P5 accounts.** Done when an imported `personal` slot resolves from the keychain service, a thread with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
+3. **P3 machines.** A design-mode counsel review of the core activation seam and the schema comes first. Done when:
    - a track machine runs implement, review with changes, implement, review accepted, verify and decide on fake models, with no owner turn between rounds;
    - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
    - a command interrupted by a crash moves the run to `ask`;
