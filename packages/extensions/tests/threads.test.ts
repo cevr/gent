@@ -1254,6 +1254,34 @@ describe("thread round ownership", () => {
       ),
     30_000,
   )
+  it.live(
+    "a round the thread's full queue refuses leaves no open round, so the thread is not held busy",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hanging = yield* Deferred.make<boolean>()
+          const { client, sessionId, branchId } = yield* roundHarness({
+            hang: Effect.asVoid(Deferred.succeed(hanging, true)),
+          })
+          const starter = { sessionId, branchId }
+          const impl = yield* startWorker(client, starter, "start-impl")
+          // The user keeps the thread busy and fills its follow-up queue.
+          yield* client.message.send({ ...placeOf(impl), content: "HANG" })
+          yield* Deferred.await(hanging)
+          for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+            yield* client.message.send({ ...placeOf(impl), content: `ECHO queued ${index}` })
+          }
+          const [refused] = yield* call(client, starter, [
+            ["thread.send", "send-full", { thread: impl.thread, message: "ECHO one more" }],
+          ])
+          expect(refused?.failed).toBe(true)
+          expect(textOf(refused?.result)).toContain("queue full")
+          const [listed] = yield* call(client, starter, [["thread.list", "list-full", {}]])
+          expect(byThread(listed?.result)[impl.thread]?.openRound).toBeUndefined()
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
 })
 
 // ── rounds: the service ─────────────────────────────────────────────────────

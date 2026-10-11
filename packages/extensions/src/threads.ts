@@ -372,6 +372,8 @@ interface ThreadRoundsService {
     readonly branchId: BranchId
     readonly thread: SessionId
   }) => Effect.Effect<ReadonlyArray<RoundRow>, ThreadStorageError>
+  /** Drops a round that is still open: its turn was refused, so it never ran. */
+  readonly releaseRound: (round: string) => Effect.Effect<void, ThreadStorageError>
   /** Drops the rounds a deleted session sent or ran. */
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void, ThreadStorageError>
   /** Every round end this server marks, in order. In memory: a restart starts it empty. */
@@ -655,6 +657,13 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
             `
           },
           Effect.mapError(storageError("Failed to read the pending rounds")),
+        ),
+
+        releaseRound: Effect.fn("ThreadRounds.releaseRound")(
+          function* (round) {
+            yield* sql`DELETE FROM thread_rounds WHERE round = ${round} AND ended_at IS NULL`
+          },
+          Effect.mapError(storageError("Failed to release the round")),
         ),
 
         removeSession: Effect.fn("ThreadRounds.removeSession")(
@@ -1245,7 +1254,12 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   }
   const round = claim.round
   if (claim.fresh || (Predicate.isNull(round.ended_at) && !(yield* admitted(round)))) {
-    yield* sendRoundTurn(round)
+    // A send that fails left the turn out of the thread's loop (a full
+    // follow-up queue refuses it), and the loop keeps that reply under the
+    // round's command id, so a repeat is refused the same way. The round
+    // goes with it: an open round with no turn would hold the thread busy
+    // and take a place under the cap until a stop.
+    yield* sendRoundTurn(round).pipe(Effect.tapError(() => rounds.releaseRound(round.round)))
   }
   return { round: round.round, number: round.number, thread: SessionId.make(round.thread) }
 })

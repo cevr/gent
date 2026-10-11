@@ -872,7 +872,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     round id is `round-` and 16 hex of SHA-256 over the caller's session,
     branch and tool call id: a tool call id is unique only in its session.
     A thread runs one round at a time, and only the thread that started it
-    sends to it. A retry under the same key is handed its round before the
+    sends to it. A send the thread's loop refuses (a full follow-up queue)
+    drops its round, so the thread is not held busy; the loop keeps the
+    refusal under the round's command id, and a repeat gets it again. A retry under the same key is handed its round before the
     busy refusal; it re-sends only a round whose message never reached the
     branch, since a repeat of a running turn's command waits for that turn.
   - `thread_rounds` (one table in the server's database; its migrations are
