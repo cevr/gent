@@ -1605,7 +1605,7 @@ const restartableHome = Effect.gen(function* () {
 
 describe("a thread round running when the server stopped", () => {
   it.live(
-    "resumes when the starter opens, wakes it once, and a second reconcile wakes it no more",
+    "resumes when the starter opens, wakes it once, and a later process loses no end and wakes it no more",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1645,7 +1645,7 @@ describe("a thread round running when the server stopped", () => {
             if (isWorkerRequest(options.prompt)) return Effect.succeed(billed("resumed answer"))
             return Effect.succeed(starterStep(options.prompt))
           })
-          yield* Effect.scoped(
+          const userRound = yield* Effect.scoped(
             Effect.gen(function* () {
               const { client } = yield* createRpcClient(home.layerFor(resumed))
               const snapshot = yield* waitForWakes(client, stopped.starter, 1)
@@ -1654,16 +1654,38 @@ describe("a thread round running when the server stopped", () => {
                 ["thread.round", "read-resumed", { round: stopped.round.round }],
               ])
               expect(read?.result).toMatchObject({ status: "ended", text: "resumed answer" })
+              // A round the user reads: its end wakes nobody.
+              const [sent] = yield* call(client, stopped.starter, [
+                ["thread.send", "send-user", { thread: stopped.impl.thread, message: "ECHO x" }],
+              ])
+              const round = decodeRound(sent?.result)
+              yield* readRoundUntil(client, stopped.starter, round.round, "read-user", (text) =>
+                text.includes('"status":"ended"'),
+              )
+              return round
             }),
           )
 
-          // The process died after the wake was sent and before the round's
-          // end was saved: the next process records it again from the
-          // thread's history, and its wake is the one already delivered.
+          const rowOf = (round: string) =>
+            home.sql(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient
+                return yield* sql<{
+                  readonly text: string
+                  readonly delivered: number
+                }>`SELECT COALESCE(text, '') AS text, delivered_at IS NOT NULL AS delivered FROM thread_rounds WHERE round = ${round}`
+              }),
+            )
+          // The two windows a process can die in once a turn ended. The
+          // `starter` round's end was saved and its wake sent, and the process
+          // died before marking it delivered. The `user` round's turn ended,
+          // and the process died before its end was saved; nothing is sent
+          // for it, so nothing else was.
           yield* home.sql(
             Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient
-              yield* sql`UPDATE thread_rounds SET ended_at = NULL, text = NULL, delivered_at = NULL WHERE round = ${stopped.round.round}`
+              yield* sql`UPDATE thread_rounds SET delivered_at = NULL WHERE round = ${stopped.round.round}`
+              yield* sql`UPDATE thread_rounds SET ended_at = NULL, text = NULL, usage_json = NULL, delivered_at = NULL WHERE round = ${userRound.round}`
             }),
           )
           yield* Effect.scoped(
@@ -1671,20 +1693,22 @@ describe("a thread round running when the server stopped", () => {
               const { client } = yield* createRpcClient(home.layerFor(resumed))
               yield* client.session.getSnapshot(stopped.starter)
               const rows = yield* waitFor(
-                home.sql(
-                  Effect.gen(function* () {
-                    const sql = yield* SqlClient.SqlClient
-                    return yield* sql<{
-                      readonly text: string
-                      readonly delivered: number
-                    }>`SELECT COALESCE(text, '') AS text, delivered_at IS NOT NULL AS delivered FROM thread_rounds WHERE round = ${stopped.round.round}`
-                  }),
-                ),
+                rowOf(userRound.round),
                 (found) => found[0]?.delivered === 1,
                 8_000,
-                "the reconcile recorded the round again",
+                "the reconcile recorded the user's round again",
               )
               expect(rows[0]?.text).toBe("resumed answer")
+              const [read] = yield* call(client, stopped.starter, [
+                ["thread.round", "read-again", { round: userRound.round }],
+              ])
+              expect(read?.result).toMatchObject({
+                status: "ended",
+                text: "resumed answer",
+                usage: { input: 100, output: 20 },
+              })
+              const woken = yield* rowOf(stopped.round.round)
+              expect(woken[0]?.delivered).toBe(1)
               const snapshot = yield* waitFor(
                 client.session.getSnapshot(stopped.starter),
                 (current) => current.runtime._tag === "Idle",
