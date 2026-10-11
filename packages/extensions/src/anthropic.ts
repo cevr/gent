@@ -1720,7 +1720,11 @@ const readLinked = (
  * spent (`spendSource`). A held rotation the endpoint refuses stays held
  * until the source moves past its base (`afterRefusal`). A held rotation gent
  * cannot read blocks the login beside it: nothing is spent until the source
- * moves past that login (`settleQuarantined`).
+ * moves past that login (`settleQuarantined`). The lock is held through the
+ * whole step, which has no single bound: its I/O deadlines sum to about 31 s
+ * from synced, 33 s from pending, and 40 s when a held rotation lands (or the
+ * source moved past it) and the login it serves is expired, so the source is
+ * spent again; ARCHITECTURE.md (Credential slots) lists them.
  */
 const refreshLinked = (
   source: LinkedSource,
