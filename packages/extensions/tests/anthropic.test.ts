@@ -81,6 +81,7 @@ import {
   defineExtension,
   ProviderAuthError,
   CredentialSlot,
+  CredentialStoreBusy,
   type ProviderHints,
   SessionId,
   ProviderAuthInfo,
@@ -4281,6 +4282,35 @@ const sendExpectingFailure = (
     }
   })
 
+/**
+ * Resolve `authInfo` through `driver` (it must resolve) and send one request
+ * on it, as the loop does: the `AiError` the request fails with (none when it
+ * was answered), and the refresh tokens that went out.
+ */
+const requestFailure = (
+  driver: LinkedDriver,
+  authInfo: ProviderAuthInfo,
+  responder: FakeResponder = rotatingEndpoint(),
+) =>
+  Effect.gen(function* () {
+    const state = makeFakeFetchState()
+    const model = yield* driver
+      .resolveModel("claude-opus-4-6", authInfo)
+      .pipe(Effect.provide(fakeFetchLayer(state, responder)))
+    const sent = yield* Effect.exit(
+      LanguageModel.generateText({ prompt: "hi" }).pipe(
+        Effect.provide(Layer.provideMerge(model, fakeFetchLayer(state, responder))),
+        Effect.scoped,
+      ),
+    )
+    let error = Option.none<AiError.AiError>()
+    if (Exit.isFailure(sent)) error = Cause.findErrorOption(sent.cause)
+    return {
+      error,
+      sent: state.captured.filter((captured) => captured.url === TOKEN_URL).map(refreshTokenOf),
+    }
+  })
+
 /** A Claude Code config directory under `home` holding `blob` as its login. */
 const scratchDirectory = (home: string, name: string, blob: Option.Option<string>) =>
   Effect.gen(function* () {
@@ -5319,6 +5349,41 @@ describe("linked rotation: a held rotation gent cannot read", () => {
         expect(fourth.refreshTokens).toEqual(["fake-new-login-refresh"])
         expect(fourth.authorization).toBe("Bearer fake-rotated-1-access")
         expect(yield* fs.readFileString(aside)).toBe("{torn")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("linked rotation: a busy credential store", () => {
+  it.scopedLive(
+    "a linked refresh that times out waiting for the store's lock may pass, and spends nothing",
+    () =>
+      Effect.gen(function* () {
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = numberedEndpoint()
+        // Another holder keeps the store's lock past the wait, as a second gent
+        // process mid-refresh does: nothing runs under it.
+        const busy: LockSourceRotation = () => () =>
+          Effect.fail(new CredentialStoreBusy({ provider: "anthropic" }))
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const result = yield* requestFailure(
+          driver,
+          linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, { lockSourceRotation: busy }),
+          endpoint.respond,
+        )
+        expect(result.sent).toEqual([])
+        expect(Option.map(result.error, (error) => error.isRetryable)).toEqual(Option.some(true))
+        expect(
+          Option.exists(
+            result.error,
+            (error) =>
+              error.message.includes("credential store is busy") &&
+              error.message.includes(LINKED_DIRECTORY) &&
+              error.message.includes("no token was spent"),
+          ),
+        ).toBe(true)
+        expect(writesOf(keychain.calls)).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })

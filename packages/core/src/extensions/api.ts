@@ -69,6 +69,7 @@ export {
 export {
   acceptedEfforts,
   credentialFailureMetadata,
+  CredentialStoreBusy,
   DEFAULT_RETRY_POLICY,
   DriverError,
   PendingRotation,

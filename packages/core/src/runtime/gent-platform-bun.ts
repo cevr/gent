@@ -385,7 +385,10 @@ const fileProviderLock =
       }),
       Effect.catchTag("AuthLockBusy", () =>
         Effect.fail(
-          new AuthError({ message: `Timed out waiting for the auth lock for "${provider}"` }),
+          new AuthError({
+            message: `Timed out waiting for the auth lock for "${provider}"`,
+            lockBusy: true,
+          }),
         ),
       ),
     )

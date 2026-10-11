@@ -355,13 +355,31 @@ export interface SourceRotation {
  * from the login's place, never from a label), under the same lock as every
  * write of the provider's credentials: in this process and, on a host with a
  * lock file, in every gent process over the store. Two refreshes of one
- * source, in two profiles or two processes, never interleave.
+ * source, in two profiles or two processes, never interleave. A lock another
+ * holder keeps for the whole wait fails `CredentialStoreBusy`: `use` never
+ * ran, and the store is as it was.
  */
 export type LockSourceRotation = (
   source: string,
 ) => <A, E>(
   use: (held: SourceRotation) => Effect.Effect<A, E>,
-) => Effect.Effect<A, E | ProviderAuthError>
+) => Effect.Effect<A, E | ProviderAuthError | CredentialStoreBusy>
+
+/**
+ * The credential store's lock stayed held by another holder for the whole
+ * wait (another gent process mid-refresh, say): nothing ran, nothing changed,
+ * and a later attempt may pass.
+ */
+export class CredentialStoreBusy extends Schema.TaggedError<CredentialStoreBusy>()(
+  "CredentialStoreBusy",
+  {
+    provider: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `gent's credential store is busy: its lock for "${this.provider}" stayed held by another holder for the whole wait`
+  }
+}
 
 const LockSourceRotation = Schema.declare<LockSourceRotation>(
   (value): value is LockSourceRotation => Predicate.isFunction(value),

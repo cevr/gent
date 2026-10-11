@@ -69,6 +69,7 @@ import {
   authMethodAppliesTo,
   type CredentialFailureReason,
   credentialFailureReason,
+  CredentialStoreBusy,
   type CredentialReceipt,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -218,6 +219,12 @@ export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
+  /**
+   * The provider's lock stayed held by another holder for the whole wait:
+   * nothing ran under it, and a later attempt may pass. Only a lock's
+   * acquisition sets it.
+   */
+  lockBusy: Schema.optional(Schema.Boolean),
 }) {}
 
 /** A stored entry that does not decode: a corrupt file, or one an older writer tore. */
@@ -1413,7 +1420,8 @@ const toProviderAuthInfo = (
 /**
  * The rotations `providerId`'s driver holds for sources other programs keep,
  * as a driver reaches them (`LockSourceRotation`): keyed by source, under
- * the provider's lock, with the store's faults as `ProviderAuthError`.
+ * the provider's lock, with the store's faults as `ProviderAuthError`, and a
+ * lock another holder kept for the whole wait as `CredentialStoreBusy`.
  */
 export const sourceRotationLock =
   (authStore: AuthService, providerId: string): LockSourceRotation =>
@@ -1424,6 +1432,10 @@ export const sourceRotationLock =
         message: `${cause.message} (provider "${providerId}")`,
         cause,
       })
+    const asStoreFailure = (cause: AuthError): ProviderAuthError | CredentialStoreBusy => {
+      if (cause.lockBusy === true) return new CredentialStoreBusy({ provider: providerId })
+      return asAuthFailure(cause)
+    }
     return authStore
       .withRotation(providerId, source, (held) =>
         use({
@@ -1434,7 +1446,7 @@ export const sourceRotationLock =
           moveAside: (base) => held.moveAside(base).pipe(Effect.mapError(asAuthFailure)),
         }),
       )
-      .pipe(Effect.catchIf(Schema.is(AuthError), (cause) => Effect.fail(asAuthFailure(cause))))
+      .pipe(Effect.catchIf(Schema.is(AuthError), (cause) => Effect.fail(asStoreFailure(cause))))
   }
 
 /** The OAuth fields of a stored credential; none for an API key. */

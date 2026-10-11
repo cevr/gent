@@ -65,6 +65,7 @@ import {
   finishPart,
   ProviderLock,
   resolveDriverModel,
+  sourceRotationLock,
   textStep,
   toolCallPart,
 } from "../../src/runtime/provider"
@@ -1492,6 +1493,74 @@ describe("Auth", () => {
           expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
         }).pipe(Effect.provide(host), Effect.timeout("5 seconds")),
       )
+
+    it.scopedLive(
+      "a provider lock that times out reaches a driver as a busy store, not a failed credential",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          // Two stores over one directory, as two gent processes: only the lock file orders them.
+          const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          let polls = 0
+          // The waiter's lock file host makes no directory (the holder made
+          // it), so each poll runs without I/O between two clock steps; it is
+          // a host of its own, not the one the holder's store shares.
+          const pollsOnTheClock = Layer.fresh(BunProviderLockLive).pipe(
+            Layer.provide(
+              Layer.succeed(FileSystem.FileSystem, {
+                ...fs,
+                makeDirectory: () =>
+                  Effect.sync(() => {
+                    polls++
+                  }),
+              }),
+            ),
+          )
+          const waiter = Context.get(
+            yield* Layer.build(Auth.Live(dir).pipe(Layer.provide(pollsOnTheClock))),
+            Auth,
+          )
+          const source = "fake-source"
+          const holding = yield* Deferred.make<boolean>()
+          const release = yield* Deferred.make<boolean>()
+          const held = yield* holder
+            .withRotation("anthropic", source, () =>
+              Deferred.succeed(holding, true).pipe(Effect.andThen(Deferred.await(release))),
+            )
+            .pipe(Effect.forkScoped)
+          yield* Deferred.await(holding)
+          // The lock a driver's sign-in carries (`ProviderAuthInfo.Oauth.lockSourceRotation`).
+          let ran = false
+          const waited = yield* Deferred.make<boolean>()
+          const waiting = yield* sourceRotationLock(
+            waiter,
+            "anthropic",
+          )(source)(() =>
+            Effect.sync(() => {
+              ran = true
+            }),
+          ).pipe(Effect.exit, Effect.ensuring(Deferred.succeed(waited, true)), Effect.forkScoped)
+          // The waiter polls the lock file on the clock, past its whole wait.
+          for (let step = 0; step < 120 && !(yield* Deferred.isDone(waited)); step++) {
+            yield* TestClock.adjust("1 second")
+          }
+          const exit = yield* Fiber.join(waiting)
+          expect(polls).toBeGreaterThan(1)
+          yield* Deferred.succeed(release, true)
+          yield* Fiber.join(held)
+          expect(ran).toBe(false)
+          if (Exit.isSuccess(exit)) return yield* Effect.die("the waiter took a held lock")
+          const failure = Cause.findErrorOption(exit.cause)
+          expect(Option.map(failure, (error) => error._tag)).toEqual(
+            Option.some("CredentialStoreBusy"),
+          )
+          expect(Option.exists(failure, (error) => error.message.includes("busy"))).toBe(true)
+        }).pipe(
+          Effect.provide(Layer.merge(fileLockHost, TestClock.layer())),
+          Effect.timeout("20 seconds"),
+        ),
+    )
 
     // A write that truncates the file in place shows a reader in another
     // process an empty file for a moment. A reader that opened the file

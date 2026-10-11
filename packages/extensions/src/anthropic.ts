@@ -1736,6 +1736,16 @@ const refreshLinked = (
         if (settled._tag === "Serve" && servesFresh(settled.creds)) return settled.creds
         return yield* spendSource(source, held, cached)
       }).pipe(Effect.provideContext(context)),
+    ).pipe(
+      // Another holder kept the lock for the whole wait: nothing ran, so
+      // nothing was spent, and a later attempt may pass.
+      Effect.catchTag("CredentialStoreBusy", (busy) =>
+        Effect.fail(
+          new CredentialRefreshUnavailable({
+            message: `${busy.message}, so Claude Code's login on ${source.directory} was not refreshed; no token was spent`,
+          }),
+        ),
+      ),
     )
   })
 
