@@ -53,7 +53,7 @@
     "@effect/sql-d1": "4.0.2",
     "effect": "4.0.2"
   },
-  "packageManager": "bun@1.4.1",
+  "packageManager": "bun@1.4.3",
   "catalog": {
     "effect": "4.0.2",
     "@effect/platform-bun": "4.0.2",
@@ -66,12 +66,12 @@
     "picomatch": "^4.0.7",
     "@types/picomatch": "^4.0.3",
     "effect-bun-test": "0.4.0",
-    "solid-js": "^1.9.15",
+    "solid-js": "^1.9.17",
     "@effect/ai-anthropic": "4.0.2",
     "@effect/ai-openai": "4.0.2",
     "@effect/ai-openai-compat": "4.0.2",
     "@effect/ai-typesafe": "4.0.2",
-    "@ff-labs/fff-bun": "0.10.6"
+    "@ff-labs/fff-bun": "0.11.0"
   },
   "patchedDependencies": {
     "@effect/ai-anthropic@4.0.2": "patches/@effect%2Fai-anthropic@4.0.2.patch",
