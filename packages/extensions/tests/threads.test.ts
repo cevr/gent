@@ -524,6 +524,23 @@ describe("threads", () => {
             )
             expect(reasons).toEqual([["spawned"], ["spawned"], ["spawned"], ["spawned"]])
             yield* Deferred.succeed(rig.gate, true)
+            // Once the child on b ended its first step, b is open again: with
+            // three live caches on a and one on b, a child started now goes to b.
+            yield* rig.listUntil(
+              rig.starter,
+              (rows) =>
+                rows.length === 4 &&
+                rows.every((row) => row.status === "idle" && row.preview.length > 0),
+              "the burst's rounds end",
+            )
+            const late = yield* rig.start(rig.starter, THREAD_TASK)
+            const latePlaced = yield* waitFor(
+              placementsOf(rig.client, late),
+              (placements) => placements.length > 0,
+              4_000,
+              "the late thread is placed",
+            )
+            expect(latePlaced[0]).toEqual({ reason: "spawned", slot: b })
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,
