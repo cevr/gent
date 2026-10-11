@@ -5355,6 +5355,65 @@ describe("linked rotation: a held rotation gent cannot read", () => {
   )
 
   it.scopedLive(
+    "a held rotation gent cannot move aside blocks every login on its directory, a new sign-in included, until the file is moved by hand",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const authDirectory = path.join(yield* fs.makeTempDirectoryScoped(), "auth")
+        const rotations = path.join(authDirectory, ".rotations", "anthropic")
+        const file = path.join(rotations, LINKED_KEY)
+        yield* fs.makeDirectory(rotations, { recursive: true })
+        yield* fs.writeFileString(file, "{torn")
+        const store = { lockSourceRotation: yield* storeRotationLock(authDirectory, "anthropic") }
+        // The rotations directory takes no new name, so the move's link fails.
+        yield* fs.chmod(rotations, 0o500)
+        yield* Effect.addFinalizer(() => fs.chmod(rotations, 0o700).pipe(Effect.ignore))
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = numberedEndpoint()
+        const driver = yield* linkedDriver("darwin", keychain.spawner)
+        const signIn = linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, store)
+        // The failure names the file and the step that clears it, and no sign-in.
+        const namesTheManualStep = (message: string) =>
+          message.includes(LINKED_DIRECTORY) &&
+          message.includes(file) &&
+          message.includes("by hand") &&
+          !message.includes("Sign in again")
+        const first = yield* resolveFailure(driver, signIn, endpoint.respond)
+        expect(Option.exists(first, (error) => namesTheManualStep(error.message))).toBe(true)
+        expect(
+          first.pipe(Option.flatMap((error) => Option.fromUndefinedOr(error.credentialFailure))),
+        ).toEqual(Option.some("Unavailable"))
+        // Claude Code signs in again: the new login serves while it is fresh…
+        const now = yield* Clock.currentTimeMillis
+        yield* keychain.write(LINKED_SERVICE, {
+          account: "alice",
+          blob: claudeBlob("fake-new-login", now + 3600000),
+        })
+        const served = yield* sendThrough(driver, signIn, endpoint.respond)
+        expect(served.authorization).toBe("Bearer fake-new-login")
+        expect(served.refreshTokens).toEqual([])
+        // …and its refresh is blocked all the same: the sign-in did not clear the file.
+        endpoint.refuseNext()
+        const refused = yield* sendExpectingFailure(driver, signIn, endpoint.respond)
+        expect(Option.exists(refused.request, namesTheManualStep)).toBe(true)
+        expect(refused.sent).toEqual([])
+        expect(yield* fs.readFileString(file)).toBe("{torn")
+        expect(yield* fs.readDirectory(rotations)).toEqual([LINKED_KEY])
+        // The file is moved out by hand: the refused login refreshes, once.
+        yield* fs.chmod(rotations, 0o700)
+        const kept = path.join(authDirectory, "kept-rotation")
+        yield* fs.rename(file, kept)
+        const cleared = yield* sendThrough(driver, signIn, endpoint.respond)
+        expect(cleared.refreshTokens).toEqual(["fake-new-login-refresh"])
+        expect(cleared.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(yield* fs.readFileString(kept)).toBe("{torn")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
     "a move aside whose record cannot be written keeps one sibling however often it is retried, and lands on it once the disk takes writes",
     () =>
       Effect.gen(function* () {

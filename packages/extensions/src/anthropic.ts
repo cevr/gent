@@ -1495,12 +1495,25 @@ const settleQuarantined = (
     return Settled.cases.Serve.make({ creds: read.creds })
   })
 
+/**
+ * A rotation gent can neither read nor move aside: every settle finds the
+ * file again and blocks whatever login the source holds, so a new sign-in
+ * does not clear it; only moving the file by hand does. Its message is the
+ * whole failure, with no sign-in hint after it.
+ */
+class LinkedRotationStuck extends Schema.TaggedError<LinkedRotationStuck>()("LinkedRotationStuck", {
+  message: Schema.String,
+}) {}
+
 /** The failure of a refresh a rotation gent cannot read blocks: nothing is spent. */
 const linkedBlocked = (source: LinkedSource, file: string, movedAside: boolean) => {
-  let where = `at ${file}, which it could not move aside`
-  if (movedAside) where = `moved aside to ${file}`
+  if (!movedAside) {
+    return new LinkedRotationStuck({
+      message: `gent holds a token rotation for ${source.directory} it cannot read at ${file} and could not move aside, so it spends no login on that directory, a new Claude Code sign-in included. Move that file out of its directory by hand (keep it: it may hold the login's only live token), and gent uses the login there again`,
+    })
+  }
   return new ProviderAuthError({
-    message: `gent holds a token rotation for ${source.directory} it cannot read, ${where}; the login there may be spent, so gent spends nothing until Claude Code signs in again on that directory`,
+    message: `gent holds a token rotation for ${source.directory} it cannot read, moved aside to ${file}; the login there may be spent, so gent spends nothing until Claude Code signs in again on that directory`,
     credentialFailure: "Unavailable",
   })
 }
@@ -1713,7 +1726,11 @@ const refreshLinked = (
   source: LinkedSource,
   lock: LockSourceRotation,
   cached: Option.Option<ClaudeCredentials>,
-): Effect.Effect<ClaudeCredentials, CredentialFailure, LinkedIORequirements> =>
+): Effect.Effect<
+  ClaudeCredentials,
+  CredentialFailure | LinkedRotationStuck,
+  LinkedIORequirements
+> =>
   Effect.gen(function* () {
     const context = yield* Effect.context<LinkedIORequirements>()
     return yield* lock(source.key)((held) =>
@@ -1859,7 +1876,7 @@ interface SourceIO<R> {
   ) => Effect.Effect<Option.Option<ClaudeCredentials>, never, R>
   readonly refresh: (
     held: Option.Option<ClaudeCredentials>,
-  ) => Effect.Effect<ClaudeCredentials, CredentialFailure, R>
+  ) => Effect.Effect<ClaudeCredentials, CredentialFailure | LinkedRotationStuck, R>
 }
 
 /**
@@ -1889,12 +1906,19 @@ const makeSourceCredentialCache = <R>(
       // denied, OAuth 4xx); only a refresh that returns an expired token
       // gets the generic hint. A linked directory's failure keeps the
       // reason it proved, so an unpinned turn moves past a refused login.
+      // A rotation stuck in gent's store names its own remedy: no hint.
       refresh: (held) =>
         Effect.gen(function* () {
           const refreshed = yield* io.refresh(held).pipe(
             Effect.provideContext(ioContext),
             Effect.mapError((cause): CredentialFailure => {
               if (cause._tag === "CredentialRefreshUnavailable") return cause
+              if (cause._tag === "LinkedRotationStuck") {
+                return new ProviderAuthError({
+                  message: cause.message,
+                  credentialFailure: "Unavailable",
+                })
+              }
               const message = `${subject} sign-in failed: ${cause.message}. ${hint}`
               if (source._tag === "Primary") return new ProviderAuthError({ message, cause })
               return new ProviderAuthError({
