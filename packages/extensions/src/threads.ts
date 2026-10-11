@@ -1588,9 +1588,12 @@ const nextEndOf = (ends: PubSub.Subscription<RoundEnded>, round: string) =>
 /**
  * Closes a round a stop reached. The stopped turn's own `turnAfter` records
  * the end, with the turn's text and bill (a round records what it spent,
- * stopped or not), so the stop waits for it while the turn runs. A round
- * whose turn already ended is recorded from its receipt; one whose turn
- * never ran, or held out past `STOP_SETTLE`, is closed here with no bill.
+ * stopped or not), so the stop waits for it while the turn runs, unless the
+ * round already ended. A round whose turn already ended is recorded from its
+ * receipt, and one whose turn never reached the branch is closed here with
+ * no bill. A turn that reached the branch and holds out past `STOP_SETTLE`
+ * (an uninterruptible tool finishing its own work) keeps its round open,
+ * stopped: its end records the round, bill and all, when it comes.
  */
 const settleStopped = Effect.fn("Threads.settleStopped")(function* (
   round: RoundRow,
@@ -1598,21 +1601,27 @@ const settleStopped = Effect.fn("Threads.settleStopped")(function* (
   running: boolean,
 ) {
   const rounds = yield* ThreadRounds
+  const reread = Effect.map(
+    rounds.round(round.round),
+    Option.getOrElse(() => round),
+  )
+  const before = yield* reread
+  if (Predicate.isNotNull(before.ended_at)) return
   if (running) yield* Effect.timeoutOption(nextEndOf(ends, round.round), STOP_SETTLE)
-  const current = Option.getOrElse(yield* rounds.round(round.round), () => round)
+  const current = yield* reread
   if (Predicate.isNotNull(current.ended_at)) return
   const recorded = yield* recordedOutcome(current)
-  yield* endRound(
-    current,
-    Option.getOrElse(recorded, () => stoppedOutcome),
-  )
+  if (Option.isSome(recorded)) return yield* endRound(current, recorded.value)
+  if (yield* admitted(current)) return
+  yield* endRound(current, stoppedOutcome)
 })
 
 /**
  * Stops every turn the thread runs now, and closes its open round as
  * interrupted. The round is marked stopped first, so its end wakes nobody,
- * and the stop returns once the round is closed. `key` names a repeat of the
- * same stop.
+ * and the stop returns once the round is closed, or once `STOP_SETTLE`
+ * passed while its turn holds out (the turn's end closes it). `key` names a
+ * repeat of the same stop.
  */
 const stopThread = Effect.fn("Threads.stop")(function* (
   thread: string,

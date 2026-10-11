@@ -947,9 +947,12 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     closes its open round as stopped (no wake), and refuses any other
     thread. The stopped turn's own `turnAfter` records the round, with its
     text and its bill: the stop marks the round stopped, stops the turn, and
-    waits for that end (up to 10 s); a turn that already ended is recorded
-    from its receipt, and a round whose turn never ran, or held out, closes
-    as interrupted with no bill. A `loopOpen` closes a stopped round whose
+    waits for that end (up to 10 s, and not at all for a round already
+    ended); a turn that already ended is recorded from its receipt, and a
+    round whose turn never reached the branch closes as interrupted with no
+    bill. A turn that reached the branch and holds out past the wait (an
+    uninterruptible tool finishing its own work) keeps its round open,
+    stopped, and its own end records it with its bill. A `loopOpen` closes a stopped round whose
     turn never reached the branch, when the stop died before closing it.
   - One thread runs at most four threads with an open round over all its
     sessions, or as many as the user's own `~/.gent/config.json` sets

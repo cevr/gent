@@ -769,6 +769,7 @@ const starterStep = (prompt: Prompt.Prompt) => {
 
 /** The tool a worker calls for a `BLOCK` round: it never returns (`blockProbe`). */
 const BLOCK_TOOL = "probe.block"
+const HOLD_TOOL = "probe.hold"
 
 const workerStep = (prompt: Prompt.Prompt, hang: Effect.Effect<void>) => {
   const text = lastUserText(prompt)
@@ -776,6 +777,10 @@ const workerStep = (prompt: Prompt.Prompt, hang: Effect.Effect<void>) => {
   if (/^BLOCK/m.test(text)) {
     if (acted(prompt)) return billed("unblocked")
     return toolCalls([{ tool: BLOCK_TOOL, id: "block-1", input: {} }])
+  }
+  if (/^HOLD/m.test(text)) {
+    if (acted(prompt)) return billed("released")
+    return toolCalls([{ tool: HOLD_TOOL, id: "hold-1", input: {} }])
   }
   const replyLine = /^REPLY (\S+) (.*)$/m.exec(text)
   if (Predicate.isNotNull(replyLine)) {
@@ -842,6 +847,7 @@ const call = (
   client: Client,
   place: SessionKey,
   calls: ReadonlyArray<readonly [tool: string, id: string, input: Schema.Json]>,
+  within = 8_000,
 ) =>
   Effect.gen(function* () {
     const before = yield* client.session.getSnapshot(place)
@@ -857,7 +863,7 @@ const call = (
         calls.every(
           ([, id], index) => toolResults(current.messages, id).length > (counts[index] ?? 0),
         ),
-      8_000,
+      within,
       `the starter ran ${calls.map(([, id]) => id).join(", ")}`,
     )
     return calls.map(([, id]) => toolResults(snapshot.messages, id).at(-1))
@@ -1011,6 +1017,34 @@ const blockProbe = (entered: Deferred.Deferred<boolean>) =>
           params: Schema.Struct({}),
           output: Schema.String,
           execute: () => Effect.andThen(Deferred.succeed(entered, true), Effect.never),
+        }),
+      )
+    }),
+  })
+
+/**
+ * A tool that holds its turn until `release`, and lets no stop cut it short:
+ * it runs uninterruptible, as a tool that must finish its own cleanup does.
+ */
+const holdProbe = (entered: Deferred.Deferred<boolean>, release: Deferred.Deferred<boolean>) =>
+  defineExtension({
+    id: "threads-hold-probe",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: HOLD_TOOL,
+          description: "Hold until released.",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () =>
+            Effect.uninterruptible(
+              Deferred.succeed(entered, true).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as("released"),
+              ),
+            ),
         }),
       )
     }),
@@ -1530,6 +1564,56 @@ describe("thread round ownership", () => {
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.live(
+    "a round whose stopped turn holds out past the stop's wait keeps its bill when the turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<boolean>()
+          const release = yield* Deferred.make<boolean>()
+          const { client, sessionId, branchId } = yield* roundHarness({
+            extensions: [holdProbe(entered, release)],
+          })
+          // Released before the server closes, so a failed check cannot hang its close.
+          yield* Effect.addFinalizer(() => Deferred.succeed(release, true))
+          const starter = { sessionId, branchId }
+          const impl = yield* startWorker(client, starter, "start-impl")
+          const [sent] = yield* call(client, starter, [
+            ["thread.send", "send-hold", { thread: impl.thread, message: "HOLD" }],
+          ])
+          const round = decodeRound(sent?.result)
+          yield* Deferred.await(entered)
+          // The stop waits for the turn's end (10 s) and returns; the turn runs on.
+          const [stopped] = yield* call(
+            client,
+            starter,
+            [["thread.stop", "stop-hold", { thread: impl.thread }]],
+            20_000,
+          )
+          expect(stopped?.result).toMatchObject({ round: round.round })
+          const [open] = yield* call(client, starter, [
+            ["thread.round", "read-held", { round: round.round }],
+          ])
+          expect(open?.result).toMatchObject({ status: "open" })
+          yield* Deferred.succeed(release, true)
+          const read = yield* readRoundUntil(
+            client,
+            starter,
+            round.round,
+            "read-released",
+            (text) => text.includes('"status":"ended"'),
+          )
+          expect(read?.result).toMatchObject({
+            status: "ended",
+            stopped: true,
+            usage: { input: 50, output: 10 },
+          })
+          expect(wakes((yield* client.session.getSnapshot(starter)).messages)).toEqual([])
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
   )
 
   it.live(
