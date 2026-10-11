@@ -906,7 +906,10 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     or ended with its text, reply (null when none was given), flags and
     usage. `thread.reply({ value })` keeps a JSON value on the open round of
     the caller's branch when the round asked for one; the last call wins, and
-    no schema validates it. The `Threads` service (a Tag other extensions
+    no schema validates it. It is offered to every agent at all times and
+    refuses a call when no open round there asked for a value: a tool list
+    that changed per round would change the request and break the thread's
+    cached prompt. The `Threads` service (a Tag other extensions
     read with `Effect.serviceOption`, as delegate reads `Workspaces`) carries
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.

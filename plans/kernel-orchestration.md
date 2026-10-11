@@ -106,7 +106,7 @@ A delegate child is a thread: one round on the `delegate` agent, ending with a w
 
 ### P2. Rounds as values
 
-- **Structured reply**: `thread.send`'s optional `reply` describes the value the round must return. For that round the thread gets the tool `thread.reply({ value })`. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
+- **Structured reply**: `thread.send`'s optional `reply` describes the value the round must return. The thread answers with the tool `thread.reply({ value })`. The tool is offered to every agent at all times, not only during a round that asks: a tool list that changed per round would change the request's tools and break the thread's cached prompt, so the tool stays and refuses a call when no open round on the caller's branch asked for a value. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
 - **Usage**: every round records its usage and cost, so a program can budget by them.
 
 ### P3. Machines: `@gent/machines`, `packages/extensions/src/machines.ts`
