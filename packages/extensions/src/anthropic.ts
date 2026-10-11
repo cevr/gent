@@ -1757,7 +1757,7 @@ const refreshLinked = (
         }
         if (settled._tag === "Unknown") {
           return yield* new CredentialRefreshUnavailable({
-            message: `Claude Code's login on ${source.directory} could not be read (${settled.reason}), and gent holds a token rotation for it it cannot read at ${settled.file}; no token was spent`,
+            message: `Claude Code's login on ${source.directory} could not be read (${settled.reason}), and gent holds a token rotation for that directory which it cannot read, at ${settled.file}; no token was spent`,
           })
         }
         if (settled._tag === "Serve" && servesFresh(settled.creds)) return settled.creds
