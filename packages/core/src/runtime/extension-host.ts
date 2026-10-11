@@ -1897,7 +1897,12 @@ const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(functio
   }
   yield* provideExtensionModules
   const platform = yield* GentPlatform
-  const specifier = `${filePath}?${SERVED_MODULE_QUERY}=${encodeURIComponent(file.version)}`
+  const fs = yield* FileSystem.FileSystem
+  // Bun loads a module at its real path. Imported through a link (on macOS
+  // the temp root `/var` is one), its resolver misses a file added since it
+  // last listed the linked directory, so the import names the real path.
+  const realPath = yield* fs.realPath(filePath).pipe(Effect.orElseSucceed(() => filePath))
+  const specifier = `${realPath}?${SERVED_MODULE_QUERY}=${encodeURIComponent(file.version)}`
   yield* platform.serveModule(specifier, file.build.success)
   const mod = yield* Effect.tryPromise({
     try: () => importExtensionModule(specifier),

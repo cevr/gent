@@ -13,7 +13,7 @@
  * API. Surrounding runtime code yields `GentPlatform` and stays portable.
  */
 
-// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter resolves its own executable once, before any Effect runs
+// oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter resolves its own executable once, before any Effect runs, and a served module's real path inside a sync plugin step
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- the platform adapter reads Bun's build record, whose paths are relative to the process's directory
@@ -166,10 +166,26 @@ const bundleBunModule = (entry: string): Effect.Effect<ModuleBundle, ModuleBundl
   )
 
 /**
- * The code each served specifier imports as (`serveModule`). Bun keeps a
- * module for the process lifetime, so its code stays here as long.
+ * The code each served specifier imports as (`serveModule`), keyed by the
+ * path Bun loads it at. Bun keeps a module for the process lifetime, so its
+ * code stays here as long.
  */
 const servedModules = new Map<string, string>()
+
+/**
+ * The specifier as Bun's loader names it: the file's real path, with every
+ * link resolved, and the query. On macOS the temp root `/var` links to
+ * `/private/var`, so a file reached through a link loads under another path
+ * than the one it was served at. A path that does not resolve stays as given.
+ */
+const loadedSpecifier = (specifier: string): string => {
+  const [file = specifier, ...query] = specifier.split("?")
+  const real = Result.getOrElse(
+    Result.try(() => realpathSync(file)),
+    () => file,
+  )
+  return [real, ...query].join("?")
+}
 
 /**
  * `GentPlatform.serveModule` on Bun: one runtime plugin, registered with the
@@ -180,7 +196,7 @@ const servedModules = new Map<string, string>()
 const serveBunModule = (specifier: string, code: string): Effect.Effect<void> =>
   Effect.sync(() => {
     const first = servedModules.size === 0
-    servedModules.set(specifier, code)
+    servedModules.set(loadedSpecifier(specifier), code)
     if (!first) return
     Bun.plugin({
       name: "gent-served-modules",

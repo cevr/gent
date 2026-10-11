@@ -4705,6 +4705,33 @@ export default { manifest: { id: "home-user" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  // Bun loads a module at its real path; on macOS `/var` (the temp root) is a
+  // link to `/private/var`, so a served module keyed by the path it was
+  // reached through was never found.
+  it.scopedLive("an extension reached through a symlinked directory loads", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const { home: real, userDir: realDir } = yield* makeExtensionHome("gent-loader-linked-")
+      yield* fs.writeFileString(
+        path.join(realDir, "linked.ts"),
+        'import { Effect } from "effect"\nexport default { manifest: { id: "linked" }, setup: Effect.void }\n',
+      )
+      const links = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "gent-loader-link-" }),
+      )
+      const home = path.join(links, "home")
+      yield* fs.symlink(real, home)
+
+      const result = yield* discoverProfileExtensions({ home, cwd: noProjectCwd })
+
+      expect(result.failed).toEqual([])
+      expect(result.active.map((extension) => extension.manifest.id)).toEqual([
+        ExtensionId.make("linked"),
+      ])
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("a setup that returns the old contribution object is rejected", () =>
     Effect.gen(function* () {
       // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions -- This old-contract setup is a boundary rejection fixture.
