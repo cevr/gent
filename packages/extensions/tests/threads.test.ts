@@ -22,6 +22,7 @@ import type * as Prompt from "effect/ai/Prompt"
 import { BunSqlite } from "@gent/core/host-bun"
 import { workspaceIdForCwd } from "@gent/core/host"
 import {
+  CredentialSlot,
   DEFAULT_SESSION_NAME,
   defineExtension,
   ExtensionContext,
@@ -217,10 +218,27 @@ const threadRig = Effect.gen(function* () {
   ) => waitFor(list(at), ready, 4_000, label)
   const start = (at: SessionKey, task: string) =>
     Effect.flatMap(one(at, op("thread.start", { task })), decodeStarted)
+  /** A thread started on the credential `account`. */
+  const startOn = (at: SessionKey, task: string, account: string) =>
+    Effect.flatMap(one(at, op("thread.start", { task, account })), decodeStarted)
   const stop = (at: SessionKey, thread: string) =>
     Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
-  return { client, cwd, starter, gate, act, op, one, list, listUntil, start, stop }
+  return { client, cwd, starter, gate, act, op, one, list, listUntil, start, startOn, stop }
 })
+
+type RigClient = Effect.Success<typeof threadRig>["client"]
+
+/** The credential label each model step of the branch went out on, from its durable history. */
+const stepSlots = (client: RigClient, target: SessionKey) =>
+  client.session.events(target).pipe(
+    Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+    Stream.flatMap((envelope) => {
+      if (envelope.event._tag !== "StreamEnded") return Stream.empty
+      return Stream.make(envelope.event.credential?.slot ?? "none")
+    }),
+    Stream.runCollect,
+    Effect.map((slots) => Array.from(slots)),
+  )
 
 const decodeStarted = Schema.decodeEffect(StartedOutput)
 const decodeListed = Schema.decodeEffect(ListedOutput)
@@ -365,6 +383,101 @@ describe("threads", () => {
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+
+  it.live(
+    "a thread started with an account runs its rounds on that credential, and the starter keeps its own",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          yield* Deferred.succeed(rig.gate, true)
+          const started = yield* rig.startOn(rig.starter, THREAD_TASK, "personal")
+          const stored = yield* rig.client.session.get({ sessionId: started.sessionId })
+          expect(stored?.admission?.runSpec?.credentialSlot).toBe(CredentialSlot.make("personal"))
+          yield* rig.listUntil(
+            rig.starter,
+            (rows) => rows[0]?.status === "idle" && rows[0].preview.length > 0,
+            "the thread's round ends",
+          )
+          const threadSlots = yield* stepSlots(rig.client, started)
+          expect(threadSlots.length).toBeGreaterThan(0)
+          expect(threadSlots.every((slot) => slot === "personal")).toBe(true)
+          // The starter's run names no pin: it walks its order, whose first is the default.
+          const starterSlots = yield* stepSlots(rig.client, rig.starter)
+          expect(starterSlots.length).toBeGreaterThan(0)
+          expect(starterSlots.every((slot) => slot === "default")).toBe(true)
+          const starter = yield* rig.client.session.get({ sessionId: rig.starter.sessionId })
+          expect(starter?.admission?.runSpec?.credentialSlot).toBeUndefined()
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a thread with no agent keeps its starter's account, and a named agent's thread runs on its own order",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* threadRig
+          yield* Deferred.succeed(rig.gate, true)
+          const pinned: SessionKey = yield* rig.client.session.create({
+            cwd: rig.cwd,
+            admission: { runSpec: { credentialSlot: CredentialSlot.make("work") } },
+          })
+          const pinOf = (call: ThreadOp) =>
+            Effect.gen(function* () {
+              const started = yield* Effect.flatMap(rig.one(pinned, call), decodeStarted)
+              const stored = yield* rig.client.session.get({ sessionId: started.sessionId })
+              return stored?.admission?.runSpec?.credentialSlot
+            })
+          expect(yield* pinOf(rig.op("thread.start", { task: THREAD_TASK }))).toBe(
+            CredentialSlot.make("work"),
+          )
+          expect(
+            yield* pinOf(rig.op("thread.start", { task: THREAD_TASK, account: "personal" })),
+          ).toBe(CredentialSlot.make("personal"))
+          expect(
+            yield* pinOf(rig.op("thread.start", { task: THREAD_TASK, agent: "worker" })),
+          ).toBeUndefined()
+          expect(
+            yield* pinOf(
+              rig.op("thread.start", { task: THREAD_TASK, agent: "worker", account: "personal" }),
+            ),
+          ).toBe(CredentialSlot.make("personal"))
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live("a thread's account survives a handoff", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* threadRig
+        yield* Deferred.succeed(rig.gate, true)
+        const started = yield* rig.startOn(rig.starter, THREAD_TASK, "personal")
+        yield* rig.listUntil(
+          rig.starter,
+          (rows) => rows[0]?.status === "idle" && rows[0].preview.length > 0,
+          "the thread's first round ends",
+        )
+        const handoff: SessionKey = yield* rig.client.session.create({
+          cwd: rig.cwd,
+          parentSessionId: started.sessionId,
+          parentBranchId: started.branchId,
+          continueThread: true,
+        })
+        const stored = yield* rig.client.session.get({ sessionId: handoff.sessionId })
+        expect(stored?.admission?.runSpec?.credentialSlot).toBe(CredentialSlot.make("personal"))
+        // The thread's next round runs on its newest session.
+        const round = yield* turnEnds(rig.client.session.events(handoff), 1)
+        yield* rig.client.message.send({ ...handoff, content: `${THREAD_TASK} again` })
+        yield* Fiber.join(round)
+        const slots = yield* stepSlots(rig.client, handoff)
+        expect(slots.length).toBeGreaterThan(0)
+        expect(slots.every((slot) => slot === "personal")).toBe(true)
+      }).pipe(Effect.timeout("12 seconds")),
+    ),
   )
 
   // A thread is a child session, named as a delegate child is: the TUI heads

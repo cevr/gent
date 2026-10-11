@@ -54,6 +54,7 @@ import {
   AgentDefinition,
   AgentName,
   BranchId,
+  CredentialSlot,
   defineResource,
   ExtensionContext,
   type ExtensionContextService,
@@ -1919,6 +1920,12 @@ const StartParams = Schema.Struct({
     }),
   ),
   effort: Schema.optionalKey(ReasoningEffort),
+  account: Schema.optionalKey(
+    CredentialSlot.annotate({
+      description:
+        'The credential label from /auth (e.g. "personal") that every round of the thread runs on, alone: a refusal on it fails the round and never moves to another credential. Default: a named agent walks the provider\'s order; with no agent, yours.',
+    }),
+  ),
   cwd: Schema.optionalKey(
     Schema.String.annotate({
       description:
@@ -1993,7 +2000,10 @@ type StoredAdmission = NonNullable<StoredSession["admission"]>
  * The run a thread starts with: the named agent, else the starter's agent
  * and admission, as a `/btw` fork runs. Model attempts are capped, unless
  * the run names a cap. `instructions` add to the run's addendum, and `tools`
- * narrow its tools, keeping `thread.reply`.
+ * narrow its tools, keeping `thread.reply`. `account` pins the run to that
+ * credential (`RunSpec.credentialSlot`); a named agent runs on none unless
+ * the call names one, and a thread with no agent keeps the starter's pin.
+ * A handoff keeps its parent's admission, so the pin outlives it.
  */
 const threadAdmission = (starter: StoredSession, input: ThreadStartInput): StoredAdmission => {
   const base: StoredAdmission = Option.match(Option.fromUndefinedOr(input.agent), {
@@ -2006,6 +2016,7 @@ const threadAdmission = (starter: StoredSession, input: ThreadStartInput): Store
     ...base,
     runSpec: {
       ...base.runSpec,
+      ...omitUndefined({ credentialSlot: input.account }),
       overrides: {
         maxModelAttempts: THREAD_MAX_MODEL_ATTEMPTS,
         ...overrides,
