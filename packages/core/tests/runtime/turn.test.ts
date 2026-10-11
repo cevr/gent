@@ -5000,7 +5000,7 @@ describe("credential order", () => {
       }
 
     it.live(
-      "a turn recovered past its cache lifetime with receipts of its own resumes on its newest receipt's account and records no placement, across a second restart",
+      "a turn recovered past its cache lifetime with receipts of its own resumes on its newest receipt's account and is never placed again at its start, across a second restart",
       () => {
         const offset = { ms: 0 }
         return Effect.gen(function* () {
@@ -5030,14 +5030,21 @@ describe("credential order", () => {
             replies: { "sk-a": dyingRequest(again), "sk-b": answer("from b") },
           })
           yield* recoverAndDie(first, second, again)
-          const third = spreadRoot(world, "recovered-cold")
+          // The third refuses on a: the turn moves on from where it walks.
+          const third = spreadRoot(world, "recovered-cold", {
+            replies: { "sk-a": () => refusal(), "sk-b": answer("from b") },
+          })
           const events = yield* dieAndRecoverTail(world, first, third)
-          // The turn is past its first request: it stays on its receipt's
-          // account and is never placed again.
+          // The turn is past its first request: it goes on from its receipt's
+          // account, never placed again at its start, so b is still ahead
+          // of it when a refuses, and the move is recorded with b's receipt.
           expect(second.sent).toEqual(["sk-a"])
-          expect(third.sent).toEqual(["sk-a"])
-          expect(slotsOf(events)).toEqual([a, a, a])
-          expect(placementsOf(events)).toEqual([{ slot: a, reason: "new", from: "none" }])
+          expect(third.sent).toEqual(["sk-a", "sk-b"])
+          expect(slotsOf(events)).toEqual([a, a, b])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+          ])
           expect(placementsWithoutReceipt(events)).toEqual([])
         }).pipe(
           Effect.scoped,
