@@ -1,7 +1,7 @@
 import { FetchHttpClient, type HttpClient } from "effect/http"
 /**
  * Tools on the wire. Gent tool ids hold dots (`session.send`,
- * `delegate.start`); Anthropic and OpenAI take only `[a-zA-Z0-9_-]` names.
+ * `thread.start`); Anthropic and OpenAI take only `[a-zA-Z0-9_-]` names.
  * A direct turn (no cell) through each real driver sends wire names in its
  * tool declarations and history, and the call it reads back runs the gent tool.
  * Each driver's tool declarations are pinned byte for byte, and a call the
@@ -411,8 +411,8 @@ describe("tool names on the wire", () => {
           const providerLayer = Layer.provide(
             model,
             fakeFetchLayer(state, () => {
-              // The first request's reply calls `delegate.list`; the next one ends the turn.
-              if (state.captured.length === 1) return wire.toolCall("delegate__list")
+              // The first request's reply calls `thread.list`; the next one ends the turn.
+              if (state.captured.length === 1) return wire.toolCall("thread__list")
               return wire.text("done")
             }),
           )
@@ -433,7 +433,7 @@ describe("tool names on the wire", () => {
           yield* client.message.send({
             sessionId,
             branchId,
-            content: "list the delegates",
+            content: "list the threads",
           })
           const events = Array.from(yield* Fiber.join(turn))
 
@@ -442,15 +442,15 @@ describe("tool names on the wire", () => {
           for (const body of bodies) {
             const declared = namesOf(body.tools ?? [])
             expect(declared).toContain("session__send")
-            expect(declared).toContain("delegate__start")
+            expect(declared).toContain("thread__start")
             expect(declared.filter((name) => !WIRE_NAME.test(name))).toEqual([])
           }
           // The second request replays the first call under its wire name.
-          expect(wire.called(bodies[1] ?? {})).toEqual(["delegate__list"])
+          expect(wire.called(bodies[1] ?? {})).toEqual(["thread__list"])
           // The stored events keep the gent id, and the call ran that tool.
           expect(events.flatMap(toolRun)).toEqual([
-            "ToolCallStarted:delegate.list",
-            "ToolCallSucceeded:delegate.list",
+            "ToolCallStarted:thread.list",
+            "ToolCallSucceeded:thread.list",
           ])
         }).pipe(Effect.timeout("20 seconds")),
       ),

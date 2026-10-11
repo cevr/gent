@@ -880,7 +880,7 @@ const makeSessionMutationsService: Effect.Effect<
         // An inheriting session starts from what the source's model sees now:
         // the current context window, with hidden rows out, as in that
         // branch's own turn. A tool call still running in the source (a fork
-        // made from inside `delegate.start`) is left out with its step. The
+        // made from inside `thread.start`) is left out with its step. The
         // rows get fresh ids, so a copied window marker's anchor never
         // resolves; that is harmless, because the copy already is the window.
         if (!Predicate.isUndefined(input.historyBranchId)) {

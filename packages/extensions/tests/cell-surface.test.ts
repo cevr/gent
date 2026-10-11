@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -23,10 +24,8 @@ import {
   createE2ELayer,
   plantInFlightTurn,
   plantToolCallBinding,
-  runtimeHostContext,
   createRpcHarness,
   ensureStorageParents,
-  runToolWithCtx,
   finishPart,
   LanguageModelLayers,
   multiToolCallStep,
@@ -123,14 +122,7 @@ import {
   type FakeFetchState,
   makeFakeFetchState,
 } from "./helpers/fake-http-client.js"
-import {
-  ChildAgentHandle,
-  CancelChild,
-  DelegateEntry,
-  DelegateExtension,
-  ListChildren,
-  StartChild,
-} from "../src/delegate.js"
+import { DELEGATE_AGENT_NAME, ThreadStartTool, threadRoundText } from "../src/threads.js"
 import { SqlClient } from "effect/sql"
 import {
   platform,
@@ -1411,12 +1403,12 @@ describe("shipped model surface", () => {
 
 describe("child cell", () => {
   it.scopedLive(
-    "a child delegated from a cell runs its own cell instead of refusing as a nested outer cell",
+    "a thread delegated from a cell runs its own cell instead of refusing as a nested outer cell",
     () =>
       Effect.gen(function* () {
-        // The parent starts the child from a cell and ends its turn; the
-        // child runs its own cell. Each branch is told apart by its first
-        // user text, so the two turns never race for one script.
+        // The parent starts a delegate thread from a cell and ends its turn;
+        // the thread runs its own cell. Each branch is told apart by its
+        // first user text, so the two turns never race for one script.
         const childTask = "compute"
         const firstText = (prompt: Prompt.Prompt) =>
           prompt.content.flatMap((message) => {
@@ -1444,13 +1436,13 @@ describe("child cell", () => {
           if (parentCalls === 1) {
             return step([
               toolCallPart("cell", {
-                code: "const h = await tools.delegate.start({ todo: 'compute' }); typeof h.requestId === 'string'",
+                code: "const h = await tools.thread.start({ task: 'compute', agent: 'delegate', notify: 'starter' }); typeof h.thread === 'string'",
               }),
               finishPart({ finishReason: "tool-calls" }),
             ])
           }
-          // The turn that started the child ends here; "done" is the turn
-          // the child's completion wakes.
+          // The turn that started the thread ends here; "done" is the turn
+          // its round's end wakes.
           if (parentCalls === 2) {
             return step([textDeltaPart("started"), finishPart({ finishReason: "stop" })])
           }
@@ -1473,11 +1465,7 @@ describe("child cell", () => {
               ...fixture,
               artifactIdentity: LoadedArtifactIdentity.make("cell-child-foreground-source"),
             },
-            {
-              ...DelegateExtension,
-              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
-            },
-            // The `delegate` agent is registered by the threads, in @gent/session-tools.
+            // Threads and the `delegate` agent come with @gent/session-tools.
             {
               ...SessionToolsExtension,
               artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
@@ -1486,8 +1474,8 @@ describe("child cell", () => {
         })
         const content = "delegate from a cell"
         yield* client.message.send({ sessionId, branchId, content })
-        // The child's completion wakes the parent; the parent's reply to it
-        // is the last thing to land.
+        // The round's end wakes the parent; the parent's reply to it is the
+        // last thing to land.
         const parentMessages = yield* waitFor(
           client.message.list({ branchId }),
           (items) =>
@@ -1495,7 +1483,7 @@ describe("child cell", () => {
               (item) => item.role === "assistant" && messagePartsText(item.parts) === "done",
             ),
           12_000,
-          "the parent read the child's completion",
+          "the parent read the round's end",
         )
         const startResults = parentMessages
           .flatMap((message) => message.parts)
@@ -1503,7 +1491,7 @@ describe("child cell", () => {
         expect(startResults).toHaveLength(1)
         expect(startResults[0]).toMatchObject({ isFailure: false, result: { display: "true" } })
         const completion = parentMessages.find(
-          (item) => item.metadata?.customType === "child-completion",
+          (item) => item.metadata?.customType === "thread-round-end",
         )
         expect(completion).toBeDefined()
         expect(messagePartsText(completion?.parts ?? [])).toContain("child says 2")
@@ -1546,13 +1534,21 @@ it.scopedLive("rejects cell dispatch without a branch owner", () =>
   ),
 )
 
+/** What a test keeps of a `thread.start` result outside the kernel. */
+const ThreadHandle = Schema.Struct({
+  thread: Schema.String,
+  sessionId: SessionId,
+  branchId: BranchId,
+})
+type ThreadHandle = typeof ThreadHandle.Type
+
 describe("branch cell lifetime", () => {
   it.scopedLive(
-    "controls children across kernel reset and reads a completed child reply",
+    "controls threads across kernel reset and reads a finished thread's reply",
     () =>
       Effect.gen(function* () {
-        const handle = yield* Ref.make(Option.none<typeof ChildAgentHandle.Type>())
-        // A turn is either sent by the test or started by a child-completion message.
+        const handle = yield* Ref.make(Option.none<ThreadHandle>())
+        // A turn is either sent by the test or started by a round-end message.
         const turns: ReadonlyArray<{
           readonly send: boolean
           readonly code: string
@@ -1560,33 +1556,34 @@ describe("branch cell lifetime", () => {
         }> = [
           {
             send: true,
-            code: "const child = await tools.delegate.start({todo: 'Wait for cancellation'}); await tools['child-handle']({_tag: 'save', handle: child}); await tools['model-started']({call: 1}); true",
+            code: "const child = await tools.thread.start({task: 'Wait for the stop', agent: 'delegate', notify: 'starter'}); await tools['child-handle']({_tag: 'save', handle: child}); await tools['model-started']({call: 1}); true",
           },
           {
             send: true,
-            code: "(await tools.delegate.list({})).find((kid) => kid.requestId === child.requestId).completed === false",
+            code: "(await tools.thread.list({})).find((row) => row.thread === child.thread).openRound !== undefined",
           },
           {
             send: true,
             reset: true,
-            code: "const saved = await tools['child-handle']({_tag: 'get'}); typeof child === 'undefined' && (await tools.delegate.list({})).find((kid) => kid.requestId === saved.requestId).completed === false",
+            code: "const saved = await tools['child-handle']({_tag: 'get'}); typeof child === 'undefined' && (await tools.thread.list({})).find((row) => row.thread === saved.thread).openRound !== undefined",
           },
           {
             send: true,
-            code: "const id = (await tools['child-handle']({_tag: 'get'})).requestId; await tools.delegate.cancel({requestId: id}); true",
+            code: "const id = (await tools['child-handle']({_tag: 'get'})).thread; await tools.thread.stop({thread: id}); true",
           },
-          // The cancelled child's completion arrives as a message; no cell ever waited for it.
+          // A stopped round wakes nobody: the stopper reads how it ended.
           {
-            send: false,
-            code: "const cancelled = await tools['child-handle']({_tag: 'get'}); (await tools.delegate.list({})).find((kid) => kid.requestId === cancelled.requestId).interrupted === true",
+            send: true,
+            code: "const stopped = await tools['child-handle']({_tag: 'get'}); const last = (await tools.thread.list({})).find((row) => row.thread === stopped.thread).lastRound; last.interrupted === true && last.stopped === true",
           },
           {
             send: true,
-            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {model: 'custom/model', reasoningEffort: 'high', tools: ['cell', 'read_session', '!delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
+            code: "const finished = await tools.thread.start({task: 'Return the result', agent: 'delegate', notify: 'starter', model: 'custom/model', effort: 'high', tools: ['cell', 'read_session', '!thread.start'], instructions: 'Report the verified result'}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
           },
+          // The finished round's end arrives as a message; no cell ever waited for it.
           {
             send: false,
-            code: "const h = await tools['child-handle']({_tag: 'get'}); const reply = await tools.read_session({sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.delegate.list({}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.messageCount > 0 && reply.content.includes('verified child result')",
+            code: "const h = await tools['child-handle']({_tag: 'get'}); const reply = await tools.read_session({sessionId: h.sessionId, branchId: h.branchId}); const rows = await tools.thread.list({}); rows.length === 2 && rows.every((row) => row.openRound === undefined && row.lastRound !== undefined) && reply.messageCount > 0 && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [
@@ -1612,7 +1609,7 @@ describe("branch cell lifetime", () => {
             const system = systemTextOf(options.prompt)
             expect(system).toContain("Report the verified result")
             expect(system).toContain("- tools.read_session(input: { sessionId: string")
-            expect(system).not.toContain("- tools.delegate.start(")
+            expect(system).not.toContain("- tools.thread.start(")
           },
         })
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
@@ -1637,9 +1634,9 @@ describe("branch cell lifetime", () => {
               }),
               tool({
                 id: "child-handle",
-                description: "Save or read the test child handle outside the kernel",
-                params: Schema.TaggedUnion({ save: { handle: ChildAgentHandle }, get: {} }),
-                output: ChildAgentHandle,
+                description: "Save or read the test thread handle outside the kernel",
+                params: Schema.TaggedUnion({ save: { handle: ThreadHandle }, get: {} }),
+                output: ThreadHandle,
                 execute: Effect.fn("test.childHandle")(function* (input) {
                   if (input._tag === "save") yield* Ref.set(handle, Option.some(input.handle))
                   return yield* Effect.fromOption(yield* Ref.get(handle))
@@ -1657,11 +1654,7 @@ describe("branch cell lifetime", () => {
               ...fixture,
               artifactIdentity: LoadedArtifactIdentity.make("cell-child-fixture-source"),
             },
-            {
-              ...DelegateExtension,
-              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
-            },
-            // The `delegate` agent is registered by the threads, in @gent/session-tools.
+            // Threads and the `delegate` agent come with @gent/session-tools.
             {
               ...SessionToolsExtension,
               artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
@@ -1672,7 +1665,7 @@ describe("branch cell lifetime", () => {
         for (const [index, turn] of turns.entries()) {
           const content = `cell-child-${index}`
           const isCompletion = (item: { metadata?: { customType?: string } }) =>
-            item.metadata?.customType === "child-completion"
+            item.metadata?.customType === "thread-round-end"
           if (turn.send) yield* client.message.send({ sessionId, branchId, content })
           else completions += 1
           const messages = yield* waitFor(client.message.list({ branchId }), (items) => {
@@ -1702,12 +1695,12 @@ describe("branch cell lifetime", () => {
           expect(results.at(-1)).toMatchObject({ isFailure: false, result: { display: "true" } })
         }
         const parentMessages = yield* client.message.list({ branchId })
+        // Only the finished round woke the parent; the stopped one told its stopper.
         const notices = parentMessages.filter(
-          (item) => item.metadata?.customType === "child-completion",
+          (item) => item.metadata?.customType === "thread-round-end",
         )
-        expect(notices).toHaveLength(2)
-        expect(messagePartsText(notices[0]?.parts ?? [])).toContain("interrupted")
-        expect(messagePartsText(notices[1]?.parts ?? [])).toContain("verified child result")
+        expect(notices).toHaveLength(1)
+        expect(messagePartsText(notices[0]?.parts ?? [])).toContain("verified child result")
         const saved = yield* Effect.fromOption(yield* Ref.get(handle))
         const childMessages = yield* client.message.list({ branchId: saved.branchId })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
@@ -1868,52 +1861,53 @@ describe("branch cell lifetime", () => {
 // ── cell recovery ───────────────────────────────────────────────────────────
 
 /**
- * The delegate registry is one JSON array per parent branch under
- * `<home>/.gent/delegates`. Seeding it is how a test admits a durable child
- * the way a crashed process would have left one behind.
+ * A thread round as a lost worker leaves it: its thread session made and the
+ * round saved, never sent. The starter's next loop open sends it, as it does
+ * after a crash.
  */
-const encodeRegistry = Schema.encodeSync(Schema.fromJsonString(Schema.Array(DelegateEntry)))
-
-const seedDelegateRegistry = Effect.fn("test.seedDelegateRegistry")(function* (
-  branchId: BranchId,
-  entries: ReadonlyArray<DelegateEntry>,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const directory = `${(yield* RuntimeEnvironment).home}/.gent/delegates`
-  yield* fs.makeDirectory(directory, { recursive: true })
-  yield* fs.writeFileString(`${directory}/${branchId}.json`, encodeRegistry(entries))
-})
-
-/**
- * The leaf view `delegate.cancel` sees when the parent branch runs it. The real
- * host context carries the session facade the tool steers through, so the
- * cancellation reaches the child's loop exactly as it does in production.
- */
-const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (parent: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
+const plantUnsentRound = Effect.fn("test.plantUnsentRound")(function* (input: {
+  readonly starter: { readonly sessionId: SessionId; readonly branchId: BranchId }
+  readonly thread: { readonly sessionId: SessionId; readonly branchId: BranchId }
+  readonly task: string
 }) {
-  // Outside a loop the facade has no session control, so the cancellation the
-  // tool steers would die. The runtime is the same door the loop opens.
-  return {
-    ...(yield* runtimeHostContext(parent)),
-    extensionId: ExtensionId.make("cell-recovery"),
-    toolCallId: ToolCallId.make("delegate-cancel-call"),
-  }
+  const sql = yield* SqlClient.SqlClient
+  yield* waitFor(
+    sql<{
+      readonly name: string
+    }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'thread_rounds'`.pipe(
+      Effect.orElseSucceed(() => []),
+    ),
+    (rows) => rows.length === 1,
+    5_000,
+    "the round table exists",
+  )
+  const round = "lost-worker-round"
+  yield* sql`INSERT INTO thread_rounds ${sql.insert({
+    round,
+    thread: input.thread.sessionId,
+    number: 1,
+    starter_session_id: input.starter.sessionId,
+    starter_branch_id: input.starter.branchId,
+    starter_thread: input.starter.sessionId,
+    session_id: input.thread.sessionId,
+    branch_id: input.thread.branchId,
+    message_id: `thread-round:${round}`,
+    content: threadRoundText({
+      number: 1,
+      starter: input.starter.sessionId,
+      message: input.task,
+      reply: Option.none(),
+      notify: "starter",
+      place: Option.none(),
+    }),
+    notify: "starter",
+    started_at: 1_000,
+  })}`.pipe(Effect.orDie)
 })
 
-/**
- * Starts the recovered child and cancels it once it holds a request at the
- * model. The first `delegate.list` is what starts it: its reconcile re-sends
- * the start the lost worker never sent, and admission returns before the
- * child's turn reaches the model. A cancel sent at once can stop that turn
- * first, and the parent's next turn then takes the model reply scripted for
- * the child. `childAtModel` ends that race.
- */
-const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
+/** The start a lost worker never finished: the recovered cell reports it incomplete. */
+const expectIncompleteStart = Effect.fn("test.expectIncompleteStart")(function* (
   outer: Option.Option<Message["parts"][number]>,
-  parent: { readonly sessionId: SessionId; readonly branchId: BranchId },
-  childAtModel: Effect.Effect<void>,
 ) {
   if (Option.isNone(outer) || outer.value.type !== "tool-result")
     return yield* Effect.die("Missing recovered cell result")
@@ -1921,31 +1915,26 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
     Schema.Struct({
       operations: Schema.Array(
         Schema.Struct({
-          tool: Schema.Literal("delegate.start"),
+          tool: Schema.Literal("thread.start"),
           outcome: Schema.Literal("incomplete"),
           toolCallId: ToolCallId,
         }),
       ),
     }),
   )(outer.value.result)
-  const operation = recovered.operations[0]
-  if (Predicate.isUndefined(operation)) return yield* Effect.die("Missing unknown child operation")
-  const requestId = RequestId.make(operation.toolCallId)
-  const ctx = yield* delegateToolContext(parent)
-  const observe = runToolWithCtx(ListChildren, {}, ctx).pipe(
-    Effect.map((children) => children.find((child) => child.requestId === requestId)),
-  )
-  expect((yield* observe)?.completed).toBe(false)
-  yield* childAtModel
-  yield* runToolWithCtx(CancelChild, { requestId }, ctx)
-  const cancelled = yield* waitFor(
-    observe,
-    (observed) => observed?.completed === true,
-    2000,
-    "cancelled child completion",
-  )
-  expect(cancelled?.interrupted).toBe(true)
+  expect(recovered.operations).toHaveLength(1)
 })
+
+/** The planted round's row: whether it ended, and how. */
+const lostRoundRow = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  return yield* sql<{
+    readonly ended: number
+    readonly interrupted: number
+    readonly stopped: number
+    readonly delivered: number
+  }>`SELECT ended_at IS NOT NULL AS ended, interrupted, stopped_at IS NOT NULL AS stopped, delivered_at IS NOT NULL AS delivered FROM thread_rounds WHERE round = 'lost-worker-round'`
+}).pipe(Effect.orDie)
 
 describe("saved cell recovery through RPC", () => {
   for (const state of [
@@ -1970,7 +1959,20 @@ describe("saved cell recovery through RPC", () => {
           const recoverCell = getToolMetadata(CellTool).recover
           if (Predicate.isUndefined(recoverCell))
             return yield* Effect.die("The cell has no recover")
+          // Threads, the `delegate` agent and their hooks, as the builtin loads them.
+          const sessionTools = yield* collectTestContributions(SessionToolsExtension.setup).pipe(
+            Effect.provide(
+              Layer.mergeAll(BunServices.layer, GentPlatform.Test(), FetchHttpClient.layer),
+            ),
+          )
           const extensions: ReadonlyArray<LoadedExtension> = [
+            {
+              manifest: SessionToolsExtension.manifest,
+              scope: "builtin",
+              sourcePath: "session-tools",
+              artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
+              contributions: sessionTools,
+            },
             {
               manifest: { id: ExtensionId.make("cell-recovery") },
               scope: "builtin",
@@ -1979,8 +1981,6 @@ describe("saved cell recovery through RPC", () => {
               contributions: {
                 resources: [CellStorageResource],
                 tools: [
-                  StartChild,
-                  CancelChild,
                   tool({
                     id: "approve",
                     description: "Approve inner operation",
@@ -2016,15 +2016,35 @@ describe("saved cell recovery through RPC", () => {
               },
             },
           ]
-          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-            textStep("Recovered"),
-            // The orphaned child's own turn, once `delegate.list` restarts it
-            // after the recovery turn. It is gated and never released, so the
-            // child is still at the model when the parent cancels it.
-            { ...textStep("child"), gated: true },
-            // The parent reads the cancelled child's completion message.
-            textStep("Child cancelled"),
-          ])
+          // The lost worker's thread is told apart by its task: its turn runs
+          // when the parent's loop opens, beside the recovery turn, and holds
+          // its request at the model until the parent stops it. The parent
+          // answers the recovery turn, then stops the thread when asked.
+          const task = "Admitted before the worker was lost"
+          const threadAtModel = yield* Deferred.make<string>()
+          const parentCalls = yield* Ref.make(0)
+          let recoveredThread = Option.none<SessionId>()
+          const isThreadTurn = (prompt: Prompt.Prompt) =>
+            prompt.content.some(
+              (message) =>
+                message.role === "user" &&
+                message.content.some((part) => part.type === "text" && part.text.endsWith(task)),
+            )
+          const parentReply = (call: number) => {
+            if (call === 2 && Option.isSome(recoveredThread))
+              return Stream.fromIterable([
+                toolCallPart("thread.stop", { thread: recoveredThread.value }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            let text = "Stopped"
+            if (call === 1) text = "Recovered"
+            return Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
+          }
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            if (isThreadTurn(options.prompt))
+              return Deferred.succeed(threadAtModel, task).pipe(Effect.as(Stream.never))
+            return Ref.updateAndGet(parentCalls, (n) => n + 1).pipe(Effect.map(parentReply))
+          })
           // Keep the real server context to seed the crash gap before actor startup.
           const context = yield* Layer.build(
             createE2ELayer({
@@ -2098,36 +2118,26 @@ describe("saved cell recovery through RPC", () => {
             const turn = yield* captureTurnTools(cell)
             const bindingOf = (name: string) => Option.fromUndefinedOr(turn.toolBindings.get(name))
             if (state === "unknown-child") {
-              const selected = bindingOf("delegate.start")
+              const selected = bindingOf("thread.start")
               const identity = Option.flatMap(selected, (entry) =>
                 Option.fromUndefinedOr(entry.binding),
               )
-              if (Option.isNone(identity)) return yield* Effect.die("Missing child start binding")
-              const prompt = "Admitted before the worker was lost"
-              const admitted = yield* (yield* CellStorage).operations.admit({
+              if (Option.isNone(identity)) return yield* Effect.die("Missing thread start binding")
+              yield* (yield* CellStorage).operations.admit({
                 cell,
                 operationId: "unknown-child-start",
                 binding: identity.value,
-                input: { agent: DEFAULT_AGENT_NAME, prompt },
+                input: { task, agent: DELEGATE_AGENT_NAME, notify: "starter" },
               })
-              const toolCallId = admitted.operation.toolCallId
+              // The worker was lost after the start made the thread and saved
+              // its round, before the round was sent.
               const child = yield* client.session.create({
                 parentSessionId: sessionId,
                 parentBranchId: branchId,
+                admission: { agent: DELEGATE_AGENT_NAME },
               })
-              yield* seedDelegateRegistry(branchId, [
-                {
-                  requestId: RequestId.make(toolCallId),
-                  sessionId: child.sessionId,
-                  branchId: child.branchId,
-                  agentName: DEFAULT_AGENT_NAME,
-                  prompt,
-                  toolCallId,
-                  private: false,
-                  submitted: false,
-                  delivered: false,
-                },
-              ])
+              yield* plantUnsentRound({ starter: { sessionId, branchId }, thread: child, task })
+              recoveredThread = Option.some(child.sessionId)
             }
             if (state === "unadmitted" || state === "revoked") {
               const captured = bindingOf("cell")
@@ -2220,35 +2230,39 @@ describe("saved cell recovery through RPC", () => {
             (part) => part.type === "tool-result" && part.id === cell.toolCallId,
           )
           if (state === "unknown-child") {
-            yield* cancelRecoveredChild(
-              Option.fromUndefinedOr(outer),
-              { sessionId, branchId },
-              controls.waitForCall(1),
-            ).pipe(
-              Effect.provideContext(context),
-              Effect.provideService(CurrentWorkspaceId, workspaceId),
+            // The cell reports the start it never finished and does not run it
+            // again; the round the lost worker saved runs on, and the parent
+            // still controls its thread.
+            yield* expectIncompleteStart(Option.fromUndefinedOr(outer))
+            yield* Deferred.await(threadAtModel)
+            yield* client.message.send({ sessionId, branchId, content: "Stop the thread" })
+            const rows = yield* waitFor(
+              lostRoundRow.pipe(Effect.provideContext(context)),
+              (found) => found[0]?.ended === 1,
+              5000,
+              "the stopped round ended",
             )
-            // The cancelled child reports back, so the parent reads it in one
-            // more turn. Three model calls in all: the recovery turn, the
-            // child's gated turn, and the parent reading the completion. The
-            // recovered cell itself never replayed — that is the two results
-            // asserted above, not a fourth call.
+            expect(rows[0]).toMatchObject({ interrupted: 1, stopped: 1 })
+            // A stopped round wakes nobody: three parent calls in all, the
+            // recovery turn and the stop's two steps. The recovered cell itself
+            // never replayed (the two results asserted above).
             const settled = yield* waitFor(
               client.session.getSnapshot({ sessionId, branchId }),
               (current) =>
                 current.runtime._tag === "Idle" &&
                 current.messages.some(
-                  (message) => message.metadata?.customType === "child-completion",
+                  (message) =>
+                    message.role === "assistant" && messagePartsText(message.parts) === "Stopped",
                 ),
               5000,
-              "the cancelled child reported to the parent",
+              "the parent stopped the thread",
             )
             expect(
               settled.messages.filter(
-                (message) => message.metadata?.customType === "child-completion",
+                (message) => message.metadata?.customType === "thread-round-end",
               ),
-            ).toHaveLength(1)
-            expect(yield* controls.callCount).toBe(3)
+            ).toHaveLength(0)
+            expect(yield* Ref.get(parentCalls)).toBe(3)
           }
           // A cell with no receipt was in flight too: it is not run again.
           if (state === "completed") expect(outer).toEqual(savedResult)
@@ -2392,16 +2406,8 @@ const bracketed = tool({
 
 const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
-    StartChild,
-    '- tools.delegate.start(input: { todo: string; name?: string; context?: "fresh" | "fork"; overrides?: object; isolation?: "shared" | "snapshot" }): Promise<{ requestId: string; sessionId: string; branchId: string; workspace?: { path: string; branch: string; note?: string } }> // Start a child agent on a task',
-  ],
-  [
-    CancelChild,
-    '- tools.delegate.cancel(input: { requestId: string }): Promise<{ _tag: "Pending"; requestId: string; sessionId: string; branchId: string } | { _tag: "Completed"; requestId: string; sessionId: string; branchId: string; interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean }> // Cancel a running child on this branch. Its turn ends as interrupted; a finished child is left as it is.',
-  ],
-  [
-    ListChildren,
-    "- tools.delegate.list(input?: { completed?: boolean }): Promise<{ requestId: string; sessionId: string; branchId: string; agentName: string; completed: boolean; interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean }[]> // List every child this branch owns, from the registry. The registry survives restarts; completed is a turn receipt, no...",
+    ThreadStartTool,
+    '- tools.thread.start(input?: { task?: string; name?: string; agent?: string; model?: string; effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; cwd?: string; instructions?: string; tools?: string[]; notify?: "user" | "starter"; workspace?: { snapshot: true }; fork?: boolean }): Promise<{ thread: string; sessionId: string; branchId: string; round?: { round: string; number: number }; workspace?: { path: string; branch: string; note?: string } }> // Start a thread: a subagent, side work, or a long-lived worker',
   ],
   [
     BashTool,

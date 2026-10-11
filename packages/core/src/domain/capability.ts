@@ -828,7 +828,7 @@ export interface KeptToolCallVerdict {
 /**
  * The name a model provider sees for a tool. Provider APIs take only
  * `^[a-zA-Z0-9_-]+$`: Anthropic up to 128 characters, OpenAI up to 64. A
- * tool id may name a namespace with dots (`session.send`, `delegate.start`),
+ * tool id may name a namespace with dots (`session.send`, `thread.start`),
  * so each dot goes on the wire as `__`. `isWireToolId` keeps the mapping
  * reversible: an id is dot-separated segments of letters, digits and `-`
  * joined by single `_`, so no segment holds `__` or starts or ends with `_`.

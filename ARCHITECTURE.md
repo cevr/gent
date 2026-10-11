@@ -158,7 +158,7 @@ updates this list in the same commit.
     HTML parsing, and past-session queries happen in the cell. Receipt:
     `packages/extensions/src/cell.ts`.
 14. **A child's completion arrives as a user message, never a tool result.**
-    Receipt: `packages/extensions/src/delegate.ts`.
+    Receipt: `packages/extensions/src/threads.ts` (a `starter` round's end).
 15. **Platform edges stay explicit.** Extensions reach files, paths,
     processes, ids, and HTTP through the Effect platform services
     (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`, `HttpClient`) and resolve
@@ -2087,10 +2087,10 @@ can express as those lists, and any other patterns as `allowedTools: []`, so
 an old reader holds no tool rather than every tool. `paths` has no old form:
 an old reader drops it. A config entry writes back the keys its author used
 (`writeAuthoredPatch`), and a config write keeps an unchanged field's raw
-JSON, so a config file never gains keys for an older gent. A `delegate.start`
-call writes `RunOverrides`, the new keys only: the model-facing schema names
-nothing else, and an old or unknown key fails the call with a message that
-names the key to use. Stored and wire readers stay tolerant of unknown keys;
+JSON, so a config file never gains keys for an older gent. A `thread.start`
+call names its overrides as flat parameters (`model`, `effort`, `tools`,
+`instructions`), and the thread writes them to its run spec with the new
+keys only. Stored and wire readers stay tolerant of unknown keys;
 authoring is strict: a config entry, `AgentDefinition.make` and
 `new AgentDefinition` refuse a key the schema does not name, so TypeScript
 that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as

@@ -2558,17 +2558,26 @@ const stopThread = Effect.fn("Threads.stop")(function* (
         )
       }
       const stopped = yield* Effect.forEach(found.working, (loop) =>
-        ctx.Session.stop({
-          sessionId: loop.sessionId,
-          branchId: loop.branchId,
-          ...omitUndefined({
-            requestId: Option.getOrUndefined(
-              Option.map(key, (id) =>
-                RequestId.make(`thread-stop:${id}:${loop.sessionId}:${loop.branchId}`),
+        Effect.gen(function* () {
+          // The id names this call and the loop it stops. A tool call id is
+          // unique only in its session and may be long (a cell op's is 69
+          // characters), so it is digested with the rest, as a start's is,
+          // and the id keeps inside a request id's 128 characters.
+          const requestId = yield* Effect.transposeOption(
+            Option.map(key, (id) =>
+              Effect.map(
+                identityDigest("thread.stop", [id, loop.sessionId, loop.branchId].join("\n")),
+                (digest) => RequestId.make(`thread-stop:${digest.slice(0, 32)}`),
               ),
             ),
-          }),
-        }).pipe(Effect.as({ sessionId: loop.sessionId, branchId: loop.branchId })),
+          )
+          yield* ctx.Session.stop({
+            sessionId: loop.sessionId,
+            branchId: loop.branchId,
+            ...omitUndefined({ requestId: Option.getOrUndefined(requestId) }),
+          })
+          return { sessionId: loop.sessionId, branchId: loop.branchId }
+        }),
       )
       if (Option.isSome(open)) {
         yield* settleStopped(open.value, ends, reached || stopped.length > 0)

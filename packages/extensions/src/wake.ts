@@ -843,8 +843,8 @@ const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized
 
 /**
  * The turns a usage limit stopped since the branch's last answered turn,
- * read from the branch's durable events (as `delegate` reads a child's
- * end). A receipt that answered starts the count again; an interrupt, a
+ * read from the branch's durable events (as a thread's round reads its
+ * turn's end). A receipt that answered starts the count again; an interrupt, a
  * turn that gave up, or a failure that was not a usage limit neither counts
  * nor starts it again. The receipt of `messageId`'s own turn is left out, so
  * a repeated end of the same turn counts the same.

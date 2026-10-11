@@ -444,7 +444,7 @@ describe("defineExtension", () => {
         validateExtensionPackage(
           { id: ExtensionId.make("wire-ok") },
           {
-            tools: idsOf(["session.send", "delegate.start", "fs_read", "a-b.c_d"]),
+            tools: idsOf(["session.send", "thread.start", "fs_read", "a-b.c_d"]),
           },
         ),
       )

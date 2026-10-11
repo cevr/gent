@@ -1236,8 +1236,8 @@ describe("a bound host call", () => {
     "drops undefined optional fields from a tool result before it crosses the cell pipe",
     () =>
       Effect.gen(function* () {
-        // Schema-encoded results keep `undefined` for optional fields such as the
-        // delegate metadata session id of a private child. That is not JSON.
+        // Schema-encoded results keep `undefined` for optional fields such as a
+        // thread start's absent round. That is not JSON.
         const Metadata = Schema.Struct({
           sessionId: Schema.optional(Schema.String),
           agentName: Schema.String,
@@ -1245,7 +1245,7 @@ describe("a bound host call", () => {
         const metadata = yield* Schema.encodeEffect(Metadata)({ agentName: "main" })
         const result = Prompt.toolResultPart({
           id: toolCallId,
-          name: "delegate.start",
+          name: "thread.start",
           isFailure: false,
           providerExecuted: false,
           result: { output: "pong", metadata },
@@ -1261,14 +1261,14 @@ describe("a bound host call", () => {
         cellToolResultValue(
           Prompt.toolResultPart({
             id: toolCallId,
-            name: "delegate.start",
+            name: "thread.start",
             isFailure: true,
             providerExecuted: false,
             result,
           }),
         ).pipe(Effect.flip)
-      const plain = yield* failure({ error: "Tool 'delegate.start' failed: no such agent" })
-      expect(plain.message).toBe("Tool 'delegate.start' failed: no such agent")
+      const plain = yield* failure({ error: "Tool 'thread.start' failed: no such agent" })
+      expect(plain.message).toBe("Tool 'thread.start' failed: no such agent")
       const detailed = yield* failure({ error: "boom", code: 3 })
       expect(detailed.message).toBe('{"error":"boom","code":3}')
     }),

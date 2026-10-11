@@ -212,7 +212,7 @@ describe("builtin tool schemas", () => {
 // ── session deletion ────────────────────────────────────────────────────────
 
 /** The builtin stores that keep one `<branchId>.json` per branch. */
-const BRANCH_STATE_DIRECTORIES = ["goals", "wakes", "delegates"] as const
+const BRANCH_STATE_DIRECTORIES = ["goals", "wakes"] as const
 
 describe("session deletion", () => {
   it.scopedLive.layer(BunFileSystem.layer)(

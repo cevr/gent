@@ -547,8 +547,8 @@ const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> =>
  * `RunSpec`; their `tools` and `paths` only narrow the agent (`SessionAgent`).
  * A config entry keeps the keys its author wrote (`AuthoredAgentPatch`);
  * stored rows and the wire also carry the old keys, for an older gent
- * (`StoredRunOverrides`, `StoredAgentDefinition`). A `delegate.start` call
- * sends the new keys only (`RunOverrides`).
+ * (`StoredRunOverrides`, `StoredAgentDefinition`). A `thread.start` call
+ * writes the new keys only.
  */
 export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
   agentDefinitionFields,
@@ -866,7 +866,9 @@ const RUN_OVERRIDE_KEYS = [
  * A run's overrides as `RunSpec` stores them (`sessions.admission_json`):
  * the run fields of a stored patch, through `readStoredPatch` and
  * `writeStoredPatch`, so an old row keeps its meaning and an older gent
- * reads a new one. A caller writes them as `RunOverrides`.
+ * reads a new one. A caller writes the new keys: a `thread.start` call
+ * names its own (`model`, `effort`, `tools`, `instructions`) and the thread
+ * builds its run from them.
  */
 const StoredRunOverrides = StoredPatchFields.mapFields(
   Struct.pick([...RUN_OVERRIDE_KEYS, "modelId", "allowedTools", "deniedTools"] as const),
@@ -880,57 +882,6 @@ const StoredRunOverrides = StoredPatchFields.mapFields(
       encode: SchemaGetter.transform(writeStoredPatch),
     },
   ),
-)
-
-const RunFields = AgentPatch.mapFields(Struct.pick(RUN_OVERRIDE_KEYS))
-const runKeys: ReadonlySet<string> = new Set(RUN_OVERRIDE_KEYS)
-
-/** What replaced each old run key, for the failure that refuses it. */
-const replacedRunKeys = new Map([
-  ["modelId", "model"],
-  ["allowedTools", 'tools, ordered patterns such as ["read", "grep"]'],
-  ["deniedTools", 'tools, ordered patterns such as ["*", "!bash"]'],
-])
-
-/** The run fields, and any other key, kept for the decode to refuse. */
-const RunOverridesInput = Schema.StructWithRest(RunFields, [
-  Schema.Record(
-    Schema.String.check(Schema.makeFilter((key: string) => !runKeys.has(key))),
-    Schema.Unknown,
-  ),
-])
-
-/** One line for each key of `input` that is not a run field. */
-const refusedRunKeys = (input: typeof RunOverridesInput.Type): ReadonlyArray<string> =>
-  Object.keys(input)
-    .filter((key) => !runKeys.has(key))
-    .map((key) =>
-      Option.match(Option.fromUndefinedOr(replacedRunKeys.get(key)), {
-        onSome: (replacement) => `${key} is gone: use ${replacement}`,
-        onNone: () => `${key} is not a run override`,
-      }),
-    )
-
-/**
- * A run's overrides as a caller writes them (`delegate.start`): the new keys
- * only, so the schema a model reads names nothing else. A call with another
- * key fails, and the failure names it and, for an old key (`modelId`,
- * `allowedTools`, `deniedTools`), the key that replaced it. A dropped key
- * could give the child more than the caller asked, so none is dropped. The
- * refusal is in the decode, not in the encoded form: a model's call decodes
- * its encoded form as it streams, and the tool runner reports the decode
- * failure to the model. The run spec stores the result through
- * `StoredRunOverrides`.
- */
-export const RunOverrides = RunOverridesInput.pipe(
-  Schema.decodeTo(Schema.toType(RunFields), {
-    decode: SchemaGetter.transformEffect((input) => {
-      const refused = refusedRunKeys(input)
-      if (refused.length === 0) return Effect.succeed(input)
-      return Effect.fail(new SchemaIssue.InvalidValue({ message: refused.join("; ") }, input))
-    }),
-    encode: SchemaGetter.transform((overrides) => overrides),
-  }),
 )
 
 // ── agent resolution ────────────────────────────────────────────────────────
@@ -1170,7 +1121,6 @@ export const effectiveModelDriver = (
 export const RunSpecSchema = Schema.Struct({
   overrides: Schema.optional(StoredRunOverrides),
 })
-export type RunSpec = typeof RunSpecSchema.Type
 
 // Model-call budget
 

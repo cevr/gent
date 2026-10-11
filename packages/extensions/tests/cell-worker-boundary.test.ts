@@ -767,31 +767,31 @@ describe("Bun cell evaluation", () => {
               Effect.as({ tool: name } satisfies Schema.Json),
             ),
         },
-        "delegate.start",
-        "delegate.list",
+        "thread.start",
+        "thread.list",
         "wake",
         "wake.cancel",
         "read",
         "must-not-run",
       )
       const result = yield* kernel.evaluate(
-        "const started = await tools.delegate.start({ todo: 'x' }); started.tool",
+        "const started = await tools.thread.start({ task: 'x' }); started.tool",
       )
-      expect(result.display).toBe("delegate.start")
+      expect(result.display).toBe("thread.start")
       yield* kernel.evaluate(
-        "await tools.delegate.list(); await tools.wake({ note: 'n' }); await tools.wake.cancel({ wakeId: 'w' }); await tools['must-not-run'](3)",
+        "await tools.thread.list(); await tools.wake({ note: 'n' }); await tools.wake.cancel({ wakeId: 'w' }); await tools['must-not-run'](3)",
       )
       expect(yield* Ref.get(sent)).toEqual([
-        { id: "delegate.start", input: { todo: "x" } },
-        { id: "delegate.list", input: {} },
+        { id: "thread.start", input: { task: "x" } },
+        { id: "thread.list", input: {} },
         { id: "wake", input: { note: "n" } },
         { id: "wake.cancel", input: { wakeId: "w" } },
         { id: "must-not-run", input: 3 },
       ])
       expect((yield* kernel.evaluate("Object.keys(tools).join(',')")).display).toBe(
-        "delegate,must-not-run,read,wake",
+        "must-not-run,read,thread,wake",
       )
-      expect((yield* kernel.evaluate("Object.keys(tools.delegate).join(',')")).display).toBe(
+      expect((yield* kernel.evaluate("Object.keys(tools.thread).join(',')")).display).toBe(
         "list,start",
       )
       expect((yield* kernel.evaluate("typeof (await tools.read({ path: 'a' }))")).display).toBe(
@@ -807,17 +807,17 @@ describe("Bun cell evaluation", () => {
       const calls = yield* Ref.make(0)
       const kernel = yield* makeKernel(
         { call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)) },
-        "delegate.start",
-        "delegate.list",
+        "thread.start",
+        "thread.list",
         "read",
       )
-      const typo = yield* kernel.evaluate("await tools.delegte.start({})").pipe(Effect.flip)
+      const typo = yield* kernel.evaluate("await tools.thred.start({})").pipe(Effect.flip)
       expect(typo.message).toContain(
-        "tools.delegte is not a host tool selected for this turn. Close ids: delegate.list, delegate.start",
+        "tools.thred is not a host tool selected for this turn. Close ids: thread.list, thread.start",
       )
-      const namespace = yield* kernel.evaluate("await tools.delegate({})").pipe(Effect.flip)
+      const namespace = yield* kernel.evaluate("await tools.thread({})").pipe(Effect.flip)
       expect(namespace.message).toContain(
-        "tools.delegate is a namespace, not a tool. Its tools: delegate.start, delegate.list",
+        "tools.thread is a namespace, not a tool. Its tools: thread.start, thread.list",
       )
       // `await` probes `then`; a node is not a thenable.
       expect((yield* kernel.evaluate("typeof tools.read.then")).display).toBe("undefined")

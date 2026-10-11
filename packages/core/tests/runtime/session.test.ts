@@ -745,7 +745,7 @@ describe("SessionRuntime", () => {
             sessionId,
             branchId,
             content: "from an agent",
-            metadata: { extensionId: "@gent/delegate" },
+            metadata: { extensionId: "@gent/session-tools" },
           })
           yield* sessionRuntime.sendUserMessage({
             sessionId,

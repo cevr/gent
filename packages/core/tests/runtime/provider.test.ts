@@ -3164,19 +3164,24 @@ describe("Scripted debug model tool scenario", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
-  it.live("debug delegate starts one child that plays the tool scenario, then answers", () =>
-    Effect.gen(function* () {
-      const tools = ["delegate__start"]
-      const steps = yield* Effect.forEach([0, 1], (done) => step(done, tools, "debug delegate"))
-      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
-        ["delegate__start"],
-        [],
-      ])
-      // The child's own turn holds `debug tools`, so it runs real tools in its session.
-      expect(callsOf(steps[0] ?? [])[0]?.params).toEqual(
-        expect.objectContaining({ todo: expect.stringContaining("debug tools") }),
-      )
-    }).pipe(Effect.timeout("4 seconds")),
+  it.live(
+    "debug delegate starts one delegate thread that plays the tool scenario, then answers",
+    () =>
+      Effect.gen(function* () {
+        const tools = ["thread__start"]
+        const steps = yield* Effect.forEach([0, 1], (done) => step(done, tools, "debug delegate"))
+        expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+          ["thread__start"],
+          [],
+        ])
+        // The thread's own turn holds `debug tools`, so it runs real tools in its
+        // session; its round end comes back to the starter.
+        expect(callsOf(steps[0] ?? [])[0]?.params).toEqual({
+          task: expect.stringContaining("debug tools"),
+          agent: "delegate",
+          notify: "starter",
+        })
+      }).pipe(Effect.timeout("4 seconds")),
   )
 
   it.live("debug handoff asks for a handoff, then answers", () =>

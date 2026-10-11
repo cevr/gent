@@ -1409,8 +1409,8 @@ describe("ask_user_async", () => {
             return Effect.succeed(
               Stream.fromIterable([
                 toolCallPart(
-                  "delegate.start",
-                  { todo: childTask },
+                  "thread.start",
+                  { task: childTask, agent: "delegate", notify: "starter" },
                   { toolCallId: ToolCallId.make("start-1") },
                 ),
                 finishPart({ finishReason: "tool-calls" }),

@@ -1349,7 +1349,7 @@ export type ExtensionStateFacet = (
 /**
  * Every facet, built once per run by the provider that owns its inputs.
  * A leaf adds only the two facts a run does not carry: the tool call the
- * leaf runs under (for example the `delegate.start` replay key), and the
+ * leaf runs under (for example the `thread.start` create key), and the
  * extension id `State.changed` reports under.
  */
 export interface ExtensionHostContext {

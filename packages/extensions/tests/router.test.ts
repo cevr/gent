@@ -1134,7 +1134,7 @@ describe("router on the wire", () => {
           const providerLayer = Layer.provide(
             model,
             fakeFetchLayer(state, (_request, call) => {
-              if (call === 1) return toolReply("delegate__list")
+              if (call === 1) return toolReply("thread__list")
               return textReply(`answer ${call}`)
             }),
           )
@@ -1161,7 +1161,7 @@ describe("router on the wire", () => {
           yield* client.message.send({ sessionId, branchId, content: "hello" })
           yield* afterTurns(1)
           yield* select(selection)
-          yield* client.message.send({ sessionId, branchId, content: "list the delegates" })
+          yield* client.message.send({ sessionId, branchId, content: "list the threads" })
           const events = yield* afterTurns(2)
           return {
             models: stepModels(events),

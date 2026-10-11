@@ -399,9 +399,9 @@ describe("context handoff", () => {
               customType: "goal-context",
               extensionId: "@gent/goal",
             }),
-            typedMessage("child", "The child finished.", 5, {
-              customType: "child-completion",
-              extensionId: "@gent/delegate",
+            typedMessage("child", "The thread's round ended.", 5, {
+              customType: "thread-round-end",
+              extensionId: "@gent/session-tools",
             }),
             typedMessage("wake", "The alarm fired.", 6, {
               customType: "wake",
@@ -469,7 +469,8 @@ describe("context handoff", () => {
       const result = yield* compact({
         history: [
           typedMessage("task", "Task from your parent session: audit the loader.", 1, {
-            extensionId: "@gent/delegate",
+            customType: "thread-round",
+            extensionId: "@gent/session-tools",
           }),
           typedMessage("peer", "Also check the cache.", 2, {
             customType: "session-message",

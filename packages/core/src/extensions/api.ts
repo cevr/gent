@@ -57,8 +57,6 @@ export {
   AgentName,
   type AgentPathEntry,
   ReasoningEffort,
-  type RunSpec,
-  RunOverrides,
   scopeReaches,
 } from "../domain/agent.js"
 export {

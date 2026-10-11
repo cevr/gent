@@ -968,7 +968,7 @@ interface RelationshipStorageService {
 
   /**
    * Every session of the session's thread, and every session below any of
-   * them by parent link, at any depth: delegate children, `/btw` forks and
+   * them by parent link, at any depth: threads, `/btw` forks and
    * the handoffs of those alike. The thread is read by its key, not from its
    * first session, so a deleted first session (whose handoffs stay, detached)
    * loses none of the rest. One indexed recursive read, so its cost follows
@@ -984,7 +984,7 @@ interface RelationshipStorageService {
    *
    * A thread is the work itself, not one session's parent line: a session that
    * handed off twice has two children and both continue it. Sessions carry the
-   * thread they belong to, so this is one indexed read — a delegate run or a
+   * thread they belong to, so this is one indexed read — a started thread or a
    * `/btw` fork started its own thread when it was created and is
    * simply not in this one.
    */

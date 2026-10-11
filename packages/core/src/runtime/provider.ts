@@ -4514,8 +4514,9 @@ export const multiToolCallStep = (
  *
  * `debug threads` starts two threads with `thread.start` (one plays `debug
  * tools`, one answers at once), lists them with `thread.list`, and answers.
- * `debug delegate` starts one child with `delegate.start` (it plays `debug
- * tools`) and answers; the child's result arrives later as a message.
+ * `debug delegate` starts one `delegate` thread with `thread.start` and
+ * `notify: "starter"` (it plays `debug tools`) and answers; the thread's
+ * round end arrives later as a message.
  * `debug handoff` calls `handoff`; on a yes the new session continues the
  * thread, so the Sessions pane shows one row with two sessions.
  *
@@ -4649,9 +4650,18 @@ const THREAD_STEPS: ReadonlyArray<ScenarioStep> = [
 
 const DELEGATE_STEPS: ReadonlyArray<ScenarioStep> = [
   {
-    reasoning: "The file check is apart from this; a child does it.",
-    // The child's message holds `debug tools`, so the child plays that scenario.
-    ops: [{ tool: "delegate.start", input: { todo: "Check the greeting files (debug tools)." } }],
+    reasoning: "The file check is apart from this; a delegate thread does it.",
+    // The thread's round holds `debug tools`, so the thread plays that scenario.
+    ops: [
+      {
+        tool: "thread.start",
+        input: {
+          task: "Check the greeting files (debug tools).",
+          agent: "delegate",
+          notify: "starter",
+        },
+      },
+    ],
   },
   { reasoning: "Summarize.", ops: [] },
 ]

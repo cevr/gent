@@ -138,7 +138,7 @@ export const compareIds = (left: string, right: string): number => {
 }
 
 /**
- * The source a model writes to reach `id`: `tools.delegate.start`,
+ * The source a model writes to reach `id`: `tools.thread.start`,
  * `tools["must-not-run"]`, or `tools("read.then")` when a segment is reserved
  * or the first segment is a discovery key.
  */

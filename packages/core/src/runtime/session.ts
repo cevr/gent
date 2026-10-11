@@ -168,7 +168,7 @@ export const makeRequestDeduper = <In, A, E>(opts: {
 /*
  * Session nesting depth: one computation and one admission rule for every
  * child-session writer. `SessionMutations.createSession` spawns a session under
- * a parent (a delegate child, a `/btw` fork) and runs `admitChildSessionDepth`.
+ * a parent (a thread, a `/btw` fork) and runs `admitChildSessionDepth`.
  * A handoff (`continueThread`) is not a spawn and is not admitted.
  */
 

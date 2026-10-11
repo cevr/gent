@@ -357,7 +357,7 @@ export const extensionMetadata = (
 /**
  * Whether a turn can ask its user. A session its user drives (a top-level
  * session, or a handoff that continues its thread) always has its user
- * watching, so its wake, monitor, child-completion and slash-command turns
+ * watching, so its wake, monitor, thread round-end and slash-command turns
  * ask too. A spawned session's turn (`isSpawnedSession`) asks only when a
  * client opened it: no one watches a turn its parent, a wake or a monitor
  * opened, so an approval there declines at once. A spawned row stored before
@@ -615,7 +615,7 @@ export class Session extends Schema.Class<Session>("Session")({
    *
    * A handoff joins its parent's thread (`continueThread` on create), so work
    * that outgrew one session stays one thread. Every other session, a
-   * delegate child or a `/btw` fork included, starts its own, so side work
+   * started thread or a `/btw` fork included, starts its own, so side work
    * never joins the thread it was launched from. Storage fills it with the
    * session id when the create names none.
    */
@@ -631,7 +631,7 @@ export const sessionThread = (session: Pick<Session, "id" | "threadId">): Sessio
 
 /**
  * A spawned session: one with a parent that starts its own thread (a
- * delegate child, a `/btw` fork). A handoff also has a parent, but it joins
+ * started thread, a `/btw` fork). A handoff also has a parent, but it joins
  * the parent's thread, so it is the same user's conversation, not a spawn.
  * One rule for spawn depth (`getSessionDepth`) and for who can answer in a
  * session's turns (`turnCanAsk`).

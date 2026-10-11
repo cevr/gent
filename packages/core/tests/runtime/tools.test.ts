@@ -807,7 +807,7 @@ describe("compileToolPolicy", () => {
   test("the last pattern that matches a tool decides, and no match leaves the tool out", () => {
     const open = AgentDefinition.make({ name: AgentName.make("open"), tools: ["*", "!bash"] })
     expect(open.admitsTool("cell")).toBe(true)
-    expect(open.admitsTool("delegate.start")).toBe(true)
+    expect(open.admitsTool("thread.start")).toBe(true)
     expect(open.admitsTool("bash")).toBe(false)
     const painter = AgentDefinition.make({
       name: AgentName.make("painter"),

@@ -280,7 +280,7 @@ const searchCatalog = (
   return { ...page, nextOffset: offset + items.length }
 }
 
-/** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
+/** A call with no argument sends an empty input, as `tools.thread.list()` reads; `null` stays `null`. */
 // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
 const inputOrEmpty = (input: unknown) => {
   if (Predicate.isUndefined(input)) return {}
@@ -293,7 +293,7 @@ const isToolKey = (key: string | symbol): key is string =>
 
 /**
  * `tools` inside the cell: every selected host tool id is a callable path, so
- * `delegate.start` is `tools.delegate.start(input)`. Each node is a Proxy that
+ * `thread.start` is `tools.thread.start(input)`. Each node is a Proxy that
  * reads the current id set on access; a node can be a tool and a namespace at
  * once (`tools.wake(input)` and `tools.wake.cancel(input)`). A call sends the
  * id itself to the host, so operation records key on the tool id.

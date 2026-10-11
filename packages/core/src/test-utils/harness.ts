@@ -1866,8 +1866,8 @@ const extensionInputsForConfig = (
  * through `createDependencies`, the root the SDK builds.
  *
  * Each layer gets its own temp home and temp working directory, removed when
- * the layer's scope closes: the extensions write goal, wake and delegate
- * files under the home and prompt files under `<cwd>/.gent`, and a session
+ * the layer's scope closes: the extensions write goal and wake files
+ * under the home and prompt files under `<cwd>/.gent`, and a session
  * reads project extensions, skills and `AGENTS.md` from its cwd. A shared
  * directory would hand one test's files to the next.
  */

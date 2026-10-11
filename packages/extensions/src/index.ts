@@ -10,7 +10,6 @@ import type { HttpClient } from "effect/http"
 import { CellExtension } from "./cell.js"
 import { CompactionExtension } from "./compaction.js"
 import { ExecToolsExtension } from "./exec-tools.js"
-import { DelegateExtension } from "./delegate.js"
 import { WorkspacesExtension } from "./workspaces.js"
 import { CheckpointsExtension } from "./checkpoints.js"
 import { AgentsExtension } from "./agents.js"
@@ -80,7 +79,6 @@ export const BuiltinExtensions: ReadonlyArray<
   GuardExtension,
   WorkspacesExtension,
   CheckpointsExtension,
-  DelegateExtension,
   InteractionToolsExtension,
   SessionToolsExtension,
   ExtensionAdminExtension,
