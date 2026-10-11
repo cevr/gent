@@ -2079,6 +2079,68 @@ describe("a thread round running when the server stopped", () => {
   )
 
   it.live(
+    "an end whose saved wake target was deleted wakes the starter's current session",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const starter: SessionKey = yield* client.session.create({})
+              const impl = yield* startWorker(client, starter, "start-impl")
+              // The end was to wake a handoff of the starter, deleted since.
+              const gone: SessionKey = yield* client.session.create({
+                parentSessionId: starter.sessionId,
+                parentBranchId: starter.branchId,
+                continueThread: true,
+              })
+              yield* client.session.delete({ sessionId: gone.sessionId })
+              return { starter, impl, gone }
+            }),
+          )
+          const round = "round-target-gone"
+          yield* saveUnsentRound(home, {
+            round,
+            starter: first.starter,
+            thread: first.impl,
+            message: "ECHO answered",
+            startedAt: 0,
+          })
+          // The process died after saving the target, before the wake landed.
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`
+                UPDATE thread_rounds
+                SET ended_at = 1, text = 'answered', wake_session_id = ${first.gone.sessionId},
+                  wake_branch_id = ${first.gone.branchId}
+                WHERE round = ${round}
+              `
+            }),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const woke = yield* waitForWakes(client, first.starter, 1)
+              expect(wakeTexts(woke.messages)[0]).toContain(round)
+            }),
+          )
+          const target = yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{
+                readonly wake_session_id: string
+              }>`SELECT wake_session_id FROM thread_rounds WHERE round = ${round}`
+            }),
+          )
+          expect(target).toEqual([{ wake_session_id: first.starter.sessionId }])
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
+
+  it.live(
     "a wake sent before the process died is not sent again to the starter's handoff",
     () =>
       Effect.scoped(

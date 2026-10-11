@@ -902,7 +902,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     default) tells nobody, the user reads the thread; `"starter"` queues a
     one-line wake to the starter thread's current session, saved on the row
     before the first wake is sent, so a delivery after a crash and a handoff
-    goes where the first one went (`sourceId:
+    goes where the first one went; a saved place whose session was deleted
+    since is replaced, once, by the starter thread's current place
+    (compare-and-swap on the saved session) (`sourceId:
 "thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
     is the service's own. The one writer that marks it delivered publishes it
     to `Threads.subscribeRoundEnds`: one feed per server, since the threads'

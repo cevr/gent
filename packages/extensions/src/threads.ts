@@ -376,6 +376,8 @@ interface ThreadRoundsService {
   readonly saveWakeTarget: (
     round: string,
     place: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    /** The saved target's session this replaces; none saves the first. */
+    replacing: Option.Option<SessionId>,
   ) => Effect.Effect<
     Option.Option<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
     ThreadStorageError
@@ -626,11 +628,13 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
         ),
 
         saveWakeTarget: Effect.fn("ThreadRounds.saveWakeTarget")(
-          function* (round, place) {
+          function* (round, place, replacing) {
+            // `IS` compares a NULL as a value: a writer that saw no target, or
+            // the same deleted one, wins once, and the rest read its place.
             yield* sql`
               UPDATE thread_rounds
               SET wake_session_id = ${place.sessionId}, wake_branch_id = ${place.branchId}
-              WHERE round = ${round} AND wake_session_id IS NULL
+              WHERE round = ${round} AND wake_session_id IS ${Option.getOrNull(replacing)}
             `
             return Option.flatMap(yield* selectRound(round), wakeTargetOf)
           },
@@ -972,13 +976,20 @@ const starterPlace = Effect.fn("Threads.starterPlace")(function* (round: RoundRo
  * wake's message id derives from its source id and the place it lands, so a
  * delivery after a crash and a handoff of the starter would land a second
  * wake on the handoff; the saved place sends it where the first one went.
+ * A saved place whose session was deleted since can never take the wake:
+ * the starter's current place replaces it, once, by compare-and-swap.
  */
 const wakeTarget = Effect.fn("Threads.wakeTarget")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
   const saved = wakeTargetOf(round)
-  if (Option.isSome(saved)) return saved.value
+  if (Option.isSome(saved)) {
+    const session = yield* ctx.Session.getSession(saved.value.sessionId)
+    if (Predicate.isNotUndefined(session)) return saved.value
+  }
   const place = yield* starterPlace(round)
-  return Option.getOrElse(yield* rounds.saveWakeTarget(round.round, place), () => place)
+  const replacing = Option.map(saved, (target) => target.sessionId)
+  return Option.getOrElse(yield* rounds.saveWakeTarget(round.round, place, replacing), () => place)
 })
 
 /**
