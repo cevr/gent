@@ -953,7 +953,10 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     bill. A turn that reached the branch and holds out past the wait (an
     uninterruptible tool finishing its own work) keeps its round open,
     stopped, and its own end records it with its bill. A `loopOpen` closes a stopped round whose
-    turn never reached the branch, when the stop died before closing it.
+    turn never reached the branch, when the stop died before closing it; for
+    one whose turn did, the starter's side asks the stop again (a new request
+    id), which opens the thread's loop and stops the resumed turn, so the
+    round closes when only the starter opens.
   - One thread runs at most four threads with an open round over all its
     sessions, or as many as the user's own `~/.gent/config.json` sets
     (`{ "threads": { "maxRunning": 8 } }`; a project file cannot, as each

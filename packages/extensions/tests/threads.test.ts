@@ -2225,6 +2225,72 @@ describe("a thread round running when the server stopped", () => {
   )
 
   it.live(
+    "a round stopped while its turn ran when the process died closes when only the starter opens",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const hanging = yield* Deferred.make<boolean>()
+              const { client } = yield* createRpcClient(
+                home.layerFor(workerModels(Effect.asVoid(Deferred.succeed(hanging, true)))),
+              )
+              const starter: SessionKey = yield* client.session.create({})
+              const impl = yield* startWorker(client, starter, "start-impl")
+              const [sent] = yield* call(client, starter, [
+                [
+                  "thread.send",
+                  "send-hang",
+                  { thread: impl.thread, message: "HANG until stopped", notify: "starter" },
+                ],
+              ])
+              yield* Deferred.await(hanging)
+              return { starter, round: decodeRound(sent?.result) }
+            }),
+          )
+          // The stop marked the round, and the process died before its turn ended.
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`UPDATE thread_rounds SET stopped_at = 1 WHERE round = ${first.round.round}`
+            }),
+          )
+          const ended = (round: string) =>
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{
+                readonly ended: number
+                readonly interrupted: number
+              }>`SELECT ended_at IS NOT NULL AS ended, interrupted FROM thread_rounds WHERE round = ${round}`
+            })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              // Only the starter opens; the thread's own session is never read.
+              yield* client.session.getSnapshot(first.starter)
+              const rows = yield* waitFor(
+                home.sql(ended(first.round.round)),
+                (found) => found[0]?.ended === 1,
+                8_000,
+                "the stopped round closed",
+              )
+              expect(rows).toEqual([{ ended: 1, interrupted: 1 }])
+              const starter = yield* waitFor(
+                client.session.getSnapshot(first.starter),
+                (current) => current.runtime._tag === "Idle",
+                8_000,
+                "the starter is idle",
+              )
+              expect(wakes(starter.messages)).toEqual([])
+            }),
+          )
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
+
+  it.live(
     "a wake sent before the process died is not sent again to the starter's handoff",
     () =>
       Effect.scoped(

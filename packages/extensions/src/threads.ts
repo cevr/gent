@@ -1137,11 +1137,19 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   const recorded = yield* recordedOutcome(round)
   if (Option.isSome(recorded)) return yield* endRound(round, recorded.value)
   if (Predicate.isNotNull(round.stopped_at)) {
-    // A stop that died before it closed the round. A turn that reached the
-    // branch ends it when its loop resumes it, stopped; a round whose turn
-    // never did has no turn to end it.
-    if (yield* admitted(round)) return
-    return yield* endRound(round, stoppedOutcome)
+    // A stop that died before it closed the round. A round whose turn never
+    // reached the branch has no turn to end it. One whose turn did ends when
+    // its loop resumes the turn, and the stop may have died before it reached
+    // the loop: the starter's side asks again, which opens the thread's loop
+    // and stops the turn there. A new request id each time: a durable repeat
+    // of an earlier one returns its stored reply and reaches no loop.
+    if (!(yield* admitted(round))) return yield* endRound(round, stoppedOutcome)
+    if (!starterSide) return
+    yield* stopRoundTurn(
+      round,
+      RequestId.make(`thread-stop:${round.round}:reconcile:${yield* Clock.currentTimeMillis}`),
+    )
+    return
   }
   if (!starterSide) return
   yield* sendClaimedRound(round)
@@ -1616,6 +1624,20 @@ const settleStopped = Effect.fn("Threads.settleStopped")(function* (
   yield* endRound(current, stoppedOutcome)
 })
 
+/** Stops the round's own turn, queued or running; true when the stop reached it. */
+const stopRoundTurn = Effect.fn("Threads.stopRoundTurn")(function* (
+  round: RoundRow,
+  requestId: RequestId,
+) {
+  const ctx = yield* ExtensionContext
+  return yield* ctx.Session.stopMessage({
+    sessionId: SessionId.make(round.session_id),
+    branchId: BranchId.make(round.branch_id),
+    messageId: MessageId.make(round.message_id),
+    requestId,
+  })
+})
+
 /**
  * Stops every turn the thread runs now, and closes its open round as
  * interrupted. The round is marked stopped first, so its end wakes nobody,
@@ -1638,12 +1660,10 @@ const stopThread = Effect.fn("Threads.stop")(function* (
       let reached = false
       if (Option.isSome(open)) {
         yield* rounds.markStopped(open.value.round, yield* Clock.currentTimeMillis)
-        reached = yield* ctx.Session.stopMessage({
-          sessionId: SessionId.make(open.value.session_id),
-          branchId: BranchId.make(open.value.branch_id),
-          messageId: MessageId.make(open.value.message_id),
-          requestId: RequestId.make(`thread-stop:${open.value.round}`),
-        })
+        reached = yield* stopRoundTurn(
+          open.value,
+          RequestId.make(`thread-stop:${open.value.round}`),
+        )
       }
       const stopped = yield* Effect.forEach(found.working, (loop) =>
         ctx.Session.stop({
