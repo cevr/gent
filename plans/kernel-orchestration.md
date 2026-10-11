@@ -136,9 +136,27 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 - **The `~/.claude2` login lives in the keychain**, under `Claude Code-credentials-<first 8 hex of sha256(config dir)>`. On this laptop that is `-3ef2928b` for `$HOME/.claude2`, and there is no `.credentials.json`. The directory import reads that service on darwin and the file elsewhere. Write-back goes to the same entry.
 - **A thread pins its credential slot**: `account` becomes a run override, `credentialSlot`. This is an additive, optional key in `RUN_OVERRIDE_KEYS`, read by the credential order ahead of `authOrder`.
 
-### P6. Workspaces as tools
+### P6. A thread binds its workspace at start
 
-`workspace.create({ name, from? })` makes a Rift copy and runs the `postcreate` hooks, and `workspace.remove({ name })` removes one: both on `@gent/workspaces`, reusing `locate` and `acquire`. Today Rifts are never removed, and there is no standalone create.
+`thread.start({ workspace: { rift: { from?, name } } | { path } })` makes or attaches the copy, runs its `postcreate` hooks, and binds the thread to it before the agent starts. `thread.stop({ thread, removeWorkspace? })` removes a Rift copy it made. Both reuse `@gent/workspaces` `locate` and `acquire`. This follows T3's `t3_thread_launch` `workspaceStrategy`: a worktree made from inside the task prompt does not move the binding. Today Rifts are never removed, and there is no standalone create.
+
+## Compared with T3 Code orchestration V2 (pingdotgg/t3code `5f7294d4`, docs/orchestration-v2)
+
+- **Taken from T3**:
+  - the workspace is bound at start (P6);
+  - reviewers and verifiers default to `fresh` in machines, with a findings ledger carried in the context. T3 starts a new `delegate_task` each review round, Prime separates verification from the generator, and a reviewer's input is mostly a new diff each round, so a fresh reviewer loses little cache;
+  - round messages carry provenance metadata (an agent wrote them), as T3's `creationSource` does.
+- **Not taken**:
+  - blocking `wait` modes, which break "children wake, never block";
+  - caller-supplied `clientRequestId`, since gent derives ids from the tool call;
+  - routing as model turns, the cost machines remove.
+- **Where T3 is ahead**: native harnesses. Its Codex reviewer is the Codex app server itself. R1's shadow run measures gent's OpenAI path against it.
+- **Where gent is ahead**:
+  - state machines;
+  - an outbox from day one (T3 tracks it as a follow-up);
+  - derived idempotency on every verb (T3's launch has no retry key);
+  - structured round replies;
+  - a thread key that survives handoffs.
 
 ## Stages
 
@@ -155,7 +173,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
    - a command interrupted by a crash moves the run to `ask`;
    - a stale or conflicting answer is refused.
-4. **P4 and P6.**
+4. **P4 permits and P6 workspace binding.**
 5. **The library and baton's retirement.** An `/orchestrate` outcome prompt in `@gent/workflows` and the track program as a cell snippet. One real unit runs end to end, with a Codex pane under baton as a shadow reviewer for the first two units.
 
 ## Risks
