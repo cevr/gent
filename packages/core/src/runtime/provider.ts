@@ -735,11 +735,8 @@ export class Auth extends Context.Service<Auth, AuthService>()(
                       decodeRotation(raw).pipe(
                         Effect.asSome,
                         Effect.mapError(
-                          (cause) =>
-                            new HeldRotationUndecodable({
-                              file: rotationFileOf(provider, source),
-                              cause,
-                            }),
+                          () =>
+                            new HeldRotationUndecodable({ file: rotationFileOf(provider, source) }),
                         ),
                       ),
                   }),

@@ -316,12 +316,15 @@ export type QuarantinedRotation = typeof QuarantinedRotation.Type
 export const HeldRotation = Schema.Union([PendingRotation, QuarantinedRotation])
 export type HeldRotation = typeof HeldRotation.Type
 
-/** A held rotation's file that does not decode, at the absolute path `file`. */
+/**
+ * A held rotation's file that does not decode, at the absolute path `file`.
+ * It carries no decode issue: one can quote the file's bytes, which may hold
+ * a live token.
+ */
 export class HeldRotationUndecodable extends Schema.TaggedError<HeldRotationUndecodable>()(
   "HeldRotationUndecodable",
   {
     file: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
