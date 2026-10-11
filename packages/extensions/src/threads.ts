@@ -50,6 +50,7 @@ import {
   type ExtensionContextService,
   type ExtensionHostService,
   type ExtensionServiceError,
+  FollowUpQueueFull,
   headChars,
   headTailChars,
   latestAssistantText,
@@ -113,6 +114,7 @@ const asThreadError = (what: string) =>
         | ExtensionServiceError
         | SessionReachError
         | PlatformError.PlatformError
+        | FollowUpQueueFull
         | ThreadStorageError
         | ThreadError,
     ) => {
@@ -886,6 +888,27 @@ const sendRoundTurn = Effect.fn("Threads.sendRoundTurn")(function* (round: Round
   })
 })
 
+/**
+ * Sends a claimed round's turn. Only a full queue proves the turn is out of
+ * the thread's loop (`FollowUpQueueFull`), and the loop keeps that reply
+ * under the round's command id, so a repeat is refused the same way: the
+ * round goes with it, since an open round with no turn would hold the thread
+ * busy and take a place under the cap until a stop. Any other failure proves
+ * nothing (a reply lost after the loop admitted the turn, a concurrent repeat
+ * of the request refused as already processing): the round stays, its turn's
+ * end records it, and a retry or the starter's reconcile sends a turn that
+ * never arrived.
+ */
+const sendClaimedRound = Effect.fn("Threads.sendClaimedRound")(function* (round: RoundRow) {
+  const rounds = yield* ThreadRounds
+  yield* sendRoundTurn(round).pipe(
+    Effect.tapError((error) => {
+      if (!Schema.is(FollowUpQueueFull)(error)) return Effect.void
+      return rounds.releaseRound(round.round)
+    }),
+  )
+})
+
 /** The thread branch's messages, from the session detail. */
 const branchMessages = Effect.fn("Threads.branchMessages")(function* (round: RoundRow) {
   const ctx = yield* ExtensionContext
@@ -1110,10 +1133,24 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
     return yield* endRound(round, stoppedOutcome)
   }
   if (!starterSide) return
-  yield* sendRoundTurn(round)
+  yield* sendClaimedRound(round)
 })
 
-/** Every round this branch's thread sent, or this branch runs, whose end is not delivered. */
+/** A hook's step that fails is logged, never raised: no user watches a hook. */
+const logFailure =
+  (event: string) =>
+  <E, R>(step: Effect.Effect<void, E, R>) =>
+    step.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(event).pipe(Effect.annotateLogs({ cause: String(cause) })),
+      ),
+    )
+
+/**
+ * Every round this branch's thread sent, or this branch runs, whose end is
+ * not delivered. Each round settles on its own: one that fails is logged
+ * with its id, and the rest go on.
+ */
 const reconcileBranch = Effect.fn("Threads.reconcile")(function* () {
   const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
@@ -1125,7 +1162,11 @@ const reconcileBranch = Effect.fn("Threads.reconcile")(function* () {
   })
   yield* Effect.forEach(
     pending,
-    (round) => reconcileRound(round, round.starter_thread === thread),
+    (round) =>
+      reconcileRound(round, round.starter_thread === thread).pipe(
+        logFailure("threads.reconcile.round-failed"),
+        Effect.annotateLogs({ round: round.round }),
+      ),
     { discard: true },
   )
 })
@@ -1343,12 +1384,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   }
   const round = claim.round
   if (claim.fresh || (Predicate.isNull(round.ended_at) && !(yield* admitted(round)))) {
-    // A send that fails left the turn out of the thread's loop (a full
-    // follow-up queue refuses it), and the loop keeps that reply under the
-    // round's command id, so a repeat is refused the same way. The round
-    // goes with it: an open round with no turn would hold the thread busy
-    // and take a place under the cap until a stop.
-    yield* sendRoundTurn(round).pipe(Effect.tapError(() => rounds.releaseRound(round.round)))
+    yield* sendClaimedRound(round)
   }
   return { round: round.round, number: round.number, thread: SessionId.make(round.thread) }
 })
@@ -1872,15 +1908,6 @@ export const THREAD_LINES = [
 ]
 
 /** A hook step that fails logs and ends; the next loop open reconciles what it left. */
-const logFailure =
-  (event: string) =>
-  <E, R>(step: Effect.Effect<void, E, R>) =>
-    step.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(event).pipe(Effect.annotateLogs({ cause: String(cause) })),
-      ),
-    )
-
 const removeSessionRounds = Effect.fn("Threads.sessionDeleted")(function* (sessionId: SessionId) {
   const rounds = yield* ThreadRounds
   yield* rounds.removeSession(sessionId)

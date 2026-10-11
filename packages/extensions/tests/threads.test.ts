@@ -11,6 +11,7 @@ import {
   Predicate,
   PubSub,
   Record,
+  Result,
   Schema,
   type Scope,
   Stream,
@@ -25,6 +26,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
+  ExtensionServiceError,
   getToolId,
   messagePartsDisplayText,
   sessionThread,
@@ -224,6 +226,27 @@ const decodeStarted = Schema.decodeEffect(StartedOutput)
 const decodeListed = Schema.decodeEffect(ListedOutput)
 const decodeStopped = Schema.decodeEffect(StoppedOutput)
 const decodeStartedResult = Schema.decodeUnknownEffect(StartedResult)
+
+/** A tool another extension registered, as the host holds it: its channels erased. */
+type RegisteredTool = Parameters<typeof runToolWithCtx>[0]
+
+const decodeMessage = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))
+
+/** A registered tool run as the host runs it; it fails with its error's message. */
+const runRegistered = (
+  leaf: RegisteredTool,
+  input: Schema.Json,
+  ctx: Parameters<typeof runToolWithCtx>[2],
+): Effect.Effect<unknown, string> =>
+  // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane
+  runToolWithCtx(leaf, input, ctx).pipe(
+    Effect.mapError((error) =>
+      Option.match(decodeMessage(error), {
+        onNone: () => String(error),
+        onSome: (failure) => failure.message,
+      }),
+    ),
+  )
 
 describe("threads", () => {
   it.live(
@@ -596,8 +619,7 @@ describe("threads", () => {
           const starter: SessionKey = yield* client.session.create({ cwd })
           const run = Effect.gen(function* () {
             const host = yield* runtimeHostContext(starter)
-            // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane
-            const output: unknown = yield* runToolWithCtx(
+            const output = yield* runRegistered(
               start,
               { task: THREAD_TASK },
               {
@@ -1345,6 +1367,118 @@ describe("thread round ownership", () => {
   )
 
   it.live(
+    "a send that fails after its turn reached the thread keeps the round, and it ends with its bill",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A send can fail after the loop admitted its turn (its reply was
+          // lost, or a concurrent repeat of the same request was refused as
+          // already processing). Only a full queue proves the turn is out.
+          const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
+          const toolOf = (id: string) =>
+            Effect.fromNullishOr(
+              contributions.tools?.find((candidate) => getToolId(candidate) === id),
+            ).pipe(Effect.orDie)
+          const startTool = yield* toolOf("thread.start")
+          const sendTool = yield* toolOf("thread.send")
+          const roundTool = yield* toolOf("thread.round")
+          const resource = yield* Effect.fromNullishOr(
+            contributions.resources?.find(
+              (candidate) => candidate.id === "@gent/session-tools/threads",
+            ),
+          ).pipe(Effect.orDie)
+          const cwd = yield* makeTempDirectoryScoped("gent-threads-")
+          const home = yield* makeTempDirectoryScoped("threads-")
+          const context = yield* Layer.build(
+            createE2ELayer({ ...e2ePreset, cwd, home, providerLayer: workerModels() }),
+          )
+          const buildResource: Effect.Effect<
+            Context.Context<never>,
+            never,
+            Scope.Scope
+          > = Layer.build(resource.layer).pipe(Effect.provideContext(context), Effect.orDie)
+          const threads = yield* buildResource
+          const { client } = yield* createRpcClient(Layer.succeedContext(context))
+          const starter: SessionKey = yield* client.session.create({ cwd })
+          const lost = new ExtensionServiceError({
+            service: "ExtensionSession",
+            operation: "send",
+            message: "the reply was lost",
+          })
+          const run = (
+            leaf: RegisteredTool,
+            input: Record<string, Schema.Json>,
+            id: string,
+            reply: "kept" | "lost" = "kept",
+          ) =>
+            Effect.gen(function* () {
+              const host = yield* runtimeHostContext(starter)
+              const send: typeof host.Session.send = (params) => {
+                if (reply === "kept") return host.Session.send(params)
+                return Effect.andThen(host.Session.send(params), Effect.fail(lost))
+              }
+              return yield* Effect.result(
+                runRegistered(leaf, input, {
+                  ...host,
+                  Session: { ...host.Session, send },
+                  extensionId: SESSION_TOOLS_EXTENSION_ID,
+                  toolCallId: ToolCallId.make(id),
+                }),
+              )
+            }).pipe(
+              Effect.provideContext(Context.merge(context, threads)),
+              Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
+            )
+          const succeeded = (result: Result.Result<unknown, string>) =>
+            Result.match(result, {
+              onSuccess: (value) => Effect.succeed(value),
+              onFailure: (message) => Effect.die(message),
+            })
+          const impl = decodeThread(
+            yield* succeeded(
+              yield* run(startTool, { name: "impl", agent: "worker" }, "start-impl"),
+            ),
+          )
+          const failed = yield* run(
+            sendTool,
+            { thread: impl.thread, message: "ECHO kept through a lost reply" },
+            "send-lost",
+            "lost",
+          )
+          expect(Result.isFailure(failed) && failed.failure).toContain("the reply was lost")
+          // The turn the lost send admitted runs to its end before the retry.
+          yield* waitFor(
+            client.message.list({ branchId: impl.branchId }),
+            (messages) => messages.some((message) => message.role === "assistant"),
+            5_000,
+            "the thread's answer",
+          )
+          // No retry: the round the lost send claimed is still the thread's.
+          const sql = Context.get(context, SqlClient.SqlClient)
+          const kept = yield* sql<{
+            readonly round: string
+          }>`SELECT round FROM thread_rounds WHERE thread = ${impl.thread}`.pipe(Effect.orDie)
+          expect(kept).toHaveLength(1)
+          const round = kept[0]?.round ?? ""
+          const ended = yield* waitFor(
+            Effect.flatMap(run(roundTool, { round }, "read-lost"), succeeded),
+            (read) => textOf(read).includes('"status":"ended"'),
+            5_000,
+            "the round's end",
+          )
+          expect(ended).toMatchObject({
+            status: "ended",
+            text: "kept through a lost reply",
+            usage: { input: 100, output: 20 },
+          })
+          const worker = yield* client.session.getSnapshot(placeOf(impl))
+          expect(worker.messages.filter((message) => message.role === "user")).toHaveLength(1)
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
     "the user's own config sets the running-thread cap",
     () =>
       Effect.scoped(
@@ -1488,14 +1622,38 @@ const SendTwice = tool({
   }),
 })
 
+const ConcurrentSend = Schema.Struct({
+  round: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(Schema.String),
+})
+
+/** Two sends of one round under one key at once, as two replays of one lost call can race. */
+const SendConcurrently = tool({
+  id: "probe.send-concurrently",
+  description: "Send a thread one round under one key, twice at once.",
+  params: Schema.Struct({ thread: SessionId, message: Schema.String }),
+  output: Schema.Array(ConcurrentSend),
+  execute: Effect.fn("SendConcurrently.execute")(function* (params) {
+    const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
+    const send = threads.send({ ...params, key: "concurrent", notify: "none" }).pipe(
+      Effect.match({
+        onFailure: (error) => ({ error: error.message }),
+        onSuccess: (sent) => ({ round: sent.round }),
+      }),
+    )
+    return yield* Effect.all([send, send], { concurrency: 2 })
+  }),
+})
+
 const decodeHeard = Schema.decodeUnknownSync(Heard)
 const decodeRounds = Schema.decodeUnknownSync(Schema.Array(RoundHandle))
+const decodeConcurrent = Schema.decodeUnknownSync(Schema.Array(ConcurrentSend))
 
 const ServiceProbe = defineExtension({
   id: "threads-service-probe",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", QuietRound, SendTwice)
+    yield* host.register("tool", QuietRound, SendTwice, SendConcurrently)
   }),
 })
 
@@ -1559,6 +1717,45 @@ describe("the Threads service", () => {
   )
 
   it.live(
+    "two sends of one round under one key at once keep the round, and it ends with its bill",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* roundHarness({
+            extensions: [ServiceProbe],
+          })
+          const starter = { sessionId, branchId }
+          const impl = yield* startWorker(client, starter, "start-impl")
+          const [both] = yield* call(client, starter, [
+            [
+              "probe.send-concurrently",
+              "concurrent-1",
+              { thread: impl.thread, message: "ECHO sent twice at once" },
+            ],
+          ])
+          expect(both?.failed).toBe(false)
+          const results = decodeConcurrent(both?.result)
+          expect(results.filter((result) => Predicate.isNotUndefined(result.error))).toEqual([])
+          const round = results.find((result) => Predicate.isNotUndefined(result.round))?.round
+          if (Predicate.isUndefined(round)) {
+            return yield* Effect.die(`no round: ${textOf(both?.result)}`)
+          }
+          const read = yield* readRoundUntil(client, starter, round, "read-concurrent", (text) =>
+            text.includes('"status":"ended"'),
+          )
+          expect(read?.result).toMatchObject({
+            status: "ended",
+            text: "sent twice at once",
+            usage: { input: 100, output: 20 },
+          })
+          const worker = yield* client.session.getSnapshot(placeOf(impl))
+          expect(worker.messages.filter((message) => message.role === "user")).toHaveLength(1)
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
     "a retried send while its round runs returns that round, not a refusal, and sends no second turn",
     () =>
       Effect.scoped(
@@ -1602,6 +1799,41 @@ const restartableHome = Effect.gen(function* () {
     )
   return { layerFor, sql }
 })
+
+/** A round saved and never sent, as a process that died between the two leaves it. */
+const saveUnsentRound = (
+  home: Effect.Success<typeof restartableHome>,
+  input: {
+    readonly round: string
+    readonly starter: SessionKey
+    readonly thread: typeof StartedResult.Type
+    readonly message: string
+    readonly startedAt: number
+  },
+) =>
+  home.sql(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      const content = threadRoundText({
+        number: 1,
+        starter: input.starter.sessionId,
+        message: input.message,
+        reply: Option.none(),
+        notify: "starter",
+      })
+      yield* sql`
+        INSERT INTO thread_rounds (
+          round, thread, number, starter_session_id, starter_branch_id, starter_thread,
+          session_id, branch_id, message_id, content, notify, started_at
+        ) VALUES (
+          ${input.round}, ${input.thread.thread}, 1, ${input.starter.sessionId},
+          ${input.starter.branchId}, ${input.starter.sessionId}, ${input.thread.sessionId},
+          ${input.thread.branchId}, ${`thread-round:${input.round}`}, ${content}, 'starter',
+          ${input.startedAt}
+        )
+      `
+    }),
+  )
 
 describe("a thread round running when the server stopped", () => {
   it.live(
@@ -1774,6 +2006,73 @@ describe("a thread round running when the server stopped", () => {
               expect(read?.result).toMatchObject({ status: "ended", text: "sent at last" })
             }),
           )
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
+
+  it.live(
+    "at the starter's open, a round a full queue refuses is dropped, and the next round is still sent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const hanging = yield* Deferred.make<boolean>()
+              const { client } = yield* createRpcClient(
+                home.layerFor(workerModels(Effect.asVoid(Deferred.succeed(hanging, true)))),
+              )
+              const starter: SessionKey = yield* client.session.create({})
+              const full = yield* startWorker(client, starter, "start-full")
+              const free = yield* startWorker(client, starter, "start-free")
+              // The user keeps one thread busy and fills its follow-up queue.
+              yield* client.message.send({ ...placeOf(full), content: "HANG" })
+              yield* Deferred.await(hanging)
+              for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+                yield* client.message.send({ ...placeOf(full), content: `ECHO queued ${index}` })
+              }
+              return { starter, full, free }
+            }),
+          )
+          // The process died between saving two rounds and sending their turns.
+          yield* saveUnsentRound(home, {
+            round: "round-refused",
+            starter: first.starter,
+            thread: first.full,
+            message: "ECHO refused",
+            startedAt: 0,
+          })
+          yield* saveUnsentRound(home, {
+            round: "round-sent",
+            starter: first.starter,
+            thread: first.free,
+            message: "ECHO sent after the refusal",
+            startedAt: 1,
+          })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const woke = yield* waitForWakes(client, first.starter, 1)
+              expect(wakeTexts(woke.messages)[0]).toContain("round-sent")
+              const [read] = yield* call(client, first.starter, [
+                ["thread.round", "read-sent", { round: "round-sent" }],
+              ])
+              expect(read?.result).toMatchObject({
+                status: "ended",
+                text: "sent after the refusal",
+              })
+            }),
+          )
+          const refused = yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{
+                readonly round: string
+              }>`SELECT round FROM thread_rounds WHERE round = 'round-refused'`
+            }),
+          )
+          expect(refused).toEqual([])
         }).pipe(Effect.timeout("40 seconds")),
       ),
     45_000,

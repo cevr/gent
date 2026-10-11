@@ -117,7 +117,8 @@ export {
   ExtensionId,
 } from "../domain/ids.js"
 // The message a `steer` send lands; `Session.stopMessage({ messageId })` names it.
-export { interjectionMessageId } from "../domain/agent-loop.js"
+// `Session.send`'s refusal: the branch's queue was full, so nothing was admitted.
+export { FollowUpQueueFull, interjectionMessageId } from "../domain/agent-loop.js"
 export { clampEffort, Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 // What a prompt-cache write costs and how long it lives: a router prices a switch with them.
 export { cacheWriteRate, promptCacheTtlMsFor } from "../domain/agent.js"

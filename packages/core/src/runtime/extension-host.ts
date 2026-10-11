@@ -187,6 +187,7 @@ import {
 import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
+  FollowUpQueueFull,
   listWorkspaceLoops,
   type SendUserMessagePayload,
   type SessionRuntimeState,
@@ -3792,6 +3793,17 @@ const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<
 const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
 
 /**
+ * A send's failure: the branch's refusal kept as itself, so a caller can
+ * tell "not admitted" from a failure that proves nothing (a lost reply).
+ */
+const sendError =
+  (operation: string) =>
+  (error: Error): ExtensionServiceError | FollowUpQueueFull => {
+    if (Schema.is(FollowUpQueueFull)(error)) return error
+    return sessionError(operation)(error)
+  }
+
+/**
  * The answer to an approval asked in a turn no user started. It says how the
  * request reaches someone, and that no message can grant it, so a child
  * told "go ahead" does not ask again.
@@ -4164,7 +4176,7 @@ export const makeExtensionHostContextProvider = (
                         completion: turn.completion,
                         metadata: turn.metadata,
                       }),
-                    ).pipe(Effect.mapError(sessionError("send")))
+                    ).pipe(Effect.mapError(sendError("send")))
                   }),
                 queue: (queued) =>
                   Effect.gen(function* () {
@@ -4182,7 +4194,7 @@ export const makeExtensionHostContextProvider = (
                           clientRequest: clientRequestGrant(runInfo, target),
                         }),
                       }),
-                    ).pipe(Effect.mapError(sessionError("send")))
+                    ).pipe(Effect.mapError(sendError("send")))
                   }),
                 steer: (steered) =>
                   Effect.gen(function* () {

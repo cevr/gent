@@ -42,6 +42,7 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
+  type FollowUpQueueFull,
   RunOverrides,
   type SessionReachError,
   headChars,
@@ -183,6 +184,7 @@ const asDelegateError = (message: string) =>
         | ExtensionServiceError
         | SessionReachError
         | PlatformError.PlatformError
+        | FollowUpQueueFull
         | DelegateError
         | WorkspaceError,
     ) => {

@@ -55,6 +55,7 @@ import {
   SessionId,
   type ToolCallId,
 } from "./ids.js"
+import type { FollowUpQueueFull } from "./agent-loop.js"
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
@@ -1151,9 +1152,14 @@ export interface ExtensionSessionService {
   ) => Effect.Effect<void, ExtensionServiceError | SessionReachError>
   /**
    * One user message into a branch; `delivery` picks how it lands. See
-   * `SessionSendParams` for the three modes.
+   * `SessionSendParams` for the three modes. `FollowUpQueueFull` is a
+   * refusal: the branch's queue was full and the message is not admitted, so
+   * nothing it would start runs. Any other failure is not proof of that: a
+   * send whose reply was lost may have been admitted.
    */
-  readonly send: (params: SessionSendParams) => Effect.Effect<void, ExtensionServiceError>
+  readonly send: (
+    params: SessionSendParams,
+  ) => Effect.Effect<void, ExtensionServiceError | FollowUpQueueFull>
   /**
    * Stop a branch's running turn, whichever message opened it; the current
    * branch when no target is named. A `requestId` makes a repeat of the same

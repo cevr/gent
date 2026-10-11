@@ -880,9 +880,14 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     round id is `round-` and 16 hex of SHA-256 over the caller's session,
     branch and tool call id: a tool call id is unique only in its session.
     A thread runs one round at a time, and only the thread that started it
-    sends to it. A send the thread's loop refuses (a full follow-up queue)
+    sends to it. A send the thread's loop refuses (a full follow-up queue:
+    `Session.send` fails with `FollowUpQueueFull` itself, not wrapped)
     drops its round, so the thread is not held busy; the loop keeps the
-    refusal under the round's command id, and a repeat gets it again. A retry under the same key is handed its round before the
+    refusal under the round's command id, and a repeat gets it again. Any
+    other send failure proves nothing (a reply lost after the loop admitted
+    the turn, a concurrent repeat refused as already processing), so the
+    round stays: its turn's end records it, and a retry or the starter's
+    reconcile sends a turn that never arrived. A retry under the same key is handed its round before the
     busy refusal; it re-sends only a round whose message never reached the
     branch. A repeat of a round's command (`completion: "admission"`)
     admits nothing new and returns at once; it does not wait for the turn.
@@ -908,7 +913,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     (`child-turns.ts`, shared with delegate), and a round with neither is
     re-sent from the starter's side, whether or not the thread's loop is
     open: the repeat admits a round that was never sent and resumes one cut
-    short. The
+    short, and a full queue's refusal drops the round as at admission. Each
+    round settles on its own: one that fails is logged with its id
+    (`threads.reconcile.round-failed`) and the rest go on. The
     wake's source id makes a second delivery a no-op.
   - `thread.round({ round })` reads a round the caller's thread sent: open,
     or ended with its text, reply (null when none was given), flags and
