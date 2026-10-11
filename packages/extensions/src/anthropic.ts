@@ -1172,12 +1172,16 @@ const rotateAndWriteBack = (base: RefreshBase) =>
 // refresh spends the refresh token Claude Code holds too. The rotation goes
 // back to the source with a compare-and-swap, and until it lands gent's
 // credential store holds it (`PendingRotation`, keyed by the directory, not
-// by the label), so neither a failed write, a restart, a rename, a second
-// link nor a second gent process loses the only live token. A held rotation
+// by the label), so neither a failed write, a rename, a second link nor a
+// profile rebuild loses the only live token; on disk it also outlives a
+// restart and reaches a second gent process over the same store, and a
+// store whose disk refuses it holds it in its process memory alone. The
+// store's lock orders gent holders only, never Claude Code. A held rotation
 // whose file does not decode is moved aside, never deleted, and blocks only
-// the login beside it (`QuarantinedRotation`). `readLinked` and
+// the login beside it (`QuarantinedRotation`); a lock another holder keeps
+// past the wait fails the refresh as one that may pass. `readLinked` and
 // `refreshLinked` are the whole state machine; ARCHITECTURE.md (Credential
-// slots) states it.
+// slots) states it, with the windows that stay and the bounds.
 
 type LinkedIORequirements = AnthropicCredentialIORequirements | Crypto.Crypto
 
@@ -1512,8 +1516,10 @@ const linkedSignedOut = (source: LinkedSource) =>
  * Hold `rotation` in gent's store, then hand it back to the source. It is
  * held before the write, so a write that fails, or a process that ends
  * before it, leaves it for the next read; only a crash between the token
- * response and the hold loses it. A store that cannot hold it is logged and
- * the write tried all the same.
+ * response and the hold loses it. A store whose disk refuses it holds it in
+ * its process memory (`AuthService.withRotation`), which a process exit
+ * loses; a store that cannot hold it at all is logged and the write tried
+ * all the same.
  */
 const holdAndLand = (
   source: LinkedSource,

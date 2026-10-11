@@ -154,8 +154,8 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 
 ### P5. Accounts
 
-- **The `~/.claude2` login lives in the keychain**, under `Claude Code-credentials-<first 8 hex of sha256(config dir)>`. On this laptop that is `-3ef2928b` for `$HOME/.claude2`, and there is no `.credentials.json`. The directory import reads that service on darwin and the file elsewhere. Write-back goes to the same entry.
-- **A thread pins its credential slot**: `account` becomes a run override, `credentialSlot`. This is an additive, optional key in `RUN_OVERRIDE_KEYS`, read by the credential order ahead of `authOrder`.
+- **A run spec pins one credential slot** (`RunSpec.credentialSlot`, not a stored run override): the turn, its handoff summary and its no-agent child walk only that slot, and a refused pin fails the turn. `thread.start` takes an `account`.
+- **A named Anthropic credential links a Claude Code config directory**: its keychain service `Claude Code-credentials-<first 8 hex of sha256(config dir)>` on macOS (`-3ef2928b` for `$HOME/.claude2` on this laptop), its `.credentials.json` elsewhere. Each refresh is written back with compare-and-swap, and gent's credential store holds the rotation until it lands.
 
 ### P6. A thread binds its workspace at start
 
@@ -189,7 +189,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a send to a busy thread is refused, and a retried send returns its round; a round reaches the thread's new session after a handoff;
    - the gate is green.
      1b. **P1b, the delegate fold.** Done when every ported delegate test passes on threads, `git grep -E 'delegate\.(start|list|cancel)'` finds only plans, research and stored-transcript fixtures, and the gate is green.
-2. **P5 accounts.** Done when an imported `personal` slot resolves from the keychain service, a thread with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
+2. **P5 accounts: pin + linked directories + thread account.** Done when a linked `personal` slot resolves from its directory's keychain service, a thread with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
 3. **P3 machines.** A design-mode counsel review of the core activation seam and the schema comes first. Done when:
    - a track machine runs implement, review with changes, implement, review accepted, verify and decide on fake models, with no owner turn between rounds;
    - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
