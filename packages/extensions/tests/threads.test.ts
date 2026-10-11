@@ -30,11 +30,14 @@ import {
   ExtensionServiceError,
   getToolId,
   messagePartsDisplayText,
+  type ModelPricing,
+  omitUndefined,
   sessionThread,
   tool,
 } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
+  ConfigService,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -45,8 +48,10 @@ import {
   runtimeHostContext,
   runToolWithCtx,
   systemTextOf,
+  TEST_MODEL_ID,
   textDeltaPart,
   toolCallPart,
+  UserConfig,
   waitFor,
 } from "@gent/core/test-utils"
 import { BranchId, type EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -87,15 +92,24 @@ const userTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
 const isThreadRequest = (prompt: Prompt.Prompt): boolean =>
   userTexts(prompt)[0]?.includes("THREAD-TASK") === true
 
-const reply = (text: string) =>
-  Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
+/** The tokens a step of a priced rig reports, so each step has a price. */
+type StepUsage = { readonly inputTokens: number; readonly outputTokens: number }
+
+const reply = (text: string, usage: Option.Option<StepUsage> = Option.none()) =>
+  Stream.fromIterable([
+    textDeltaPart(text),
+    finishPart({
+      finishReason: "stop",
+      ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
+    }),
+  ])
 
 type SessionKey = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
 /** One thread-tool call a scripted model step makes. */
 interface ThreadOp {
   readonly tool: "thread.start" | "thread.list" | "thread.stop" | "thread.send"
-  readonly input: Record<string, string>
+  readonly input: Record<string, string | boolean>
   readonly id: string
 }
 
@@ -118,6 +132,13 @@ const ListedOutput = Schema.fromJsonString(
       current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
       status: Schema.Literals(["running", "idle"]),
       preview: Schema.String,
+      account: Schema.optionalKey(
+        Schema.Struct({
+          provider: Schema.optionalKey(Schema.String),
+          slot: Schema.String,
+          placement: Schema.Literals(["pinned", "assigned", "walked"]),
+        }),
+      ),
     }),
   ),
 )
@@ -132,99 +153,148 @@ const StoppedOutput = Schema.fromJsonString(
  * production extension, its process permit included. `act` sends a session a
  * message whose turn makes the given calls in one model step and returns
  * their results once the turn ends. A thread's own turn waits at the model
- * until `gate` opens, so it runs until then.
+ * until `gate` opens, so it runs until then; `threadRequests` counts the
+ * thread requests sent so far.
  */
-const threadRig = Effect.gen(function* () {
-  const gate = yield* Deferred.make<boolean>()
-  const scripted = new Map<string, ReadonlyArray<ThreadOp>>()
-  const providerLayer = LanguageModelLayers.testStream((options) => {
-    if (isThreadRequest(options.prompt)) {
-      return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied")))
-    }
-    if (options.prompt.content.at(-1)?.role === "tool") return Effect.succeed(reply("noted"))
-    const ops = scripted.get(userTexts(options.prompt).at(-1) ?? "") ?? []
-    if (ops.length === 0) return Effect.succeed(reply("nothing to do"))
-    return Effect.succeed(
-      Stream.fromIterable([
-        ...ops.map((op) => toolCallPart(op.tool, op.input, { toolCallId: ToolCallId.make(op.id) })),
-        finishPart({ finishReason: "tool-calls" }),
-      ]),
-    )
-  })
-  const cwd = yield* makeTempDirectoryScoped("gent-threads-")
-  const harness = yield* createRpcHarness({
-    ...e2ePreset,
-    cwd,
-    providerLayer,
-    extensionInputs: [AgentsExtension, SessionToolsExtension],
-  })
-  const { client } = harness
-  const starter: SessionKey = { sessionId: harness.sessionId, branchId: harness.branchId }
-  const act = (at: SessionKey, ops: ReadonlyArray<ThreadOp>) =>
-    Effect.gen(function* () {
-      const label = `OPS ${scripted.size + 1}`
-      scripted.set(label, ops)
-      const ids = new Set(ops.map((op) => op.id))
-      const results: Array<ThreadOpResult> = []
-      const turn = yield* client.session.events(at).pipe(
-        Stream.tap(({ event }) =>
-          Effect.sync(() => {
-            if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") return
-            if (!THREAD_TOOLS.has(event.toolName) || !ids.has(event.toolCallId)) return
-            results.push({
-              id: event.toolCallId,
-              ok: event._tag === "ToolCallSucceeded",
-              output: event.output ?? "",
-            })
+const accountsRig = (options: RigAccounts) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<boolean>()
+    const scripted = new Map<string, ReadonlyArray<ThreadOp>>()
+    const usage = Option.fromUndefinedOr(options.usage)
+    let threadRequestCount = 0
+    const providerLayer = LanguageModelLayers.testStream((request) => {
+      if (isThreadRequest(request.prompt)) {
+        threadRequestCount += 1
+        return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied", usage)))
+      }
+      if (request.prompt.content.at(-1)?.role === "tool") {
+        return Effect.succeed(reply("noted", usage))
+      }
+      const ops = scripted.get(userTexts(request.prompt).at(-1) ?? "") ?? []
+      if (ops.length === 0) return Effect.succeed(reply("nothing to do", usage))
+      return Effect.succeed(
+        Stream.fromIterable([
+          ...ops.map((op) =>
+            toolCallPart(op.tool, op.input, { toolCallId: ToolCallId.make(op.id) }),
+          ),
+          finishPart({
+            finishReason: "tool-calls",
+            ...omitUndefined({ usage: options.usage }),
           }),
-        ),
-        // The turn's end that follows its last thread call.
-        Stream.takeUntil(
-          ({ event }) => event._tag === "TurnCompleted" && results.length === ops.length,
-        ),
-        Stream.runDrain,
-        Effect.forkScoped,
+        ]),
       )
-      yield* client.message.send({ ...at, content: label })
-      yield* Fiber.join(turn)
-      return yield* Effect.forEach(ops, (call) => {
-        const found = results.find((result) => result.id === call.id)
-        if (Predicate.isUndefined(found)) return Effect.die(`no result for ${call.id}`)
-        return Effect.succeed(found)
+    })
+    const threadRequests = Effect.sync(() => threadRequestCount)
+    const cwd = yield* makeTempDirectoryScoped("gent-threads-")
+    const harness = yield* createRpcHarness({
+      ...e2ePreset,
+      cwd,
+      providerLayer,
+      extensionInputs: [AgentsExtension, SessionToolsExtension],
+      ...omitUndefined({
+        modelPricing: options.pricing,
+        configServiceLayer: Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(options.order), (order) =>
+            ConfigService.Test(
+              new UserConfig({ model: TEST_MODEL_ID, providers: { anthropic: order } }),
+            ),
+          ),
+        ),
+      }),
+    })
+    const { client } = harness
+    const starter: SessionKey = { sessionId: harness.sessionId, branchId: harness.branchId }
+    const act = (at: SessionKey, ops: ReadonlyArray<ThreadOp>) =>
+      Effect.gen(function* () {
+        const label = `OPS ${scripted.size + 1}`
+        scripted.set(label, ops)
+        const ids = new Set(ops.map((op) => op.id))
+        const results: Array<ThreadOpResult> = []
+        const turn = yield* client.session.events(at).pipe(
+          Stream.tap(({ event }) =>
+            Effect.sync(() => {
+              if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") return
+              if (!THREAD_TOOLS.has(event.toolName) || !ids.has(event.toolCallId)) return
+              results.push({
+                id: event.toolCallId,
+                ok: event._tag === "ToolCallSucceeded",
+                output: event.output ?? "",
+              })
+            }),
+          ),
+          // The turn's end that follows its last thread call.
+          Stream.takeUntil(
+            ({ event }) => event._tag === "TurnCompleted" && results.length === ops.length,
+          ),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ ...at, content: label })
+        yield* Fiber.join(turn)
+        return yield* Effect.forEach(ops, (call) => {
+          const found = results.find((result) => result.id === call.id)
+          if (Predicate.isUndefined(found)) return Effect.die(`no result for ${call.id}`)
+          return Effect.succeed(found)
+        })
       })
-    })
-  let calls = 0
-  const op = (tool: ThreadOp["tool"], input: Record<string, string> = {}): ThreadOp => {
-    calls += 1
-    return { tool, input, id: `thread-op-${calls}` }
+    let calls = 0
+    const op = (tool: ThreadOp["tool"], input: ThreadOp["input"] = {}): ThreadOp => {
+      calls += 1
+      return { tool, input, id: `thread-op-${calls}` }
+    }
+    /** One call's output, which must have succeeded. */
+    const one = (at: SessionKey, call: ThreadOp) =>
+      Effect.flatMap(act(at, [call]), ([result]) => {
+        if (result?.ok !== true) return Effect.die(`${call.tool} failed: ${result?.output}`)
+        return Effect.succeed(result.output)
+      })
+    /** `at`'s listing, or one thread's row of it. */
+    const list = (at: SessionKey, thread?: string) =>
+      Effect.flatMap(
+        one(at, op("thread.list", Record.filter({ thread }, Predicate.isNotUndefined))),
+        decodeListed,
+      )
+    /** Read `at`'s listing until `ready` holds. */
+    const listUntil = (
+      at: SessionKey,
+      ready: (rows: typeof ListedOutput.Type) => boolean,
+      label: string,
+    ) => waitFor(list(at), ready, 4_000, label)
+    const start = (at: SessionKey, task: string) =>
+      Effect.flatMap(one(at, op("thread.start", { task })), decodeStarted)
+    /** A thread started on the credential `account`. */
+    const startOn = (at: SessionKey, task: string, account: string) =>
+      Effect.flatMap(one(at, op("thread.start", { task, account })), decodeStarted)
+    const stop = (at: SessionKey, thread: string) =>
+      Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
+    return {
+      client,
+      cwd,
+      starter,
+      gate,
+      threadRequests,
+      act,
+      op,
+      one,
+      list,
+      listUntil,
+      start,
+      startOn,
+      stop,
+    }
+  })
+
+/** The `anthropic` sign-in a rig's turns walk, and what each step costs; default: neither. */
+interface RigAccounts {
+  readonly order?: {
+    readonly authOrder: ReadonlyArray<CredentialSlot>
+    readonly authSpread?: ReadonlyArray<CredentialSlot>
   }
-  /** One call's output, which must have succeeded. */
-  const one = (at: SessionKey, call: ThreadOp) =>
-    Effect.flatMap(act(at, [call]), ([result]) => {
-      if (result?.ok !== true) return Effect.die(`${call.tool} failed: ${result?.output}`)
-      return Effect.succeed(result.output)
-    })
-  /** `at`'s listing, or one thread's row of it. */
-  const list = (at: SessionKey, thread?: string) =>
-    Effect.flatMap(
-      one(at, op("thread.list", Record.filter({ thread }, Predicate.isNotUndefined))),
-      decodeListed,
-    )
-  /** Read `at`'s listing until `ready` holds. */
-  const listUntil = (
-    at: SessionKey,
-    ready: (rows: typeof ListedOutput.Type) => boolean,
-    label: string,
-  ) => waitFor(list(at), ready, 4_000, label)
-  const start = (at: SessionKey, task: string) =>
-    Effect.flatMap(one(at, op("thread.start", { task })), decodeStarted)
-  /** A thread started on the credential `account`. */
-  const startOn = (at: SessionKey, task: string, account: string) =>
-    Effect.flatMap(one(at, op("thread.start", { task, account })), decodeStarted)
-  const stop = (at: SessionKey, thread: string) =>
-    Effect.flatMap(one(at, op("thread.stop", { thread })), decodeStopped)
-  return { client, cwd, starter, gate, act, op, one, list, listUntil, start, startOn, stop }
-})
+  readonly pricing?: ModelPricing
+  readonly usage?: StepUsage
+}
+
+const threadRig = accountsRig({})
 
 type RigClient = Effect.Success<typeof threadRig>["client"]
 
@@ -413,6 +483,143 @@ describe("threads", () => {
       ),
     15_000,
   )
+
+  describe("spread accounts", () => {
+    const a = CredentialSlot.make("a")
+    const b = CredentialSlot.make("b")
+    const spread = { authOrder: [a, b], authSpread: [a, b] }
+
+    /** Each placement of the branch (`CredentialAssigned`), from its durable history. */
+    const placementsOf = (client: RigClient, target: SessionKey) =>
+      client.session.events(target).pipe(
+        Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+        Stream.flatMap((envelope) => {
+          if (envelope.event._tag !== "CredentialAssigned") return Stream.empty
+          return Stream.make({ reason: envelope.event.reason, slot: envelope.event.slot })
+        }),
+        Stream.runCollect,
+        Effect.map((placements) => Array.from(placements)),
+      )
+
+    it.live(
+      "a burst of fresh threads spreads to the less-used account, with one cold start there until its first step ends",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* accountsRig({ order: spread })
+            const burst = [1, 2, 3, 4].map((n) =>
+              rig.op("thread.start", { task: `${THREAD_TASK} ${n}` }),
+            )
+            const results = yield* rig.act(rig.starter, burst)
+            const children = yield* Effect.forEach(results, (result) => {
+              if (!result.ok) return Effect.die(`thread.start failed: ${result.output}`)
+              return decodeStarted(result.output)
+            })
+            // Every child's first request is open at the model: none has ended a step.
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 4, 4_000, "the burst's requests")
+            const firstSlots = yield* Effect.forEach(children, (child) =>
+              Effect.map(placementsOf(rig.client, child), (placements) => placements[0]?.slot),
+            )
+            expect(firstSlots.filter((slot) => slot === b).length).toBe(1)
+            expect(firstSlots.filter((slot) => slot === a).length).toBe(3)
+            const reasons = yield* Effect.forEach(children, (child) =>
+              Effect.map(placementsOf(rig.client, child), (placements) =>
+                placements.map((placement) => placement.reason),
+              ),
+            )
+            expect(reasons).toEqual([["spawned"], ["spawned"], ["spawned"], ["spawned"]])
+            yield* Deferred.succeed(rig.gate, true)
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a forked thread runs on its starter's account however uneven the usage",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* accountsRig({
+              order: spread,
+              pricing: { input: 3, output: 15 },
+              usage: { inputTokens: 1_000, outputTokens: 100 },
+            })
+            yield* Deferred.succeed(rig.gate, true)
+            // Every priced step of the starter goes out on `a`, its cache warm.
+            yield* rig.list(rig.starter)
+            yield* rig.list(rig.starter)
+            expect(new Set(yield* stepSlots(rig.client, rig.starter))).toEqual(new Set([a]))
+            const fork = yield* Effect.flatMap(
+              rig.one(rig.starter, rig.op("thread.start", { task: THREAD_TASK, fork: true })),
+              decodeStarted,
+            )
+            yield* rig.listUntil(
+              rig.starter,
+              (rows) => rows[0]?.status === "idle" && rows[0].preview.length > 0,
+              "the fork's round ends",
+            )
+            const forkSlots = yield* stepSlots(rig.client, fork)
+            expect(forkSlots.length).toBeGreaterThan(0)
+            expect(forkSlots.every((slot) => slot === a)).toBe(true)
+            expect(yield* placementsOf(rig.client, fork)).toEqual([{ reason: "fork", slot: a }])
+            // The usage is uneven: a fresh thread started now goes to `b`.
+            const fresh = yield* rig.start(rig.starter, THREAD_TASK)
+            const freshPlaced = yield* waitFor(
+              placementsOf(rig.client, fresh),
+              (placements) => placements.length > 0,
+              4_000,
+              "the fresh thread is placed",
+            )
+            expect(freshPlaced[0]).toEqual({ reason: "spawned", slot: b })
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "thread.list names each thread's account and whether it was pinned or assigned",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const rig = yield* accountsRig({ order: spread })
+            yield* Deferred.succeed(rig.gate, true)
+            const pinned = yield* rig.startOn(rig.starter, THREAD_TASK, b)
+            const placed = yield* rig.start(rig.starter, THREAD_TASK)
+            const rows = yield* rig.listUntil(
+              rig.starter,
+              (listed) =>
+                listed.length === 2 &&
+                listed.every((row) => row.status === "idle" && row.preview.length > 0),
+              "both threads' rounds end",
+            )
+            const accountOf = (thread: SessionId) =>
+              rows.find((row) => row.thread === thread)?.account
+            expect(accountOf(pinned.thread)).toEqual({
+              provider: "anthropic",
+              slot: b,
+              placement: "pinned",
+            })
+            expect(accountOf(placed.thread)?.placement).toBe("assigned")
+            expect(accountOf(placed.thread)?.provider).toBe("anthropic")
+            // A sign-in with no pool: the thread walks its order.
+            const plain = yield* accountsRig({ order: { authOrder: [a, b] } })
+            yield* Deferred.succeed(plain.gate, true)
+            const walked = yield* plain.start(plain.starter, THREAD_TASK)
+            const plainRows = yield* plain.listUntil(
+              plain.starter,
+              (listed) => listed[0]?.status === "idle" && listed[0].preview.length > 0,
+              "the thread's round ends",
+            )
+            expect(plainRows.find((row) => row.thread === walked.thread)?.account).toEqual({
+              provider: "anthropic",
+              slot: a,
+              placement: "walked",
+            })
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+  })
 
   it.live(
     "a thread with no agent keeps its starter's account, and a named agent's thread runs on its own order",

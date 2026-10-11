@@ -3480,7 +3480,7 @@ const INLINE_OBJECT_LIMIT = 80
  * schema can flood the prompt. One bound for both: the result is the half of
  * the contract the cell code reads, so a shipped tool's result renders whole.
  */
-const SIGNATURE_TYPE_LIMIT = 300
+const SIGNATURE_TYPE_LIMIT = 340
 /** An enum with more literals than this renders as the literals' types. */
 const LITERAL_LIMIT = 8
 /** The description after a signature is cut here, as opencode codemode cuts it. */
