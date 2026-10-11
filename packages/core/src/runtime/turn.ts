@@ -123,6 +123,7 @@ import {
 } from "../domain/driver.js"
 import {
   type AgentEvent,
+  CredentialAssigned,
   ErrorOccurred,
   type EventEnvelope,
   EventStore,
@@ -175,9 +176,11 @@ import {
 import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
+  CredentialPlacement,
   driverCacheWritesByLifetime,
   driverRetryPolicy,
   limitResetAt,
+  makeCredentialPlacement,
   ModelRegistry,
   ModelResolver,
   type ResolveModelRequest,
@@ -185,6 +188,7 @@ import {
   requestCredentialOrder,
   credentialRefusal,
   retryReason,
+  spreadsRuns,
   servedEffortRouter,
   type ServedVirtualModel,
   servedVirtualModel,
@@ -891,6 +895,18 @@ interface TurnLedger {
    * their receipts: the turn goes on from that slot, not from the first.
    */
   readonly resumeCredential: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
+  /** Where `provider`'s spread walk stands in this turn (`placementWalk`). */
+  readonly credentialPlacement: (provider: string) => Effect.Effect<CredentialCursor>
+  /**
+   * This turn's walk of `provider`'s spread order starts at `at` (none: at
+   * the order's first): a placement, the account a warm cache holds, or a
+   * recovered turn's own placement. The turn is placed only once settled
+   * this way, but for a window handoff and a refusal.
+   */
+  readonly settleCredential: (
+    provider: string,
+    at: Option.Option<CredentialSlot>,
+  ) => Effect.Effect<void>
 }
 
 /** Where one sign-in's order stands in a turn. */
@@ -898,12 +914,22 @@ interface CredentialCursor {
   readonly passed: ReadonlySet<CredentialSlot>
   /** The slot a resumed turn ran on, until the next selection reads it. */
   readonly resumedAt: Option.Option<CredentialSlot>
+  /** Where a spread run's walk starts: its placement (`settleCredential`). */
+  readonly at: Option.Option<CredentialSlot>
+  /** True once the turn decided where its spread walk starts. */
+  readonly settled: boolean
 }
 
 const cursorOf = (
   cursors: ReadonlyMap<string, CredentialCursor>,
   provider: string,
-): CredentialCursor => cursors.get(provider) ?? { passed: new Set(), resumedAt: Option.none() }
+): CredentialCursor =>
+  cursors.get(provider) ?? {
+    passed: new Set(),
+    resumedAt: Option.none(),
+    at: Option.none(),
+    settled: false,
+  }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
 const positiveCount = (count: number) => Option.liftPredicate(count, (value) => value > 0)
@@ -1039,7 +1065,10 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
         // An order that no longer names the slot leaves nothing before it.
         const before = slots.slice(0, Math.max(slots.indexOf(cursor.resumedAt.value), 0))
         const passed: ReadonlySet<CredentialSlot> = new Set([...cursor.passed, ...before])
-        return [passed, new Map(current).set(provider, { passed, resumedAt: Option.none() })]
+        return [
+          passed,
+          new Map(current).set(provider, { ...cursor, passed, resumedAt: Option.none() }),
+        ]
       }),
     passCredential: (provider, slot) =>
       Ref.update(cursors, (current) => {
@@ -1055,6 +1084,12 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           ...cursorOf(current, provider),
           resumedAt: Option.some(slot),
         }),
+      ),
+    credentialPlacement: (provider) =>
+      Effect.map(Ref.get(cursors), (current) => cursorOf(current, provider)),
+    settleCredential: (provider, at) =>
+      Ref.update(cursors, (current) =>
+        new Map(current).set(provider, { ...cursorOf(current, provider), at, settled: true }),
       ),
   }
 })
@@ -1830,7 +1865,11 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
 }) {
   const order = yield* requestCredentialOrder(params.request, params.extensionRegistry, params.pin)
   if (Option.isNone(order)) return Option.none<CredentialReceipt>()
-  const { provider, slots } = order.value
+  const { provider } = order.value
+  const slots = placementWalk(
+    order.value,
+    (yield* params.turnLedger.credentialPlacement(provider)).at,
+  )
   const left = yield* params.turnLedger.passedCredentials(provider, slots)
   const slot = slots.find((candidate) => !left.has(candidate))
   if (Predicate.isUndefined(slot)) {
@@ -1844,6 +1883,89 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
       params.extensionRegistry,
     ),
   )
+})
+
+/**
+ * The order a turn walks: a spread run's starts at its placement (`at`, the
+ * turn's `CredentialAssigned` or the account its warm cache is on), then
+ * the rest of the order as it reads now. The walk is fixed for the turn, so
+ * a resumed turn's receipts skip only the slots before theirs in it. Any
+ * other order walks as it reads.
+ */
+const placementWalk = (
+  order: {
+    readonly slots: ReadonlyArray<CredentialSlot>
+    readonly pool: Option.Option<ReadonlyArray<CredentialSlot>>
+  },
+  at: Option.Option<CredentialSlot>,
+): ReadonlyArray<CredentialSlot> => {
+  if (Option.isNone(order.pool)) return order.slots
+  return Option.match(
+    Option.filter(at, (slot) => order.slots.includes(slot)),
+    {
+      onNone: () => order.slots,
+      onSome: (slot) => [slot, ...order.slots.filter((other) => other !== slot)],
+    },
+  )
+}
+
+/** How long a placed session counts as live on its account when its model names no cache lifetime. */
+const PLACEMENT_LIVE_WITHOUT_LIFETIME_MS = 3_600_000
+
+/** How long a placed session's cache counts as live on its account (`CredentialPlacement`). */
+const placementLifetimeMs = (ttlMs: Option.Option<number>) =>
+  Option.getOrElse(ttlMs, () => PLACEMENT_LIVE_WITHOUT_LIFETIME_MS)
+
+/** Why a spread run is placed, the account it prefers, and the session whose burst it joins. */
+interface RunOrigin {
+  readonly reason: CredentialAssigned["reason"]
+  readonly preferred: Option.Option<CredentialSlot>
+  /** A fresh child's parent: its siblings' warming guard applies. */
+  readonly starter: Option.Option<SessionId>
+}
+
+/** Record where a spread run was placed: the turn walks from `slot`. */
+const publishCredentialAssigned = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly provider: string
+  readonly slot: CredentialSlot
+  readonly from: Option.Option<CredentialSlot>
+  readonly reason: CredentialAssigned["reason"]
+}) =>
+  publishEventOrDie(
+    CredentialAssigned.make({
+      sessionId: params.sessionId,
+      branchId: params.branchId,
+      messageId: params.messageId,
+      provider: ProviderId.make(params.provider),
+      slot: params.slot,
+      reason: params.reason,
+      ...omitUndefined({ from: Option.getOrUndefined(params.from) }),
+    }),
+  )
+
+/**
+ * The loop's one warm rule: a cache belongs to the model and the account of
+ * the branch's last request, and lives for the model's lifetime (`ttlMs`,
+ * none: it never goes cold) from that request's start, while its account
+ * stands (`lastAccountStands`). Model routing, effort routing and
+ * credential placement all read it.
+ */
+const cacheWarm = Effect.fn("TurnHelpers.cacheWarm")(function* (params: {
+  readonly modelId: ModelIdType
+  readonly ttlMs: Option.Option<number>
+  readonly lastCallModel: Option.Option<ModelIdType>
+  readonly lastCallAtMillis: Option.Option<number>
+  readonly accountStands: Effect.Effect<boolean>
+}) {
+  const now = yield* Clock.currentTimeMillis
+  if (!Option.contains(params.lastCallModel, params.modelId)) return false
+  const alive = Option.exists(params.lastCallAtMillis, (at) =>
+    Option.match(params.ttlMs, { onNone: () => true, onSome: (ttlMs) => now < at + ttlMs }),
+  )
+  return alive && (yield* params.accountStands)
 })
 
 /**
@@ -2123,7 +2245,6 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
     return fallbackAmong(entryAt(listed), noneSignedIn)
   }
 
-  const now = yield* Clock.currentTimeMillis
   const current = yield* Option.match(log.current, {
     onNone: () => Effect.succeed(Option.none<ModelRouteCurrent>()),
     onSome: (id) =>
@@ -2131,17 +2252,13 @@ const routeTurn = Effect.fn("TurnHelpers.routeTurn")(function* (params: {
         const entry = yield* entryOf(id)
         if (Option.isNone(entry)) return Option.none<ModelRouteCurrent>()
         const model = entry.value
-        // A cache belongs to the model and the account of the last request. A
-        // model whose entry names no lifetime never goes cold.
-        const warm =
-          Option.contains(log.lastCallModel, model.id) &&
-          Option.exists(log.lastCallAtMillis, (at) =>
-            Option.match(promptCacheTtlMsFor(model, resolved.child), {
-              onNone: () => true,
-              onSome: (ttlMs) => now < at + ttlMs,
-            }),
-          ) &&
-          (yield* log.accountStands)
+        const warm = yield* cacheWarm({
+          modelId: model.id,
+          ttlMs: promptCacheTtlMsFor(model, resolved.child),
+          lastCallModel: log.lastCallModel,
+          lastCallAtMillis: log.lastCallAtMillis,
+          accountStands: log.accountStands,
+        })
         return Option.some<ModelRouteCurrent>({
           model,
           warm,
@@ -2386,18 +2503,13 @@ const admitEfforts = Effect.fn("TurnHelpers.admitEfforts")(function* (params: {
     ),
   )
   if (!accepted.some(Option.isSome)) return Option.none<EffortAdmission>()
-  const now = yield* Clock.currentTimeMillis
-  // A cache belongs to the model and the account of the last request; one
-  // with no lifetime never goes cold.
-  const warm =
-    Option.contains(log.lastCallModel, turn.modelId) &&
-    Option.exists(log.lastCallAtMillis, (at) =>
-      Option.match(promptCacheTtlMsFor(model, params.child), {
-        onNone: () => true,
-        onSome: (ttlMs) => now < at + ttlMs,
-      }),
-    ) &&
-    (yield* log.accountStands)
+  const warm = yield* cacheWarm({
+    modelId: turn.modelId,
+    ttlMs: promptCacheTtlMsFor(model, params.child),
+    lastCallModel: log.lastCallModel,
+    lastCallAtMillis: log.lastCallAtMillis,
+    accountStands: log.accountStands,
+  })
   const held = Option.flatMap(
     Option.filter(log.lastEffort, (receipt) => receipt.model === turn.modelId),
     (receipt) => receipt.level,
@@ -2763,6 +2875,8 @@ type ModelTurnSource = {
   readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   /** The chars/4 estimate of the system prompt, notices and tools this request carries. */
   readonly overheadTokens: number
+  /** How long the step's cache lives from its request (`placementLifetimeMs`). */
+  readonly cacheLifetimeMs: number
   /**
    * The effort this request sends (`effectiveEffort`); `"default"` when it
    * names no level to a model that reasons, none when the model does not.
@@ -2833,6 +2947,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   ledger: ModelContextLedger["Service"]
   /** What the turn spent so far, and the credentials it left. */
   turnLedger: TurnLedger
+  /** The server's credential placement: a spread run is placed again after a window handoff and on a refusal. */
+  placement: CredentialPlacement["Service"]
+  /** This step's turn was placed at its start (`placeTurn`): a handoff in it places nothing more. */
+  placed: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const { resolved } = params
@@ -2967,6 +3085,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // and then every account's cache is cold, so a move that the order makes
   // (a first credential that keeps refusing) hands off as any cold turn does.
   const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
+  const cacheLifetimeMs = placementLifetimeMs(
+    promptCacheTtlMsFor(modelOption.value, resolved.child),
+  )
   const promptCache = Option.map(
     Option.all([
       Option.filter(params.lastCallAtMillis, () => sameModel),
@@ -3071,8 +3192,36 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         resolved.credentialPin,
       ).pipe(Effect.orElseSucceed(Option.none))
       if (Option.isNone(order) || order.value.provider !== provider) return false
-      const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
-      const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
+      const walk = placementWalk(
+        order.value,
+        (yield* params.turnLedger.credentialPlacement(provider)).at,
+      )
+      const left = yield* params.turnLedger.passedCredentials(provider, walk)
+      const leaving: ReadonlySet<CredentialSlot> = new Set([...left, slot])
+      // A spread run holds the refused account until its reset and goes to
+      // the least-used one it has not left; any other run takes the next slot.
+      const next = yield* Option.match(order.value.pool, {
+        onNone: () => Effect.succeed(walk.find((candidate) => !leaving.has(candidate))),
+        onSome: (pool) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            yield* params.placement.refuse({
+              provider,
+              slot,
+              retryAt: retryPolicy.retryAt(cause, now),
+            })
+            const placed = yield* params.placement.place({
+              provider,
+              pool,
+              sessionId: params.sessionId,
+              preferred: Option.none(),
+              starter: Option.none(),
+              left: leaving,
+              ttlMs: cacheLifetimeMs,
+            })
+            return [...placed, ...walk].find((candidate) => !leaving.has(candidate))
+          }),
+      })
       if (Predicate.isUndefined(next)) return false
       yield* params.turnLedger.passCredential(provider, slot)
       yield* Effect.logInfo("turn.credential-moved").pipe(
@@ -3086,6 +3235,18 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           notice: true,
         }),
       )
+      if (Option.isSome(order.value.pool)) {
+        yield* params.turnLedger.settleCredential(provider, Option.some(next))
+        yield* publishCredentialAssigned({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          messageId: params.messageId,
+          provider,
+          slot: next,
+          from: Option.some(slot),
+          reason: "refused",
+        })
+      }
       return true
     }).pipe(Effect.provideService(EventStore, eventStore))
   /**
@@ -3216,6 +3377,46 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     provideExtensionLeaf({}),
     provideCurrentHostCtx({ ...hostCtx, agentName: resolved.agent.name }),
   )
+  // A window handed off is a cache boundary: the summary stayed on the
+  // account that held the window, and the next request of a spread run is
+  // placed again, preferring that account. A turn placed at its start
+  // already chose with the cold cache in view.
+  if (compacted && !params.placed) {
+    const order = yield* requestCredentialOrder(
+      modelRequest,
+      extensionRegistry,
+      resolved.credentialPin,
+    ).pipe(Effect.orElseSucceed(Option.none))
+    if (Option.isSome(order) && Option.isSome(order.value.pool)) {
+      const { provider } = order.value
+      const pool = order.value.pool.value
+      const cursor = yield* params.turnLedger.credentialPlacement(provider)
+      const summaryOn = Option.map(
+        Option.filter(yield* credential, (receipt) => receipt.provider === provider),
+        (receipt) => receipt.slot,
+      )
+      const from = Option.orElse(summaryOn, () => cursor.at)
+      const walk = yield* params.placement.place({
+        provider,
+        pool,
+        sessionId: params.sessionId,
+        preferred: Option.filter(from, (slot) => pool.includes(slot)),
+        starter: Option.none(),
+        left: cursor.passed,
+        ttlMs: cacheLifetimeMs,
+      })
+      yield* params.turnLedger.settleCredential(provider, Option.some(walk[0]))
+      yield* publishCredentialAssigned({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messageId: params.messageId,
+        provider,
+        slot: walk[0],
+        from,
+        reason: "compacted",
+      }).pipe(Effect.provideService(EventStore, eventStore))
+    }
+  }
 
   // A summary is priced by the model its receipt names, as a step is by its
   // own. A summary that failed after its model was admitted has no receipt,
@@ -3370,6 +3571,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   return {
     compaction,
     overheadTokens: budget.reservedSystemTokens + budget.reservedToolTokens,
+    cacheLifetimeMs,
     reasoningLevel,
     stream: reportedStream.pipe(
       Stream.mapError(
@@ -3737,6 +3939,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const processLocalReplay = yield* ProcessLocalToolReplay
     const eventStorage = yield* EventStorage
     const sessionStorage = yield* SessionStorage
+    // The server provides one placement to every session. A root composed
+    // without it (a test's actor) places in memory, for this branch alone.
+    const placement = yield* Option.match(yield* Effect.serviceOption(CredentialPlacement), {
+      onNone: () => makeCredentialPlacement(Option.none()),
+      onSome: Effect.succeed,
+    })
 
     /**
      * The model the branch last ran on or was told it continues with: a
@@ -3845,10 +4053,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     }
     const knownLastEffort = (envelope: EventEnvelope): Option.Option<StepEffort> =>
       Option.map(knownStepEffort(envelope), ([, receipt]) => receipt)
-    /** The credential a step's request went out with, and the turn it belongs to. */
+    /** The credential a step's request went out with, the turn it belongs to, and its model. */
     interface StepCredential {
       readonly messageId: MessageId
       readonly receipt: CredentialReceipt
+      readonly model: Option.Option<ModelIdType>
     }
     /** The newest step credential of each sign-in, with the ones `events` add. */
     const withStepCredentials = (
@@ -3863,10 +4072,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             Option.fromUndefinedOr(event.credential),
           ]).pipe(
             Option.map(
-              ([messageId, receipt]) => [receipt.provider, { messageId, receipt }] as const,
+              ([messageId, receipt]) =>
+                [
+                  receipt.provider,
+                  { messageId, receipt, model: Option.fromUndefinedOr(event.model) },
+                ] as const,
             ),
           ),
         )
+      })
+      if (added.length === 0) return known
+      return new Map([...known, ...added])
+    }
+    /** The newest placement of each sign-in, with the ones `events` add. */
+    const withPlacements = (
+      known: ReadonlyMap<string, CredentialAssigned>,
+      events: ReadonlyArray<EventEnvelope>,
+    ): ReadonlyMap<string, CredentialAssigned> => {
+      const added = events.flatMap(({ event }) => {
+        if (event._tag !== "CredentialAssigned") return []
+        return [[event.provider, event] as const]
       })
       if (added.length === 0) return known
       return new Map([...known, ...added])
@@ -3883,6 +4108,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly routed: Option.Option<ModelRouted>
       readonly effortRouted: Option.Option<ModelRouted>
       readonly credentials: ReadonlyMap<string, StepCredential>
+      /** The branch's newest `CredentialAssigned` of each sign-in. */
+      readonly placements: ReadonlyMap<string, CredentialAssigned>
     }
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
@@ -3895,6 +4122,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       routed: Option.none<ModelRouted>(),
       effortRouted: Option.none<ModelRouted>(),
       credentials: new Map<string, StepCredential>(),
+      placements: new Map<string, CredentialAssigned>(),
     }
     const lastKnownStep = yield* Ref.make<KnownSteps>({ cursor: 0, ...unknownSteps })
     const newest = <A>(
@@ -3931,6 +4159,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         routed: newest(events, knownRoute, known.routed),
         effortRouted: newest(events, knownEffortRoute, known.effortRouted),
         credentials: withStepCredentials(known.credentials, events),
+        placements: withPlacements(known.placements, events),
       }
       yield* Ref.set(lastKnownStep, current)
       return current
@@ -3967,6 +4196,154 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         Option.none(),
       )
       return credentials.filter(({ messageId }) => Option.contains(turn, messageId))
+    })
+    /**
+     * Where a spread run with no request on its branch yet comes from, and
+     * the account it prefers: the newest receipt of the session it continues
+     * (a handoff's predecessor, a spawned child's parent) on the same model.
+     * A spawned child whose window holds a reply copied at create is a fork.
+     * A session with no parent is new.
+     */
+    const runOrigin = Effect.fn("AgentLoop.runOrigin")(function* (params: {
+      readonly provider: string
+      readonly modelId: ModelIdType
+      readonly messages: ReadonlyArray<Message>
+    }) {
+      const session = yield* sessionStorage.getSession(scope.sessionId)
+      const parentSessionId = Option.fromUndefinedOr(session?.parentSessionId)
+      if (Predicate.isUndefined(session) || Option.isNone(parentSessionId)) {
+        const fresh: RunOrigin = {
+          reason: "new",
+          preferred: Option.none(),
+          starter: Option.none(),
+        }
+        return fresh
+      }
+      const events = yield* eventStorage.listEvents({
+        sessionId: parentSessionId.value,
+        ...omitUndefined({ branchId: session.parentBranchId }),
+      })
+      const preferred = Option.fromUndefinedOr(
+        withStepCredentials(new Map(), events).get(params.provider),
+      ).pipe(
+        Option.filter((step) => Option.contains(step.model, params.modelId)),
+        Option.map((step) => step.receipt.slot),
+      )
+      if (!isSpawnedSession(session)) {
+        const handoff: RunOrigin = { reason: "handoff", preferred, starter: Option.none() }
+        return handoff
+      }
+      const spawned: RunOrigin = { reason: "spawned", preferred, starter: parentSessionId }
+      // A fork on another model than its parent's is placed as a fresh child.
+      const copied = params.messages.some((message) => message.role === "assistant")
+      const fork: RunOrigin = { ...spawned, reason: "fork" }
+      if (copied && Option.isSome(preferred)) return fork
+      return spawned
+    })
+    /**
+     * Place a spread run (`providers.<id>.authSpread`) at its turn's first
+     * request when its cache is not warm by the loop's one rule
+     * (`cacheWarm`): a new session, a handoff session, a spawned child, a
+     * fork, another model, a lapsed lifetime. A warm turn starts on the
+     * account its cache is on and records nothing; a recovered turn walks the
+     * placement it recorded; a pinned run is never placed. A fork takes its
+     * parent's account with no ranking. True when it placed.
+     */
+    const placeTurn = Effect.fn("AgentLoop.placeTurn")(function* (params: {
+      readonly messageId: MessageId
+      readonly resolved: ResolvedTurnContext
+      readonly knownSteps: Omit<KnownSteps, "cursor">
+      readonly accountStands: Effect.Effect<boolean>
+      readonly extensionRegistry: ExtensionRegistryService
+      readonly modelRegistry: ModelRegistry["Service"]
+    }) {
+      const { resolved, knownSteps } = params
+      const order = yield* requestCredentialOrder(
+        {
+          modelId: resolved.modelId,
+          driverId: Option.getOrUndefined(resolved.modelDriver.driverId),
+        },
+        params.extensionRegistry,
+        resolved.credentialPin,
+      ).pipe(Effect.orElseSucceed(Option.none))
+      if (Option.isNone(order) || Option.isNone(order.value.pool)) return false
+      const { provider } = order.value
+      const pool = order.value.pool.value
+      const cursor = yield* scope.turnLedger.credentialPlacement(provider)
+      if (cursor.settled) return false
+      const own = Option.filter(
+        Option.fromUndefinedOr(knownSteps.placements.get(provider)),
+        (event) => event.messageId === params.messageId,
+      )
+      if (Option.isSome(own)) {
+        yield* scope.turnLedger.settleCredential(provider, Option.some(own.value.slot))
+        return false
+      }
+      const listed = yield* params.modelRegistry
+        .get(resolved.modelDriver.contextModelId)
+        .pipe(Effect.orElseSucceed(() => Option.none<Model>()))
+      const ttlMs = Option.flatMap(listed, (model) => promptCacheTtlMsFor(model, resolved.child))
+      const lastCall = knownSteps.lastCall
+      const lastSlot = Option.flatMap(lastCall, (call) =>
+        Option.map(
+          Option.filter(call.credential, (receipt) => receipt.provider === provider),
+          (receipt) => receipt.slot,
+        ),
+      )
+      const warm = yield* cacheWarm({
+        modelId: resolved.modelId,
+        ttlMs,
+        lastCallModel: knownSteps.lastCallModel,
+        lastCallAtMillis: knownSteps.lastCallAtMillis,
+        accountStands: params.accountStands,
+      })
+      if (warm) {
+        yield* scope.turnLedger.settleCredential(provider, lastSlot)
+        return false
+      }
+      // A branch that ran a request goes cold; its own account is preferred
+      // only on the same model.
+      const origin = yield* Option.match(lastCall, {
+        onSome: (call) =>
+          Effect.succeed<RunOrigin>({
+            reason: "cold",
+            preferred: Option.filter(lastSlot, () => call.model === resolved.modelId),
+            starter: Option.none(),
+          }),
+        onNone: () =>
+          runOrigin({ provider, modelId: resolved.modelId, messages: resolved.messages }),
+      })
+      const preferred = Option.filter(origin.preferred, (slot) => pool.includes(slot))
+      const slot = yield* Option.match(
+        Option.filter(preferred, () => origin.reason === "fork"),
+        {
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.map(
+              placement.place({
+                provider,
+                pool,
+                sessionId: scope.sessionId,
+                preferred,
+                starter: origin.starter,
+                left: cursor.passed,
+                ttlMs: placementLifetimeMs(ttlMs),
+              }),
+              (walk) => walk[0],
+            ),
+        },
+      )
+      yield* scope.turnLedger.settleCredential(provider, Option.some(slot))
+      yield* publishCredentialAssigned({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        messageId: params.messageId,
+        provider,
+        slot,
+        from: origin.preferred,
+        reason: origin.reason,
+      })
+      return true
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
@@ -4323,6 +4700,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       overflowed: boolean
       /** The turn profile's revision, named on `StreamStarted`. */
       profileRevision: Option.Option<string>
+      /** The turn was placed at this step's start (`placeTurn`). */
+      placed: boolean
     }) {
       const persistAssistantPartsWithBindingsAt = (
         at: StepAddress,
@@ -4375,6 +4754,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         overflowed: params.overflowed,
         ledger: scope.ledger,
         turnLedger: scope.turnLedger,
+        placement,
+        placed: params.placed,
       }).pipe(
         Effect.asSome,
         Effect.catchTag("CompactionStopped", () => Effect.succeedNone),
@@ -4436,6 +4817,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const assistantParts = collected.messageProjection.assistant
       const toolParts = collected.messageProjection.tool
 
+      // The step's account serves the session's cache now, and its price
+      // counts toward that account's usage. Any end releases the warming
+      // guard a fresh child holds.
+      const notePlacedStep = (costUsd: Option.Option<number>) =>
+        Effect.gen(function* () {
+          const credential = yield* source.credential
+          if (Option.isNone(credential)) return
+          yield* placement.noteStep({
+            provider: credential.value.provider,
+            slot: credential.value.slot,
+            sessionId: scope.sessionId,
+            costUsd,
+            ttlMs: source.cacheLifetimeMs,
+          })
+        })
+
       // A settled step: cost frozen into the boundary event, metrics folded,
       // parts persisted with their bindings.
       const settleStep = Effect.gen(function* () {
@@ -4484,6 +4881,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }),
           }),
         )
+        yield* notePlacedStep(streamEndedCost)
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
           inputTokens: 0,
           outputTokens: 0,
@@ -4572,6 +4970,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             costUsd: Option.none(),
             toolCallCount: 0,
           })
+          yield* notePlacedStep(Option.none())
         })
 
       yield* Match.type<StepOutcome>().pipe(
@@ -5479,6 +5878,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (yield* scope.turnInterruption.interrupted) {
         return stop({ interrupted: true })
       }
+      // A placement that cannot be read leaves the turn on its order's walk.
+      const placed = yield* placeTurn({
+        messageId: params.state.message.id,
+        resolved,
+        knownSteps,
+        accountStands,
+        extensionRegistry,
+        modelRegistry,
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.credential-placement-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(false),
+          ),
+        ),
+      )
 
       const { collected, outcome } = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -5496,6 +5911,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
             profileRevision: Option.fromUndefinedOr(params.turnProfile.turnProfileRevision),
+            placed,
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
       )
@@ -5740,6 +6156,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
           )
           for (const { receipt } of parentCredentials) {
+            // A spread sign-in places the child instead (`placeTurn`): the
+            // parent's place in its walk would skip the child's account.
+            if (yield* spreadsRuns(receipt.provider, yield* ExtensionRegistry)) continue
             yield* scope.turnLedger.resumeCredential(receipt.provider, receipt.slot)
           }
         }
@@ -5772,6 +6191,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         .pipe(
           Effect.onExit(() =>
             Effect.gen(function* () {
+              // A fresh child that ends its turn before its first step warms nothing.
+              yield* placement.release(scope.sessionId)
               if (preserveReplayBindings) return
               yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
               yield* clearProcessLocalToolResultsForTurn(state.message.id)
