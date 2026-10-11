@@ -6,8 +6,10 @@ import {
   DateTime,
   Duration,
   Effect,
+  Equal,
   Exit,
   FileSystem,
+  Hash,
   type JsonSchema,
   Layer,
   Option,
@@ -15,6 +17,7 @@ import {
   Path,
   type PlatformError,
   Predicate,
+  RcMap,
   Result,
   Schema,
   Scope,
@@ -1312,8 +1315,9 @@ const mergeResourceServices = (
  * extension builds in its own child of `parent`, over its `buildContext`.
  * A build that fails closes its own scope, is
  * logged naming its extension, and is returned in `failed`; the other
- * extensions' Resources stay live. Process and branch Resources both build
- * here.
+ * extensions' Resources stay live. A branch loop builds its Resources here
+ * (a test builds any scope here); a profile holds its server and process
+ * Resources as shared builds (`SharedBuild`, `SessionProfileCache`).
  *
  * `reuse` hands over services an earlier build left to share instead of
  * building them; `built` receives each new build and the scope that holds it.
@@ -1342,12 +1346,6 @@ export const buildScopeResources = (params: {
     scope: Scope.Closeable,
     context: Context.Context<unknown>,
   ) => void
-  /**
-   * The version to run in place of an extension whose Resources fail to
-   * build: its last good version, marked with the failure. It is shared or
-   * built as any other; when it fails too, the extension is failed.
-   */
-  readonly fallback?: (extension: LoadedExtension, error: string) => Option.Option<LoadedExtension>
 }): Effect.Effect<BuiltScopeResources> =>
   Effect.gen(function* () {
     let context = params.context
@@ -1396,16 +1394,6 @@ export const buildScopeResources = (params: {
       yield* Effect.logError("extension.resource.failed").pipe(
         Effect.annotateLogs({ extensionId: extension.manifest.id, scope: params.scope, error }),
       )
-      const fallback = params.fallback?.(extension, error) ?? Option.none()
-      if (Option.isSome(fallback)) {
-        const previous = yield* start(fallback.value)
-        if (Exit.isSuccess(previous)) {
-          context = mergeResourceServices(context, previous.value, fallback.value.manifest.id)
-          services.set(fallback.value.manifest.id, previous.value)
-          active.push(fallback.value)
-          continue
-        }
-      }
       failed.push({
         extension,
         failure: toFailedExtension(extension, "startup", error),
@@ -1414,6 +1402,30 @@ export const buildScopeResources = (params: {
     }
     return { active, failed, context, services }
   })
+
+/**
+ * One build of an extension's server or process Resources over a context,
+ * which a profile holds and every profile that names its key shares
+ * (`SessionProfileCache`). The key names everything the build reads, so two
+ * builds with one key build the same code over the same services: equality
+ * and hash read the key only.
+ */
+class SharedBuild implements Equal.Equal {
+  constructor(
+    readonly key: string,
+    readonly extension: LoadedExtension,
+    readonly scope: "server" | "process",
+    readonly context: Context.Context<unknown>,
+  ) {}
+
+  [Equal.symbol](that: Equal.Equal): boolean {
+    return that instanceof SharedBuild && that.key === this.key
+  }
+
+  [Hash.symbol](): number {
+    return Hash.string(this.key)
+  }
+}
 
 // ── host-platform ───────────────────────────────────────────────────────────
 
@@ -2786,12 +2798,34 @@ const effectiveInputs = (
   disabledExtensions: Option.getOrElse(Option.fromUndefinedOr(config.disabledExtensions), () => []),
 })
 
-interface StartedProcessResources {
+/** The server and process Resources one profile holds (`SessionProfileCache`). */
+interface HeldProfileResources {
+  /** The extensions that run, each in the one version both phases built. */
   readonly active: ReadonlyArray<LoadedExtension>
   readonly failed: ReadonlyArray<FailedExtension>
+  /** The host's services with every server, then every process, service over them. */
   readonly context: Context.Context<unknown>
   /** Each live extension's process Resources: their key and the services they built. */
   readonly process: ResourceBuildInputs["process"]
+}
+
+/** What one pass of a profile's two phases holds when every build in it built. */
+interface HeldResourcePass {
+  readonly context: Context.Context<unknown>
+  readonly process: ResourceBuildInputs["process"]
+}
+
+/** The first build of a pass that failed, which ends the pass. */
+interface FailedResourcePass {
+  readonly extension: LoadedExtension
+  readonly scope: "server" | "process"
+  readonly cause: Cause.Cause<unknown>
+}
+
+/** The lease one `resolve` takes, and whether its caller's scope let go of it. */
+interface CallerLease<Entry> {
+  entry: Option.Option<Entry>
+  released: boolean
 }
 
 export class SessionProfileCache extends Context.Service<
@@ -2860,30 +2894,30 @@ export class SessionProfileCache extends Context.Service<
           readonly consulted: ReadonlyMap<string, string>
           readonly place: string
           readonly profile: SessionProfile
+          /** Closing it lets go of every build the profile holds. */
           readonly scope: Scope.Closeable
-          /** The shared process resources the profile holds (`sharedResources`). */
-          readonly resources: ReadonlyArray<string>
         }
-        // Every map below changes only under the place's lock. A shared
-        // process resource's key starts with its place, so its place's lock
-        // guards it. A server resource's key starts with `server` and holds no
-        // place: its builds run under the server's own lock
-        // (`serverResourceLock`), and a profile of any place takes and drops a
-        // hold on it in one synchronous step.
+        // Every map below changes only under the place's lock.
         const entries = new Map<string, ProfileEntry>()
         const leases = new Map<string, number>()
-        // One extension's process resources, shared by every profile that
-        // builds them over the same context, and its server resources, shared
-        // by every profile that runs the same version of it
-        // (`startProcessResources`), with the number of profiles that hold them.
-        const sharedResources = new Map<
-          string,
-          {
-            readonly scope: Scope.Closeable
-            readonly context: Context.Context<unknown>
-            holders: number
-          }
-        >()
+        // One build of each extension's server or process Resources per key,
+        // shared by every profile that names the key, of any place
+        // (`holdResources`). A profile holds a build through a scope of its
+        // own: the build is made by the first profile that asks for its key
+        // while two places that ask at once share it, and closes when the
+        // last profile holding it lets go (an idle time of zero). A build
+        // that fails is held by no profile once its asker lets go, so the
+        // next one to ask builds again. Builds of different keys never wait
+        // on each other.
+        const builds = yield* RcMap.make({
+          lookup: (build: SharedBuild) =>
+            Effect.flatMap(Effect.scope, (scope) =>
+              Layer.build(buildResourceLayer([build.extension], build.scope)).pipe(
+                Effect.provideContext(build.context),
+                Effect.provideService(Scope.Scope, scope),
+              ),
+            ),
+        })
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
         // How many times each extension of a place was reloaded. The counts
@@ -2896,7 +2930,7 @@ export class SessionProfileCache extends Context.Service<
         // The last version of each user and project extension of a place
         // that ran, by place, scope and source path. A newer version that
         // fails runs this one in its place (`loadRuntimeProfileDeclarations`,
-        // `startProcessResources`). A deleted file or a disabled id leaves the
+        // `holdResources`). A deleted file or a disabled id leaves the
         // profile, so it leaves this map too.
         const lastGood = new Map<string, LoadedExtension>()
         const lastGoodKey = (
@@ -3015,171 +3049,211 @@ export class SessionProfileCache extends Context.Service<
           extensions: config.extensions,
         })
 
-        /**
-         * Let go of shared resources a profile held. The ones no profile holds
-         * any more are returned for the caller to close.
-         */
-        const dropResources = (keys: ReadonlyArray<string>): ReadonlyArray<Scope.Closeable> =>
-          keys.toReversed().flatMap((key) => {
-            const shared = Option.fromNullishOr(sharedResources.get(key))
-            if (Option.isNone(shared)) return []
-            shared.value.holders -= 1
-            if (shared.value.holders > 0) return []
-            sharedResources.delete(key)
-            return [shared.value.scope]
-          })
-
         const closeScopes = (scopes: ReadonlyArray<Scope.Closeable>) =>
           Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true })
 
-        // One server resource build at a time, whatever its place: two places
-        // that first run an extension at once build its server resources once.
-        const serverResourceLock = yield* Semaphore.make(1)
-        /** A server resource's key: its extension's version, and no place. */
-        const serverResourceKey = (extension: LoadedExtension): string =>
-          ["server", extensionResourceIdentity(extension)].join("\u0000")
+        /**
+         * Hold one shared build in a new child of `parent`: shared when its
+         * key is held already, built otherwise. A build that fails lets go at
+         * once. Only the wait for the build can be interrupted (`restore`): an
+         * interrupt of the caller there lets go of its hold and returns as an
+         * interrupt, while an extension that interrupts itself is a failure.
+         * The reference and its release are taken in one step
+         * (`RcMap.get`), so no interrupt leaves a hold behind.
+         */
+        const holdBuild = (build: SharedBuild, parent: Scope.Scope, restore: Restore) =>
+          Effect.gen(function* () {
+            const hold = yield* Scope.fork(parent)
+            const held = yield* restore(RcMap.get(builds, build)).pipe(
+              Effect.provideService(Scope.Scope, hold),
+              Effect.exit,
+            )
+            if (Exit.isSuccess(held)) return held
+            yield* Scope.close(hold, held)
+            // The cause cannot tell an interrupt of the caller from an
+            // extension that interrupts itself, the fiber can: an
+            // interruptible no-op fails at once only when this fiber was
+            // interrupted.
+            if (Cause.hasInterruptsOnly(held.cause)) yield* restore(Effect.void)
+            return held
+          })
 
         /**
-         * Build every extension's server resources, then its process
-         * resources over them, in resolution order, so a later extension's
-         * service wins exactly as it does in the registry. An extension's
-         * server resources are shared by every profile, of any place, that
-         * runs the same version of it (id, source and file version); they read
-         * the host's services only, so the place a profile was built for does
-         * not change them. A process build and a leaf read them as any other
-         * resource's services. They close when the last profile holding them
-         * retires.
-         *
-         * Process resources are built in resolution order, so
-         * a later extension's service wins exactly as it does in the
-         * registry. An extension's resources are shared by every profile of
-         * the place that builds them over the same context: the same
-         * resource-bearing extensions before it and itself (id, source and
-         * file version). A profile rebuilt for an edit that leaves them alone
-         * keeps them, and with them their state: an open `/btw` fork, a
-         * watcher, a running job. They close when the last profile holding
-         * them retires. A resource that fails to build is not shared: its
-         * extension is reported as failed at the startup phase, and the rest
-         * of the profile stays live. Only a build can be interrupted; each
-         * key it shares or builds is pushed to `held` at once, so the caller
-         * can let go of it.
+         * One pass of a profile's two phases over `extensions`, holding each
+         * build in `parent`. First every extension's server Resources, in
+         * resolution order, each over the host's services only: its key is
+         * its version (`server`, then scope, id, source and file version), and
+         * no place, so every place that runs that version shares it. Then
+         * every extension's process Resources, in resolution order, each over
+         * the host's services, every server service and the process services
+         * before it, so a later extension's service wins exactly as it does in
+         * the registry (a compactor joins a chain instead). A process key
+         * names what its build reads: the place, every server build the pass
+         * holds, the process-bearing extensions before it, and itself. So an
+         * edit, reload or disable of any extension with a server Resource
+         * builds every process Resource again, and a process service is never
+         * held over a server service that closed. The pass stops at the first
+         * build that fails.
          */
-        const startProcessResources = (
+        const holdAttempt = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
-          held: Array<string>,
+          parent: Scope.Scope,
           restore: Restore,
-        ): Effect.Effect<StartedProcessResources> =>
+        ): Effect.Effect<Result.Result<HeldResourcePass, FailedResourcePass>> =>
           Effect.gen(function* () {
-            // The key of a build is the identities of the builds it runs over,
-            // as they started: a last good version that runs in place of a
-            // version that failed to start is named by its own version, and a
-            // build after it by that version too. `buildScopeResources`
-            // shares or builds one extension at a time in resolution order,
-            // and each one it shares or builds is live over the ones before.
-            // A branch Resource that reads an extension's process Resources
-            // keys on that extension's key (`branchResourceKeys`).
-            const chain = [place]
-            const keyOf = (extension: LoadedExtension) =>
-              [...chain, extensionResourceIdentity(extension)].join("\u0000")
-            const keys = new Map<ExtensionId, string>()
-            const accept = (extension: LoadedExtension, key: string) => {
-              chain.push(extensionResourceIdentity(extension))
-              keys.set(extension.manifest.id, key)
-              held.push(key)
-            }
-            // The set as it runs: each last good version in place of the
-            // version it stands for.
-            let effective = extensions
-            // A last good version runs only where its contributions collide
-            // with none of the set's: the set validated without it, so a
-            // collision is its own, and the extension whose new version
-            // failed is the one that fails.
-            const fallback = (extension: LoadedExtension, error: string) => {
-              if (extension.scope === "builtin") return Option.none()
-              return Option.fromNullishOr(lastGood.get(lastGoodKey(place, extension))).pipe(
-                Option.filter((previous) => previous.version !== extension.version),
-                Option.map((previous): LoadedExtension => ({
-                  ...previous,
-                  reloadFailed: { phase: "startup", error },
-                })),
-                Option.filter((previous) => {
-                  const substituted = effective.map((other) => {
-                    if (sameSource(other, extension)) return previous
-                    return other
-                  })
-                  if (collectValidationFailures(substituted).size > 0) return false
-                  effective = substituted
-                  return true
-                }),
+            const sorted = sortExtensionsByScope(extensions)
+            let context = platformServicesContext
+            const serverKeys: Array<string> = []
+            for (const extension of sorted) {
+              if (collectResourceEntries([extension], "server").length === 0) continue
+              const key = ["server", extensionResourceIdentity(extension)].join("\u0000")
+              const held = yield* holdBuild(
+                new SharedBuild(key, extension, "server", platformServicesContext),
+                parent,
+                restore,
               )
+              if (Exit.isFailure(held)) {
+                return Result.fail({ extension, scope: "server", cause: held.cause })
+              }
+              context = mergeResourceServices(context, held.value, extension.manifest.id)
+              serverKeys.push(key)
             }
-            yield* restore(serverResourceLock.take(1))
-            const server = yield* buildScopeResources({
-              extensions,
-              scope: "server",
-              context: platformServicesContext,
-              buildContext: () => platformServicesContext,
-              parent: serverScope,
-              restore,
-              reuse: (extension) => {
-                const key = serverResourceKey(extension)
-                const shared = Option.fromNullishOr(sharedResources.get(key))
-                if (Option.isNone(shared)) return Option.none()
-                shared.value.holders += 1
-                held.push(key)
-                return Option.some(shared.value.context)
-              },
-              built: (extension, scope, context) => {
-                const key = serverResourceKey(extension)
-                sharedResources.set(key, { scope, context, holders: 1 })
-                held.push(key)
-              },
-              fallback,
-            }).pipe(Effect.ensuring(serverResourceLock.release(1)))
-            const started = yield* buildScopeResources({
-              extensions: server.active,
-              scope: "process",
-              context: server.context,
-              buildContext: (_extension, before) => before,
-              parent: serverScope,
-              restore,
-              reuse: (extension) => {
-                const key = keyOf(extension)
-                const shared = Option.fromNullishOr(sharedResources.get(key))
-                if (Option.isNone(shared)) return Option.none()
-                shared.value.holders += 1
-                accept(extension, key)
-                return Option.some(shared.value.context)
-              },
-              built: (extension, scope, context) => {
-                const key = keyOf(extension)
-                sharedResources.set(key, { scope, context, holders: 1 })
-                accept(extension, key)
-              },
-              fallback,
-            })
+            const chain = [place, ...serverKeys]
             const process = new Map<
               ExtensionId,
               { key: string; context: Context.Context<unknown> }
             >()
-            for (const [id, context] of started.services) {
-              const key = keys.get(id)
-              if (!Predicate.isUndefined(key)) process.set(id, { key, context })
+            for (const extension of sorted) {
+              if (collectResourceEntries([extension], "process").length === 0) continue
+              const identity = extensionResourceIdentity(extension)
+              const key = [...chain, identity].join("\u0000")
+              const held = yield* holdBuild(
+                new SharedBuild(key, extension, "process", context),
+                parent,
+                restore,
+              )
+              if (Exit.isFailure(held)) {
+                return Result.fail({ extension, scope: "process", cause: held.cause })
+              }
+              context = mergeResourceServices(context, held.value, extension.manifest.id)
+              chain.push(identity)
+              process.set(extension.manifest.id, { key, context: held.value })
             }
-            return {
-              active: started.active,
-              failed: [...server.failed, ...started.failed].map(({ failure }) => failure),
-              context: started.context,
-              process,
+            return Result.succeed({ context, process })
+          })
+
+        /**
+         * The set to run after `extension` failed to build: with its last good
+         * version in its place, marked with the failure, when it has another
+         * one and the set validates with it (a collision is the last good
+         * version's own, so the extension whose new version failed is the one
+         * that fails). None when the failed version is the last good one.
+         */
+        const withLastGood = (
+          place: string,
+          extensions: ReadonlyArray<LoadedExtension>,
+          extension: LoadedExtension,
+          error: string,
+        ): Option.Option<{
+          readonly previous: LoadedExtension
+          readonly extensions: ReadonlyArray<LoadedExtension>
+        }> => {
+          if (extension.scope === "builtin") return Option.none()
+          return Option.fromNullishOr(lastGood.get(lastGoodKey(place, extension))).pipe(
+            Option.filter((previous) => previous.version !== extension.version),
+            Option.map((previous) => {
+              const marked: LoadedExtension = {
+                ...previous,
+                reloadFailed: { phase: "startup", error },
+              }
+              return {
+                previous: marked,
+                extensions: extensions.map((other) => {
+                  if (sameSource(other, extension)) return marked
+                  return other
+                }),
+              }
+            }),
+            Option.filter((next) => collectValidationFailures(next.extensions).size === 0),
+          )
+        }
+
+        /**
+         * Hold the server and process Resources of a profile's extensions,
+         * each extension in one version across both phases. A pass
+         * (`holdAttempt`) runs both phases over the set; when a build fails,
+         * the failure decides for its whole extension: its last good version
+         * runs in its place (`withLastGood`), or it leaves the set and is
+         * reported failed at the startup phase with the failure of the version
+         * that first failed. Then a new pass runs both phases again over the
+         * new set. The pass before is let go only after the new one holds its
+         * builds, so a build the change left alone is shared, not built again,
+         * while the failed version's builds (its server service among them)
+         * close unless another profile holds them. Each source path changes at
+         * most twice (new version, last good version, out), so the passes end.
+         * Every pass holds its builds in a child of `profileScope`: closing it
+         * lets go of all of them, process builds before the server builds they
+         * read.
+         */
+        const holdResources = (
+          place: string,
+          extensions: ReadonlyArray<LoadedExtension>,
+          profileScope: Scope.Scope,
+          restore: Restore,
+        ): Effect.Effect<HeldProfileResources> =>
+          Effect.gen(function* () {
+            let effective = extensions
+            const failed: Array<FailedExtension> = []
+            // A last good version that runs, to the new version it stands
+            // for and that version's failure.
+            const standsFor = new Map<
+              LoadedExtension,
+              { readonly extension: LoadedExtension; readonly error: string }
+            >()
+            let previous = Option.none<Scope.Closeable>()
+            while (true) {
+              const pass = yield* Scope.fork(profileScope)
+              const held = yield* holdAttempt(place, effective, pass, restore)
+              if (Option.isSome(previous)) yield* Scope.close(previous.value, Exit.void)
+              previous = Option.some(pass)
+              if (Result.isSuccess(held)) {
+                return {
+                  active: sortExtensionsByScope(effective),
+                  failed,
+                  context: held.success.context,
+                  process: held.success.process,
+                }
+              }
+              const attempt = held.failure
+              const error = Cause.pretty(attempt.cause)
+              yield* Effect.logError("extension.resource.failed").pipe(
+                Effect.annotateLogs({
+                  extensionId: attempt.extension.manifest.id,
+                  scope: attempt.scope,
+                  error,
+                }),
+              )
+              const next = withLastGood(place, effective, attempt.extension, error)
+              if (Option.isSome(next)) {
+                standsFor.set(next.value.previous, { extension: attempt.extension, error })
+                effective = next.value.extensions
+                continue
+              }
+              const first = standsFor.get(attempt.extension) ?? {
+                extension: attempt.extension,
+                error,
+              }
+              failed.push(toFailedExtension(first.extension, "startup", first.error))
+              effective = effective.filter((extension) => extension !== attempt.extension)
             }
           })
 
         /**
          * Build a profile into a new scope. The caller runs this where it
-         * cannot be interrupted; only a resource build and the registry
-         * build (`restore`) can be. A failed or interrupted build closes its
-         * scope and lets go of the shared resources it took.
+         * cannot be interrupted; only the wait for a resource build and the
+         * registry build (`restore`) can be. A failed or interrupted build
+         * closes its scope, which lets go of every build it held.
          */
         const buildProfile = (
           place: string,
@@ -3190,12 +3264,11 @@ export class SessionProfileCache extends Context.Service<
         ) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
-            const held: Array<string> = []
             const profile = yield* Effect.gen(function* () {
-              const started = yield* startProcessResources(
+              const started = yield* holdResources(
                 place,
                 declarations.extensionDeclarations.active,
-                held,
+                profileScope,
                 restore,
               )
               // A config failure is not part of the profile: health reads it
@@ -3240,13 +3313,9 @@ export class SessionProfileCache extends Context.Service<
             }).pipe(
               Effect.provideService(Scope.Scope, profileScope),
               // A failed or interrupted build releases everything it acquired.
-              Effect.onError((cause) =>
-                Scope.close(profileScope, Exit.failCause(cause)).pipe(
-                  Effect.andThen(closeScopes(dropResources(held))),
-                ),
-              ),
+              Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
             )
-            return { profile, scope: profileScope, resources: held }
+            return { profile, scope: profileScope }
           })
 
         /**
@@ -3318,12 +3387,12 @@ export class SessionProfileCache extends Context.Service<
           })
 
         /**
-         * Drop a superseded profile no lease holds: its scope, and the shared
-         * resources no other profile holds. The caller closes the returned
-         * scopes after it releases the place's lock, so an extension
-         * finalizer never runs under it.
+         * Drop a superseded profile no lease holds. The caller closes the
+         * returned scope, which lets go of the profile's builds, after it
+         * releases the place's lock, so an extension finalizer never runs
+         * under it.
          */
-        const retireIfUnused = (key: string): Option.Option<ReadonlyArray<Scope.Closeable>> => {
+        const retireIfUnused = (key: string): Option.Option<Scope.Closeable> => {
           const entry = Option.fromNullishOr(entries.get(key))
           if (Option.isNone(entry)) return Option.none()
           if ((leases.get(key) ?? 0) > 0) return Option.none()
@@ -3331,20 +3400,21 @@ export class SessionProfileCache extends Context.Service<
           entries.delete(key)
           leases.delete(key)
           for (const [list, target] of aliases) if (target === key) aliases.delete(list)
-          return Option.some([entry.value.scope, ...dropResources(entry.value.resources)])
+          return Option.some(entry.value.scope)
         }
 
-        const closeRetired = (retired: Option.Option<ReadonlyArray<Scope.Closeable>>) =>
-          Option.match(retired, {
-            onNone: () => Effect.void,
-            onSome: (scopes) =>
-              closeScopes(scopes).pipe(Effect.andThen(Effect.logInfo("session-profile.retired"))),
+        const closeRetired = (retired: ReadonlyArray<Scope.Closeable>) =>
+          Effect.suspend(() => {
+            if (retired.length === 0) return Effect.void
+            return closeScopes(retired).pipe(
+              Effect.andThen(Effect.logInfo("session-profile.retired")),
+            )
           })
 
         const release = (entry: ProfileEntry, lock: Semaphore.Semaphore) =>
           Effect.sync(() => {
             leases.set(entry.key, (leases.get(entry.key) ?? 1) - 1)
-            return retireIfUnused(entry.key)
+            return Option.toArray(retireIfUnused(entry.key))
           }).pipe(lock.withPermits(1), Effect.flatMap(closeRetired))
 
         const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
@@ -3354,48 +3424,74 @@ export class SessionProfileCache extends Context.Service<
             const canonicalCwd = pathSvc.resolve(cwd)
             const place = placeKey(workspaceId, canonicalCwd)
             const lock = yield* lockFor(place)
+            const lease: CallerLease<ProfileEntry> = { entry: Option.none(), released: false }
+            // The profiles this resolve superseded, closed after the lock.
+            const retired: Array<Scope.Closeable> = []
             // Finding or building the entry, its lease, and `current` are one
             // step no interrupt can split: an entry stored without its lease
             // and not current would never retire. Only the reads and the
-            // build inside it (`restore`) can be interrupted. The lease's
-            // release joins the caller's scope after the lock is let go: a
-            // scope that already closed (a loop that closed while one of its
-            // fibers resolved) runs the release at once, and the release
-            // takes the lock. Retired scopes close after releasing it, within
-            // the same protected transfer, so interruption cannot lose cleanup.
-            const entry = yield* Effect.uninterruptibleMask((restore) =>
+            // build (`restoreUnderLock`) can be interrupted.
+            const underLock = Effect.uninterruptibleMask((restoreUnderLock) =>
               Effect.gen(function* () {
-                yield* restore(lock.take(1))
-                const leased = yield* Effect.gen(function* () {
-                  // The config is read under the place lock, so resolves set
-                  // `current` in the order they read it: a read from before an
-                  // edit cannot put the older profile back.
-                  const fresh = yield* restore(configService.getFresh(canonicalCwd))
-                  const scan = yield* restore(
-                    scanRuntimeProfileExtensions(inputsFor(canonicalCwd), graphs).pipe(
-                      Effect.provideContext(configReadContext(fresh)),
-                    ),
-                  )
-                  const list = listKey(
-                    place,
-                    effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                    filesStamp(place, scan, fresh),
-                  )
-                  const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
-                  recordLastGood(place, entry.profile.resolved)
+                // The config is read under the place lock, so resolves set
+                // `current` in the order they read it: a read from before an
+                // edit cannot put the older profile back.
+                const fresh = yield* restoreUnderLock(configService.getFresh(canonicalCwd))
+                const scan = yield* restoreUnderLock(
+                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd), graphs).pipe(
+                    Effect.provideContext(configReadContext(fresh)),
+                  ),
+                )
+                const list = listKey(
+                  place,
+                  effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                  filesStamp(place, scan, fresh),
+                )
+                const entry = yield* entryFor(
+                  place,
+                  list,
+                  scan,
+                  canonicalCwd,
+                  fresh,
+                  restoreUnderLock,
+                )
+                recordLastGood(place, entry.profile.resolved)
+                if (!lease.released) {
                   leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
-                  const previous = Option.fromNullishOr(current.get(place))
-                  current.set(place, entry.key)
-                  const retired = Option.flatMap(
-                    Option.filter(previous, (key) => key !== entry.key),
-                    retireIfUnused,
-                  )
-                  return { entry, retired }
-                }).pipe(Effect.ensuring(lock.release(1)))
-                yield* Scope.addFinalizer(callerScope, release(leased.entry, lock))
-                yield* closeRetired(leased.retired)
-                return leased.entry
+                  lease.entry = Option.some(entry)
+                }
+                const previous = Option.fromNullishOr(current.get(place))
+                current.set(place, entry.key)
+                const superseded = Option.flatMap(
+                  Option.filter(previous, (key) => key !== entry.key),
+                  retireIfUnused,
+                )
+                retired.push(...Option.toArray(superseded))
+                return entry
               }),
+            )
+            // The lease's release joins the caller's scope before the lock is
+            // taken, so no interrupt falls between a lease and its release: a
+            // scope that already closed (a loop that closed while one of its
+            // fibers resolved) runs it at once with no lease, and the resolve
+            // then takes none. `withPermits` takes the permit and its release
+            // in one step, so only the wait for the lock can be interrupted
+            // around it. Retired scopes close after the lock is let go,
+            // however the step ended.
+            const entry = yield* Effect.uninterruptibleMask((restore) =>
+              Scope.addFinalizer(
+                callerScope,
+                Effect.suspend(() => {
+                  lease.released = true
+                  return Option.match(lease.entry, {
+                    onNone: () => Effect.void,
+                    onSome: (leased) => release(leased, lock),
+                  })
+                }),
+              ).pipe(
+                Effect.andThen(restore(underLock.pipe(lock.withPermits(1)))),
+                Effect.ensuring(closeRetired(retired)),
+              ),
             )
             return entry.profile
           })

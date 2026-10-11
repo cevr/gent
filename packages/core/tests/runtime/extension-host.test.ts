@@ -18,6 +18,7 @@ import {
   Ref,
   References,
   Result,
+  Scheduler,
   Schema,
   Scope,
   Stream,
@@ -431,6 +432,135 @@ class ServerResourceProbe extends Context.Service<
   ServerResourceProbe,
   { readonly build: number }
 >()("@gent/core/tests/runtime/extension-host.test/ServerResourceProbe") {}
+
+/** A server service: its extension's version, and whether its scope closed. */
+class ServerFeed extends Context.Service<
+  ServerFeed,
+  { readonly version: string; readonly closed: () => boolean }
+>()("@gent/core/tests/runtime/extension-host.test/ServerFeed") {}
+
+/** A process service: what it read of `ServerFeed` when it was built. */
+class ServerFeedReader extends Context.Service<
+  ServerFeedReader,
+  { readonly seen: () => { readonly version: string; readonly closed: boolean } }
+>()("@gent/core/tests/runtime/extension-host.test/ServerFeedReader") {}
+
+/** The `ServerFeedReader` that a process Resource builds over the profile's `ServerFeed`, if any. */
+const serverFeedReaderLayer = (builds: Ref.Ref<number>) =>
+  Layer.effect(
+    ServerFeedReader,
+    Effect.gen(function* () {
+      yield* Ref.update(builds, (count) => count + 1)
+      const feed = yield* Effect.serviceOption(ServerFeed)
+      return ServerFeedReader.of({
+        seen: () =>
+          Option.match(feed, {
+            onNone: () => ({ version: "none", closed: false }),
+            onSome: (found) => ({ version: found.version, closed: found.closed() }),
+          }),
+      })
+    }),
+  )
+
+/** The layer source of `serverFeedSource`'s process Resource, by kind. */
+const serverFeedReaderSource = {
+  broken: 'Layer.effect(ServerFeedReader, Effect.die("startup broke"))',
+  good: "Layer.effect(ServerFeedReader, Effect.map(ServerFeed, (feed) => ServerFeedReader.of({ seen: () => ({ version: feed.version, closed: feed.closed() }) })))",
+} as const
+
+/**
+ * A user extension file, id `server-feed`, whose server Resource serves
+ * `ServerFeed` labelled `version`. When `marks` is given, each open build
+ * keeps one file `<version>-<uuid>` there; when `reader` is `"broken"` or
+ * `"good"`, it also has a process Resource that dies at startup or serves
+ * `ServerFeedReader` over its own feed.
+ */
+function serverFeedSource(
+  version: string,
+  options: { readonly marks?: string; readonly reader?: "good" | "broken" } = {},
+): string {
+  const marks = Option.fromUndefinedOr(options.marks)
+  const mark = Option.match(marks, {
+    onNone: () => "",
+    onSome: (dir) => `const mark = join(${encodeJson(dir)}, "${version}-" + randomUUID());
+        writeFileSync(mark, "");`,
+  })
+  const unmark = Option.match(marks, { onNone: () => "", onSome: () => "rmSync(mark);" })
+  const reader = Option.match(Option.fromUndefinedOr(options.reader), {
+    onNone: () => "",
+    onSome: (kind) => `,
+      defineResource({
+        id: "server-feed/reader",
+        scope: "process",
+        layer: ${serverFeedReaderSource[kind]},
+      })`,
+  })
+  return `import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class ServerFeed extends Context.Service<ServerFeed, { readonly version: string; readonly closed: () => boolean }>()(
+  "@gent/core/tests/runtime/extension-host.test/ServerFeed",
+) {}
+class ServerFeedReader extends Context.Service<ServerFeedReader, { readonly seen: () => { readonly version: string; readonly closed: boolean } }>()(
+  "@gent/core/tests/runtime/extension-host.test/ServerFeedReader",
+) {}
+export default defineExtension({
+  id: "server-feed",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "server-feed/feed",
+        scope: "server",
+        layer: Layer.effect(ServerFeed, Effect.gen(function* () {
+          ${mark}
+          const state = { closed: false };
+          yield* Effect.addFinalizer(() => Effect.sync(() => { state.closed = true; ${unmark} }));
+          return ServerFeed.of({ version: "${version}", closed: () => state.closed });
+        })),
+      })${reader},
+    );
+  }),
+});
+`
+}
+
+/**
+ * A scheduler that counts the steps of one fiber, the one `run` starts, and
+ * interrupts it at step `at` (never, when its steps end before). Each fiber
+ * yields as the default scheduler yields it, so the steps of two runs of the
+ * same code count the same.
+ */
+class InterruptAtStep implements Scheduler.Scheduler {
+  readonly executionMode = "async"
+  readonly inner = new Scheduler.MixedScheduler()
+  steps = 0
+  target: Option.Option<Fiber.Fiber<unknown, unknown>> = Option.none()
+  constructor(readonly at: number) {}
+
+  run<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+    return Effect.withFiber((fiber) => {
+      this.target = Option.some(fiber)
+      return effect
+    }).pipe(Effect.provideService(Scheduler.Scheduler, this))
+  }
+
+  shouldYield(fiber: Fiber.Fiber<unknown, unknown>): boolean {
+    // By reference: `Equal` compares two fibers by their structure.
+    if (Option.exists(this.target, (target) => target === fiber)) {
+      this.steps += 1
+      if (this.steps === this.at) fiber.interruptUnsafe()
+    }
+    return this.inner.shouldYield(fiber)
+  }
+
+  makeDispatcher(): Scheduler.SchedulerDispatcher {
+    return this.inner.makeDispatcher()
+  }
+}
 
 /** A process resource whose layer runs `start` as it builds. */
 const startResource = (id: string, start: Effect.Effect<void>) =>
@@ -919,6 +1049,350 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
         }).pipe(
           Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [shared] })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("9".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // An interrupt can land at any step of a resolve. Wherever it lands up to
+  // the build of the place's process Resource (the place's lock, the setups,
+  // the server phase), the resolve keeps no lock and no hold: another place
+  // and its own place resolve after it.
+  it.scopedLive(
+    "a resolve interrupted at any step up to its process build keeps no lock and no hold",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-interrupt-" })
+        const home = path.join(directory, "home")
+        const place = (name: string) => path.join(directory, name)
+        yield* fs.makeDirectory(home, { recursive: true })
+        // The scheduler of the resolve that runs, and the steps it had run
+        // at the setup and at the process build.
+        const at = {
+          scheduler: new InterruptAtStep(Number.POSITIVE_INFINITY),
+          setup: 0,
+          processBuild: 0,
+        }
+        const extension = defineExtension({
+          id: "interrupt-feed",
+          setup: Effect.gen(function* () {
+            yield* Effect.sync(() => {
+              at.setup = at.scheduler.steps
+            })
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "interrupt-feed/feed",
+                scope: "server",
+                layer: Layer.succeed(ServerResourceProbe, ServerResourceProbe.of({ build: 1 })),
+              }),
+              defineResource({
+                id: "interrupt-feed/reader",
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileStartProbe,
+                  Effect.sync(() => {
+                    at.processBuild = at.scheduler.steps
+                    return SessionProfileStartProbe.of({ value: "reader" })
+                  }),
+                ),
+              }),
+            )
+          }),
+        })
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolveIn = (cwd: string) => Effect.scoped(cache.resolve(cwd))
+          const resolvesIn = (cwd: string) =>
+            resolveIn(cwd).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.exit,
+              Effect.map(Exit.isSuccess),
+            )
+          // This place holds the server build: every later place shares it.
+          yield* cache.resolve(place("held"))
+          // The steps of one resolve, uninterrupted.
+          yield* Effect.forkChild(at.scheduler.run(resolveIn(place("count")))).pipe(
+            Effect.flatMap(Fiber.join),
+          )
+          // The count reached past the setups to the process build.
+          const last = at.processBuild
+          expect(last).toBeGreaterThan(at.setup)
+          const kept: Array<string> = []
+          for (let step = 1; step <= last; step += 1) {
+            at.scheduler = new InterruptAtStep(step)
+            const own = place(`step-${step}`)
+            const resolving = yield* Effect.forkChild(at.scheduler.run(resolveIn(own)))
+            const ended = yield* Fiber.await(resolving).pipe(
+              Effect.timeout("5 seconds"),
+              Effect.exit,
+            )
+            if (Exit.isFailure(ended)) {
+              kept.push(`step ${step}: the interrupted resolve did not end`)
+              break
+            }
+            if (!(yield* resolvesIn(place(`elsewhere-${step}`)))) {
+              kept.push(`step ${step}: another place does not resolve`)
+              break
+            }
+            if (!(yield* resolvesIn(own))) kept.push(`step ${step}: its own place does not resolve`)
+          }
+          expect(kept).toEqual([])
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: place("held"), home, extensions: [extension] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("a".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+    60_000,
+  )
+
+  // A process build runs over every server service of its profile, a later
+  // extension's too: an edit or a disable of that extension builds it again,
+  // and the server service it read closes with the last profile that held it.
+  it.scopedLive(
+    "an edit or a disable of an extension with a server resource closes its service and builds the process resources over it again",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-feed-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const entry = path.join(home, ".gent", "extensions", "feed.ts")
+        const userConfig = path.join(home, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+        yield* fs.makeDirectory(launch, { recursive: true })
+        const readerBuilds = yield* Ref.make(0)
+        // A builtin extension, so before the user's in resolution order.
+        const reader = defineExtension({
+          id: "server-feed-reader",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-feed-reader/reader",
+                scope: "process",
+                layer: serverFeedReaderLayer(readerBuilds),
+              }),
+            )
+          }),
+        })
+        const feed = (profile: SessionProfile) => Context.get(profile.layerContext, ServerFeed)
+        const seen = (profile: SessionProfile) =>
+          Context.get(profile.layerContext, ServerFeedReader).seen()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* writeFileAtomic(entry, serverFeedSource("one"))
+          const first = yield* resolve
+          expect(seen(first)).toEqual({ version: "one", closed: false })
+          const one = feed(first)
+
+          yield* writeFileAtomic(entry, serverFeedSource("two"))
+          const second = yield* resolve
+          expect(seen(second)).toEqual({ version: "two", closed: false })
+          expect(one.closed()).toBe(true)
+          const two = feed(second)
+
+          yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: ["server-feed"] }))
+          const third = yield* resolve
+          expect(Option.isNone(Context.getOption(third.layerContext, ServerFeed))).toBe(true)
+          expect(seen(third)).toEqual({ version: "none", closed: false })
+          expect(two.closed()).toBe(true)
+          expect(yield* Ref.get(readerBuilds)).toBe(3)
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [reader] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("b".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // An extension runs whole or not at all. One whose process Resource fails
+  // on its first load fails whole: its server service is not in the profile,
+  // and it closed.
+  it.scopedLive(
+    "an extension whose process resource fails on its first load keeps no server service",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-failed-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const marks = path.join(directory, "marks")
+        const entry = path.join(home, ".gent", "extensions", "feed.ts")
+        yield* Effect.forEach([path.dirname(entry), launch, marks], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          yield* writeFileAtomic(entry, serverFeedSource("one", { marks, reader: "broken" }))
+          const profile = yield* Effect.scoped(cache.resolve(launch))
+          expect(
+            profile.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
+          ).toMatchObject({ _tag: "Failed", phase: "startup" })
+          expect(Option.isNone(Context.getOption(profile.layerContext, ServerFeed))).toBe(true)
+          expect(yield* fs.readDirectory(marks)).toEqual([])
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({ cwd: launch, home, extensions: [], allowFailedExtensions: true }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("c".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A new version whose process Resource fails runs its last good version
+  // in both phases: the profile's server service and the process build over
+  // it are of one version, and the new version's server service closed.
+  it.scopedLive(
+    "a version whose process resource fails runs its last good version in the server phase too",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-fallback-" })
+        const home = path.join(directory, "home")
+        const launch = path.join(directory, "launch")
+        const marks = path.join(directory, "marks")
+        const entry = path.join(home, ".gent", "extensions", "feed.ts")
+        yield* Effect.forEach([path.dirname(entry), launch, marks], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        // The versions of the open server builds.
+        const open = Effect.map(fs.readDirectory(marks), (files) =>
+          files.map((file) => file.slice(0, file.indexOf("-"))).toSorted(),
+        )
+        const visible = (profile: SessionProfile) =>
+          Option.map(Context.getOption(profile.layerContext, ServerFeed), (found) => found.version)
+        const seen = (profile: SessionProfile) =>
+          Option.map(Context.getOption(profile.layerContext, ServerFeedReader), (found) =>
+            found.seen(),
+          )
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          yield* writeFileAtomic(entry, serverFeedSource("two", { marks, reader: "good" }))
+          const good = yield* resolve
+          expect(visible(good)).toEqual(Option.some("two"))
+          expect(seen(good)).toEqual(Option.some({ version: "two", closed: false }))
+          expect(yield* open).toEqual(["two"])
+
+          yield* writeFileAtomic(entry, serverFeedSource("three", { marks, reader: "broken" }))
+          const kept = yield* resolve
+          expect(
+            kept.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
+          ).toMatchObject({ _tag: "Active", reloadFailed: { phase: "startup" } })
+          expect(visible(kept)).toEqual(Option.some("two"))
+          expect(seen(kept)).toEqual(Option.some({ version: "two", closed: false }))
+          expect(yield* open).toEqual(["two"])
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.provide(
+            makeCacheLayer({ cwd: launch, home, extensions: [], allowFailedExtensions: true }),
+          ),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // Server builds share by key, not by a lock: a place whose profile needs
+  // none of a slow build's keys does not wait for it, and two places that
+  // first need one key at once share its one build.
+  it.scopedLive(
+    "a slow server build blocks no place that does not run it, and two places that first run it at once build it once",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-server-slow-" })
+        const home = path.join(directory, "home")
+        const first = path.join(directory, "first")
+        const second = path.join(directory, "second")
+        const elsewhere = path.join(directory, "elsewhere")
+        yield* Effect.forEach([home, first, second, path.join(elsewhere, ".gent")], (dir) =>
+          fs.makeDirectory(dir, { recursive: true }),
+        )
+        yield* fs.writeFileString(
+          path.join(elsewhere, ".gent", "config.json"),
+          encodeJson({ disabledExtensions: ["server-slow"] }),
+        )
+        const started = yield* Deferred.make<void>()
+        const gate = yield* Deferred.make<void>()
+        const builds = yield* Ref.make(0)
+        const slow = defineExtension({
+          id: "server-slow",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-slow/probe",
+                scope: "server",
+                layer: Layer.effect(
+                  ServerResourceProbe,
+                  Effect.gen(function* () {
+                    const build = yield* Ref.updateAndGet(builds, (count) => count + 1)
+                    yield* Deferred.succeed(started, void 0)
+                    yield* Deferred.await(gate)
+                    return ServerResourceProbe.of({ build })
+                  }),
+                ),
+              }),
+            )
+          }),
+        })
+        const quick = defineExtension({
+          id: "server-quick",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: "server-quick/feed",
+                scope: "server",
+                layer: Layer.succeed(
+                  ServerFeed,
+                  ServerFeed.of({ version: "quick", closed: () => false }),
+                ),
+              }),
+            )
+          }),
+        })
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const atFirst = yield* Effect.forkChild(Effect.scoped(cache.resolve(first)))
+          const atSecond = yield* Effect.forkChild(Effect.scoped(cache.resolve(second)))
+          yield* Deferred.await(started)
+          const other = yield* Effect.scoped(cache.resolve(elsewhere)).pipe(
+            Effect.timeout("4 seconds"),
+          )
+          expect(Context.get(other.layerContext, ServerFeed).version).toBe("quick")
+          expect(Option.isNone(Context.getOption(other.layerContext, ServerResourceProbe))).toBe(
+            true,
+          )
+          yield* Deferred.succeed(gate, void 0)
+          const one = yield* Fiber.join(atFirst)
+          const two = yield* Fiber.join(atSecond)
+          expect(Context.get(one.layerContext, ServerResourceProbe)).toBe(
+            Context.get(two.layerContext, ServerResourceProbe),
+          )
+          expect(yield* Ref.get(builds)).toBe(1)
+        }).pipe(
+          Effect.ensuring(Deferred.succeed(gate, void 0)),
+          Effect.timeout("15 seconds"),
+          Effect.provide(makeCacheLayer({ cwd: first, home, extensions: [slow, quick] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
   )

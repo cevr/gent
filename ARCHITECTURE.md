@@ -333,11 +333,12 @@ updates this list in the same commit.
     check is by identity, so another definition under the same id fails too.
     A server or process Resource names none, and a branch Resource names
     only process Resources. An extension that owns tables creates and migrates them in a
-    process Resource over the host's `SqlClient`, under a migration table of
+    server or process Resource over the host's `SqlClient`, under a migration table of
     its own; core's migration chain builds only the kernel's tables, and the
-    root takes no feature input. The cell is the shipped case
+    root takes no feature input. The cell is the shipped process case
     (`CellStorageResource`, `CellKernelResource`), and a user extension has
-    the same two declarations. Receipts:
+    the same two declarations; the threads' round table is the server case
+    (`ThreadsResource`, `thread_migrations`). Receipts:
     `packages/core/src/domain/capability.ts` (`tool`, `request`),
     `packages/core/src/domain/extension.ts` (`defineResource`,
     `RequiredDeclarations`, `validateLeafResources`), `packages/extensions/src/cell.ts`,
@@ -545,43 +546,66 @@ extension scan and the TUI loader from reading `~/.gent` a second time. A
 list that leaves the
 same extensions, such as one that names an unknown id, finds the profile
 already built. Finding or building the profile, its lease and making it
-current are one step no interrupt can split. `resolve` takes a
+current are one step no interrupt can split: the place's lock is held by
+`Semaphore.withPermits`, which takes the permit and its release in one step,
+and the lease's release joins the caller's scope before the lock is taken.
+`resolve` takes a
 lease in the caller's scope: a turn and an extension request hold it until they
 end, a branch Resource built over it holds it while it lives, and a query holds
 it for its read. The newest profile of a (workspace, cwd) stays cached; a
-superseded one closes its scope when its last lease is released. It builds
-every extension's process-scope resources in resolution order, each in its own
-scope, and reports an extension whose layer fails as failed at the startup
-phase. An extension's process resources are shared by every profile of the
-place that builds them over the same context: the same resource-bearing
-extensions before it, and itself (id, source, file version). So a profile
-rebuilt for a config edit keeps the resources the edit leaves alone, and their
-state with them (an open `/btw` fork, the agents-view watchers, a running
-background job); a resource closes when the last profile that holds it
-retires. Before them it builds every extension's server-scope resources: one
-build per server for each extension version (id, source, file version), with
-no place in its key, shared by the profiles of every place that run that
-version and closed when the last of them retires. A server build reads the
-host's services only, under the cache's own lock (`serverResourceLock`), so
-two places that first run an extension at once build it once; every process
-build and every leaf of a profile reads the server services. State that a
-round started in one place and ended in another must both reach (the
-threads' round-end feed) lives there. The build key of an extension's process Resources names that context
-as it started: the place, then the identity (scope, id, source, file version
-from `LoadedExtension.version`) of each resource-bearing extension that
-started before it, then its own (`startProcessResources`). A last good
-version that runs in place of a version that failed to start is named by its
-own version, in its key and in the key of each build over it, so a Resource
-built over one version is never shared by a profile that runs another. A
-branch Resource keys on what its build reads (`branchResourceKeys`). A reload (`SessionProfileCacheService.reload`, which the
+superseded one closes its scope when its last lease is released.
+
+A profile holds its server and process Resources as shared builds: one build
+of one extension's Resources of one scope over one context, owned by an
+`RcMap` of the cache (one per server) under its build key (`SharedBuild`,
+`holdResources`). The first profile that asks for a key builds it, two places
+that ask at once share the one build, a later one shares it, and builds of
+different keys never wait on each other: there is no server-wide lock. A
+profile holds each build through a scope of its own, and the build closes when
+the last profile holding it lets go (a profile retires, its build fails or is
+interrupted); an interrupted asker lets go of its own hold only, and a build
+no profile holds any more is interrupted. A build that failed is not kept, so
+the next profile that asks builds again. The reference and its release are
+taken in one step (`RcMap.get`), so no interrupt leaves a hold behind.
+
+A profile builds every extension's server Resources first, in resolution
+order. A server build reads the host's services only, so its key is its
+extension's version (`server`, then scope, id, source and file version) and
+holds no place: every place that runs that version shares it. State that a
+round started in one place and ended in another must both reach (the threads'
+round-end feed) lives there. Then it builds every extension's process
+Resources in resolution order, each over the host's services, every server
+service of the profile and the process services before it. The build key of
+an extension's process Resources names what that build reads: the place, the
+key of every server build the profile holds, the identity (scope, id, source,
+file version from `LoadedExtension.version`) of each process-bearing extension
+before it, then its own. So a profile rebuilt for a config edit keeps the
+process Resources the edit leaves alone, and their state with them (an open
+`/btw` fork, the agents-view watchers, a running background job), while an
+edit, reload or disable of an extension with a server Resource builds every
+process Resource of the place again: a process service is never held over a
+server service that closed. Every leaf of a profile reads the services of both
+scopes. A branch Resource keys on what its build reads (`branchResourceKeys`),
+so it is built again when the process Resources it names are.
+
+A profile runs each extension in one version across both phases. A build that
+fails decides for its whole extension: its last good version runs in its place
+(below), or it leaves the profile and is reported failed at the startup phase,
+with the failure of the version that first failed; then both phases run again
+over the new set. The pass before is let go only after the new one holds its
+builds, so a build the change left alone is shared, not built again, and the
+failed version's builds (its server service among them) close unless another
+profile holds them. A last good version is named by its own version, in its
+key and in the key of each build over it, so a Resource built over one version
+is never shared by a profile that runs another. A reload (`SessionProfileCacheService.reload`, which the
 `Extensions` facet calls) adds a count per (place, extension id) to the file
 stamp, so the next resolve misses the cached profile, runs every setup again,
 and keeps each Resource whose build key it shares; the counts live in memory
 only. The cache keeps, per (place, scope, source path), the last version of
 each user and project extension the place's current profile ran (`lastGood`).
 A new version that fails `load`, `setup` or `validation`
-(`loadRuntimeProfileDeclarations`), or whose process Resources fail at
-`startup` (`buildScopeResources` `fallback`), runs that last good version in
+(`loadRuntimeProfileDeclarations`), or whose server or process Resources fail
+at `startup` (`holdResources`), runs that last good version in
 its place, marked with the failure (`LoadedExtension.reloadFailed`); it keeps
 the Resources the profile before it built, by their build key. A last good
 version runs only in a set it is valid in: one whose contributions collide
@@ -2966,7 +2990,7 @@ One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
-- **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"server"` (built once per server for each extension version and shared by every place's profiles, released when the last holder retires), `"process"` (built per place and shared by that place's compatible profiles, released when the last holder retires) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildScopeResources` in `runtime/extension-host.ts`.
+- **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"server"` (built once per server for each extension version and shared by every place's profiles, released when the last holder retires), `"process"` (built per place over the server builds its profile holds, shared by that place's profiles that hold the same builds, released when the last holder retires) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts`, and `holdResources` and `buildScopeResources` in `runtime/extension-host.ts`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `FileLock`, `Models`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` facet wraps the host-internal `FileLockService`, the `Models` facet the `DecisionModelResolver`, and the `State` facet publishes `ExtensionStateChanged` on `EventStore`, so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries. A request that fails answers the client with the extension's own reason as the `ExtensionProtocolError` message (a handler's error message, or `"<extension>" has no request "<id>"`), with no loop or runtime wrapper; the TUI shows a failed slash command as `/<name> failed: <reason>` on the status row.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `forkBranch` (a branch of the run's own session that holds the messages up to `atMessageId`, the rewind the client's `branch.fork` makes, over the same `SessionMutations.forkSessionBranch`; durable-once by `requestId`; the old branch keeps every message and the active branch does not move), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`, and with `ifLatest: <messageId>` a conditional one: `LoopInbox.admit` admits it only while the loop can start a turn, its queue is empty (no parked steer, follow-up or item in flight) and that id is still the branch's newest step (`latestStep`: the newest user-role message that is not a runtime row or a joined steer), and then reserves the start at once (`admitAndBegin` on the own branch, so a caller that holds the side-mutation permit does not wait for the start), all under the queue permit; the same transaction stores the item in the queue's in-flight slot, because an accepted line is a promise: the caller may forget its own record (`@gent/wake` drops its alarm row) as soon as `send` returns, so a restart before the turn stores its message runs the item once from that slot (`wantsWakeOnRecovery`, or `incompleteUserTurn` once the message is stored), with no new test of `ifLatest`, and the turn clears the slot when it stores the message; otherwise it admits nothing, as a repeat does; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer that stops the running turn, whichever message opened it; `Interrupt` has no writer and only decodes), `stopMessage` (the persisted `StopMessage` actor operation, through `stopMessageOn`: it records the durable cancellation of one message id, so a turn that message opens later starts interrupted, takes back a steer with that id that no step has read, and interrupts the running turn that message opened. A step's join of steers and the take-back hold the same queue permit, so a message is either joined or taken back, never both. It answers true only when this stop reached the message; false when the loop no longer holds it (its turn ended, or a step joined it into a turn another message opened, which runs on) or an earlier interrupt already stops its turn. A steer taken back answers true, unless an earlier stop from the same requesting branch already stops the turn the steer waited to join: the turn's latch records the requester of its first stop, and that stop's caller already reports the branch. A stop that reaches a running turn also takes back, under the interrupt permit, every waiting steer its own requesting branch sent (the `sender` a loop records on a steer into another branch's `Steer` operation and queue item, never a client): the turn's end cannot hand such a steer on as the next turn, so a later stop of that steer reaches nothing and the branch is reported once, however late that stop comes. A `Cancel` steer that names a `messageId` still decodes and runs the same routine), `events` (replay, then the `StreamSynchronized` marker, then live; `from: "now"` skips the replay and starts at the newest stored event), `delete` (cascade), `dequeueFollowUp`, and `holdResident` (a scoped hold that keeps the own branch's loop resident; see Residency). `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`, except that a `queue` or `steer` into the loop's own branch is admitted re-entrantly inside the caller: a client request's grant is read at admission, while the request provably runs, and a send from a context kept past it is an extension send; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; The loop's `sessionControl` calls the queue bodies (`queueFollowUpOn`, `dequeueFollowUpOn`), and both `SessionRuntime` and `sessionControl` call `submitUserMessage` and `steerLoop`, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Model-call budget visibility** — The reservation row is the one count; everything a reader or the model sees is a reading of it (`SessionOperationStorage.modelAttemptsUsed`), never a second counter. Each `StreamEnded` of a budgeted turn carries the receipt `modelAttempts: { used, limit }` (`ModelAttempts` in `domain/agent.ts`), read when the step ends, failed and interrupted steps included; it is absent for a turn with no budget. `SessionRuntimeMetrics.turnModelAttempts` folds the newest receipt and clears on `TurnCompleted`, so the next turn starts a budget of its own. At the first step boundary after a call with `MODEL_ATTEMPTS_NOTICE_LEFT` (5) calls or fewer and more than one left (never before the first step, so a small budget's first step reads only the task), the turn appends one durable runtime user line (custom type `model-attempts`, id `<turn>:model-attempts`, details the reading): how many calls are left, that a retry or summary uses one too, that the last call runs with tools off, and to finish or save progress; a new message starts a fresh budget. It is written once and stays in the cached prefix. The last call the budget allows (one left at the boundary, the first step for a budget of 1) runs as the step limit's last step does (`maxSteps`): `toolChoice: "none"`, opened by a durable line of the same custom type (id `<turn>:model-attempts-last`) worded as `MAX_STEPS_INSTRUCTION` for the budget, so the turn ends with its answer; a tool call made anyway is refused (`ModelCallBudget`) and the turn is unanswered. When that step is also the step limit's last, only the step limit's line is written. A turn whose next request finds no call left (a budget of 0, or a retry, context summary or credential move inside the last call) fails that step with `Stopped at the model-call budget: N of N model calls used this turn…`, the `ErrorOccurred` text a client, a headless run and a parent's child completion read. Nothing lifts the cap automatically, and no API exists only for a reviewer. The TUI draws the receipt as `N/M model calls` on the turn line, the two lines as `⧗` rows (`K of M model calls left …`, `last of M model calls · tools off …`), and the running turn as `calls N/M`, then `⧗ K of M calls left` near the limit, in the status row's right group.
@@ -2991,9 +3015,11 @@ Other notes:
   turn on a close. The loop builds one `ModelContextLedger` per branch and
   puts it in the branch's services, so a directive any dispatching tool
   schedules reaches the next step; there is no inert ledger.
-- Server, process and branch Resources build through one builder,
-  `buildScopeResources` in `runtime/extension-host.ts`: extension by
-  extension in resolution order, each in its own child scope. Every build
+- Server, process and branch Resources build extension by extension in
+  resolution order, each in its own scope: a profile holds its server and
+  process builds as shared builds keyed by what they read (`holdResources`,
+  `SharedBuild` in `runtime/extension-host.ts`), and a branch loop builds
+  its branch Resources through `buildScopeResources`. Every build
   reads the host's services (`ResourceHostServices`: the extension
   platform, the session database's `SqlClient` and `InteractionStorage`),
   given by value in the profile cache's build context. A server build reads
@@ -3006,8 +3032,9 @@ Other notes:
   else does not compile. A layer that fails to build closes
   what it acquired, is logged naming its extension
   (`extension.resource.failed`), and leaves every other extension's Resources
-  live. A process Resource that fails rejects its extension: the profile
-  reports it failed at the `startup` phase. Branch resources follow the
+  live. A server or process Resource that fails rejects its extension in
+  both phases: its last good version runs, or the profile reports it failed
+  at the `startup` phase and holds none of its services. Branch resources follow the
   session's profile (the extensions set up for the session's cwd): each run
   of the loop (a turn, an extension request, the `loopOpen` hooks) resolves
   the profile under the loop's `branchResourceLock` and builds the branch
