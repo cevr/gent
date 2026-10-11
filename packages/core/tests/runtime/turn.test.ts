@@ -2460,6 +2460,8 @@ describe("credential order", () => {
     readonly placement?: CredentialPlacement["Service"]
     /** The model's cache lifetime; default: the catalog names none. */
     readonly cacheTtlMs?: number
+    /** The cache lifetime a subscription sign-in lists; default `cacheTtlMs`. */
+    readonly subscriptionCacheTtlMs?: number
   }
 
   /**
@@ -2496,9 +2498,11 @@ describe("credential order", () => {
       listModels: (_catalog, authInfo) => {
         let pricing = apiPricing
         let contextLength = API_WINDOW
+        let promptCacheTtlMs = params.cacheTtlMs
         if (authInfo?._tag === "Oauth") {
           pricing = subscriptionPricing
           contextLength = SUBSCRIPTION_WINDOW
+          promptCacheTtlMs = params.subscriptionCacheTtlMs ?? params.cacheTtlMs
         }
         return Effect.succeed([
           Model.make({
@@ -2507,7 +2511,7 @@ describe("credential order", () => {
             provider: ProviderId.make(FALLBACK),
             contextLength,
             pricing,
-            ...omitUndefined({ promptCacheTtlMs: params.cacheTtlMs }),
+            ...omitUndefined({ promptCacheTtlMs }),
           }),
         ])
       },
@@ -3801,6 +3805,7 @@ describe("credential order", () => {
         readonly pin?: CredentialSlot
         readonly retry?: Partial<typeof DEFAULT_RETRY_POLICY>
         readonly held?: Deferred.Deferred<void>
+        readonly history?: ReadonlyArray<number>
       } = {},
     ) => {
       const pool = options.pool ?? [a, b]
@@ -3813,7 +3818,12 @@ describe("credential order", () => {
         storage: world.storage,
         placement: world.placement,
         cacheTtlMs: HOUR_MS,
-        ...omitUndefined({ pin: options.pin, retry: options.retry, held: options.held }),
+        ...omitUndefined({
+          pin: options.pin,
+          retry: options.retry,
+          held: options.held,
+          history: options.history,
+        }),
       })
     }
 
@@ -4227,6 +4237,313 @@ describe("credential order", () => {
       }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
+    /** A tool step echoing `chars` characters on the turn's first request, then `then` on each later one. */
+    const toolStepThen =
+      (chars: number, then: Reply): Reply =>
+      (call) => {
+        if (call > 0) return then(call)
+        return Stream.fromIterable([
+          toolCallPart("echo", { text: "x".repeat(chars) }),
+          finishPart({ finishReason: "tool-calls" }),
+        ])
+      }
+    /** A request that never ends: the process dies while it is out. */
+    const dyingRequest =
+      (sent: Deferred.Deferred<void>): Reply =>
+      () =>
+        Stream.fromEffect(Deferred.succeed(sent, void 0).pipe(Effect.andThen(Effect.never)))
+    /**
+     * Run `text` on `first` until its request to the placed account is out,
+     * stop the process there, and recover the turn on `second`.
+     */
+    const dieAndRecover = (
+      world: SpreadWorld,
+      first: ReturnType<typeof credentialRoot>,
+      second: ReturnType<typeof credentialRoot>,
+      out: Deferred.Deferred<void>,
+    ) =>
+      Effect.gen(function* () {
+        const { sessionId, branchId } = first
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* first.seed
+            yield* submitAgentLoop(makeMessage(sessionId, branchId, "hello"), first.admission)
+            yield* Deferred.await(out)
+          }),
+        ).pipe(Effect.provide(first.layer))
+        const before = (yield* eventsOf(world, first)).length
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* waitFor(
+              eventsOf(world, first),
+              (all) => all.slice(before).some((event) => event._tag === "TurnCompleted"),
+              10_000,
+              "the recovered turn to end",
+            )
+          }),
+        ).pipe(Effect.provide(second.layer))
+        return yield* eventsOf(world, first)
+      })
+
+    it.live(
+      "a turn recovered after a refusal moved it, before the new account's first receipt, resumes on the account it moved to",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // The turn is placed on a; its tool step runs there, and the step
+          // after it is refused and moves to b, where the process dies.
+          const first = spreadRoot(world, "recovered-refused", {
+            replies: {
+              "sk-a": toolStepThen(2, () => refusal()),
+              "sk-b": dyingRequest(out),
+            },
+          })
+          const second = spreadRoot(world, "recovered-refused")
+          const events = yield* dieAndRecover(world, first, second, out)
+          expect(first.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+          // Not back on a, the account the move left, whose hold died with the process.
+          expect(second.sent).toEqual(["sk-b"])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a turn recovered after a handoff placed it, before the new account's first receipt, resumes on the placed account",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // The turn is placed on a, over a window near full, and its tool step
+          // fills it mid-turn: the next step hands the window off, with the
+          // summary on a, and is placed on b, by then far less used, where
+          // the process dies.
+          const toolStep = toolStepThen(60_000, answer("summary"))
+          const first = spreadRoot(world, "recovered-compacted", {
+            history: [110_000, 110_000, 110_000],
+            replies: {
+              "sk-a": (call) => {
+                if (call > 0) return toolStep(call)
+                const spent = Effect.andThen(
+                  spend(world.placement, a, 50, "elsewhere-a"),
+                  spend(world.placement, b, 1, "elsewhere-b"),
+                )
+                return Stream.unwrap(Effect.as(spent, toolStep(call)))
+              },
+              "sk-b": dyingRequest(out),
+            },
+          })
+          const second = spreadRoot(world, "recovered-compacted")
+          const events = yield* dieAndRecover(world, first, second, out)
+          expect(first.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+          expect(
+            events.flatMap((event) => {
+              if (event._tag !== "ModelContextProjected") return []
+              return [event.compacted]
+            }),
+          ).toEqual([false, true, false])
+          expect(second.sent).toEqual(["sk-b"])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "compacted", from: a },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a spread run that fell to an account outside the pool stays there while every pool account is held, and returns to the pool at the next turn one is not",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const limitedOnce = (slot: string) => (call: number) => {
+            if (call === 0)
+              return failWith(new AiError.RateLimitError({ retryAfter: Duration.minutes(10) }))
+            return answer(`from ${slot}`)(call)
+          }
+          const root = credentialRoot({
+            name: "billed-fallback",
+            order: [a, b, c],
+            spread: [a, b],
+            stored: keysOf([a, b, c]),
+            replies: {
+              "sk-a": limitedOnce("a"),
+              "sk-b": limitedOnce("b"),
+              "sk-c": answer("from c"),
+            },
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+          })
+          yield* runOn(root, "first")
+          // Both pool accounts still held, inside the cache lifetime: c.
+          offset.ms += 5 * 60_000
+          yield* runOn(root, "second")
+          // Past both resets, inside the cache lifetime: back to the pool.
+          offset.ms += 6 * 60_000
+          yield* runOn(root, "third")
+          offset.ms += 5 * 60_000
+          yield* runOn(root, "fourth")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-a", "sk-a"])
+          expect(slotsOf(events)).toEqual([c, c, a, a])
+          // The fall to c is the order's walk, not a placement.
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "refused", from: a },
+            { slot: a, reason: "returned", from: "none" },
+          ])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    it.live(
+      "a fork keeps its parent's account outside the pool, and returns to the pool at its next turn",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const parent = credentialRoot({
+            name: "fork-parent-pinned",
+            order: [a, b, c],
+            spread: [a, b],
+            stored: keysOf([a, b, c]),
+            replies: answers([a, b, c]),
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+            pin: c,
+          })
+          yield* runOn(parent, "first")
+          // The fork's window holds the parent's reply, copied at create.
+          const fork = credentialRoot({
+            name: "fork-of-pinned",
+            order: [a, b, c],
+            spread: [a, b],
+            stored: keysOf([a, b, c]),
+            replies: answers([a, b, c]),
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+            history: [100],
+          })
+          yield* createChild(world, fork, parent, false)
+          yield* Effect.scoped(fork.seed.pipe(Effect.provide(fork.layer)))
+          yield* runOn(fork, "task")
+          yield* runOn(fork, "next")
+          const events = yield* eventsOf(world, fork)
+          expect(parent.sent).toEqual(["sk-c"])
+          expect(fork.sent).toEqual(["sk-c", "sk-a"])
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "returned", from: "none" }])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a run placed again after a handoff budgets its window by the placed account's catalog entry",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          // a an API key, b a subscription sign-in with a larger window.
+          const root = credentialRoot({
+            name: "handoff-window",
+            order: [a, b],
+            spread: [a, b],
+            stored: [
+              [a, apiKey("sk-a")],
+              [b, oauthLogin],
+            ],
+            replies: { "sk-a": answer("from a"), oauth: answer("from b") },
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+          })
+          yield* runOn(root, "first")
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* Effect.gen(function* () {
+            const storage = yield* MessageStorage
+            const now = yield* Clock.currentTimeMillis
+            yield* Effect.forEach(
+              Array.from({ length: 12 }, (_, index) => index),
+              (index) =>
+                storage.createMessage(
+                  Message.cases.regular.make({
+                    id: MessageId.make(`handoff-window-grown-${index + 1}`),
+                    sessionId: root.sessionId,
+                    branchId: root.branchId,
+                    role: "assistant",
+                    parts: [Prompt.textPart({ text: "x".repeat(50_000) })],
+                    createdAt: dateFromMillis(now + index),
+                  }),
+                ),
+              { discard: true },
+            )
+          }).pipe(Effect.provide(world.storage), Effect.orDie)
+          yield* runOn(root, "second")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["sk-a", "sk-a", "oauth"])
+          expect(
+            events.flatMap((event) => {
+              if (event._tag !== "ModelContextProjected") return []
+              return [{ compacted: event.compacted, window: event.contextLimitTokens }]
+            }),
+          ).toEqual([
+            { compacted: false, window: API_WINDOW },
+            { compacted: true, window: SUBSCRIPTION_WINDOW },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a spread run's cache lives as long as the account of its last request lists it",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          // a an API key listing an hour, b a subscription sign-in listing 5 minutes.
+          const root = credentialRoot({
+            name: "lifetime-of-account",
+            order: [a, b],
+            spread: [a, b],
+            stored: [
+              [a, apiKey("sk-a")],
+              [b, oauthLogin],
+            ],
+            replies: { "sk-a": answer("from a"), oauth: answer("from b") },
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+            subscriptionCacheTtlMs: 5 * 60_000,
+          })
+          // a used: the run is placed on b.
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* spend(world.placement, b, 1, "elsewhere-b")
+          yield* runOn(root, "first")
+          // Past b's lifetime, inside a's: the cache on b is cold, and the
+          // turn is placed again.
+          offset.ms += 10 * 60_000
+          yield* runOn(root, "second")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["oauth", "oauth"])
+          expect(placementsOf(events)).toEqual([
+            { slot: b, reason: "new", from: "none" },
+            { slot: b, reason: "cold", from: b },
+          ])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
     it.live(
       "without authSpread each turn starts at the first credential of its authOrder, as before",
       () =>
@@ -4311,6 +4628,38 @@ describe("credential order", () => {
           expect(ledger).toContain('"slot":"a"')
           expect(ledger).not.toContain("sk-")
         }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    )
+
+    it.effect("the usage ledger is written as each hour closes, with no step after it", () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-spread-ledger-hour-")
+        const fs = yield* FileSystem.FileSystem
+        const file = `${home}/.gent/credential-usage.json`
+        const server = CredentialPlacement.Live.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              RuntimeEnvironment.Live({ cwd: home, home }),
+              BunServices.layer,
+              GentPlatform.Test(),
+            ),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+            yield* spend(placement, a, 2, "one-step")
+            expect(yield* fs.exists(file)).toBe(false)
+            // The hour closes with the server still up and no step after it.
+            yield* TestClock.adjust("1 hour")
+            // The write is real file IO on the woken fiber: wait for it, boundedly.
+            const written = yield* fs
+              .exists(file)
+              .pipe(Effect.repeat({ until: (found) => found, times: 1_000 }))
+            expect(written).toBe(true)
+            expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
+          }),
+        )
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
     )
   })
 })
