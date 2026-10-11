@@ -5,6 +5,7 @@ import {
   Deferred,
   Effect,
   Fiber,
+  FileSystem,
   Layer,
   Option,
   Predicate,
@@ -867,11 +868,21 @@ const roundHarness = (
   options: {
     readonly hang?: Effect.Effect<void>
     readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
+    /** The user's own `~/.gent/config.json`. */
+    readonly userConfig?: string
   } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("threads-")
     const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
+    const userConfig = options.userConfig
+    if (Predicate.isNotUndefined(userConfig)) {
+      yield* Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+        yield* fs.writeFileString(`${home}/.gent/config.json`, userConfig)
+      }).pipe(Effect.provide(BunServices.layer))
+    }
     return yield* createRpcHarness({
       ...e2ePreset,
       extensionInputs: [...e2ePreset.extensionInputs, ...(options.extensions ?? [])],
@@ -1328,6 +1339,29 @@ describe("thread round ownership", () => {
           expect(textOf(refused?.result)).toContain("queue full")
           const [listed] = yield* call(client, starter, [["thread.list", "list-full", {}]])
           expect(byThread(listed?.result)[impl.thread]?.openRound).toBeUndefined()
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "the user's own config sets the running-thread cap",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* roundHarness({
+            userConfig: '{"threads":{"maxRunning":1}}',
+          })
+          const starter = { sessionId, branchId }
+          const [first] = yield* call(client, starter, [
+            ["thread.start", "start-cap-1", { agent: "worker", task: "HANG first" }],
+          ])
+          expect(first?.failed).toBe(false)
+          const [second] = yield* call(client, starter, [
+            ["thread.start", "start-cap-2", { agent: "worker", task: "HANG second" }],
+          ])
+          expect(second?.failed).toBe(true)
+          expect(textOf(second?.result)).toContain("already runs 1 thread:")
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

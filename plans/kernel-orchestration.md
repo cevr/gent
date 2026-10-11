@@ -80,7 +80,7 @@ The worker primitive is the existing **thread**, improved, not a new "seat" conc
 - **Round end**: a `turnAfter` hook matches the round's commandId and records `{ text, reply, interrupted, streamFailed, usage, endedAt }` in `thread_rounds`. It publishes the end to the `Threads` service's subscribers, then notifies as the round's mode says. `loopOpen` reconciles a round that ended while the server was down, as delegate's `turnEnd` does.
 - **`thread.round({ round })`** reads a result. `thread.list` and `thread.stop` stay, and `stop` also closes an open round.
 - **The `Threads` service** (a Tag, as `Workspaces` is) carries `start`, `send({ ..., notify })`, `round`, `stop`, and the round-end subscription, for machines.
-- **The running-thread cap** (4) counts threads with an open round, and config can raise it.
+- **The running-thread cap** (4) counts threads with an open round, and config can raise it: `threads.maxRunning` in the user's own `~/.gent/config.json` (a project file cannot spend the user's money).
 - **Delegate folds into threads** in stage 1b (P1b).
 
 ### P1b. Delegate folds into threads

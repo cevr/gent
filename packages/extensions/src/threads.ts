@@ -27,6 +27,7 @@ import {
   Context,
   Crypto,
   Effect,
+  FileSystem,
   Layer,
   Option,
   Order,
@@ -751,8 +752,45 @@ export const THREAD_ROUND_TYPE = "thread-round"
 /** `metadata.customType` on the message that wakes a starter at a round's end. */
 export const THREAD_ROUND_END_TYPE = "thread-round-end"
 
-/** Running threads one thread may have, over all its sessions: threads with an open round. */
-const MAX_RUNNING_THREADS = 4
+/**
+ * Running threads one thread may have, over all its sessions: threads with
+ * an open round. The user's own config sets another cap:
+ *
+ *     { "threads": { "maxRunning": 8 } }
+ *
+ * Only `~/.gent/config.json` counts: each running thread spends the user's
+ * money, and a project file cannot.
+ */
+const DEFAULT_MAX_RUNNING_THREADS = 4
+
+const ThreadsConfig = Schema.fromJsonString(
+  Schema.Struct({
+    threads: Schema.optionalKey(
+      Schema.Struct({
+        maxRunning: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+      }),
+    ),
+  }),
+)
+
+/** The cap from the user's own config, else the default; a file that does not decode keeps the default, with a warning. */
+const runningCap = Effect.fn("Threads.runningCap")(function* () {
+  const ctx = yield* ExtensionContext
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const file = path.join(ctx.home, ".gent", "config.json")
+  if (!(yield* fs.exists(file))) return DEFAULT_MAX_RUNNING_THREADS
+  return yield* fs.readFileString(file).pipe(
+    Effect.flatMap(Schema.decodeEffect(ThreadsConfig)),
+    Effect.map((config) => config.threads?.maxRunning ?? DEFAULT_MAX_RUNNING_THREADS),
+    Effect.catch((error) =>
+      Effect.logWarning("threads.config.unreadable").pipe(
+        Effect.annotateLogs({ file, error: String(error) }),
+        Effect.as(DEFAULT_MAX_RUNNING_THREADS),
+      ),
+    ),
+  )
+})
 
 /** A thread that loops on a broken model stops here, as a delegate child does. */
 const THREAD_MAX_MODEL_ATTEMPTS = 32
@@ -1236,6 +1274,11 @@ const threadAdmission = (starter: StoredSession, input: ThreadStartInput): Store
   }
 }
 
+const threadsWord = (count: number) => {
+  if (count === 1) return "thread"
+  return "threads"
+}
+
 /** The cap's refusal, naming the threads the starter's thread runs. */
 const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArray<string>) {
   const started = yield* startedThreads()
@@ -1246,7 +1289,7 @@ const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArra
     })
     .join(", ")
   return yield* new ThreadError({
-    message: `This session's thread already runs ${busy.length} threads: ${names}. Stop one with thread.stop, or send this round when one ends.`,
+    message: `This session's thread already runs ${busy.length} ${threadsWord(busy.length)}: ${names}. Stop one with thread.stop, or send this round when one ends.`,
   })
 })
 
@@ -1255,10 +1298,10 @@ const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArra
  * none. The claim reads it again in its transaction: that read is the one
  * the table holds to.
  */
-const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* () {
+const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number) {
   const rounds = yield* ThreadRounds
   const busy = yield* rounds.busyThreads(yield* callerThread())
-  if (busy.length < MAX_RUNNING_THREADS) return
+  if (busy.length < cap) return
   return yield* capRefusal(busy)
 })
 
@@ -1291,6 +1334,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
     branchId: ctx.branchId,
     thread: yield* callerThread(),
   }
+  const cap = yield* runningCap()
   const claim = yield* Semaphore.withPermit(
     rounds.admissions,
     Effect.gen(function* () {
@@ -1298,11 +1342,11 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       if (Option.isSome(retry)) {
         return RoundClaim.cases.Ready.make({ round: retry.value, fresh: false })
       }
-      yield* refuseOverCap()
+      yield* refuseOverCap(cap)
       const input = yield* request
       return yield* rounds.claimRound({
         round: roundId,
-        cap: MAX_RUNNING_THREADS,
+        cap,
         thread: input.thread,
         starter,
         place: input.place,
@@ -1629,7 +1673,7 @@ type ThreadsApi = ReturnType<typeof makeThreads>
  * `subscribeRoundEnds`. Read it with `Effect.serviceOption`, as delegate
  * reads `Workspaces`.
  *
- * @effect-expect-leaking ExtensionContext | Path | Crypto
+ * @effect-expect-leaking ExtensionContext | Path | Crypto | FileSystem
  */
 export class Threads extends Context.Service<Threads, ThreadsApi>()(
   "@gent/extensions/src/threads",

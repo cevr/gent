@@ -932,9 +932,11 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     as interrupted with no bill. A `loopOpen` closes a stopped round whose
     turn never reached the branch, when the stop died before closing it.
   - One thread runs at most four threads with an open round over all its
-    sessions (a constant): the count is read under one permit per server
+    sessions, or as many as the user's own `~/.gent/config.json` sets
+    (`{ "threads": { "maxRunning": 8 } }`; a project file cannot, as each
+    running thread spends the user's money): the count is read under one permit per server
     before a start makes its session, so a start with a task past the cap
-    makes no session and names the four, and again in the claim's
+    makes no session and names the threads that run, and again in the claim's
     transaction, the read the table holds to. The transcript shows a round's message without its
     source line on a muted `» task from session` row, as a delegate child's
     `"child-task"` on `» task from parent` (another session wrote it, so it
