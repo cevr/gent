@@ -35,6 +35,7 @@ import {
   omitUndefined,
   Model,
   type PendingRotation,
+  QuarantinedRotation,
   type SourceRotation,
   type ModelDriverContribution,
   ProviderAuthError,
@@ -1172,7 +1173,9 @@ const rotateAndWriteBack = (base: RefreshBase) =>
 // back to the source with a compare-and-swap, and until it lands gent's
 // credential store holds it (`PendingRotation`, keyed by the directory, not
 // by the label), so neither a failed write, a restart, a rename, a second
-// link nor a second gent process loses the only live token. `readLinked` and
+// link nor a second gent process loses the only live token. A held rotation
+// whose file does not decode is moved aside, never deleted, and blocks only
+// the login beside it (`QuarantinedRotation`). `readLinked` and
 // `refreshLinked` are the whole state machine; ARCHITECTURE.md (Credential
 // slots) states it.
 
@@ -1369,6 +1372,15 @@ const Settled = Schema.TaggedUnion({
   Pending: { creds: ClaudeCredentials, base: Schema.String },
   /** Claude Code signed out of the directory; the rotation was dropped. */
   SignedOut: {},
+  /**
+   * gent holds a rotation for the directory it cannot read, its bytes at
+   * `file` (moved aside, or left in place when the move failed), and the
+   * source still holds `login`, the login gent found beside them, whose token
+   * those bytes may have replaced. A read serves it; a refresh spends nothing.
+   */
+  Blocked: { login: ClaudeCredentials, file: Schema.String, movedAside: Schema.Boolean },
+  /** gent holds a rotation it cannot read, at `file`, and the source could not be read: nothing changed. */
+  Unknown: { file: Schema.String, reason: Schema.String },
 })
 type Settled = typeof Settled.Type
 
@@ -1377,22 +1389,117 @@ const settleRotation = (
   source: LinkedSource,
   held: SourceRotation,
 ): Effect.Effect<Settled, ProviderAuthError, LinkedIORequirements> =>
+  held.read.pipe(
+    Effect.flatMap((stored) => {
+      if (Option.isNone(stored)) return Effect.succeed(Settled.cases.Synced.make({}))
+      if (Schema.is(QuarantinedRotation)(stored.value)) {
+        return settleQuarantined(source, held, stored.value.quarantined)
+      }
+      return settlePending(source, held, stored.value)
+    }),
+    Effect.catchTag("HeldRotationUndecodable", (undecodable) =>
+      settleUndecodable(source, held, undecodable.file),
+    ),
+  )
+
+const settlePending = (
+  source: LinkedSource,
+  held: SourceRotation,
+  stored: PendingRotation,
+): Effect.Effect<Settled, never, LinkedIORequirements> =>
   Effect.gen(function* () {
-    const stored = yield* held.read
-    if (Option.isNone(stored)) return Settled.cases.Synced.make({})
-    const creds = heldCredentials(stored.value)
-    const landing = yield* landRotation(source, creds, stored.value.base)
+    const creds = heldCredentials(stored)
+    const landing = yield* landRotation(source, creds, stored.base)
     if (landing._tag === "NotLanded") {
       yield* Effect.logWarning("anthropic.oauth.linked.rotation-held").pipe(
         Effect.annotateLogs({ directory: source.directory, reason: landing.reason }),
       )
-      return Settled.cases.Pending.make({ creds, base: stored.value.base })
+      return Settled.cases.Pending.make({ creds, base: stored.base })
     }
     yield* forgetRotation(held, source)
     if (landing._tag === "SignedOut") return Settled.cases.SignedOut.make({})
     if (landing._tag === "Moved") return Settled.cases.Serve.make({ creds: landing.creds })
     return Settled.cases.Serve.make({ creds })
   })
+
+/**
+ * A held rotation whose file does not decode. Its bytes may hold the only
+ * live token of the login the source holds now, so that login is never
+ * spent: they are moved aside with that login as the base, and the slot is
+ * `Blocked` until the source moves past it. A source that holds no login
+ * blocks nothing: the bytes are moved aside and no record is kept. A source
+ * that cannot be read changes nothing.
+ */
+const settleUndecodable = (
+  source: LinkedSource,
+  held: SourceRotation,
+  file: string,
+): Effect.Effect<Settled, never, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const read = yield* readLinkedSource(source)
+    if (read._tag === "Unreadable") return Settled.cases.Unknown.make({ file, reason: read.reason })
+    let base = Option.none<string>()
+    if (read._tag === "Login") base = Option.some(yield* loginFingerprint(read.creds))
+    const moved = yield* Effect.exit(held.moveAside(base))
+    if (Exit.isSuccess(moved)) {
+      yield* Effect.logWarning("anthropic.oauth.linked.rotation-moved-aside").pipe(
+        Effect.annotateLogs({ directory: source.directory, file, movedTo: moved.value }),
+      )
+    } else {
+      yield* Effect.logWarning("anthropic.oauth.linked.rotation-undecodable").pipe(
+        Effect.annotateLogs({
+          directory: source.directory,
+          file,
+          error: Option.match(Cause.findErrorOption(moved.cause), {
+            onNone: () => "the move failed",
+            onSome: (error) => error.message,
+          }),
+        }),
+      )
+    }
+    if (read._tag === "SignedOut") return Settled.cases.SignedOut.make({})
+    if (Exit.isSuccess(moved)) {
+      return Settled.cases.Blocked.make({ login: read.creds, file: moved.value, movedAside: true })
+    }
+    return Settled.cases.Blocked.make({ login: read.creds, file, movedAside: false })
+  })
+
+/**
+ * The record of a rotation moved aside: it blocks the login at its base
+ * while the source holds it, and is forgotten once the source moves past it
+ * (a sign-in, Claude Code's own refresh, a sign-out).
+ */
+const settleQuarantined = (
+  source: LinkedSource,
+  held: SourceRotation,
+  quarantined: QuarantinedRotation["quarantined"],
+): Effect.Effect<Settled, never, LinkedIORequirements> =>
+  Effect.gen(function* () {
+    const read = yield* readLinkedSource(source)
+    if (read._tag === "Unreadable") {
+      return Settled.cases.Unknown.make({ file: quarantined.file, reason: read.reason })
+    }
+    if (read._tag === "Login" && (yield* loginFingerprint(read.creds)) === quarantined.base) {
+      return Settled.cases.Blocked.make({
+        login: read.creds,
+        file: quarantined.file,
+        movedAside: true,
+      })
+    }
+    yield* forgetRotation(held, source)
+    if (read._tag === "SignedOut") return Settled.cases.SignedOut.make({})
+    return Settled.cases.Serve.make({ creds: read.creds })
+  })
+
+/** The failure of a refresh a rotation gent cannot read blocks: nothing is spent. */
+const linkedBlocked = (source: LinkedSource, file: string, movedAside: boolean) => {
+  let where = `at ${file}, which it could not move aside`
+  if (movedAside) where = `moved aside to ${file}`
+  return new ProviderAuthError({
+    message: `gent holds a token rotation for ${source.directory} it cannot read, ${where}; the login there may be spent, so gent spends nothing until Claude Code signs in again on that directory`,
+    credentialFailure: "Unavailable",
+  })
+}
 
 /** The failure of a link whose source Claude Code signed out of. */
 const linkedSignedOut = (source: LinkedSource) =>
@@ -1547,9 +1654,11 @@ const spendSource = (
 /**
  * A read of a linked source, as the credential cache asks for it: a held
  * rotation is handed back first, and serves while it cannot be (the source
- * still holds the login whose token it spent). A source that cannot be read
- * proves nothing: the trusted cached credential serves on, and nothing is
- * spent. None sends the cache to `refreshLinked`, which says why.
+ * still holds the login whose token it spent). A held rotation gent cannot
+ * read is moved aside, and the source's login serves (`settleUndecodable`).
+ * A source that cannot be read proves nothing: the trusted cached credential
+ * serves on, and nothing is spent. None sends the cache to `refreshLinked`,
+ * which says why.
  */
 const readLinked = (
   source: LinkedSource,
@@ -1565,6 +1674,9 @@ const readLinked = (
         if (settled._tag === "Pending") return Option.some(settled.creds)
         if (settled._tag === "Serve") return Option.some(settled.creds)
         if (settled._tag === "SignedOut") return Option.none<ClaudeCredentials>()
+        // A read spends nothing: the login a held rotation it cannot read blocks serves.
+        if (settled._tag === "Blocked") return Option.some(settled.login)
+        if (settled._tag === "Unknown") return cached
         const read = yield* readLinkedSource(source)
         if (read._tag === "Login") return Option.some(read.creds)
         if (read._tag === "SignedOut") return Option.none<ClaudeCredentials>()
@@ -1587,7 +1699,9 @@ const readLinked = (
  * (the source still holds the spent token, or cannot be read), only its own
  * token is spent, which gent alone holds. Otherwise the source's token is
  * spent (`spendSource`). A held rotation the endpoint refuses stays held
- * until the source moves past its base (`afterRefusal`).
+ * until the source moves past its base (`afterRefusal`). A held rotation gent
+ * cannot read blocks the login beside it: nothing is spent until the source
+ * moves past that login (`settleQuarantined`).
  */
 const refreshLinked = (
   source: LinkedSource,
@@ -1609,6 +1723,15 @@ const refreshLinked = (
           // A fresh rotation gent holds serves while the source cannot take it.
           if (servesFresh(settled.creds)) return settled.creds
           return yield* spendLinked(source, held, settled.creds.refreshToken, settled.base)
+        }
+        if (settled._tag === "Blocked") {
+          if (servesFresh(settled.login)) return settled.login
+          return yield* linkedBlocked(source, settled.file, settled.movedAside)
+        }
+        if (settled._tag === "Unknown") {
+          return yield* new CredentialRefreshUnavailable({
+            message: `Claude Code's login on ${source.directory} could not be read (${settled.reason}), and gent holds a token rotation for it it cannot read at ${settled.file}; no token was spent`,
+          })
         }
         if (settled._tag === "Serve" && servesFresh(settled.creds)) return settled.creds
         return yield* spendSource(source, held, cached)

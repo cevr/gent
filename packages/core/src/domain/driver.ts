@@ -300,12 +300,54 @@ export const PendingRotation = Schema.Struct({
 })
 export type PendingRotation = typeof PendingRotation.Type
 
+/**
+ * What the store keeps at a source's place once a held rotation's file did
+ * not decode and its bytes were moved aside to `file`, which gent never
+ * deletes. Those bytes may hold the only live token of the login whose
+ * fingerprint is `base`, the login the driver found beside them, so that
+ * login is never spent while the source still holds it.
+ */
+export const QuarantinedRotation = Schema.Struct({
+  quarantined: Schema.Struct({ base: Schema.String, file: Schema.String }),
+})
+export type QuarantinedRotation = typeof QuarantinedRotation.Type
+
+/** What the store holds for a source: a pending rotation, or the record of one moved aside. */
+export const HeldRotation = Schema.Union([PendingRotation, QuarantinedRotation])
+export type HeldRotation = typeof HeldRotation.Type
+
+/** A held rotation's file that does not decode, at the absolute path `file`. */
+export class HeldRotationUndecodable extends Schema.TaggedError<HeldRotationUndecodable>()(
+  "HeldRotationUndecodable",
+  {
+    file: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `The held token rotation at ${this.file} does not decode`
+  }
+}
+
 /** The pending rotation of one source, read and written under the store's lock. */
 export interface SourceRotation {
-  /** The rotation the store holds for the source; none once it landed. */
-  readonly read: Effect.Effect<Option.Option<PendingRotation>, ProviderAuthError>
-  /** Hold `next`, or, with none, forget the source's rotation. */
+  /**
+   * What the store holds for the source; none once it landed. A file that
+   * does not decode fails typed, naming the file.
+   */
+  readonly read: Effect.Effect<
+    Option.Option<HeldRotation>,
+    ProviderAuthError | HeldRotationUndecodable
+  >
+  /** Hold `next`, or, with none, forget what the store holds for the source. */
   readonly write: (next: Option.Option<PendingRotation>) => Effect.Effect<void, ProviderAuthError>
+  /**
+   * Move the source's file that does not decode aside, byte for byte, to a
+   * sibling it returns, and keep the record of it (`QuarantinedRotation`)
+   * with `base` at its place, in one step; with no base, keep nothing there.
+   * A move that fails leaves the file where it is.
+   */
+  readonly moveAside: (base: Option.Option<string>) => Effect.Effect<string, ProviderAuthError>
 }
 
 /**

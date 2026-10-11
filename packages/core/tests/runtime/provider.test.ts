@@ -11,6 +11,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   Predicate,
   Ref,
   Schema,
@@ -430,6 +431,7 @@ const failingReadAuthLayer = Layer.succeed(
       remove: () => Effect.void,
       getRotation: () => Effect.fail(new AuthError({ message: "read failed" })),
       setRotation: () => Effect.void,
+      moveRotationAside: () => Effect.fail(new AuthError({ message: "read failed" })),
     }),
   ),
 )
@@ -894,6 +896,7 @@ describe("Auth", () => {
                 else disk.delete(source)
                 return Effect.void
               }),
+            moveRotationAside: () => Effect.die("the fake disk holds only what decodes"),
           }
           const store = serializeAuthStore(access)
           const other = serializeAuthStore(access)
@@ -1096,11 +1099,63 @@ describe("Auth", () => {
           // One that does not decode fails the read and stays: it may be a login's only live token.
           yield* fs.writeFileString(file, "{torn")
           const failure = yield* Effect.flip(readHeld(auth))
-          expect(failure._tag).toBe("AuthError")
+          expect(failure._tag).toBe("HeldRotationUndecodable")
           expect(yield* fs.readFileString(file)).toBe("{torn")
           yield* other.withRotation("anthropic", source, (held) => held.write(Option.none()))
           expect(yield* fs.exists(file)).toBe(false)
           expect(yield* readHeld(auth)).toEqual(Option.none())
+        }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "a held rotation that does not decode fails its read naming its file, and is moved aside byte for byte, never deleted",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const source = "60475e44c7992da8758ab6b20d184256ebbae977bbd313d882c36f8adb6d9052"
+          const file = path.resolve(dir, ".rotations", "anthropic", source)
+          yield* auth.withRotation("anthropic", source, (held) =>
+            held.write(
+              Option.some({
+                rotation: { access: "fake-held", refresh: "fake-held-refresh", expires: 1 },
+                base: "fake-base",
+              }),
+            ),
+          )
+          // Torn in place: the file keeps the owner-only mode its write gave it.
+          yield* fs.writeFileString(file, "{torn")
+          const readHeld = auth.withRotation("anthropic", source, (held) => held.read)
+          const failure = yield* Effect.flip(readHeld)
+          if (failure._tag !== "HeldRotationUndecodable") {
+            return yield* Effect.die(`expected HeldRotationUndecodable, got ${failure._tag}`)
+          }
+          expect(failure.file).toBe(file)
+          expect(path.isAbsolute(failure.file)).toBe(true)
+          expect(failure.message).toContain(file)
+          const aside = yield* auth.withRotation("anthropic", source, (held) =>
+            held.moveAside(Option.some("fake-login-fingerprint")),
+          )
+          expect(path.dirname(aside)).toBe(path.dirname(file))
+          expect(aside.startsWith(`${file}.undecodable-`)).toBe(true)
+          expect(yield* fs.readFileString(aside)).toBe("{torn")
+          expect((yield* fs.stat(aside)).mode & 0o777).toBe(0o600)
+          // The record of it sits at the file's place, saved in the same step.
+          expect(yield* readHeld).toEqual(
+            Option.some({ quarantined: { base: "fake-login-fingerprint", file: aside } }),
+          )
+          expect((yield* fs.stat(file)).mode & 0o777).toBe(0o600)
+          // A source signed out keeps no record: the bytes are moved aside, and stay.
+          yield* fs.writeFileString(file, "{torn again")
+          const second = yield* auth.withRotation("anthropic", source, (held) =>
+            held.moveAside(Option.none()),
+          )
+          expect(yield* fs.readFileString(second)).toBe("{torn again")
+          expect(yield* fs.exists(file)).toBe(false)
+          expect(yield* readHeld).toEqual(Option.none())
+          expect(yield* fs.readFileString(aside)).toBe("{torn")
         }).pipe(Effect.provide(fileLockHost), Effect.timeout("5 seconds")),
     )
 
@@ -1798,6 +1853,7 @@ const failingAuthStoreLayer = Layer.succeed(
       remove: () => Effect.void,
       getRotation: () => Effect.succeedNone,
       setRotation: () => Effect.fail(new AuthError({ message: "write failed" })),
+      moveRotationAside: () => Effect.fail(new AuthError({ message: "write failed" })),
     }),
   ),
 )
@@ -1890,6 +1946,7 @@ const testAuthStorage: AuthService = serializeAuthStore({
   remove: () => Effect.void,
   getRotation: () => Effect.succeedNone,
   setRotation: () => Effect.void,
+  moveRotationAside: () => Effect.fail(new AuthError({ message: "no rotation file" })),
 })
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>

@@ -4085,6 +4085,8 @@ const rotationStore = () => {
           else held.delete(source)
           return Effect.void
         }),
+      // Memory holds only what decodes: nothing is ever there to move aside.
+      moveAside: () => Effect.die("the test store holds no undecodable rotation"),
     }).pipe(lock.withPermits(1))
   return {
     held,
@@ -5242,6 +5244,82 @@ describe("linked rotation: a store that cannot hold it on disk", () => {
           expect(yield* store.rotationFileExists).toBe(false)
         }),
       ).pipe(Effect.provide(BunServices.layer)),
+  )
+})
+
+describe("linked rotation: a held rotation gent cannot read", () => {
+  it.scopedLive(
+    "a held rotation that does not decode is moved aside and named, its login is never spent, and a new Claude Code login clears it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const authDirectory = path.join(yield* fs.makeTempDirectoryScoped(), "auth")
+        const rotations = path.join(authDirectory, ".rotations", "anthropic")
+        yield* fs.makeDirectory(rotations, { recursive: true })
+        // A torn rotation file: its bytes may be the expired login's only live token.
+        yield* fs.writeFileString(path.join(rotations, LINKED_KEY), "{torn")
+        const keychain = fakeKeychain([
+          [LINKED_SERVICE, { account: "alice", blob: claudeBlob("fake-expired", 0) }],
+        ])
+        const endpoint = numberedEndpoint()
+        const spent: Array<string> = []
+        const respond: FakeResponder = (request, call) => {
+          if (request.url === TOKEN_URL) spent.push(refreshTokenOf(request))
+          return endpoint.respond(request, call)
+        }
+        const movedAsideIn = (failure: Option.Option<ProviderAuthError>) =>
+          Option.match(failure, {
+            onNone: () => "resolved",
+            onSome: (error) => /(\/\S+\.undecodable-\d+)/.exec(error.message)?.[1] ?? error.message,
+          })
+        const attempt = Effect.gen(function* () {
+          // Each attempt is a new process: a new store over the directory, a new driver.
+          const store = { lockSourceRotation: yield* storeRotationLock(authDirectory, "anthropic") }
+          const driver = yield* linkedDriver("darwin", keychain.spawner)
+          const signIn = linkedSignIn(LINKED_DIRECTORY, 1, LINKED_SLOT, store)
+          return { driver, signIn }
+        })
+        const firstProcess = yield* attempt
+        const first = yield* resolveFailure(firstProcess.driver, firstProcess.signIn, respond)
+        const aside = movedAsideIn(first)
+        expect(path.dirname(aside)).toBe(rotations)
+        expect(Option.exists(first, (error) => error.message.includes(LINKED_DIRECTORY))).toBe(true)
+        expect(
+          first.pipe(Option.flatMap((error) => Option.fromUndefinedOr(error.credentialFailure))),
+        ).toEqual(Option.some("Unavailable"))
+        expect(spent).toEqual([])
+        expect(yield* fs.readFileString(aside)).toBe("{torn")
+        // A restart meets the record: the same file is named, and nothing is spent.
+        const secondProcess = yield* attempt
+        const second = yield* resolveFailure(secondProcess.driver, secondProcess.signIn, respond)
+        expect(movedAsideIn(second)).toBe(aside)
+        expect(spent).toEqual([])
+        expect(writesOf(keychain.calls)).toEqual([])
+        // Claude Code signs in again: the source moves past the blocked login, which serves.
+        const now = yield* Clock.currentTimeMillis
+        yield* keychain.write(LINKED_SERVICE, {
+          account: "alice",
+          blob: claudeBlob("fake-new-login", now + 3600000),
+        })
+        const third = yield* sendThrough(
+          secondProcess.driver,
+          secondProcess.signIn,
+          endpoint.respond,
+        )
+        expect(third.authorization).toBe("Bearer fake-new-login")
+        expect(third.refreshTokens).toEqual([])
+        // The record is gone: a refresh spends the new login's token, once.
+        endpoint.refuseNext()
+        const fourth = yield* sendThrough(
+          secondProcess.driver,
+          secondProcess.signIn,
+          endpoint.respond,
+        )
+        expect(fourth.refreshTokens).toEqual(["fake-new-login-refresh"])
+        expect(fourth.authorization).toBe("Bearer fake-rotated-1-access")
+        expect(yield* fs.readFileString(aside)).toBe("{torn")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 

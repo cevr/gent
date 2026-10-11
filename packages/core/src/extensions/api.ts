@@ -74,6 +74,7 @@ export {
   PendingRotation,
   ProviderAuthError,
   ProviderAuthInfo,
+  QuarantinedRotation,
   rateLimitResponse,
   ReasoningOption,
   reportProviderStopReason,

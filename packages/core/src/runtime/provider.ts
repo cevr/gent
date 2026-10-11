@@ -61,8 +61,10 @@ import {
   type ModelRouterContribution,
   modelFromCatalog,
   ReasoningOption,
+  HeldRotation,
+  HeldRotationUndecodable,
   type LockSourceRotation,
-  PendingRotation,
+  type PendingRotation,
   type PersistAuth,
   authMethodAppliesTo,
   type CredentialFailureReason,
@@ -240,17 +242,29 @@ interface AuthStoreAccess {
   readonly remove: (provider: string, slot?: CredentialSlot) => Effect.Effect<void, AuthError>
   /** The provider ids an entry is stored under, decoded or not. */
   readonly list: Effect.Effect<ReadonlyArray<string>, AuthError>
-  /** The rotation `provider`'s driver holds for `source` (`PendingRotation`); none when it holds none. */
+  /**
+   * What `provider`'s driver holds for `source` (`HeldRotation`); none when it
+   * holds none. A file that does not decode fails `HeldRotationUndecodable`.
+   */
   readonly getRotation: (
     provider: string,
     source: string,
-  ) => Effect.Effect<Option.Option<PendingRotation>, AuthError>
-  /** Hold `next` for `source`, or remove the held one. */
+  ) => Effect.Effect<Option.Option<HeldRotation>, AuthError | HeldRotationUndecodable>
+  /** Hold `next` for `source`, or remove what is held. */
   readonly setRotation: (
     provider: string,
     source: string,
     next: Option.Option<PendingRotation>,
   ) => Effect.Effect<void, AuthError>
+  /**
+   * Move the file held for `source` aside to a sibling and return its path,
+   * keeping the record of it with `base` at its place (none: nothing).
+   */
+  readonly moveRotationAside: (
+    provider: string,
+    source: string,
+    base: Option.Option<string>,
+  ) => Effect.Effect<string, AuthError>
 }
 
 export interface AuthService {
@@ -308,13 +322,18 @@ export interface AuthService {
    * rotation in its memory, and `read` returns it, until a later write lands
    * or a forget clears it (a forget then leaves the disk as it is). Only this
    * store sees it, and only while the process runs.
+   *
+   * A file that does not decode is never discarded: `read` fails naming it,
+   * and `moveAside` moves its bytes to a sibling and keeps the record of it
+   * (`QuarantinedRotation`) at its place, in one locked step.
    */
   readonly withRotation: <A, E>(
     provider: string,
     source: string,
     use: (held: {
-      readonly read: Effect.Effect<Option.Option<PendingRotation>, AuthError>
+      readonly read: Effect.Effect<Option.Option<HeldRotation>, AuthError | HeldRotationUndecodable>
       readonly write: (next: Option.Option<PendingRotation>) => Effect.Effect<void, AuthError>
+      readonly moveAside: (base: Option.Option<string>) => Effect.Effect<string, AuthError>
     }) => Effect.Effect<A, E>,
   ) => Effect.Effect<A, E | AuthError>
 }
@@ -382,11 +401,14 @@ export const serializeAuthStore = (
   const heldRotation = (provider: string, source: string) => {
     const key = unsavedKey(provider, source)
     return {
-      read: Effect.suspend(() => {
-        const inMemory = unsaved.get(key)
-        if (Predicate.isNotUndefined(inMemory)) return Effect.succeedSome(inMemory)
-        return store.getRotation(provider, source)
-      }),
+      read: Effect.suspend(
+        (): Effect.Effect<Option.Option<HeldRotation>, AuthError | HeldRotationUndecodable> => {
+          const inMemory = unsaved.get(key)
+          if (Predicate.isNotUndefined(inMemory)) return Effect.succeedSome(inMemory)
+          return store.getRotation(provider, source)
+        },
+      ),
+      moveAside: (base: Option.Option<string>) => store.moveRotationAside(provider, source, base),
       write: (next: Option.Option<PendingRotation>) =>
         Effect.suspend((): Effect.Effect<void, AuthError> => {
           if (Option.isNone(next)) {
@@ -566,11 +588,41 @@ export class Auth extends Context.Service<Auth, AuthService>()(
           if (encoded === "." || encoded === "..") return encoded.replaceAll(".", "%2E")
           return encoded
         }
+        // Absolute, so a failure that names the file names it wherever it is read.
         const rotationFileOf = (provider: string, source: string) =>
-          pathService.join(directory, ".rotations", segment(provider), segment(source))
-        const rotationCodec = Schema.fromJsonString(Schema.toCodecJson(PendingRotation))
+          pathService.resolve(directory, ".rotations", segment(provider), segment(source))
+        const rotationCodec = Schema.fromJsonString(Schema.toCodecJson(HeldRotation))
         const decodeRotation = Schema.decodeEffect(rotationCodec)
         const encodeRotation = Schema.encodeEffect(rotationCodec)
+        const movedAsideFailure = "Failed to move a held token rotation aside"
+        // A second name for `file` beside it, `<file>.undecodable-<epoch ms>`,
+        // counted on when a name of that millisecond is taken.
+        const linkAside = (file: string) =>
+          Effect.gen(function* () {
+            const stamp = `${file}.undecodable-${yield* Clock.currentTimeMillis}`
+            const attempt = (n: number): Effect.Effect<string, AuthError> => {
+              let aside = stamp
+              if (n > 0) aside = `${stamp}-${n}`
+              return fs.link(file, aside).pipe(
+                Effect.as(aside),
+                Effect.catchIf(
+                  (error) => error.reason._tag === "AlreadyExists" && n < 100,
+                  () => attempt(n + 1),
+                ),
+                Effect.mapError(wrap(movedAsideFailure)),
+              )
+            }
+            return yield* attempt(0)
+          })
+        // Staged and renamed over the file, owner-only from the first byte.
+        const writeRotation = (file: string, held: HeldRotation) =>
+          encodeRotation(held).pipe(
+            Effect.tap(() => fs.makeDirectory(pathService.dirname(file), { recursive: true })),
+            Effect.flatMap((text) => writeFileAtomic(file, text, { mode: 0o600 })),
+            Effect.mapError(wrap("Failed to hold a token rotation")),
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, pathService),
+          )
         const namesIn = (dir: string) =>
           fs.readDirectory(dir).pipe(
             Effect.catchIf(
@@ -660,7 +712,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
               return [...new Set([...legacy, ...named])]
             }),
             // A held rotation that does not decode is never discarded: it may
-            // be the only live token of a login. The read fails and says so.
+            // be the only live token of a login. The read fails naming it.
             getRotation: (provider, source) =>
               fs.readFileString(rotationFileOf(provider, source)).pipe(
                 Effect.asSome,
@@ -675,7 +727,13 @@ export class Auth extends Context.Service<Auth, AuthService>()(
                     onSome: (raw) =>
                       decodeRotation(raw).pipe(
                         Effect.asSome,
-                        Effect.mapError(wrap("A held token rotation does not decode")),
+                        Effect.mapError(
+                          (cause) =>
+                            new HeldRotationUndecodable({
+                              file: rotationFileOf(provider, source),
+                              cause,
+                            }),
+                        ),
                       ),
                   }),
                 ),
@@ -686,20 +744,24 @@ export class Auth extends Context.Service<Auth, AuthService>()(
                   fs
                     .remove(rotationFileOf(provider, source), { force: true })
                     .pipe(Effect.mapError(wrap("Failed to remove a held token rotation"))),
-                onSome: (rotation) =>
-                  encodeRotation(rotation).pipe(
-                    Effect.tap(() =>
-                      fs.makeDirectory(pathService.dirname(rotationFileOf(provider, source)), {
-                        recursive: true,
-                      }),
-                    ),
-                    Effect.flatMap((text) =>
-                      writeFileAtomic(rotationFileOf(provider, source), text, { mode: 0o600 }),
-                    ),
-                    Effect.mapError(wrap("Failed to hold a token rotation")),
-                    Effect.provideService(FileSystem.FileSystem, fs),
-                    Effect.provideService(Path.Path, pathService),
-                  ),
+                onSome: (rotation) => writeRotation(rotationFileOf(provider, source), rotation),
+              }),
+            // The bytes get a second name first, and the record is then
+            // renamed over the first: no step leaves the place empty, where
+            // the next read would find nothing held and spend the login the
+            // bytes may have replaced. A link that fails changes nothing; a
+            // record that fails leaves the bytes under both names. A link
+            // never replaces a name, so an earlier sibling is never lost.
+            moveRotationAside: (provider, source, base) =>
+              Effect.gen(function* () {
+                const file = rotationFileOf(provider, source)
+                const aside = yield* linkAside(file)
+                if (Option.isNone(base)) {
+                  yield* fs.remove(file).pipe(Effect.mapError(wrap(movedAsideFailure)))
+                  return aside
+                }
+                yield* writeRotation(file, { quarantined: { base: base.value, file: aside } })
+                return aside
               }),
           },
           (provider) => providerLock.exclusive(directory, provider),
@@ -729,6 +791,9 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             if (Option.isSome(next)) rotations.set(rotationKey(provider, source), next.value)
             else rotations.delete(rotationKey(provider, source))
           }),
+        // Memory holds only what decodes: nothing is ever there to move aside.
+        moveRotationAside: () =>
+          Effect.fail(new AuthError({ message: "An in-memory store holds no rotation file" })),
         list: Effect.sync(() => {
           const providers: string[] = []
           for (const [provider, slots] of map) if (slots.size > 0) providers.push(provider)
@@ -1362,8 +1427,11 @@ export const sourceRotationLock =
     return authStore
       .withRotation(providerId, source, (held) =>
         use({
-          read: held.read.pipe(Effect.mapError(asAuthFailure)),
+          read: held.read.pipe(
+            Effect.catchTag("AuthError", (cause) => Effect.fail(asAuthFailure(cause))),
+          ),
           write: (next) => held.write(next).pipe(Effect.mapError(asAuthFailure)),
+          moveAside: (base) => held.moveAside(base).pipe(Effect.mapError(asAuthFailure)),
         }),
       )
       .pipe(Effect.catchIf(Schema.is(AuthError), (cause) => Effect.fail(asAuthFailure(cause))))
