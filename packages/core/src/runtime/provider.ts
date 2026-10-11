@@ -3506,10 +3506,14 @@ interface CredentialPlacementService {
     readonly slot: CredentialSlot
     readonly retryAt: Option.Option<number>
   }) => Effect.Effect<void>
-  /** Whether any account of `pool` is not held by a refusal now: a run outside the pool returns to it. */
+  /**
+   * Whether any account of `pool` is eligible now: not held by a refusal and
+   * not `left` by the turn. A run outside the pool returns to it only then.
+   */
   readonly open: (params: {
     readonly provider: string
     readonly pool: ReadonlyArray<CredentialSlot>
+    readonly left: ReadonlySet<CredentialSlot>
   }) => Effect.Effect<boolean>
   /** The session's turn ended: a warming guard it holds is released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
@@ -3536,7 +3540,8 @@ const placementKey = (...parts: ReadonlyArray<string | number>) => parts.join("\
 /** Where the usage buckets persist: read once at start, replaced whole. Neither fails. */
 interface PlacementLedgerStore {
   readonly load: Effect.Effect<ReadonlyArray<UsageBucket>>
-  readonly save: (buckets: ReadonlyArray<UsageBucket>) => Effect.Effect<void>
+  /** True when the buckets were written; a failed write is logged, never raised. */
+  readonly save: (buckets: ReadonlyArray<UsageBucket>) => Effect.Effect<boolean>
 }
 
 /**
@@ -3564,6 +3569,7 @@ const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function
         const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets })
         yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
         yield* writeFileAtomic(file, text, { mode: 0o600 })
+        return true
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, pathService),
@@ -3571,6 +3577,7 @@ const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function
         Effect.catch((cause) =>
           Effect.logWarning("credential-placement.ledger-write-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(false),
           ),
         ),
       ),
@@ -3607,8 +3614,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (children.size === 0) warming.delete(key)
     }
   }
-  /** Buckets changed since the ledger was last written. */
-  let dirty = false
+  /**
+   * Each change of the buckets counts up `version`; `written` is the version
+   * the ledger last saved. A write that fails, or is cut off at shutdown,
+   * leaves them apart, so the next write saves the buckets again.
+   */
+  let version = 0
+  let written = 0
   /** One read or change of the state at a time: a burst of placements reads each earlier one. */
   const locked = <A>(body: () => A) => Effect.sync(body).pipe(lock.withPermits(1))
   const windowStart = (now: number) => Math.floor((now - PLACEMENT_WINDOW_MS) / PLACEMENT_BUCKET_MS)
@@ -3630,12 +3642,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     onSome: (store) =>
       Effect.gen(function* () {
         // Nothing recorded since the last write: the file already holds it.
-        const kept = yield* locked(() => {
-          const changed = dirty
-          dirty = false
-          return Option.liftPredicate([...buckets.values()], () => changed)
+        const kept = yield* locked(() =>
+          Option.liftPredicate(
+            { version, buckets: [...buckets.values()] },
+            () => version !== written,
+          ),
+        )
+        if (Option.isNone(kept)) return
+        if (!(yield* store.save(kept.value.buckets))) return
+        yield* locked(() => {
+          written = kept.value.version
         })
-        if (Option.isSome(kept)) yield* store.save(kept.value)
       }).pipe(writeLock.withPermits(1)),
   })
   const liveOn = (provider: string, slot: CredentialSlot, except: SessionId) => {
@@ -3741,7 +3758,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             sessions += 1
           }
           buckets.set(key, { ...bucket, costUsd: bucket.costUsd + step.costUsd.value, sessions })
-          dirty = true
+          version += 1
         })
       }),
     refuse: (params) =>
@@ -3755,7 +3772,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         const now = yield* Clock.currentTimeMillis
         return yield* locked(() => {
           trim(now)
-          return params.pool.some((slot) => !held.has(placementKey(params.provider, slot)))
+          return params.pool.some(
+            (slot) => !params.left.has(slot) && !held.has(placementKey(params.provider, slot)),
+          )
         })
       }),
     release: (sessionId) => locked(() => unguard(sessionId)),
