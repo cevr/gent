@@ -238,12 +238,16 @@ export const requireContextModules = Effect.fn("Tooling.requireContextModules")(
 /** Compile and lint one context's blocks; each failure keeps its module position. */
 export const compileContext = Effect.fn("Tooling.compileContext")(function* (
   repoRoot: string,
-  directory: string,
+  scratch: string,
   context: GuideCodeContext,
   names: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
+  // oxlint matches its override globs against the real path of the files it
+  // lints; reached through a link (on macOS the temp root `/var` is one), the
+  // config's directory is another path and no override applies.
+  const directory = yield* fs.realPath(scratch)
   const tsconfig = {
     extends: path.join(repoRoot, context.tsconfig),
     // The root's `types: ["bun"]` resolves from the root; the rest from the context's modules.
