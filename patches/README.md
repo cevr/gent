@@ -6,7 +6,7 @@ until it is regenerated for the new release. The Effect patches follow
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
-## `@opentui/core@0.5.14`
+## `@opentui/core@0.5.17`
 
 The split footer forgets its history state when it leaves for the alternate
 screen. `syncSplitFooterState` resets the native split scrollback (its row
@@ -47,7 +47,7 @@ saves them before the draw and puts back each one the draw changed to a
 border glyph. Only the fast path writes there, and only with no grapheme or
 link in the buffer, so a saved cell holds no grapheme reference. The other
 paths and the titles (`drawText`) already respect the scissor. The Bun and
-Node buffer bundles (`chunk-bun-sjw2d9bq.js`, `chunk-node-80p7e6t6.js`) get
+Node buffer bundles (`chunk-bun-6rvkxs1v.js`, `chunk-node-tfvyz31s.js`) get
 the same change. "box borders under a scissor" in `apps/tui/tests/ui.test.tsx`
 (left, centered, right and wide-character titles, nested scissors, a solid
 background) and "a prompt cut by history draws its rail only beside its own
@@ -67,7 +67,7 @@ row, so the native frame keeps its row accounting (`noteViewportScroll`) and
 writes no `CSI S`. The immediate scroll in `applyScreenMode` uses the same
 line feeds (`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
 (`codex-rs/tui/src/tui/scrollback.rs`, `grow_viewport`). The renderer bundles
-(`chunk-bun-j2z63cdy.js`, `chunk-node-wp7ct2m6.js`) get the same change. "a
+(`chunk-bun-h3ggawd9.js`, `chunk-node-kc1sqq2a.js`) get the same change. "a
 long session's retried multiline prompt keeps every prompt and answer row
 once at 45x15" in `packages/e2e/tests/scrollback.test.ts` covers it.
 
@@ -125,7 +125,11 @@ frame. Checked on 2026-10-04: `main` after 0.5.14 still resets the state,
 its `drawVisibleBox` border fast path still writes past the scissor, and
 `applyPendingSplitFooterTransition` still writes `CSI S`. Checked on
 2026-10-05 (`main` at 684d70ce): `resetSplitFooterForReplay` still writes
-its clear at once.
+its clear at once. Rechecked on 2026-10-10: 0.5.17 changes none of these paths.
+It clamps a negative scissor size before the native push, and the patch's
+`_scissorRects` copy takes the same clamped size. 0.6.0 moves layout and
+paint into native code, and its split footer still resets the history state
+and writes the replay clear at once; gent stays on 0.5.
 
 ## `@effect/ai-anthropic@4.0.2`
 

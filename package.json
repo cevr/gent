@@ -77,7 +77,7 @@
     "@effect/ai-anthropic@4.0.2": "patches/@effect%2Fai-anthropic@4.0.2.patch",
     "@effect/ai-openai@4.0.2": "patches/@effect%2Fai-openai@4.0.2.patch",
     "@effect/ai-openai-compat@4.0.2": "patches/@effect%2Fai-openai-compat@4.0.2.patch",
-    "@opentui/core@0.5.14": "patches/@opentui%2Fcore@0.5.14.patch",
+    "@opentui/core@0.5.17": "patches/@opentui%2Fcore@0.5.17.patch",
     "@effect/platform-node-shared@4.0.2": "patches/@effect%2Fplatform-node-shared@4.0.2.patch",
     "effect@4.0.2": "patches/effect@4.0.2.patch"
   }
