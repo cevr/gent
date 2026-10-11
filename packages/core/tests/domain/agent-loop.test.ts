@@ -230,13 +230,15 @@ describe("session metrics fold", () => {
       slot: b,
       placement: "pinned",
     })
-    // Placed, before its first step ends.
+    // A placement alone names no account: it comes with a request's receipt,
+    // and a last step whose selection failed (no credential) leaves the
+    // account unknown, never the older placement's.
+    const selectionFailed = wrap(
+      AgentEvent.cases.StreamEnded.make({ sessionId, branchId, model, outcome: "Failed" }),
+    )
     expect(foldSessionMetrics([placedOn(a)]).placement).toEqual({ provider: anthropic, slot: a })
-    expect(accountOf(unpinned, [placedOn(a)])).toEqual({
-      provider: anthropic,
-      slot: a,
-      placement: "assigned",
-    })
+    expect(accountOf(unpinned, [placedOn(a)])).toBeUndefined()
+    expect(accountOf(unpinned, [placedOn(a), stepOn(a), selectionFailed])).toBeUndefined()
     // The step went out on the placement.
     expect(accountOf(unpinned, [placedOn(a), stepOn(a)])?.placement).toBe("assigned")
     // The newest placement wins.

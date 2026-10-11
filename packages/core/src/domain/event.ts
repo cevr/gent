@@ -154,8 +154,10 @@ export const AgentEvent = Schema.TaggedUnion({
    * account the turn walks from: a fall outside the pool is the walk of the
    * order, not a placement, and a run that stays there records nothing.
    * Written with the receipt (`StreamEnded.credential`) of the turn's
-   * (`messageId`) first request on `slot`, in the same transaction and just
-   * before it: a decision whose request never ended records nothing. A
+   * (`messageId`) first request that went out on `slot` (its stream
+   * opened), in the same transaction and just before it, however that
+   * request ends: a decision no request went out on (a step stopped by the
+   * budget or the stop check first, or a restart) records nothing. A
    * recovered turn reads its receipts, not these. Labels only: no account,
    * no credential.
    */

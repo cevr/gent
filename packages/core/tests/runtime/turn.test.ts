@@ -5094,6 +5094,88 @@ describe("credential order", () => {
       },
     )
 
+    it.live(
+      "a refusal move the model-call budget stops before its request goes out records no placement, and its receipt is as before",
+      () =>
+        Effect.gen(function* () {
+          // a refuses the turn's one model call; the move to b is decided,
+          // and the budget stops the step before its request goes out.
+          const root = credentialRoot({
+            name: "budget-stops-move",
+            order: [a, b],
+            spread: [a, b],
+            stored: keysOf([a, b]),
+            replies: { "sk-a": refusal, "sk-b": answer("from b") },
+            maxModelAttempts: 1,
+            cacheTtlMs: HOUR_MS,
+          })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* root.seed
+              yield* runAgentLoop(
+                makeMessage(root.sessionId, root.branchId, "hello"),
+                root.admission,
+              )
+            }),
+          ).pipe(Effect.provide(root.layer))
+          const events = yield* Ref.get(root.events)
+          expect(root.sent).toEqual(["sk-a"])
+          // The receipt names the account the step selected, as at base.
+          const ended = events.flatMap((event) => {
+            if (event._tag !== "StreamEnded") return []
+            return [`${event.outcome}:${event.credential?.slot}`]
+          })
+          expect(ended).toEqual(["Failed:b"])
+          // No request went out on b: no placement names it.
+          expect(placementsOf(events)).toEqual([])
+          expect(
+            events.some(
+              (event) =>
+                event._tag === "ErrorOccurred" &&
+                event.error.startsWith("Stopped at the model-call budget"),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a turn recovered after its receipt's account left the pool and order is placed afresh by the ranking, recorded with its first request there",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // Turn one is placed on a; turn two runs a tool step there and the
+          // process dies on its next request.
+          const first = spreadRoot(world, "recovered-left-pool", {
+            replies: { "sk-a": answerToolThenDie(out), "sk-b": answer("from b") },
+          })
+          yield* twoTurnsThenDie(first, out)
+          expect(first.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+          // The restart's pool and order are [b, c], with b busier than c by
+          // three sessions: the ranking takes c, the pool's second, as for a
+          // run returning to the pool from a, now outside it.
+          for (const other of ["left-pool-1", "left-pool-2", "left-pool-3"])
+            yield* world.placement.place({
+              provider: FALLBACK,
+              pool: [b, c],
+              sessionId: SessionId.make(other),
+              preferred: Option.some(b),
+              starter: Option.none(),
+              left: new Set([c]),
+              ttlMs: HOUR_MS,
+            })
+          const second = spreadRoot(world, "recovered-left-pool", { pool: [b, c] })
+          const events = yield* dieAndRecoverTail(world, first, second)
+          expect(second.sent).toEqual(["sk-c"])
+          expect(slotsOf(events)).toEqual([a, a, c])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: c, reason: "returned", from: a },
+          ])
+          expect(placementsWithoutReceipt(events)).toEqual([])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
     describe("crash points", () => {
       /** mulberry32: one seed draws the same crash points on every run. */
       const drawsOf = (seed: number) => {
@@ -5106,27 +5188,55 @@ describe("credential order", () => {
         }
       }
       const SEEDS = 40
-      /** One session's turns: tool steps, refusals on a and on b, and windows filled mid-turn. */
-      const WORKLOAD = ["w1 tool", "w2 refuse-a", "w3 fill", "w4 refuse-b", "w5 tool", "w6 fill"]
+      /**
+       * One session's turns: tool steps, refusals on a and on b, windows
+       * filled mid-turn, and a last turn that spends its model-call budget.
+       */
+      const WORKLOAD = [
+        "w1 tool",
+        "w2 refuse-a",
+        "w3 fill",
+        "w4 refuse-b",
+        "w5 tool",
+        "w6 fill",
+        "w7 spend",
+      ]
+      /** The model-call budget of every turn: only `w7 spend` reaches it. */
+      const BUDGET = 8
       const textOf = (message: Prompt.Message) => {
         if (message.role === "system") return message.content
         const texts: Array<string> = []
         for (const part of message.content) if (part.type === "text") texts.push(part.text)
         return texts.join("")
       }
+      /** The newest workload prompt in `prompt`; none for the summary request. */
+      const workloadAt = (prompt: Prompt.Prompt) =>
+        prompt.content.findLastIndex(
+          (message) => message.role === "user" && WORKLOAD.includes(textOf(message)),
+        )
       /**
        * The reply to a request on `credential`: by the newest workload prompt
        * in it, and whether a tool result came after that prompt. A request
-       * with none (the summary request) answers.
+       * with none (the summary request) answers. `w7 spend` calls a tool on
+       * every request but its `BUDGET`-th (`spent`), which is refused: the
+       * move after it is stopped by the budget before its request goes out.
        */
-      const workloadReply = (credential: string, prompt: Prompt.Prompt, refused: Set<string>) => {
+      const workloadReply = (
+        credential: string,
+        prompt: Prompt.Prompt,
+        refused: Set<string>,
+        spent: number,
+      ) => {
         const messages = prompt.content
-        const at = messages.findLastIndex(
-          (message) => message.role === "user" && WORKLOAD.includes(textOf(message)),
-        )
-        if (at < 0 || messages.slice(at + 1).some((message) => message.role === "tool"))
-          return answer("done")(0)
+        const at = workloadAt(prompt)
+        if (at < 0) return { refused: false, reply: answer("done")(0) }
         const kind = textOf(messages[at]!).split(" ")[1]
+        if (kind === "spend") {
+          if (spent === BUDGET) return { refused: true, reply: refusal() }
+          return { refused: false, reply: toolStepThen(10, answer("unused"))(0) }
+        }
+        if (messages.slice(at + 1).some((message) => message.role === "tool"))
+          return { refused: false, reply: answer("done")(0) }
         // A refusal on its account, once per turn and process.
         const refusing =
           (kind === "refuse-a" && credential === "sk-a") ||
@@ -5134,11 +5244,50 @@ describe("credential order", () => {
         const key = `${textOf(messages[at]!)} ${credential}`
         if (refusing && !refused.has(key)) {
           refused.add(key)
-          return refusal()
+          return { refused: true, reply: refusal() }
         }
         // A tool step that fills the window mid-turn, or a small one.
         const echoed = new Map([["fill", 60_000]]).get(kind ?? "") ?? 10
-        return toolStepThen(echoed, answer("unused"))(0)
+        return { refused: false, reply: toolStepThen(echoed, answer("unused"))(0) }
+      }
+      /** A request that went out: its workload turn (none for a summary), account and refusal. */
+      interface SentRequest {
+        readonly text: Option.Option<string>
+        readonly credential: string
+        readonly refused: boolean
+      }
+      /** The workload text of each turn's user message, by its id. */
+      const turnTexts = (events: ReadonlyArray<AgentEvent>) =>
+        new Map(
+          events.flatMap((event) => {
+            if (event._tag !== "MessageReceived" || event.message.role !== "user") return []
+            const text = event.message.parts.flatMap((part) => {
+              if (part.type !== "text") return []
+              return [part.text]
+            })
+            return [[event.message.id, text.join("")] as const]
+          }),
+        )
+      /**
+       * Placements no request of their turn went out on: a placement is
+       * written only with the receipt of a request sent on its account.
+       */
+      const placementsNeverSent = (
+        events: ReadonlyArray<AgentEvent>,
+        sent: ReadonlyArray<SentRequest>,
+      ) => {
+        const texts = turnTexts(events)
+        return events.flatMap((event) => {
+          if (event._tag !== "CredentialAssigned") return []
+          const text = texts.get(event.messageId)
+          const went = sent.some(
+            (request) =>
+              Option.contains(request.text, text ?? "") &&
+              request.credential === `sk-${event.slot}`,
+          )
+          if (went) return []
+          return [{ text, slot: event.slot, reason: event.reason }]
+        })
       }
       const turnsEnded = (events: ReadonlyArray<AgentEvent>) =>
         new Set(
@@ -5151,19 +5300,35 @@ describe("credential order", () => {
       /**
        * One process of `seed`'s session: a fresh placement, as a restart has,
        * that recovers the open turn and runs the workload's next turns, and
-       * dies on its `crashAt`-th request when one is drawn.
+       * dies on its `crashAt`-th request when one is drawn (`w7 spend`'s
+       * requests are never drawn). `busy` is an account three other sessions
+       * hold in the new placement, so a turn placed afresh would leave it.
        */
       const runProcess = (
         world: SpreadWorld,
         seed: number,
         crashAt: Option.Option<number>,
+        busy: Option.Option<CredentialSlot>,
         progress: { submitted: number; seeded: boolean },
       ) =>
         Effect.gen(function* () {
           const out = yield* Deferred.make<void>()
           const placement = yield* makeCredentialPlacement(Option.none())
+          for (const slot of Option.toArray(busy))
+            for (const other of [1, 2, 3])
+              yield* placement.place({
+                provider: FALLBACK,
+                pool: [a, b],
+                sessionId: SessionId.make(`crash-${seed}-busy-${other}`),
+                preferred: Option.some(slot),
+                starter: Option.none(),
+                left: new Set([a, b].filter((other) => other !== slot)),
+                ttlMs: HOUR_MS,
+              })
           let requests = 0
+          let spent = 0
           const refused = new Set<string>()
+          const sent: Array<SentRequest> = []
           const root = credentialRoot({
             name: `crash-${seed}`,
             order: [a, b],
@@ -5174,10 +5339,21 @@ describe("credential order", () => {
             placement,
             cacheTtlMs: HOUR_MS,
             history: [110_000, 110_000, 110_000],
+            maxModelAttempts: BUDGET,
             respond: (credential, prompt) => {
-              requests += 1
-              if (Option.contains(crashAt, requests)) return dyingRequest(out)(0)
-              return workloadReply(credential, prompt, refused)
+              const at = workloadAt(prompt)
+              const text = Option.liftPredicate(at, (found) => found >= 0).pipe(
+                Option.map((found) => textOf(prompt.content[found]!)),
+              )
+              if (Option.contains(text, "w7 spend")) spent += 1
+              else requests += 1
+              if (Option.contains(crashAt, requests) && !Option.contains(text, "w7 spend")) {
+                sent.push({ text, credential, refused: false })
+                return dyingRequest(out)(0)
+              }
+              const reply = workloadReply(credential, prompt, refused, spent)
+              sent.push({ text, credential, refused: reply.refused })
+              return reply.reply
             },
           })
           const work = Effect.gen(function* () {
@@ -5212,68 +5388,142 @@ describe("credential order", () => {
             Effect.as(work, false),
             Effect.as(Deferred.await(out), true),
           )
-          return { root, crashed }
+          return { root, crashed, sent }
         }).pipe(Effect.scoped)
 
+      /**
+       * The recovered turn's requests in a process, from its first: each
+       * goes to `slot` until the first refusal moves the turn or a summary
+       * request hands its window off (each included). Those that went
+       * elsewhere.
+       */
+      const offResumedSlot = (
+        sent: ReadonlyArray<SentRequest>,
+        text: string,
+        slot: CredentialSlot,
+      ) => {
+        const off: Array<string> = []
+        for (const request of sent) {
+          if (Option.isSome(request.text) && request.text.value !== text) break
+          if (request.credential !== `sk-${slot}`) off.push(request.credential)
+          if (request.refused || Option.isNone(request.text)) break
+        }
+        return off
+      }
+
       it.live(
-        "across random crash points, every placement is written with a receipt on its account, and a recovered turn's first request goes to its newest receipt's account",
+        "across random crash points, every placement is written with the receipt of a request that went out on its account, and a recovered turn's requests go to its newest receipt's account until it moves",
         () =>
           Effect.gen(function* () {
-            const coverage = { restarts: 0, resumed: 0, placements: 0, reasons: new Set<string>() }
+            const coverage = {
+              restarts: 0,
+              resumed: 0,
+              placements: 0,
+              reasons: new Set<string>(),
+              stopped: 0,
+            }
             for (let seed = 1; seed <= SEEDS; seed += 1) {
               const draw = drawsOf(seed)
               const world = yield* spreadWorld
               const progress = { submitted: 0, seeded: false }
+              const offset = { ms: 0 }
+              const sent: Array<SentRequest> = []
               let crashes = 1 + Math.floor(draw() * 3)
               let events: ReadonlyArray<AgentEvent> = []
               for (let processes = 1; processes <= 12; processes += 1) {
                 // The open turn's newest receipt, before this process starts.
                 const ended = turnsEnded(events)
-                const resumeOn = events.findLast(
-                  (event): event is StreamEnded =>
-                    event._tag === "StreamEnded" &&
-                    Predicate.isNotUndefined(event.credential) &&
-                    Predicate.isNotUndefined(event.messageId) &&
-                    !ended.has(event.messageId),
+                const resumeOn = Option.fromUndefinedOr(
+                  events.findLast(
+                    (event): event is StreamEnded =>
+                      event._tag === "StreamEnded" &&
+                      Predicate.isNotUndefined(event.credential) &&
+                      Predicate.isNotUndefined(event.messageId) &&
+                      !ended.has(event.messageId),
+                  ),
                 )
+                const resumed = Option.flatMap(resumeOn, (receipt) =>
+                  Option.all({
+                    slot: Option.fromUndefinedOr(receipt.credential?.slot),
+                    text: Option.fromUndefinedOr(
+                      turnTexts(events).get(receipt.messageId ?? MessageId.make("none")),
+                    ),
+                  }),
+                )
+                // A restart comes past the cache's lifetime, with the receipt's
+                // account the busier: a turn placed afresh would leave it.
+                if (processes > 1) offset.ms += HOUR_MS + 60_000
                 const crashAt = Option.liftPredicate(1 + Math.floor(draw() * 9), () => crashes > 0)
-                const { root, crashed } = yield* runProcess(world, seed, crashAt, progress)
+                const process = yield* runProcess(
+                  world,
+                  seed,
+                  crashAt,
+                  Option.map(resumed, (found) => found.slot),
+                  progress,
+                ).pipe(Effect.provideService(Clock.Clock, skewedClock(offset)))
+                sent.push(...process.sent)
                 if (processes > 1) coverage.restarts += 1
-                if (Predicate.isNotUndefined(resumeOn)) {
+                if (Option.isSome(resumed)) {
                   coverage.resumed += 1
-                  expect({ seed, first: root.sent[0] }).toEqual({
+                  const { slot, text } = resumed.value
+                  expect({ seed, text, off: offResumedSlot(process.sent, text, slot) }).toEqual({
                     seed,
-                    first: `sk-${resumeOn.credential?.slot}`,
+                    text,
+                    off: [],
                   })
                 }
-                events = yield* eventsOf(world, root)
-                if (!crashed) break
+                events = yield* eventsOf(world, process.root)
+                if (!process.crashed) break
                 crashes -= 1
               }
+              // Every turn ends, none on a failure but the last, which the
+              // model-call budget stops.
+              const completed = events.filter((event) => event._tag === "TurnCompleted")
               expect({ seed, ended: turnsEnded(events).size }).toEqual({
                 seed,
                 ended: WORKLOAD.length,
               })
+              const texts = turnTexts(events)
+              expect({
+                seed,
+                failed: completed.flatMap((event) => {
+                  if (event.streamFailed !== true) return []
+                  return [texts.get(event.messageId ?? MessageId.make("none"))]
+                }),
+              }).toEqual({ seed, failed: ["w7 spend"] })
               expect({ seed, unreceipted: placementsWithoutReceipt(events) }).toEqual({
                 seed,
                 unreceipted: [],
               })
+              expect({ seed, neverSent: placementsNeverSent(events, sent) }).toEqual({
+                seed,
+                neverSent: [],
+              })
+              const stopped = events.some(
+                (event) =>
+                  event._tag === "ErrorOccurred" &&
+                  event.error.startsWith("Stopped at the model-call budget"),
+              )
+              if (stopped) coverage.stopped += 1
               for (const placed of placementsOf(events)) coverage.reasons.add(placed.reason)
               coverage.placements += placementsOf(events).length
             }
             // The draws reach the cases the properties are about: restarts
-            // with and without receipts of the open turn, and placements of
-            // each kind the workload makes. (40 seeds: 79 restarts, 40 with a
-            // receipt, 157 placements.)
+            // with and without receipts of the open turn, placements of each
+            // kind the workload makes, and a refusal move the budget stops
+            // before its request goes out. (40 seeds: 79 restarts, 37 with a
+            // receipt, 139 placements, 40 budget stops.)
             expect(coverage.restarts).toBeGreaterThanOrEqual(SEEDS)
             expect(coverage.resumed).toBeGreaterThanOrEqual(20)
             expect(coverage.restarts - coverage.resumed).toBeGreaterThanOrEqual(20)
+            expect(coverage.stopped).toBe(SEEDS)
             expect(
               ["new", "cold", "refused", "compacted"].filter(
                 (reason) => !coverage.reasons.has(reason),
               ),
             ).toEqual([])
           }).pipe(Effect.scoped, Effect.timeout("120 seconds")),
+        120_000,
       )
     })
 
