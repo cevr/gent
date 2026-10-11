@@ -5245,7 +5245,7 @@ describe("credential order", () => {
     )
 
     it.live(
-      "a turn recovered after its receipt's account left the pool and order, while every pool account is held, stays outside the pool recording nothing, and is placed when its order has no account outside it",
+      "a turn recovered after its receipt's account left the pool and order, while every pool account is held, is placed by the ranking and recorded, whether or not its order has an account outside the pool",
       () =>
         Effect.gen(function* () {
           const d = CredentialSlot.make("d")
@@ -5277,16 +5277,20 @@ describe("credential order", () => {
               const events = yield* dieAndRecoverTail(world, first, second)
               return { sent: second.sent, slots: slotsOf(events), placements: placementsOf(events) }
             })
-          // An account past the pool: the turn stays outside it there, as
-          // any run outside the pool does while no pool account is eligible.
+          // The turn ran on no account of its new order, so it has none to
+          // stay on: the ranking places it, falling back to the pool's first
+          // with every account held, and the decision is recorded with b's
+          // receipt. An account past the pool (d, a fallback key) is never
+          // chosen for it, and no request goes anywhere unrecorded.
           expect(yield* recoverHeld("recovered-held-outside", [b, c, d])).toEqual({
-            sent: ["sk-d"],
-            slots: [a, a, d],
-            placements: [{ slot: a, reason: "new", from: "none" }],
+            sent: ["sk-b"],
+            slots: [a, a, b],
+            placements: [
+              { slot: a, reason: "new", from: "none" },
+              { slot: b, reason: "returned", from: a },
+            ],
           })
-          // The order is the pool: no account outside it to stay on. The
-          // ranking places the turn, and the decision is recorded with b's
-          // receipt, never a walk to b with none.
+          // The order is the pool: the same.
           expect(yield* recoverHeld("recovered-held-pool", [b, c])).toEqual({
             sent: ["sk-b"],
             slots: [a, a, b],
