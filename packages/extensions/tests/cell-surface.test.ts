@@ -113,7 +113,7 @@ import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
 import { WebSearchTool } from "../src/network-tools.js"
-import { ReadSessionTool } from "../src/session-tools.js"
+import { ReadSessionTool, SessionToolsExtension } from "../src/session-tools.js"
 import { CancelTool, MonitorTool, WakeTool } from "../src/wake.js"
 import { CellResponse } from "../src/cell-protocol.js"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -1477,6 +1477,11 @@ describe("child cell", () => {
               ...DelegateExtension,
               artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
             },
+            // The `delegate` agent is registered by the threads, in @gent/session-tools.
+            {
+              ...SessionToolsExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
+            },
           ],
         })
         const content = "delegate from a cell"
@@ -1620,9 +1625,9 @@ describe("branch cell lifetime", () => {
               new AgentDefinition({ name: DEFAULT_AGENT_NAME }),
               new AgentDefinition({ name: AgentName.make("child") }),
             )
+            // `read_session` comes with @gent/session-tools, below.
             yield* host.register(
               "tool",
-              ReadSessionTool,
               tool({
                 id: "model-started",
                 description: "Wait for the model boundary",
@@ -1655,6 +1660,11 @@ describe("branch cell lifetime", () => {
             {
               ...DelegateExtension,
               artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
+            },
+            // The `delegate` agent is registered by the threads, in @gent/session-tools.
+            {
+              ...SessionToolsExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
             },
           ],
         })

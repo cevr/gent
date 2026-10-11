@@ -355,17 +355,11 @@ const senderLine = (from: SessionMessageSender): string => {
 }
 
 /**
- * A child's message is never its completion. It can arrive mid-turn or after
- * the completion (a later wake turn), so the line holds in both cases.
+ * A child's message is never its round's answer. It can arrive mid-round or
+ * after the round's end (a later wake turn), so the line holds in both cases.
  */
 const CHILD_STATUS_LINE =
-  "A child's completion arrives as its own child-completion message; this message is not one."
-
-/** Stored rows written before the line above carry this one. */
-const STORED_CHILD_STATUS_LINES = [
-  CHILD_STATUS_LINE,
-  "Your child is still running. This is not its completion; that arrives as a separate message.",
-]
+  "A thread's answer to your round arrives as its own round-end message; this message is not one."
 
 export const sessionMessageText = (input: {
   readonly from: SessionMessageSender
@@ -379,9 +373,11 @@ export const sessionMessageText = (input: {
 }
 
 /**
- * The text of a stored message without its header. Rows written before the
- * child status line existed have none, so the line is removed only when it
- * is there; a row whose header does not match is returned whole.
+ * The text of a stored message without its header. The header is the sender
+ * line, at most one status line, then a blank line, so any line between the
+ * sender line and the blank line is a status line, whatever words the binary
+ * that stored the row wrote there. Rows written before the status line
+ * existed have none; a row whose header does not match is returned whole.
  */
 export const sessionMessageBody = (from: SessionMessageSender, content: string): string => {
   const afterSender = (text: string) =>
@@ -389,10 +385,12 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
       Option.map((value) => value.slice(senderLine(from).length)),
     )
   const afterStatus = (text: string) =>
-    Option.fromUndefinedOr(
-      STORED_CHILD_STATUS_LINES.find((line) => text.startsWith(`\n${line}`)),
-    ).pipe(
-      Option.map((line) => text.slice(line.length + 1)),
+    Option.liftPredicate(text, (value) => value.startsWith("\n") && !value.startsWith("\n\n")).pipe(
+      Option.flatMap((value) =>
+        Option.liftPredicate(value.indexOf("\n", 1), (end) => end !== -1).pipe(
+          Option.map((end) => value.slice(end)),
+        ),
+      ),
       Option.getOrElse(() => text),
     )
   return afterSender(content).pipe(
@@ -410,14 +408,15 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
  * turn, and the sender stops it when its own turn is interrupted: the user
  * who stops a parent means its work, and a correction the parent sent is
  * part of it. A message that still waits in the child's queue is taken back
- * the same way, by the one stop that names its message. When the sender's
- * delegate stop reached the child's turn first, that stop took the waiting
- * message with the turn: the send stop then reaches nothing, and the child
- * is named once, under the delegate's stopped children. A turn the user
- * opened in the child is not the sender's, and the stop never names it.
+ * the same way, by the one stop that names its message. The threads' own
+ * `turnAfter` hook runs first: when the sender's interrupt stopped a
+ * `starter` round and that stop reached the child's turn first, it took the
+ * waiting message with the turn: the send stop then reaches nothing, and the
+ * child is named once, under the stopped threads. A turn the user opened in
+ * the child is not the sender's, and the stop never names it.
  *
  * Only sends to a child are kept: an interrupt reaches down the spawn tree,
- * as the delegate registry's does for a child's first turn, never up to a
+ * as the threads' interrupt does for a `starter` round, never up to a
  * parent or across to a sibling.
  *
  * The record lives in memory, keyed by the child session and the message.
@@ -624,7 +623,7 @@ const SendSessionTool = tool({
   id: "session.send",
   resources: [SentTurnsResource],
   description:
-    "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list or thread.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
+    "Send a message to another session: `parent` for the one that started you, or a session id from thread.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
   params: SendSessionParams,
   output: SendSessionResult,
   summary: (input, output) => `to ${output.relation} · ${input.message.trim()}`,
@@ -720,13 +719,13 @@ const SendSessionTool = tool({
 // ── extension ───────────────────────────────────────────────────────────────
 
 const SEND_LINE =
-  "- Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session."
+  "- Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a notify \"starter\" round returns its final text as the round's end). A message wakes an idle session."
 
 /**
  * `session.send` is how sessions talk, and the thread tools open and follow
  * side work; the section is their owner's. Each line shows only where its
- * tool may run: an agent that does not admit one lacks it (a delegate child
- * is denied `thread.start`), so the section sits in the agent's own part of the
+ * tool may run: an agent that does not admit one lacks it (a `delegate`
+ * thread is denied `thread.start`), so the section sits in the agent's own part of the
  * prompt, after the part a child shares with its parent (core's
  * `AGENT_PROMPT_PRIORITY`).
  */

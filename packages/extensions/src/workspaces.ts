@@ -1,23 +1,23 @@
 /**
- * Private places for child agents: a copy of a session's working tree that a
- * child edits, whose work comes back to the origin repository as one branch.
+ * Private places for threads: a copy of a session's working tree that a
+ * thread edits, whose work comes back to the origin repository as one branch.
  *
- * The delegate asks for a place when a start names `isolation: "snapshot"`
- * and creates the child session with its `cwd` inside the copy, so the child's
- * profile, tools, shell and cell all run there. On btrfs, where a whole-tree
- * copy is one snapshot, `rift` makes the copy (`rift rpc`, a process, never
- * its FFI; gent never runs `rift init` or `rift gc`). Everywhere else, and
- * when rift fails, gent makes a `git worktree add --detach` with the origin's
- * uncommitted state. gent runs the `.rift.toml` `postcreate` hooks in the copy
- * for both. A copy is not a sandbox: the child still reaches every path on
- * the machine.
+ * `thread.start` asks for a place when it names `workspace: { snapshot: true }`
+ * and creates the thread session with its `cwd` inside the copy, so the
+ * thread's profile, tools, shell and cell all run there. On btrfs, where a
+ * whole-tree copy is one snapshot, `rift` makes the copy (`rift rpc`, a
+ * process, never its FFI; gent never runs `rift init` or `rift gc`).
+ * Everywhere else, and when rift fails, gent makes a `git worktree add
+ * --detach` with the origin's uncommitted state. gent runs the `.rift.toml`
+ * `postcreate` hooks in the copy for both. A copy is not a sandbox: the
+ * thread still reaches every path on the machine.
  *
- * Work comes back at each child turn end: the copy's committed and
+ * Work comes back at each thread turn end: the copy's committed and
  * uncommitted work, as one commit over the copy's state after its hooks
  * (`base`), on `refs/heads/gent/<name>` of the origin. gent moves that branch
  * only from the commit it last wrote (compare and swap), and never while a
  * worktree has it checked out. Nothing is merged. A worktree copy lives as
- * long as its child session. gent never removes a rift copy: rift cannot
+ * long as its thread session. gent never removes a rift copy: rift cannot
  * refuse, in one step, to remove a copy that has copies of its own, so a rift
  * copy is kept (`retained`) when its session goes.
  *
@@ -131,7 +131,7 @@ const encodeRecord = Schema.encodeSync(recordCodec)
 
 type Work = typeof CollectedWorkSchema.Type
 
-/** A place as the delegate uses it. `notes` say, one line each, what the acquire did not do as asked. */
+/** A place as a thread start uses it. `notes` say, one line each, what the acquire did not do as asked. */
 interface WorkspacePlace {
   readonly name: string
   readonly path: string
@@ -618,7 +618,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     const free = yield* freeBytes(at)
     if (Option.isNone(free)) {
       return yield* new WorkspaceError({
-        message: `gent cannot tell how much space is free where the copy would go (${at}), so it makes no copy. Start the child with isolation "shared".`,
+        message: `gent cannot tell how much space is free where the copy would go (${at}), so it makes no copy. Start the thread without a snapshot workspace.`,
       })
     }
     yield* Effect.logDebug("workspaces.free-space").pipe(
@@ -626,7 +626,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     )
     if (free.value >= minimumFree) return
     return yield* new WorkspaceError({
-      message: `Only ${gib(free.value)} GB is free where the copy would go (${at}); a snapshot child needs ${gib(minimumFree)} GB. Free some space, or start the child with isolation "shared".`,
+      message: `Only ${gib(free.value)} GB is free where the copy would go (${at}); a snapshot thread needs ${gib(minimumFree)} GB. Free some space, or start the thread without a snapshot workspace.`,
     })
   })
 
@@ -1089,7 +1089,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       Effect.mapError(
         () =>
           new WorkspaceError({
-            message: `Snapshot isolation needs a git repository, and ${input.cwd} is not in one.`,
+            message: `A snapshot workspace needs a git repository, and ${input.cwd} is not in one.`,
           }),
       ),
     )
@@ -1097,7 +1097,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       Effect.mapError(
         () =>
           new WorkspaceError({
-            message: `Snapshot isolation needs a commit in ${top}; the repository has none yet.`,
+            message: `A snapshot workspace needs a commit in ${top}; the repository has none yet.`,
           }),
       ),
     )
@@ -1322,8 +1322,8 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   /**
    * The work of the place a session works in; none when the session has no
-   * place. With `turn`, a second collect for the same turn (the delegate's
-   * completion after this extension's turn end) reads the first.
+   * place. With `turn`, a second collect for the same turn (the round's end
+   * after this extension's turn end) reads the first.
    */
   const collect = Effect.fn("Workspaces.collect")(function* (sessionId: SessionId, turn?: string) {
     const name = yield* linkedName(sessionId)
@@ -1437,8 +1437,8 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 type WorkspacesApi = ReturnType<typeof makeWorkspaces>
 
 /**
- * The places service. The delegate reads it with `Effect.serviceOption`, so
- * snapshot children exist only where `@gent/workspaces` is active.
+ * The places service. Threads read it with `Effect.serviceOption`, so
+ * snapshot threads exist only where `@gent/workspaces` is active.
  *
  * Its methods run in their caller's leaf or hook: the caller's
  * `ExtensionContext` names the data directory's home, the parent session and
@@ -1465,7 +1465,7 @@ const logged =
       ),
     )
 
-/** Places for snapshot children. `options` name the rift program and the free-space floor. */
+/** Places for snapshot threads. `options` name the rift program and the free-space floor. */
 export const makeWorkspacesExtension = (options: WorkspacesOptions = {}) =>
   defineExtension({
     id: WORKSPACES_EXTENSION_ID,

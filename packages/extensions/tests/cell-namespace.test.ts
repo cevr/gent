@@ -53,8 +53,8 @@ import {
   CellStorage,
   CellTool,
 } from "../src/cell.js"
-import { DelegateExtension } from "../src/delegate.js"
 import { CompactionExtension } from "../src/compaction.js"
+import { SessionToolsExtension } from "../src/session-tools.js"
 import {
   buildCellWorker,
   openCellOwner,
@@ -302,7 +302,7 @@ describe("cell namespace restore and handoff", () => {
 
 describe("thread namespace", () => {
   it.scopedLive(
-    "a handoff session starts with its predecessor's namespace; a delegate child starts empty",
+    "a handoff session starts with its predecessor's namespace; a delegate thread starts empty",
     () =>
       Effect.gen(function* () {
         // Each branch runs its own script, chosen by its first user text: the
@@ -329,7 +329,7 @@ describe("thread namespace", () => {
               () => cell("const notes = ['alpha']; notes.length"),
               () =>
                 cell(
-                  "const h = await tools.delegate.start({ todo: 'child-probe' }); typeof h.requestId",
+                  "const h = await tools.thread.start({ task: 'child-probe', agent: 'delegate', notify: 'starter' }); typeof h.sessionId",
                 ),
               () => reply("A started"),
               () => reply("A woke"),
@@ -367,8 +367,8 @@ describe("thread namespace", () => {
               artifactIdentity: LoadedArtifactIdentity.make("cell-thread-namespace-source"),
             },
             {
-              ...DelegateExtension,
-              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
+              ...SessionToolsExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("session-tools-source"),
             },
           ],
         })
@@ -398,7 +398,7 @@ describe("thread namespace", () => {
 
         yield* client.message.send({ sessionId, branchId, content: "scratch A" })
         yield* replied(branchId, "A woke")
-        // A delegate child is side work: it does not join the thread, so its
+        // A delegate thread is side work: it does not join the thread, so its
         // cell starts empty.
         const child = (yield* client.session.list()).find(
           (session) => session.parentSessionId === sessionId,

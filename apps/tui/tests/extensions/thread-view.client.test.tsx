@@ -159,6 +159,7 @@ describe("windows on a branch", () => {
           message: "tidy the changelog",
           reply: Option.none(),
           notify: "user",
+          place: Option.none(),
         }),
         1,
       ),

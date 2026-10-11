@@ -317,10 +317,10 @@ describe("btw forks", () => {
                 expect(request.reasoning).toBe("low")
               },
               assertOptions: (options) => {
-                // The delegate agent denies delegation; the default agent would offer it.
+                // The delegate agent cannot start threads; the default agent would offer it.
                 const tools = options.tools.map((entry) => entry.name)
                 expect(tools.length).toBeGreaterThan(0)
-                expect(tools).not.toContain("delegate__start")
+                expect(tools).not.toContain("thread__start")
               },
             },
           ])

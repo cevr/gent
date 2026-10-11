@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Context,
+  Crypto,
   DateTime,
   Effect,
   Exit,
@@ -17,13 +18,19 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import type * as Prompt from "effect/ai/Prompt"
-import { ExtensionContext, RequestId, runProcess } from "@gent/core/extensions/api"
+import { Hex } from "effect/encoding"
+import { workspaceIdForCwd } from "@gent/core/host"
+import { ExtensionContext, getToolId, RequestId, runProcess } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
+  CurrentWorkspaceId,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  runtimeHostContext,
   runToolWithCtx,
   testLeafContext,
   testToolContext,
@@ -32,7 +39,8 @@ import {
   waitFor,
 } from "@gent/core/test-utils"
 import { BranchId, Session, SessionId, ToolCallId } from "@gent/core/protocol"
-import { StartChild } from "../src/delegate.js"
+import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
+import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
 import {
   makeWorkspacesExtension,
   WORKSPACES_EXTENSION_ID,
@@ -248,7 +256,7 @@ const installed = (home: string, options: WorkspacesOptions) =>
           ),
         )
     const within = as(parentA)
-    /** A start from `cwd` for the call `id`, as the delegate makes one. */
+    /** A start from `cwd` for the call `id`, as a thread start makes one. */
     const start = (id: string, cwd: string, parent: Parent = parentA) =>
       as(parent)(places.locate({ key: key(id), cwd }).pipe(Effect.flatMap(places.acquire)))
     /** The session delete of `sessionId`, as the host runs the hook. */
@@ -440,8 +448,8 @@ describe("a worktree copy", () => {
             minimumFreeBytes: Number.MAX_SAFE_INTEGER,
           })
           const refused = yield* full.start("call-1", origin).pipe(Effect.flip)
-          expect(refused.message).toContain("a snapshot child needs")
-          expect(refused.message).toContain('isolation "shared"')
+          expect(refused.message).toContain("a snapshot thread needs")
+          expect(refused.message).toContain("start the thread without a snapshot workspace")
           const unknown = yield* roomy
             .start("call-2", origin)
             .pipe(Effect.flip, Effect.provide(platformWith({ noFreeSpace: true })))
@@ -987,9 +995,17 @@ describe("a rift copy", () => {
   )
 })
 
-// ── snapshot children ───────────────────────────────────────────────────────
+// ── snapshot threads ────────────────────────────────────────────────────────
 
-const childTask = "CHILD-TASK: write child.txt"
+const threadTask = "THREAD-TASK: write thread.txt"
+
+/** What a `thread.start` asks for: one delegate task in a copy, whose end wakes the starter. */
+const snapshotStart = {
+  task: threadTask,
+  agent: "delegate",
+  notify: "starter",
+  workspace: { snapshot: true },
+}
 
 /** Every text part of the prompt's user and assistant messages, in order. */
 const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
@@ -1017,29 +1033,25 @@ const toolStep = (name: string, input: Parameters<typeof toolCallPart>[1], id: s
   ])
 
 /**
- * A parent that starts one snapshot child and ends its turn; the child
- * writes `child.txt` by a relative path (its session's cwd is the copy) and
- * answers. The completion wakes the parent once more.
+ * A starter that starts one snapshot thread and ends its turn; the thread
+ * writes `thread.txt` by a relative path (its session's cwd is the copy) and
+ * answers. The round's end wakes the starter once more. A thread's request
+ * is the one whose first text (its round's text) ends with the task.
  */
 const snapshotModel = () =>
   LanguageModelLayers.testStream((options) => {
     const texts = promptTexts(options.prompt)
     const calls = calledTools(options.prompt)
-    if (texts[0]?.endsWith(childTask) === true) {
+    if (texts[0]?.endsWith(threadTask) === true) {
       if (calls === 0) {
         return Effect.succeed(
-          toolStep("write", { path: "child.txt", content: "from the child\n" }, "write-1"),
+          toolStep("write", { path: "thread.txt", content: "from the thread\n" }, "write-1"),
         )
       }
       return Effect.succeed(reply("wrote it"))
     }
-    if (texts.some((text) => text.startsWith("Child agent")))
-      return Effect.succeed(reply("read it"))
-    if (calls === 0) {
-      return Effect.succeed(
-        toolStep("delegate.start", { todo: childTask, isolation: "snapshot" }, "start-1"),
-      )
-    }
+    if (texts.some((text) => text.startsWith('Thread "'))) return Effect.succeed(reply("read it"))
+    if (calls === 0) return Effect.succeed(toolStep("thread.start", snapshotStart, "start-1"))
     return Effect.succeed(reply("started"))
   })
 
@@ -1063,11 +1075,12 @@ const harnessIn = (
     admission,
   })
 
-const completionOf = <
+/** The message a thread's round end wakes its starter with. */
+const roundEndOf = <
   M extends { readonly metadata?: { readonly customType?: string; readonly details?: unknown } },
 >(
   messages: ReadonlyArray<M>,
-) => messages.find((message) => message.metadata?.customType === "child-completion")
+) => messages.find((message) => message.metadata?.customType === THREAD_ROUND_END_TYPE)
 
 const textOf = (message: Option.Option<{ readonly parts: ReadonlyArray<Prompt.Part> }>) =>
   Option.match(message, { onNone: () => [], onSome: (found) => found.parts })
@@ -1077,40 +1090,56 @@ const textOf = (message: Option.Option<{ readonly parts: ReadonlyArray<Prompt.Pa
     })
     .join("")
 
-/** What `delegate.start` says of a snapshot child's place. */
+/** What `thread.start` says of a snapshot thread's place. */
 const StartedInCopy = Schema.fromJsonString(
   Schema.Struct({ workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }) }),
 )
 
-/** The copy and the branch a snapshot child's completion names. */
-const WorkOfCompletion = Schema.Struct({
+/** The copy and the branch a snapshot thread's round end names. */
+const WorkOfRoundEnd = Schema.Struct({
   sessionId: SessionId,
   workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }),
 })
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
-type CreateParams = Parameters<ReturnType<typeof testToolContext>["Session"]["create"]>[0]
+/**
+ * The request id `thread.start` gives its thread's create for the tool call
+ * `toolCallId` from `starter`, which is the key its copy is located by: a
+ * digest of the start's identity, as `Threads.start` derives it.
+ */
+const threadCreateKey = (starter: Parent, toolCallId: string) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const identity = ["thread.create", starter.sessionId, starter.branchId, toolCallId].join("\n")
+    const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(identity))
+    return `thread:${Hex.encode(digest).slice(0, 32)}`
+  }).pipe(Effect.orDie)
 
-describe("a snapshot child", () => {
+type HostSession = Effect.Success<ReturnType<typeof runtimeHostContext>>["Session"]
+type CreateParams = Parameters<HostSession["create"]>[0]
+
+describe("a snapshot thread", () => {
   it.live(
-    "edits its own copy, leaves the parent's tree as it was, and hands back a branch that holds the edit",
+    "edits its own copy, leaves the starter's tree as it was, and hands back a branch that holds the edit",
     () =>
       Effect.gen(function* () {
         const origin = yield* dirtyRepository
         const home = yield* makeTempDirectoryScoped("ws-home-")
         const before = yield* treeState(origin)
         const harness = yield* harnessIn(origin, home)
+        const starter = { sessionId: harness.sessionId, branchId: harness.branchId }
         // A start that ran before a crash left its copy: the start adopts it.
         const earlier = yield* installed(home, { rift: NO_RIFT })
-        const planted = yield* earlier.start("start-1", origin, {
-          sessionId: harness.sessionId,
-          branchId: harness.branchId,
-        })
+        const planted = yield* earlier.start(
+          yield* threadCreateKey(starter, "start-1"),
+          origin,
+          starter,
+        )
         const started = yield* harness.client.session
           .events({ sessionId: harness.sessionId, branchId: harness.branchId })
           .pipe(
-            Stream.filter(isToolResultFor("delegate.start")),
+            Stream.filter(isToolResultFor("thread.start")),
             Stream.take(1),
             Stream.runCollect,
             Effect.map((events) => Array.from(events)[0]?.event),
@@ -1132,41 +1161,46 @@ describe("a snapshot child", () => {
             branchId: harness.branchId,
           }),
           (current) =>
-            Predicate.isNotUndefined(completionOf(current.messages)) &&
+            Predicate.isNotUndefined(roundEndOf(current.messages)) &&
             current.runtime._tag === "Idle",
           15_000,
-          "the child's completion woke the parent",
+          "the thread's round end woke the starter",
         )
-        const completion = completionOf(snapshot.messages)
-        expect(textOf(Option.fromUndefinedOr(completion))).toContain(
-          `Work: branch ${planted.branch}`,
-        )
-        expect(completion?.metadata?.details).toMatchObject({
+        const roundEnd = roundEndOf(snapshot.messages)
+        const roundEndText = textOf(Option.fromUndefinedOr(roundEnd))
+        expect(roundEndText).toMatch(/^Thread ".*" \(agent delegate\) round 1 completed\./)
+        expect(roundEndText).toContain(`Work: branch ${planted.branch}`)
+        expect(roundEnd?.metadata?.details).toMatchObject({
           workspace: { branch: planted.branch, files: 1, insertions: 1, deletions: 0 },
         })
-        // The edit is in the copy and on the branch, never in the parent's tree.
-        expect(yield* sh(planted.path, "cat child.txt")).toBe("from the child")
-        expect(yield* sh(origin, `git show ${planted.branch}:child.txt`)).toBe("from the child")
-        expect(yield* exists(`${origin}/child.txt`)).toBe(false)
+        // The branch is named for the copy, and the origin holds it.
+        expect(planted.branch).toBe(`gent/${planted.path.split("/").at(-1)}`)
+        expect(
+          yield* sh(origin, `git rev-parse --verify --quiet refs/heads/${planted.branch}`),
+        ).toMatch(/^[0-9a-f]{40}$/)
+        // The edit is in the copy and on the branch, never in the starter's tree.
+        expect(yield* sh(planted.path, "cat thread.txt")).toBe("from the thread")
+        expect(yield* sh(origin, `git show ${planted.branch}:thread.txt`)).toBe("from the thread")
+        expect(yield* exists(`${origin}/thread.txt`)).toBe(false)
         expect(yield* treeState(origin)).toEqual(before)
         // One copy: the start adopted the planted one.
         expect(yield* worktreeCount(origin)).toBe("2")
-        // The child read where it works.
-        const child = (yield* harness.client.session.list()).find(
+        // The thread read where it works.
+        const thread = (yield* harness.client.session.list()).find(
           (session) => session.parentSessionId === harness.sessionId,
         )
-        expect(child?.cwd).toBe(planted.cwd)
+        expect(thread?.cwd).toBe(planted.cwd)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )
 
   it.live(
-    "of a path-confined parent is refused file calls in its copy, which lies outside the parent's paths",
+    "of a path-confined starter is refused file calls in its copy, which lies outside the starter's paths",
     () =>
       Effect.gen(function* () {
         const origin = yield* dirtyRepository
         const home = yield* makeTempDirectoryScoped("ws-home-")
-        // The parent run may write anywhere in its own cwd, and nowhere else.
+        // The starter run may write anywhere in its own cwd, and nowhere else.
         const harness = yield* harnessIn(origin, home, {
           runSpec: { overrides: { paths: [{ path: ".", access: "write" }] } },
         })
@@ -1181,21 +1215,21 @@ describe("a snapshot child", () => {
             branchId: harness.branchId,
           }),
           (current) =>
-            Predicate.isNotUndefined(completionOf(current.messages)) &&
+            Predicate.isNotUndefined(roundEndOf(current.messages)) &&
             current.runtime._tag === "Idle",
           15_000,
-          "the child's completion woke the parent",
+          "the thread's round end woke the starter",
         )
-        const child = (yield* harness.client.session.list()).find(
+        const thread = (yield* harness.client.session.list()).find(
           (session) => session.parentSessionId === harness.sessionId,
         )
-        expect(child?.cwd).not.toBe(origin)
-        const copy = child?.cwd ?? ""
-        // The parent's scopes resolve against the parent's cwd, not the copy.
-        expect(yield* exists(`${copy}/child.txt`)).toBe(false)
-        expect(yield* exists(`${origin}/child.txt`)).toBe(false)
+        expect(thread?.cwd).not.toBe(origin)
+        const copy = thread?.cwd ?? ""
+        // The starter's scopes resolve against the starter's cwd, not the copy.
+        expect(yield* exists(`${copy}/thread.txt`)).toBe(false)
+        expect(yield* exists(`${origin}/thread.txt`)).toBe(false)
         const branches = yield* harness.client.branch.list({
-          sessionId: child?.id ?? harness.sessionId,
+          sessionId: thread?.id ?? harness.sessionId,
         })
         const messages = yield* harness.client.message.list({
           branchId: branches[0]?.id ?? harness.branchId,
@@ -1216,24 +1250,24 @@ describe("a snapshot child", () => {
         const origin = yield* dirtyRepository
         const home = yield* makeTempDirectoryScoped("ws-home-")
         const harness = yield* harnessIn(origin, home)
-        // A parent at the depth limit cannot spawn: its child's create fails.
-        let parent = { sessionId: harness.sessionId, branchId: harness.branchId }
+        // A starter at the depth limit cannot start a thread: the thread's create fails.
+        let starter = { sessionId: harness.sessionId, branchId: harness.branchId }
         for (const _ of [1, 2, 3]) {
           const next = yield* harness.client.session.create({
             cwd: origin,
-            parentSessionId: parent.sessionId,
-            parentBranchId: parent.branchId,
+            parentSessionId: starter.sessionId,
+            parentBranchId: starter.branchId,
           })
-          parent = next
+          starter = next
         }
-        const started = yield* harness.client.session.events(parent).pipe(
-          Stream.filter(isToolResultFor("delegate.start")),
+        const started = yield* harness.client.session.events(starter).pipe(
+          Stream.filter(isToolResultFor("thread.start")),
           Stream.take(1),
           Stream.runCollect,
           Effect.map((events) => Array.from(events)[0]?.event),
           Effect.forkScoped,
         )
-        yield* harness.client.message.send({ ...parent, content: "delegate it in a copy" })
+        yield* harness.client.message.send({ ...starter, content: "delegate it in a copy" })
         const result = yield* Fiber.join(started)
         expect(result?._tag).toBe("ToolCallFailed")
         if (result?._tag !== "ToolCallFailed") return
@@ -1256,47 +1290,45 @@ describe("a snapshot child", () => {
   )
 
   it.live(
-    "a start from two parents with one tool call id makes two children, each with its own copy",
+    "a start from two starters with one tool call id makes two threads, each with its own copy",
     () =>
       Effect.gen(function* () {
         const origin = yield* dirtyRepository
         const home = yield* makeTempDirectoryScoped("ws-home-")
         const harness = yield* harnessIn(origin, home)
         const second = yield* harness.client.session.create({ cwd: origin })
-        const parents = [{ sessionId: harness.sessionId, branchId: harness.branchId }, second]
-        // Each parent's model calls `delegate.start` with the same tool call id, `start-1`.
-        const completions = yield* Effect.forEach(parents, (parent) =>
+        const starters = [{ sessionId: harness.sessionId, branchId: harness.branchId }, second]
+        // Each starter's model calls `thread.start` with the same tool call id, `start-1`.
+        const roundEnds = yield* Effect.forEach(starters, (starter) =>
           Effect.gen(function* () {
-            yield* harness.client.message.send({ ...parent, content: "delegate it in a copy" })
+            yield* harness.client.message.send({ ...starter, content: "delegate it in a copy" })
             const snapshot = yield* waitFor(
-              harness.client.session.getSnapshot(parent),
+              harness.client.session.getSnapshot(starter),
               (current) =>
-                Predicate.isNotUndefined(completionOf(current.messages)) &&
+                Predicate.isNotUndefined(roundEndOf(current.messages)) &&
                 current.runtime._tag === "Idle",
               15_000,
-              "the child's completion woke its parent",
+              "the thread's round end woke its starter",
             )
-            return completionOf(snapshot.messages)?.metadata?.details
+            return roundEndOf(snapshot.messages)?.metadata?.details
           }),
         )
-        const children = (yield* harness.client.session.list()).filter((session) =>
-          parents.some((parent) => parent.sessionId === session.parentSessionId),
+        const threads = (yield* harness.client.session.list()).filter((session) =>
+          starters.some((starter) => starter.sessionId === session.parentSessionId),
         )
-        expect(children).toHaveLength(2)
-        expect(new Set(children.map((child) => child.cwd)).size).toBe(2)
-        const works = completions.map((details) =>
-          Schema.decodeUnknownSync(WorkOfCompletion)(details),
-        )
+        expect(threads).toHaveLength(2)
+        expect(new Set(threads.map((thread) => thread.cwd)).size).toBe(2)
+        const works = roundEnds.map((details) => Schema.decodeUnknownSync(WorkOfRoundEnd)(details))
         expect(new Set(works.map((work) => work.workspace.branch)).size).toBe(2)
         for (const [index, work] of works.entries()) {
-          // Each completion names its own parent's child, and the copy that child works in.
-          const child = children.find((found) => found.id === work.sessionId)
-          expect(child?.parentSessionId).toBe(parents[index]?.sessionId)
-          expect(child?.cwd).toBe(work.workspace.path)
+          // Each round end names its own starter's thread, and the copy that thread works in.
+          const thread = threads.find((found) => found.id === work.sessionId)
+          expect(thread?.parentSessionId).toBe(starters[index]?.sessionId)
+          expect(thread?.cwd).toBe(work.workspace.path)
           expect(work.workspace.branch).toBe(`gent/${work.workspace.path.split("/").at(-1)}`)
-          expect(yield* sh(work.workspace.path, "cat child.txt")).toBe("from the child")
-          expect(yield* sh(origin, `git show ${work.workspace.branch}:child.txt`)).toBe(
-            "from the child",
+          expect(yield* sh(work.workspace.path, "cat thread.txt")).toBe("from the thread")
+          expect(yield* sh(origin, `git show ${work.workspace.branch}:thread.txt`)).toBe(
+            "from the thread",
           )
         }
         expect(yield* worktreeCount(origin)).toBe("3")
@@ -1314,7 +1346,35 @@ describe("a snapshot child", () => {
           const home = yield* (yield* FileSystem.FileSystem).realPath(
             yield* makeTempDirectoryScoped("ws-home-"),
           )
+          const fs = yield* FileSystem.FileSystem
           const { places, within } = yield* installed(home, { rift: NO_RIFT })
+          // The registered `thread.start`, run as the host runs a call, from a stored starter.
+          const contributions = yield* collectTestContributions(SessionToolsExtension.setup)
+          const startTool = contributions.tools?.find(
+            (candidate) => getToolId(candidate) === "thread.start",
+          )
+          const resource = contributions.resources?.find(
+            (candidate) => candidate.id === "@gent/session-tools/threads",
+          )
+          if (Predicate.isUndefined(startTool) || Predicate.isUndefined(resource)) {
+            return yield* Effect.die("session tools register no thread.start or threads resource")
+          }
+          const context = yield* Layer.build(
+            createE2ELayer({
+              ...e2ePreset,
+              cwd: origin,
+              home,
+              providerLayer: LanguageModelLayers.testStream(() => Effect.succeed(reply("done"))),
+            }),
+          )
+          const buildThreads: Effect.Effect<
+            Context.Context<never>,
+            never,
+            Scope.Scope
+          > = Layer.build(resource.layer).pipe(Effect.provideContext(context), Effect.orDie)
+          const threads = yield* buildThreads
+          const { client } = yield* createRpcClient(Layer.succeedContext(context))
+          const starter: Parent = yield* client.session.create({ cwd: origin })
           const stored = yield* Ref.make<ReadonlyArray<Session>>([])
           /** Core stores the session, then the call is interrupted before it returns. */
           const storeThenStop = (sessionId: SessionId) => (params: CreateParams) =>
@@ -1323,8 +1383,8 @@ describe("a snapshot child", () => {
               const session = new Session({
                 id: sessionId,
                 cwd: params.cwd,
-                // The calling session is always the parent (`Session.create` names none).
-                parentSessionId: parentA.sessionId,
+                // The calling session is always the starter (`Session.create` names none).
+                parentSessionId: starter.sessionId,
                 parentBranchId: params.parentBranchId,
                 createdAt: now,
                 updatedAt: now,
@@ -1334,52 +1394,58 @@ describe("a snapshot child", () => {
             })
           const admit = (
             id: string,
-            session: Partial<
-              Pick<ReturnType<typeof testToolContext>["Session"], "create" | "listSessions">
-            >,
+            session: Partial<Pick<HostSession, "create" | "listSessions">>,
           ) =>
-            runToolWithCtx(
-              StartChild,
-              { todo: "a task", isolation: "snapshot" },
-              {
-                ...testToolContext({
-                  cwd: origin,
-                  home,
-                  sessionId: parentA.sessionId,
-                  branchId: parentA.branchId,
-                  Session: {
-                    ...testToolContext().Session,
-                    listSessions: () => Ref.get(stored),
-                    ...session,
-                  },
-                }),
+            Effect.gen(function* () {
+              const host = yield* runtimeHostContext(starter)
+              // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane
+              return yield* runToolWithCtx(startTool, snapshotStart, {
+                ...host,
+                Session: { ...host.Session, listSessions: () => Ref.get(stored), ...session },
+                extensionId: SESSION_TOOLS_EXTENSION_ID,
                 toolCallId: ToolCallId.make(id),
-              },
-            ).pipe(Effect.provideService(Workspaces, places), Effect.exit)
-          const copyOf = (id: string) =>
-            within(places.locate({ key: key(id), cwd: origin })).pipe(
-              Effect.map((start) => `${home}/.gent/workspaces/worktrees/${start.name}`),
+              })
+            }).pipe(
+              Effect.provideContext(Context.merge(context, threads)),
+              Effect.provideService(Workspaces, places),
+              Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(origin)),
+              Effect.exit,
             )
+          // A copy is named by the start's whole identity, which the test does
+          // not derive: each admission's copy is the one it added to the copies.
+          const worktrees = `${home}/.gent/workspaces/worktrees`
+          const copies = fs
+            .readDirectory(worktrees)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+          const admitted = (id: string, session: Parameters<typeof admit>[1]) =>
+            Effect.gen(function* () {
+              const before = yield* copies
+              const exit = yield* admit(id, session)
+              const added = (yield* copies).filter((name) => !before.includes(name))
+              return { exit, added: added.map((name) => `${worktrees}/${name}`) }
+            })
           // Stored, then stopped: the copy is the stored session's.
-          const committed = SessionId.make("stored-child")
-          const afterStore = yield* admit("call-stored", { create: storeThenStop(committed) })
-          expect(Exit.hasInterrupts(afterStore)).toBe(true)
-          const kept = yield* copyOf("call-stored")
+          const committed = SessionId.make("stored-thread")
+          const afterStore = yield* admitted("call-stored", { create: storeThenStop(committed) })
+          expect(Exit.hasInterrupts(afterStore.exit)).toBe(true)
+          expect(afterStore.added).toHaveLength(1)
+          const kept = afterStore.added[0] ?? ""
           expect(yield* exists(kept)).toBe(true)
           expect(Option.map(yield* within(places.find(committed)), (found) => found.path)).toEqual(
             Option.some(kept),
           )
           // Stopped before anything was stored: the copy goes.
-          const beforeStore = yield* admit("call-unstored", { create: () => Effect.interrupt })
-          expect(Exit.hasInterrupts(beforeStore)).toBe(true)
-          expect(yield* exists(yield* copyOf("call-unstored"))).toBe(false)
+          const beforeStore = yield* admitted("call-unstored", { create: () => Effect.interrupt })
+          expect(Exit.hasInterrupts(beforeStore.exit)).toBe(true)
+          expect(beforeStore.added).toEqual([])
           // A check that cannot tell keeps the copy.
-          const unknown = yield* admit("call-unknown", {
-            create: storeThenStop(SessionId.make("unknown-child")),
+          const unknown = yield* admitted("call-unknown", {
+            create: storeThenStop(SessionId.make("unknown-thread")),
             listSessions: () => Effect.die("the session list is not readable"),
           })
-          expect(Exit.hasInterrupts(unknown)).toBe(true)
-          expect(yield* exists(yield* copyOf("call-unknown"))).toBe(true)
+          expect(Exit.hasInterrupts(unknown.exit)).toBe(true)
+          expect(unknown.added).toHaveLength(1)
+          expect(yield* exists(unknown.added[0] ?? "")).toBe(true)
         }),
       ),
   )

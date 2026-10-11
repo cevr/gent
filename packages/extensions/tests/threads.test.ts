@@ -654,7 +654,7 @@ describe("threads", () => {
   )
 
   it.live(
-    "a delegate child is not offered thread.start; its parent is",
+    "a delegate thread is not offered thread.start; its starter is",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -673,8 +673,8 @@ describe("threads", () => {
             return Effect.succeed(
               Stream.fromIterable([
                 toolCallPart(
-                  "delegate.start",
-                  { todo: childTask },
+                  "thread.start",
+                  { task: childTask, agent: "delegate", notify: "starter" },
                   { toolCallId: ToolCallId.make("start-child") },
                 ),
                 finishPart({ finishReason: "tool-calls" }),
@@ -955,6 +955,15 @@ const ListedRows = Schema.Array(
     current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
     status: Schema.Literals(["running", "idle"]),
     openRound: Schema.optionalKey(RoundHandle),
+    lastRound: Schema.optionalKey(
+      Schema.Struct({
+        ...RoundHandle.fields,
+        interrupted: Schema.Boolean,
+        streamFailed: Schema.Boolean,
+        unanswered: Schema.Boolean,
+        stopped: Schema.Boolean,
+      }),
+    ),
     preview: Schema.String,
   }),
 )
@@ -1234,6 +1243,74 @@ describe("thread rounds", () => {
             ["thread.send", "send-next", { thread: impl.thread, message: "ECHO after the stop" }],
           ])
           expect(decodeRound(next?.result).number).toBe(2)
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "thread.list shows each thread's open round and its last ended round",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hanging = yield* Deferred.make<boolean>()
+          const { client, sessionId, branchId } = yield* roundHarness({
+            hang: Effect.asVoid(Deferred.succeed(hanging, true)),
+          })
+          const starter = { sessionId, branchId }
+          const { impl, rev } = yield* startTwo(client, starter)
+          // A thread that took no round has neither.
+          const [fresh] = yield* call(client, starter, [["thread.list", "list-fresh", {}]])
+          expect(byThread(fresh?.result)[impl.thread]?.openRound).toBeUndefined()
+          expect(byThread(fresh?.result)[impl.thread]?.lastRound).toBeUndefined()
+
+          const [sent] = yield* call(client, starter, [
+            [
+              "thread.send",
+              "send-first",
+              { thread: impl.thread, message: "ECHO first", notify: "starter" },
+            ],
+          ])
+          const first = decodeRound(sent?.result)
+          yield* waitForWakes(client, starter, 1)
+          const [sentHang] = yield* call(client, starter, [
+            [
+              "thread.send",
+              "send-hang-listed",
+              { thread: impl.thread, message: "HANG", notify: "starter" },
+            ],
+          ])
+          const open = decodeRound(sentHang?.result)
+          yield* Deferred.await(hanging)
+          // While the second round runs, the row names it open and the first as the last that ended.
+          const [running] = yield* call(client, starter, [["thread.list", "list-running", {}]])
+          expect(byThread(running?.result)).toMatchObject({
+            [impl.thread]: {
+              status: "running",
+              openRound: open,
+              lastRound: {
+                ...first,
+                interrupted: false,
+                streamFailed: false,
+                unanswered: false,
+                stopped: false,
+              },
+            },
+            [rev.thread]: { status: "idle" },
+          })
+          expect(byThread(running?.result)[rev.thread]?.lastRound).toBeUndefined()
+
+          yield* call(client, starter, [["thread.stop", "stop-listed", { thread: impl.thread }]])
+          // Once stopped, no round is open and the stopped one is the last, as stopped.
+          const [listed] = yield* waitFor(
+            call(client, starter, [["thread.list", "list-stopped", {}]]),
+            ([found]) => byThread(found?.result)[impl.thread]?.lastRound?.round === open.round,
+            8_000,
+            "the stopped round is the thread's last",
+          )
+          const row = byThread(listed?.result)[impl.thread]
+          expect(row?.openRound).toBeUndefined()
+          expect(row?.lastRound).toMatchObject({ ...open, interrupted: true, stopped: true })
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
@@ -1669,7 +1746,7 @@ const QuietRound = tool({
   output: Heard,
   execute: Effect.fn("QuietRound.execute")(function* (params) {
     const ctx = yield* ExtensionContext
-    // Another extension reads the service as delegate reads `Workspaces`.
+    // Another extension reads the service as threads read `Workspaces`.
     const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -1904,6 +1981,7 @@ const saveUnsentRound = (
         message: input.message,
         reply: Option.none(),
         notify: "starter",
+        place: Option.none(),
       })
       yield* sql`
         INSERT INTO thread_rounds (
@@ -2064,6 +2142,7 @@ describe("a thread round running when the server stopped", () => {
                 message: "ECHO sent at last",
                 reply: Option.none(),
                 notify: "starter",
+                place: Option.none(),
               })
               yield* sql`
                 INSERT INTO thread_rounds (

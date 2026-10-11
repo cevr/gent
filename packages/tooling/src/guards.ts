@@ -3461,6 +3461,13 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
   },
   {
+    // The snapshot-admission test runs the registered thread.start against a
+    // session store that stops between storing a session and admitting it,
+    // which no model turn can arrange; the tool it finds is the erased registration.
+    file: "packages/extensions/tests/workspaces.test.ts",
+    text: "anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane",
+  },
+  {
     // The type tests assert that a tool body and a request body needing a
     // service no declaration proves fail to compile; the Effect diagnostic
     // reports the same failure.

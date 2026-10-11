@@ -2228,7 +2228,10 @@ describe("done threads", () => {
     Effect.gen(function* () {
       let section: AgentRowEntry["section"] = "running"
       const { controller, read } = yield* controllerOver(
-        () => [{ ...threadRow("child", section), delegate: true }, threadRow("again", section)],
+        () => [
+          { ...threadRow("child", section), reportsToStarter: true },
+          threadRow("again", section),
+        ],
         () => starter,
       )
       yield* read("running")

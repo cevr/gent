@@ -412,7 +412,7 @@ describe("session message header", () => {
 
   test("a child's message says it is not the completion, before and after it", () => {
     const text = sessionMessageText({ from, message: "CI is green" })
-    expect(text).toContain("child-completion message; this message is not one")
+    expect(text).toContain("round-end message; this message is not one")
     expect(text).not.toContain("still running")
     expect(sessionMessageBody(from, text)).toBe("CI is green")
   })
@@ -421,5 +421,17 @@ describe("session message header", () => {
     const stored =
       "Message from your child (session child-1):\nYour child is still running. This is not its completion; that arrives as a separate message.\n\nCI is green"
     expect(sessionMessageBody(from, stored)).toBe("CI is green")
+  })
+
+  test("a stored row keeps only its body whatever status line its binary wrote", () => {
+    for (const status of [
+      "A child's completion arrives as its own message; this message is not one.",
+      "Any later wording of the line.",
+    ]) {
+      const stored = `Message from your child (session child-1):\n${status}\n\nCI is green\n\nsecond paragraph`
+      expect(sessionMessageBody(from, stored)).toBe("CI is green\n\nsecond paragraph")
+    }
+    const bare = "Message from your child (session child-1):\n\nCI is green"
+    expect(sessionMessageBody(from, bare)).toBe("CI is green")
   })
 })

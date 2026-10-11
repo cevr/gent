@@ -10,23 +10,31 @@
  *
  * `thread.start` opens a thread: a session spawned under the starter, as the
  * starter's agent or the one it names (`worker` keeps the session prompt
- * cache). With a task, the task is its first round. `thread.send` admits one
+ * cache; `delegate` is the one-round subagent). With a task, the task is its
+ * first round. A thread may work in a snapshot copy of the working tree
+ * (`workspace: { snapshot: true }`, from `@gent/workspaces`) and may start
+ * from the starter's context window (`fork`). `thread.send` admits one
  * round, a turn on the thread's current session, and returns the round's id
  * at admission, never its answer: a thread runs one round at a time, and only
  * the thread that started it sends to it. The `turnAfter` hook of the
  * thread's branch ends the round: it records the text, the value the thread
  * gave `thread.reply`, the turn's flags and its bill in `thread_rounds`,
  * publishes the end to the `Threads` service's subscribers, then notifies as
- * the round's `notify` says: the user reads it (`user`), a one-line message
- * wakes the starter (`starter`), or nobody is told (`none`, the service's
- * own senders). A branch's loop open reconciles what a restart left. The
- * starter's own interrupt does not stop a thread; `thread.stop` does.
+ * the round's `notify` says: the user reads it (`user`), a message that
+ * carries the answer and the row it draws wakes the starter (`starter`), or
+ * nobody is told (`none`, the service's own senders). A branch's loop open
+ * reconciles what a restart left, and its next turn reconciles again after
+ * a threads hook failed. The starter's interrupt stops the `starter` rounds
+ * whose end would wake it, and its next turns read which; it leaves `user`
+ * and `none` rounds running. `thread.stop` stops any thread.
  */
 import {
+  Cause,
   Clock,
   Context,
   Crypto,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Option,
@@ -35,6 +43,7 @@ import {
   type PlatformError,
   Predicate,
   PubSub,
+  Ref,
   Schema,
   Semaphore,
 } from "effect"
@@ -65,17 +74,47 @@ import {
   tool,
   type TurnAfterInput,
 } from "@gent/core/extensions/api"
-import { ChildUsage, receiptTotal, startTurnMessages, turnEnd, usageOf } from "./child-turns.js"
+import {
+  ChildToolLine,
+  ChildUsage,
+  receiptTotal,
+  startTurnMessages,
+  toolCountsOf,
+  turnDuration,
+  turnEnd,
+  turnToolLines,
+  usageOf,
+} from "./child-turns.js"
 import { childSessionName } from "./session-names.js"
+import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
 
-// ── the worker agent ────────────────────────────────────────────────────────
+// ── the agents ──────────────────────────────────────────────────────────────
+
+/**
+ * The one-round subagent: a thread started with a task and `notify:
+ * "starter"`, whose round's end hands its starter the answer. It never
+ * orchestrates: fan-out is the starter's decision, and a project prompt that
+ * addresses "the orchestrator" reaches a thread too, so without these denials
+ * it would read that prompt and start threads of its own. Its model and effort
+ * come from this definition, reshaped by `agents.delegate` in
+ * `.gent/config.json` (user, then project), unless the start names its own.
+ * That config entry is where a pairing such as fable → opus is declared.
+ */
+export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
+
+const delegateAgent = AgentDefinition.make({
+  name: DELEGATE_AGENT_NAME,
+  description:
+    "The default subagent: runs one delegated task and cannot delegate further. When blocked in its task turn, it ends the turn with its question; in a later turn, it asks its parent with session.send.",
+  tools: ["*", "!thread.start", "!thread.stop", "!machine.*"],
+})
 
 const WORKER_AGENT_NAME = AgentName.make("worker")
 
 /**
  * The agent of a long-lived thread that takes rounds. A worker does its
- * starter's work and never orchestrates: it starts and stops no threads, runs
- * no machines and delegates nothing. It keeps `thread.reply` for a round that
+ * starter's work and never orchestrates: it starts and stops no threads and
+ * runs no machines. It keeps `thread.reply` for a round that
  * asks for a value, and the session prompt cache (`promptCache: "session"`):
  * its rounds come minutes or an hour apart, where a one-turn child keeps
  * five minutes.
@@ -84,7 +123,7 @@ const workerAgent = AgentDefinition.make({
   name: WORKER_AGENT_NAME,
   description:
     "A long-lived worker thread: takes rounds from the thread that started it, one at a time, and answers each in its final text, or with thread.reply when the round asks for a value.",
-  tools: ["*", "!thread.start", "!thread.stop", "!machine.*", "!delegate.*"],
+  tools: ["*", "!thread.start", "!thread.stop", "!machine.*"],
   promptCache: "session",
   systemPromptAddendum: `# Worker
 
@@ -116,6 +155,7 @@ const asThreadError = (what: string) =>
         | PlatformError.PlatformError
         | FollowUpQueueFull
         | ThreadStorageError
+        | WorkspaceError
         | ThreadError,
     ) => {
       if (Schema.is(ThreadError)(cause)) return cause
@@ -235,8 +275,9 @@ const currentPlace = (found: StartedThread) =>
 
 /**
  * Who hears a round's end. `user`: the user reads it in the thread, and
- * nothing reaches the starter. `starter`: a one-line message wakes the
- * starter. `none`: nobody is told; the end is recorded and published on
+ * nothing reaches the starter. `starter`: a message that carries the answer
+ * wakes the starter, and the starter's interrupt stops the round. `none`:
+ * nobody is told; the end is recorded and published on
  * `Threads.subscribeRoundEnds`, for a sender that is not a model turn.
  */
 const RoundNotify = Schema.Literals(["user", "starter", "none"])
@@ -245,7 +286,7 @@ type RoundNotify = typeof RoundNotify.Type
 /** The modes a tool call picks; `none` belongs to the service's own senders. */
 const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
   description:
-    "`user` (default): the user reads the round in the thread, and nothing comes back to you. `starter`: the round's end wakes you with a one-line summary; thread.round reads its text and reply.",
+    "`user` (default): the user reads the round in the thread, and nothing comes back to you. `starter`: the round's end arrives as a message that wakes you with the thread's answer; thread.round reads its whole text and reply. Your interrupt stops a `starter` round.",
 })
 
 /**
@@ -254,11 +295,13 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * starter is the session and branch that sent it and their thread, which a
  * round's end reaches after a handoff. `reply_spec` is the value the round
  * asked for and `reply_json` the last `thread.reply`. `stopped_at` is set by
- * a `thread.stop` that closed the round. The end fields are NULL while the
- * round is open; the flags are 0 or 1. `wake_session_id` and
- * `wake_branch_id` are where a `starter` round's end wakes its starter,
- * saved before the wake is sent, so a second delivery goes where the first
- * one went.
+ * a `thread.stop` that closed the round, or by the starter's interrupt; the
+ * interrupt also sets `stop_notice_at`, which stays until a turn of the
+ * starter reads the notice. The end fields are NULL while the round is open;
+ * the flags are 0 or 1. `wake_session_id` and `wake_branch_id` are where a
+ * `starter` round's end wakes its starter, saved before the wake is sent (or
+ * when the interrupt that stops it is that place's), so a second delivery
+ * goes where the first one went.
  */
 const RoundRow = Schema.Struct({
   round: Schema.String,
@@ -286,8 +329,15 @@ const RoundRow = Schema.Struct({
   wake_session_id: Schema.NullOr(Schema.String),
   wake_branch_id: Schema.NullOr(Schema.String),
   delivered_at: Schema.NullOr(Schema.Finite),
+  stop_notice_at: Schema.NullOr(Schema.Finite),
 })
 type RoundRow = typeof RoundRow.Type
+
+/** A session and branch: where a round runs, or where its end wakes. */
+interface Place {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+}
 
 /** What a round's end records. */
 interface RoundEnd {
@@ -369,9 +419,44 @@ interface ThreadRoundsService {
   readonly claimRound: (round: NewRound) => Effect.Effect<RoundClaim, ThreadStorageError>
   /** Keeps the value on the open round; a round that ended keeps the one it had. */
   readonly recordReply: (round: string, json: string) => Effect.Effect<boolean, ThreadStorageError>
-  /** Records the end once: the first writer wins, a later one changes nothing. */
+  /**
+   * Records the end once: the first writer wins, a later one changes nothing.
+   * A turn that ended uninterrupted completed before the starter's interrupt
+   * reached it: the interrupt's stop and notice go, so its end wakes the
+   * starter as any other does.
+   */
   readonly endRound: (round: string, end: RoundEnd) => Effect.Effect<void, ThreadStorageError>
   readonly markStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
+  /** The open `starter` rounds one starter thread sent that nothing has stopped yet. */
+  readonly stopCandidates: (
+    starterThread: SessionId,
+  ) => Effect.Effect<ReadonlyArray<RoundRow>, ThreadStorageError>
+  /**
+   * Marks an open round stopped by the starter's interrupt at `place`, with a
+   * stop notice, and saves `place` as where its end wakes: `replacing` is the
+   * saved target this replaces (none when none was saved), as
+   * `saveWakeTarget`'s compare and swap reads it. False when the round ended,
+   * was stopped already, or its target moved.
+   */
+  readonly claimStop: (
+    round: string,
+    at: number,
+    place: Place,
+    replacing: Option.Option<SessionId>,
+  ) => Effect.Effect<boolean, ThreadStorageError>
+  /** Hands back a claim whose stop failed: the round runs on and reports itself. */
+  readonly unclaimStop: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
+  /** The rounds whose stop notice no turn at `place` has read, the newest stop first. */
+  readonly stopNoticesAt: (
+    place: Place,
+  ) => Effect.Effect<ReadonlyArray<RoundRow>, ThreadStorageError>
+  /** Drops one notice, only for the stop that wrote it. */
+  readonly clearStopNotice: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
+  /** A thread's latest round, open or ended; with `ended`, its latest ended one. */
+  readonly latestRound: (
+    thread: string,
+    ended: boolean,
+  ) => Effect.Effect<Option.Option<RoundRow>, ThreadStorageError>
   /** Saves where the end wakes the starter; the first writer wins. Returns the saved place. */
   readonly saveWakeTarget: (
     round: string,
@@ -406,7 +491,49 @@ interface ThreadRoundsService {
    * session it guards are one step, so a start past the cap makes no session.
    */
   readonly admissions: Semaphore.Semaphore
+  /** The branches whose turns reconciled since the last failed hook step. */
+  readonly reconciled: ReconciledBranches
 }
+
+/**
+ * The branches this server reconciled on a turn. A turn's reconcile repairs
+ * what a failed hook step left; the hooks deliver every end otherwise. So a
+ * branch's turns reconcile once per process, and again after any threads hook
+ * step fails: a failure invalidates every mark, in every place, because the
+ * failed step may not know which starter it was writing to. A generation
+ * keeps a reconcile that raced the failure from marking its branch clean.
+ * Without the gate every model step would replay each running thread's log.
+ */
+interface ReconciledBranches {
+  /** The current generation, read before a reconcile starts. */
+  readonly generation: Effect.Effect<number>
+  readonly has: (key: string) => Effect.Effect<boolean>
+  /** Marks the branch only when no failure invalidated the marks since `generation`. */
+  readonly add: (key: string, generation: number) => Effect.Effect<void>
+  readonly invalidate: Effect.Effect<void>
+}
+
+interface ReconciledState {
+  readonly generation: number
+  readonly keys: ReadonlySet<string>
+}
+
+const makeReconciledBranches = Effect.map(
+  Ref.make<ReconciledState>({ generation: 0, keys: new Set() }),
+  (state): ReconciledBranches => ({
+    generation: Effect.map(Ref.get(state), (current) => current.generation),
+    has: (key) => Effect.map(Ref.get(state), (current) => current.keys.has(key)),
+    add: (key, generation) =>
+      Ref.update(state, (current) => {
+        if (current.generation !== generation) return current
+        return { generation, keys: new Set([...current.keys, key]) }
+      }),
+    invalidate: Ref.update(state, (current) => ({
+      generation: current.generation + 1,
+      keys: new Set<string>(),
+    })),
+  }),
+)
 
 /**
  * The round table, in the server's database. Threads run their own
@@ -459,12 +586,32 @@ const threadRoundsMigration = Effect.gen(function* () {
 })
 
 /**
+ * The stop notice of a round the starter's interrupt stopped: when it was
+ * written, until a turn of the starter reads it. Additive: a server on the
+ * code before it reads and writes the same rows.
+ */
+const stopNoticesMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* Effect.forEach(
+    [
+      `ALTER TABLE thread_rounds ADD COLUMN stop_notice_at INTEGER`,
+      `CREATE INDEX thread_rounds_stop_notices ON thread_rounds (wake_session_id, wake_branch_id) WHERE stop_notice_at IS NOT NULL`,
+    ],
+    (statement) => sql.unsafe(statement),
+    { discard: true },
+  )
+})
+
+/**
  * Runs the migrations the database has not recorded, in one transaction. A
  * run that finds another one recording the same ids treats them as done, so
  * the builds of two places over one database are safe.
  */
 const migrateThreadRounds = Migrator.make({})({
-  loader: Migrator.fromRecord({ "1_thread_rounds": threadRoundsMigration }),
+  loader: Migrator.fromRecord({
+    "1_thread_rounds": threadRoundsMigration,
+    "2_thread_round_stop_notices": stopNoticesMigration,
+  }),
   table: "thread_migrations",
 }).pipe(Effect.mapError(storageError("Thread table migration failed")))
 
@@ -483,6 +630,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
       const sql = yield* SqlClient.SqlClient
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
+      const reconciled = yield* makeReconciledBranches
       yield* migrateThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
@@ -602,6 +750,8 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
               onNone: () => Effect.succeed(Option.none<string>()),
               onSome: (value) => Effect.asSome(encodeUsage(value)),
             })
+            // Every SET reads the row as it was, so the CASEs see the claim.
+            const completed = flag(!end.interrupted)
             yield* sql`
               UPDATE thread_rounds
               SET ended_at = ${end.endedAt},
@@ -610,11 +760,90 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
                   stream_failed = ${flag(end.streamFailed)},
                   unanswered = ${flag(end.unanswered)},
                   error = ${Option.getOrNull(end.error)},
-                  usage_json = ${Option.getOrNull(usage)}
+                  usage_json = ${Option.getOrNull(usage)},
+                  stopped_at = CASE
+                    WHEN ${completed} = 1 AND stop_notice_at IS NOT NULL THEN NULL
+                    ELSE stopped_at
+                  END,
+                  stop_notice_at = CASE
+                    WHEN ${completed} = 1 THEN NULL
+                    ELSE stop_notice_at
+                  END
               WHERE round = ${round} AND ended_at IS NULL
             `
           },
           Effect.mapError(storageError("Failed to record the round's end")),
+        ),
+
+        stopCandidates: Effect.fn("ThreadRounds.stopCandidates")(
+          function* (starterThread) {
+            return yield* sql<RoundRow>`
+              SELECT * FROM thread_rounds
+              WHERE starter_thread = ${starterThread} AND notify = 'starter'
+                AND ended_at IS NULL AND stopped_at IS NULL
+              ORDER BY started_at, round
+            `
+          },
+          Effect.mapError(storageError("Failed to read the rounds to stop")),
+        ),
+
+        claimStop: Effect.fn("ThreadRounds.claimStop")(
+          function* (round, at, place, replacing) {
+            const rows = yield* sql<{ readonly round: string }>`
+              UPDATE thread_rounds
+              SET stopped_at = ${at}, stop_notice_at = ${at},
+                  wake_session_id = ${place.sessionId}, wake_branch_id = ${place.branchId}
+              WHERE round = ${round} AND ended_at IS NULL AND stopped_at IS NULL
+                AND wake_session_id IS ${Option.getOrNull(replacing)}
+              RETURNING round
+            `
+            return rows.length > 0
+          },
+          Effect.mapError(storageError("Failed to mark the round stopped")),
+        ),
+
+        unclaimStop: Effect.fn("ThreadRounds.unclaimStop")(
+          function* (round, at) {
+            yield* sql`
+              UPDATE thread_rounds SET stopped_at = NULL, stop_notice_at = NULL
+              WHERE round = ${round} AND stop_notice_at = ${at} AND ended_at IS NULL
+            `
+          },
+          Effect.mapError(storageError("Failed to hand the round back")),
+        ),
+
+        stopNoticesAt: Effect.fn("ThreadRounds.stopNoticesAt")(
+          function* (place) {
+            return yield* sql<RoundRow>`
+              SELECT * FROM thread_rounds
+              WHERE stop_notice_at IS NOT NULL
+                AND wake_session_id = ${place.sessionId} AND wake_branch_id = ${place.branchId}
+              ORDER BY stop_notice_at DESC, round
+            `
+          },
+          Effect.mapError(storageError("Failed to read the stop notices")),
+        ),
+
+        clearStopNotice: Effect.fn("ThreadRounds.clearStopNotice")(
+          function* (round, at) {
+            yield* sql`
+              UPDATE thread_rounds SET stop_notice_at = NULL
+              WHERE round = ${round} AND stop_notice_at = ${at}
+            `
+          },
+          Effect.mapError(storageError("Failed to clear the stop notice")),
+        ),
+
+        latestRound: Effect.fn("ThreadRounds.latestRound")(
+          function* (thread, ended) {
+            const rows = yield* sql<RoundRow>`
+              SELECT * FROM thread_rounds
+              WHERE thread = ${thread} AND (${flag(ended)} = 0 OR ended_at IS NOT NULL)
+              ORDER BY number DESC LIMIT 1
+            `
+            return Option.fromNullishOr(rows[0])
+          },
+          Effect.mapError(storageError("Failed to read the thread's rounds")),
         ),
 
         markStopped: Effect.fn("ThreadRounds.markStopped")(
@@ -686,6 +915,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
 
         ended,
         admissions,
+        reconciled,
       })
     }),
   )
@@ -768,14 +998,17 @@ const runningCap = Effect.fn("Threads.runningCap")(function* () {
   )
 })
 
-/** A thread that loops on a broken model stops here, as a delegate child does. */
+/** A thread that loops on a broken model stops here instead of spending its starter's budget. */
 const THREAD_MAX_MODEL_ATTEMPTS = 32
 
-/** A round's preview in the wake line; the whole text is `thread.round`'s. */
-const maximumPreviewChars = 240
+/** The head and tail of a round's text in the starter's round-end message; the whole text is `thread.round`'s. */
+const maximumPreviewChars = 4_000
 
 /** The error a round ended on, as one bounded line. */
-const maximumErrorChars = 400
+const maximumErrorChars = 1_000
+
+/** The round-end row shows the round's last calls; the thread's branch keeps them all. */
+const MAX_ROUND_END_TOOLS = 20
 
 const oneLine = (text: string, limit: number) => {
   const line = text.replace(/\s+/g, " ").trim()
@@ -785,19 +1018,46 @@ const oneLine = (text: string, limit: number) => {
 
 const ROUND_PREFIX = "Round "
 
-/** Where a round's answer goes, in words the thread's model reads. */
+/**
+ * Where a round's answer goes, in words the thread's model reads. A `starter`
+ * round's final text is its result, and it returns to the starter by itself:
+ * a thread told only that "a later result goes through session.send" sent
+ * this turn's result that way too, so the starter read every result twice. A
+ * question in this turn is that text too. Only a later turn that nobody waits
+ * for reports with session.send: one a wake, a monitor or a goal starts, or a
+ * message from the starter. The round's message stays in every later turn's
+ * context.
+ */
 const answerLine = (notify: RoundNotify) => {
   if (notify === "user") {
     return "The user reads your replies in this thread; nothing you write returns to that session, so do not report to it with session.send. When you are blocked, end your turn with your question: the user answers here."
   }
+  if (notify === "starter") {
+    return [
+      "Your final text in this turn is the round's result: it goes back to that session by itself, so do not also send it with session.send. When you are blocked in this turn, end it with your question as that text.",
+      'End this turn once the work is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn that is not a round (a wake, a monitor, a goal, a message from that session) returns nothing by itself: send its result or question with session.send to "parent".',
+    ].join("\n")
+  }
   return "Your final text in this turn is the round's answer, and it goes back to that session; do not send it with session.send."
 }
 
+/** Where a snapshot thread works: its copy, and the branch its work returns on. */
+interface WorkPlace {
+  readonly cwd: string
+  readonly branch: string
+}
+
+/** The line every round to a snapshot thread carries. */
+const placeLine = (place: WorkPlace) =>
+  `You work in a private copy of your starter's working tree at ${place.cwd}. When each of your turns ends, your changes go back to that session as the git branch ${place.branch}; you do not need to commit or push.`
+
 /**
- * A round's message: a line that says where it came from and where its
- * answer goes, a blank line, the starter's words, and the value it asks for
- * when it asks for one. Without the line, a session a parent spawned reads
- * the sessions section and reports to its parent with session.send.
+ * A round's message: lines that say where it came from, where its answer
+ * goes and, for a snapshot thread, where it works; a blank line; the
+ * starter's words; and the value it asks for when it asks for one. Without
+ * the lines, a session a parent spawned reads the sessions section and
+ * reports to its parent with session.send, and takes its own task for an
+ * injection.
  */
 export const threadRoundText = (input: {
   readonly number: number
@@ -805,9 +1065,11 @@ export const threadRoundText = (input: {
   readonly message: string
   readonly reply: Option.Option<string>
   readonly notify: RoundNotify
+  readonly place: Option.Option<WorkPlace>
 }) =>
   [
     `${ROUND_PREFIX}${input.number} from session ${input.starter}. ${answerLine(input.notify)}`,
+    ...Option.toArray(Option.map(input.place, placeLine)),
     "",
     input.message,
     ...Option.match(input.reply, {
@@ -847,26 +1109,138 @@ const outcomeWords = (round: RoundRow) => {
   return `ended (${failures.join(", ")})`
 }
 
-const replyWords = (round: RoundRow) => {
-  if (Predicate.isNull(round.reply_spec)) return ""
-  if (Predicate.isNotNull(round.reply_json)) return "; reply recorded"
-  return "; no reply: the round asked for one and the thread never called thread.reply"
+/** What the round's reply value came to; none for a round that asked for none. */
+const replyNote = (round: RoundRow): Option.Option<string> => {
+  if (Predicate.isNull(round.reply_spec)) return Option.none()
+  if (Predicate.isNotNull(round.reply_json)) {
+    return Option.some("The round's reply recorded: thread.round returns the value.")
+  }
+  return Option.some(
+    "The round got no reply: it asked for one and the thread never called thread.reply.",
+  )
 }
 
-/** The one line that wakes a round's starter. */
-const roundEndLine = (round: RoundRow) => {
-  const parts = [
-    `Thread ${round.thread} round ${round.number} ${outcomeWords(round)}${replyWords(round)}.`,
-    `thread.round({ round: "${round.round}" }) returns its text and reply.`,
-  ]
+/**
+ * `metadata.details` of a round's end on the starter's branch. The row that
+ * draws it commits to scrollback once, after the round ends, so it carries
+ * everything the row shows: the thread's name and agent, the turn's flags and
+ * bill, its last calls and its time, and a snapshot thread's work.
+ */
+const ThreadRoundEndDetails = Schema.Struct({
+  round: Schema.String,
+  thread: Schema.String,
+  number: Schema.Finite,
+  sessionId: SessionId,
+  branchId: BranchId,
+  /** The agent the thread runs as; absent when it runs as its starter's default agent. */
+  agentName: Schema.optionalKey(AgentName),
+  /** The thread session's name, as the tray and the sessions pane show it. */
+  name: Schema.optionalKey(Schema.String),
+  interrupted: Schema.Boolean,
+  streamFailed: Schema.Boolean,
+  unanswered: Schema.Boolean,
+  usage: Schema.optionalKey(ChildUsage),
+  /** The error a turn that ended badly ended on, one bounded line. */
+  error: Schema.optionalKey(Schema.String),
+  /** The round's last calls, oldest first. `toolCount` counts every call. */
+  tools: Schema.Array(ChildToolLine),
+  toolCount: Schema.Finite,
+  /** Every call by tool and outcome, so the row's summary counts more than the kept calls. */
+  toolCounts: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      status: ChildToolLine.fields.status,
+      count: Schema.Finite,
+    }),
+  ),
+  /** From the round's message to its turn's last message. */
+  durationMs: Schema.Finite,
+  /** A snapshot thread's work: its copy, the branch that holds it, and its size. */
+  workspace: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.optionalKey(Schema.String),
+      branch: Schema.optionalKey(Schema.String),
+      files: Schema.optionalKey(Schema.Finite),
+      insertions: Schema.optionalKey(Schema.Finite),
+      deletions: Schema.optionalKey(Schema.Finite),
+      error: Schema.optionalKey(Schema.String),
+    }),
+  ),
+})
+type ThreadRoundEndDetails = typeof ThreadRoundEndDetails.Type
+
+/** A snapshot thread's work as its round's end carries it. */
+interface RoundWork {
+  readonly line: string
+  readonly details: NonNullable<ThreadRoundEndDetails["workspace"]>
+}
+
+/** The round end's line for a collected copy, and its details. */
+const workOf = (work: CollectedWork): RoundWork => {
+  if (Predicate.isNotUndefined(work.problem)) {
+    return {
+      line: `Work: not on a branch: ${work.problem} (${work.path}).`,
+      details: { path: work.path, error: work.problem },
+    }
+  }
+  return Option.match(Option.fromUndefinedOr(work.branch), {
+    onNone: () => ({
+      line: `Work: no changes in the thread's copy at ${work.path}.`,
+      details: { path: work.path, files: 0, insertions: 0, deletions: 0 },
+    }),
+    onSome: (branch) => ({
+      line: `Work: branch ${branch}, one commit over the thread's copy as it started (${work.files} files, +${work.insertions} -${work.deletions}). Nothing is merged; read it with git show ${branch}.`,
+      details: {
+        path: work.path,
+        branch,
+        files: work.files,
+        insertions: work.insertions,
+        deletions: work.deletions,
+      },
+    }),
+  })
+}
+
+/**
+ * The message a round's end wakes its starter with: the answer itself, so
+ * the starter reads it with no extra step.
+ *
+ * A turn receipt is not task success, and the ways a turn can end badly are
+ * not visible in its text: an interrupted turn, a failed model stream, and a
+ * turn that spent its continuations without answering all leave text a
+ * starter would otherwise read as a result. Each flag is named in the
+ * header, with the error the turn ended on, so a failure that will repeat (a
+ * sign-in, a missing key) reads differently from a flake. `thread.round`
+ * returns the whole text and the reply value.
+ */
+const roundEndContent = (input: {
+  readonly round: RoundRow
+  readonly name: Option.Option<string>
+  readonly agentName: Option.Option<AgentName>
+  readonly work: Option.Option<RoundWork>
+}): string => {
+  const { round } = input
+  const named = Option.match(input.name, {
+    onNone: () => "",
+    onSome: (name) => ` "${name}"`,
+  })
+  const agent = Option.match(input.agentName, {
+    onNone: () => "",
+    onSome: (name) => ` (agent ${name})`,
+  })
   const error = Option.filter(Option.fromNullishOr(round.error), (text) => text.length > 0)
-  if (Option.isSome(error)) parts.push(`Error: ${error.value}`)
-  const preview = oneLine(
-    Option.getOrElse(Option.fromNullishOr(round.text), () => ""),
-    maximumPreviewChars,
-  )
-  if (preview.length > 0) parts.push(`It begins: ${preview}`)
-  return parts.join(" ")
+  const text = Option.getOrElse(Option.fromNullishOr(round.text), () => "")
+  return [
+    `Thread${named}${agent} round ${round.number} ${outcomeWords(round)}. Thread ${round.thread}; round ${round.round}; session ${round.session_id}; branch ${round.branch_id}.`,
+    ...Option.toArray(Option.map(error, (line) => `Error: ${line}`)),
+    ...Option.toArray(Option.map(input.work, (work) => work.line)),
+    "A round's end is a turn receipt, not task success. Read the answer before relying on it.",
+    "",
+    headTailChars(text, maximumPreviewChars).text,
+    "",
+    ...Option.toArray(replyNote(round)),
+    `thread.round({ round: "${round.round}" }) returns its whole text and reply.`,
+  ].join("\n")
 }
 
 /** Admits (or re-sends) a round's turn on the thread. A repeat admits nothing new. */
@@ -993,27 +1367,91 @@ const wakeTarget = Effect.fn("Threads.wakeTarget")(function* (round: RoundRow) {
 })
 
 /**
+ * A snapshot thread's work, brought back to the origin as a branch before
+ * the round's end goes out; a thread with no copy has none. The workspaces
+ * turn end collects the same turn under the same key (the round's message),
+ * so the turn is collected once, whichever runs first. A collect that fails
+ * is one line in the message, which still goes out.
+ */
+const roundWork = Effect.fn("Threads.roundWork")(function* (round: RoundRow) {
+  const places = yield* Effect.serviceOption(Workspaces)
+  if (Option.isNone(places)) return Option.none<RoundWork>()
+  const collected = yield* places.value
+    .collect(SessionId.make(round.session_id), round.message_id)
+    .pipe(Effect.result)
+  if (collected._tag === "Success") return Option.map(collected.success, workOf)
+  const message = collected.failure.message
+  return Option.some<RoundWork>({
+    line: `Work: the thread's copy was not collected: ${message}`,
+    details: { error: message },
+  })
+})
+
+/**
+ * The starter's message for a recorded end, and the row's details: read from
+ * the round's own turn, so a forked thread's copied window counts for
+ * nothing, and from the thread's session, for its name and agent.
+ */
+const roundEndMessage = Effect.fn("Threads.roundEndMessage")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
+  const sessionId = SessionId.make(round.session_id)
+  const detail = yield* ctx.Session.getDetail(sessionId)
+  const branch = detail.branches.find((current) => current.branch.id === round.branch_id)
+  const messages = startTurnMessages(branch?.messages ?? [], MessageId.make(round.message_id))
+  const tools = turnToolLines(messages)
+  const name = Option.fromUndefinedOr(detail.session.name)
+  const agentName = Option.fromUndefinedOr(detail.session.admission?.agent)
+  const work = yield* roundWork(round)
+  const details: ThreadRoundEndDetails = {
+    round: round.round,
+    thread: round.thread,
+    number: round.number,
+    sessionId,
+    branchId: BranchId.make(round.branch_id),
+    interrupted: round.interrupted === 1,
+    streamFailed: round.stream_failed === 1,
+    unanswered: round.unanswered === 1,
+    tools: tools.slice(-MAX_ROUND_END_TOOLS),
+    toolCount: tools.length,
+    toolCounts: toolCountsOf(tools),
+    durationMs: turnDuration(messages),
+    ...omitUndefined({
+      agentName: Option.getOrUndefined(agentName),
+      name: Option.getOrUndefined(name),
+      usage: Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(round.usage_json), decodeUsage),
+      ),
+      error: Option.getOrUndefined(
+        Option.filter(Option.fromNullishOr(round.error), (text) => text.length > 0),
+      ),
+      workspace: Option.getOrUndefined(Option.map(work, (found) => found.details)),
+    }),
+  }
+  return { content: roundEndContent({ round, name, agentName, work }), details }
+})
+
+/**
  * Hands a recorded end to whoever hears it. A `starter` round wakes the
- * starter with the line, once: the message id derives from the source id
- * and the saved place, so a second delivery after a crash is a no-op. A round `thread.stop`
- * closed wakes nobody: its stopper knows. Every end is then marked
- * delivered, and the one writer that marked it publishes it.
+ * starter with its answer, once: the message id derives from the source id
+ * and the saved place, so a second delivery after a crash is a no-op. A
+ * round `thread.stop` or the starter's interrupt closed wakes nobody: its
+ * stopper knows, and an interrupt's notice tells the starter's next turns.
+ * Every end is then marked delivered, and the one writer that marked it
+ * publishes it.
  */
 const deliverRoundEnd = Effect.fn("Threads.deliverRoundEnd")(function* (round: RoundRow) {
   const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
   if (round.notify === "starter" && Predicate.isNull(round.stopped_at)) {
     const place = yield* wakeTarget(round)
+    const ended = yield* roundEndMessage(round)
     yield* ctx.Session.send({
       delivery: "queue",
       ...place,
       sourceId: roundEndSourceId(round.round),
       wake: true,
-      content: roundEndLine(round),
-      metadata: {
-        customType: THREAD_ROUND_END_TYPE,
-        details: { round: round.round, thread: round.thread, number: round.number },
-      },
+      content: ended.content,
+      metadata: { customType: THREAD_ROUND_END_TYPE, details: ended.details },
     })
   }
   const marked = yield* rounds.markDelivered(round.round, yield* Clock.currentTimeMillis)
@@ -1133,12 +1571,19 @@ const randomNonce = Effect.gen(function* () {
  * `completion: "admission"` admits nothing new and returns at once, and it
  * opens the thread's loop, which resumes a turn cut short; a round never
  * sent is admitted now, though the thread's loop is open and idle. The
- * turn's own hook ends the round.
+ * turn's own hook ends the round. A round whose thread session was deleted
+ * while no process ran (so no delete hook dropped it) goes, as the hook
+ * would have dropped it: it wakes nobody, and frees its place under the cap.
  */
 const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   round: RoundRow,
   starterSide: boolean,
 ) {
+  const ctx = yield* ExtensionContext
+  const sessionId = SessionId.make(round.session_id)
+  if (Predicate.isUndefined(yield* ctx.Session.getSession(sessionId))) {
+    return yield* Effect.flatMap(ThreadRounds, (rounds) => rounds.removeSession(sessionId))
+  }
   if (Predicate.isNotNull(round.ended_at)) return yield* deliverRoundEnd(round)
   const recorded = yield* recordedOutcome(round)
   if (Option.isSome(recorded)) return yield* endRound(round, recorded.value)
@@ -1161,13 +1606,21 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   yield* sendClaimedRound(round)
 })
 
-/** A hook's step that fails is logged, never raised: no user watches a hook. */
+/**
+ * A hook's step that fails is logged, never raised: no user watches a hook.
+ * It may have left an end undelivered or a stop unsettled, for a starter it
+ * cannot name, so it invalidates every branch's reconcile mark: each
+ * branch's next turn reconciles again.
+ */
 const logFailure =
   (event: string) =>
   <E, R>(step: Effect.Effect<void, E, R>) =>
     step.pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning(event).pipe(Effect.annotateLogs({ cause: String(cause) })),
+        Effect.logWarning(event).pipe(
+          Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          Effect.andThen(Effect.flatMap(ThreadRounds, (rounds) => rounds.reconciled.invalidate)),
+        ),
       ),
     )
 
@@ -1196,13 +1649,225 @@ const reconcileBranch = Effect.fn("Threads.reconcile")(function* () {
   )
 })
 
+/** The reconcile mark of the caller's branch. */
+const branchKey = Effect.map(ExtensionContext, (ctx) => `${ctx.sessionId}:${ctx.branchId}`)
+
+/**
+ * The loop open's reconcile: always, since a restart or a loop that closed
+ * may have left anything. It marks the branch, so its turns do not repeat it.
+ */
+const reconcileOnOpen = Effect.gen(function* () {
+  const rounds = yield* ThreadRounds
+  const key = yield* branchKey
+  const generation = yield* rounds.reconciled.generation
+  yield* reconcileBranch()
+  yield* rounds.reconciled.add(key, generation)
+})
+
+/** The turn-time reconcile: once per branch per process, again after any threads hook step failed. */
+const reconcileOnce = Effect.gen(function* () {
+  const rounds = yield* ThreadRounds
+  const key = yield* branchKey
+  if (yield* rounds.reconciled.has(key)) return
+  const generation = yield* rounds.reconciled.generation
+  yield* reconcileBranch()
+  yield* rounds.reconciled.add(key, generation)
+})
+
+// ── the starter's interrupt ─────────────────────────────────────────────────
+
+/**
+ * Where a round's end would wake now, without saving it: the saved target
+ * while its session exists, else the starter's current place. With the
+ * saved session the claim replaces, as `wakeTarget` would.
+ */
+const wouldWake = Effect.fn("Threads.wouldWake")(function* (round: RoundRow) {
+  const ctx = yield* ExtensionContext
+  const saved = wakeTargetOf(round)
+  const replacing = Option.map(saved, (target) => target.sessionId)
+  if (Option.isSome(saved)) {
+    const session = yield* ctx.Session.getSession(saved.value.sessionId)
+    if (Predicate.isNotUndefined(session)) return { place: saved.value, replacing }
+  }
+  return { place: yield* starterPlace(round), replacing }
+})
+
+/**
+ * Stops one round for the starter's interrupt. The round is claimed first:
+ * marked stopped with a notice, so its turn's end, interrupted, wakes nobody,
+ * and the starter's next turns read the notice instead. Then its turn is
+ * stopped, queued or running, and a round whose turn never reached the
+ * thread's branch is closed here. A turn that completed before the stop
+ * reached it ends uninterrupted, and its end takes the claim back
+ * (`endRound`): it wakes the starter as any other. A stop that fails hands
+ * the claim back and fails: the round runs on and reports itself.
+ */
+const stopForInterrupt = Effect.fn("Threads.stopForInterrupt")(function* (
+  round: RoundRow,
+  place: Place,
+  replacing: Option.Option<SessionId>,
+) {
+  const rounds = yield* ThreadRounds
+  const at = yield* Clock.currentTimeMillis
+  if (!(yield* rounds.claimStop(round.round, at, place, replacing))) return
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const ends = yield* PubSub.subscribe(rounds.ended)
+      const answer = yield* Effect.exit(
+        stopRoundTurn(round, RequestId.make(`thread-stop:${round.round}:interrupt:${at}`)),
+      )
+      if (Exit.isFailure(answer)) {
+        yield* rounds.unclaimStop(round.round, at)
+        return yield* Effect.failCause(answer.cause)
+      }
+      // The stopped turn's own end closes a round that reached the branch; a
+      // round still queued is closed here, without waiting for any turn.
+      const current = yield* rounds.round(round.round)
+      yield* settleStopped(
+        Option.getOrElse(current, () => round),
+        ends,
+        false,
+      )
+    }),
+  )
+})
+
+/** Rounds one interrupt stops side by side, a few at a time. */
+const STOP_CONCURRENCY = 8
+
+/**
+ * An interrupted turn on branch B stops the open `starter` rounds whose end
+ * would wake B: the rounds B's thread sent, whichever of its sessions sent
+ * them, whose wake lands here. Left running, they would work on after the
+ * user stopped what was waiting for them; the gamut saw six such children
+ * edit files after an Escape. A `user` or `none` round runs on: it is the
+ * user's side thread, or a machine's. A thread stopped this way ends its own
+ * turn interrupted, so the cascade reaches what it started too. Each round
+ * stops on its own; one that fails is logged and invalidates the reconcile
+ * marks, so the next turn tries again.
+ */
+const stopStarterRounds = Effect.fn("Threads.stopStarterRounds")(function* (
+  input: Pick<TurnAfterInput, "sessionId" | "branchId" | "interrupted">,
+) {
+  if (!input.interrupted) return
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const candidates = yield* rounds.stopCandidates(yield* callerThread())
+  if (candidates.length === 0) return
+  yield* Effect.forEach(
+    candidates,
+    (round) =>
+      Effect.gen(function* () {
+        const target = yield* wouldWake(round)
+        if (
+          target.place.sessionId !== input.sessionId ||
+          target.place.branchId !== input.branchId
+        ) {
+          return
+        }
+        yield* stopForInterrupt(round, target.place, target.replacing)
+      }).pipe(
+        logFailure("threads.interrupt.stop-failed"),
+        Effect.annotateLogs({ round: round.round }),
+      ),
+    { concurrency: STOP_CONCURRENCY, discard: true },
+  )
+  yield* ctx.State.changed().pipe(Effect.ignore)
+})
+
+/** A stop notice names a round by its message's first line, cut here by code point. */
+const maximumNoticeTaskChars = 80
+
+/** The threads one notice names; the rest are counted, and named once these are read. */
+const maximumNoticeThreads = 8
+
+const noticeTask = (content: string) => {
+  const line = threadRoundBody(content).trim().split("\n")[0] ?? ""
+  if (line.length <= maximumNoticeTaskChars) return line
+  return `${headChars(line, maximumNoticeTaskChars - 1)}…`
+}
+
+/** One unread stop notice: a round, at the stop that wrote it. A later stop of the same round is a new notice. */
+const stopNoticeKey = (round: RoundRow) => `${round.round}@${round.stop_notice_at}`
+
+/** The notice's id; session-tools' own notices have others. */
+const STOPPED_THREADS_NOTICE = "threads-stopped"
+
+/**
+ * The threads this branch's interrupt stopped, as one turn notice: the stop
+ * wakes nobody, and without it the starter's next turn believes they still
+ * run. A thread is one line however many of its rounds were stopped, the
+ * newest stop first, at most `maximumNoticeThreads`; the rest are a count.
+ * Every step reads it; an answered turn clears exactly the rounds it showed,
+ * and a round the cap left out stays for the next turn.
+ */
+const stopNotices = Effect.fn("Threads.stopNotices")(function* () {
+  const ctx = yield* ExtensionContext
+  const rounds = yield* ThreadRounds
+  const stopped = yield* rounds.stopNoticesAt({ sessionId: ctx.sessionId, branchId: ctx.branchId })
+  if (stopped.length === 0) return []
+  // Newest stop first: each thread's first row is its latest.
+  const byThread = new Map<string, Array<RoundRow>>()
+  for (const round of stopped)
+    byThread.set(round.thread, [...(byThread.get(round.thread) ?? []), round])
+  const threads = [...byThread.values()]
+  const named = threads.slice(0, maximumNoticeThreads)
+  const unnamed = threads.length - named.length
+  const lines = named.flatMap((rows) =>
+    Option.toArray(
+      Option.map(
+        Option.fromUndefinedOr(rows[0]),
+        (latest) =>
+          `- "${noticeTask(latest.content)}" · thread ${latest.thread} · round ${latest.round}`,
+      ),
+    ),
+  )
+  if (unnamed > 0) {
+    lines.push(`- and ${unnamed} more stopped threads, named once you have read these.`)
+  }
+  return [
+    {
+      id: STOPPED_THREADS_NOTICE,
+      keys: named.flat().map(stopNoticeKey),
+      content: `# Stopped threads\n\nThe user interrupted your turn, and that stopped these threads before their rounds finished. They are not running, and no round end will come from them. Tell the user which threads stopped; send them work again only when the user asks for it.\n\n${lines.join("\n")}`,
+    },
+  ]
+})
+
+/**
+ * Drops the stop notices the turn read. The runtime hands back only what an
+ * answered turn showed: an interrupted, failed or unanswered turn keeps them,
+ * and so does every notice the turn did not show.
+ */
+const clearReadStopNotices = Effect.fn("Threads.clearStopNotices")(function* (
+  input: Pick<TurnAfterInput, "sessionId" | "branchId" | "readNotices">,
+) {
+  if (input.readNotices.size === 0) return
+  const rounds = yield* ThreadRounds
+  const shown = yield* rounds.stopNoticesAt(input)
+  yield* Effect.forEach(
+    shown.filter((round) => input.readNotices.has(stopNoticeKey(round))),
+    (round) => rounds.clearStopNotice(round.round, round.stop_notice_at ?? 0),
+    { discard: true },
+  )
+})
+
 // ── the threads service ─────────────────────────────────────────────────────
+
+/**
+ * Where a thread works besides its `cwd`. `snapshot`: a private copy of the
+ * working tree from `@gent/workspaces`, whose work returns as a branch.
+ */
+const ThreadWorkspace = Schema.Struct({ snapshot: Schema.Literal(true) }).annotate({
+  description:
+    "{ snapshot: true }: the thread works in its own copy of the git working tree it would work in, and each turn's work comes back as the branch gent/<name> that nothing merges. A copy is not a sandbox.",
+})
 
 const StartParams = Schema.Struct({
   task: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        "The thread's first round. The thread starts with no conversation history: it sees only this text. Absent: the thread waits for its first thread.send.",
+        "The thread's first round: the whole task. A thread starts with no conversation history and sees only this text, unless it is forked. Absent: the thread waits for its first thread.send.",
     }),
   ),
   name: Schema.optionalKey(
@@ -1213,11 +1878,13 @@ const StartParams = Schema.Struct({
   agent: Schema.optionalKey(
     AgentName.annotate({
       description:
-        'The agent the thread runs as; default yours. "worker" is a long-lived thread that takes rounds and keeps its prompt cache between them.',
+        'The agent the thread runs as, with that agent\'s own model and effort; default yours, with your model. "delegate" runs one task and cannot start threads; "worker" is a long-lived thread that takes rounds and keeps its prompt cache between them.',
     }),
   ),
   model: Schema.optionalKey(
-    ModelId.annotate({ description: "The thread's model; default yours." }),
+    ModelId.annotate({
+      description: "The thread's model; default the agent's own, or yours when no agent is named.",
+    }),
   ),
   effort: Schema.optionalKey(ReasoningEffort),
   cwd: Schema.optionalKey(
@@ -1238,6 +1905,13 @@ const StartParams = Schema.Struct({
     }),
   ),
   notify: Schema.optionalKey(ToolNotify),
+  workspace: Schema.optionalKey(ThreadWorkspace),
+  fork: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "true: the thread starts from your current context window, so it can continue your work as it stands. The copy is what you see now, so a long context is a costly seed.",
+    }),
+  ),
 })
 
 const RoundHandle = Schema.Struct({ round: Schema.String, number: Schema.Finite })
@@ -1249,6 +1923,15 @@ const StartResult = Schema.Struct({
   branchId: BranchId,
   /** The task's round, when a task was given. */
   round: Schema.optionalKey(RoundHandle),
+  /** A snapshot thread's copy and the branch its work returns on. */
+  workspace: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.String,
+      branch: Schema.String,
+      /** What the copy did not do as asked, one line each (a worktree in place of rift, a failed hook). */
+      note: Schema.optionalKey(Schema.String),
+    }),
+  ),
 })
 type StartResult = typeof StartResult.Type
 
@@ -1276,9 +1959,9 @@ type StoredAdmission = NonNullable<StoredSession["admission"]>
 
 /**
  * The run a thread starts with: the named agent, else the starter's agent
- * and admission, as a `/btw` fork runs. Model attempts are capped as a
- * delegate child's are, unless the run names a cap. `instructions` add to the
- * run's addendum, and `tools` narrow its tools, keeping `thread.reply`.
+ * and admission, as a `/btw` fork runs. Model attempts are capped, unless
+ * the run names a cap. `instructions` add to the run's addendum, and `tools`
+ * narrow its tools, keeping `thread.reply`.
  */
 const threadAdmission = (starter: StoredSession, input: ThreadStartInput): StoredAdmission => {
   const base: StoredAdmission = Option.match(Option.fromUndefinedOr(input.agent), {
@@ -1343,11 +2026,18 @@ const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number)
 
 interface RoundRequest {
   readonly thread: SessionId
-  readonly place: { readonly sessionId: SessionId; readonly branchId: BranchId }
+  readonly place: Place
   readonly message: string
   readonly reply: Option.Option<string>
   readonly notify: RoundNotify
+  /** A snapshot thread's copy, which the round's text names. */
+  readonly workPlace: Option.Option<WorkPlace>
 }
+
+/** The round a start or a send under `key` admits: the same key, the same round. */
+const roundIdOf = Effect.fn("Threads.roundIdOf")(function* (kind: string, key: string) {
+  return `round-${(yield* identityDigest(kind, key)).slice(0, 16)}`
+})
 
 /**
  * Admits one round under the cap. A retry under the same key is handed the
@@ -1364,7 +2054,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
 ) {
   const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
-  const roundId = `round-${(yield* identityDigest(kind, key)).slice(0, 16)}`
+  const roundId = yield* roundIdOf(kind, key)
   const starter = {
     sessionId: ctx.sessionId,
     branchId: ctx.branchId,
@@ -1394,6 +2084,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
             message: input.message,
             reply: input.reply,
             notify: input.notify,
+            place: input.workPlace,
           }),
         replySpec: input.reply,
         notify: input.notify,
@@ -1414,6 +2105,94 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   return { round: round.round, number: round.number, thread: SessionId.make(round.thread) }
 })
 
+/**
+ * The model and reasoning a thread's session keeps. A session's own model
+ * wins over its agent's, so a named agent gets only what the call names:
+ * otherwise the agent's own (its definition, reshaped by config
+ * `agents.<name>`), else config `model`. A thread with no agent is its
+ * starter's run, model and reasoning included.
+ */
+const threadRoute = (starter: StoredSession, input: ThreadStartInput) =>
+  Option.match(Option.fromUndefinedOr(input.agent), {
+    onNone: () => ({
+      modelId: input.model ?? starter.modelId,
+      reasoningLevel: input.effort ?? starter.reasoningLevel,
+    }),
+    onSome: () => ({ modelId: input.model, reasoningLevel: input.effort }),
+  })
+
+/**
+ * The thread session a start stored, read from storage: the one session
+ * under this starter branch whose cwd is in the start's copy. The copy's path
+ * is named by the start's whole identity, so no other start's thread works
+ * there.
+ */
+const storedThreadIn = Effect.fn("Threads.storedThreadIn")(function* (cwd: string) {
+  const ctx = yield* ExtensionContext
+  const sessions = yield* ctx.Session.listSessions({ thread: ctx.sessionId })
+  return Option.fromUndefinedOr(
+    sessions.find(
+      (session) =>
+        session.parentSessionId === ctx.sessionId &&
+        session.parentBranchId === ctx.branchId &&
+        session.cwd === cwd,
+    ),
+  )
+})
+
+/**
+ * A snapshot thread's copy, made outside the admission permit: a copy runs
+ * its `postcreate` hooks, which can take minutes, and must not hold every
+ * other admission on the server. `precheck` refuses a start past the cap
+ * before the copy is made. The copy's record exists from the first step of
+ * its making. When the start fails or is interrupted (the finalizer on the
+ * start's scope), storage decides what happens to the copy, not what this
+ * fiber saw: core can store the session and then be interrupted before
+ * `Session.create` returns. A stored thread session gets the copy (bound); a
+ * copy is released only when storage shows no session works in it; a check
+ * that fails keeps the copy. The same start (the same key) adopts the copy it
+ * made before.
+ */
+const snapshotPlace = Effect.fn("Threads.snapshotPlace")(function* <E, R>(input: {
+  readonly key: RequestId
+  readonly cwd: string
+  readonly precheck: Effect.Effect<void, E, R>
+}) {
+  const places = yield* Effect.serviceOption(Workspaces)
+  if (Option.isNone(places)) {
+    return yield* new ThreadError({
+      message:
+        "workspace { snapshot: true } needs the @gent/workspaces extension, which is not active for this session",
+    })
+  }
+  yield* input.precheck
+  const start = yield* places.value.locate({ key: input.key, cwd: input.cwd })
+  const acquired = yield* Ref.make(Option.none<string>())
+  yield* Effect.addFinalizer((exit) =>
+    Effect.gen(function* () {
+      if (Exit.isSuccess(exit)) return
+      // No copy yet: `Session.create` never ran, so no session can work in it.
+      const cwd = yield* Ref.get(acquired)
+      let stored = Option.none<{ readonly id: SessionId }>()
+      if (Option.isSome(cwd)) stored = yield* storedThreadIn(cwd.value)
+      if (Option.isSome(stored)) return yield* places.value.bind(start.name, stored.value.id)
+      yield* places.value.release(start.name)
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("threads.workspace.kept").pipe(
+          Effect.annotateLogs({ name: start.name, cause: Cause.pretty(cause) }),
+        ),
+      ),
+    ),
+  )
+  const place = yield* places.value.acquire(start)
+  yield* Ref.set(acquired, Option.some(place.cwd))
+  return {
+    place,
+    bind: (sessionId: SessionId) => places.value.bind(place.name, sessionId),
+  }
+})
+
 const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInput) {
   const ctx = yield* ExtensionContext
   const path = yield* Path.Path
@@ -1432,47 +2211,108 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
   const requestId = RequestId.make(
     `thread:${(yield* identityDigest("thread.create", input.key)).slice(0, 32)}`,
   )
-  const create = ctx.Session.create({
-    name: threadName(input),
-    parentBranchId: ctx.branchId,
-    admission: threadAdmission(starter, input),
-    ...omitUndefined({
-      modelId: input.model ?? starter.modelId,
-      reasoningLevel: input.effort ?? starter.reasoningLevel,
-      cwd: Option.getOrUndefined(
-        Option.map(Option.fromUndefinedOr(input.cwd), (cwd) => path.resolve(ctx.cwd, cwd)),
-      ),
+  const cwd = Option.map(Option.fromUndefinedOr(input.cwd), (dir) => path.resolve(ctx.cwd, dir))
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      // A start with a task is refused past the cap before its copy is made;
+      // a retry has its round already, and the cap does not apply to it.
+      const precheck = Effect.gen(function* () {
+        if (Option.isNone(task)) return
+        const rounds = yield* ThreadRounds
+        if (Option.isSome(yield* rounds.round(yield* roundIdOf("thread.start", input.key)))) return
+        yield* refuseOverCap(yield* runningCap())
+      })
+      // `{ snapshot: true }` is the one workspace a start names today.
+      const snapshot = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
+        onNone: () => Effect.succeedNone,
+        onSome: () =>
+          Effect.asSome(
+            snapshotPlace({
+              key: requestId,
+              cwd: Option.getOrElse(cwd, () => ctx.cwd),
+              precheck,
+            }),
+          ),
+      })
+      const create = ctx.Session.create({
+        name: threadName(input),
+        parentBranchId: ctx.branchId,
+        admission: threadAdmission(starter, input),
+        ...omitUndefined({
+          ...threadRoute(starter, input),
+          cwd: Option.getOrUndefined(
+            Option.orElse(
+              Option.map(snapshot, (found) => found.place.cwd),
+              () => cwd,
+            ),
+          ),
+          historyBranchId: Option.getOrUndefined(
+            Option.map(
+              Option.liftPredicate(input.fork, (fork) => fork === true),
+              () => ctx.branchId,
+            ),
+          ),
+        }),
+        requestId,
+      }).pipe(
+        // The binding names the session that works in the copy; a repeat binds the same one.
+        Effect.tap((created) =>
+          Option.match(snapshot, {
+            onNone: () => Effect.void,
+            onSome: (found) => found.bind(created.sessionId),
+          }),
+        ),
+      )
+      const workPlace = Option.map(snapshot, (found) => ({
+        cwd: found.place.cwd,
+        branch: found.place.branch,
+      }))
+      // With a task, the cap admits the thread before its session is made. A
+      // retry finds its round before the cap and its session after it.
+      const round = yield* Option.match(task, {
+        onNone: () => Effect.succeed(Option.none<typeof RoundHandle.Type>()),
+        onSome: (message) =>
+          admitRound(
+            "thread.start",
+            input.key,
+            Effect.map(create, (created) => ({
+              thread: created.sessionId,
+              place: created,
+              message,
+              reply: Option.none<string>(),
+              notify: input.notify ?? "user",
+              workPlace,
+            })),
+          ).pipe(
+            Effect.map((admitted) =>
+              Option.some({ round: admitted.round, number: admitted.number }),
+            ),
+          ),
+      })
+      const created = yield* create
+      yield* ctx.State.changed().pipe(Effect.ignore)
+      const result: StartResult = {
+        thread: created.sessionId,
+        sessionId: created.sessionId,
+        branchId: created.branchId,
+        ...omitUndefined({
+          round: Option.getOrUndefined(round),
+          workspace: Option.getOrUndefined(
+            Option.map(snapshot, ({ place }) => ({
+              path: place.cwd,
+              branch: place.branch,
+              ...omitUndefined({
+                note: Option.getOrUndefined(
+                  Option.liftPredicate(place.notes.join("; "), (note) => note.length > 0),
+                ),
+              }),
+            })),
+          ),
+        }),
+      }
+      return result
     }),
-    requestId,
-  })
-  // With a task, the cap admits the thread before its session is made. A
-  // retry finds its round before the cap and its session after it.
-  const round = yield* Option.match(task, {
-    onNone: () => Effect.succeed(Option.none<typeof RoundHandle.Type>()),
-    onSome: (message) =>
-      admitRound(
-        "thread.start",
-        input.key,
-        Effect.map(create, (created) => ({
-          thread: created.sessionId,
-          place: created,
-          message,
-          reply: Option.none<string>(),
-          notify: input.notify ?? "user",
-        })),
-      ).pipe(
-        Effect.map((admitted) => Option.some({ round: admitted.round, number: admitted.number })),
-      ),
-  })
-  const created = yield* create
-  yield* ctx.State.changed().pipe(Effect.ignore)
-  const result: StartResult = {
-    thread: created.sessionId,
-    sessionId: created.sessionId,
-    branchId: created.branchId,
-    ...omitUndefined({ round: Option.getOrUndefined(round) }),
-  }
-  return result
+  )
 })
 
 const SendParams = Schema.Struct({
@@ -1498,6 +2338,14 @@ interface ThreadSendInput extends Omit<Schema.Schema.Type<typeof SendParams>, "n
   readonly notify?: RoundNotify
 }
 
+/** The copy a thread's session works in, for its round's text; none without `@gent/workspaces`. */
+const workPlaceOf = Effect.fn("Threads.workPlaceOf")(function* (sessionId: SessionId) {
+  const places = yield* Effect.serviceOption(Workspaces)
+  if (Option.isNone(places)) return Option.none<WorkPlace>()
+  const found = yield* places.value.find(sessionId)
+  return Option.map(found, ({ cwd, branch }): WorkPlace => ({ cwd, branch }))
+})
+
 /** A round to the thread's current session, so it reaches the thread after a handoff. */
 const sendToThread = Effect.fn("Threads.send")(function* (input: ThreadSendInput) {
   const found = yield* ownThread(input.thread)
@@ -1508,13 +2356,14 @@ const sendToThread = Effect.fn("Threads.send")(function* (input: ThreadSendInput
   const admitted = yield* admitRound(
     "thread.send",
     input.key,
-    Effect.succeed({
+    Effect.map(workPlaceOf(found.current.id), (workPlace) => ({
       thread: found.thread,
       place: place.value,
       message: input.message,
       reply: Option.fromUndefinedOr(input.reply),
       notify: input.notify ?? "user",
-    }),
+      workPlace,
+    })),
   )
   return { round: admitted.round, number: admitted.number }
 })
@@ -1529,6 +2378,8 @@ const RoundView = Schema.Struct({
   round: Schema.String,
   thread: Schema.String,
   number: Schema.Finite,
+  /** Who hears its end. */
+  notify: RoundNotify,
   status: Schema.Literals(["open", "ended"]),
   text: Schema.String,
   reply: Schema.NullOr(Schema.Json),
@@ -1536,7 +2387,7 @@ const RoundView = Schema.Struct({
   interrupted: Schema.Boolean,
   streamFailed: Schema.Boolean,
   unanswered: Schema.Boolean,
-  /** A thread.stop closed the round. */
+  /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
   error: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(ChildUsage),
@@ -1552,6 +2403,7 @@ const roundView = (round: RoundRow): RoundView => ({
   round: round.round,
   thread: round.thread,
   number: round.number,
+  notify: round.notify,
   status: roundStatus(round),
   text: Option.getOrElse(Option.fromNullishOr(round.text), () => ""),
   reply: Option.getOrNull(Option.flatMap(Option.fromNullishOr(round.reply_json), decodeReply)),
@@ -1708,6 +2560,13 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     start: (input: ThreadStartInput) => startThread(input).pipe(withRounds),
     send: (input: ThreadSendInput) => sendToThread(input).pipe(withRounds),
     round: (round: string) => readRound(round).pipe(withRounds),
+    /**
+     * A thread's latest round, open or ended, or with `ended` its latest
+     * ended one; none for a thread that took no round. By the thread's key
+     * alone, for a reader that lists every session (the agents view).
+     */
+    lastRound: (thread: string, options: { readonly ended: boolean }) =>
+      Effect.map(rounds.latestRound(thread, options.ended), Option.map(roundView)),
     stop: (thread: string, key: Option.Option<string>) => stopThread(thread, key).pipe(withRounds),
     /**
      * A subscription to every round end this server records, in any place,
@@ -1726,10 +2585,10 @@ type ThreadsApi = ReturnType<typeof makeThreads>
  * Threads for other extensions: start, send, read and stop, with the checks
  * the tools make, and the feed of round ends. A sender that is not a model
  * turn (a machine) sends with `notify: "none"` and reads
- * `subscribeRoundEnds`. Read it with `Effect.serviceOption`, as delegate
- * reads `Workspaces`.
+ * `subscribeRoundEnds`. Read it with `Effect.serviceOption`, as threads
+ * read `Workspaces`.
  *
- * @effect-expect-leaking ExtensionContext | Path | Crypto | FileSystem
+ * @effect-expect-leaking ExtensionContext | Path | Crypto | FileSystem | ChildProcessSpawner
  */
 export class Threads extends Context.Service<Threads, ThreadsApi>()(
   "@gent/extensions/src/threads",
@@ -1751,9 +2610,12 @@ export const ThreadStartTool = tool({
   id: "thread.start",
   resources: [ThreadsResource],
   description:
-    'Start a thread: a new session of its own beside you, and return at admission. With a task, the task is its first round; without one, it waits for thread.send. By default its replies go to the user in that thread and nothing wakes you; with notify "starter" a round\'s end wakes you with a one-line summary.',
-  promptSnippet: "Start a thread: side work, or a long-lived worker",
+    'Start a thread: a new session of its own beside you, and return at admission, never its answer. With a task, the task is its first round; without one, it waits for thread.send. By default its replies go to the user in that thread and nothing wakes you; with notify "starter" a round\'s end arrives as a message that wakes you with the thread\'s answer. For a subagent on one task: agent "delegate", notify "starter".',
+  promptSnippet: "Start a thread: a subagent, side work, or a long-lived worker",
   promptGuidelines: [
+    'Delegate independent, self-contained work with agent "delegate" and notify "starter"; do a single read, search or edit yourself. A thread has no conversation history: give it the whole task, or fork: true when it needs what you already read or decided.',
+    "Start every independent thread from one cell, then end your turn. Do not poll, set an alarm or set a monitor for a thread: each round's end wakes you as a message, and several may arrive over several turns.",
+    'Interrupting your turn stops every notify "starter" round you are waiting for. A new call starts new work: do not repeat a start to recover an unknown outcome; thread.list shows the threads you started.',
     'For a role that lasts several rounds (an implementor, a reviewer), start a thread with agent "worker" and no task, then give it rounds with thread.send.',
   ],
   params: StartParams,
@@ -1861,6 +2723,16 @@ const ThreadRow = Schema.Struct({
   status: Schema.Literals(["running", "idle"]),
   /** The round the thread runs now, if any. */
   openRound: Schema.optionalKey(RoundHandle),
+  /** The thread's latest ended round: how its turn ended, and whether a stop closed it. */
+  lastRound: Schema.optionalKey(
+    Schema.Struct({
+      ...RoundHandle.fields,
+      interrupted: Schema.Boolean,
+      streamFailed: Schema.Boolean,
+      unanswered: Schema.Boolean,
+      stopped: Schema.Boolean,
+    }),
+  ),
   /** The current session's latest reply: one line, or for one named thread its head and tail. */
   preview: Schema.String,
 })
@@ -1885,7 +2757,7 @@ const ThreadListTool = tool({
   id: "thread.list",
   resources: [ThreadsResource],
   description:
-    "List the threads this thread started, from any of its sessions: each one's status, its open round, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
+    "List the threads this thread started, from any of its sessions: each one's status, its open round, its last ended round and how it ended, its current session, and its latest reply. A snapshot; do not call it in a loop to wait for a thread.",
   params: ThreadListParams,
   output: Schema.Array(ThreadRow),
   execute: Effect.fn("ThreadListTool.execute")(function* (params: typeof ThreadListParams.Type) {
@@ -1910,6 +2782,7 @@ const ThreadListTool = tool({
           onSome: () => headTailChars(reply, THREAD_PREVIEW_CHARS).text,
         })
         const open = yield* rounds.openRound(entry.thread)
+        const last = yield* rounds.latestRound(entry.thread, true)
         const row: typeof ThreadRow.Type = {
           thread: entry.thread,
           name: current.name ?? "",
@@ -1921,6 +2794,16 @@ const ThreadListTool = tool({
             agent: current.admission?.agent,
             openRound: Option.getOrUndefined(
               Option.map(open, (round) => ({ round: round.round, number: round.number })),
+            ),
+            lastRound: Option.getOrUndefined(
+              Option.map(last, (round) => ({
+                round: round.round,
+                number: round.number,
+                interrupted: round.interrupted === 1,
+                streamFailed: round.stream_failed === 1,
+                unanswered: round.unanswered === 1,
+                stopped: Predicate.isNotNull(round.stopped_at),
+              })),
             ),
           }),
         }
@@ -1951,10 +2834,18 @@ const ThreadStopTool = tool({
 
 // ── registration ────────────────────────────────────────────────────────────
 
-/** The sessions section's lines for the thread tools, shown where `thread.start` is admitted. */
+/**
+ * The sessions section's lines for the thread tools, shown only where
+ * `thread.start` is admitted: an agent that cannot start threads pays nothing
+ * for them in its cached prompt. A section, not tool guidelines: in a cell
+ * turn the model sees only the cell tool, and tool guidelines stay behind
+ * `tools(id)`.
+ */
 export const THREAD_LINES = [
-  '- Start a thread with thread.start: a new session of its own beside you, for unrelated work or for a long-lived worker (agent "worker"). thread.send gives it rounds, one at a time. A round\'s replies go to the user unless you send it with notify "starter": then its end wakes you, and thread.round reads its text and reply.',
-  "- thread.list shows the threads you started, whether each runs, and its latest reply; read_session reads one in full, and thread.stop stops it. Check on a thread only when the user asks or your work depends on it.",
+  '- Delegate independent, self-contained work to threads: thread.start with agent "delegate" and notify "starter", each from one cell when you work in one, then end your turn. Each round\'s end arrives as a message that wakes you with the answer; do not poll for it. Do a single read, lookup, edit or command yourself.',
+  '- A thread has no conversation history, so give it a whole task; fork: true starts it from your context. workspace { snapshot: true } runs it in its own copy of the working tree, and its work comes back as a branch. Your interrupt stops the notify "starter" rounds you wait for. A new call starts new work.',
+  '- A thread can also be unrelated side work, or a long-lived worker (agent "worker"): thread.send gives it rounds, one at a time. A round\'s replies go to the user unless you send it with notify "starter"; thread.round reads its text and reply.',
+  "- thread.list shows the threads you started, whether each runs, and its last round; read_session reads one in full, and thread.stop stops it. Check on a thread only when the user asks or your work depends on it.",
 ]
 
 /** A hook step that fails logs and ends; the next loop open reconciles what it left. */
@@ -1964,13 +2855,17 @@ const removeSessionRounds = Effect.fn("Threads.sessionDeleted")(function* (sessi
 })
 
 /**
- * The threads' part of `@gent/session-tools`: the worker agent, the tools,
- * the round table, and the hooks that end, deliver and reconcile rounds.
- * Threads share that extension's id, so a thread's messages carry it.
+ * The threads' part of `@gent/session-tools`: the delegate and worker
+ * agents, the tools, the round table, and the hooks that end, deliver,
+ * stop and reconcile rounds. Threads share that extension's id, so a
+ * thread's messages carry it. Its `turnAfter` hook comes before
+ * session-tools' own, so the interrupt stops a starter's rounds before its
+ * `session.send` corrections: a correction that a stopped round took with it
+ * is named once, under the stopped threads.
  */
 export const registerThreads = (host: ExtensionHostService) =>
   Effect.gen(function* () {
-    yield* host.register("agent", workerAgent)
+    yield* host.register("agent", delegateAgent, workerAgent)
     yield* host.register("resource", ThreadsResource)
     yield* host.register(
       "tool",
@@ -1981,11 +2876,39 @@ export const registerThreads = (host: ExtensionHostService) =>
       ThreadListTool,
       ThreadStopTool,
     )
+    // Every turn end is read three times: as a thread's round end, as a
+    // starter's interrupt, and as a starter's answer that read its notices.
+    // Each read fails alone, and a failure has the next turn reconcile.
     yield* host.on("turnAfter", (input) =>
-      onRoundTurnAfter(input).pipe(logFailure("threads.round-end.failed")),
+      Effect.all(
+        [
+          onRoundTurnAfter(input).pipe(logFailure("threads.round-end.failed")),
+          stopStarterRounds(input).pipe(logFailure("threads.interrupt.failed")),
+          clearReadStopNotices(input).pipe(logFailure("threads.stop-notices.clear.failed")),
+        ],
+        { discard: true },
+      ),
     )
     // A restart leaves a round mid-turn, or ended with no record or no
     // delivery. The loop open of its starter's thread, or of the thread, picks it up.
-    yield* host.on("loopOpen", () => reconcileBranch().pipe(logFailure("threads.reconcile.failed")))
+    yield* host.on("loopOpen", () => reconcileOnOpen.pipe(logFailure("threads.reconcile.failed")))
+    // A failed hook step left something for a starter it could not name: each
+    // branch's next turn reconciles once more, then reads its stop notices.
+    yield* host.on("turnProjection", () =>
+      reconcileOnce.pipe(
+        logFailure("threads.reconcile.failed"),
+        Effect.andThen(
+          stopNotices().pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("threads.stop-notices.read.failed").pipe(
+                Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+                Effect.as([]),
+              ),
+            ),
+          ),
+        ),
+        Effect.map((notices) => ({ notices })),
+      ),
+    )
     yield* host.on("sessionDeleted", ({ sessionId }) => removeSessionRounds(sessionId))
   })

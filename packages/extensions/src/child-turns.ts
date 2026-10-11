@@ -1,15 +1,17 @@
 /**
  * A child session's turns, read through the public facade: how one turn
- * ended (`turnEnd`), its bill (`usageOf`, `receiptTotal`), and the messages
- * of the turn one message opened (`startTurnMessages`). A delegate child's
- * start turn and a thread's round are read the same way.
+ * ended (`turnEnd`), its bill (`usageOf`, `receiptTotal`), the messages of
+ * the turn one message opened (`startTurnMessages`), and the calls and time
+ * of those messages (`turnToolLines`, `toolCountsOf`, `turnDuration`). A
+ * thread's round is read this way.
  */
-import { Effect, Option, Record, Schema, Stream } from "effect"
+import { Effect, Option, Predicate, Record, Schema, Stream } from "effect"
 import {
   type AgentEvent,
   type BranchId,
   ExtensionContext,
   isRuntimeUserMessage,
+  type Message,
   type MessageId,
   type SessionId,
   type TurnUsage,
@@ -127,4 +129,75 @@ export const startTurnMessages = <
     .findIndex((message) => message.role === "user" && !isRuntimeUserMessage(message))
   if (end === -1) return messages.slice(start)
   return messages.slice(start, start + 1 + end)
+}
+
+/** One call a turn made, as the round-end row draws it. */
+export const ChildToolLine = Schema.Struct({
+  name: Schema.String,
+  summary: Schema.String,
+  status: Schema.Literals(["completed", "error", "incomplete"]),
+})
+type ChildToolLine = typeof ChildToolLine.Type
+
+/**
+ * The receipts a saved cell result carries under `operations`, read
+ * leniently. The cell extension writes them (`CellOperationReceipt`).
+ */
+const CellReceipts = Schema.Struct({
+  operations: Schema.Array(
+    Schema.Struct({
+      tool: Schema.String,
+      outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
+      summary: Schema.String,
+    }),
+  ),
+})
+const decodeCellReceipts = Schema.decodeUnknownOption(CellReceipts)
+
+const receiptStatus = (outcome: "succeeded" | "failed" | "incomplete"): ChildToolLine["status"] => {
+  if (outcome === "succeeded") return "completed"
+  if (outcome === "failed") return "error"
+  return "incomplete"
+}
+
+/** The calls a turn made, from its saved tool results: a cell's receipts stand for the calls it admitted. */
+export const turnToolLines = (
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Message["parts"][number]> }>,
+): ReadonlyArray<ChildToolLine> =>
+  messages.flatMap((message) =>
+    message.parts.flatMap((part): ReadonlyArray<ChildToolLine> => {
+      if (part.type !== "tool-result") return []
+      const receipts = Option.filter(decodeCellReceipts(part.result), () => part.name === "cell")
+      if (Option.isSome(receipts)) {
+        return receipts.value.operations.map((receipt) => ({
+          name: receipt.tool,
+          summary: receipt.summary,
+          status: receiptStatus(receipt.outcome),
+        }))
+      }
+      let status: ChildToolLine["status"] = "completed"
+      if (part.isFailure) status = "error"
+      return [{ name: part.name, summary: "", status }]
+    }),
+  )
+
+/** Every call by tool and outcome, in the order each pair first ran. */
+export const toolCountsOf = (tools: ReadonlyArray<ChildToolLine>) => {
+  const counts = new Map<string, { name: string; status: ChildToolLine["status"]; count: number }>()
+  for (const tool of tools) {
+    const key = `${tool.name}\u0000${tool.status}`
+    const current = counts.get(key)
+    if (Predicate.isUndefined(current))
+      counts.set(key, { name: tool.name, status: tool.status, count: 1 })
+    else current.count += 1
+  }
+  return Array.from(counts.values())
+}
+
+/** The time a turn took: its first message to its last. */
+export const turnDuration = (messages: ReadonlyArray<{ readonly createdAt: Date }>): number => {
+  const first = messages.at(0)
+  const last = messages.at(-1)
+  if (Predicate.isUndefined(first) || Predicate.isUndefined(last)) return 0
+  return Math.max(0, last.createdAt.getTime() - first.createdAt.getTime())
 }

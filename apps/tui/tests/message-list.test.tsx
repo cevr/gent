@@ -1038,6 +1038,7 @@ describe("transcript message rows", () => {
             message: "Tidy the changelog.",
             reply: Option.none(),
             notify: "user",
+            place: Option.none(),
           }),
           THREAD_ROUND_TYPE,
         )
@@ -1389,6 +1390,7 @@ describe("speaker lanes", () => {
         message: "Tidy the changelog.",
         reply: Option.none(),
         notify: "user",
+        place: Option.none(),
       }),
       {
         customType: THREAD_ROUND_TYPE,

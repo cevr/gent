@@ -33,7 +33,7 @@ import { Hex } from "effect/encoding"
 import {
   ActorCommandId,
   AGENT_PROMPT_PRIORITY,
-  AgentDefinition,
+  type AgentDefinition,
   AgentName,
   BranchId,
   defineExtension,
@@ -61,46 +61,14 @@ import {
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { ChildUsage, receiptTotal, startTurnMessages, turnEnd, usageOf } from "./child-turns.js"
 import { childSessionName } from "./session-names.js"
+import { DELEGATE_AGENT_NAME } from "./threads.js"
 import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
 
-// Test seam: only tests read these exports. DELEGATE_AGENT_NAME and
-// DelegateEntry name the registry's shapes in assertions. StartChild,
+// The `delegate` agent a child runs as is a threads agent now: threads
+// register it. Test seam: only tests read these exports. DelegateEntry names
+// the registry's shapes in assertions. StartChild,
 // CancelChild, ListChildren and ChildAgentHandle are the capabilities and the
 // handle the cell tests drive.
-
-// ── the subagent ────────────────────────────────────────────────────────────
-
-/**
- * A child never delegates. Fan-out is the caller's decision, and a project
- * prompt that addresses "the orchestrator" reaches children too, so without
- * this a worker reads that prompt and spawns its own workers. For the same
- * reason a child never starts a thread: it does bounded work for its
- * parent, not unrelated work of its own.
- */
-const CHILD_TOOL_DENIALS: ReadonlyArray<string> = [
-  "!delegate.start",
-  "!delegate.cancel",
-  "!delegate.list",
-  "!thread.start",
-]
-
-export const DELEGATE_AGENT_NAME = AgentName.make("delegate")
-
-/**
- * The one agent every child runs as. A child inherits neither its caller's
- * agent nor the session's model, only the caller run's bound (its tools and
- * paths never exceed its parent run's). Its model and
- * effort come from this definition, reshaped by `agents.delegate` in
- * `.gent/config.json` (user, then project), and a call's own `overrides`
- * win over both; their `tools` and `paths` only narrow it. That config entry is where a pairing such as
- * fable → opus or opus → sonnet is declared.
- */
-const delegateAgent = AgentDefinition.make({
-  name: DELEGATE_AGENT_NAME,
-  description:
-    "The default subagent: runs one delegated task and cannot delegate further. When blocked in its task turn, it ends the turn with its question; in a later turn, it asks its parent with session.send.",
-  tools: ["*", ...CHILD_TOOL_DENIALS],
-})
 
 // ── registry ────────────────────────────────────────────────────────────────
 
@@ -295,7 +263,7 @@ const completionError = (outcome: ChildOutcome, error: Option.Option<string>) =>
  * the error the turn ended on, so a failure that will repeat (a sign-in, a
  * missing key) reads differently from a flake.
  */
-export const describeChildCompletion = (params: {
+const describeChildCompletion = (params: {
   readonly requestId: RequestId
   readonly agentName: AgentName
   readonly sessionId: SessionId
@@ -1544,7 +1512,6 @@ export const DelegateExtension = defineExtension({
   id: DELEGATE_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("resource", ReconciledBranchesResource)
     yield* host.on("sessionDeleted", ({ branchIds }) => registry.removeBranches(branchIds))

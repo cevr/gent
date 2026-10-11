@@ -93,7 +93,7 @@ const durable = (overrides: {
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
   thread: sid(overrides.thread ?? overrides.session),
-  delegate: false,
+  reportsToStarter: false,
 })
 
 const find = (rows: ReadonlyArray<AgentRow>, session: string, branch: string) =>
@@ -181,16 +181,16 @@ describe("agents view projection", () => {
       expect(rows[0]?.name).toEqual(Option.some("yesterday"))
     })
 
-    test("a delegate child's row says so, and no other row does", () => {
+    test("a thread that reports to its starter says so, and no other row does", () => {
       const rows = reconcileAgentRows({
         live: [],
         durable: [
-          { ...durable({ session: "child", branch: "b" }), delegate: true },
+          { ...durable({ session: "child", branch: "b" }), reportsToStarter: true },
           durable({ session: "main", branch: "b" }),
         ],
       })
-      expect(find(rows, "child", "b")?.delegate).toBe(true)
-      expect(find(rows, "main", "b")?.delegate).toBe(false)
+      expect(find(rows, "child", "b")?.reportsToStarter).toBe(true)
+      expect(find(rows, "main", "b")?.reportsToStarter).toBe(false)
     })
 
     test("does not collapse two branches of one session", () => {
@@ -1002,8 +1002,8 @@ describe("AgentsViewExtension via RPC", () => {
           const row = rows.rows.find((candidate) => candidate["sessionId"] === sessionId)
           expect(row?.["live"]).toBe(true)
           expect(Object.keys(row ?? {})).not.toContain("agent")
-          // Only a delegate child carries the flag.
-          expect(row?.["delegate"]).toBeUndefined()
+          // Only a thread whose latest round reports to its starter carries the flag.
+          expect(row?.["reportsToStarter"]).toBeUndefined()
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

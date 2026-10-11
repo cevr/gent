@@ -15,8 +15,8 @@ import {
   sessionThread,
   tailChars,
 } from "@gent/core/extensions/api"
-import { DELEGATE_AGENT_NAME } from "./delegate.js"
 import { openQuestionCount } from "./interaction-tools.js"
+import { Threads } from "./threads.js"
 
 // Test seam: only tests read these exports. The row shapes (LiveAgentRow,
 // DurableAgentRow, AgentRow) and the row functions (rowKey, sectionOf,
@@ -86,12 +86,12 @@ export interface DurableAgentRow {
   readonly parent: Option.Option<AgentRowKey>
   readonly createdAt: number
   readonly updatedAt: number
-  /** Spawned beside its parent's work (a delegate child or a `/btw` fork), not a handoff. */
+  /** Spawned beside its parent's work (a thread or a `/btw` fork), not a handoff. */
   readonly sideThread: boolean
   /** The thread key (`sessionThread`): a handoff chain shares its first session's id. */
   readonly thread: SessionId
-  /** A delegate child: its completion lands in its parent's transcript. */
-  readonly delegate: boolean
+  /** A thread whose latest round reports to its starter: the round's end lands in the starter's transcript. */
+  readonly reportsToStarter: boolean
 }
 
 /** One reconciled row, ready for display. */
@@ -119,7 +119,7 @@ export interface AgentRow {
   /** The thread key, from the durable row; `None` for a loop with no session row yet. */
   readonly thread: Option.Option<SessionId>
   /** From the durable row; a loop with no session row yet is not marked. */
-  readonly delegate: boolean
+  readonly reportsToStarter: boolean
   /**
    * The loops this row stands for, oldest first. One for a loop; a thread's
    * sessions after `buildRowTree` folds them, the row's own ids the newest's.
@@ -213,7 +213,7 @@ export const reconcileAgentRows = (params: {
       depth: 0,
       sideThread: Option.exists(durable, (row) => row.sideThread),
       thread: Option.map(durable, (row) => row.thread),
-      delegate: Option.exists(durable, (row) => row.delegate),
+      reportsToStarter: Option.exists(durable, (row) => row.reportsToStarter),
       members: [identity.value],
     })
   }
@@ -649,10 +649,11 @@ export const AgentRowEntry = Schema.Struct({
    */
   thread: Schema.optional(SessionId),
   /**
-   * A delegate child, whose completion lands in its parent's transcript; the
+   * A thread whose latest round reports to its starter (`notify:
+   * "starter"`): the round's end lands in the starter's transcript, so the
    * TUI gives it no done row. Absent for any other session.
    */
-  delegate: Schema.optional(Schema.Literal(true)),
+  reportsToStarter: Schema.optional(Schema.Literal(true)),
   /**
    * The sessions of this row's thread, oldest first, when it holds more than
    * one (a handoff chain). The row's own ids are the newest's.
@@ -733,6 +734,28 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
     { concurrency: 8 },
   )
 
+  // Whether each spawned thread's latest round reports to its starter, from
+  // the round table, read once per thread. Without the threads service (no
+  // `@gent/session-tools`) no thread reports. A table read that fails is the
+  // threads' error to show; here the thread counts as not reporting.
+  const threads = yield* Effect.serviceOption(Threads)
+  const reporting = new Set<string>()
+  yield* Option.match(threads, {
+    onNone: () => Effect.void,
+    onSome: (service) =>
+      Effect.forEach(
+        new Set(sessions.filter(isSpawnedSession).map(sessionThread)),
+        (thread) =>
+          service.lastRound(thread, { ended: false }).pipe(
+            Effect.map((round) => {
+              if (Option.exists(round, (found) => found.notify === "starter")) reporting.add(thread)
+            }),
+            Effect.ignore,
+          ),
+        { concurrency: 8, discard: true },
+      ),
+  })
+
   // The durable half. One row per session, keyed to its active branch — a
   // session with no active branch has never run and has no loop to show.
   const durable: ReadonlyArray<DurableAgentRow> = sessions.flatMap((session) => {
@@ -751,12 +774,12 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (root: Option.
         parent,
         createdAt: session.createdAt.getTime(),
         updatedAt: session.updatedAt.getTime(),
-        // A handoff joins its parent's thread. A delegate child or a `/btw` fork
+        // A handoff joins its parent's thread. A thread or a `/btw` fork
         // has a parent and is the session its own thread is named after.
         // A session that names its parent without a branch gets no `parent`.
         sideThread: isSpawnedSession(session),
         thread: sessionThread(session),
-        delegate: session.admission?.agent === DELEGATE_AGENT_NAME,
+        reportsToStarter: reporting.has(sessionThread(session)),
       },
     ]
   })
@@ -818,7 +841,9 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           ),
           sideThread: row.sideThread,
           thread: Option.getOrUndefined(row.thread),
-          delegate: Option.getOrUndefined(Option.liftPredicate(true as const, () => row.delegate)),
+          reportsToStarter: Option.getOrUndefined(
+            Option.liftPredicate(true as const, () => row.reportsToStarter),
+          ),
           sessions: Option.getOrUndefined(
             Option.liftPredicate(
               row.members.map((member) => member.sessionId),

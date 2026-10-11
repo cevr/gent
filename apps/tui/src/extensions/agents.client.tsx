@@ -253,7 +253,8 @@ export const trayLines = (
  * tray says it is done. A delegate child's completion lands in its parent's
  * transcript, so it gets no done row.
  */
-const finishesSilently = (row: AgentRowEntry): boolean => row.sideThread && row.delegate !== true
+const finishesSilently = (row: AgentRowEntry): boolean =>
+  row.sideThread && row.reportsToStarter !== true
 
 export function SubagentTray(props: { controller: AgentsController; place: PathPlace }) {
   const { theme } = useTheme()
