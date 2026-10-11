@@ -211,7 +211,9 @@ export type SessionAccount = typeof SessionAccount.Type
  * The session's account, from its admission and its folded metrics: the
  * pin when the admission names one; else the last step's credential,
  * `assigned` when the newest placement names it and `walked` when not; else
- * the placement, before its first step ends; else none.
+ * none. A placement alone names no account: it is written with the receipt
+ * of a request on it, so a last step with no credential (its selection
+ * failed) leaves the account unknown, never the older placement's.
  */
 export const sessionAccount = (
   admission: Option.Option<SessionAdmission>,
@@ -240,7 +242,7 @@ export const sessionAccount = (
     if (assigned) return Option.some({ provider, slot, placement: "assigned" })
     return Option.some({ provider, slot, placement: "walked" })
   }
-  return Option.map(placement, (placed) => ({ ...placed, placement: "assigned" as const }))
+  return Option.none()
 }
 
 // ── State builders ──────────────────────────────────────────────────────────

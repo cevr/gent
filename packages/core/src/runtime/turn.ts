@@ -924,13 +924,22 @@ interface TurnLedger {
   ) => Effect.Effect<void>
   /**
    * The turn placed its spread walk on `placed.slot`: settled there, the
-   * placement recorded with the first receipt on that account (`takePlacement`).
+   * placement recorded with the receipt of the first request that goes out
+   * on that account (`noteDispatched`, `takePlacement`).
    */
   readonly placeCredential: (provider: string, placed: CredentialDecision) => Effect.Effect<void>
   /**
+   * A request on `slot` of `provider` went out: its stream opened. A
+   * placement waiting on that account can be recorded from now on.
+   */
+  readonly noteDispatched: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
+  /**
    * A step's receipt names `slot` of `provider`: the placement waiting on
-   * that account, recorded with this receipt. Any other waits no more: its
-   * account served no request.
+   * that account, recorded with this receipt once a request went out there.
+   * A receipt whose step never sent its request (stopped, or refused by the
+   * model-call budget, before its stream opened) records nothing, and the
+   * placement goes on waiting. One waiting on another account waits no
+   * more: its account served no request.
    */
   readonly takePlacement: (
     provider: string,
@@ -939,15 +948,20 @@ interface TurnLedger {
 }
 
 /**
- * Where a spread run was placed and why, until a receipt on that account
- * records it (`CredentialAssigned`): a decision whose request never went out
- * records nothing.
+ * Where a spread run was placed and why, until the receipt of a request that
+ * went out on that account records it (`CredentialAssigned`): a decision no
+ * request went out on records nothing.
  */
 interface CredentialDecision {
   readonly slot: CredentialSlot
   /** The slot it preferred, the one that refused it, or the one outside the pool it returned from. */
   readonly from: Option.Option<CredentialSlot>
   readonly reason: CredentialAssigned["reason"]
+}
+
+/** A decision waiting for its receipt, and whether a request went out on its account yet. */
+interface PendingPlacement extends CredentialDecision {
+  readonly dispatched: boolean
 }
 
 /** Where one sign-in's order stands in a turn. */
@@ -963,7 +977,7 @@ interface CredentialCursor {
   /** True once the turn decided where its spread walk starts. */
   readonly settled: boolean
   /** The placement that put the walk at `at`, until a receipt there records it. */
-  readonly pending: Option.Option<CredentialDecision>
+  readonly pending: Option.Option<PendingPlacement>
 }
 
 const cursorOf = (
@@ -1152,14 +1166,27 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           ...cursorOf(current, provider),
           at: Option.some(placed.slot),
           settled: true,
-          pending: Option.some(placed),
+          pending: Option.some({ ...placed, dispatched: false }),
         }),
       ),
+    noteDispatched: (provider, slot) =>
+      Ref.update(cursors, (current) => {
+        const cursor = cursorOf(current, provider)
+        const waiting = Option.filter(cursor.pending, (placed) => placed.slot === slot)
+        if (Option.isNone(waiting) || waiting.value.dispatched) return current
+        return new Map(current).set(provider, {
+          ...cursor,
+          pending: Option.some({ ...waiting.value, dispatched: true }),
+        })
+      }),
     takePlacement: (provider, slot) =>
       Ref.modify(cursors, (current) => {
         const cursor = cursorOf(current, provider)
         if (Option.isNone(cursor.pending)) return [Option.none(), current]
-        const placed = Option.filter(cursor.pending, (decision) => decision.slot === slot)
+        const { dispatched, ...decision } = cursor.pending.value
+        // No request went out on its account yet: it waits for one.
+        if (decision.slot === slot && !dispatched) return [Option.none(), current]
+        const placed = Option.some(decision).pipe(Option.filter(() => decision.slot === slot))
         return [placed, new Map(current).set(provider, { ...cursor, pending: Option.none() })]
       }),
   }
@@ -2030,11 +2057,12 @@ interface RunOrigin {
 }
 
 /**
- * A turn's receipt writer. A placement is a fact of a receipt: the one the
- * turn decided on the receipt's account (`TurnLedger.takePlacement`) is
- * recorded with it (`CredentialAssigned`, then the `StreamEnded`, in one
- * transaction, delivered once both are stored), so a placement always names
- * an account a receipt of its turn names. A receipt with none is a publish.
+ * A turn's receipt writer. A placement is a fact of a sent request's
+ * receipt: the one the turn decided on the receipt's account, once a request
+ * went out there (`TurnLedger.takePlacement`), is recorded with it
+ * (`CredentialAssigned`, then the `StreamEnded`, in one transaction,
+ * delivered once both are stored), so a placement always names an account
+ * the turn sent a request on. A receipt with none is a publish.
  */
 const makePublishReceipt =
   (turnLedger: TurnLedger, storageTransaction: StorageTransaction): PublishReceipt =>
@@ -3664,28 +3692,45 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         model,
         stepWindow.model.hostContextUpdateOptions,
       )
+      // The request goes out as its stream opens, on the credential it
+      // resolved with: a placement waiting on that account can be recorded
+      // with this step's receipt. A step stopped before this point (the stop,
+      // the model-call budget, a sign-in that does not resolve) sent nothing.
+      const dispatched = Effect.flatMap(credential, (sent) =>
+        Effect.forEach(
+          Option.toArray(sent),
+          (receipt) => params.turnLedger.noteDispatched(receipt.provider, receipt.slot),
+          { discard: true },
+        ),
+      )
       if (resolved.tools.length > 0) {
         if (params.finalStep) {
-          return model.streamText({
-            prompt,
-            toolkit: convertTools([...resolved.tools]),
-            toolChoice: "none",
-            disableToolCallResolution: true,
-          })
+          return model
+            .streamText({
+              prompt,
+              toolkit: convertTools([...resolved.tools]),
+              toolChoice: "none",
+              disableToolCallResolution: true,
+            })
+            .pipe(Stream.onStart(dispatched))
         }
         // The reply decodes against every tool the profile registers;
         // `oneOf` keeps the request's declarations to the advertised ones,
         // in their order, so the request is the same bytes.
-        return model.streamText({
-          prompt,
-          toolkit: convertTools([...resolved.replyTools]),
-          toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
-          disableToolCallResolution: true,
-        })
+        return model
+          .streamText({
+            prompt,
+            toolkit: convertTools([...resolved.replyTools]),
+            toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
+            disableToolCallResolution: true,
+          })
+          .pipe(Stream.onStart(dispatched))
       }
       // No tool goes on the request, but the reply can still call one: the
       // tool runner answers it (`Unknown tool: <id>`), as for any step.
-      return model.streamText({ prompt, disableToolCallResolution: true })
+      return model
+        .streamText({ prompt, disableToolCallResolution: true })
+        .pipe(Stream.onStart(dispatched))
     }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
@@ -4430,8 +4475,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * fork, another model, a lapsed lifetime. A warm turn starts on the
      * account its cache is on and records nothing; a turn with a receipt of
      * its own (one recovered after a restart) walks from that receipt's
-     * account and is never placed again at its start; a pinned run is never
-     * placed. The placement is recorded with the first receipt on its
+     * account and is never placed again at its start, unless its order no
+     * longer names that account; a pinned run is never placed. The placement
+     * is recorded with the receipt of the first request that went out on its
      * account (`makePublishReceipt`), never before. A fork takes its
      * parent's account with no ranking, in the pool or not (the parent's own
      * choice). A run whose last request fell outside the pool stands by
@@ -4462,8 +4508,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const pool = order.value.pool.value
       // Settled: an earlier step of the turn, or a receipt of the turn's own
       // before a restart (`resumeCredential`), already said where it walks.
+      // A turn resumed on an account its order no longer names has no
+      // account to go on from: it is placed afresh, as at a turn's start.
       const cursor = yield* scope.turnLedger.credentialPlacement(provider)
-      if (cursor.settled) return false
+      const resumedOffOrder = Option.exists(
+        cursor.resumedAt,
+        (slot) => !order.value.slots.includes(slot),
+      )
+      if (cursor.settled && !resumedOffOrder) return false
       const lastCall = knownSteps.lastCall
       // The cache lives as long as the account that wrote it lists it.
       const lastReceipt = Option.flatMap(lastCall, (call) => call.credential)
