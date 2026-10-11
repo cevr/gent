@@ -55,7 +55,7 @@ plus stale TUI extension mock/doc cleanup.
 - Legacy message substrate no longer appears in the current extension
   API surface. Current authoring entrypoint is the bucketed
   `defineExtension({ id, resources?, tools?, commands?, rpc?, actors?,
-reactions?, modelDrivers?, externalDrivers? })` shape in
+  reactions?, modelDrivers?, externalDrivers? })` shape in
   `/Users/cvr/Developer/personal/gent/packages/core/src/extensions/api.ts`.
 - Architecture now documents the final authoring surface in
   `/Users/cvr/Developer/personal/gent/ARCHITECTURE.md:325`.

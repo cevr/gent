@@ -4,7 +4,7 @@
 
 - **Source**: opens from `plans/WAVE-41-audit-receipt.md`.
 - **Start HEAD**: `22e23c41` (`refactor(runtime): isolate agent loop
-context adapter`).
+  context adapter`).
 - **W41 status**: implementation complete; `bun run gate` passed at
   `22e23c416251db2df219ae1b4674e1aee2b7259a`.
 - **P0**: none.
@@ -340,7 +340,7 @@ context adapter`).
   replay cannot resurrect deleted session results.
 - **C19 migration hardening complete**: the two idempotent `ALTER TABLE`
   helpers now catch only known already-applied SQLite cases (`duplicate
-column name` / `already exists`) instead of swallowing every ALTER
+  column name` / `already exists`) instead of swallowing every ALTER
   failure.
 - **C21 wrapper-call guardrail complete**: `withX(innerCall(...))` and
   `withX(...)(innerCall(...))` now fail custom lint, and existing

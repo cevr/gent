@@ -722,7 +722,7 @@ It judges a call in this order, and the first answer wins:
    subject decides the call, and an allow decides only when every subject is
    allowed. A subject no rule matches leaves the call to the next step. A
    rule without `match` takes every call of its tools: `{ "tool":
-"mcp.computer-use.*", "effect": "ask" }` asks before each call of the
+   "mcp.computer-use.*", "effect": "ask" }` asks before each call of the
    `computer-use` MCP server's tools (the MCP section of `ARCHITECTURE.md`
    shows that server's `plugin` entry).
 2. A `readonly` tool runs.

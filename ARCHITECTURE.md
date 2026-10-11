@@ -897,7 +897,7 @@ Shape:
   in `packages/extensions/src/threads.ts` and register under
   `@gent/session-tools`, so their messages carry that extension id.
   `thread.start({ task?, name?, agent?, model?, effort?, cwd?, instructions?,
-tools?, notify? })` makes a session spawned under the starter (so spawn
+  tools?, notify? })` makes a session spawned under the starter (so spawn
   depth applies) with its own key, fresh context, and the named agent or the
   starter's agent and admission, model and reasoning, a run spec of at most
   32 model attempts; `instructions` add to the run's `systemPromptAddendum`
@@ -910,7 +910,7 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
   `machine.*` and `delegate.*`) is the long-lived thread that takes rounds.
   - A round is one turn on the thread's current session, so it reaches the
     thread after a handoff: `thread.send({ thread, message, reply?, notify?
-})` returns `{ round, number }` at admission (`Session.send` `turn`,
+    })` returns `{ round, number }` at admission (`Session.send` `turn`,
     `completion: "admission"`, command and message id
     `thread-round:<round>`, metadata `customType: "thread-round"` with
     `details.round`, `details.createdBy: "agent"` and the starter). The
@@ -942,7 +942,7 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     goes where the first one went; a saved place whose session was deleted
     since is replaced, once, by the starter thread's current place
     (compare-and-swap on the saved session) (`sourceId:
-"thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
+    "thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
     is the service's own. The one writer that marks it delivered publishes it
     to `Threads.subscribeRoundEnds`: one feed per server, since the threads'
     resource is a server resource, and a thread started with `cwd` runs in
@@ -1006,7 +1006,7 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     never takes the reader's rail). The starter's interrupt does not stop a
     thread, and a thread's unattended turns decline their asks
     (`turnCanAsk`). A delegate child is denied `thread.start`. The `#
-Sessions` prompt section shows its `thread.*` lines only to an agent that
+    Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.
 - A session takes its name from its first user message: at a turn end,
   `@gent/session-tools` renames a session that still has
@@ -1316,8 +1316,8 @@ Sessions` prompt section shows its `thread.*` lines only to an agent that
   carrier like any other effort change. The session metrics keep the newest
   route (`SessionRuntimeMetrics.routed`); while the session runs on that
   virtual model the TUI status row names both (`Auto → Claude Sonnet 5
-(anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
-5`, after the debug mark and the cwd gave way), shows the level in the
+  (anthropic)`; a row too narrow for it takes the short form `Auto → Sonnet
+  5`, after the debug mark and the cwd gave way), shows the level in the
   same order after the routed model's clamp, and reads the context gauge
   against the routed model's window. The effort picker lists the routed
   model's levels, and its `default` row names the route's level.
@@ -1428,7 +1428,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   which the tray, the sessions pane and its completion row head with, is the
   start's optional `name` on one line (at most 80 units), else the first clause
   of its todo's title in whole words, at most 32 units (`Check the greeting
-files`); never the agent's name, since every child runs as `delegate`, and
+  files`); never the agent's name, since every child runs as `delegate`, and
   never the default session name, which marks a session its first message
   still names: a candidate equal to it gives way to the whole title line. A
   thread takes its name by the same rule (`childSessionName` in
@@ -1595,10 +1595,10 @@ files`); never the agent's name, since every child runs as `delegate`, and
   Sections order `needs`, `running`, `idle`, `inactive`; the glyph's shape
   says the state (`●` needs you, the `◇◈◆` pulse running, `○` idle, `·`
   inactive) and a needs row says why (`waiting for an answer`, `1 open
-question`). The title counts each state there is (`Sessions · 1 needs you
-· 2 running`). From 100 terminal columns a details column (40% of the
+  question`). The title counts each state there is (`Sessions · 1 needs you
+  · 2 running`). From 100 terminal columns a details column (40% of the
   width, ruled off in `border`) shows the selected row: name, state, `model ·
-effort`, turns · cost · time, cwd, what it does now or the head of its
+  effort`, turns · cost · time, cwd, what it does now or the head of its
   last answer, and its task. The detail is the one per-row snapshot read
   (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and `lastAnswer`);
   under 100 columns the one-line detail stays. While the session in view
@@ -1734,7 +1734,7 @@ section, no notice. Core has no checkpoint concept.
   it. Only the paths not at their target are examined for what stands in the
   way. Each of those holding a file or a link moves aside first, by rename
   in its own directory to `.gent-aside-<16 hex of sha256(request)>-<16 hex of
-sha256(path)>`; what moved is hashed into the store, and an aside whose
+  sha256(path)>`; what moved is hashed into the store, and an aside whose
   bytes `before` lacks moves the `before` ref (old value checked) to a commit
   of the amended tree with the same message, parent the old `before`; only
   then does the aside go. So the bytes the revert takes are the bytes it
@@ -1757,7 +1757,7 @@ sha256(path)>`; what moved is hashed into the store, and an aside whose
   since its target is a conflict. `Finish` writes an unfinished revert; with
   `overwrite` it writes over later edits too, and its `before` keeps them for
   undo. An undo is a revert record whose marks also carry `Gent-Undoes:
-<request>` (additive: an older store has none). `checkpoints.list` names
+  <request>` (additive: an older store has none). `checkpoints.list` names
   the newest revert as `undo` (with its file count) once done, unless it is
   itself a done undo, which leaves nothing to undo (its undo would redo the
   revert; a turn row does that by name), and `Undo` refuses then too; it

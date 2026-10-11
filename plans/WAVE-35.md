@@ -63,7 +63,7 @@ the highest-ROI P1s before the next independent audit may pass.
     delivery failures _do_ propagate. They are not "silently
     dropped". 2. **`waitFor` would deadlock the existing test.**
     `"steer interject interrupts the active turn ahead of queued
-follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
+    follow-ups"` (`tests/runtime/session-runtime.test.ts:848`)
     submits "first" (gated, in-flight), enqueues "queued", then
     calls `steer` _before_ releasing the gated provider. With
     `send + waitFor`, `waitFor` blocks on actor-handler completion,
@@ -122,7 +122,7 @@ Steer/Queue invariants verified: `agent-loop.state.ts:194-220`
     pure helpers take string paths (`path.join`-resolved before call).
   - **C10.2** `extensions/src/acp-agents/session-manager.ts:79` + `index.ts:221`
     — `createAcpSessionManager(spawner)` → `() => Effect<AcpSessionManager,
-never, ChildProcessSpawner>` that yields internally. Drop the
+    never, ChildProcessSpawner>` that yields internally. Drop the
     `spawnerContext` closure; caller already has `ChildProcessSpawner` in scope.
   - **C10.3** `extensions/src/librarian/repo-explorer.ts:305-321` — drop the
     `files: ExtensionContextService["Files"]` parameter on `getCachePath`; use
@@ -161,7 +161,7 @@ never, ChildProcessSpawner>` that yields internally. Drop the
   preservation; a single 45-site commit would be review-hostile and hide
   regressions:
   - **C14.1** Introduce the replacement helper (`TaggedStruct(wireTag,
-fields)` 20-line variant for the wire-tag mismatch case) and migrate the
+    fields)` 20-line variant for the wire-tag mismatch case) and migrate the
     `schema-tagged-enum-class.test.ts` test surface onto the new API. Lock
     behavioral invariants (guards, `isAnyOf`, `match` semantics) under the
     new shape before any production migration.

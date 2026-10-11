@@ -106,7 +106,7 @@ Worked examples:
   `LOCK_REGISTRY`. Tools whose lock-name sets overlap serialize on
   the overlap; disjoint sets run parallel. (`resources`'s job today.)
 - **Read-safety**: every `Tag` in the registry is annotated `read |
-write | none`. A tool whose `needs` contains zero `write` Tags is
+  write | none`. A tool whose `needs` contains zero `write` Tags is
   read-safe — eligible for parallel sub-agent spawning, sandbox
   fast-path, "audit-only" run modes.
 - **`idempotent`**: derives — read-safe tool with no

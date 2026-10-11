@@ -49,7 +49,7 @@ as P1 because they directly violate documented invariants.
   `core/src/server/errors.ts:52` so one symbol = one meaning.
   (L4-P1-1 + L4-P2-2 ride-along)
 - **C6.5** — Ride-along P2s: delete dead `GentRpcsClient =
-GentRpcClient` alias (`core/src/server/rpcs.ts:199` +
+  GentRpcClient` alias (`core/src/server/rpcs.ts:199` +
   `sdk/src/{client.ts:10,104,index.ts:40}`); drop `publicSetupContext`
   from public api (`core/src/extensions/api.ts:229-231`).
 
@@ -85,7 +85,7 @@ Observability gap.
   the interjected turn has _run_. A `send + waitFor` (or `ref.execute`
   on the persisted Steer) switch deadlocks against the gated-turn
   pattern used by `"steer interject interrupts the active turn ahead
-of queued follow-ups"`
+  of queued follow-ups"`
   (`tests/runtime/session-runtime.test.ts:847`) because the waiter
   blocks on handler completion which can't fire until the in-flight
   turn releases. Re-validated empirically 2026-05-11 (W37-S4-C10):

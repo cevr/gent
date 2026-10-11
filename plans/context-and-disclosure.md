@@ -32,7 +32,7 @@ Inside the cell, a `context` namespace served by host requests, never mid-cell
 for the mutating call:
 
 - `context.status()` returns `{ tokens, limit, percent, omittedMessages,
-compactedRevision }` from the last `ModelContextProjection`.
+  compactedRevision }` from the last `ModelContextProjection`.
 - `context.compact(instructions?)` schedules compaction for the end of the
   current turn with optional user-style instructions, the Prime `compact.run`
   contract. The model rewrites its own context through the instructions, which
@@ -93,7 +93,7 @@ counsel review.
   duration because `ToolCall` in the feed has no timing field; add it when the
   tool-result event carries `durationMs`.
 - S2 shipped 2026-09-08. The cell exposes `context.status()`, `context.read(id,
-{ offset, limit })`, `context.compact(instructions?)`, and `context.newWindow()`
+  { offset, limit })`, `context.compact(instructions?)`, and `context.newWindow()`
   as host calls under the `context.` prefix (`cell-context-host.ts`). A
   branch-owned `ModelContextLedger` records each projection. `turn-source.ts`
   keeps a pending directive until its projection succeeds. The first step of

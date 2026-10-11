@@ -599,12 +599,12 @@ Per Lane 1 #1. Folds in Wave 18 carry-forward C9, C26. Built on
 Why effect-encore and not raw `Entity.make`:
 
 1. Declarative shape. `Actor.fromEntity("AgentLoop", { Submit: {...}, Steer:
-{...}, ... })` replaces the `Schema.Class` + `Rpc.make` + `RpcGroup` +
+   {...}, ... })` replaces the `Schema.Class` + `Rpc.make` + `RpcGroup` +
    `Entity.make` + handler wiring + client service quintet with one object.
 2. Built-in dedup via `id(payload) → primaryKey`. Each loop op (Submit,
    Steer, QueueFollowUp) gets persisted-and-deduped semantics by returning
    `{ entityId: \`${sessionId}${branchId}\`, primaryKey: opPrimaryKey }`from`id`. This replaces gent's hand-rolled
-`agent_loop_checkpoints` dedup logic.
+   `agent_loop_checkpoints` dedup logic.
 3. `peek` / `watch` / `waitFor` on `ExecId` is exactly the
    `awaitIdleStateSince` / `awaitTurnFailure` / `failIfTurnFailedSince`
    shape — gent built that by hand; encore provides it.
@@ -643,7 +643,7 @@ Sub-commits:
   - `interaction_requests` PK `request_id` with type/params/status,
     plus unique partial index
     `idx_interaction_requests_pending_singleton` on `(session_id,
-branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
+    branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
     `agent_loop_checkpoints`** — schema-independent.
   - **Runtime independence is NOT total.** Today's
     persist-then-checkpoint ordering already has a crash window:
@@ -775,21 +775,21 @@ branch_id) WHERE status = 'pending'`. **Not foreign-keyed to
   existing SQLite storage so `Actor.rerun` works: compose
   `effect/unstable/cluster/SqlMessageStorage.layer` (provides upstream
   `MessageStorage`) with a manual `Layer.effect(EncoreMessageStorage,
-…)` that yields the upstream `MessageStorage` plus the gent
+  …)` that yields the upstream `MessageStorage` plus the gent
   `SqlClient` and calls `fromMessageStorage(upstream, { deleteEnvelope })`.
   The captured `sql` runs the two deletes (`cluster_replies`, then
   `cluster_messages`) inside one `sql.withTransaction`, refailing
   `SqlError` as `PersistenceError`. (The `encoreMessageStorageLayer`
   helper expects `deleteEnvelope: (req) => Effect<void,
-PersistenceError>` with no service requirements, so it doesn't fit a
+  PersistenceError>` with no service requirements, so it doesn't fit a
   SQL-backed implementation — manual layer is the right shape.)
   Per encore AGENTS.md: adapters MUST implement `deleteEnvelope` or
   `.rerun` dies loudly. Adapter contract test added at
   `packages/core/tests/runtime/agent/encore-storage.test.ts`. No
   callers yet — C5.2/C5.4 consume it.
 - **C5.2** — Define `AgentLoop = Actor.fromEntity("AgentLoop", { Submit:
-{...}, Steer: {...}, QueueFollowUp: {...}, Interrupt: {...}, Snapshot:
-{...} })`. `id(payload)` returns `{ entityId, primaryKey }` keyed by
+  {...}, Steer: {...}, QueueFollowUp: {...}, Interrupt: {...}, Snapshot:
+  {...} })`. `id(payload)` returns `{ entityId, primaryKey }` keyed by
   `(sessionId, branchId)` for entityId and the op-specific dedup key for
   primaryKey. Schemas live alongside the actor definition. Op shapes
   reuse gent's existing domain (`Message`, `agentOverride`, `RunSpec`,
@@ -805,7 +805,7 @@ PersistenceError>` with no service requirements, so it doesn't fit a
   layer is the manual `EncoreMessageStorageLive` from C5.1 (built via
   `fromMessageStorage` with a captured `SqlClient`, not the helper).
 - **C5.4** — Move loop body into `Actor.toLayer(AgentLoop, { Submit:
-({operation}) => ..., Steer: ..., ... })`. Delete `loopsRef` Map,
+  ({operation}) => ..., Steer: ..., ... })`. Delete `loopsRef` Map,
   `mutationSemaphoresRef` Map, `loopsSemaphore`, per-key
   `Semaphore.make(1)` cache, `LoopHandle` structure, `LoopDriverEvent`
   TaggedEnum, `dispatch` function, `awaitIdleStateSince`,
@@ -840,7 +840,7 @@ PersistenceError>` with no service requirements, so it doesn't fit a
 - **C5.9** — Convert all gent test layers that wrapped `agent-loop` to
   `Actor.toTestLayer(AgentLoop, { ... })`. Delete the bespoke test
   harness. `it.scopedLive.layer(Layer.provide(AgentLoopTest,
-TestShardingConfig))` is the new shape.
+  TestShardingConfig))` is the new shape.
 
 Verification per sub-commit: focused agent-loop tests, recovery/checkpoint
 tests, queue tests, `bun run gate`. C5.4, C5.5, C5.7, C5.8 each run

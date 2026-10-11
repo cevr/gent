@@ -228,7 +228,7 @@ in this order:
 2. Wait up to 5s for in-flight **host requests** to settle
    (`HOST_REQUEST_DISPOSE_TIMEOUT_MS` at `:32`).
 3. `cleanupResources()` in a `finally` — `rejectActiveExecution(new
-Error("Kernel has been shut down"))` at `:1295`, then SIGTERM.
+   Error("Kernel has been shut down"))` at `:1295`, then SIGTERM.
 
 So Prime drains host callbacks but **interrupts the running cell
 unconditionally**. Its own code marks the gap at `:1507`:

@@ -34,7 +34,7 @@ trace-name additions; smallest model can apply the pattern.
 - **C4**: AgentLoopBehavior public methods — wrap each of the ~17
   state-transition methods in `Effect.fn("AgentLoop.<method>")` at
   `packages/core/src/runtime/agent/agent-loop.behavior.ts:192-199,
-502-643, 1214-1311`.
+  502-643, 1214-1311`.
 - **P2 ride-alongs in scope**: L1-P2-3 (`findAgent`/
   `findModelCapability`/`requireAgent` trace names — C4 file
   adjacency), L1-P2-4 (`resolveStoredAgent` trace name — C4 file).
@@ -95,29 +95,29 @@ Closes L9-P1-1, L9-P1-2, L9-P1-3 + W37 carry-overs.
 - **C10**: Demote `SessionRuntime.getState` (twin of S7-C19
   `invokeTool`). Delete from interface + impl. Migrate 6 test
   sites at `packages/core/tests/runtime/session-runtime.test.ts:
-370, 507, 850, 1003, 1034, 1046` to `actorClientFactory +
-entityIdOf(DefaultWorkspaceId, ...)` (pattern at `:568-579`).
+  370, 507, 850, 1003, 1034, 1046` to `actorClientFactory +
+  entityIdOf(DefaultWorkspaceId, ...)` (pattern at `:568-579`).
 - **C11**: Demote `DriverRegistry.requireModel` +
   `requireExternal` at
   `packages/core/src/runtime/extensions/driver-registry.ts:56-59,
-93-112`. Pair-demotion, single commit. Drop 2 test stubs at
+  93-112`. Pair-demotion, single commit. Drop 2 test stubs at
   `packages/core/tests/drivers/driver-registry.test.ts:138-154`.
 - **C12**: Demote `Permission.addRule` + `removeRule` + `getRules`
   at `packages/core/src/domain/permission.ts:63-68, 82-94` +
   `packages/core/src/runtime/profile.ts:111-116`. Collapse 3 test
   describe blocks at `packages/core/tests/domain/permission.test.
-ts:118-180` to direct `ConfigService` calls.
+  ts:118-180` to direct `ConfigService` calls.
   `PermissionService` becomes `{ check }`.
 - **C13** (W37 carry-over): Demote `SessionRuntime.recordToolResult`
   per W37-S7 counsel finding — structurally identical to
   `invokeTool` (pure wrapper over `AgentLoopActor.RecordToolResult.
-make(...)`). Zero non-test callers (7 hits, all in
+  make(...)`). Zero non-test callers (7 hits, all in
   `session-runtime.test.ts`).
 - **C14** (W37 carry-over): `ModelRegistry.refresh` fixture
   redesign — replace 5 test sites with `waitFor(registry.list(),
-predicate)` per test-407 precedent. Then drop `refresh` from
+  predicate)` per test-407 precedent. Then drop `refresh` from
   interface at `packages/core/src/runtime/extensions/
-model-registry.ts:240`.
+  model-registry.ts:240`.
 - **P2 ride-alongs in scope**: L9-P2-1/P2-2/P2-3
   (`listModelCapabilities` / `listAgents` / `listExtensionStatuses`
   — same file, same pattern; demote within C10-C12).
@@ -130,7 +130,7 @@ model-registry.ts:240`.
   `packages/core/src/runtime/ephemeral-root.ts:54, 77, 210, 230`
   references, `packages/core/src/server/dependencies.ts:446`
   wiring, all of `packages/core/tests/runtime/resource-manager.
-test.ts`.
+  test.ts`.
 
 ### S6 — Policy-blocked Promise pyramids (W37 carry-over)
 

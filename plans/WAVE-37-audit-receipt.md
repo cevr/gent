@@ -69,7 +69,7 @@ clean at HEAD `210f737d`:
 - L9-P1-1/2/4: `ExtensionRegistry.listPromptSections` +
   `listFailedExtensions` + `SessionRuntime.invokeTool` deleted
   from interfaces. Tests migrated to `actorClientFactory +
-entityIdOf`. `docs/actor-model.md` clean. ✓
+  entityIdOf`. `docs/actor-model.md` clean. ✓
 
 S8 actorContext capture-once verified clean (L7 + L8 confirmed
 no R-channel occlusion / monotonic widening).
@@ -98,7 +98,7 @@ no R-channel occlusion / monotonic widening).
   wrap each handler in `Effect.fn("AgentLoop.<op>")`.
 - **L1-P1-4** —
   `packages/core/src/runtime/agent/agent-loop.behavior.ts:192-199,
-502-643, 1214-1311` — Public `AgentLoopBehavior` state-transition
+  502-643, 1214-1311` — Public `AgentLoopBehavior` state-transition
   methods (`interruptActiveStream`, `setStartingState`,
   `reserveStartOrQueueFollowUp`, `reserveRunStartOrQueueFollowUp`,
   `takeNextQueuedTurnFromState`, `clearInFlightTurn`,
@@ -139,9 +139,9 @@ were missed by W36 L7 which claimed "0 P0/P1/P2 fully clean".
 
 - **L7-P1-1** —
   `packages/core/src/runtime/agent/agent-loop.behavior.ts:686-687,
-704-705, 974-976, 1080-1081` — `executeTools` helper threads
+  704-705, 974-976, 1080-1081` — `executeTools` helper threads
   `extensionRegistry: ExtensionRegistryService` + `permission:
-PermissionService` as params, then re-provides via
+  PermissionService` as params, then re-provides via
   `Effect.provideService(ExtensionRegistry, params.extensionRegistry)`
   / `Effect.provideService(Permission, params.permission)`. Same
   anti-pattern W33 fixup `8dc38d97` documented for `ToolRunOptions`.
@@ -159,7 +159,7 @@ PermissionService` as params, then re-provides via
   `params.extensionRegistry.extensionReactions.emitTurnAfter(...)`.
   Fix: drop from params; yield `ExtensionRegistry` inside; wrap
   call at line 1097 with `Effect.provideService(ExtensionRegistry,
-turnExtensionRegistry)`.
+  turnExtensionRegistry)`.
 
 ### L9 — Composable-method demotions (3 P1)
 
@@ -174,14 +174,14 @@ turnExtensionRegistry)`.
   `session-runtime.test.ts:568-579`).
 - **L9-P1-2** —
   `packages/core/src/runtime/extensions/driver-registry.ts:56-59,
-93-112` — `requireModel` + `requireExternal` are pure
+  93-112` — `requireModel` + `requireExternal` are pure
   error-wrapping over `getModel`/`getExternal`. ZERO production
   callers (production sites at `model-resolver.ts:59`,
   `provider-auth.ts:89,129`, `turn-helpers.ts:293,570` use
   `getModel`/`getExternal` directly + undefined check). Tests only.
   Fix: delete both from interface + impl; drop 2 test stubs.
 - **L9-P1-3** — `packages/core/src/domain/permission.ts:63-68,
-82-94`, `packages/core/src/runtime/profile.ts:111-116` —
+  82-94`, `packages/core/src/runtime/profile.ts:111-116` —
   `Permission.addRule` + `removeRule` + `getRules` are pure
   adaptors over `ConfigService.addPermissionRule` /
   `removePermissionRule` / `get + concat`. ZERO production callers
@@ -209,7 +209,7 @@ turnExtensionRegistry)`.
 ### L2 — Actor + wide-event (3 P2)
 
 - L2-P2-1: `packages/core/src/server/rpc-handlers.ts:443-509,
-536-560` — Config/auth/driver RPC writes (permission.deleteRule,
+  536-560` — Config/auth/driver RPC writes (permission.deleteRule,
   driver.set/clear, auth.setKey/deleteKey/authorize/callback)
   mutate persistent state without `withWideEvent(rpcBoundary(...))`.
 - L2-P2-2:
@@ -254,8 +254,8 @@ turnExtensionRegistry)`.
 ### L5 — Test taxonomy (3 P2)
 
 - L5-P2-1: `apps/tui/tests/extension-lifecycle.test.ts:59,82,100,
-133,162,180,208,237,251,252,270` — 11 sites use `Effect.sleep
-("0 millis")` as state-transition gate. Pre-W37 violation.
+  133,162,180,208,237,251,252,270` — 11 sites use `Effect.sleep
+  ("0 millis")` as state-transition gate. Pre-W37 violation.
 - L5-P2-2: `apps/tui/tests/atom-solid.test.ts:26`,
   `apps/tui/tests/use-session-feed.test.tsx:41`,
   `apps/tui/tests/child-session-tracker.test.ts:34` — same pattern
@@ -267,7 +267,7 @@ turnExtensionRegistry)`.
 ### L6 — File cohesion (5 P2)
 
 - L6-P2-1: `packages/core/tests/extensions/host-facet-survivors.
-test.ts:106` — file/describe name encodes W33-C9.5 migration.
+  test.ts:106` — file/describe name encodes W33-C9.5 migration.
 - L6-P2-2: Hand-rolled tagged unions in TUI src + repo-explorer
   (`prompt-search-state.ts:4-12`, `session-ui-state.ts:23-33`,
   `composer-state.ts:21-22`, `prompt-search-flow.ts:4`,
@@ -289,40 +289,40 @@ test.ts:106` — file/describe name encodes W33-C9.5 migration.
 
 - L7-P2-1: `packages/core/src/server/rpc-handlers.ts:71-74` +
   `packages/core/src/runtime/make-extension-host-context.ts:51,
-392` carry `ExtensionRegistryService` as a record field in
+  392` carry `ExtensionRegistryService` as a record field in
   `ResolvedSessionServices` / host-ctx deps. Profile-scoped
   registry Tag would be cleaner.
 - L7-P2-2: `packages/core/src/runtime/session-runtime-context.ts:
-19-52` — `SessionEnvironment` / `SessionEnvironmentDefaults`
+  19-52` — `SessionEnvironment` / `SessionEnvironmentDefaults`
   carry three service interfaces as record fields. Once L7 P1s
   fix, emit `Layer.Layer<ExtensionRegistry | DriverRegistry |
-Permission>` instead of an interface-bag.
+  Permission>` instead of an interface-bag.
 
 ### L8 — Yield-don't-thread (4 P2)
 
 - L8-P2-1: `packages/core/src/runtime/agent/agent-loop.behavior.
-ts:704-705, 755-757, 1023-1026` — `runTurn` stacks 2-3
+  ts:704-705, 755-757, 1023-1026` — `runTurn` stacks 2-3
   `Effect.provideService` calls at three leaves. Capture-once
   `turnContext` bag mirroring W37-S8 actorContext.
 - L8-P2-2: `packages/core/src/runtime/agent/agent-loop.actor.ts:
-1078-1081` — `InvokeTool` handler stacks
+  1078-1081` — `InvokeTool` handler stacks
   `Effect.provideService(ExtensionRegistry)` +
   `Effect.provideService(Permission)`. Hoist into shared
   `provideTurnEnvironmentServices` helper.
 - L8-P2-3: `packages/core/src/runtime/make-extension-host-context.
-ts:345-389` — `withAmbientHostContextOverrides` conditionally
+  ts:345-389` — `withAmbientHostContextOverrides` conditionally
   pipes up to 12 `Effect.provideService` calls. Build single
   `Context` snapshot then `Effect.provide`.
 - L8-P2-4: `packages/extensions/src/anthropic/credential-service.
-ts:220-225` — `provideIO` stacks 4 `Effect.provideService` calls
+  ts:220-225` — `provideIO` stacks 4 `Effect.provideService` calls
   invoked repeatedly. Precompute `ioContext` once.
 
 ### L9 — Method demotions (3 P2 + 1 dead-API note)
 
 - L9-P2-1: `packages/core/src/runtime/extensions/registry.ts:498,
-524` — `listModelCapabilities` is `Effect.succeed([...resolved.
-modelCapabilities.values()])`. Demote to `getResolved().
-modelCapabilities` reads.
+  524` — `listModelCapabilities` is `Effect.succeed([...resolved.
+  modelCapabilities.values()])`. Demote to `getResolved().
+  modelCapabilities` reads.
 - L9-P2-2: same file `:507, 534` — `listAgents` is the same shape
   over `resolved.agents`.
 - L9-P2-3: same file `:510, 535` — `listExtensionStatuses` is a

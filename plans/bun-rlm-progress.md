@@ -46,8 +46,8 @@ and the evidence.
   state was lost" twice. Fail, fixed in `308b5b47` (below).
 - Delegation: the `explore` and `reviewer` children ended with "model stream
   failed". Headless reproduction: `OpenAiClient.createResponseStream:
-TransportError: Failed to refresh ChatGPT OAuth credentials: Token refresh
-failed: 401`. Environment, not product: the OpenAI OAuth token in
+  TransportError: Failed to refresh ChatGPT OAuth credentials: Token refresh
+  failed: 401`. Environment, not product: the OpenAI OAuth token in
   `~/.gent/auth` is expired and both agents use OpenAI models. The `architect`
   child (Anthropic) failed with "Invalid request. Schema is too complex."
   Fail, fixed in `e710ac3f`; after the fix the architect child answered
@@ -61,7 +61,7 @@ failed: 401`. Environment, not product: the OpenAI OAuth token in
   switched to it. `typeof rows` is `undefined` on the new branch and
   `alpha+beta` again after switching back. Branch-owned namespaces. Pass.
 - Handoff: `/handoff` produced the summary prompt. "Yes" returned `handoff:
-true` and nothing created a session. Fail, fixed in `d3128b47`; after the
+  true` and nothing created a session. Fail, fixed in `d3128b47`; after the
   fix the TUI opened a session linked to the parent (`parent_session_id` set
   in `sessions`), seeded with the summary, and the model replied there. Pass.
 - Worker crash: `tools.call.constructor('process.exit(7)')()` returned
