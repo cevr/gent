@@ -252,7 +252,10 @@ const ToolNotify = Schema.Literals(["user", "starter"]).annotate({
  * round's end reaches after a handoff. `reply_spec` is the value the round
  * asked for and `reply_json` the last `thread.reply`. `stopped_at` is set by
  * a `thread.stop` that closed the round. The end fields are NULL while the
- * round is open; the flags are 0 or 1.
+ * round is open; the flags are 0 or 1. `wake_session_id` and
+ * `wake_branch_id` are where a `starter` round's end wakes its starter,
+ * saved before the wake is sent, so a second delivery goes where the first
+ * one went.
  */
 const RoundRow = Schema.Struct({
   round: Schema.String,
@@ -277,6 +280,8 @@ const RoundRow = Schema.Struct({
   unanswered: Schema.Finite,
   error: Schema.NullOr(Schema.String),
   usage_json: Schema.NullOr(Schema.String),
+  wake_session_id: Schema.NullOr(Schema.String),
+  wake_branch_id: Schema.NullOr(Schema.String),
   delivered_at: Schema.NullOr(Schema.Finite),
 })
 type RoundRow = typeof RoundRow.Type
@@ -364,6 +369,14 @@ interface ThreadRoundsService {
   /** Records the end once: the first writer wins, a later one changes nothing. */
   readonly endRound: (round: string, end: RoundEnd) => Effect.Effect<void, ThreadStorageError>
   readonly markStopped: (round: string, at: number) => Effect.Effect<void, ThreadStorageError>
+  /** Saves where the end wakes the starter; the first writer wins. Returns the saved place. */
+  readonly saveWakeTarget: (
+    round: string,
+    place: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  ) => Effect.Effect<
+    Option.Option<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+    ThreadStorageError
+  >
   /** True for the one writer that marked it: that writer publishes the end. */
   readonly markDelivered: (round: string, at: number) => Effect.Effect<boolean, ThreadStorageError>
   /** The rounds a branch owes or is owed: undelivered, sent by its thread or run on it. */
@@ -457,6 +470,8 @@ const threadRoundsMigration = Effect.gen(function* () {
         unanswered INTEGER NOT NULL DEFAULT 0,
         error TEXT,
         usage_json TEXT,
+        wake_session_id TEXT,
+        wake_branch_id TEXT,
         delivered_at INTEGER
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
@@ -630,6 +645,18 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
             `
           },
           Effect.mapError(storageError("Failed to mark the round stopped")),
+        ),
+
+        saveWakeTarget: Effect.fn("ThreadRounds.saveWakeTarget")(
+          function* (round, place) {
+            yield* sql`
+              UPDATE thread_rounds
+              SET wake_session_id = ${place.sessionId}, wake_branch_id = ${place.branchId}
+              WHERE round = ${round} AND wake_session_id IS NULL
+            `
+            return Option.flatMap(yield* selectRound(round), wakeTargetOf)
+          },
+          Effect.mapError(storageError("Failed to save the wake target")),
         ),
 
         markDelivered: Effect.fn("ThreadRounds.markDelivered")(
@@ -861,6 +888,19 @@ const admitted = Effect.fn("Threads.admitted")(function* (round: RoundRow) {
   return messages.some((message) => message.id === round.message_id)
 })
 
+/** The place a round's end wakes, once one was saved. */
+const wakeTargetOf = (round: RoundRow) =>
+  Option.map(
+    Option.all({
+      sessionId: Option.fromNullishOr(round.wake_session_id),
+      branchId: Option.fromNullishOr(round.wake_branch_id),
+    }),
+    (place) => ({
+      sessionId: SessionId.make(place.sessionId),
+      branchId: BranchId.make(place.branchId),
+    }),
+  )
+
 /**
  * Where a round's end wakes its starter: the starter thread's current
  * session, so a starter that handed off reads it in its new session. The
@@ -888,9 +928,23 @@ const starterPlace = Effect.fn("Threads.starterPlace")(function* (round: RoundRo
 })
 
 /**
+ * The place a round's end wakes, saved before the first wake is sent. The
+ * wake's message id derives from its source id and the place it lands, so a
+ * delivery after a crash and a handoff of the starter would land a second
+ * wake on the handoff; the saved place sends it where the first one went.
+ */
+const wakeTarget = Effect.fn("Threads.wakeTarget")(function* (round: RoundRow) {
+  const rounds = yield* ThreadRounds
+  const saved = wakeTargetOf(round)
+  if (Option.isSome(saved)) return saved.value
+  const place = yield* starterPlace(round)
+  return Option.getOrElse(yield* rounds.saveWakeTarget(round.round, place), () => place)
+})
+
+/**
  * Hands a recorded end to whoever hears it. A `starter` round wakes the
- * starter with the line, once: the message id derives from the source id,
- * so a second delivery after a crash is a no-op. A round `thread.stop`
+ * starter with the line, once: the message id derives from the source id
+ * and the saved place, so a second delivery after a crash is a no-op. A round `thread.stop`
  * closed wakes nobody: its stopper knows. Every end is then marked
  * delivered, and the one writer that marked it publishes it.
  */
@@ -898,7 +952,7 @@ const deliverRoundEnd = Effect.fn("Threads.deliverRoundEnd")(function* (round: R
   const ctx = yield* ExtensionContext
   const rounds = yield* ThreadRounds
   if (round.notify === "starter" && Predicate.isNull(round.stopped_at)) {
-    const place = yield* starterPlace(round)
+    const place = yield* wakeTarget(round)
     yield* ctx.Session.send({
       delivery: "queue",
       ...place,

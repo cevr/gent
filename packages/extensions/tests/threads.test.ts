@@ -1608,4 +1608,72 @@ describe("a thread round running when the server stopped", () => {
       ),
     45_000,
   )
+
+  it.live(
+    "a wake sent before the process died is not sent again to the starter's handoff",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              const starter: SessionKey = yield* client.session.create({})
+              const impl = yield* startWorker(client, starter, "start-impl")
+              const [sent] = yield* call(client, starter, [
+                [
+                  "thread.send",
+                  "send-once",
+                  { thread: impl.thread, message: "ECHO woke once", notify: "starter" },
+                ],
+              ])
+              yield* waitForWakes(client, starter, 1)
+              return { starter, round: decodeRound(sent?.result) }
+            }),
+          )
+          // The process died after the wake, before the end was marked delivered.
+          const undelivered = (round: string) =>
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql<{
+                readonly delivered: number
+              }>`SELECT delivered_at IS NOT NULL AS delivered FROM thread_rounds WHERE round = ${round}`
+            })
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`UPDATE thread_rounds SET delivered_at = NULL WHERE round = ${first.round.round}`
+            }),
+          )
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const { client } = yield* createRpcClient(home.layerFor(workerModels()))
+              // The starter hands off; the handoff's loop open delivers the end again.
+              const handoff: SessionKey = yield* client.session.create({
+                parentSessionId: first.starter.sessionId,
+                parentBranchId: first.starter.branchId,
+                continueThread: true,
+              })
+              yield* client.session.getSnapshot(handoff)
+              yield* waitFor(
+                home.sql(undelivered(first.round.round)),
+                (rows) => rows[0]?.delivered === 1,
+                8_000,
+                "the handoff's reconcile delivered the round",
+              )
+              const moved = yield* waitFor(
+                client.session.getSnapshot(handoff),
+                (current) => current.runtime._tag === "Idle",
+                8_000,
+                "the handoff is idle",
+              )
+              expect(wakes(moved.messages)).toEqual([])
+              const starter = yield* client.session.getSnapshot(first.starter)
+              expect(wakes(starter.messages)).toHaveLength(1)
+            }),
+          )
+        }).pipe(Effect.timeout("40 seconds")),
+      ),
+    45_000,
+  )
 })
