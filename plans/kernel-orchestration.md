@@ -54,7 +54,7 @@ The orchestrator starts one run per unit, orders units by their dependencies, an
 
 - Children wake, never block: no host call holds a turn open for a round. A wait is a durable program's suspension or a wake message.
 - Lean core: every primitive is an extension on `@gent/core/extensions/api`, except where core lacks the capability (P4's server-wide permits, P5's credential pin), and then core gains a general verb, not a feature.
-- Persisted formats change only additively.
+- Persisted formats: this plan is exempt, with no compatibility kept (owner, 2026-10-11; see P1b).
 - One concern per file: `threads.ts`, `machines.ts`, each with section banners.
 - Child sessions cache 5 minutes unless their agent keeps the session cache: worker threads are the long-lived case and keep it.
 - Ambiguous side effects are never replayed: a crashed command becomes an `ask` (P3).
@@ -65,7 +65,7 @@ The orchestrator starts one run per unit, orders units by their dependencies, an
 
 The worker primitive is the existing **thread**, improved, not a new "seat" concept (owner, 2026-10-11). A thread already is a child session the starter lists and stops, and its key, the first session's id, survives handoffs. That is what a long-lived worker needs: when its context fills, it hands off and keeps its address. Today a thread is fire-and-forget: it runs as the starter, its replies go to the user, and nothing wakes the starter. It gains:
 
-- **`thread.start({ task?, name?, model?, effort?, cwd?, instructions?, tools?, agent?, notify?, account? })`**. Every new field is optional, and the defaults are today's behaviour.
+- **`thread.start({ task?, name?, model?, effort?, cwd?, instructions?, tools?, agent?, notify?, account? })`**. Defaults are chosen for the cleanest surface; today's behaviour need not survive (no compatibility, see P1b).
   - With no `task` it opens a thread and sends nothing (a worker waiting for its first round).
   - `agent` picks a registered agent. gent registers **`worker`**: `promptCache: "session"`, and tools that deny `thread.start`, `thread.stop`, `machine.*` and `delegate.*`. Owner rule: a long-lived seat that waits between turns keeps the session cache.
   - `instructions` becomes the run's `systemPromptAddendum`. The create's `requestId` stays `thread:<toolCallId>`.
@@ -87,18 +87,17 @@ The worker primitive is the existing **thread**, improved, not a new "seat" conc
 
 A delegate child is a thread: one round on the `delegate` agent, ending with a wake to its starter, and optionally run on a snapshot copy with the parent's history forked in. So `delegate.*` goes, and the thread surface takes the options it alone had:
 
-| `delegate` today                                                   | After the fold                                                                                                                   |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `delegate.start({ task, overrides, isolation: "snapshot", fork })` | `thread.start({ task, agent: "delegate", notify: "starter", workspace: { snapshot: true }, fork: true, model?, effort?, ... })`  |
-| `delegate.list` (`completed` is a turn receipt)                    | `thread.list`, with each thread's open and last round                                                                            |
-| `delegate.cancel`                                                  | `thread.stop`                                                                                                                    |
-| the per-branch JSON registry (`makeBranchStateStore`)              | `thread_rounds`                                                                                                                  |
-| `CHILD_TOOL_DENIALS`                                               | the `delegate` agent's tool denials: `thread.start`, `thread.stop`, `machine.*`                                                  |
-| 4 unfinished children per branch, and 4 running threads            | one cap: open rounds per starter branch                                                                                          |
-| completion message `customType: "child-completion"`                | unchanged: a `notify: "starter"` round end uses the same `customType`, so stored transcripts and the TUI renderer read as before |
+| `delegate` today                                                   | After the fold                                                                                                                  |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `delegate.start({ task, overrides, isolation: "snapshot", fork })` | `thread.start({ task, agent: "delegate", notify: "starter", workspace: { snapshot: true }, fork: true, model?, effort?, ... })` |
+| `delegate.list` (`completed` is a turn receipt)                    | `thread.list`, with each thread's open and last round                                                                           |
+| `delegate.cancel`                                                  | `thread.stop`                                                                                                                   |
+| the per-branch JSON registry (`makeBranchStateStore`)              | `thread_rounds`                                                                                                                 |
+| `CHILD_TOOL_DENIALS`                                               | the `delegate` agent's tool denials: `thread.start`, `thread.stop`, `machine.*`                                                 |
+| 4 unfinished children per branch, and 4 running threads            | one cap: open rounds per starter branch                                                                                         |
+| completion message `customType: "child-completion"`                | `customType: "thread-round-end"`, one renderer for every round end                                                              |
 
-- **Persisted format**: the delegate registry files stop being read or written, and their state moves to `thread_rounds`. This is the one non-additive change in the plan, and the owner asked for it (2026-10-11). Personal library, no shims: a delegate child unfinished at the upgrade does not report back, so finish or cancel children before upgrading. Stored sessions, messages and the completion `customType` are untouched.
-- **Old transcripts** keep their `delegate.start` calls. A resumed turn re-delivers results from `tool_call_bindings` and never reruns a tool, so they read as before.
+- **No compatibility** (owner, 2026-10-11: gent has had little use). Registry files, tool names, `customType`s and thread defaults change freely, with no migration, shim or fallback renderer. This plan is exempt from the owner rule on additive-only persisted formats.
 - **Commits**, each green on the gate:
   1. threads gain `agent`, `workspace.snapshot`, `fork` and the starter completion, with delegate's tests ported;
   2. `delegate.ts` and its tools go, and core references move (`agent.ts`, `capability.ts`, `message.ts`, `server.ts`, `provider.ts`);
