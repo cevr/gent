@@ -1,5 +1,7 @@
 # Tracks extension — design
 
+> Superseded by [kernel-orchestration.md](kernel-orchestration.md) (owner, 2026-10-10): primitives composed in the cell kernel replace this extension.
+
 Date: 2026-10-10. Author: Claude, from source read at gent `191b9c4c5` and dotfiles `b1ce469` (baton).
 Status: proposed. G1, G2 and G3's catalog check are done (`ca5e999d4`); the release (G8) is deferred by the owner (2026-10-10).
 

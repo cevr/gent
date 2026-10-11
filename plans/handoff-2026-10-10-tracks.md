@@ -1,5 +1,7 @@
 # Handoff: tracks, gent as the orchestration harness (2026-10-10)
 
+> Superseded by [kernel-orchestration.md](kernel-orchestration.md) (owner, 2026-10-10).
+
 Written by Claude at the end of the dotfiles session `9dad17b6-dc2f-457b-9042-5ad4ee9553a8`, which built baton, ran the loop retro and drafted the tracks plan. Read this instead of that thread. The design is [tracks-extension.md](tracks-extension.md); this file says where things stand and what to do first.
 
 ## Where things are
