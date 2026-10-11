@@ -2462,6 +2462,11 @@ describe("credential order", () => {
     readonly cacheTtlMs?: number
     /** The cache lifetime a subscription sign-in lists; default `cacheTtlMs`. */
     readonly subscriptionCacheTtlMs?: number
+    /** Answers every request by its credential and prompt, in place of `replies`. */
+    readonly respond?: (
+      credential: string,
+      prompt: Prompt.Prompt,
+    ) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
   }
 
   /**
@@ -2519,12 +2524,14 @@ describe("credential order", () => {
         Effect.sync(() => {
           const credential = credentialOf(Option.fromUndefinedOr(authInfo))
           resolvedWith.push(credential)
-          const providerLayer = LanguageModelLayers.testStream(() =>
+          const providerLayer = LanguageModelLayers.testStream((options) =>
             Effect.sync(() => {
               sent.push(credential)
               if (params.reorder?.on === credential) setOrder(params.reorder.order)
               const call = calls.get(credential) ?? 0
               calls.set(credential, call + 1)
+              if (Predicate.isNotUndefined(params.respond))
+                return params.respond(credential, Prompt.make(options.prompt))
               const reply = params.replies[credential]
               if (Predicate.isUndefined(reply)) return Stream.die(`no reply for ${credential}`)
               return reply(call)
@@ -4106,10 +4113,9 @@ describe("credential order", () => {
           const events = yield* eventsOf(world, root)
           expect(root.sent).toEqual(["sk-a", "sk-c", "sk-c"])
           expect(slotsOf(events)).toEqual([c, c])
-          expect(placementsOf(events)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: c, reason: "refused", from: a },
-          ])
+          // a served no request: its placement is never recorded, only the
+          // move with the receipt on c.
+          expect(placementsOf(events)).toEqual([{ slot: c, reason: "refused", from: a }])
           expect(credentialReport(events).errors).toEqual([
             {
               error: `Credential "a" of ${FALLBACK} is rate limited; continuing with "c"`,
@@ -4298,33 +4304,52 @@ describe("credential order", () => {
       })
 
     it.live(
-      "a turn recovered after a refusal moved it, before the new account's first receipt, resumes on the account it moved to",
+      "a turn recovered after a refusal moved it, before the new account's first receipt, resumes on its newest receipt's account and records only a move that has a receipt",
       () =>
         Effect.gen(function* () {
-          const world = yield* spreadWorld
-          const out = yield* Deferred.make<void>()
-          // The turn is placed on a; its tool step runs there, and the step
-          // after it is refused and moves to b, where the process dies.
-          const first = spreadRoot(world, "recovered-refused", {
-            replies: {
-              "sk-a": toolStepThen(2, () => refusal()),
-              "sk-b": dyingRequest(out),
-            },
-          })
-          const second = spreadRoot(world, "recovered-refused")
-          const events = yield* dieAndRecover(world, first, second, out)
-          expect(first.sent).toEqual(["sk-a", "sk-a", "sk-b"])
-          // Not back on a, the account the move left, whose hold died with the process.
-          expect(second.sent).toEqual(["sk-b"])
-          expect(placementsOf(events)).toEqual([
+          /**
+           * The turn is placed on a; its tool step runs there, and the step
+           * after it is refused and moves to b, where the process dies. The
+           * restart answers on a as `afterRestart` says.
+           */
+          const recover = (name: string, afterRestart: Reply) =>
+            Effect.gen(function* () {
+              const world = yield* spreadWorld
+              const out = yield* Deferred.make<void>()
+              const first = spreadRoot(world, name, {
+                replies: {
+                  "sk-a": toolStepThen(2, () => refusal()),
+                  "sk-b": dyingRequest(out),
+                },
+              })
+              const second = spreadRoot(world, name, {
+                replies: { "sk-a": afterRestart, "sk-b": answer("from b") },
+              })
+              const events = yield* dieAndRecover(world, first, second, out)
+              expect(first.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+              return { sent: second.sent, events }
+            })
+          // a still refuses: the recovered step starts on a, its newest
+          // receipt's account, moves to b at once, and records the move with
+          // b's receipt.
+          const refusing = yield* recover("recovered-refused", () => refusal())
+          expect(refusing.sent).toEqual(["sk-a", "sk-b"])
+          expect(slotsOf(refusing.events)).toEqual([a, b])
+          expect(placementsOf(refusing.events)).toEqual([
             { slot: a, reason: "new", from: "none" },
             { slot: b, reason: "refused", from: a },
           ])
+          // a answers again: the step stays on a, and the move the crash cut
+          // off, which no receipt shows, is never recorded.
+          const answering = yield* recover("recovered-refused-answers", answer("from a"))
+          expect(answering.sent).toEqual(["sk-a"])
+          expect(slotsOf(answering.events)).toEqual([a, a])
+          expect(placementsOf(answering.events)).toEqual([{ slot: a, reason: "new", from: "none" }])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
     it.live(
-      "a turn recovered after a handoff placed it, before the new account's first receipt, resumes on the placed account",
+      "a turn recovered after a handoff placed it, before the placed account's first receipt, resumes on its newest receipt's account and records no placement",
       () =>
         Effect.gen(function* () {
           const world = yield* spreadWorld
@@ -4357,11 +4382,11 @@ describe("credential order", () => {
               return [event.compacted]
             }),
           ).toEqual([false, true, false])
-          expect(second.sent).toEqual(["sk-b"])
-          expect(placementsOf(events)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "compacted", from: a },
-          ])
+          // The decision for b never went out: the recovered turn reads its
+          // receipts, the newest on a, and goes on there.
+          expect(second.sent).toEqual(["sk-a"])
+          expect(slotsOf(events)).toEqual([a, a])
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "new", from: "none" }])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -4402,12 +4427,9 @@ describe("credential order", () => {
           const events = yield* eventsOf(world, root)
           expect(root.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-a", "sk-a"])
           expect(slotsOf(events)).toEqual([c, c, a, a])
-          // The fall to c is the order's walk, not a placement.
-          expect(placementsOf(events)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-            { slot: a, reason: "returned", from: c },
-          ])
+          // The fall to c is the order's walk, not a placement, and a and b,
+          // which refused, served no request: the return alone is recorded.
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "returned", from: c }])
         }).pipe(
           Effect.scoped,
           Effect.provideService(Clock.Clock, skewedClock(offset)),
@@ -4461,11 +4483,7 @@ describe("credential order", () => {
         yield* runOn(root, "second")
         const events = yield* eventsOf(world, root)
         expect(root.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-a"])
-        expect(placementsOf(events)).toEqual([
-          { slot: a, reason: "new", from: "none" },
-          { slot: b, reason: "refused", from: a },
-          { slot: a, reason: "returned", from: c },
-        ])
+        expect(placementsOf(events)).toEqual([{ slot: a, reason: "returned", from: c }])
       }).pipe(
         Effect.scoped,
         Effect.provideService(Clock.Clock, skewedClock(offset)),
@@ -4506,11 +4524,8 @@ describe("credential order", () => {
           expect(compactedOf(events).slice(0, 2)).toEqual([false, true])
           // Recovered where the turn was: c, not a and b again.
           expect(second.sent).toEqual(["sk-c"])
-          // No placement on a held account the turn never sent to after it.
-          expect(placementsOf(events)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-          ])
+          // No placement: a and b served no request, and c is outside the pool.
+          expect(placementsOf(events)).toEqual([])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -4544,10 +4559,7 @@ describe("credential order", () => {
           const heldEvents = yield* eventsOf(world, held)
           expect(held.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c", "sk-c"])
           expect(compactedOf(heldEvents)).toEqual([false, false, true])
-          expect(placementsOf(heldEvents)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-          ])
+          expect(placementsOf(heldEvents)).toEqual([])
           expect(heldEvents.filter((event) => event._tag === "ErrorOccurred").length).toBe(2)
 
           // The same on another server, but the holds lapse while the second
@@ -4583,11 +4595,7 @@ describe("credential order", () => {
           const lapsingEvents = yield* eventsOf(otherWorld, lapsing)
           expect(lapsing.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c", "sk-a"])
           expect(compactedOf(lapsingEvents)).toEqual([false, false, true])
-          expect(placementsOf(lapsingEvents)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-            { slot: a, reason: "returned", from: c },
-          ])
+          expect(placementsOf(lapsingEvents)).toEqual([{ slot: a, reason: "returned", from: c }])
         }).pipe(
           Effect.scoped,
           Effect.provideService(Clock.Clock, skewedClock(offset)),
@@ -4643,10 +4651,7 @@ describe("credential order", () => {
           // and b: it stays on c, and records nothing after the fall.
           expect(root.sent).toEqual(["sk-a", "sk-b", "sk-c", "sk-c", "sk-c", "sk-c", "sk-c"])
           expect(compactedOf(first)).toEqual([false, true, true])
-          expect(placementsOf(first)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-          ])
+          expect(placementsOf(first)).toEqual([])
           // The next turn has left nothing: it returns.
           offset.ms += 60_000
           yield* runOn(root, "second")
@@ -4740,11 +4745,8 @@ describe("credential order", () => {
           expect(compactedOf(events).slice(0, 2)).toEqual([false, true])
           // A second restart before c's next receipt still resumes on c.
           expect(third.sent).toEqual(["sk-c"])
-          // No placement on a, which the turn never sent to again.
-          expect(placementsOf(events)).toEqual([
-            { slot: a, reason: "new", from: "none" },
-            { slot: b, reason: "refused", from: a },
-          ])
+          // No placement: a and b served no request, and c is outside the pool.
+          expect(placementsOf(events)).toEqual([])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -4938,6 +4940,335 @@ describe("credential order", () => {
         )
       },
     )
+
+    /**
+     * Each placement written without the receipt of the first request on its
+     * account just after it in the log: none, by construction.
+     */
+    const placementsWithoutReceipt = (events: ReadonlyArray<AgentEvent>) =>
+      events.flatMap((event, index) => {
+        if (event._tag !== "CredentialAssigned") return []
+        const next = events[index + 1]
+        if (
+          next?._tag === "StreamEnded" &&
+          next.messageId === event.messageId &&
+          next.credential?.provider === event.provider &&
+          next.credential.slot === event.slot
+        )
+          return []
+        return [{ slot: event.slot, reason: event.reason, next: next?._tag ?? "none" }]
+      })
+    /** `root`'s first turn answers, its second runs a tool step and dies on its next request. */
+    const twoTurnsThenDie = (
+      root: ReturnType<typeof credentialRoot>,
+      out: Deferred.Deferred<void>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* root.seed
+          yield* runAgentLoop(
+            makeMessage(root.sessionId, root.branchId, "turn one"),
+            root.admission,
+          )
+          yield* submitAgentLoop(
+            makeMessage(root.sessionId, root.branchId, "turn two"),
+            root.admission,
+          )
+          yield* Deferred.await(out)
+        }),
+      ).pipe(Effect.provide(root.layer))
+    /** Recover `first`'s stopped turn on `next` until `next`'s request is out, and stop it there. */
+    const recoverAndDie = (
+      first: ReturnType<typeof credentialRoot>,
+      next: ReturnType<typeof credentialRoot>,
+      out: Deferred.Deferred<void>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          yield* agentLoop.getState({ sessionId: first.sessionId, branchId: first.branchId })
+          yield* Deferred.await(out)
+        }),
+      ).pipe(Effect.provide(next.layer))
+    /** Answers its first request, runs a tool step on its second, and dies on its third. */
+    const answerToolThenDie =
+      (out: Deferred.Deferred<void>): Reply =>
+      (call) => {
+        if (call === 0) return answer("turn one")(call)
+        if (call === 1) return toolStepThen(10, answer("unused"))(0)
+        return dyingRequest(out)(call)
+      }
+
+    it.live(
+      "a turn recovered past its cache lifetime with receipts of its own resumes on its newest receipt's account and records no placement, across a second restart",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // Turn one is placed on a; turn two starts warm there, runs a tool
+          // step on a, and the process dies on its next request.
+          const first = spreadRoot(world, "recovered-cold", {
+            replies: { "sk-a": answerToolThenDie(out), "sk-b": answer("from b") },
+          })
+          yield* twoTurnsThenDie(first, out)
+          expect(first.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+          // Down past the cache lifetime, with a busier than b by more than
+          // one session: a turn starting now would be placed on b.
+          offset.ms += 70 * 60_000
+          for (const other of ["cold-x1", "cold-x2", "cold-x3"])
+            yield* world.placement.noteStep({
+              provider: FALLBACK,
+              slot: a,
+              sessionId: SessionId.make(other),
+              costUsd: Option.none(),
+              ttlMs: HOUR_MS,
+            })
+          // The restart dies again before its first receipt; the third ends the turn.
+          const again = yield* Deferred.make<void>()
+          const second = spreadRoot(world, "recovered-cold", {
+            replies: { "sk-a": dyingRequest(again), "sk-b": answer("from b") },
+          })
+          yield* recoverAndDie(first, second, again)
+          const third = spreadRoot(world, "recovered-cold")
+          const events = yield* dieAndRecoverTail(world, first, third)
+          // The turn is past its first request: it stays on its receipt's
+          // account and is never placed again.
+          expect(second.sent).toEqual(["sk-a"])
+          expect(third.sent).toEqual(["sk-a"])
+          expect(slotsOf(events)).toEqual([a, a, a])
+          expect(placementsOf(events)).toEqual([{ slot: a, reason: "new", from: "none" }])
+          expect(placementsWithoutReceipt(events)).toEqual([])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    it.live(
+      "a turn outside the pool recovered once the pool's holds lapsed resumes on its newest receipt's account and records no return, across a second restart",
+      () => {
+        const offset = { ms: 0 }
+        return Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const out = yield* Deferred.make<void>()
+          // Turn one falls to c past held a and b; turn two stays on c while
+          // they are held, runs a tool step there, and the process dies on
+          // its next request.
+          const first = outsideRoot(world, "recovered-outside", {
+            "sk-a": heldTenMinutes,
+            "sk-b": heldTenMinutes,
+            "sk-c": answerToolThenDie(out),
+          })
+          yield* twoTurnsThenDie(first, out)
+          expect(first.sent.slice(-3)).toEqual(["sk-c", "sk-c", "sk-c"])
+          // Down 11 minutes: both holds lapsed, c's cache still warm. A turn
+          // starting now would return to the pool.
+          offset.ms += 11 * 60_000
+          const again = yield* Deferred.make<void>()
+          const second = outsideRoot(world, "recovered-outside", {
+            ...answers([a, b]),
+            "sk-c": dyingRequest(again),
+          })
+          yield* recoverAndDie(first, second, again)
+          const third = outsideRoot(world, "recovered-outside", answers([a, b, c]))
+          const events = yield* dieAndRecoverTail(world, first, third)
+          expect(second.sent).toEqual(["sk-c"])
+          expect(third.sent).toEqual(["sk-c"])
+          expect(slotsOf(events)).toEqual([c, c, c])
+          expect(placementsOf(events)).toEqual([])
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(Clock.Clock, skewedClock(offset)),
+          Effect.timeout("30 seconds"),
+        )
+      },
+    )
+
+    describe("crash points", () => {
+      /** mulberry32: one seed draws the same crash points on every run. */
+      const drawsOf = (seed: number) => {
+        let state = seed >>> 0
+        return () => {
+          state = (state + 0x6d2b79f5) >>> 0
+          let mixed = Math.imul(state ^ (state >>> 15), state | 1)
+          mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61)
+          return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296
+        }
+      }
+      const SEEDS = 40
+      /** One session's turns: tool steps, refusals on a and on b, and windows filled mid-turn. */
+      const WORKLOAD = ["w1 tool", "w2 refuse-a", "w3 fill", "w4 refuse-b", "w5 tool", "w6 fill"]
+      const textOf = (message: Prompt.Message) => {
+        if (message.role === "system") return message.content
+        const texts: Array<string> = []
+        for (const part of message.content) if (part.type === "text") texts.push(part.text)
+        return texts.join("")
+      }
+      /**
+       * The reply to a request on `credential`: by the newest workload prompt
+       * in it, and whether a tool result came after that prompt. A request
+       * with none (the summary request) answers.
+       */
+      const workloadReply = (credential: string, prompt: Prompt.Prompt, refused: Set<string>) => {
+        const messages = prompt.content
+        const at = messages.findLastIndex(
+          (message) => message.role === "user" && WORKLOAD.includes(textOf(message)),
+        )
+        if (at < 0 || messages.slice(at + 1).some((message) => message.role === "tool"))
+          return answer("done")(0)
+        const kind = textOf(messages[at]!).split(" ")[1]
+        // A refusal on its account, once per turn and process.
+        const refusing =
+          (kind === "refuse-a" && credential === "sk-a") ||
+          (kind === "refuse-b" && credential === "sk-b")
+        const key = `${textOf(messages[at]!)} ${credential}`
+        if (refusing && !refused.has(key)) {
+          refused.add(key)
+          return refusal()
+        }
+        // A tool step that fills the window mid-turn, or a small one.
+        const echoed = new Map([["fill", 60_000]]).get(kind ?? "") ?? 10
+        return toolStepThen(echoed, answer("unused"))(0)
+      }
+      const turnsEnded = (events: ReadonlyArray<AgentEvent>) =>
+        new Set(
+          events.flatMap((event) => {
+            if (event._tag !== "TurnCompleted" || Predicate.isUndefined(event.messageId)) return []
+            return [event.messageId]
+          }),
+        )
+
+      /**
+       * One process of `seed`'s session: a fresh placement, as a restart has,
+       * that recovers the open turn and runs the workload's next turns, and
+       * dies on its `crashAt`-th request when one is drawn.
+       */
+      const runProcess = (
+        world: SpreadWorld,
+        seed: number,
+        crashAt: Option.Option<number>,
+        progress: { submitted: number; seeded: boolean },
+      ) =>
+        Effect.gen(function* () {
+          const out = yield* Deferred.make<void>()
+          const placement = yield* makeCredentialPlacement(Option.none())
+          let requests = 0
+          const refused = new Set<string>()
+          const root = credentialRoot({
+            name: `crash-${seed}`,
+            order: [a, b],
+            spread: [a, b],
+            stored: keysOf([a, b]),
+            replies: {},
+            storage: world.storage,
+            placement,
+            cacheTtlMs: HOUR_MS,
+            history: [110_000, 110_000, 110_000],
+            respond: (credential, prompt) => {
+              requests += 1
+              if (Option.contains(crashAt, requests)) return dyingRequest(out)(0)
+              return workloadReply(credential, prompt, refused)
+            },
+          })
+          const work = Effect.gen(function* () {
+            if (!progress.seeded) {
+              yield* root.seed
+              progress.seeded = true
+            }
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId: root.sessionId, branchId: root.branchId })
+            yield* waitFor(
+              Effect.map(eventsOf(world, root), (events) => turnsEnded(events).size),
+              (ended) => ended >= progress.submitted,
+              10_000,
+              "the recovered turn to end",
+            )
+            while (progress.submitted < WORKLOAD.length) {
+              progress.submitted += 1
+              const text = WORKLOAD[progress.submitted - 1]!
+              // Stamped now, so the prompt orders it after the turns before it.
+              const message = Message.cases.regular.make({
+                id: makeMessage(root.sessionId, root.branchId, text).id,
+                sessionId: root.sessionId,
+                branchId: root.branchId,
+                role: "user",
+                parts: [Prompt.textPart({ text })],
+                createdAt: dateFromMillis(yield* Clock.currentTimeMillis),
+              })
+              yield* runAgentLoop(message, root.admission)
+            }
+          }).pipe(Effect.provide(root.layer))
+          const crashed = yield* Effect.raceFirst(
+            Effect.as(work, false),
+            Effect.as(Deferred.await(out), true),
+          )
+          return { root, crashed }
+        }).pipe(Effect.scoped)
+
+      it.live(
+        "across random crash points, every placement is written with a receipt on its account, and a recovered turn's first request goes to its newest receipt's account",
+        () =>
+          Effect.gen(function* () {
+            const coverage = { restarts: 0, resumed: 0, placements: 0, reasons: new Set<string>() }
+            for (let seed = 1; seed <= SEEDS; seed += 1) {
+              const draw = drawsOf(seed)
+              const world = yield* spreadWorld
+              const progress = { submitted: 0, seeded: false }
+              let crashes = 1 + Math.floor(draw() * 3)
+              let events: ReadonlyArray<AgentEvent> = []
+              for (let processes = 1; processes <= 12; processes += 1) {
+                // The open turn's newest receipt, before this process starts.
+                const ended = turnsEnded(events)
+                const resumeOn = events.findLast(
+                  (event): event is StreamEnded =>
+                    event._tag === "StreamEnded" &&
+                    Predicate.isNotUndefined(event.credential) &&
+                    Predicate.isNotUndefined(event.messageId) &&
+                    !ended.has(event.messageId),
+                )
+                const crashAt = Option.liftPredicate(1 + Math.floor(draw() * 9), () => crashes > 0)
+                const { root, crashed } = yield* runProcess(world, seed, crashAt, progress)
+                if (processes > 1) coverage.restarts += 1
+                if (Predicate.isNotUndefined(resumeOn)) {
+                  coverage.resumed += 1
+                  expect({ seed, first: root.sent[0] }).toEqual({
+                    seed,
+                    first: `sk-${resumeOn.credential?.slot}`,
+                  })
+                }
+                events = yield* eventsOf(world, root)
+                if (!crashed) break
+                crashes -= 1
+              }
+              expect({ seed, ended: turnsEnded(events).size }).toEqual({
+                seed,
+                ended: WORKLOAD.length,
+              })
+              expect({ seed, unreceipted: placementsWithoutReceipt(events) }).toEqual({
+                seed,
+                unreceipted: [],
+              })
+              for (const placed of placementsOf(events)) coverage.reasons.add(placed.reason)
+              coverage.placements += placementsOf(events).length
+            }
+            // The draws reach the cases the properties are about: restarts
+            // with and without receipts of the open turn, and placements of
+            // each kind the workload makes. (40 seeds: 79 restarts, 40 with a
+            // receipt, 157 placements.)
+            expect(coverage.restarts).toBeGreaterThanOrEqual(SEEDS)
+            expect(coverage.resumed).toBeGreaterThanOrEqual(20)
+            expect(coverage.restarts - coverage.resumed).toBeGreaterThanOrEqual(20)
+            expect(
+              ["new", "cold", "refused", "compacted"].filter(
+                (reason) => !coverage.reasons.has(reason),
+              ),
+            ).toEqual([])
+          }).pipe(Effect.scoped, Effect.timeout("120 seconds")),
+      )
+    })
 
     it.live(
       "without authSpread each turn starts at the first credential of its authOrder, as before",
