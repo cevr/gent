@@ -50,6 +50,8 @@ import {
 } from "../../src/runtime/turn"
 import {
   BranchId,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   MessageId,
   SessionId,
   ToolCallId,
@@ -173,8 +175,6 @@ import {
 } from "../helpers/test-preset"
 import * as AiModel from "effect/ai/Model"
 import {
-  CredentialSlot,
-  DEFAULT_CREDENTIAL_SLOT,
   DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
   type ModelRouteInput,
@@ -2447,6 +2447,8 @@ describe("credential order", () => {
     readonly history?: ReadonlyArray<number>
     /** The compactor the handoff asks; default: `rangeCompactor`. */
     readonly compactor?: ModelContextCompactor["Service"]
+    /** The credential the session's run spec pins (`RunSpec.credentialSlot`); default none. */
+    readonly pin?: CredentialSlot
   }
 
   /**
@@ -2574,6 +2576,7 @@ describe("credential order", () => {
           model: fallbackModel,
           ...omitUndefined({ maxModelAttempts: params.maxModelAttempts }),
         },
+        ...omitUndefined({ credentialSlot: params.pin }),
       },
     }
     const sessionId = SessionId.make(`credential-${params.name}-session`)
@@ -2684,6 +2687,144 @@ describe("credential order", () => {
         },
       ])
     }),
+  )
+
+  it.live("a run pinned to a credential sends every request on it, whatever the authOrder", () =>
+    Effect.gen(function* () {
+      const run = yield* credentialTurn({
+        name: "pinned",
+        order: [DEFAULT_CREDENTIAL_SLOT, personal],
+        pin: personal,
+        stored: [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ],
+        prompts: ["first", "second"],
+        replies: {
+          "sk-a": answer("from a"),
+          "sk-b": (call) => {
+            if (call === 0) {
+              return Stream.fromIterable([
+                toolCallPart("echo", { text: "hi" }),
+                finishPart({ finishReason: "tool-calls" }),
+              ])
+            }
+            return answer("from b")(call)
+          },
+        },
+      })
+      // Two turns, three steps: the default answers, but the pin names who pays.
+      expect(run.sent).toEqual(["sk-b", "sk-b", "sk-b"])
+      expect(run.resolvedWith.includes("sk-a")).toBe(false)
+      expect(labelsOf(run.ended)).toEqual([
+        { provider: fallbackProvider, slot: personal },
+        { provider: fallbackProvider, slot: personal },
+        { provider: fallbackProvider, slot: personal },
+      ])
+      expect(run.errors).toEqual([])
+    }),
+  )
+
+  it.live(
+    "a pinned run whose credential refuses fails the turn, and never moves to another credential",
+    () =>
+      Effect.gen(function* () {
+        const run = yield* credentialTurn({
+          name: "pinned-refused",
+          order: [DEFAULT_CREDENTIAL_SLOT, personal],
+          pin: personal,
+          stored: [
+            [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+            [personal, apiKey("sk-b")],
+          ],
+          replies: { "sk-a": answer("from a"), "sk-b": refusal },
+        })
+        expect(run.sent).toEqual(["sk-b"])
+        expect(run.resolvedWith.includes("sk-a")).toBe(false)
+        expect(run.errors.some((entry) => entry.notice)).toBe(false)
+        expect(run.errors.some((entry) => entry.error.includes("continuing with"))).toBe(false)
+        expect(run.ended.map((event) => [event.credential?.slot, event.outcome])).toEqual([
+          [personal, "Failed"],
+        ])
+      }),
+  )
+
+  it.live(
+    "a pinned summary and a pinned child stay on the pin where the order would move them",
+    () =>
+      Effect.gen(function* () {
+        const keys = [
+          [DEFAULT_CREDENTIAL_SLOT, apiKey("sk-a")],
+          [personal, apiKey("sk-b")],
+        ] as const
+        // The handoff summary walks the pinned order: a refusal fails it, and
+        // no other credential makes it.
+        const summary = yield* credentialTurn({
+          name: "pinned-summary",
+          order: [personal, DEFAULT_CREDENTIAL_SLOT],
+          pin: personal,
+          stored: keys,
+          history: Array.from({ length: 12 }, () => 50_000),
+          replies: { "sk-a": answer("from a"), "sk-b": quotaSpent },
+        })
+        // The summary fails and the turn omits old messages instead; its step
+        // then fails on the pin too. Neither moves to the default.
+        expect(summary.sent).toEqual(["sk-b", "sk-b"])
+        expect(summary.errors.some((entry) => entry.error.startsWith("Credential"))).toBe(false)
+        // A pinned child's first turn does not start from its parent's place
+        // in the order: the parent's turn moved to personal, an unpinned child
+        // would start there, and the child pinned to the default pays on it.
+        const storage: CredentialStorage = Layer.succeedContext(
+          yield* Layer.build(testSqliteStorage).pipe(Effect.orDie),
+        )
+        const order = [DEFAULT_CREDENTIAL_SLOT, personal]
+        const runOn = (root: ReturnType<typeof credentialRoot>) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* ensureStorageParents({
+                sessionId: root.sessionId,
+                branchId: root.branchId,
+                admission: root.admission,
+              })
+              yield* runAgentLoop(
+                makeMessage(root.sessionId, root.branchId, "hello"),
+                root.admission,
+              )
+            }),
+          ).pipe(Effect.provide(root.layer))
+        const parent = credentialRoot({
+          name: "pin-parent",
+          order,
+          stored: keys,
+          storage,
+          replies: { "sk-a": refusal, "sk-b": answer("from b") },
+        })
+        yield* runOn(parent)
+        expect(parent.sent).toEqual(["sk-a", "sk-b"])
+        const child = credentialRoot({
+          name: "pin-child",
+          order,
+          pin: DEFAULT_CREDENTIAL_SLOT,
+          stored: keys,
+          storage,
+          replies: { "sk-a": answer("from a"), "sk-b": answer("from b") },
+        })
+        yield* Effect.gen(function* () {
+          const now = dateFromMillis(yield* Clock.currentTimeMillis)
+          yield* (yield* SessionStorage).createSession(
+            new Session({
+              id: child.sessionId,
+              parentSessionId: parent.sessionId,
+              parentBranchId: parent.branchId,
+              createdAt: now,
+              updatedAt: now,
+              admission: child.admission,
+            }),
+          )
+        }).pipe(Effect.provide(storage), Effect.orDie)
+        yield* runOn(child)
+        expect(child.sent).toEqual(["sk-a"])
+      }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 
   it.live("an exhausted quota moves the turn on; one that answers stays", () =>

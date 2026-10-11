@@ -35,7 +35,7 @@ import {
   UserConfig,
 } from "../../src/runtime/config"
 import { resolveSessionRoute } from "../../src/runtime/turn"
-import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../../src/domain/driver"
+import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../../src/domain/ids"
 import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 import type { ProviderOptions } from "effect/ai/LanguageModel"
 import {

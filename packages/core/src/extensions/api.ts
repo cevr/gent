@@ -120,7 +120,8 @@ export { FollowUpQueueFull, interjectionMessageId } from "../domain/agent-loop.j
 export { clampEffort, Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
 // What a prompt-cache write costs and how long it lives: a router prices a switch with them.
 export { cacheWriteRate, promptCacheTtlMsFor } from "../domain/agent.js"
-export { AuthMethod, CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../domain/driver.js"
+export { AuthMethod } from "../domain/driver.js"
+export { CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../domain/ids.js"
 // The assistant message a turn's step stores; `StreamStarted` names the turn and step.
 export {
   type Message,

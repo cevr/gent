@@ -15,6 +15,7 @@ import { InvalidStateError, NotFoundError, ProviderError, StorageError } from ".
 import { EventEnvelope, EventStoreError } from "../domain/event.js"
 import {
   BranchId,
+  CredentialSlot,
   ExtensionId,
   InteractionRequestId,
   MessageId,
@@ -29,7 +30,6 @@ import {
   AuthMetadata,
   AuthMethod,
   CredentialOrder,
-  CredentialSlot,
   DriverError,
   ProviderAuthError,
 } from "../domain/driver.js"

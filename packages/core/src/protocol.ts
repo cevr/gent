@@ -5,8 +5,6 @@ export {
   AuthPrompt,
   authMethodAppliesTo,
   type CredentialReceipt,
-  CredentialSlot,
-  DEFAULT_CREDENTIAL_SLOT,
   sameCredential,
 } from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"
@@ -22,7 +20,14 @@ export {
   isClientFile,
   SCOPE_PRECEDENCE,
 } from "./domain/extension.js"
-export { BranchId, MessageId, SessionId, ToolCallId } from "./domain/ids.js"
+export {
+  BranchId,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "./domain/ids.js"
 export {
   Branch,
   Message,

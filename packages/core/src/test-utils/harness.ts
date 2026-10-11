@@ -52,6 +52,7 @@ import {
 } from "../domain/extension.js"
 import {
   BranchId,
+  type CredentialSlot,
   ExtensionId,
   type InteractionRequestId,
   type MessageId,
@@ -172,7 +173,6 @@ import * as os from "node:os"
 import * as path from "node:path"
 import {
   type ApiClassContribution,
-  type CredentialSlot,
   type StoredOAuthCredentials,
   type ModelDriverContribution,
   ProviderStopReason,

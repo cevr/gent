@@ -37,6 +37,7 @@ import {
 } from "../../src/server/workspace-rpc"
 import {
   BranchId,
+  CredentialSlot,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -86,7 +87,6 @@ import { Model as AiModel, type LanguageModel } from "effect/ai"
 import { BunServices } from "@effect/platform-bun"
 import {
   AuthMethod,
-  CredentialSlot,
   type ModelDriverContribution,
   ProviderAuthError,
 } from "../../src/domain/driver.js"

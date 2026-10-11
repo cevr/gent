@@ -58,6 +58,7 @@ import {
 } from "../domain/message.js"
 import {
   type BranchId,
+  type CredentialSlot,
   type ExtensionId,
   InteractionRequestId,
   MessageId,
@@ -113,7 +114,6 @@ import {
   type ModelRouteDecision,
   type ModelRouteInput,
   type CredentialReceipt,
-  type CredentialSlot,
   type ModelRouterContribution,
   ProviderAuthError,
   type ProviderHints,
@@ -1440,6 +1440,12 @@ interface ResolvedTurnContext {
   sessionReasoning: Option.Option<ReasoningEffort>
   /** `/effort auto`: the effort router picks the turn's level (`routeEffort`). */
   effortAuto: boolean
+  /**
+   * The credential the run is pinned to (`RunSpec.credentialSlot`): every read
+   * of the turn's credential order (`requestCredentialOrder`) walks it alone.
+   * None walks the sign-in's `authOrder`.
+   */
+  credentialPin: Option.Option<CredentialSlot>
 }
 
 /** The notices a step's request carries after the conversation: the date first, then the extensions'. */
@@ -1773,6 +1779,9 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
       Option.fromUndefinedOr(value.reasoningLevel),
     ),
     effortAuto: Option.exists(session, (value) => value.reasoningAuto === true),
+    credentialPin: Option.flatMap(admission, (value) =>
+      Option.fromUndefinedOr(value.runSpec?.credentialSlot),
+    ),
   }
 })
 
@@ -1809,15 +1818,17 @@ const ROUTE_REASON_CHARS = 200
  * fails or the turn left every slot. A move never leaves the last slot of
  * the order it reads, so the turn has left every slot only when the order
  * changed while it ran (or after the receipts a resume or a child's first
- * turn starts from): the failure says so.
+ * turn starts from): the failure says so. A pinned run's order is its pin
+ * alone (`pin`), so it never leaves that slot.
  */
 const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(function* (params: {
   readonly request: ResolveModelRequest
+  readonly pin: Option.Option<CredentialSlot>
   readonly turnLedger: TurnLedger
   readonly extensionRegistry: ExtensionRegistryService
   readonly modelRegistry: ModelRegistry["Service"]
 }) {
-  const order = yield* requestCredentialOrder(params.request, params.extensionRegistry)
+  const order = yield* requestCredentialOrder(params.request, params.extensionRegistry, params.pin)
   if (Option.isNone(order)) return Option.none<CredentialReceipt>()
   const { provider, slots } = order.value
   const left = yield* params.turnLedger.passedCredentials(provider, slots)
@@ -1843,11 +1854,13 @@ const nextRequestCredential = Effect.fn("TurnHelpers.nextRequestCredential")(fun
  * Which slot the next request takes is not known before it goes out (the
  * order may refuse its first slots, as a spent quota does each turn), so it
  * is never a reason. A request with no receipt, or an order that cannot be
- * read, keeps the model's own rule.
+ * read, keeps the model's own rule. A pinned run reads its pin as the order
+ * (`pin`), the one its next request walks.
  */
 const lastAccountStands = Effect.fn("TurnHelpers.lastAccountStands")(
   function* (params: {
     readonly lastCall: Option.Option<RequestCall>
+    readonly pin: Option.Option<CredentialSlot>
     readonly extensionRegistry: ExtensionRegistryService
     readonly modelRegistry: ModelRegistry["Service"]
   }) {
@@ -1858,6 +1871,7 @@ const lastAccountStands = Effect.fn("TurnHelpers.lastAccountStands")(
     const order = yield* requestCredentialOrder(
       { modelId: model, driverId: last.provider },
       params.extensionRegistry,
+      params.pin,
     )
     if (Option.isNone(order)) return true
     if (!order.value.slots.includes(last.slot)) return false
@@ -2882,9 +2896,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const modelRegistry = yield* ModelRegistry
   // The turn walks its sign-in's `authOrder`, first to last, and never comes
   // back to a slot it left: a slot that answers serves the rest of the turn.
-  // A conflicting order fails here as it fails the request's resolution.
+  // A conflicting order fails here as it fails the request's resolution. A
+  // pinned run walks its pin alone.
   const selectCredential = nextRequestCredential({
     request: { modelId: resolved.modelId, driverId: Option.getOrUndefined(driverId) },
+    pin: resolved.credentialPin,
     turnLedger: params.turnLedger,
     extensionRegistry,
     modelRegistry,
@@ -3039,7 +3055,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
    * another slot the turn has not left: a refusal, an exhausted quota, a
    * rate limit past its retries, or a failure the driver proved. Any other
    * failure, a cancelled step, or the last slot stays where it is. The user
-   * reads a notice.
+   * reads a notice. A pinned run's order is its pin alone: it never moves.
    */
   const moveCredential = (cause: unknown) =>
     Effect.gen(function* () {
@@ -3049,9 +3065,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       const failed = yield* Ref.get(used)
       if (Option.isNone(failed)) return false
       const { provider, slot } = failed.value
-      const order = yield* requestCredentialOrder(modelRequest, extensionRegistry).pipe(
-        Effect.orElseSucceed(Option.none),
-      )
+      const order = yield* requestCredentialOrder(
+        modelRequest,
+        extensionRegistry,
+        resolved.credentialPin,
+      ).pipe(Effect.orElseSucceed(Option.none))
       if (Option.isNone(order) || order.value.provider !== provider) return false
       const left = yield* params.turnLedger.passedCredentials(provider, order.value.slots)
       const next = order.value.slots.find((candidate) => candidate !== slot && !left.has(candidate))
@@ -5287,6 +5305,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // Read only where a warm check reaches it, after the model and lifetime.
       const accountStands = lastAccountStands({
         lastCall: knownSteps.lastCall,
+        pin: resolved.credentialPin,
         extensionRegistry,
         modelRegistry,
       })

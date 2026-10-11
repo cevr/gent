@@ -19,8 +19,8 @@ import {
   TurnCompleted,
 } from "../../src/domain/event"
 import { ProviderId } from "../../src/domain/agent"
-import { CredentialSlot, sameCredential } from "../../src/domain/driver"
-import { BranchId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { sameCredential } from "../../src/domain/driver"
+import { BranchId, CredentialSlot, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
 import { EventStoreLive } from "../../src/runtime/session"

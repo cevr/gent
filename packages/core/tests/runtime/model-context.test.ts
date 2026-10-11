@@ -19,6 +19,8 @@ import * as Prompt from "effect/ai/Prompt"
 import {
   ActorCommandId,
   BranchId,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
   ExtensionId,
   MessageId,
   SessionId,
@@ -78,7 +80,6 @@ import {
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { omitUndefined } from "../../src/domain/guards"
-import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT } from "../../src/domain/driver"
 import {
   contextWindowOf,
   defineExtension,

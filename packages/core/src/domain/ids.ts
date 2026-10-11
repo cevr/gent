@@ -48,6 +48,15 @@ export type ClientRequestGrant = typeof ClientRequestGrant.Type
 export const ExtensionId = Schema.String.pipe(Schema.brand("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type
 
+// ── credential slot ─────────────────────────────────────────────────────────
+
+/** Nonsecret credential label. Omission selects the legacy default entry. */
+export const CredentialSlot = Schema.String.check(Schema.isPattern(/^[a-z0-9_-]{1,32}$/)).pipe(
+  Schema.brand("CredentialSlot"),
+)
+export type CredentialSlot = typeof CredentialSlot.Type
+export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
+
 // ── workspace ───────────────────────────────────────────────────────────────
 
 /** A workspace: the sha256 of a resolved working directory (`workspaceIdForCwd`). */

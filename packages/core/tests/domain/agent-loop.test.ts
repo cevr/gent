@@ -8,6 +8,7 @@ import {
 } from "../../src/domain/agent-loop"
 import {
   BranchId,
+  CredentialSlot,
   MessageId,
   SessionId,
   DefaultWorkspaceId,
@@ -15,7 +16,6 @@ import {
 } from "../../src/domain/ids"
 import { AgentEvent } from "../../src/domain/event"
 import { ModelId, ProviderId } from "../../src/domain/agent"
-import { CredentialSlot } from "../../src/domain/driver"
 
 // ── entity id ───────────────────────────────────────────────────────────────
 

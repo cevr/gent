@@ -35,7 +35,7 @@ import {
   ReasoningEffort,
 } from "./agent.js"
 import { omitUndefined } from "./guards.js"
-import type { SessionId } from "./ids.js"
+import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT, type SessionId } from "./ids.js"
 import type { ExtensionContext, ExtensionServiceError } from "./extension.js"
 import type { Message } from "./message.js"
 
@@ -43,13 +43,6 @@ export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"
 export type DriverFailureId = typeof DriverFailureId.Type
 
 // ── Auth method wire types ──
-
-/** Nonsecret credential label. Omission selects the legacy default entry. */
-export const CredentialSlot = Schema.String.check(Schema.isPattern(/^[a-z0-9_-]{1,32}$/)).pipe(
-  Schema.brand("CredentialSlot"),
-)
-export type CredentialSlot = typeof CredentialSlot.Type
-export const DEFAULT_CREDENTIAL_SLOT = CredentialSlot.make("default")
 
 /**
  * A credential order: slots a turn walks first to last, each named once. An

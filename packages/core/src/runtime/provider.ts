@@ -37,7 +37,7 @@ import {
   parseModelId,
   ProviderId,
 } from "../domain/agent.js"
-import { SessionId, ToolCallId } from "../domain/ids.js"
+import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT, SessionId, ToolCallId } from "../domain/ids.js"
 import { ExtensionRegistry, type ExtensionRegistryService } from "./extension-host.js"
 import { causeMessage, type JsonRecord, omitUndefined } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
@@ -66,8 +66,6 @@ import {
   type CredentialFailureReason,
   credentialFailureReason,
   type CredentialReceipt,
-  CredentialSlot,
-  DEFAULT_CREDENTIAL_SLOT,
   ProviderAuthError,
   ProviderAuthInfo,
   type ProviderHints,
@@ -2822,11 +2820,14 @@ export const driverCarriesEffort = (
  * request dispatches through (its `driverId`, else the provider segment), in
  * the profile of `registry`. None for a model id with no provider segment,
  * which no sign-in serves. Config entries that name conflicting orders fail
- * it, as they fail the request's resolution.
+ * it, as they fail the request's resolution. A run pinned to a credential
+ * (`pin`, the run spec's `credentialSlot`) walks that slot alone, whatever
+ * the `authOrder`: the account it names pays, or the turn fails.
  */
 export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(function* (
   request: ResolveModelRequest,
   registry: ExtensionRegistryService,
+  pin: Option.Option<CredentialSlot>,
 ) {
   const provider = Option.orElse(Option.fromUndefinedOr(request.driverId), () =>
     Option.map(parseModelId(request.modelId), ([segment]) => segment),
@@ -2837,7 +2838,12 @@ export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(fun
     yield* registry.providerConfig,
     provider.value,
   )
-  return Option.some(order)
+  return Option.some(
+    Option.match(pin, {
+      onNone: () => order,
+      onSome: (slot): CredentialOrder => ({ provider: order.provider, slots: [slot] }),
+    }),
+  )
 })
 
 const resolveModelDefect = (

@@ -25,7 +25,7 @@ import {
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
-import type { CredentialSlot } from "../domain/driver.js"
+import type { CredentialSlot } from "../domain/ids.js"
 import { CredentialOrder } from "../domain/driver.js"
 import { canonicalJsonString } from "effect-encore"
 import { writeFileAtomic } from "./gent-platform.js"

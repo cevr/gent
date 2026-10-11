@@ -22,9 +22,7 @@ import {
   type ApiClassContribution,
   type ApiClassRequest,
   AuthMethod,
-  CredentialSlot,
   catalogModelEntry,
-  DEFAULT_CREDENTIAL_SLOT,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
   type ModelCatalogView,
@@ -81,7 +79,15 @@ import {
   Model,
   type ReasoningEffort,
 } from "../../src/domain/agent"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import {
+  BranchId,
+  CredentialSlot,
+  DEFAULT_CREDENTIAL_SLOT,
+  ExtensionId,
+  MessageId,
+  SessionId,
+  ToolCallId,
+} from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import type { ProviderConfig } from "../../src/runtime/config"
 import {

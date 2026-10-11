@@ -1,6 +1,6 @@
 import { Effect, Option, Predicate, Schema, SchemaGetter, SchemaIssue, Struct } from "effect"
 import { omitUndefined } from "./guards.js"
-import { SessionId } from "./ids.js"
+import { CredentialSlot, SessionId } from "./ids.js"
 
 // ── model ───────────────────────────────────────────────────────────────────
 
@@ -1118,7 +1118,8 @@ export const effectiveModelDriver = (
 // Per-run dispatch configuration.
 //
 // Separates per-run concerns from agent identity: `overrides` reshape the
-// agent's model, tools and prompt for every turn of the session.
+// agent's model, tools and prompt for every turn of the session, and
+// `credentialSlot` names who pays for them.
 //
 // Every child is a durable session driven by the same loop as its parent.
 
@@ -1126,9 +1127,17 @@ export const effectiveModelDriver = (
  * Rows written before `parentToolCallId` was dropped still carry it; a struct
  * decode ignores the extra key. Overrides go through `StoredRunOverrides`,
  * which reads rows written before `tools` and writes rows an older gent reads.
+ *
+ * `credentialSlot` pins the run to one credential of the sign-in each request
+ * dispatches through: that slot alone is the order every turn walks, in place
+ * of the config `authOrder`, so a refusal on it fails the turn and never
+ * spends another account. It is not an agent field: config cannot set it, and
+ * no agent patch carries it. A row without it walks the `authOrder`, and an
+ * older gent ignores it.
  */
 export const RunSpecSchema = Schema.Struct({
   overrides: Schema.optional(StoredRunOverrides),
+  credentialSlot: Schema.optional(CredentialSlot),
 })
 
 // Model-call budget
