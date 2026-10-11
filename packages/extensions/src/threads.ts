@@ -38,7 +38,7 @@ import {
   Semaphore,
 } from "effect"
 import { Hex } from "effect/encoding"
-import { SqlClient } from "effect/sql"
+import { Migrator, SqlClient } from "effect/sql"
 import {
   ActorCommandId,
   AgentDefinition,
@@ -378,9 +378,64 @@ interface ThreadRoundsService {
 }
 
 /**
- * The `thread_rounds` table, created on first use in the server's database.
- * One per process: every profile shares it.
+ * The round table, in the server's database. Threads run their own
+ * migrations, recorded in their own table (`thread_migrations`), as the cell
+ * does, so their ids never meet core's chain. The table first shipped
+ * without a ledger, on an unreleased branch, so the first migration drops a
+ * table that build left and creates it whole. A later migration must be
+ * additive: a server that still runs the code before it reads the same table.
  */
+const threadRoundsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* Effect.forEach(
+    [
+      `DROP TABLE IF EXISTS thread_rounds`,
+      `CREATE TABLE thread_rounds (
+        round TEXT PRIMARY KEY,
+        thread TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        starter_session_id TEXT NOT NULL,
+        starter_branch_id TEXT NOT NULL,
+        starter_thread TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        reply_spec TEXT,
+        notify TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        stopped_at INTEGER,
+        ended_at INTEGER,
+        text TEXT,
+        reply_json TEXT,
+        interrupted INTEGER NOT NULL DEFAULT 0,
+        stream_failed INTEGER NOT NULL DEFAULT 0,
+        unanswered INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        usage_json TEXT,
+        delivered_at INTEGER
+      )`,
+      `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
+      `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
+      `CREATE INDEX thread_rounds_open_by_starter ON thread_rounds (starter_thread) WHERE ended_at IS NULL`,
+      `CREATE INDEX thread_rounds_undelivered ON thread_rounds (starter_thread) WHERE delivered_at IS NULL`,
+    ],
+    (statement) => sql.unsafe(statement),
+    { discard: true },
+  )
+})
+
+/**
+ * Runs the migrations the database has not recorded, in one transaction. A
+ * run that finds another one recording the same ids treats them as done, so
+ * the builds of two places over one database are safe.
+ */
+const migrateThreadRounds = Migrator.make({})({
+  loader: Migrator.fromRecord({ "1_thread_rounds": threadRoundsMigration }),
+  table: "thread_migrations",
+}).pipe(Effect.mapError(storageError("Thread table migration failed")))
+
+/** The `thread_rounds` table. Building it runs the migrations it lacks. */
 class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
   "@gent/extensions/src/threads/ThreadRounds",
 ) {
@@ -390,41 +445,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
       const sql = yield* SqlClient.SqlClient
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
-      yield* Effect.forEach(
-        [
-          `CREATE TABLE IF NOT EXISTS thread_rounds (
-            round TEXT PRIMARY KEY,
-            thread TEXT NOT NULL,
-            number INTEGER NOT NULL,
-            starter_session_id TEXT NOT NULL,
-            starter_branch_id TEXT NOT NULL,
-            starter_thread TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            branch_id TEXT NOT NULL,
-            message_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            reply_spec TEXT,
-            notify TEXT NOT NULL,
-            started_at INTEGER NOT NULL,
-            stopped_at INTEGER,
-            ended_at INTEGER,
-            text TEXT,
-            reply_json TEXT,
-            interrupted INTEGER NOT NULL DEFAULT 0,
-            stream_failed INTEGER NOT NULL DEFAULT 0,
-            unanswered INTEGER NOT NULL DEFAULT 0,
-            error TEXT,
-            usage_json TEXT,
-            delivered_at INTEGER
-          )`,
-          `CREATE INDEX IF NOT EXISTS thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
-          `CREATE INDEX IF NOT EXISTS thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
-          `CREATE INDEX IF NOT EXISTS thread_rounds_open_by_starter ON thread_rounds (starter_thread) WHERE ended_at IS NULL`,
-          `CREATE INDEX IF NOT EXISTS thread_rounds_undelivered ON thread_rounds (starter_thread) WHERE delivered_at IS NULL`,
-        ],
-        (statement) => sql.unsafe(statement),
-        { discard: true },
-      ).pipe(Effect.mapError(storageError("Failed to create the thread_rounds table")))
+      yield* migrateThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
         const rows =
