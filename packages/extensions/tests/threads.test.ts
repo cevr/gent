@@ -1801,7 +1801,7 @@ describe("the Threads service", () => {
   )
 
   it.live(
-    "two sends of one round under one key at once keep the round, and it ends with its bill",
+    "two sends under one key at once are one send: both succeed, one turn runs, and its round ends with its bill",
     () =>
       Effect.scoped(
         Effect.gen(function* () {

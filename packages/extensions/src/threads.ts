@@ -1117,6 +1117,12 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
 
 // ── reconcile ───────────────────────────────────────────────────────────────
 
+/** A random id no earlier request shares, for a request that must not repeat one. */
+const randomNonce = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto
+  return yield* crypto.randomUUIDv4
+})
+
 /**
  * One round a restart may have left behind. A recorded end is delivered. A
  * turn that ended with no record is read from the thread's history, then
@@ -1147,7 +1153,7 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
     if (!starterSide) return
     yield* stopRoundTurn(
       round,
-      RequestId.make(`thread-stop:${round.round}:reconcile:${yield* Clock.currentTimeMillis}`),
+      RequestId.make(`thread-stop:${round.round}:reconcile:${yield* randomNonce}`),
     )
     return
   }
@@ -1574,14 +1580,18 @@ const readRound = Effect.fn("Threads.round")(function* (roundId: string) {
 const StopResult = Schema.Struct({
   /** The loops the stop reached; empty when the thread was idle. */
   stopped: Schema.Array(Schema.Struct({ sessionId: SessionId, branchId: BranchId })),
-  /** The open round the stop closed. */
+  /**
+   * The open round the stop asked to cancel. It is closed when the stop
+   * returns, unless its turn holds out: then it stays open, stopped, until
+   * that turn ends.
+   */
   round: Schema.optionalKey(Schema.String),
 })
 
 /**
  * How long a stop waits for the stopped turn's own end. A turn stops at its
- * next await; one that holds out past this has its round closed by the stop,
- * with no bill.
+ * next await; one that holds out past this (an uninterruptible tool finishing
+ * its own work) keeps its round open, stopped, and the turn's end closes it.
  */
 const STOP_SETTLE = "10 seconds"
 
@@ -1924,7 +1934,7 @@ const ThreadStopTool = tool({
   id: "thread.stop",
   resources: [ThreadsResource],
   description:
-    "Stop a thread this thread started, from any of its sessions: every turn it runs now ends as interrupted, and its open round closes. An idle thread is left as it is.",
+    "Stop a thread this thread started, from any of its sessions: it asks every turn the thread runs now to end as interrupted, and cancels its open round. A round whose turn holds out (a tool finishing its own work) stays open until that turn ends. An idle thread is left as it is.",
   params: Schema.Struct({
     thread: SessionId.annotate({
       description: "The thread's key, from thread.start or thread.list.",
