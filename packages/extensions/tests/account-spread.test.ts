@@ -196,15 +196,16 @@ const probeTool = tool({
 /**
  * The world one run of the workload sends to: the `spread` driver over the
  * cache model, answering by the request's last user text. The first request
- * of each burst child waits until every child sent its first.
+ * of each burst child waits until every child sent its first. With
+ * `refuses`, the first request of `REFUSED_TURN` is refused once.
  */
-const makeSpreadWorld = (burstSize: number) =>
+const makeSpreadWorld = (burstSize: number, refuses: boolean) =>
   Effect.gen(function* () {
     const cache = makeCacheModel()
     const records: Array<RequestRecord> = []
     const burstOpen = yield* Deferred.make<void>()
     let burstFirsts = 0
-    let refusedOnce = false
+    let refusedOnce = !refuses
     const scripted = new Map<string, ReadonlyArray<{ tool: string; input: object }>>()
     let calls = 0
 
@@ -368,13 +369,16 @@ const BURST_SIZE = 4
 /** A big user message: two of them and the handoff turn's overflow the window. */
 const bulk = (label: string) => `${label}\n${"lorem ipsum dolor ".repeat(1_400)}`
 
-/** The workload of E1, on `order`. */
-const runWorkload = (order: {
-  readonly authOrder: ReadonlyArray<CredentialSlot>
-  readonly authSpread?: ReadonlyArray<CredentialSlot>
-}) =>
+/** The workload of E1, on `order`; `refuses`: `REFUSED_TURN`'s first request is refused. */
+const runWorkload = (
+  order: {
+    readonly authOrder: ReadonlyArray<CredentialSlot>
+    readonly authSpread?: ReadonlyArray<CredentialSlot>
+  },
+  refuses: boolean,
+) =>
   Effect.gen(function* () {
-    const world = yield* makeSpreadWorld(BURST_SIZE)
+    const world = yield* makeSpreadWorld(BURST_SIZE, refuses)
     const cwd = yield* makeTempDirectoryScoped("gent-spread-")
     const harness = yield* createRpcHarness({
       ...e2ePreset,
@@ -518,6 +522,22 @@ const stepSlots = (events: ReadonlyArray<EventEnvelope>) =>
 const sumOf = (records: ReadonlyArray<RequestRecord>, field: (record: RequestRecord) => number) =>
   records.reduce((sum, record) => sum + field(record), 0)
 
+const answered = (run: RunResult) => run.records.filter((record) => !record.refused)
+const writes = (run: RunResult) => sumOf(answered(run), (record) => record.charge.write)
+const reads = (run: RunResult) => sumOf(answered(run), (record) => record.charge.read)
+/** The system-prefix part of the writes; the rest is the conversation's. */
+const prefixWrites = (run: RunResult) => sumOf(answered(run), (record) => record.charge.systemWrite)
+/** The requests that wrote a system prefix. */
+const prefixWriters = (run: RunResult) =>
+  answered(run).filter((record) => record.charge.systemWrite > 0)
+/** Each run writes each account's system prefix at most once. */
+const expectPrefixesOnce = (runs: ReadonlyArray<RunResult>) => {
+  for (const run of runs) {
+    const written = prefixWriters(run).map((record) => record.charge.systemKey)
+    expect(new Set(written).size).toBe(written.length)
+  }
+}
+
 /**
  * Each session's steps stay on one account but where its cache starts over
  * by evidence the placement does not write: the first request of a turn
@@ -597,17 +617,8 @@ describe("account spread", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const off = yield* runWorkload({ authOrder: [a, b] })
-          const on = yield* runWorkload({ authOrder: [a, b], authSpread: [a, b] })
-          const answered = (run: RunResult) => run.records.filter((record) => !record.refused)
-          const writes = (run: RunResult) => sumOf(answered(run), (record) => record.charge.write)
-          const reads = (run: RunResult) => sumOf(answered(run), (record) => record.charge.read)
-          // The system-prefix part of the writes; the rest is the conversation's.
-          const prefixWrites = (run: RunResult) =>
-            sumOf(answered(run), (record) => record.charge.systemWrite)
-          /** The requests that wrote a system prefix. */
-          const prefixWriters = (run: RunResult) =>
-            answered(run).filter((record) => record.charge.systemWrite > 0)
+          const off = yield* runWorkload({ authOrder: [a, b] }, true)
+          const on = yield* runWorkload({ authOrder: [a, b], authSpread: [a, b] }, true)
           const W_off = writes(off)
           const W_on = writes(on)
           const PW_off = prefixWrites(off)
@@ -646,10 +657,7 @@ describe("account spread", () => {
           // spread, each system prefix (per account) written once, and at most
           // one more prefix written per added account.
           expect(W_on - PW_on).toBeLessThanOrEqual(W_off - PW_off)
-          for (const run of [off, on]) {
-            const written = prefixWriters(run).map((record) => record.charge.systemKey)
-            expect(new Set(written).size).toBe(written.length)
-          }
+          expectPrefixesOnce([off, on])
           expect(prefixWriters(on).length).toBeLessThanOrEqual(prefixWriters(off).length + 1)
 
           // 5. No mid-cache move but where the cache starts over by evidence
@@ -661,11 +669,36 @@ describe("account spread", () => {
   )
 
   it.live(
+    "with no refusal to move a session, the spread costs the same workload exactly the added account's system prefix",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const off = yield* runWorkload({ authOrder: [a, b] }, false)
+          const on = yield* runWorkload({ authOrder: [a, b], authSpread: [a, b] }, false)
+          yield* Console.log(
+            `no refusal: W_off ${writes(off)} W_on ${writes(on)} PW_off ${prefixWrites(off)} PW_on ${prefixWrites(on)} prefixes_off ${prefixWriters(off).length} prefixes_on ${prefixWriters(on).length}`,
+          )
+          expect(answered(on).length).toBe(answered(off).length)
+          // Off: every request on `a`; on: `b` serves sessions too.
+          expect(off.records.every((record) => record.account === a)).toBe(true)
+          expect(on.records.some((record) => record.account === b)).toBe(true)
+          // The spread's whole cost is `b`'s system prefix, written once.
+          expect(writes(on) - prefixWrites(on)).toBe(writes(off) - prefixWrites(off))
+          expectPrefixesOnce([off, on])
+          expect(prefixWriters(on).length).toBe(prefixWriters(off).length + 1)
+          expect(writes(on) - writes(off)).toBe(prefixWrites(on) - prefixWrites(off))
+          expectNoUnexplainedMove(on)
+        }).pipe(Effect.timeout("60 seconds")),
+      ),
+    90_000,
+  )
+
+  it.live(
     "a branch forked from a spread session runs its first turn on the account that holds its copied window",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const world = yield* makeSpreadWorld(BURST_SIZE)
+          const world = yield* makeSpreadWorld(BURST_SIZE, true)
           const cwd = yield* makeTempDirectoryScoped("gent-spread-branch-fork-")
           const harness = yield* createRpcHarness({
             ...e2ePreset,
