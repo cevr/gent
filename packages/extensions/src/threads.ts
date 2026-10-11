@@ -294,16 +294,20 @@ interface RoundEnd {
 
 /**
  * A send's claim on its thread: its own round, `fresh` when this claim
- * inserted it and false on a retry, or the open round that refuses it.
+ * inserted it and false on a retry; the open round that refuses it; or the
+ * busy threads of a starter thread at its cap.
  */
 const RoundClaim = Schema.TaggedUnion({
   Ready: { round: RoundRow, fresh: Schema.Boolean },
   Busy: { round: RoundRow },
+  OverCap: { threads: Schema.Array(Schema.String) },
 })
 type RoundClaim = typeof RoundClaim.Type
 
 interface NewRound {
   readonly round: string
+  /** The most threads with an open round the starter's thread may have. */
+  readonly cap: number
   readonly thread: SessionId
   readonly starter: {
     readonly sessionId: SessionId
@@ -350,7 +354,10 @@ interface ThreadRoundsService {
   readonly busyThreads: (
     starterThread: SessionId,
   ) => Effect.Effect<ReadonlyArray<string>, ThreadStorageError>
-  /** In one transaction: the round itself on a retry, else refused when the thread is busy, else inserted. */
+  /**
+   * In one transaction: the round itself on a retry, else refused when the
+   * thread is busy or the starter's thread is at its cap, else inserted.
+   */
   readonly claimRound: (round: NewRound) => Effect.Effect<RoundClaim, ThreadStorageError>
   /** Keeps the value on the open round; a round that ended keeps the one it had. */
   readonly recordReply: (round: string, json: string) => Effect.Effect<boolean, ThreadStorageError>
@@ -367,15 +374,50 @@ interface ThreadRoundsService {
   }) => Effect.Effect<ReadonlyArray<RoundRow>, ThreadStorageError>
   /** Drops the rounds a deleted session sent or ran. */
   readonly removeSession: (sessionId: SessionId) => Effect.Effect<void, ThreadStorageError>
-  /** Every round end this process marks, in order. In memory: a restart starts it empty. */
+  /** Every round end this server marks, in order. In memory: a restart starts it empty. */
   readonly ended: PubSub.PubSub<RoundEnded>
   /**
-   * One admission at a time in this process: the count of busy threads and
-   * the round it admits are one step, so two sends in one model step cannot
-   * both pass the cap.
+   * One admission at a time in this server: the cap check and the start's
+   * session it guards are one step, so a start past the cap makes no session.
    */
   readonly admissions: Semaphore.Semaphore
 }
+
+/** What every profile of one server shares: the feed of round ends and the admission permit. */
+interface SharedRounds {
+  readonly ended: PubSub.PubSub<RoundEnded>
+  readonly admissions: Semaphore.Semaphore
+}
+
+/**
+ * The shared part, by the server's database client. A process resource is
+ * built once per place (workspace and cwd), and a thread started with `cwd`
+ * runs in another place than its starter, so a feed or a permit per build
+ * would split a round's sender from its end. Every place's build reads the
+ * one client its server opened, so the client names the server; a second
+ * server (a test's) has its own. The map holds the client weakly: the shared
+ * part goes with it.
+ */
+const sharedByDatabase = new WeakMap<SqlClient.SqlClient, SharedRounds>()
+
+/** Two places' first builds race on the map; the first one makes the shared part. */
+const sharing = Semaphore.makeUnsafe(1)
+
+const sharedRounds = Effect.fn("ThreadRounds.shared")(function* (sql: SqlClient.SqlClient) {
+  return yield* Semaphore.withPermit(
+    sharing,
+    Effect.gen(function* () {
+      const found = sharedByDatabase.get(sql)
+      if (Predicate.isNotUndefined(found)) return found
+      const shared: SharedRounds = {
+        ended: yield* PubSub.unbounded<RoundEnded>(),
+        admissions: yield* Semaphore.make(1),
+      }
+      sharedByDatabase.set(sql, shared)
+      return shared
+    }),
+  )
+})
 
 /**
  * The round table, in the server's database. Threads run their own
@@ -443,8 +485,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
     ThreadRounds,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      const ended = yield* PubSub.unbounded<RoundEnded>()
-      const admissions = yield* Semaphore.make(1)
+      const { ended, admissions } = yield* sharedRounds(sql)
       yield* migrateThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
@@ -458,6 +499,16 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
           ORDER BY number DESC LIMIT 1
         `
         return Option.fromNullishOr(rows[0])
+      })
+
+      const selectBusyThreads = Effect.fn("ThreadRounds.selectBusyThreads")(function* (
+        starterThread: string,
+      ) {
+        const rows = yield* sql<{ readonly thread: string }>`
+          SELECT DISTINCT thread FROM thread_rounds
+          WHERE starter_thread = ${starterThread} AND ended_at IS NULL
+        `
+        return rows.map((row) => row.thread)
       })
 
       return ThreadRounds.of({
@@ -490,11 +541,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
 
         busyThreads: Effect.fn("ThreadRounds.busyThreads")(
           function* (starterThread) {
-            const rows = yield* sql<{ readonly thread: string }>`
-              SELECT DISTINCT thread FROM thread_rounds
-              WHERE starter_thread = ${starterThread} AND ended_at IS NULL
-            `
-            return rows.map((row) => row.thread)
+            return yield* selectBusyThreads(starterThread)
           },
           Effect.mapError(storageError("Failed to count the busy threads")),
         ),
@@ -508,6 +555,8 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
               }
               const open = yield* selectOpenRound(input.thread)
               if (Option.isSome(open)) return RoundClaim.cases.Busy.make({ round: open.value })
+              const busy = yield* selectBusyThreads(input.starter.thread)
+              if (busy.length >= input.cap) return RoundClaim.cases.OverCap.make({ threads: busy })
               const counted = yield* sql<{
                 readonly rounds: number
               }>`SELECT COUNT(*) AS rounds FROM thread_rounds WHERE thread = ${input.thread}`
@@ -1103,11 +1152,8 @@ const threadAdmission = (starter: StoredSession, input: ThreadStartInput): Store
   }
 }
 
-/** The cap's refusal, when the starter's thread already runs the most threads it may. */
-const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* () {
-  const rounds = yield* ThreadRounds
-  const busy = yield* rounds.busyThreads(yield* callerThread())
-  if (busy.length < MAX_RUNNING_THREADS) return
+/** The cap's refusal, naming the threads the starter's thread runs. */
+const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArray<string>) {
   const started = yield* startedThreads()
   const names = busy
     .map((thread) => {
@@ -1116,8 +1162,20 @@ const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* () {
     })
     .join(", ")
   return yield* new ThreadError({
-    message: `This session's thread already runs ${MAX_RUNNING_THREADS} threads: ${names}. Stop one with thread.stop, or send this round when one ends.`,
+    message: `This session's thread already runs ${busy.length} threads: ${names}. Stop one with thread.stop, or send this round when one ends.`,
   })
+})
+
+/**
+ * The cap, read before a start makes its session, so a start past it makes
+ * none. The claim reads it again in its transaction: that read is the one
+ * the table holds to.
+ */
+const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* () {
+  const rounds = yield* ThreadRounds
+  const busy = yield* rounds.busyThreads(yield* callerThread())
+  if (busy.length < MAX_RUNNING_THREADS) return
+  return yield* capRefusal(busy)
 })
 
 interface RoundRequest {
@@ -1160,6 +1218,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       const input = yield* request
       return yield* rounds.claimRound({
         round: roundId,
+        cap: MAX_RUNNING_THREADS,
         thread: input.thread,
         starter,
         place: input.place,
@@ -1178,6 +1237,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       })
     }),
   )
+  if (claim._tag === "OverCap") return yield* capRefusal(claim.threads)
   if (claim._tag === "Busy") {
     return yield* new ThreadError({
       message: `Thread ${claim.round.thread} is running round ${claim.round.number} (${claim.round.round}); send the next round when it ends`,
@@ -1416,8 +1476,9 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     round: (round: string) => readRound(round).pipe(withRounds),
     stop: (thread: string, key: Option.Option<string>) => stopThread(thread, key).pipe(withRounds),
     /**
-     * A subscription to every round end this process records, after its row
-     * is written and its starter (if any) is woken, whatever its `notify`.
+     * A subscription to every round end this server records, in any place,
+     * after its row is written and its starter (if any) is woken, whatever
+     * its `notify`.
      * Subscribe before sending, so no end falls between the two. In memory
      * only: after a restart, a consumer reads its rounds' rows with `round`.
      */
@@ -1440,7 +1501,10 @@ export class Threads extends Context.Service<Threads, ThreadsApi>()(
   "@gent/extensions/src/threads",
 ) {}
 
-/** The round table and the service: one per process, every profile shares them. */
+/**
+ * The round table and the service, built per place; every place's build
+ * shares the server's round ends and admission permit (`sharedRounds`).
+ */
 const ThreadsResource = defineResource({
   id: "@gent/session-tools/threads",
   scope: "process",

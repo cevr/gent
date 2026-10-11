@@ -873,8 +873,8 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     sends to it. A retry under the same key is handed its round before the
     busy refusal; it re-sends only a round whose message never reached the
     branch, since a repeat of a running turn's command waits for that turn.
-  - `thread_rounds` (one table in the server's database, created on first
-    use by a process resource) keeps each round: its thread key, the
+  - `thread_rounds` (one table in the server's database; its migrations are
+    recorded in `thread_migrations`, apart from core's chain) keeps each round: its thread key, the
     session and branch it ran on, the sender and the sender's thread key,
     the reply it asked for, `notify`, and once it ends the text, the last
     `thread.reply` value, the turn's flags, its error, its usage and cost,
@@ -885,7 +885,9 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     one-line wake to the starter thread's current session (`sourceId:
 "thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
     is the service's own. The one writer that marks it delivered publishes it
-    to `Threads.subscribeRoundEnds`. A `loopOpen` reconciles the rounds a
+    to `Threads.subscribeRoundEnds`: one feed per server (keyed by its
+    database client), since the resource is built per place and a thread
+    started with `cwd` runs in another place than its starter. A `loopOpen` reconciles the rounds a
     branch sent or ran whose end is undelivered: a recorded end is
     delivered, a turn with a receipt is recorded from its history
     (`child-turns.ts`, shared with delegate), and a round with neither is
@@ -913,9 +915,10 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     closes its open round as interrupted and stopped (no wake), and refuses
     any other thread.
   - One thread runs at most four threads with an open round over all its
-    sessions (a constant): the count and the round it admits hold one
-    process permit, and a start with a task past the cap makes no session
-    and names the four. The transcript shows a round's message without its
+    sessions (a constant): the count is read under one permit per server
+    before a start makes its session, so a start with a task past the cap
+    makes no session and names the four, and again in the claim's
+    transaction, the read the table holds to. The transcript shows a round's message without its
     source line on a muted `» task from session` row, as a delegate child's
     `"child-task"` on `» task from parent` (another session wrote it, so it
     never takes the reader's rail). The starter's interrupt does not stop a

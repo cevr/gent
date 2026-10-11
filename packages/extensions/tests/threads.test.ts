@@ -919,6 +919,21 @@ const placeOf = (thread: typeof StartedResult.Type): SessionKey => ({
   branchId: thread.branchId,
 })
 
+/** One worker thread with no task, started by `place` under the call id `id`. */
+const startWorker = (
+  client: Client,
+  place: SessionKey,
+  id: string,
+  input: Record<string, Schema.Json> = {},
+) =>
+  Effect.gen(function* () {
+    const [started] = yield* call(client, place, [
+      ["thread.start", id, { name: id, agent: "worker", ...input }],
+    ])
+    expect(started?.failed).toBe(false)
+    return decodeThread(started?.result)
+  })
+
 // ── rounds: acceptance ──────────────────────────────────────────────────────
 
 describe("thread rounds", () => {
@@ -1299,6 +1314,34 @@ describe("the Threads service", () => {
           expect(read?.result).toMatchObject({ status: "ended", text: "heard by the probe" })
           const snapshot = yield* client.session.getSnapshot(starter)
           expect(wakes(snapshot.messages)).toEqual([])
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  // A thread in another directory runs under that directory's profile.
+  it.live(
+    "a round end reaches a subscriber in the starter's directory when the thread runs in another",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const elsewhere = yield* makeTempDirectoryScoped("gent-thread-elsewhere-")
+          const { client, sessionId, branchId } = yield* roundHarness({
+            extensions: [ServiceProbe],
+          })
+          const starter = { sessionId, branchId }
+          const impl = yield* startWorker(client, starter, "start-elsewhere", { cwd: elsewhere })
+          const [quiet] = yield* call(client, starter, [
+            [
+              "probe.quiet-round",
+              "quiet-elsewhere",
+              { thread: impl.thread, message: "ECHO heard from another directory" },
+            ],
+          ])
+          expect(decodeHeard(quiet?.result)).toMatchObject({
+            notify: "none",
+            text: "heard from another directory",
+          })
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
