@@ -47,6 +47,7 @@ import {
   completeProviderAuth,
   DecisionModelResolver,
   removeSignIn,
+  renameSignIn,
   listAuthMethods,
   limitResetAt,
   listCatalogProviders,
@@ -4483,6 +4484,82 @@ describe("named provider resolution", () => {
       expect(Predicate.isNumber(stored?.signedInAt)).toBe(true)
       expect(received).toEqual([Option.fromUndefinedOr(stored?.signedInAt)])
     }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive(
+    "an OAuth sign-in keeps its prompt answers through a refresh and a rename, and its driver reads them",
+    () =>
+      Effect.gen(function* () {
+        const auth = Context.get(yield* Layer.build(Auth.Test()), Auth)
+        const personal = CredentialSlot.make("personal")
+        const home = CredentialSlot.make("home")
+        const answers = { directory: "/nonexistent/gent-link/claude-personal" }
+        const received: Array<Option.Option<Record<string, string>>> = []
+        let refreshes = 0
+        const driver: ModelDriverContribution = {
+          id: "linked-meta",
+          name: "Linked",
+          resolveModel: (_model, info) =>
+            Effect.gen(function* () {
+              if (info?._tag !== "Oauth") return yield* Effect.die("expected OAuth")
+              received.push(Option.fromUndefinedOr(info.metadata))
+              // The driver rotates the token, as a refresh does: it writes
+              // the token fields alone.
+              refreshes += 1
+              yield* info.update((current) =>
+                Effect.succeed([
+                  true,
+                  Option.map(current, (stored) => ({
+                    ...stored,
+                    access: `fake-access-${refreshes}`,
+                    refresh: `fake-refresh-${refreshes}`,
+                  })),
+                ] as const),
+              )
+              return fakeResolution()
+            }),
+          auth: {
+            methods: [AuthMethod.make({ type: "oauth", label: "Link", credentialTarget: "named" })],
+            authorize: (ctx) =>
+              ctx
+                .persist({
+                  type: "oauth",
+                  access: "fake-access-0",
+                  refresh: "fake-refresh-0",
+                  expires: 1,
+                  ...omitUndefined({ metadata: ctx.inputs }),
+                })
+                .pipe(Effect.as(Option.none())),
+          },
+        }
+        const layer = Layer.mergeAll(
+          buildProviderLayer([makeExt("linked-meta", [driver])], auth),
+          GentPlatform.Test(),
+        )
+        yield* Effect.gen(function* () {
+          const target = yield* captureProviderLogin(driver.id, 0, personal, answers)
+          yield* authorizeProvider(SessionId.make("link"), driver.id, 0, target)
+          yield* resolveModel({ model: "linked-meta/model", credentialSlot: personal })
+          const refreshed = yield* auth.get(driver.id, personal)
+          expect(refreshed?.type === "oauth" && refreshed.refresh).toBe("fake-refresh-1")
+          expect(refreshed?.type === "oauth" && refreshed.metadata).toEqual(answers)
+          yield* renameSignIn(driver.id, personal, home)
+          yield* resolveModel({ model: "linked-meta/model", credentialSlot: home })
+          const renamed = yield* auth.get(driver.id, home)
+          expect(renamed?.type === "oauth" && renamed.refresh).toBe("fake-refresh-2")
+          expect(renamed?.type === "oauth" && renamed.metadata).toEqual(answers)
+          // The listing names the label and its kind, never what it stored.
+          const rows = yield* listAuthProviders([])
+          const row = rows.find((entry) => entry.provider === driver.id)
+          expect(row?.credentials?.map((entry) => entry.slot)).toContain(home)
+          const shown = rows.flatMap((entry) => [entry, ...(entry.credentials ?? [])])
+          expect(shown.some((entry) => Predicate.hasProperty(entry, "metadata"))).toBe(false)
+          expect(shown.some((entry) => Object.values(entry).includes(answers.directory))).toBe(
+            false,
+          )
+        }).pipe(Effect.provide(layer))
+        expect(received).toEqual([Option.some(answers), Option.some(answers)])
+      }).pipe(Effect.timeout("5 seconds")),
   )
 
   it.scopedLive("a conflicting canonical order fails its own sign-in and leaves the others", () =>

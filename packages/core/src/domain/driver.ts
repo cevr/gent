@@ -289,7 +289,10 @@ const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is Up
  * `update`. Its `signedInAt` is the stamp of the sign-in the label holds now
  * (absent for one stored before stamps): a cache a driver keeps per label
  * serves only that sign-in, so a label renamed or signed in again is never
- * answered by the account it held before.
+ * answered by the account it held before. Its `metadata` is what its sign-in
+ * stored beside the tokens (`PersistAuth`), as an API key's answers are: a
+ * refresh through `update` and a rename keep it, and no `/auth` listing
+ * shows it.
  */
 export const ProviderAuthInfo = Schema.TaggedUnion({
   Api: {
@@ -301,6 +304,7 @@ export const ProviderAuthInfo = Schema.TaggedUnion({
     update: UpdateStoredOAuth,
     slot: Schema.optional(CredentialSlot),
     signedInAt: Schema.optional(Schema.Finite),
+    metadata: Schema.optional(AuthMetadata),
   },
 })
 export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>
@@ -314,7 +318,9 @@ export interface StoredOAuthCredentials {
 }
 
 /** Persist auth credentials — handed by `authorizeProvider` and `completeProviderAuth`
- *  to a model driver's auth handlers. */
+ *  to a model driver's auth handlers. An OAuth sign-in may store its
+ *  `metadata` beside the tokens; the driver reads it back on
+ *  `ProviderAuthInfo.Oauth`. */
 export type PersistAuth = (
   auth:
     | { readonly type: "api"; readonly key: string }
@@ -324,6 +330,7 @@ export type PersistAuth = (
         readonly refresh: string
         readonly expires: number
         readonly accountId?: string
+        readonly metadata?: AuthMetadata
       },
   /** Bounded owned-cell publication, no I/O or reentrant auth access. */
   onPersisted?: Effect.Effect<void, never, never>,

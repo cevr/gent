@@ -113,7 +113,10 @@ export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuth
  * - `Api`   — bearer/API key; presented to the model driver as `key`, with
  *             the answers to its method's prompts as `metadata` (absent in a
  *             record stored without any).
- * - `Oauth` — refreshable bearer token + expiry; driver may rotate.
+ * - `Oauth` — refreshable bearer token + expiry; driver may rotate. Its
+ *             `metadata` is what its sign-in stored beside the tokens (a
+ *             linked directory), absent in a record stored without any; a
+ *             refresh and a rename keep it.
  *
  * `signedInAt` is when the credential was signed in or replaced, stamped by
  * the store's `set` (a refresh through `update` keeps it). A record stored
@@ -137,6 +140,7 @@ export const AuthInfo = Schema.TaggedUnion({
     refresh: Schema.String,
     expires: Schema.Finite,
     accountId: Schema.optional(Schema.String),
+    metadata: Schema.optional(AuthMetadata),
     signedInAt: Schema.optional(Schema.Finite),
   },
 })
@@ -1124,6 +1128,7 @@ const authValue = (auth: Parameters<PersistAuth>[0]): AuthApi | AuthOauth => {
     refresh: auth.refresh,
     expires: auth.expires,
     accountId: auth.accountId,
+    ...omitUndefined({ metadata: auth.metadata }),
   })
 }
 
@@ -1144,7 +1149,9 @@ const persistAuthTo =
 /**
  * A stored credential as a driver sees it. An OAuth credential carries an
  * `update` that reads and writes the stored credential under the store's
- * per-provider lock.
+ * per-provider lock. A write through `update` is the same sign-in: it keeps
+ * the `metadata` of the record it replaces (the store keeps its stamp), so a
+ * refresh never drops what the sign-in stored.
  */
 const toProviderAuthInfo = (
   authStore: AuthService,
@@ -1160,7 +1167,7 @@ const toProviderAuthInfo = (
   }
   return ProviderAuthInfo.cases.Oauth.make({
     slot,
-    ...omitUndefined({ signedInAt: info.signedInAt }),
+    ...omitUndefined({ signedInAt: info.signedInAt, metadata: info.metadata }),
     update: <A, E>(
       f: (
         stored: Option.Option<StoredOAuthCredentials>,
@@ -1174,7 +1181,15 @@ const toProviderAuthInfo = (
               f(Option.flatMap(current, storedOAuthFields)),
               (pair): readonly [A, Option.Option<AuthInfo>] => [
                 pair[0],
-                Option.map(pair[1], (fields) => authValue({ type: "oauth", ...fields })),
+                Option.map(pair[1], (fields) =>
+                  authValue({
+                    type: "oauth",
+                    ...fields,
+                    ...omitUndefined({
+                      metadata: Option.getOrUndefined(heldOAuthMetadata(current)),
+                    }),
+                  }),
+                ),
               ],
             ),
           slot,
@@ -1199,6 +1214,13 @@ const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentia
   if (Predicate.isUndefined(stored.accountId)) return Option.some(fields)
   return Option.some({ ...fields, accountId: stored.accountId })
 }
+
+/** The `metadata` of the OAuth record the store holds; none for an API key or a record without any. */
+const heldOAuthMetadata = (current: Option.Option<AuthInfo>): Option.Option<AuthMetadata> =>
+  Option.flatMap(current, (held) => {
+    if (held.type !== "oauth") return Option.none()
+    return Option.fromUndefinedOr(held.metadata)
+  })
 
 // ── provider login ──────────────────────────────────────────────────────────
 //
