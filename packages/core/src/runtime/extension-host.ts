@@ -3304,8 +3304,8 @@ export class SessionProfileCache extends Context.Service<
          * finalizers under the lock; it closes after the new pass holds its
          * builds either way. A build's own acquisition, and its rollback when
          * that fails, still run under the lock, in the build the pass awaits.
-         * So a process Resource must not resolve or reload its own place from
-         * those, and a server Resource must not resolve or reload any place: a
+         * So a process Resource must not resolve or reload the place it was
+         * built for from those, and a server Resource must not resolve or reload any place: a
          * server Resource has no place, and every place that awaits its build
          * holds its own lock.
          */

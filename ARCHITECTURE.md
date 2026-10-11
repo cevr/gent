@@ -579,7 +579,7 @@ the build's own scope, `SharedBuildOwner`); a lenient root fails no resolve
 with it, and a test root raises them together (below). A build's own
 acquisition, and its rollback when that acquisition fails, still run while the
 resolve that awaits the build holds the place's lock. So a process Resource
-must not resolve or reload its own place from those, and a server Resource
+must not resolve or reload the place it was built for from those, and a server Resource
 must not resolve or reload any place: a server Resource has no place, and
 every place that awaits its build holds its own lock.
 
