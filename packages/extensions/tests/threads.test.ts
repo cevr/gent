@@ -132,13 +132,8 @@ const ListedOutput = Schema.fromJsonString(
       current: Schema.Struct({ sessionId: SessionId, branchId: BranchId }),
       status: Schema.Literals(["running", "idle"]),
       preview: Schema.String,
-      account: Schema.optionalKey(
-        Schema.Struct({
-          provider: Schema.optionalKey(Schema.String),
-          slot: Schema.String,
-          placement: Schema.Literals(["pinned", "assigned", "walked"]),
-        }),
-      ),
+      account: Schema.optionalKey(Schema.String),
+      placement: Schema.optionalKey(Schema.Literals(["pinned", "assigned", "walked"])),
     }),
   ),
 )
@@ -592,15 +587,14 @@ describe("threads", () => {
                 listed.every((row) => row.status === "idle" && row.preview.length > 0),
               "both threads' rounds end",
             )
-            const accountOf = (thread: SessionId) =>
-              rows.find((row) => row.thread === thread)?.account
-            expect(accountOf(pinned.thread)).toEqual({
-              provider: "anthropic",
-              slot: b,
-              placement: "pinned",
-            })
-            expect(accountOf(placed.thread)?.placement).toBe("assigned")
-            expect(accountOf(placed.thread)?.provider).toBe("anthropic")
+            const accountOf = (thread: SessionId) => {
+              const row = rows.find((found) => found.thread === thread)
+              return { account: row?.account, placement: row?.placement }
+            }
+            expect(accountOf(pinned.thread)).toEqual({ account: b, placement: "pinned" })
+            expect(accountOf(placed.thread).placement).toBe("assigned")
+            const placedOn = accountOf(placed.thread).account
+            expect(placedOn === a || placedOn === b).toBe(true)
             // A sign-in with no pool: the thread walks its order.
             const plain = yield* accountsRig({ order: { authOrder: [a, b] } })
             yield* Deferred.succeed(plain.gate, true)
@@ -610,9 +604,9 @@ describe("threads", () => {
               (listed) => listed[0]?.status === "idle" && listed[0].preview.length > 0,
               "the thread's round ends",
             )
-            expect(plainRows.find((row) => row.thread === walked.thread)?.account).toEqual({
-              provider: "anthropic",
-              slot: a,
+            const walkedRow = plainRows.find((row) => row.thread === walked.thread)
+            expect({ account: walkedRow?.account, placement: walkedRow?.placement }).toEqual({
+              account: a,
               placement: "walked",
             })
           }).pipe(Effect.timeout("12 seconds")),

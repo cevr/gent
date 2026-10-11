@@ -2665,7 +2665,7 @@ const sharedUnion = Array.from({ length: 22 }).reduce<Schema.Codec<unknown>>(
   Schema.Union([Schema.Boolean, Schema.Null]).annotate({ identifier: "Level0" }),
 )
 // Anonymous unions nested with no definition to share.
-const nestedUnion = Array.from({ length: 16 }).reduce<Schema.Codec<unknown>>(
+const nestedUnion = Array.from({ length: 14 }).reduce<Schema.Codec<unknown>>(
   (below) => Schema.Union([Schema.Boolean, Schema.Null, Schema.Array(below)]),
   Schema.Union([Schema.Boolean, Schema.Null]),
 )

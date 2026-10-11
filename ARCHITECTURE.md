@@ -1015,9 +1015,11 @@ Shape:
     spawned, with each one's status from `listActiveLoops`, its open round,
     its last ended round (`lastRound`: number and flags, so a starter reads
     whether it was interrupted, stopped or failed), its current session,
-    the account that session runs on (`account`: its label, its provider and
-    whether it was `pinned`, `assigned` or `walked`, folded from a bounded
-    read of its events by `sessionAccount`), and the current session's
+    the account that session runs on (`account`, its label, and
+    `placement`: `pinned`, `assigned` or `walked`; flat, so the row's type
+    renders whole within the cell's signature bound; folded by
+    `sessionAccount` from one read of that branch's events per call, so a
+    call costs the listed branches' histories), and the current session's
     latest reply (one line,
     or 4,000 characters head and tail for one named thread); `read_session`
     reads the rest. `thread.stop` stops each working loop of such a thread,
@@ -2524,7 +2526,7 @@ local, and their results arrive as cell output, so discovery
 never changes the prompt. An id whose first segment is `search`
 renders and is reached as `tools("search.x")`. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
-`{}`. Enums past eight literals, and input or result types past 340 characters,
+`{}`. Enums past eight literals, and input or result types past 300 characters,
 render as their outer shape; a test holds every shipped tool's result under
 that bound, so the cell code reads each result whole. The RPC lifetime test
 checks the namespace keys and a host schema through the compiled worker, and
