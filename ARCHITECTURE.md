@@ -924,8 +924,13 @@ tools?, notify? })` makes a session spawned under the starter (so spawn
     its current session, and the current session's latest reply (one line,
     or 4,000 characters head and tail for one named thread); `read_session`
     reads the rest. `thread.stop` stops each working loop of such a thread,
-    closes its open round as interrupted and stopped (no wake), and refuses
-    any other thread.
+    closes its open round as stopped (no wake), and refuses any other
+    thread. The stopped turn's own `turnAfter` records the round, with its
+    text and its bill: the stop marks the round stopped, stops the turn, and
+    waits for that end (up to 10 s); a turn that already ended is recorded
+    from its receipt, and a round whose turn never ran, or held out, closes
+    as interrupted with no bill. A `loopOpen` closes a stopped round whose
+    turn never reached the branch, when the stop died before closing it.
   - One thread runs at most four threads with an open round over all its
     sessions (a constant): the count is read under one permit per server
     before a start makes its session, so a start with a task past the cap

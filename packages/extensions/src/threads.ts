@@ -1048,12 +1048,38 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
   })
 })
 
+/** A round a stop closed with no turn's end to read: interrupted, with no bill. */
+const stoppedOutcome: TurnOutcome = {
+  interrupted: true,
+  streamFailed: false,
+  unanswered: false,
+  error: Option.none(),
+  usage: Option.none(),
+}
+
+/** The round's turn as its receipt in the thread's history records it, once the turn ended. */
+const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: RoundRow) {
+  const end = yield* turnEnd({
+    sessionId: SessionId.make(round.session_id),
+    branchId: BranchId.make(round.branch_id),
+    messageId: MessageId.make(round.message_id),
+  })
+  return Option.map(end, ({ receipt, error }): TurnOutcome => ({
+    interrupted: receipt.interrupted === true,
+    streamFailed: receipt.streamFailed === true,
+    unanswered: receipt.unanswered === true,
+    error,
+    usage: usageOf(receiptTotal(receipt)),
+  }))
+})
+
 // ── reconcile ───────────────────────────────────────────────────────────────
 
 /**
  * One round a restart may have left behind. A recorded end is delivered. A
  * turn that ended with no record is read from the thread's history, then
- * recorded and delivered. A turn with no receipt is running, was cut short,
+ * recorded and delivered. A stopped round whose turn never reached the
+ * branch is closed. A turn with no receipt is running, was cut short,
  * or was never sent (the process died between saving the round and sending
  * it): the starter side re-sends the round. A repeat of its command with
  * `completion: "admission"` admits nothing new and returns at once, and it
@@ -1066,22 +1092,16 @@ const reconcileRound = Effect.fn("Threads.reconcileRound")(function* (
   starterSide: boolean,
 ) {
   if (Predicate.isNotNull(round.ended_at)) return yield* deliverRoundEnd(round)
-  const end = yield* turnEnd({
-    sessionId: SessionId.make(round.session_id),
-    branchId: BranchId.make(round.branch_id),
-    messageId: MessageId.make(round.message_id),
-  })
-  if (Option.isSome(end)) {
-    const { receipt, error } = end.value
-    return yield* endRound(round, {
-      interrupted: receipt.interrupted === true,
-      streamFailed: receipt.streamFailed === true,
-      unanswered: receipt.unanswered === true,
-      error,
-      usage: usageOf(receiptTotal(receipt)),
-    })
+  const recorded = yield* recordedOutcome(round)
+  if (Option.isSome(recorded)) return yield* endRound(round, recorded.value)
+  if (Predicate.isNotNull(round.stopped_at)) {
+    // A stop that died before it closed the round. A turn that reached the
+    // branch ends it when its loop resumes it, stopped; a round whose turn
+    // never did has no turn to end it.
+    if (yield* admitted(round)) return
+    return yield* endRound(round, stoppedOutcome)
   }
-  if (!starterSide || Predicate.isNotNull(round.stopped_at)) return
+  if (!starterSide) return
   yield* sendRoundTurn(round)
 })
 
@@ -1490,9 +1510,48 @@ const StopResult = Schema.Struct({
 })
 
 /**
+ * How long a stop waits for the stopped turn's own end. A turn stops at its
+ * next await; one that holds out past this has its round closed by the stop,
+ * with no bill.
+ */
+const STOP_SETTLE = "10 seconds"
+
+/** The next end of one round on the feed. */
+const nextEndOf = (ends: PubSub.Subscription<RoundEnded>, round: string) =>
+  Effect.gen(function* () {
+    let ended = yield* PubSub.take(ends)
+    while (ended.round !== round) ended = yield* PubSub.take(ends)
+    return ended
+  })
+
+/**
+ * Closes a round a stop reached. The stopped turn's own `turnAfter` records
+ * the end, with the turn's text and bill (a round records what it spent,
+ * stopped or not), so the stop waits for it while the turn runs. A round
+ * whose turn already ended is recorded from its receipt; one whose turn
+ * never ran, or held out past `STOP_SETTLE`, is closed here with no bill.
+ */
+const settleStopped = Effect.fn("Threads.settleStopped")(function* (
+  round: RoundRow,
+  ends: PubSub.Subscription<RoundEnded>,
+  running: boolean,
+) {
+  const rounds = yield* ThreadRounds
+  if (running) yield* Effect.timeoutOption(nextEndOf(ends, round.round), STOP_SETTLE)
+  const current = Option.getOrElse(yield* rounds.round(round.round), () => round)
+  if (Predicate.isNotNull(current.ended_at)) return
+  const recorded = yield* recordedOutcome(current)
+  yield* endRound(
+    current,
+    Option.getOrElse(recorded, () => stoppedOutcome),
+  )
+})
+
+/**
  * Stops every turn the thread runs now, and closes its open round as
- * interrupted. The round is marked stopped first, so its own end, racing the
- * stop, wakes nobody. `key` names a repeat of the same stop.
+ * interrupted. The round is marked stopped first, so its end wakes nobody,
+ * and the stop returns once the round is closed. `key` names a repeat of the
+ * same stop.
  */
 const stopThread = Effect.fn("Threads.stop")(function* (
   thread: string,
@@ -1502,43 +1561,44 @@ const stopThread = Effect.fn("Threads.stop")(function* (
   const rounds = yield* ThreadRounds
   const found = yield* ownThread(thread)
   const open = yield* rounds.openRound(found.thread)
-  if (Option.isSome(open)) {
-    yield* rounds.markStopped(open.value.round, yield* Clock.currentTimeMillis)
-    yield* ctx.Session.stopMessage({
-      sessionId: SessionId.make(open.value.session_id),
-      branchId: BranchId.make(open.value.branch_id),
-      messageId: MessageId.make(open.value.message_id),
-      requestId: RequestId.make(`thread-stop:${open.value.round}`),
-    })
-  }
-  const stopped = yield* Effect.forEach(found.working, (loop) =>
-    ctx.Session.stop({
-      sessionId: loop.sessionId,
-      branchId: loop.branchId,
-      ...omitUndefined({
-        requestId: Option.getOrUndefined(
-          Option.map(key, (id) =>
-            RequestId.make(`thread-stop:${id}:${loop.sessionId}:${loop.branchId}`),
-          ),
-        ),
-      }),
-    }).pipe(Effect.as({ sessionId: loop.sessionId, branchId: loop.branchId })),
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      // Subscribed before the stop, so the stopped turn's end cannot fall before it.
+      const ends = yield* PubSub.subscribe(rounds.ended)
+      let reached = false
+      if (Option.isSome(open)) {
+        yield* rounds.markStopped(open.value.round, yield* Clock.currentTimeMillis)
+        reached = yield* ctx.Session.stopMessage({
+          sessionId: SessionId.make(open.value.session_id),
+          branchId: BranchId.make(open.value.branch_id),
+          messageId: MessageId.make(open.value.message_id),
+          requestId: RequestId.make(`thread-stop:${open.value.round}`),
+        })
+      }
+      const stopped = yield* Effect.forEach(found.working, (loop) =>
+        ctx.Session.stop({
+          sessionId: loop.sessionId,
+          branchId: loop.branchId,
+          ...omitUndefined({
+            requestId: Option.getOrUndefined(
+              Option.map(key, (id) =>
+                RequestId.make(`thread-stop:${id}:${loop.sessionId}:${loop.branchId}`),
+              ),
+            ),
+          }),
+        }).pipe(Effect.as({ sessionId: loop.sessionId, branchId: loop.branchId })),
+      )
+      if (Option.isSome(open)) {
+        yield* settleStopped(open.value, ends, reached || stopped.length > 0)
+      }
+      return {
+        stopped,
+        ...omitUndefined({
+          round: Option.getOrUndefined(Option.map(open, (round) => round.round)),
+        }),
+      }
+    }),
   )
-  if (Option.isSome(open)) {
-    // The turn's own hook may have recorded the end already; the first record stands.
-    const current = Option.getOrElse(yield* rounds.round(open.value.round), () => open.value)
-    yield* endRound(current, {
-      interrupted: true,
-      streamFailed: false,
-      unanswered: false,
-      error: Option.none(),
-      usage: Option.none(),
-    })
-  }
-  return {
-    stopped,
-    ...omitUndefined({ round: Option.getOrUndefined(Option.map(open, (round) => round.round)) }),
-  }
 })
 
 /** The service's methods, each run in its caller's leaf or hook. */

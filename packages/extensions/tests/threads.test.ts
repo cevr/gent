@@ -744,9 +744,16 @@ const starterStep = (prompt: Prompt.Prompt) => {
   )
 }
 
+/** The tool a worker calls for a `BLOCK` round: it never returns (`blockProbe`). */
+const BLOCK_TOOL = "probe.block"
+
 const workerStep = (prompt: Prompt.Prompt, hang: Effect.Effect<void>) => {
   const text = lastUserText(prompt)
   if (/^HANG/m.test(text)) return Stream.unwrap(Effect.as(hang, Stream.never))
+  if (/^BLOCK/m.test(text)) {
+    if (acted(prompt)) return billed("unblocked")
+    return toolCalls([{ tool: BLOCK_TOOL, id: "block-1", input: {} }])
+  }
   const replyLine = /^REPLY (\S+) (.*)$/m.exec(text)
   if (Predicate.isNotNull(replyLine)) {
     if (acted(prompt)) return billed(`replied ${replyLine[1]}`)
@@ -953,6 +960,28 @@ const readRoundUntil = (
     8_000,
     `round ${round} is read as ready`,
   ).pipe(Effect.map(([found]) => found))
+
+/**
+ * A tool that never returns: a worker's `BLOCK` round runs it, so its turn
+ * is stopped between steps, with its first step's usage known.
+ */
+const blockProbe = (entered: Deferred.Deferred<boolean>) =>
+  defineExtension({
+    id: "threads-block-probe",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: BLOCK_TOOL,
+          description: "Block until stopped.",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => Effect.andThen(Deferred.succeed(entered, true), Effect.never),
+        }),
+      )
+    }),
+  })
 
 // ── rounds: acceptance ──────────────────────────────────────────────────────
 
@@ -1274,6 +1303,7 @@ describe("thread round ownership", () => {
       ),
     30_000,
   )
+
   it.live(
     "a round the thread's full queue refuses leaves no open round, so the thread is not held busy",
     () =>
@@ -1302,6 +1332,7 @@ describe("thread round ownership", () => {
       ),
     30_000,
   )
+
   it.live(
     "deleting an older session of the starter's thread keeps the rounds it sent to a thread a newer session started",
     () =>
@@ -1328,6 +1359,42 @@ describe("thread round ownership", () => {
           ])
           expect(read?.failed).toBe(false)
           expect(read?.result).toMatchObject({ status: "ended", text: "from the older" })
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a round thread.stop closes keeps the bill of the turn the stop interrupted",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<boolean>()
+          const { client, sessionId, branchId } = yield* roundHarness({
+            extensions: [blockProbe(entered)],
+          })
+          const starter = { sessionId, branchId }
+          const impl = yield* startWorker(client, starter, "start-impl")
+          const [sent] = yield* call(client, starter, [
+            ["thread.send", "send-block", { thread: impl.thread, message: "BLOCK" }],
+          ])
+          const round = decodeRound(sent?.result)
+          yield* Deferred.await(entered)
+          const [stopped] = yield* call(client, starter, [
+            ["thread.stop", "stop-block", { thread: impl.thread }],
+          ])
+          expect(stopped?.result).toMatchObject({ round: round.round })
+          // The turn's first step reported its usage before the tool blocked.
+          const read = yield* readRoundUntil(client, starter, round.round, "read-billed", (text) =>
+            text.includes('"usage"'),
+          )
+          expect(read?.result).toMatchObject({
+            status: "ended",
+            interrupted: true,
+            stopped: true,
+            usage: { input: 50, output: 10 },
+          })
+          expect(wakes((yield* client.session.getSnapshot(starter)).messages)).toEqual([])
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
