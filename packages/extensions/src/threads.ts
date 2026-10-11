@@ -2793,10 +2793,13 @@ const ThreadRow = Schema.Struct({
   /** The current session's latest reply: one line, or for one named thread its head and tail. */
   preview: Schema.String,
   /**
-   * The account the current session runs on, and whether it was pinned,
-   * assigned or walked. Absent before its first step or placement.
+   * The account (credential label) the current session runs on. Absent
+   * before its first step or placement. Flat, as every row field is: the
+   * row's type renders whole within the cell's signature bound.
    */
-  account: Schema.optionalKey(SessionAccount),
+  account: Schema.optionalKey(Schema.String),
+  /** How the session came to that account: its pin, its placement, or the walk of its order. */
+  placement: Schema.optionalKey(SessionAccount.fields.placement),
 })
 
 /** A thread runs while any of its sessions' loops works. */
@@ -2860,7 +2863,8 @@ const ThreadListTool = tool({
           preview,
           ...omitUndefined({
             agent: current.admission?.agent,
-            account: Option.getOrUndefined(account),
+            account: Option.getOrUndefined(Option.map(account, (found) => found.slot)),
+            placement: Option.getOrUndefined(Option.map(account, (found) => found.placement)),
             openRound: Option.getOrUndefined(
               Option.map(open, (round) => ({ round: round.round, number: round.number })),
             ),
