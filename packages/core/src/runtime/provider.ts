@@ -80,8 +80,8 @@ import {
   type StoredOAuthCredentials,
   type VirtualModel,
 } from "../domain/driver.js"
-import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
-import type { ProviderConfig, ProviderConfigEntry } from "./config.js"
+import { GentPlatform, resolveDataDir, writeFileAtomic } from "./gent-platform.js"
+import { type ProviderConfig, type ProviderConfigEntry, RuntimeEnvironment } from "./config.js"
 import { DecisionModel, LanguageModel } from "effect/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/ai/AiError"
@@ -884,36 +884,39 @@ const credentialKeys = (drivers: ModelDrivers, driverId: string): ReadonlyArray<
   return [owner, ...sharers]
 }
 
-/** One sign-in's ordered credentials: the owner they are stored under, and the slots to try, first to last. */
+/**
+ * One sign-in's ordered credentials: the owner they are stored under, and
+ * the slots to try, first to last. `pool` is the slots its unpinned runs are
+ * spread over (`authSpread`); none without one, and for a pinned run.
+ */
 interface CredentialOrder {
   readonly provider: string
   readonly slots: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  readonly pool: Option.Option<Arr.NonEmptyReadonlyArray<CredentialSlot>>
 }
 
-/** The config entries that name an `authOrder` for `provider`'s sign-in, as `[id, order]`. */
+/** The `providers` fields that name a list of a sign-in's credentials. */
+type CredentialListField = "authOrder" | "authSpread"
+
+/** The config entries that name `field` for `provider`'s sign-in, as `[id, slots]`. */
 const configuredOrders = (
   drivers: ModelDrivers,
   config: ProviderConfig,
   provider: string,
+  field: CredentialListField = "authOrder",
 ): ReadonlyArray<readonly [string, ReadonlyArray<CredentialSlot>]> => {
   const owner = credentialOwner(drivers, provider)
   return Object.entries(config.providers ?? {}).flatMap(([id, entry]) => {
-    if (Predicate.isUndefined(entry.authOrder) || credentialOwner(drivers, id) !== owner) return []
-    return [[id, entry.authOrder] as const]
+    const slots = entry[field]
+    if (Predicate.isUndefined(slots) || credentialOwner(drivers, id) !== owner) return []
+    return [[id, slots] as const]
   })
 }
 
-/**
- * The config entries that name different orders for `provider`'s sign-in
- * (an alias and its owner), sorted; none when they agree. Only that sign-in
- * fails: a conflict never stops the others.
- */
-const orderConflict = (
-  drivers: ModelDrivers,
-  config: ProviderConfig,
-  provider: string,
+/** The entries of `orders` that disagree, sorted; none when they agree. */
+const disagreeing = (
+  orders: ReadonlyArray<readonly [string, ReadonlyArray<CredentialSlot>]>,
 ): ReadonlyArray<string> => {
-  const orders = configuredOrders(drivers, config, provider)
   const first = orders[0]
   if (Predicate.isUndefined(first)) return []
   const [, slots] = first
@@ -926,10 +929,38 @@ const orderConflict = (
 }
 
 /**
+ * The config entries that name different orders or different pools for
+ * `provider`'s sign-in (an alias and its owner), sorted; none when they
+ * agree. Only that sign-in fails: a conflict never stops the others.
+ */
+const orderConflict = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+): ReadonlyArray<string> => [
+  ...new Set([
+    ...disagreeing(configuredOrders(drivers, config, provider)),
+    ...disagreeing(configuredOrders(drivers, config, provider, "authSpread")),
+  ]),
+]
+
+/** The first list `field` names for `provider`'s sign-in. */
+const configuredList = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+  field: CredentialListField,
+): Option.Option<Arr.NonEmptyReadonlyArray<CredentialSlot>> =>
+  Option.flatMap(
+    Option.fromUndefinedOr(configuredOrders(drivers, config, provider, field)[0]),
+    ([, slots]) => Option.liftPredicate(slots, Arr.isReadonlyArrayNonEmpty),
+  )
+
+/**
  * The credential order of `provider`'s sign-in: its config `authOrder`, read
- * through aliases to the owner, else the default credential alone. Config
- * entries that name different orders for one sign-in fail it, never by
- * which entry comes first.
+ * through aliases to the owner, else the default credential alone, and its
+ * `authSpread` pool. Config entries that name different orders or pools for
+ * one sign-in fail it, never by which entry comes first.
  */
 const credentialOrder = Effect.fn("CredentialOrder.of")(function* (
   drivers: ModelDrivers,
@@ -940,18 +971,16 @@ const credentialOrder = Effect.fn("CredentialOrder.of")(function* (
   const conflict = orderConflict(drivers, config, provider)
   if (conflict.length > 0) {
     return yield* new ProviderAuthError({
-      message: `Conflicting credential orders for provider "${owner}": providers ${conflict.join(", ")} name different authOrder lists`,
+      message: `Conflicting credential orders for provider "${owner}": providers ${conflict.join(", ")} name different authOrder or authSpread lists`,
     })
   }
-  const configured = Option.flatMap(
-    Option.fromUndefinedOr(configuredOrders(drivers, config, provider)[0]),
-    ([, slots]) => Option.liftPredicate(slots, Arr.isReadonlyArrayNonEmpty),
-  )
   return {
     provider: owner,
-    slots: Option.getOrElse(configured, (): Arr.NonEmptyReadonlyArray<CredentialSlot> => [
-      DEFAULT_CREDENTIAL_SLOT,
-    ]),
+    slots: Option.getOrElse(
+      configuredList(drivers, config, provider, "authOrder"),
+      (): Arr.NonEmptyReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
+    ),
+    pool: configuredList(drivers, config, provider, "authSpread"),
   } satisfies CredentialOrder
 })
 
@@ -3110,7 +3139,10 @@ export const driverCarriesEffort = (
  * which no sign-in serves. Config entries that name conflicting orders fail
  * it, as they fail the request's resolution. A run pinned to a credential
  * (`pin`, the run spec's `credentialSlot`) walks that slot alone, whatever
- * the `authOrder`: the account it names pays, or the turn fails.
+ * the `authOrder`: the account it names pays, or the turn fails. An
+ * unpinned run of a sign-in with a pool (`authSpread`) walks the pool first,
+ * then the rest of its `authOrder`; the turn's placement rotates it
+ * (`placementWalk`).
  */
 export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(function* (
   request: ResolveModelRequest,
@@ -3126,10 +3158,23 @@ export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(fun
     yield* registry.providerConfig,
     provider.value,
   )
+  if (Option.isSome(pin)) {
+    return Option.some<CredentialOrder>({
+      provider: order.provider,
+      slots: [pin.value],
+      pool: Option.none(),
+    })
+  }
   return Option.some(
-    Option.match(pin, {
+    Option.match(order.pool, {
       onNone: () => order,
-      onSome: (slot): CredentialOrder => ({ provider: order.provider, slots: [slot] }),
+      onSome: (pool): CredentialOrder => ({
+        ...order,
+        slots: Arr.appendAll(
+          pool,
+          order.slots.filter((slot) => !pool.includes(slot)),
+        ),
+      }),
     }),
   )
 })
@@ -3309,6 +3354,370 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
         carriesEffort: (request, registry) =>
           driverCarriesEffort(request, registry, Option.some(catalogSource)),
       })
+    }),
+  )
+}
+
+// ── credential placement ────────────────────────────────────────────────────
+//
+// A sign-in with a pool (`authSpread`) spreads its unpinned runs over the
+// pool's accounts. A prompt cache belongs to one account, so the turn places
+// a run only where its cache starts over anyway (turn.ts decides where) and
+// keeps it there while the cache is warm. The ranking reads only what gent
+// records: the price of each account's steps over the last 7 days, and the
+// sessions whose cache lives on each account now. It makes no model call
+// and polls nothing. The provider's own refusal is the limit signal: a
+// refused account is held until its reset.
+
+/** The preferred account stays until another scores lower by more than this many sessions. */
+const PLACEMENT_HYSTERESIS_SESSIONS = 1
+/** How far back recorded usage counts. */
+const PLACEMENT_WINDOW_MS = 7 * 24 * 3_600_000
+/** How long a refused account is held when its failure names no reset. */
+const PLACEMENT_REFUSAL_HOLD_MS = 5 * 60_000
+/** Usage is kept in buckets of one hour. */
+const PLACEMENT_BUCKET_MS = 3_600_000
+/** The usage ledger's file in gent's data directory: numbers and labels, never a credential. */
+const PLACEMENT_LEDGER_FILE = "credential-usage.json"
+
+/** What placement reads of one pool account. */
+interface PlacementSlot {
+  readonly slot: CredentialSlot
+  /** The recorded price of its steps in the window, USD. */
+  readonly load: number
+  /** Sessions whose newest placement or step is on it and whose cache still lives, the placed one left out. */
+  readonly live: number
+  /** Refused until its reset, or warmed by a fresh sibling: not placed on now. */
+  readonly held: boolean
+}
+
+/** One placement's table: the pool in config order, and who prefers what. */
+interface PlacementTable {
+  readonly slots: Arr.NonEmptyReadonlyArray<PlacementSlot>
+  /** Distinct sessions with a priced step on the provider in the window. */
+  readonly sessions: number
+  /** Where the run's cache or its parent's lives, on the same model. */
+  readonly preferred: Option.Option<CredentialSlot>
+}
+
+/**
+ * Where a run goes, as the pool walk its turn takes: the choice first, then
+ * the other eligible accounts by score, then the held ones in pool order.
+ * `score = load / unit + live`, where a unit is the mean recorded price of a
+ * session (with no recorded price, the score is the live sessions alone).
+ * The preferred account wins while it scores within one session of the
+ * lowest; else the lowest wins, ties by pool order. With none eligible, the
+ * preferred account, else the pool's first.
+ */
+export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
+  const total = table.slots.reduce((sum, entry) => sum + entry.load, 0)
+  // None when nothing priced was recorded: the score is then the live sessions alone.
+  const unit = Option.liftPredicate(total / table.sessions, (mean) => total > 0 && mean > 0)
+  const score = (entry: PlacementSlot) =>
+    Option.match(unit, { onNone: () => 0, onSome: (mean) => entry.load / mean }) + entry.live
+  // A stable sort: equal scores keep pool order.
+  const eligible = table.slots
+    .filter((entry) => !entry.held)
+    .sort((left, right) => score(left) - score(right))
+  const preferred = Option.flatMap(table.preferred, (slot) =>
+    Option.fromUndefinedOr(eligible.find((entry) => entry.slot === slot)),
+  )
+  const lowest = Option.fromUndefinedOr(eligible[0])
+  const choice: CredentialSlot = Option.match(lowest, {
+    onNone: () => Option.getOrElse(table.preferred, () => table.slots[0].slot),
+    onSome: (low) =>
+      Option.match(preferred, {
+        onNone: () => low.slot,
+        onSome: (kept) => {
+          if (score(kept) <= score(low) + PLACEMENT_HYSTERESIS_SESSIONS) return kept.slot
+          return low.slot
+        },
+      }),
+  })
+  const rest = [
+    ...eligible.map((entry) => entry.slot),
+    ...table.slots.filter((entry) => entry.held).map((entry) => entry.slot),
+  ].filter((slot) => slot !== choice)
+  return [choice, ...rest]
+}
+
+/** A run to place. */
+interface PlacementRequest {
+  readonly provider: string
+  readonly pool: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  readonly sessionId: SessionId
+  readonly preferred: Option.Option<CredentialSlot>
+  /**
+   * The session that spawned a fresh child: an account other than the
+   * starter's (`preferred`) where a sibling was placed and has not ended its
+   * first step is not placed on, so a burst pays one cold start per account.
+   */
+  readonly starter: Option.Option<SessionId>
+  /** The accounts this turn left: never placed on again in it. */
+  readonly left: ReadonlySet<CredentialSlot>
+  /** How long the placed session's cache lives from now. */
+  readonly ttlMs: number
+}
+
+/** A step that ended on a pool's account. */
+interface PlacementStep {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  readonly sessionId: SessionId
+  /** The step's price; none when unpriced. */
+  readonly costUsd: Option.Option<number>
+  /** How long the session's cache lives from now. */
+  readonly ttlMs: number
+}
+
+interface CredentialPlacementService {
+  /** Place a run: the pool walk its turn takes, the choice first. One decision at a time. */
+  readonly place: (
+    request: PlacementRequest,
+  ) => Effect.Effect<Arr.NonEmptyReadonlyArray<CredentialSlot>>
+  /** A step ended on `slot`: its price counts, its session's cache lives there now. */
+  readonly noteStep: (step: PlacementStep) => Effect.Effect<void>
+  /** `slot` refused: held until `retryAt`, else for 5 minutes. */
+  readonly refuse: (params: {
+    readonly provider: string
+    readonly slot: CredentialSlot
+    readonly retryAt: Option.Option<number>
+  }) => Effect.Effect<void>
+  /** The session's turn ended: a warming guard it holds is released. */
+  readonly release: (sessionId: SessionId) => Effect.Effect<void>
+}
+
+const UsageBucket = Schema.Struct({
+  provider: Schema.String,
+  slot: CredentialSlot,
+  /** Epoch hours. */
+  hour: Schema.Int,
+  costUsd: Schema.Finite,
+  /** Sessions first counted on the provider in this hour, on this account. */
+  sessions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+type UsageBucket = typeof UsageBucket.Type
+
+const PlacementLedger = Schema.fromJsonString(Schema.Struct({ buckets: Schema.Array(UsageBucket) }))
+
+/** Keys of the placement state's maps: fields joined by NUL, which no label or id holds. */
+const placementKey = (...parts: ReadonlyArray<string | number>) => parts.join("\u0000")
+
+/**
+ * The placement state of one server: usage buckets (persisted to `ledger`
+ * when one is named, loaded from it here), live caches, held accounts and
+ * warming guards (in memory). A missing or undecodable ledger starts at
+ * zero and is replaced at the next write; the ledger never fails a turn.
+ */
+export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(function* (
+  ledger: Option.Option<string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
+  const platform = yield* GentPlatform
+  const lock = yield* Semaphore.make(1)
+  const writeLock = yield* Semaphore.make(1)
+  const buckets = new Map<string, UsageBucket>()
+  /** provider, session → the hour the session was last counted in. */
+  const counted = new Map<string, number>()
+  /** provider, session → where its cache lives and until when. */
+  const live = new Map<
+    string,
+    { readonly provider: string; readonly slot: CredentialSlot; readonly until: number }
+  >()
+  /** provider, slot → held until. */
+  const held = new Map<string, number>()
+  /** provider, starter, slot → the fresh children warming it. */
+  const warming = new Map<string, Set<SessionId>>()
+  let writtenHour = 0
+  /** Buckets changed since the ledger was last written. */
+  let dirty = false
+  /** One read or change of the state at a time: a burst of placements reads each earlier one. */
+  const locked = <A>(body: () => A) => Effect.sync(body).pipe(lock.withPermits(1))
+  const windowStart = (now: number) => Math.floor((now - PLACEMENT_WINDOW_MS) / PLACEMENT_BUCKET_MS)
+  const trim = (now: number) => {
+    const first = windowStart(now)
+    for (const [key, bucket] of buckets) if (bucket.hour < first) buckets.delete(key)
+    for (const [key, hour] of counted) if (hour < first) counted.delete(key)
+    for (const [key, entry] of live) if (entry.until <= now) live.delete(key)
+    for (const [key, until] of held) if (until <= now) held.delete(key)
+  }
+  const provideIo = <A, E>(
+    effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | GentPlatform>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, pathService),
+      Effect.provideService(GentPlatform, platform),
+    )
+  if (Option.isSome(ledger)) {
+    const loaded = yield* fs.readFileString(ledger.value).pipe(
+      Effect.flatMap(Schema.decodeEffect(PlacementLedger)),
+      Effect.asSome,
+      Effect.catch((cause) =>
+        Effect.logDebug("credential-placement.ledger-unread").pipe(
+          Effect.annotateLogs({ error: String(cause) }),
+          Effect.as(Option.none<typeof PlacementLedger.Type>()),
+        ),
+      ),
+    )
+    const first = windowStart(yield* Clock.currentTimeMillis)
+    for (const bucket of Option.match(loaded, { onNone: () => [], onSome: (read) => read.buckets }))
+      if (bucket.hour >= first)
+        buckets.set(placementKey(bucket.provider, bucket.slot, bucket.hour), bucket)
+  }
+  const write = Option.match(ledger, {
+    onNone: () => Effect.void,
+    onSome: (file) =>
+      Effect.gen(function* () {
+        // Nothing recorded since the last write: the file already holds it.
+        const kept = yield* locked(() => {
+          const changed = dirty
+          dirty = false
+          return Option.liftPredicate([...buckets.values()], () => changed)
+        })
+        if (Option.isNone(kept)) return
+        const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets: kept.value })
+        yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
+        yield* provideIo(writeFileAtomic(file, text, { mode: 0o600 }))
+      }).pipe(
+        writeLock.withPermits(1),
+        Effect.catch((cause) =>
+          Effect.logWarning("credential-placement.ledger-write-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+          ),
+        ),
+      ),
+  })
+  yield* Effect.addFinalizer(() => write)
+  const liveOn = (provider: string, slot: CredentialSlot, except: SessionId) => {
+    let count = 0
+    for (const [key, entry] of live)
+      if (
+        entry.provider === provider &&
+        entry.slot === slot &&
+        key !== placementKey(provider, except)
+      )
+        count += 1
+    return count
+  }
+  return {
+    place: (request) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        return yield* locked((): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
+          trim(now)
+          const open = request.pool.filter((slot) => !request.left.has(slot))
+          if (!Arr.isReadonlyArrayNonEmpty(open)) return request.pool
+          const first = windowStart(now)
+          let sessions = 0
+          const load = new Map<CredentialSlot, number>()
+          for (const bucket of buckets.values()) {
+            if (bucket.provider !== request.provider || bucket.hour < first) continue
+            sessions += bucket.sessions
+            load.set(bucket.slot, (load.get(bucket.slot) ?? 0) + bucket.costUsd)
+          }
+          const warmedBySibling = (slot: CredentialSlot) =>
+            Option.exists(
+              request.starter,
+              (starter) =>
+                !Option.contains(request.preferred, slot) &&
+                (warming.get(placementKey(request.provider, starter, slot))?.size ?? 0) > 0,
+            )
+          const walk = rankPlacement({
+            slots: Arr.map(open, (slot) => ({
+              slot,
+              load: load.get(slot) ?? 0,
+              live: liveOn(request.provider, slot, request.sessionId),
+              held: held.has(placementKey(request.provider, slot)) || warmedBySibling(slot),
+            })),
+            sessions,
+            preferred: Option.filter(request.preferred, (slot) => !request.left.has(slot)),
+          })
+          const choice = walk[0]
+          live.set(placementKey(request.provider, request.sessionId), {
+            provider: request.provider,
+            slot: choice,
+            until: now + request.ttlMs,
+          })
+          if (Option.isSome(request.starter) && !Option.contains(request.preferred, choice)) {
+            const key = placementKey(request.provider, request.starter.value, choice)
+            const children = warming.get(key) ?? new Set<SessionId>()
+            children.add(request.sessionId)
+            warming.set(key, children)
+          }
+          return walk
+        })
+      }),
+    noteStep: (step) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
+        const closed = yield* locked(() => {
+          trim(now)
+          for (const children of warming.values()) children.delete(step.sessionId)
+          live.set(placementKey(step.provider, step.sessionId), {
+            provider: step.provider,
+            slot: step.slot,
+            until: now + step.ttlMs,
+          })
+          if (Option.isSome(step.costUsd)) {
+            const key = placementKey(step.provider, step.slot, hour)
+            const bucket = buckets.get(key) ?? {
+              provider: step.provider,
+              slot: step.slot,
+              hour,
+              costUsd: 0,
+              sessions: 0,
+            }
+            // A session counts once in the window, on the hour of its first priced step.
+            const sessionKey = placementKey(step.provider, step.sessionId)
+            let sessions = bucket.sessions
+            if (!counted.has(sessionKey)) {
+              counted.set(sessionKey, hour)
+              sessions += 1
+            }
+            buckets.set(key, { ...bucket, costUsd: bucket.costUsd + step.costUsd.value, sessions })
+            dirty = true
+          }
+          // A bucket of an earlier hour closed: the ledger is written once an hour.
+          const closes = writtenHour !== 0 && hour > writtenHour
+          if (writtenHour === 0 || closes) writtenHour = hour
+          return closes
+        })
+        if (closed) yield* write
+      }),
+    refuse: (params) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const until = Option.getOrElse(params.retryAt, () => now + PLACEMENT_REFUSAL_HOLD_MS)
+        yield* locked(() => held.set(placementKey(params.provider, params.slot), until))
+      }),
+    release: (sessionId) =>
+      locked(() => {
+        for (const children of warming.values()) children.delete(sessionId)
+      }),
+  } satisfies CredentialPlacementService
+})
+
+/**
+ * The server's credential placement: one per server, so every session of
+ * every workspace reads one usage table. Its ledger lives in gent's data
+ * directory (`credential-usage.json`), not per workspace, as accounts are not.
+ */
+export class CredentialPlacement extends Context.Service<
+  CredentialPlacement,
+  CredentialPlacementService
+>()("@gent/core/src/runtime/provider/CredentialPlacement") {
+  static Live = Layer.effect(
+    CredentialPlacement,
+    Effect.gen(function* () {
+      const { home } = yield* RuntimeEnvironment
+      const pathService = yield* Path.Path
+      const dataDir = pathService.resolve(yield* resolveDataDir(home))
+      return yield* makeCredentialPlacement(
+        Option.some(pathService.join(dataDir, PLACEMENT_LEDGER_FILE)),
+      )
     }),
   )
 }

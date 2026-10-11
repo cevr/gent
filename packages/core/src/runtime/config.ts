@@ -124,9 +124,15 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * asked at sign-in), `env` (the key's variables), `class` (the id of the API
  * class that speaks every model, as `openai-chat`), `headers` (sent with
  * every request) and `models` (by model id, in the models.dev model shape).
+ * `authOrder` names the credentials a turn walks; `authSpread` names a pool
+ * of two or more of them that unpinned runs are spread over, each placed on
+ * the least-used one where its prompt cache starts over anyway (credential
+ * placement, runtime/provider.ts). A pool is opt-in: an order may hold a
+ * billed key as a fallback that nobody wants spread onto.
  */
 const ProviderConfigEntry = Schema.Struct({
   authOrder: Schema.optional(CredentialOrder.check(Schema.isMinLength(1))),
+  authSpread: Schema.optional(CredentialOrder.check(Schema.isMinLength(2))),
   name: Schema.optional(Schema.String),
   class: Schema.optional(Schema.String),
   api: Schema.optional(Schema.String),
