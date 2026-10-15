@@ -380,7 +380,7 @@ names the decision that left it open.
 ```text
 apps/
 ├── tui/       # OpenTUI client over the shared transport contract
-└── site/      # gent.cvr.im: landing page and install.sh, an Alchemy stack on Railway
+└── site/      # gent.cvr.im: landing page and install.sh, an Alchemy stack: one Cloudflare Worker
 
 packages/
 ├── core/          # entries: extensions/api, extensions/branch-tools, protocol, host, host-bun, test-utils
