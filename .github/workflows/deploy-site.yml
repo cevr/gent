@@ -8,10 +8,10 @@ name: Deploy site
 on:
   push:
     branches: [main]
-    paths: ['apps/site/**', 'bun.lock', 'package.json', '.github/workflows/deploy-site.yml']
+    paths: ["apps/site/**", "bun.lock", "package.json", ".github/workflows/deploy-site.yml"]
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    paths: ['apps/site/**', 'bun.lock', 'package.json', '.github/workflows/deploy-site.yml']
+    paths: ["apps/site/**", "bun.lock", "package.json", ".github/workflows/deploy-site.yml"]
 
 concurrency:
   group: deploy-site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'prod' }}
