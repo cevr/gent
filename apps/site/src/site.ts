@@ -1,18 +1,18 @@
 /**
- * gent.cvr.im: the site's HTTP surface. The Railway service
- * (`src/deploy.ts`) and the tests mount this one layer.
+ * gent.cvr.im: the site's HTTP surface. The Cloudflare Worker
+ * (`src/worker.ts`) and the tests mount this one layer.
  *
  * - `GET /` is the landing page: what gent is, the install line, links.
  * - `GET /install.sh` and `GET /install` serve the installer itself, never a
  *   redirect, so `curl -fsSL https://gent.cvr.im/install.sh | sh` runs it.
- *   Use HTTPS: Railway's edge answers plain HTTP with an empty 301 before the
- *   request reaches this app, so `curl gent.cvr.im/install.sh | sh` without
- *   `-L` runs nothing. The script is the `install.sh` asset of the latest
- *   GitHub release, when GitHub answers with a complete installer. When there
- *   is no release, or GitHub fails or answers with anything else, it is the
- *   copy bundled at deploy time; with no copy, a script that says so and exits
- *   1. The `x-gent-install-source` header names which one answered.
- * - `GET /healthz` answers `ok` (Railway's health check).
+ *   Use HTTPS: an edge that redirects plain HTTP answers with an empty 301,
+ *   so `curl gent.cvr.im/install.sh | sh` without `-L` runs nothing. The
+ *   script is the `install.sh` asset of the latest GitHub release, when
+ *   GitHub answers with a complete installer. When there is no release, or
+ *   GitHub fails or answers with anything else, it is the copy bundled at
+ *   deploy time; with no copy, a script that says so and exits 1. The
+ *   `x-gent-install-source` header names which one answered.
+ * - `GET /healthz` answers `ok` (a liveness probe).
  */
 import { Cache, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 import {
@@ -282,6 +282,7 @@ export const layer = (options: SiteOptions) =>
 
       // One GitHub read serves every request for a few minutes; a miss is
       // kept for less time, so a new release shows up soon after it ships.
+      // On a Worker the cache lives as long as its isolate.
       // The cache runs the read in a fiber of its own, so a visitor who hangs
       // up mid-read does not leave an interruption for the next one.
       const releaseInstaller = yield* Cache.makeWith(
