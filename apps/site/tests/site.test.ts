@@ -1,5 +1,5 @@
-// The site as a visitor and as `curl | sh` meet it: the routes the Railway
-// service mounts, served over real HTTP on this machine, with GitHub replaced
+// The site as a visitor and as `curl | sh` meet it: the routes the Worker
+// mounts, served over real HTTP on this machine, with GitHub replaced
 // by a fake client that answers the release download the way `fetch` does.
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import {
