@@ -910,6 +910,20 @@ describe("test lane defaults guard", () => {
     ).toEqual([[3, true]])
   })
 
+  test("a deploy lane, which reaches real infrastructure, runs without the preload", () => {
+    const manifest = [
+      "{",
+      '  "scripts": {',
+      '    "test:deploy": "bun test ./tests/deploy.integration.ts",',
+      '    "test:live": "bun test ./tests/live.integration.ts"',
+      "  }",
+      "}",
+    ].join("\n")
+    expect(
+      findTestLaneDefaults("apps/site/package.json", manifest).map((finding) => finding.line),
+    ).toEqual([4, 4])
+  })
+
   test("a script that runs no bun test, and the gamut fixture's own project, pass", () => {
     expect(laneFindings("packages/core/package.json", "tsc --noEmit")).toEqual([])
     expect(laneFindings("testbeds/gamut/fixture/package.json", "bun test")).toEqual([])
