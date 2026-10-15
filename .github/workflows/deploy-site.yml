@@ -1,0 +1,63 @@
+# gent.cvr.im (apps/site): `prod` on main, a `pr-<n>` preview per pull
+# request that touches it, and a teardown when that pull request closes.
+# ci.yml runs the whole gate; this workflow checks the site itself before it
+# deploys. CI owns `prod`: a local deploy builds a bundle that hashes
+# differently, so use a throwaway stage for local work.
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/site/**', 'bun.lock', 'package.json', '.github/workflows/deploy-site.yml']
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths: ['apps/site/**', 'bun.lock', 'package.json', '.github/workflows/deploy-site.yml']
+
+concurrency:
+  group: deploy-site-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'prod' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  LEFTHOOK: 0
+  STAGE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'prod' }}
+  # Provider credentials. Profiles are never read when CI=true.
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+defaults:
+  run:
+    working-directory: apps/site
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bunx alchemy provider check-env --provider Cloudflare
+      - run: bunx alchemy deploy alchemy.run.ts --stage "$STAGE" --yes
+
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Destroy the preview stage
+        run: |
+          case "$STAGE" in pr-*) ;; *) echo "refusing to destroy $STAGE"; exit 1 ;; esac
+          bunx alchemy destroy alchemy.run.ts --stage "$STAGE" --yes
