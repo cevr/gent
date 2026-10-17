@@ -192,10 +192,13 @@ describe("the test preload's network guard", () => {
           [handle.exitCode, Stream.mkString(Stream.decodeText(handle.all))],
           { concurrency: "unbounded" },
         )
-        // Bun ends a result line with the duration, so `fetch` does not match `fetch.preconnect`.
+        // A result line is the name, then the duration, which Bun leaves out
+        // of some lines: match the whole line, so `fetch` does not match
+        // `fetch.preconnect`.
+        const lines = new Set(output.split("\n").map((line) => line.replace(/ \[[^\]]*\]$/, "")))
         const outcome = (name: string) => {
-          if (output.includes(`(pass) ${name} [`)) return "pass"
-          if (output.includes(`(fail) ${name} [`)) return "fail"
+          if (lines.has(`(pass) ${name}`)) return "pass"
+          if (lines.has(`(fail) ${name}`)) return "fail"
           return "missing"
         }
         expect(REMOTE_ENTRY_POINTS.map((name) => [name, outcome(`remote: ${name}`)])).toEqual(
