@@ -118,6 +118,21 @@ replay's history in one step with the reset (`writeOffers` in
 history in one synchronized update" in `apps/tui/tests/message-list.test.tsx`
 covers it.
 
+The patch also retries a split commit the native side skips when the
+renderer has no output feed. `flushPendingSplitCommits` retried a skipped
+commit with `scheduleRenderAfterFeedIdle`, which does nothing without a feed;
+gent on macOS writes to process stdout through the render thread, so it has
+none. A direct flush that the thread's lock skips (the `footerHeight` and
+`externalOutputMode` setters) then left its commits queued with no retry:
+`idle()` resolved with them queued, and `destroy()` wrote `[snapshot WxH]`
+for each. The patch retries with `scheduleRenderAfterBackpressure`, a timer
+without a feed and the feed's idle with one, in both renderer bundles. gent's
+exit flush waits for `idle()` (`flushTranscriptForExit` in
+`apps/tui/src/message-list.tsx`). "SIGTERM during a handover …" in
+`packages/e2e/tests/scrollback.test.ts` covers it: under CPU load it lost the
+second message's rows 3 runs in 14 before, and 0 in 28 after. 0.6.6 waits for
+the native split output in `destroy()`.
+
 Remove this patch when an OpenTUI release keeps the split's history state
 across the alternate screen, crops a box's border to the scissor, grows
 the split region without `CSI S` and writes the replay's clear inside a

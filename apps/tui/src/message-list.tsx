@@ -2828,7 +2828,14 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     return Effect.gen(function* () {
       const drained = yield* Deferred.make<void>()
       enqueueNative(Deferred.done(drained, Exit.void))
-      yield* Deferred.await(drained).pipe(Effect.timeout(EXIT_FLUSH_MS), Effect.ignore)
+      // The drain hands the rows to OpenTUI, which writes them on its next
+      // renders, later still while the terminal reads slowly; its destroy
+      // writes a placeholder for each commit it still holds. Idle, it holds none.
+      yield* Deferred.await(drained).pipe(
+        Effect.andThen(Effect.promise(() => renderer.idle())),
+        Effect.timeout(EXIT_FLUSH_MS),
+        Effect.ignore,
+      )
     })
   })
   exitFlushes.set(renderer, flushForExit)

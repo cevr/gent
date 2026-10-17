@@ -105,7 +105,7 @@ index 4b632a668bbee5a038fd6eb169140c736d6b89c9..ccdc08c4a97fbd41117d9aed9df4b573
    }
    pushOpacity(opacity) {
 diff --git a/chunk-bun-h3ggawd9.js b/chunk-bun-h3ggawd9.js
-index 4808e75d8fac63fbf1727f79d56f8045f2593c74..6f29773b952b0dbec3755c100b0cb784b265e982 100644
+index 4808e75d8fac63fbf1727f79d56f8045f2593c74..01b0fdde47f879c548b5a097397300cce4694ab9 100644
 --- a/chunk-bun-h3ggawd9.js
 +++ b/chunk-bun-h3ggawd9.js
 @@ -6506,6 +6506,7 @@ var ANSI = {
@@ -194,13 +194,31 @@ index 4808e75d8fac63fbf1727f79d56f8045f2593c74..6f29773b952b0dbec3755c100b0cb784
 -    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
 +    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
 +    if (!this.openSplitFrame()) {
-+      this.scheduleRenderAfterFeedIdle();
++      this.scheduleRenderAfterBackpressure();
 +      return "backpressured";
 +    }
 +    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
      let hasCommittedOutput = false;
      const lastCommitIndex = commits.length - 1;
      let acceptedCommits = 0;
+@@ -8683,7 +8726,7 @@ Captured external output:
+       return this.reportNativeRenderFailure();
+     }
+     if (nativeBackpressured) {
+-      this.scheduleRenderAfterFeedIdle();
++      this.scheduleRenderAfterBackpressure();
+       return "backpressured";
+     }
+     if (acceptedCommits > 0) {
+@@ -8695,7 +8738,7 @@ Captured external output:
+     if (!hasCommittedOutput) {
+       const nativeResult = this.lib.repaintSplitFooter(this.rendererPtr, this.getSplitPinnedRenderOffset(), forceFooterRepaint);
+       if (nativeResult.status === NATIVE_RENDER_STATUS_SKIPPED) {
+-        this.scheduleRenderAfterFeedIdle();
++        this.scheduleRenderAfterBackpressure();
+         return "backpressured";
+       }
+       if (nativeResult.status === NATIVE_RENDER_STATUS_FAILED) {
 @@ -8770,6 +8813,7 @@ Captured external output:
      this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
    }
@@ -305,7 +323,7 @@ index 4808e75d8fac63fbf1727f79d56f8045f2593c74..6f29773b952b0dbec3755c100b0cb784
        if (nativeStatus === NATIVE_RENDER_STATUS_SKIPPED || nativeStatus === NATIVE_RENDER_STATUS_FAILED) {
          return this.handleNativeRenderRejection(nativeStatus);
 diff --git a/chunk-node-kc1sqq2a.js b/chunk-node-kc1sqq2a.js
-index 8a014caa43ae6edb6118dd803ab8553bc917a6e6..e9766263559d7c493acc1c1aedc27ee20c0d1de4 100644
+index 8a014caa43ae6edb6118dd803ab8553bc917a6e6..925d8184bc5f7747cbfbb414e8a0151eaab160a2 100644
 --- a/chunk-node-kc1sqq2a.js
 +++ b/chunk-node-kc1sqq2a.js
 @@ -6505,6 +6505,7 @@ var ANSI = {
@@ -394,13 +412,31 @@ index 8a014caa43ae6edb6118dd803ab8553bc917a6e6..e9766263559d7c493acc1c1aedc27ee2
 -    const commits = this.externalOutputQueue.peek(drainAll ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
 +    const opensWithPrefix = this.pendingSplitFramePrefix !== "";
 +    if (!this.openSplitFrame()) {
-+      this.scheduleRenderAfterFeedIdle();
++      this.scheduleRenderAfterBackpressure();
 +      return "backpressured";
 +    }
 +    const commits = this.externalOutputQueue.peek(drainAll || opensWithPrefix ? Number.POSITIVE_INFINITY : this.maxSplitCommitsPerFrame);
      let hasCommittedOutput = false;
      const lastCommitIndex = commits.length - 1;
      let acceptedCommits = 0;
+@@ -8682,7 +8725,7 @@ Captured external output:
+       return this.reportNativeRenderFailure();
+     }
+     if (nativeBackpressured) {
+-      this.scheduleRenderAfterFeedIdle();
++      this.scheduleRenderAfterBackpressure();
+       return "backpressured";
+     }
+     if (acceptedCommits > 0) {
+@@ -8694,7 +8737,7 @@ Captured external output:
+     if (!hasCommittedOutput) {
+       const nativeResult = this.lib.repaintSplitFooter(this.rendererPtr, this.getSplitPinnedRenderOffset(), forceFooterRepaint);
+       if (nativeResult.status === NATIVE_RENDER_STATUS_SKIPPED) {
+-        this.scheduleRenderAfterFeedIdle();
++        this.scheduleRenderAfterBackpressure();
+         return "backpressured";
+       }
+       if (nativeResult.status === NATIVE_RENDER_STATUS_FAILED) {
 @@ -8769,6 +8812,7 @@ Captured external output:
      this.flushPendingSplitCommits(this._externalOutputMode === "capture-stdout" ? forceFooterRepaint : false, true);
    }
