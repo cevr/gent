@@ -693,6 +693,14 @@ describe("git review commands", () => {
 })
 
 /**
+ * An untracked file whose patch is far more than the pipe from git to the
+ * pager holds: about 1.2 MB sits in the pipes and Bun's buffers, so a patch
+ * of that size lets git write it all and exit before the pager reads. This
+ * one, about 12 MB, keeps git writing until the pager reads or stops.
+ */
+const LONG_FILE = "a line of the untracked file\n".repeat(400_000)
+
+/**
  * A stand-in program: a shell script, in its own directory, made of the lines
  * `script` gives for that directory. `log` reads `<dir>/log`.
  */
@@ -1042,11 +1050,8 @@ describe("git pane", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const repo = yield* makeRepo("gent-git-stop-")
-        // More patch than a pipe holds: git waits on a pager that never reads.
-        yield* fs.writeFileString(
-          `${repo}/big.txt`,
-          "a line of the untracked file\n".repeat(40_000),
-        )
+        // More patch than the pipes hold: git waits on a pager that never reads.
+        yield* fs.writeFileString(`${repo}/big.txt`, LONG_FILE)
         // The pager ignores SIGPIPE and sleeps as one process, as `less` waits for a key.
         const pager = yield* fakeProgram("pager", (dir) => [
           `echo $$ > '${dir}/log'`,
@@ -1085,10 +1090,7 @@ describe("git pane", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const repo = yield* makeRepo("gent-git-quit-")
-        yield* fs.writeFileString(
-          `${repo}/big.txt`,
-          "a line of the untracked file\n".repeat(40_000),
-        )
+        yield* fs.writeFileString(`${repo}/big.txt`, LONG_FILE)
         // The reader reads a screen and quits: the pager closes the pipe under the patch.
         const pager = yield* fakeProgram("pager", () => ["exec head -c 4096 > /dev/null"])
         yield* git(repo, "config", "core.pager", pager.program)
@@ -1105,10 +1107,7 @@ describe("git pane", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const repo = yield* makeRepo("gent-git-ctrlc-")
-        yield* fs.writeFileString(
-          `${repo}/a-long.txt`,
-          "a line of the untracked file\n".repeat(40_000),
-        )
+        yield* fs.writeFileString(`${repo}/a-long.txt`, LONG_FILE)
         yield* fs.writeFileString(`${repo}/z-after.txt`, "the file after the long one\n")
         // The reader's ctrl+c reaches the git that writes the patch (it is in
         // the terminal's group); the pager ignores it and reads on to the end.
