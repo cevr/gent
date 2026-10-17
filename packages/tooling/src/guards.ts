@@ -1546,8 +1546,17 @@ const TEST_PRELOAD = /--preload\s+\S*\/src\/test-preload\.ts(?:\s|$)/
 const GAMUT_FIXTURE = /^testbeds\/gamut\/fixture\//
 
 /**
+ * A deploy lane deploys a throwaway stage to real infrastructure, probes it
+ * and destroys it (`apps/site` `test:deploy`). It needs the network and the
+ * real home's cloud credentials, which the preload takes away, and its one
+ * test sets its own bun timeout. The gate never runs it.
+ */
+const DEPLOY_LANE = "test:deploy"
+
+/**
  * Guard: every package script that runs `bun test` loads the test preload,
  * and one that runs without `--parallel` also passes the preload's timeout.
+ * A deploy lane is the one exception.
  */
 export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!isManifest(file) || GAMUT_FIXTURE.test(file)) return []
@@ -1556,7 +1565,7 @@ export const findTestLaneDefaults = (file: string, text: string): ReadonlyArray<
     onSome: (manifest) => Object.entries(manifest.scripts ?? {}),
   })
   return scripts.flatMap(([name, script]) => {
-    if (!/\bbun test\b/.test(script)) return []
+    if (!/\bbun test\b/.test(script) || name === DEPLOY_LANE) return []
     const line = lineAt(text, text.indexOf(`"${name}":`))
     const words = script.split(/\s+/)
     const findings: Array<Finding> = []

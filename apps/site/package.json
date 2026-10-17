@@ -7,17 +7,16 @@
     "typecheck": "tsc --noEmit",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-preload.ts --reporter=dots --parallel tests",
     "plan": "alchemy plan alchemy.run.ts --stage prod",
-    "deploy": "alchemy deploy alchemy.run.ts --stage prod"
+    "deploy": "alchemy deploy alchemy.run.ts --stage prod",
+    "test:deploy": "bun test ./tests/deploy.integration.ts"
   },
   "dependencies": {
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@distilled.cloud/core": "1.0.0-rc.13",
-    "@distilled.cloud/railway": "1.0.0-rc.13",
     "@effect/platform-bun": "catalog:",
     "@effect/platform-node": "catalog:",
-    "alchemy": "2.0.0-beta.81",
+    "alchemy": "2.0.0-beta.83",
     "effect-bun-test": "catalog:"
   }
 }
