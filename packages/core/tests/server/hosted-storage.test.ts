@@ -14,6 +14,7 @@ import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { SqliteClient as DoSqliteClient } from "@effect/sql-sqlite-do"
 import { describe, expect, it } from "effect-bun-test"
 import {
+  Array as Arr,
   Clock,
   Config,
   Context,
@@ -532,6 +533,20 @@ describe("Durable-Object-shaped storage", () => {
           "the park mark",
         )
         disk.setPhase("parked")
+        // The turn's worker lets the parked turn go, and its keep-alive is
+        // released under the request id read back as a double. An id the
+        // double keeps is released; wait for it, or the sample races the
+        // release. An id it loses stays unprocessed for good.
+        const parkedKeepAlive = Option.getOrThrow(Arr.head(keepAliveRows(disk).messages))
+        const released = String(Number(parkedKeepAlive.id)) === parkedKeepAlive.id
+        if (released) {
+          yield* waitFor(
+            Effect.sync(() => unprocessedTags(disk)),
+            (tags) => !tags.includes(KEEP_ALIVE),
+            5_000,
+            "the worker's release",
+          )
+        }
         const heldWhileParked = unprocessedTags(disk)
         const wakeWhileParked = yield* nextClusterWake(disk)
         const entitiesWhileParked = yield* Context.get(activation1.built.context, Sharding.Sharding)
@@ -606,14 +621,23 @@ describe("Durable-Object-shaped storage", () => {
           ledger: ledgerReport(disk),
         })
 
-        // Risk 6: a parked ask holds residency. Its keep-alive stays
-        // unprocessed, so the host would keep a heartbeat alarm while the turn
-        // waits on a human, and the alarm wakes the loop to wait again.
-        expect(heldWhileParked).toEqual([KEEP_ALIVE])
-        expect(Option.isSome(wakeWhileParked)).toBe(true)
+        // A parked ask holds nothing: the worker is done with the turn. With
+        // its keep-alive released, the loop holds no alarm while the human
+        // decides, and the answer wakes it from storage. A keep-alive whose
+        // id the double loses stays unprocessed, so the host keeps a
+        // heartbeat alarm and the alarm wakes the loop to wait again.
         expect(entitiesWhileParked).toBe(1)
-        expect(entitiesAfterAlarm).toBe(1)
-        expect(Option.isSome(wakeAfterAlarm)).toBe(true)
+        if (released) {
+          expect(heldWhileParked).toEqual([])
+          expect(Option.isNone(wakeWhileParked)).toBe(true)
+          expect(entitiesAfterAlarm).toBe(0)
+          expect(Option.isNone(wakeAfterAlarm)).toBe(true)
+        } else {
+          expect(heldWhileParked).toEqual([KEEP_ALIVE])
+          expect(Option.isSome(wakeWhileParked)).toBe(true)
+          expect(entitiesAfterAlarm).toBe(1)
+          expect(Option.isSome(wakeAfterAlarm)).toBe(true)
+        }
         expect(callsBeforeAnswer).toBe(0)
         expect(runsBeforeAnswer).toBe(0)
         expect(yield* eventCount(disk, "TurnCompleted")).toBe(1)

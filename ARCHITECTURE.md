@@ -370,6 +370,8 @@ names the decision that left it open.
   each integer as a JavaScript number. A reply then names its request by the
   id's nearest double, so most keep-alives stay unprocessed and an awaited
   persisted request does not return to its caller (the loop still runs it).
+  A turn parked on an ask holds no residency: only such a stale keep-alive
+  keeps a heartbeat alarm on it.
   `hosted-storage.test.ts` states this behaviour. The fix is upstream (read
   the ids as text); gent does not fork the message storage.
 - **Compaction is measured on long sessions only by hand.** The handoff
