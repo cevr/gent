@@ -179,7 +179,16 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
   - structured round replies;
   - a thread key that survives handoffs.
 
+## Status (2026-10-17)
+
+- **Merged:** stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`).
+- **Unmerged:** `origin/feat/kernel-orchestration`, 20 commits from `09620a290`, +5,319 lines: account spread (a sign-in names a pool, placement ranks it, recovery stands on its receipts). This plan does not list it; it extends P5. The last Counsel round found a recovery Blocker (a false `compacted a from b`), and later commits on the branch address it. A gate and a final review are not recorded.
+- **baton is gone** (not installed). The `orchestrate` skill now routes Claude Code and Codex background agents, and its machine has moved past this plan's `track` example: a `plan` state with a planner, a `stuck` verdict, a failure cap of 3 that sends the unit to `decide` for a rewrite, and a dead worker (usage limit, no hand-back, empty review) that gives no verdict. Stage 3's schema and stage 5's target follow the skill, not baton.
+- **Shared seam:** the warm pre-lapse handoff (compute a handoff before the prompt cache lapses on an idle branch) needs what P3 liveness needs: wake a passivated branch at a time, or after a restart, with no user message. Stage 3's design review designs one core verb for both.
+
 ## Stages
+
+0. **Land account spread.** Gate, then one `/counsel-review` round on `main...origin/feat/kernel-orchestration`, then merge.
 
 Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two rounds. Then a merge to `main` by hand.
 
@@ -196,7 +205,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a command interrupted by a crash moves the run to `ask`;
    - a stale or conflicting answer is refused.
 4. **P4 permits and P6 workspace binding.**
-5. **The library and baton's retirement.** An `/orchestrate` outcome prompt in `@gent/workflows` and the track program as a cell snippet. One real unit runs end to end.
+5. **The library.** An `/orchestrate` outcome prompt in `@gent/workflows`, and the `orchestrate` skill's machine (plan, implement, review, verify, decide) as a machine definition. One real unit runs end to end in gent, with no Claude Code or Codex background agent.
 
 ## Risks
 
