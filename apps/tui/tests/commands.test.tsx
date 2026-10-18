@@ -226,9 +226,17 @@ describe("CommandPalette renderer", () => {
     }),
   )
 
+  // These tests reach Branches as the root's last row, one up from the
+  // first. The root lists the extensions' commands after its own, and the
+  // shipped ones load at no set time after the palette opens, so these
+  // renders load none: the last row is Branches whenever the key lands.
   it.scopedLive("a submenu's escape steps back to the root, where escape closes", () =>
     Effect.gen(function* () {
-      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, { width: 90, height: 28 })
+      const setup = yield* renderScoped(() => <OpenPaletteOnMount />, {
+        builtins: [],
+        width: 90,
+        height: 28,
+      })
       yield* waitForFrame(
         setup,
         (frame) => frame.includes("Commands") && frame.includes("Branches"),
@@ -280,7 +288,7 @@ describe("CommandPalette renderer", () => {
             <OpenPaletteOnMount />
           </ErrorBoundary>
         ),
-        { client, initialSession: rootSession, width: 90, height: 28 },
+        { client, builtins: [], initialSession: rootSession, width: 90, height: 28 },
       )
       yield* waitForFrame(setup, (frame) => frame.includes("Branches"), "commands root")
       setup.mockInput.pressArrow("up")

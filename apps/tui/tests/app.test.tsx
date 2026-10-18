@@ -760,9 +760,13 @@ const gatedDrain = (content: string) =>
  * The session view on A, with B one switch away: a test starts an action in
  * A, moves to B before A's server answers, and reads where the answer lands.
  */
-const mountSessionPair = (overrides: Parameters<typeof createMockClient>[0]) =>
+const mountSessionPair = (
+  overrides: Parameters<typeof createMockClient>[0],
+  render: { readonly cwd?: string } = {},
+) =>
   Effect.gen(function* () {
     const { setup, client: clientCtx } = yield* mountApp({
+      ...render,
       client: overrides,
       initialSession: sessionNamed(pairA.sessionId, pairA.branchId, "Session A"),
     })
@@ -3463,35 +3467,42 @@ describe("App drafts, queue restore and forks across session switches", () => {
       Effect.gen(function* () {
         const sends: Array<{ readonly content: string; readonly requestId: string }> = []
         const drained = yield* Deferred.make<void>()
-        const view = yield* mountSessionPair({
-          message: {
-            send: (input: { readonly content: string; readonly requestId: string }) =>
-              Effect.suspend(() => {
-                sends.push({ content: input.content, requestId: input.requestId })
-                // The first send and its four retries: queued, reply lost.
-                if (sends.length <= 5) {
-                  return Effect.fail(
-                    new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
-                  )
-                }
-                return Effect.void
-              }),
+        // The workspace holds the file the draft names.
+        const fs = yield* FileSystem.FileSystem
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-file-send-" })
+        yield* fs.writeFileString(`${cwd}/package.json`, `{ "name": "file-send" }\n`)
+        const view = yield* mountSessionPair(
+          {
+            message: {
+              send: (input: { readonly content: string; readonly requestId: string }) =>
+                Effect.suspend(() => {
+                  sends.push({ content: input.content, requestId: input.requestId })
+                  // The first send and its four retries: queued, reply lost.
+                  if (sends.length <= 5) {
+                    return Effect.fail(
+                      new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                    )
+                  }
+                  return Effect.void
+                }),
+            },
+            queue: {
+              // The server queued the first send under its request id.
+              drain: () =>
+                Effect.sync(() => ({
+                  steering: [],
+                  followUp: [
+                    QueueEntryInfo.cases.FollowUp.make({
+                      id: userMessageIdForRequest(sends[0]?.requestId ?? "none"),
+                      content: sends[0]?.content ?? "",
+                      createdAt: 0,
+                    }),
+                  ],
+                })).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
+            },
           },
-          queue: {
-            // The server queued the first send under its request id.
-            drain: () =>
-              Effect.sync(() => ({
-                steering: [],
-                followUp: [
-                  QueueEntryInfo.cases.FollowUp.make({
-                    id: userMessageIdForRequest(sends[0]?.requestId ?? "none"),
-                    content: sends[0]?.content ?? "",
-                    createdAt: 0,
-                  }),
-                ],
-              })).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
-          },
-        })
+          { cwd },
+        )
         const draft = "resend @package.json"
         yield* Effect.promise(() => view.setup.mockInput.typeText(draft))
         yield* Effect.promise(() => view.setup.renderOnce())
@@ -3511,7 +3522,7 @@ describe("App drafts, queue restore and forks across session switches", () => {
         yield* waitForFrame(view.setup, () => sends.length === 6, "sent again")
         expect(sends[5]?.content).toBe(sends[0]?.content)
         expect(sends[5]?.requestId).not.toBe(sends[0]?.requestId)
-      }).pipe(Effect.timeout("12 seconds")),
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
   // Refused sends come back in send order at the draft's start. Queue text
@@ -8188,6 +8199,8 @@ describe("native history across a turn", () => {
   // the footer by its activity row and gives the rows back when it ends. A
   // turn the server timed under half a second must still put its turn line
   // there: rows left blank inside the cut answer write all of history again.
+  // The long answer ends its own turn first: a live user message starts a
+  // turn, and with no end the session would run, not idle.
   it.scopedLive("a turn under half a second writes history only once", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-short-turn")
@@ -8220,6 +8233,7 @@ describe("native history across a turn", () => {
         }),
       )
       push(message("ask", "user", "LONG-ASK"))
+      push(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
       push(
         message(
           "long",
@@ -8227,6 +8241,7 @@ describe("native history across a turn", () => {
           Array.from({ length: 30 }, (_, index) => `LONG line ${index + 1}`).join("\n\n"),
         ),
       )
+      push(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 2_000 }))
       const { setup } = yield* mountApp({
         client: { session: { events: () => Stream.fromQueue(feed) } },
         width: 60,
@@ -8236,8 +8251,11 @@ describe("native history across a turn", () => {
       const historyHasTopOfAnswer = () => terminalText(setup).includes("LONG line 1")
       yield* waitForFrame(
         setup,
-        (frame) => frame.includes("LONG line 30") && historyHasTopOfAnswer(),
-        "the answer's top rows in history",
+        (frame) =>
+          !frame.includes("esc cancel") &&
+          frame.includes("LONG line 30") &&
+          historyHasTopOfAnswer(),
+        "the answer's top rows in history, at idle",
         6_000,
       )
       const resets: string[] = []

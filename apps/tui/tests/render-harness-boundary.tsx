@@ -65,7 +65,7 @@ const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
 
 type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
 
-// ── temp homes ──────────────────────────────────────────────────────────────
+// ── temp homes and workspaces ───────────────────────────────────────────────
 
 /**
  * Each render gets its own home, so prompt history, frecency and caches never
@@ -76,14 +76,20 @@ type TestRenderSetup = Awaited<ReturnType<typeof createTestRenderer>>
  * test file's own `HOME`: the temp home the shared test preload makes, and
  * removes in a global `afterAll` after the file's last test. So every home is
  * removed once, when no test of the file runs, and no process reads another's.
+ *
+ * A render whose test names no cwd opens an empty workspace of its own there
+ * too, which is no git checkout. The repo root would be one: `@gent/git` would
+ * read the reader's own branch and changed files into the status row, at a
+ * time no test sets, and a test that holds a frame still would see it move.
  */
-const makeRenderHome = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const root = path.join(yield* Config.String("HOME"), "render-homes")
-  yield* fs.makeDirectory(root, { recursive: true })
-  return yield* fs.makeTempDirectory({ directory: root, prefix: "home-" })
-}).pipe(Effect.provide(BunServices.layer), Effect.orDie)
+const makeRenderDirectory = (prefix: "home-" | "workspace-") =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const root = path.join(yield* Config.String("HOME"), "render-homes")
+    yield* fs.makeDirectory(root, { recursive: true })
+    return yield* fs.makeTempDirectory({ directory: root, prefix })
+  }).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 
 // ── platform ────────────────────────────────────────────────────────────────
 
@@ -133,12 +139,6 @@ export const testPlatformLayer = (tools: TestTools = {}) => {
 }
 
 let sharedServices: Option.Option<Context.Context<unknown>> = Option.none()
-
-/** The repo root: the workspace a render opens when its test names no cwd. */
-const defaultWorkspaceCwd = Effect.gen(function* () {
-  const path = yield* Path.Path
-  return yield* path.fromFileUrl(new URL("../../..", import.meta.url))
-}).pipe(Effect.provide(BunServices.layer), Effect.orDie)
 
 type MockMethod = (...args: ReadonlyArray<never>) => unknown
 type MockNamespace = { readonly [method: string]: MockMethod }
@@ -506,6 +506,7 @@ export const renderWithProviders = (
     initialPrompt?: Option.Option<string>
     width?: number
     height?: number
+    /** The workspace; defaults to an empty directory of the render's own, outside any checkout. */
     cwd?: string
     /** Client extension builtins; defaults to the shipped ones. */
     builtins?: ReadonlyArray<AnyExtensionClientModule>
@@ -541,8 +542,8 @@ export const renderWithProviders = (
       const runtime = Option.getOrElse(Option.fromNullishOr(options?.runtime), createMockRuntime)
       // Each render gets its own home: prompt history, frecency and caches
       // written under it never reach another test or another run.
-      const home = yield* makeRenderHome
-      const cwd = options?.cwd ?? (yield* defaultWorkspaceCwd)
+      const home = yield* makeRenderDirectory("home-")
+      const cwd = options?.cwd ?? (yield* makeRenderDirectory("workspace-"))
       const initialSession = toInitialSession(Option.fromNullishOr(options?.initialSession))
 
       // A kept terminal takes the renderer's bytes as a real stdout would.
@@ -723,14 +724,27 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
     (setup) => Effect.sync(() => destroyRenderSetup(setup)),
   )
 
-/** A stored session to start a render on: `initialSession` takes it as the server lists it. */
-export const sessionFixture = (id: string, branch: string, name: string): DomainSession =>
+/**
+ * A stored session to start a render on: `initialSession` takes it as the
+ * server lists it. With no `cwd` the client reads the session's directory
+ * from the server (`session.get`) each time a reader asks for it.
+ */
+export const sessionFixture = (
+  id: string,
+  branch: string,
+  name: string,
+  cwd?: string,
+): DomainSession =>
   DomainSession.make({
     id: SessionId.make(id),
     activeBranchId: BranchId.make(branch),
     name,
     createdAt: dateFromMillis(0),
     updatedAt: dateFromMillis(0),
+    ...Option.match(Option.fromUndefinedOr(cwd), {
+      onNone: () => ({}),
+      onSome: (dir) => ({ cwd: dir }),
+    }),
   })
 
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {

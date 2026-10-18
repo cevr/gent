@@ -2639,7 +2639,9 @@ describe("transcript block spacing", () => {
   ]
   // The three tool-only steps are one run, one block, then the answer. The
   // full level parts the run's open rows by a blank line each, and the
-  // transcript view (full detail) draws each step as its own block.
+  // transcript view (full detail) draws each step as its own block. An open
+  // cell draws its code, its op and its shown text as three blocks.
+  const openSteps = (items.length - 1) * 3 + 1
   const views: ReadonlyArray<{
     disclosure: DisclosureLevel
     fullDetail: boolean
@@ -2647,25 +2649,33 @@ describe("transcript block spacing", () => {
   }> = [
     { disclosure: "collapsed", fullDetail: false, blocks: 2 },
     { disclosure: "preview", fullDetail: false, blocks: 2 },
-    { disclosure: "full", fullDetail: false, blocks: items.length },
-    { disclosure: "collapsed", fullDetail: true, blocks: items.length },
+    { disclosure: "full", fullDetail: false, blocks: openSteps },
+    { disclosure: "collapsed", fullDetail: true, blocks: openSteps },
   ]
   for (const view of views) {
     it.scopedLive(
       `one blank line separates each block at ${view.disclosure}, full detail ${view.fullDetail}`,
       () =>
         Effect.gen(function* () {
+          let extensionsLoaded = () => false
           const setup = yield* renderScoped(
-            () => (
-              <MessageList
-                items={items}
-                disclosure={view.disclosure}
-                fullDetail={view.fullDetail}
-                syntaxStyle={syntaxStyle}
-              />
-            ),
+            () => {
+              extensionsLoaded = useExtensionUI().loaded
+              return (
+                <MessageList
+                  items={items}
+                  disclosure={view.disclosure}
+                  fullDetail={view.fullDetail}
+                  syntaxStyle={syntaxStyle}
+                />
+              )
+            },
             { width: 100, height: 80 },
           )
+          // The cell's own renderer comes with the client extensions: before
+          // they load, the rows are the generic tool renderer's.
+          yield* untilExtensionsLoaded(setup, () => extensionsLoaded())
+          yield* Effect.promise(() => setup.renderOnce())
           const lines = renderFrame(setup)
             .split("\n")
             .map((line) => line.trimEnd())
@@ -4716,6 +4726,9 @@ describe("native transcript region at the terminal's bottom", () => {
         let screen = Option.none<CliRenderer>()
         const [streaming, setStreaming] = createSignal(true)
         const [footer, setFooter] = createSignal(6)
+        // The item settles as the turn ends: history takes no row while the
+        // footer has the activity row, whenever the client extensions load.
+        const [settled, setSettled] = createSignal(false)
         // The one item draws one row per line.
         const body = Array.from({ length: 19 }, (_, index) => `CUT-0 line ${index + 1}`)
         const setup = yield* renderScoped(
@@ -4729,6 +4742,7 @@ describe("native transcript region at the terminal's bottom", () => {
               <box flexDirection="column" flexGrow={1}>
                 <Transcript
                   items={[assistant("cut", body.join("\n"))]}
+                  settled={settled()}
                   streaming={streaming()}
                   footerHeight={footer()}
                   renderItems={(visible) => (
@@ -4750,6 +4764,7 @@ describe("native transcript region at the terminal's bottom", () => {
         batch(() => {
           setStreaming(false)
           setFooter(4)
+          setSettled(true)
         })
         yield* waitForFrame(setup, () => historyRows > 0, "the cut row in history", 6_000)
         yield* waitForStableFrame(setup)

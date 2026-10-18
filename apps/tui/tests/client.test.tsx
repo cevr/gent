@@ -2,6 +2,7 @@
 import {
   DriverFailureId,
   emptyQueueSnapshot,
+  makeTempDirectoryScoped,
   testAgent,
   ErrorOccurred,
   EventId,
@@ -400,8 +401,12 @@ describe("ClientProvider session metrics", () => {
     }),
   )
 
+  // The reads counted here are the route's. The session names its directory,
+  // so the extensions that ask for it (the loader, `@gent/git` at each turn's
+  // end) read it from the record, not through `session.get`, whenever they load.
   it.scopedLive("a route reply a newer read replaced is dropped", () =>
     Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("gent-route-")
       const held = yield* Deferred.make<ModelId>()
       let reads = 0
       // The read to hold: the first settings read, after the mount's own.
@@ -424,7 +429,8 @@ describe("ClientProvider session metrics", () => {
       })
       const { setup, client: clientContext } = yield* mountClient({
         client,
-        initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
+        cwd,
+        initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First", cwd),
       })
       holdRead = reads + 1
       const settingsChanged = (id: number) =>
@@ -516,6 +522,7 @@ describe("ClientProvider session metrics", () => {
 
   it.scopedLive("a finished turn reads the model the next turn resolves to, once", () =>
     Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("gent-route-")
       let reads = 0
       let snapshotReads = 0
       // The project config changes during the turn; the server resolves the new model.
@@ -545,7 +552,8 @@ describe("ClientProvider session metrics", () => {
       })
       const { setup, client: clientContext } = yield* mountClient({
         client,
-        initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
+        cwd,
+        initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First", cwd),
       })
       clientContext.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       yield* Effect.promise(() => setup.renderOnce())
