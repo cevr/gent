@@ -369,9 +369,10 @@ const runGent = ({
         screenMode: "split-footer",
         externalOutputMode: "capture-stdout",
         useMouse: false,
-        // Exit clears the split region only: the transcript above it stays
-        // on screen, and the shell prompt follows.
-        clearOnShutdown: false,
+        // Exit clears the split region only, from its top row down, and
+        // leaves the cursor on that row: the transcript above it stays on
+        // screen, and the shell prompt follows it.
+        clearOnShutdown: true,
         // SIGINT, SIGTERM and SIGHUP are the process entry's (`runCliMain`): they
         // interrupt the main fiber, whose hold on the renderer commits the
         // live tail before it destroys the renderer. OpenTUI's own listener
@@ -428,11 +429,7 @@ const runGent = ({
     // Keep a real process handle open until the renderer is destroyed. A
     // signal leaves the terminal as the reader's exit does: the live view's
     // last items reach history before the renderer goes.
-    return yield* holdUntilRendererDestroyed(
-      renderer,
-      envWithShutdown.writeTerminal,
-      terminal.close,
-    ).pipe(
+    return yield* holdUntilRendererDestroyed(renderer, terminal.close).pipe(
       Effect.onInterrupt(() =>
         Effect.sync(() => {
           shutdownLog("shutdown.interrupted")

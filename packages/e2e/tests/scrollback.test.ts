@@ -28,10 +28,12 @@ import {
   screenWaitFor,
   seedAndSpawn,
   settleAndCapture,
+  settleAndCaptureFollowedBy,
   settlePty,
   signalAndExit,
   type TestContext,
 } from "../src/pty-fixture"
+import { exitWithin } from "../src/server-process-fixture"
 
 const TEST_TIMEOUT = 120_000
 const EFFECT_TIMEOUT = "110 seconds"
@@ -197,6 +199,38 @@ describe("E2E: Scrollback ownership", () => {
       TEST_TIMEOUT,
     )
   }
+
+  // The reader's exit clears the region and leaves the cursor at its top
+  // row: what the shell writes next follows the transcript, over no row of it
+  // and under no row of the region.
+  it.scopedLive(
+    "ctrl+c twice leaves the cursor under the transcript, where the shell prompt follows, at 60x20",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* seedAndSpawn(["--debug"], { cols: 60, rows: 20 })
+        yield* screenWaitFor(
+          ctx,
+          (visible) =>
+            visible.some((row) => row.includes(DEBUG_SESSION_END)) &&
+            visible.some((row) => row.startsWith("ready")),
+          { timeout: 25_000, label: "the debug session at idle" },
+        )
+        const before = transcriptBlock(yield* settleAndCapture(ctx, SETTLE))
+        ctx.pty.write(keys["ctrl+c"])
+        yield* ptyWaitFor(ctx, "ctrl+c again to exit", { timeout: 5_000 })
+        ctx.pty.write(keys["ctrl+c"])
+        expect(yield* exitWithin(ctx.pty.exited, "10 seconds")).toEqual(Option.some(0))
+        const rows = allRows(yield* settleAndCaptureFollowedBy(ctx, "SHELL-PROMPT", SETTLE))
+        const start = rows.indexOf(before[0] ?? "")
+        const prompt = rows.indexOf("SHELL-PROMPT")
+        expect(rows.slice(start, start + before.length)).toEqual(before)
+        expect(prompt).toBeGreaterThanOrEqual(start + before.length)
+        // The region is gone: nothing follows the prompt, and no status row stays.
+        expect(rows.slice(prompt + 1).filter((row) => row !== "")).toEqual([])
+        expect(rows.filter((row) => row.startsWith("ready"))).toEqual([])
+      }).pipe(Effect.timeout(EFFECT_TIMEOUT)),
+    TEST_TIMEOUT,
+  )
 
   // A signal from outside while a program holds the terminal: gent stops the
   // program and takes the terminal back before it leaves. The editor ignores

@@ -476,6 +476,20 @@ export const settleAndCapture = (
     Effect.andThen(Effect.suspend(() => parseTerminal(ctx[RAW](), ctx.size))),
   )
 
+/**
+ * Settle, then replay everything captured by then and `following` after it:
+ * what a program writes at the cursor once the child has exited, as the
+ * shell's prompt does.
+ */
+export const settleAndCaptureFollowedBy = (
+  ctx: PtyStream,
+  following: string,
+  options: SettleOptions = {},
+): Effect.Effect<TerminalGrid, PtySettleError> =>
+  settlePty(ctx, options).pipe(
+    Effect.andThen(Effect.suspend(() => parseTerminal(ctx[RAW]() + following, ctx.size))),
+  )
+
 // ── Live screen ──
 
 /** A session whose output also feeds a live emulator that follows each resize, as a terminal window does. */

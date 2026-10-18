@@ -3020,7 +3020,7 @@ export const useExit = () => {
     if (!env.beginExit()) return
     const leaving = client.activeSessionId()
     client.runtime.cast(
-      leaveTerminal(renderer, env.writeTerminal).pipe(
+      leaveTerminal(renderer).pipe(
         Effect.ensuring(
           Effect.sync(() => {
             if (env.resumable) env.writeTerminal(`\nto resume: gent resume ${leaving}\n`)

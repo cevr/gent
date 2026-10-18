@@ -304,8 +304,10 @@ session or branch) writes history again, so its reset clears the terminal's
 saved lines first (`resetHistory`): the old copy would show each row twice.
 Exit commits the live tail first (`leaveTerminal`; over the palette, a pane
 that holds the composer or the expanded transcript it takes the terminal's
-screen back first, as scrollback takes no rows from the alternate one), and the renderer is
-created with `clearOnShutdown: false`, so exit leaves every turn on screen.
+screen back first, as scrollback takes no rows from the alternate one). The
+renderer is created with `clearOnShutdown: true`: in split mode OpenTUI's
+close clears only the region, from its top row down, and leaves the cursor on
+that row, so every turn stays on screen and the shell prompt follows it.
 
 Answer markdown draws each top-level block on its own
 (`internalBlockMode="top-level"`), so a heading never shows its `#` marks

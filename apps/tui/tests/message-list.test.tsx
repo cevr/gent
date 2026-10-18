@@ -5443,7 +5443,6 @@ describe("native transcript exit", () => {
     () =>
       Effect.gen(function* () {
         const committedText: string[] = []
-        const written: string[] = []
         let screen = Option.none<CliRenderer>()
         const items: ListMessage[] = [
           assistant("earlier", "EARLIER-ANSWER"),
@@ -5472,9 +5471,7 @@ describe("native transcript exit", () => {
         )
         expect(committedText.join("")).toBe("")
         const renderer = Option.getOrThrow(screen)
-        const hold = yield* Effect.forkChild(
-          holdUntilRendererDestroyed(renderer, (text) => written.push(text), Effect.void),
-        )
+        const hold = yield* Effect.forkChild(holdUntilRendererDestroyed(renderer, Effect.void))
         // The hold has started: it waits on the renderer, as the process entry does.
         yield* Effect.yieldNow
         yield* Fiber.interrupt(hold)
@@ -5483,9 +5480,6 @@ describe("native transcript exit", () => {
         expect(history.indexOf("EARLIER-ANSWER")).toBeGreaterThanOrEqual(0)
         expect(history.indexOf("EARLIER-ANSWER")).toBeLessThan(history.indexOf("SIGNALLED-DRAFT"))
         expect(renderer.isDestroyed).toBe(true)
-        // The cursor goes back over the cleared region, under the transcript.
-        expect(written).toHaveLength(1)
-        expect(written[0]).toMatch(new RegExp(`^${String.fromCharCode(27)}\\[[1-9][0-9]*A$`))
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -5545,9 +5539,7 @@ describe("native transcript exit", () => {
           ),
         )
         yield* Deferred.await(holding)
-        const hold = yield* Effect.forkChild(
-          holdUntilRendererDestroyed(renderer, () => {}, terminal.close),
-        )
+        const hold = yield* Effect.forkChild(holdUntilRendererDestroyed(renderer, terminal.close))
         yield* Effect.yieldNow
         yield* Fiber.interrupt(hold)
         expect(steps).toEqual(["suspend", "program stopped", "resume", "destroy"])

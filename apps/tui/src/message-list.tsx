@@ -2143,50 +2143,24 @@ const exitFlushes = new WeakMap<CliRenderer, Effect.Effect<void>>()
 export const flushTranscriptForExit = (renderer: CliRenderer): Effect.Effect<void> =>
   Option.getOrElse(Option.fromUndefinedOr(exitFlushes.get(renderer)), () => Effect.void)
 
-/** The escape that moves the terminal's cursor up `rows` rows. */
-const cursorUp = (rows: number): string => `${String.fromCharCode(27)}[${rows}A`
-
 /**
  * Every way gent leaves the terminal: the reader's exit, a signal, a fatal
  * error. The live view's last items reach native history first
- * (`flushTranscriptForExit`, bounded), then the renderer goes. Its destroy
- * clears the split region and leaves the cursor under it, so the cursor
- * goes back up by the region's rows: what the shell writes next follows the
- * transcript with no empty rows between.
+ * (`flushTranscriptForExit`, bounded), then the renderer goes. Its close
+ * clears the split region and leaves the cursor on the region's top row
+ * (`clearOnShutdown`): what the shell writes next follows the transcript with
+ * no empty rows between. The close ends once the renderer's last bytes are
+ * out (`closed`, which fails after a second when the terminal does not read
+ * them), so what gent writes after it lands under them.
  */
-export const leaveTerminal = (
-  renderer: CliRenderer,
-  writeTerminal: (text: string) => void,
-): Effect.Effect<void> =>
+export const leaveTerminal = (renderer: CliRenderer): Effect.Effect<void> =>
   flushTranscriptForExit(renderer).pipe(
     Effect.ensuring(
-      Effect.sync(() => {
-        if (renderer.isDestroyed) return Option.none()
-        const regionRows = Option.liftPredicate(
-          renderer.height,
-          () => renderer.screenMode === "split-footer",
-        )
+      Effect.suspend(() => {
+        if (renderer.isDestroyed) return Effect.void
         renderer.destroy()
-        return Option.some(regionRows)
-      }).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            // The destroy restores the terminal after it returns: the cursor
-            // moves once the renderer's last bytes are out (`closed`, which
-            // fails after a second when the terminal does not read them).
-            onSome: (regionRows) =>
-              Effect.tryPromise(() => renderer.closed).pipe(
-                Effect.ignore,
-                Effect.andThen(
-                  Effect.sync(() =>
-                    Option.map(regionRows, (rows) => writeTerminal(cursorUp(rows))),
-                  ),
-                ),
-              ),
-          }),
-        ),
-      ),
+        return Effect.tryPromise(() => renderer.closed).pipe(Effect.ignore)
+      }),
     ),
   )
 
@@ -2199,7 +2173,6 @@ export const leaveTerminal = (
  */
 export const holdUntilRendererDestroyed = (
   renderer: CliRenderer,
-  writeTerminal: (text: string) => void,
   endHandovers: Effect.Effect<void>,
 ): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {
@@ -2217,7 +2190,7 @@ export const holdUntilRendererDestroyed = (
       settled = true
       clearInterval(keepAlive)
       renderer.off("destroy", onDestroy)
-      return endHandovers.pipe(Effect.andThen(leaveTerminal(renderer, writeTerminal)))
+      return endHandovers.pipe(Effect.andThen(leaveTerminal(renderer)))
     })
   })
 

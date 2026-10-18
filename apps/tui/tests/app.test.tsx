@@ -2134,12 +2134,10 @@ describe("App status and activity rows", () => {
           })
           view.setup.mockInput.pressKey("d", { ctrl: true })
           yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
-          // First the cursor goes back up over the cleared split region, so
-          // what follows lands right under the transcript.
-          const [cursor, ...rest] = written
-          expect(cursor).toMatch(new RegExp(`^${String.fromCharCode(27)}\\[[1-9][0-9]*A$`))
-          if (resumable) expect(rest).toEqual(["\nto resume: gent resume session-a\n"])
-          else expect(rest).toEqual([])
+          // The renderer's close leaves the cursor under the transcript
+          // itself: gent writes only the way back.
+          if (resumable) expect(written).toEqual(["\nto resume: gent resume session-a\n"])
+          else expect(written).toEqual([])
         }).pipe(Effect.timeout("10 seconds")),
     )
   }
