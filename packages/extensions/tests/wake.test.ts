@@ -2757,6 +2757,13 @@ describe("auto-resume", () => {
             (pending) => pending.entries.some(isResumeAlarm),
             "the resume is stored",
           )
+          // The resume is stored in the stopped turn's `turnAfter`, before
+          // the loop takes its next item: a steer sent then gets that turn.
+          yield* eventually(
+            client.session.getSnapshot(ids),
+            (snapshot) => snapshot.runtime._tag === "Idle",
+            "the stopped turn ended",
+          )
           yield* client.steer.command({
             command: SteerCommand.make({
               _tag: "Interject",
