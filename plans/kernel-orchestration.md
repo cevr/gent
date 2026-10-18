@@ -181,14 +181,14 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 
 ## Status (2026-10-17)
 
-- **Merged:** stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`).
-- **Unmerged:** `origin/feat/kernel-orchestration`, 20 commits from `09620a290`, +5,319 lines: account spread (a sign-in names a pool, placement ranks it, recovery stands on its receipts). This plan does not list it; it extends P5. The last Counsel round found a recovery Blocker (a false `compacted a from b`), and later commits on the branch address it. A gate and a final review are not recorded.
+- **Merged:** stage 0 (account spread, `a690a2f85`, 2026-10-17: one review round, fix `ba6392700`), stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`).
+- **Stage 0 review fixes:** a pool keeps in step with its order on rename and removal; a pool must be inside its order, or that sign-in fails; a rate limit or unsupported model holds the account for that model only; handoff summaries count toward load; `CredentialPlacement` is a required service in every root; the ledger stores session ids, so a restart counts a session once; nothing is written unless a sign-in spreads. Skipped: marking a session live at dispatch (a burst must see each earlier placement).
 - **baton is gone** (not installed). The `orchestrate` skill now routes Claude Code and Codex background agents, and its machine has moved past this plan's `track` example: a `plan` state with a planner, a `stuck` verdict, a failure cap of 3 that sends the unit to `decide` for a rewrite, and a dead worker (usage limit, no hand-back, empty review) that gives no verdict. Stage 3's schema and stage 5's target follow the skill, not baton.
 - **Shared seam:** the warm pre-lapse handoff (compute a handoff before the prompt cache lapses on an idle branch) needs what P3 liveness needs: wake a passivated branch at a time, or after a restart, with no user message. Stage 3's design review designs one core verb for both.
 
 ## Stages
 
-0. **Land account spread.** Gate, then one `/counsel-review` round on `main...origin/feat/kernel-orchestration`, then merge.
+0. **Land account spread.** Done 2026-10-17 at `a690a2f85`.
 
 Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two rounds. Then a merge to `main` by hand.
 
