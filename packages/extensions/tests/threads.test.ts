@@ -28,6 +28,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionServiceError,
+  FollowUpQueueFull,
   getToolId,
   messagePartsDisplayText,
   type ModelPricing,
@@ -60,8 +61,10 @@ import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/sessio
 import {
   THREAD_ROUND_END_TYPE,
   THREAD_ROUND_TYPE,
+  ThreadBusy,
   threadRoundText,
   Threads,
+  ThreadsOverCap,
 } from "../src/threads.js"
 import { e2ePreset } from "./helpers/test-preset"
 
@@ -2175,6 +2178,40 @@ const SendConcurrently = tool({
   }),
 })
 
+/** How a sender that is not a model turn reads a refused send: wait, or fail. */
+const Refusal = Schema.Struct({
+  refusal: Schema.Literals(["sent", "busy", "over-cap", "queue-full", "other"]),
+  round: Schema.optionalKey(Schema.String),
+  threads: Schema.optionalKey(Schema.Array(Schema.String)),
+})
+
+const ClassifySend = tool({
+  id: "probe.classify-send",
+  description: "Send a thread a round through the service, and name the refusal.",
+  params: Schema.Struct({ thread: SessionId, message: Schema.String }),
+  output: Refusal,
+  execute: Effect.fn("ClassifySend.execute")(function* (params) {
+    const ctx = yield* ExtensionContext
+    const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
+    return yield* threads
+      .send({ ...params, key: ctx.toolCallId ?? "classify", notify: "none" })
+      .pipe(
+        Effect.match({
+          onSuccess: (sent): typeof Refusal.Type => ({ refusal: "sent", round: sent.round }),
+          onFailure: (error): typeof Refusal.Type => {
+            if (Schema.is(ThreadBusy)(error)) return { refusal: "busy", round: error.round }
+            if (Schema.is(ThreadsOverCap)(error)) {
+              return { refusal: "over-cap", threads: error.threads }
+            }
+            if (Schema.is(FollowUpQueueFull)(error)) return { refusal: "queue-full" }
+            return { refusal: "other" }
+          },
+        }),
+      )
+  }),
+})
+
+const decodeRefusal = Schema.decodeUnknownSync(Refusal)
 const decodeHeard = Schema.decodeUnknownSync(Heard)
 const decodeRounds = Schema.decodeUnknownSync(Schema.Array(RoundHandle))
 const decodeConcurrent = Schema.decodeUnknownSync(Schema.Array(ConcurrentSend))
@@ -2183,11 +2220,76 @@ const ServiceProbe = defineExtension({
   id: "threads-service-probe",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("tool", QuietRound, SendTwice, SendConcurrently)
+    yield* host.register("tool", QuietRound, SendTwice, SendConcurrently, ClassifySend)
   }),
 })
 
 describe("the Threads service", () => {
+  it.live(
+    "a sender through the service tells a busy thread, the running cap and a full queue apart, and the model reads the same words as before",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hanging = yield* Deferred.make<boolean>()
+          const { client, sessionId, branchId } = yield* roundHarness({
+            hang: Effect.asVoid(Deferred.succeed(hanging, true)),
+            extensions: [ServiceProbe],
+            userConfig: '{"threads":{"maxRunning":2}}',
+          })
+          const starter = { sessionId, branchId }
+          const { impl, rev } = yield* startTwo(client, starter)
+          const third = yield* startWorker(client, starter, "start-third")
+          const classify = (id: string, thread: SessionId) =>
+            Effect.map(
+              call(client, starter, [
+                ["probe.classify-send", id, { thread, message: "ECHO classified" }],
+              ]),
+              ([result]) => decodeRefusal(result?.result),
+            )
+          // The user keeps rev working and fills its follow-up queue.
+          yield* client.message.send({ ...placeOf(rev), content: "HANG" })
+          yield* Deferred.await(hanging)
+          for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+            yield* client.message.send({ ...placeOf(rev), content: `ECHO queued ${index}` })
+          }
+          expect(yield* classify("classify-full", rev.thread)).toEqual({ refusal: "queue-full" })
+
+          // One open round: a send to that thread is busy, and names the round.
+          const [opened] = yield* call(client, starter, [
+            ["thread.send", "send-open", { thread: impl.thread, message: "HANG" }],
+          ])
+          const open = decodeRound(opened?.result)
+          expect(yield* classify("classify-busy", impl.thread)).toEqual({
+            refusal: "busy",
+            round: open.round,
+          })
+          const [busyTool] = yield* call(client, starter, [
+            ["thread.send", "send-busy", { thread: impl.thread, message: "ECHO too soon" }],
+          ])
+          expect(busyTool?.failed).toBe(true)
+          expect(textOf(busyTool?.result)).toContain(
+            `ThreadError: Thread ${impl.thread} is running round 1 (${open.round})`,
+          )
+
+          // Two open rounds at a cap of two: any send is over the cap first.
+          yield* call(client, starter, [
+            ["thread.send", "send-third", { thread: third.thread, message: "HANG" }],
+          ])
+          const capped = yield* classify("classify-cap", rev.thread)
+          expect(capped.refusal).toBe("over-cap")
+          expect(capped.threads?.toSorted()).toEqual([impl.thread, third.thread].toSorted())
+          const [capTool] = yield* call(client, starter, [
+            ["thread.send", "send-capped", { thread: rev.thread, message: "ECHO over" }],
+          ])
+          expect(capTool?.failed).toBe(true)
+          expect(textOf(capTool?.result)).toContain(
+            "ThreadError: This session's thread already runs 2 threads:",
+          )
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
   it.live(
     "a round sent with notify none publishes its end and wakes nobody",
     () =>

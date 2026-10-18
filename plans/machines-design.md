@@ -1094,8 +1094,10 @@ Checked against `makeThreads` (`threads.ts:2620-2642`) and the inputs at
 - **G1. Refusals are not typed.** Busy, over the cap and a full queue all
   become a `ThreadError` with a message (`threads.ts:141-176`). A machine must
   wait on busy or over the cap and fail on the rest. Fix: two
-  `Schema.TaggedError`s, `ThreadBusy` and `ThreadsOverCap`, kept through
-  `asThreadError`. The tools' text does not change.
+  `Schema.TaggedError`s, `ThreadBusy` and `ThreadsOverCap`, that the
+  service's callers get. The tools' `asThreadError` turns each into a
+  `ThreadError` with the same message, so the tools' text does not change
+  (F16).
 - **G2. The owner's current place is private.** `starterPlace` and
   `wakeTarget` (`threads.ts:1362-1420`) find a thread's newest session and save
   the place. Machines need the same rule for an ask. Fix: export one helper
@@ -1116,10 +1118,10 @@ Checked against `makeThreads` (`threads.ts:2620-2642`) and the inputs at
 - **G4. Outside threads: the command process.** `runBashCommand` gives no pid
   to its caller (`exec-tools.ts:1128-1150`), and `processStartIdentity` and
   `stopStaleProcess` are private (`exec-tools.ts:971`, `exec-tools.ts:1018`).
-  Fix: export `runRecordedCommand` (with the `started` callback that
-  `spawnBashCommand` already takes, `exec-tools.ts:1041-1047`) and
-  `stopStaleProcess` from `exec-tools.ts`, a module the two concerns then
-  share.
+  Fix: `runBashCommand` takes an optional `recorded` hook that gets the
+  started process (`CommandProcess`: pid and start identity), and
+  `stopStaleProcess` is exported from `exec-tools.ts`, a module the two
+  concerns then share (F17).
 
 ## Part C. Tests for stage 3's done criteria
 
@@ -1583,3 +1585,28 @@ the note in these places; the note above now follows the code.
   fires at the next start, and one more than ten minutes past due leaves a
   notice. The passivation test closes an idle branch under a 24-hour alarm and
   sees the branch scope close, then the fire.
+
+## Commit 3 facts
+
+Commit 3 closed G1 and G4 of B10. The code disagreed with the note in these
+places; the note above now follows the code.
+
+- **F16. A kept tag changes the model's text.** A tool failure reaches the
+  model as `String(error)`, which is `<tag>: <message>`. A `ThreadBusy` kept
+  through `asThreadError` would read `ThreadBusy: ...` where the model read
+  `ThreadError: ...`. So the tools' mapping wraps each typed refusal in a
+  `ThreadError` with its message, and only the service's callers see the
+  tags. The service applied no `asThreadError` before either, so a full
+  queue already reaches its caller as `FollowUpQueueFull`. `ThreadBusy`
+  names the open round, and `ThreadsOverCap` names the threads with one.
+- **F17. One run function, not a variant.** `runRecordedCommand` would repeat
+  `runBashCommand` for one hook, so `runBashCommand` takes an optional
+  `recorded` instead. `JobProcess` is now the exported `CommandProcess`, and
+  `recordingStart` (read the start identity, then record; a failure is
+  logged) is shared with background jobs.
+- **F18. G2 and G3 land with their consumer.** The dead-export scan
+  (`packages/tooling/src/guards.ts`, surface `packages/extensions/src/`)
+  refuses an export that no other file names: exporting `starterPlace` or
+  `ThreadStartInput` alone fails it. Machines (commit 4) are their consumer,
+  so they are exported there. G1's and G4's names have one now: the tests
+  that check them.

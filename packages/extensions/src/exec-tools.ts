@@ -140,10 +140,10 @@ interface BackgroundBashStorageService {
    */
   readonly recordProcess: (
     key: BackgroundBashJobKeyFields,
-    process: JobProcess,
+    process: CommandProcess,
   ) => Effect.Effect<void, BackgroundBashStorageError>
   /** The jobs an earlier server process left running that recorded their process. */
-  readonly staleProcesses: Effect.Effect<ReadonlyArray<JobProcess>, BackgroundBashStorageError>
+  readonly staleProcesses: Effect.Effect<ReadonlyArray<CommandProcess>, BackgroundBashStorageError>
   /**
    * Marks the running jobs an earlier server process started as interrupted.
    * Run after `staleProcesses` were stopped: a job that recorded its process
@@ -192,8 +192,12 @@ interface BackgroundBashBranch {
   readonly branchId: BranchId
 }
 
-/** The process a job started: the group leader's pid and its start time. */
-interface JobProcess {
+/**
+ * The process a command started: the group leader's pid and its start time
+ * (`processStartIdentity`). A later server stops what a lost run left with
+ * `stopStaleProcess`.
+ */
+export interface CommandProcess {
   readonly pid: number
   readonly startIdentity: string
 }
@@ -1004,9 +1008,10 @@ const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") => {
 }
 
 /**
- * Stop the process group an earlier server left running: SIGTERM, then
- * SIGKILL after `SIGKILL_DELAY_MS`. True only when the job's group is
- * shown gone; a refused signal leaves the job one that may still run.
+ * Stop the process group an earlier server left running (a background job,
+ * or any command whose process was recorded): SIGTERM, then SIGKILL after
+ * `SIGKILL_DELAY_MS`. True only when the group is shown gone; a refused
+ * signal leaves a process that may still run.
  *
  * The system does not reuse a pid while a process group with that id lives
  * (POSIX "Process ID Reuse"; Linux keeps the pid allocated while a task holds
@@ -1015,7 +1020,7 @@ const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") => {
  * holds it, a group with that id still holds the job's descendants that
  * outlived the leader, and they stop as the leader's group does.
  */
-const stopStaleProcess = (job: JobProcess) =>
+export const stopStaleProcess = (job: CommandProcess) =>
   Effect.gen(function* () {
     const identity = yield* processStartIdentity(job.pid)
     if (Option.isSome(identity) && identity.value !== job.startIdentity) return true
@@ -1037,6 +1042,27 @@ const stopStaleProcess = (job: JobProcess) =>
       ),
     ),
   )
+
+/**
+ * A spawn's `started` hook that reads the process's start identity and hands
+ * both to `recorded`. A process gone before `ps` reads it records nothing. A
+ * failed read or record is logged, and the command runs on: a later server
+ * then has no process of it to stop.
+ */
+const recordingStart =
+  <E>(recorded: (process: CommandProcess) => Effect.Effect<void, E>, failure: string) =>
+  (pid: number) =>
+    processStartIdentity(pid).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (startIdentity) => recorded({ pid, startIdentity }),
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(failure).pipe(Effect.annotateLogs({ cause: Cause.pretty(cause) })),
+      ),
+    )
 
 /**
  * Spawn `bash -c <command>`: the one spawn every shell command shares. Each
@@ -1124,11 +1150,15 @@ interface CommandOutput {
  * as its ends around a marker that counts the middle. Given a `spill` file,
  * output past that also goes to the file, whole, and a run that ends
  * without a result removes it. The scope owns the process and the file.
+ * Given `recorded`, the run hands it the process it started, before the
+ * command ends, so a caller can store what a later server must stop
+ * (`stopStaleProcess`) when this one is lost.
  */
-export const runBashCommand = (
+export const runBashCommand = <E = never>(
   command: string,
   cwd: Option.Option<string>,
   spill: Option.Option<string>,
+  recorded?: (process: CommandProcess) => Effect.Effect<void, E>,
 ) =>
   Effect.gen(function* () {
     let stdout = noOutput
@@ -1139,18 +1169,27 @@ export const runBashCommand = (
     })
     const toFile = (text: string) =>
       Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.write(text) })
-    const exitCode = yield* spawnBashCommand(command, cwd, {
-      stdout: (text) =>
-        Effect.suspend(() => {
-          stdout = appendOutput(stdout, text, commandOutputEndChars)
-          return toFile(text)
-        }),
-      stderr: (text) =>
-        Effect.suspend(() => {
-          stderr = appendOutput(stderr, text, commandOutputEndChars)
-          return toFile(text)
-        }),
-    }).pipe(
+    const started = Option.match(Option.fromUndefinedOr(recorded), {
+      onNone: () => () => Effect.void,
+      onSome: (record) => recordingStart(record, "exec-tools.command-process.record.failed"),
+    })
+    const exitCode = yield* spawnBashCommand(
+      command,
+      cwd,
+      {
+        stdout: (text) =>
+          Effect.suspend(() => {
+            stdout = appendOutput(stdout, text, commandOutputEndChars)
+            return toFile(text)
+          }),
+        stderr: (text) =>
+          Effect.suspend(() => {
+            stderr = appendOutput(stderr, text, commandOutputEndChars)
+            return toFile(text)
+          }),
+      },
+      started,
+    ).pipe(
       // Only a result names the file: a run that ends without one (a
       // timeout, an interrupt, a spawn failure) removes it.
       Effect.onError(() =>
@@ -1441,21 +1480,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
       // A server that ends without its finalizers leaves the process behind;
       // the row names it so the next server can stop it. A failed record
       // leaves the job running, and a restart reports it as unchecked.
-      const recordProcess = (pid: number) =>
-        processStartIdentity(pid).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (startIdentity) =>
-                storage.recordProcess(backgroundJobKeyFields(target), { pid, startIdentity }),
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("exec-tools.job-process.record.failed").pipe(
-              Effect.annotateLogs({ cause: Cause.pretty(cause) }),
-            ),
-          ),
-        )
+      const recordProcess = recordingStart(
+        (process) => storage.recordProcess(backgroundJobKeyFields(target), process),
+        "exec-tools.job-process.record.failed",
+      )
       const { exitCode, output } = yield* streamBackgroundCommand(
         job.command,
         job.cwd,

@@ -163,6 +163,11 @@
     read with `Effect.serviceOption`, as threads read `Workspaces`) carries
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.
+    A send it refuses fails with `ThreadBusy` (the open round), with
+    `ThreadsOverCap` (the threads at the running cap), or with the thread
+    loop's `FollowUpQueueFull`, so a sender that is not a model turn waits on
+    the first two and fails on the rest; the tools wrap the first two in a
+    `ThreadError` with the same words, which is the text the model reads.
     A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
     it sent stay, since the starter's thread owns them and its handoffs read
     and hear them.

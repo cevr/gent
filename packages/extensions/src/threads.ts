@@ -157,7 +157,38 @@ class ThreadStorageError extends Schema.TaggedError<
 const storageError = (message: string) => (cause: unknown) =>
   new ThreadStorageError({ message, cause })
 
-/** Every fault behind the facade is one caller-facing error. */
+/**
+ * A send to a thread whose round is still open: a thread runs one round at a
+ * time. A sender that is not a model turn waits for `round` to end and sends
+ * again; a full follow-up queue (`FollowUpQueueFull`) is another refusal.
+ */
+export class ThreadBusy extends Schema.TaggedError<ThreadBusy, { readonly brand: unique symbol }>()(
+  "ThreadBusy",
+  {
+    message: Schema.String,
+    thread: Schema.String,
+    round: Schema.String,
+  },
+) {}
+
+/**
+ * A round past the running cap: the starter's thread already has `threads`
+ * with an open round. A sender that is not a model turn waits for one of
+ * them to end.
+ */
+export class ThreadsOverCap extends Schema.TaggedError<
+  ThreadsOverCap,
+  { readonly brand: unique symbol }
+>()("ThreadsOverCap", {
+  message: Schema.String,
+  threads: Schema.Array(Schema.String),
+}) {}
+
+/**
+ * Every fault behind the facade is one caller-facing error. A busy thread
+ * and the cap keep their own words: the model reads them as before, as a
+ * `ThreadError`, and the service's callers get the typed refusal.
+ */
 const asThreadError = (what: string) =>
   Effect.mapError(
     (
@@ -168,9 +199,14 @@ const asThreadError = (what: string) =>
         | FollowUpQueueFull
         | ThreadStorageError
         | WorkspaceError
+        | ThreadBusy
+        | ThreadsOverCap
         | ThreadError,
     ) => {
       if (Schema.is(ThreadError)(cause)) return cause
+      if (Schema.is(ThreadBusy)(cause) || Schema.is(ThreadsOverCap)(cause)) {
+        return new ThreadError({ message: cause.message, cause })
+      }
       return new ThreadError({ message: `${what}: ${cause.message}`, cause })
     },
   )
@@ -2061,8 +2097,9 @@ const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArra
       return `${thread} "${name}"`
     })
     .join(", ")
-  return yield* new ThreadError({
+  return yield* new ThreadsOverCap({
     message: `This session's thread already runs ${busy.length} ${threadsWord(busy.length)}: ${names}. Stop one with thread.stop, or send this round when one ends.`,
+    threads: busy,
   })
 })
 
@@ -2148,8 +2185,10 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   )
   if (claim._tag === "OverCap") return yield* capRefusal(claim.threads)
   if (claim._tag === "Busy") {
-    return yield* new ThreadError({
+    return yield* new ThreadBusy({
       message: `Thread ${claim.round.thread} is running round ${claim.round.number} (${claim.round.round}); send the next round when it ends`,
+      thread: claim.round.thread,
+      round: claim.round.round,
     })
   }
   const round = claim.round

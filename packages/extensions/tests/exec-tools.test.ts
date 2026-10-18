@@ -27,7 +27,9 @@ import {
   BackgroundBashSupervisorLive,
   BashParams,
   BashTool,
+  type CommandProcess,
   runBashCommand,
+  stopStaleProcess,
 } from "../src/exec-tools.js"
 import {
   BranchId,
@@ -63,7 +65,11 @@ import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { GentPlatform } from "@gent/core/host"
 import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
-import { ExtensionServiceError, maximumModelToolResultChars } from "@gent/core/extensions/api"
+import {
+  ExtensionServiceError,
+  maximumModelToolResultChars,
+  runProcess,
+} from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
@@ -1707,6 +1713,54 @@ describe("background job output", () => {
         expect(notice[0]).toContain("MID-RUN-MARK")
       }).pipe(Effect.timeout("40 seconds")),
     45_000,
+  )
+})
+
+describe("a command's recorded process", () => {
+  /** One `ps` column of a process, in the locale and zone the record reads it in. */
+  const psColumn = (column: "pgid" | "lstart", pid: number) =>
+    Effect.map(
+      runProcess("ps", ["-o", `${column}=`, "-p", String(pid)], {
+        env: { LC_ALL: "C", TZ: "UTC0" },
+        extendEnv: true,
+      }),
+      (result) => result.stdout.trim(),
+    )
+  /** The pids in process group `pid`, none once the group is gone. */
+  const groupMembers = (pid: number) =>
+    Effect.map(runProcess("pgrep", ["-g", String(pid)]), (result) =>
+      result.stdout.split("\n").filter((line) => line.trim() !== ""),
+    )
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a run reports the process group it leads with that process's start time, and a later server's stop ends the group and its children",
+    () =>
+      Effect.gen(function* () {
+        const recorded = yield* Deferred.make<CommandProcess>()
+        // `bash` leads its group; the background sleep is a child in it.
+        const run = yield* runBashCommand(
+          "sleep 60 & wait",
+          Option.none(),
+          Option.none(),
+          (process) => Deferred.succeed(recorded, process),
+        ).pipe(Effect.exit, Effect.forkScoped)
+        const process = yield* Deferred.await(recorded)
+        expect(yield* psColumn("pgid", process.pid)).toBe(String(process.pid))
+        expect(process.startIdentity).toBe(yield* psColumn("lstart", process.pid))
+        const members = yield* waitFor(
+          groupMembers(process.pid),
+          (pids) => pids.length >= 2,
+          5_000,
+          "the sleep joined the command's group",
+        )
+        expect(members).toContain(String(process.pid))
+        // The run that owned the group is lost; a later server stops what it recorded.
+        expect(yield* stopStaleProcess(process)).toBe(true)
+        expect(yield* groupMembers(process.pid)).toEqual([])
+        // The killed command's run ends: nothing of it waits on the group.
+        yield* Fiber.join(run)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
   )
 })
 
