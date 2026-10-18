@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { DateTime, Effect, Option, Schema } from "effect"
-import type { CheckpointListType, RevertOutcomeType } from "@gent/extensions/client"
+import {
+  type CheckpointListType,
+  RevertAction,
+  RevertOutcome,
+  type RevertOutcomeType,
+} from "@gent/extensions/client"
 import { BranchId, MessageId } from "@gent/core/protocol"
 import checkpointsClient, {
   actionEntries,
@@ -66,8 +71,8 @@ describe("revert pane rows", () => {
     expect(Option.isNone(turnEntry(readOnly))).toBe(true)
     expect(Option.map(turnEntry(parser), (entry) => [entry.enter, entry.filesOnly])).toEqual(
       Option.some([
-        { _tag: "Turn", n: 1, conversation: true },
-        Option.some({ _tag: "Turn", n: 1, conversation: false }),
+        RevertAction.cases.Turn.make({ n: 1, conversation: true }),
+        Option.some(RevertAction.cases.Turn.make({ n: 1, conversation: false })),
       ]),
     )
     expect(actionEntries(list)).toEqual([])
@@ -153,7 +158,10 @@ describe("revert pane", () => {
           turns: list.turns.map((row) => ({ ...row, createdAt: now - (NOW - row.createdAt) })),
         }
         const { setup, log } = yield* openPane(120, fresh, [
-          { _tag: "Reverted", files: ["a.txt", "b.txt"], branchId: BranchId.make("branch-fork") },
+          RevertOutcome.cases.Reverted.make({
+            files: ["a.txt", "b.txt"],
+            branchId: BranchId.make("branch-fork"),
+          }),
         ])
         const wide = renderFrame(setup)
         expect(wide).toContain("Revert · 3 turns")
@@ -172,7 +180,7 @@ describe("revert pane", () => {
         setup.mockInput.pressEnter()
         yield* waitUntil(() => log.switched.length > 0, "the switch to the new branch")
         expect(reverts(log).map((request) => request.input)).toMatchObject([
-          { action: { _tag: "Turn", n: 1, conversation: true }, overwrite: false },
+          { action: RevertAction.cases.Turn.make({ n: 1, conversation: true }), overwrite: false },
         ])
         expect(log.switched).toEqual([{ branchId: "branch-fork", name: "Parser work" }])
         expect(log.notes).toEqual(["reverted 2 files to before turn #1 · /revert to undo"])
@@ -185,12 +193,11 @@ describe("revert pane", () => {
     () =>
       Effect.gen(function* () {
         const { setup, log } = yield* openPane(120, list, [
-          {
-            _tag: "Refused",
+          RevertOutcome.cases.Refused.make({
             reason: "others also changed 1 of the files to revert",
             conflicts: ["a.txt"],
-          },
-          { _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] },
+          }),
+          RevertOutcome.cases.Reverted.make({ files: ["a.txt"], kept: ["a.txt"] }),
         ])
         setup.mockInput.pressKey("f")
         yield* waitForFrame(
@@ -203,11 +210,11 @@ describe("revert pane", () => {
         yield* waitUntil(() => log.notes.length > 0, "the overwrite's note")
         const [refused, written] = reverts(log).map((request) => request.input)
         expect(refused).toMatchObject({
-          action: { _tag: "Turn", n: 1, conversation: false },
+          action: RevertAction.cases.Turn.make({ n: 1, conversation: false }),
           overwrite: false,
         })
         expect(written).toMatchObject({
-          action: { _tag: "Turn", n: 1, conversation: false },
+          action: RevertAction.cases.Turn.make({ n: 1, conversation: false }),
           overwrite: true,
         })
         // The refused request wrote nothing, so the overwrite reuses its id.
@@ -271,13 +278,13 @@ describe("revert pane", () => {
       const { setup, log } = yield* openPane(
         120,
         { ...list, undo: { requestId: "r-1", files: 2 } },
-        [{ _tag: "Reverted", files: ["a.txt", "b.txt"] }],
+        [RevertOutcome.cases.Reverted.make({ files: ["a.txt", "b.txt"] })],
       )
       yield* waitForFrame(setup, (frame) => frame.includes("↶ undo the last revert"), "undo row")
       setup.mockInput.pressEnter()
       yield* waitUntil(() => log.notes.length > 0, "the undo's note")
       expect(reverts(log).map((request) => request.input)).toMatchObject([
-        { action: { _tag: "Undo" } },
+        { action: RevertAction.cases.Undo.make({}) },
       ])
       expect(log.notes).toEqual(["undid the last revert: 2 files written back"])
     }).pipe(Effect.timeout("10 seconds")),

@@ -3,7 +3,13 @@ import { BunServices } from "@effect/platform-bun"
 import { Deferred, Effect, Exit, Fiber, FileSystem, Option } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
-import { makeHandover, openExternalEditor, parseEditorCommand, resolveEditor } from "../src/os"
+import {
+  EditorResult,
+  makeHandover,
+  openExternalEditor,
+  parseEditorCommand,
+  resolveEditor,
+} from "../src/os"
 
 // ── external editor ─────────────────────────────────────────────────────────
 
@@ -56,10 +62,10 @@ describe("external editor", () => {
         yield* fs.writeFileString(`${dir}/editor`, "#!/bin/sh\nkill -TERM $$\n")
         yield* fs.chmod(`${dir}/editor`, 0o755)
         const stopped = yield* run(`${dir}/editor`)
-        expect(applied).toEqual({ _tag: "applied", content: "draft" })
-        expect(cancelled).toEqual({ _tag: "cancelled" })
+        expect(applied).toEqual(EditorResult.cases.applied.make({ content: "draft" }))
+        expect(cancelled).toEqual(EditorResult.cases.cancelled.make({}))
         expect(failed._tag).toBe("error")
-        expect(stopped).toEqual({ _tag: "cancelled" })
+        expect(stopped).toEqual(EditorResult.cases.cancelled.make({}))
         // Each run hands the terminal over once and takes it back, a failed one too.
         expect(steps).toEqual([...Array.from({ length: 4 }, () => ["suspend", "resume"])].flat())
       }).pipe(Effect.scoped, Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),

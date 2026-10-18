@@ -12,11 +12,12 @@ import {
   threadRoundText,
 } from "@gent/extensions/client"
 import {
-  type AssistantSegment,
+  AssistantSegment,
   MessageList,
   NativeTranscript,
   type SessionItem,
   type ToolCall,
+  Message,
 } from "../../src/message-list"
 import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
@@ -67,10 +68,11 @@ const cellWith = (operations: ToolCall[]): ToolCall => ({
 })
 
 const assistant = (id: string, calls: ToolCall[], text = ""): SessionItem => {
-  const segments: AssistantSegment[] = calls.map((toolCall) => ({ _tag: "tool-call", toolCall }))
-  if (text.length > 0) segments.push({ _tag: "text", content: text })
-  return {
-    _tag: "regular-message",
+  const segments: AssistantSegment[] = calls.map((toolCall) =>
+    AssistantSegment.cases["tool-call"].make({ toolCall }),
+  )
+  if (text.length > 0) segments.push(AssistantSegment.cases.text.make({ content: text }))
+  return Message.cases["regular-message"].make({
     id,
     role: "assistant",
     content: text,
@@ -78,7 +80,7 @@ const assistant = (id: string, calls: ToolCall[], text = ""): SessionItem => {
     images: [],
     createdAt: 0,
     segments,
-  }
+  })
 }
 
 /** The text the starter's model reads; the row shows only the answer between the header and the closing note. */
@@ -96,16 +98,16 @@ const roundEnd = (
   details: Schema.JsonObject,
   content = roundEndText("THREAD-ANSWER: the loader is fine"),
   id = "round-end",
-): SessionItem => ({
-  _tag: "regular-message",
-  id,
-  role: "user",
-  content,
-  reasoning: "",
-  images: [],
-  createdAt: 1,
-  metadata: { customType: THREAD_ROUND_END_TYPE, details },
-})
+): SessionItem =>
+  Message.cases["regular-message"].make({
+    id,
+    role: "user",
+    content,
+    reasoning: "",
+    images: [],
+    createdAt: 1,
+    metadata: { customType: THREAD_ROUND_END_TYPE, details },
+  })
 
 /** The details as the wire carries them. */
 const fullDetails = {
@@ -365,8 +367,7 @@ describe("round-end row", () => {
 
   it.scopedLive("a thread's round draws as its starter's message, off the reader's rail", () =>
     Effect.gen(function* () {
-      const task: SessionItem = {
-        _tag: "regular-message",
+      const task: SessionItem = Message.cases["regular-message"].make({
         id: "thread-round",
         role: "user",
         content: threadRoundText({
@@ -381,7 +382,7 @@ describe("round-end row", () => {
         images: [],
         createdAt: 1,
         metadata: { customType: THREAD_ROUND_TYPE, extensionId: SESSION_TOOLS_EXTENSION_ID },
-      }
+      })
       const frame = (yield* loadedFrame([task])).replace(/ +$/gm, "")
       expect(frame).toContain("  » task from session\n")
       expect(frame).toContain("    Fix the csv quoting.\n    Then test.")

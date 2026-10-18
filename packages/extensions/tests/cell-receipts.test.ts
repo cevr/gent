@@ -51,6 +51,7 @@ import {
   AgentDefinition,
   DEFAULT_AGENT_NAME,
   messagePartsText,
+  SteerCommand,
 } from "@gent/core/protocol"
 import {
   ExtensionId,
@@ -76,8 +77,10 @@ import {
   StorageError,
 } from "@gent/core/extensions/branch-tools"
 import {
+  CellExecutionAdmission,
   CellKernelResource,
   CellStorage,
+  CellToolOperationState,
   CellStorageResource,
   cellInteractionOwner,
   CellTool,
@@ -309,12 +312,11 @@ describe("cell approvals", () => {
         const { cell, client, sessionId, branchId, request } = started
         yield* client.steer
           .command({
-            command: {
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               sessionId,
               branchId,
               requestId: RequestId.make("cancel-waiting-cell"),
-            },
+            }),
           })
           .pipe(Effect.timeout("3 seconds"))
         const dismissed = yield* client.session.events({ sessionId, branchId }).pipe(
@@ -1412,10 +1414,8 @@ describe("recorded host operations", () => {
             ...hostParams,
             cell: { ...cellToolHost, branchId: BranchId.make("other") },
           }).pipe(Effect.flip)
-          expect(refused).toMatchObject({
-            _tag: "CellEvaluationError",
-            message: "Cell host belongs to another branch",
-          })
+          expect(refused._tag).toBe("CellEvaluationError")
+          expect(refused).toMatchObject({ message: "Cell host belongs to another branch" })
         }),
       ).pipe(Effect.timeout("10 seconds")),
     12000,
@@ -2109,10 +2109,12 @@ describe("cell execution storage", () => {
         { concurrency: 8 },
       )
       expect(claims.filter((claim) => claim._tag === "Claimed")).toEqual([
-        { _tag: "Claimed", code },
+        CellExecutionAdmission.cases.Claimed.make({ code }),
       ])
       expect(claims.filter((claim) => claim._tag === "Incomplete")).toHaveLength(7)
-      expect(yield* storage.get(address)).toEqual(Option.some({ _tag: "Incomplete" }))
+      expect(yield* storage.get(address)).toEqual(
+        Option.some(CellExecutionAdmission.cases.Incomplete.make({})),
+      )
       const result = Prompt.toolResultPart({
         id: address.toolCallId,
         name: "cell",
@@ -2121,14 +2123,20 @@ describe("cell execution storage", () => {
         providerExecuted: false,
       })
       yield* storage.complete(address, result)
-      expect(yield* storage.get(address)).toEqual(Option.some({ _tag: "Completed", result }))
+      expect(yield* storage.get(address)).toEqual(
+        Option.some(CellExecutionAdmission.cases.Completed.make({ result })),
+      )
       yield* storage.complete(address, result)
-      expect(yield* storage.claim(address)).toEqual({ _tag: "Completed", result })
+      expect(yield* storage.claim(address)).toEqual(
+        CellExecutionAdmission.cases.Completed.make({ result }),
+      )
       const conflict = yield* storage
         .complete(address, Prompt.toolResultPart({ ...result, result: "different" }))
         .pipe(Effect.flip)
       expect(conflict.message).toBe("Cell result is immutable")
-      expect(yield* storage.claim(address)).toEqual({ _tag: "Completed", result })
+      expect(yield* storage.claim(address)).toEqual(
+        CellExecutionAdmission.cases.Completed.make({ result }),
+      )
     }).pipe(Effect.provide(cellTestStorage)),
   )
 
@@ -2185,7 +2193,9 @@ describe("cell execution storage", () => {
         ),
       ).toBe("Cell result does not match its call")
       yield* storage.complete(address, result)
-      expect(yield* storage.claim(address)).toEqual({ _tag: "Completed", result })
+      expect(yield* storage.claim(address)).toEqual(
+        CellExecutionAdmission.cases.Completed.make({ result }),
+      )
       yield* sql`UPDATE cell_executions SET result_json = ${"not-json"} WHERE assistant_message_id = ${address.assistantMessageId}`
       expect(yield* refusal(storage.claim(address))).toBe("Failed to record cell execution")
       yield* sql`DELETE FROM messages WHERE id = ${address.assistantMessageId}`
@@ -2204,7 +2214,9 @@ describe("cell execution storage", () => {
       expect(yield* refusal(storage.claim(address).pipe(sql.withTransaction))).toBe(
         "Cell admission requires a committed claim outside any caller transaction",
       )
-      expect(yield* storage.claim(address)).toEqual({ _tag: "Claimed", code })
+      expect(yield* storage.claim(address)).toEqual(
+        CellExecutionAdmission.cases.Claimed.make({ code }),
+      )
     }).pipe(Effect.provide(cellTestStorage)),
   )
 
@@ -2245,11 +2257,14 @@ describe("cell execution storage", () => {
             const context = yield* Layer.build(storageLayer)
             return yield* Effect.gen(function* () {
               const storage = (yield* CellStorage).executions
-              expect(yield* storage.claim(first.interrupted)).toEqual({ _tag: "Incomplete" })
-              expect(yield* storage.claim(first.completed)).toEqual({
-                _tag: "Completed",
-                result: first.result,
-              })
+              expect(yield* storage.claim(first.interrupted)).toEqual(
+                CellExecutionAdmission.cases.Incomplete.make({}),
+              )
+              expect(yield* storage.claim(first.completed)).toEqual(
+                CellExecutionAdmission.cases.Completed.make({
+                  result: first.result,
+                }),
+              )
             }).pipe(Effect.provideContext(context))
           }),
         )
@@ -2332,7 +2347,9 @@ describe("cell tool operation storage", () => {
       ).toBe("Cell operation result does not match its bound call")
       yield* storage.complete(key, result)
       yield* storage.complete(key, result)
-      expect((yield* storage.get(key)).state).toEqual({ _tag: "Completed", result })
+      expect((yield* storage.get(key)).state).toEqual(
+        CellToolOperationState.cases.Completed.make({ result }),
+      )
       expect((yield* storage.admit(params)).admitted).toBe(false)
       expect(
         yield* refusal(
@@ -2439,7 +2456,9 @@ describe("cell tool operation storage", () => {
       expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([])
       yield* storage.suspend(key, requestOperationStorage)
       expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([requestOperationStorage])
-      expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
+      expect((yield* storage.get(key)).state).toEqual(
+        CellToolOperationState.cases.Waiting.make({ requestId }),
+      )
     }).pipe(Effect.provide(cellTestStorage)),
   )
 
@@ -2456,7 +2475,9 @@ describe("cell tool operation storage", () => {
         const found = yield* storage.listForToolCall(cellOperationStorage)
         expect(found).toHaveLength(1)
         expect(found[0]?.key).toEqual(key)
-        expect(found[0]?.operation.state).toEqual({ _tag: "Waiting", requestId })
+        expect(found[0]?.operation.state).toEqual(
+          CellToolOperationState.cases.Waiting.make({ requestId }),
+        )
         expect(
           yield* refusal(
             storage.listForToolCall({ ...cellOperationStorage, branchId: BranchId.make("other") }),
@@ -2514,7 +2535,9 @@ describe("cell tool operation storage", () => {
       const decision = { approved: false, notes: "Do not write" }
       yield* recordInteractionDecision(cellOperationStorage, requestId, decision)
       const resumed = yield* storage.resume(key, requestId)
-      expect(resumed.state).toEqual({ _tag: "Resuming", requestId, decision })
+      expect(resumed.state).toEqual(
+        CellToolOperationState.cases.Resuming.make({ requestId, decision }),
+      )
       expect(resumed.toolCallId).toBe(first.operation.toolCallId)
       expect(yield* refusal(storage.resume(key, requestId))).toBe(
         "Cell operation is not waiting for this request",
@@ -2636,18 +2659,21 @@ describe("cell tool operation storage", () => {
             const context = yield* Layer.build(layer)
             return yield* Effect.gen(function* () {
               const storage = (yield* CellStorage).operations
-              expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
+              expect((yield* storage.get(key)).state).toEqual(
+                CellToolOperationState.cases.Waiting.make({ requestId }),
+              )
               expect(
                 (yield* storage.listForToolCall(cellOperationStorage)).map(
                   ({ operation }) => operation.state,
                 ),
-              ).toEqual([{ _tag: "Waiting", requestId }])
+              ).toEqual([CellToolOperationState.cases.Waiting.make({ requestId })])
               const resumed = yield* storage.resume(key, requestId)
-              expect(resumed.state).toEqual({
-                _tag: "Resuming",
-                requestId,
-                decision: { approved: true },
-              })
+              expect(resumed.state).toEqual(
+                CellToolOperationState.cases.Resuming.make({
+                  requestId,
+                  decision: { approved: true },
+                }),
+              )
               return resumed.toolCallId
             }).pipe(Effect.provideContext(context))
           }),

@@ -36,6 +36,7 @@ import {
   TurnRecordStorage,
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { ToolImage } from "../../src/runtime/tool-image"
 import {
   CurrentWorkspaceId,
   DefaultWorkspaceId,
@@ -1083,14 +1084,13 @@ describe("Messages", () => {
                   isFailure: false,
                   providerExecuted: false,
                   result: {
-                    shot: {
-                      _tag: "ToolImage",
+                    shot: ToolImage.make({
                       sha256: shared,
                       mediaType: "image/png",
                       width: 1,
                       height: 1,
                       bytes: 70,
-                    },
+                    }),
                   },
                 }),
               ],

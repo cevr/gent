@@ -142,7 +142,7 @@ const CellToolOperationId = Schema.NonEmptyString.check(Schema.isMaxLength(128))
 const OperationAddressRow = Schema.Struct({
   operation_id: CellToolOperationId,
 })
-const CellToolOperationState = Schema.TaggedUnion({
+export const CellToolOperationState = Schema.TaggedUnion({
   Started: {},
   Waiting: { requestId: InteractionRequestId },
   Resuming: { requestId: InteractionRequestId, decision: ApprovalDecisionSchema },
@@ -569,7 +569,7 @@ const ResultJson = Schema.fromJsonString(Prompt.ToolResultPart)
 const ExecutionRow = Schema.Struct({ result_json: Schema.NullOr(Schema.String) })
 
 /** Incomplete means no recorded result, not proof of a live worker. Never reclaim it. */
-const CellExecutionAdmission = Schema.TaggedUnion({
+export const CellExecutionAdmission = Schema.TaggedUnion({
   Claimed: CellInput.fields,
   Incomplete: {},
   Completed: { result: Prompt.ToolResultPart },

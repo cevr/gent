@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Array as Arr,
   Cause,
   Clock,
   ConfigProvider,
@@ -51,17 +52,19 @@ import {
   ConnectionState,
   AgentEvent,
   EventEnvelope,
-  type ExtensionHealthSnapshot,
+  ExtensionHealthSnapshot,
   type GentClientRpcError,
-  type QueueEntryInfo,
+  QueueEntryInfo,
   QueueSnapshot,
   userMessageIdForRequest,
+  SessionRuntimeStateSchema,
+  ExtensionHealthIssue,
 } from "@gent/core/protocol"
 import {
   createRpcHarness,
   emptyQueueSnapshot,
   EventId,
-  type ExtensionStatusScope,
+  ExtensionStatusScope,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   reasoningDeltaPart,
@@ -69,8 +72,10 @@ import {
   textStep,
   toolCallStep,
   waitFor,
+  ExtensionHealth,
 } from "@gent/core/test-utils"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
+import { WakeEntry } from "@gent/extensions/client"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import { BuiltinExtensions } from "@gent/extensions"
 import {
@@ -152,11 +157,12 @@ import { seedDebugSession } from "../src/ops"
 const absent = undefined
 // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
 const nullValue = null
-const idleTag = "Idle" satisfies "Idle"
+// oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
 const refusedInA = Schema.decodeSync(GentRpcError)({
   _tag: "InvalidStateError",
   message: "send refused in A",
 })
+// oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
 const noModel = Schema.decodeSync(GentRpcError)({
   _tag: "NoModelError",
   message: 'No model is set for agent "main". Pick one with /model',
@@ -481,7 +487,8 @@ describe("startup state", () => {
         continue_: true,
         prompt: Option.none(),
       })
-      expect(state).toMatchObject({ _tag: "session", session: { id: "handoff" } })
+      expect(state._tag).toBe("session")
+      expect(state).toMatchObject({ session: { id: "handoff" } })
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
@@ -627,11 +634,11 @@ const countShutdowns = (setup: TestSetup) =>
   })
 
 /** A turn that started now, on the real clock, with nothing waiting. */
-const runningNow = () => ({
-  _tag: "Running" satisfies "Running",
-  startedAtMs: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-  queue: emptyQueueSnapshot(),
-})
+const runningNow = () =>
+  SessionRuntimeStateSchema.cases.Running.make({
+    startedAtMs: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+    queue: emptyQueueSnapshot(),
+  })
 
 /**
  * The session view over a turn that runs, on a terminal `height` rows tall.
@@ -686,12 +693,11 @@ const mountRunningTurn = (
             Effect.succeed({
               steering: [],
               followUp: [
-                {
-                  _tag: "FollowUp" satisfies "FollowUp",
+                QueueEntryInfo.cases.FollowUp.make({
                   id: MessageId.make("queued-follow-up"),
                   content: "the queued follow-up",
                   createdAt: 0,
-                },
+                }),
               ],
             }),
         },
@@ -731,12 +737,11 @@ const gatedDrain = (content: string) =>
         Effect.as({
           steering: [],
           followUp: [
-            {
-              _tag: "FollowUp" satisfies "FollowUp",
+            QueueEntryInfo.cases.FollowUp.make({
               id: MessageId.make("queued"),
               content,
               createdAt: 0,
-            },
+            }),
           ],
         }),
       )
@@ -904,7 +909,13 @@ const mountShortTerminalWithTrays = (
               if (input.capabilityId === "wake.pending") {
                 return {
                   now: 0,
-                  entries: [{ _tag: "alarm", wakeId: "w1", dueAt: 120_000, note: "check tests" }],
+                  entries: [
+                    WakeEntry.cases.alarm.make({
+                      wakeId: "w1",
+                      dueAt: 120_000,
+                      note: "check tests",
+                    }),
+                  ],
                 }
               }
               if (input.capabilityId === "btw.ask") return { asked: true }
@@ -1441,14 +1452,13 @@ describe("App session view and fatal screen", () => {
     if (surface !== "message queue label") return Stream.never
     const queue = new QueueSnapshot({
       steering: [
-        {
-          _tag: "Steering",
+        QueueEntryInfo.cases.Steering.make({
           id: MessageId.make("breaks-queued"),
           content: "plain breaks queued",
           createdAt: 1,
           // The reader's own: only the reader's waiting messages draw.
           metadata: { customType: "breaks-row", fromClient: true },
-        },
+        }),
       ],
       followUp: [],
     })
@@ -1670,6 +1680,7 @@ describe("App session view and fatal screen", () => {
       const record = (msg: string) => logged.push(msg)
       const written: Array<string> = []
       const { setup } = yield* mountApp({
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- a health reply without its lists, which no constructor builds: the test proves the view fails on it
         client: { extension: { listStatus: () => Effect.succeed({ _tag: "Degraded" }) } },
         log: { debug: () => {}, info: () => {}, warn: () => {}, error: record },
         writeTerminal: (text) => written.push(text),
@@ -2166,7 +2177,7 @@ describe("App status and activity rows", () => {
                 reasoningLevel: absent,
                 resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
                 agent: AgentName.make("main"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: { turns: 1, durationMs: 0, costUsd: 0.002, lastInputTokens: 0 },
               }),
           },
@@ -2251,7 +2262,7 @@ describe("App status and activity rows", () => {
                 reasoningLevel: absent,
                 resolvedModelId: ModelId.make("opencode/claude-sonnet-5"),
                 agent: AgentName.make("main"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
               }),
           },
@@ -2291,7 +2302,7 @@ describe("App status and activity rows", () => {
                 lastEventId: nullValue,
                 reasoningLevel: absent,
                 agent: AgentName.make("main"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
               }),
           },
@@ -2410,7 +2421,9 @@ describe("App status and activity rows", () => {
                     reasoningLevel: absent,
                     resolvedModelId: sonnet.id,
                     agent: AgentName.make("main"),
-                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                      queue: emptyQueueSnapshot(),
+                    }),
                     metrics: {
                       turns: 1,
                       durationMs: 0,
@@ -2475,7 +2488,9 @@ describe("App status and activity rows", () => {
                     reasoningLevel: absent,
                     resolvedModelId: auto.id,
                     agent: AgentName.make("main"),
-                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                      queue: emptyQueueSnapshot(),
+                    }),
                     metrics: {
                       turns: 1,
                       durationMs: 0,
@@ -2570,7 +2585,9 @@ describe("App status and activity rows", () => {
                     reasoningLevel: absent,
                     resolvedModelId: auto.id,
                     agent: AgentName.make("main"),
-                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                      queue: emptyQueueSnapshot(),
+                    }),
                     metrics: {
                       turns: 1,
                       durationMs: 0,
@@ -2765,7 +2782,7 @@ describe("App status and activity rows", () => {
                 defaultReasoningLevel: "medium",
                 resolvedModelId: auto.id,
                 agent: AgentName.make("main"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: {
                   turns: 1,
                   durationMs: 0,
@@ -2825,7 +2842,7 @@ describe("App status and activity rows", () => {
                 reasoningLevel: absent,
                 resolvedModelId: opus.id,
                 agent: AgentName.make("main"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: {
                   turns: 1,
                   durationMs: 0,
@@ -2894,7 +2911,9 @@ describe("App status and activity rows", () => {
                     defaultReasoningLevel: "medium",
                     resolvedModelId: opus.id,
                     agent: AgentName.make("main"),
-                    runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                      queue: emptyQueueSnapshot(),
+                    }),
                     metrics: {
                       turns: 1,
                       durationMs: 0,
@@ -2956,7 +2975,9 @@ describe("App status and activity rows", () => {
                   defaultReasoningLevel: "medium",
                   resolvedModelId: opus.id,
                   agent: AgentName.make("main"),
-                  runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                  runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                    queue: emptyQueueSnapshot(),
+                  }),
                   metrics: {
                     turns: 1,
                     durationMs: 0,
@@ -3360,12 +3381,11 @@ describe("App drafts, queue restore and forks across session switches", () => {
                   return {
                     steering: [],
                     followUp: [
-                      {
-                        _tag: "FollowUp" satisfies "FollowUp",
+                      QueueEntryInfo.cases.FollowUp.make({
                         id: MessageId.make("queued-in-a"),
                         content: "queued in A",
                         createdAt: 0,
-                      },
+                      }),
                     ],
                   }
                 }),
@@ -3457,12 +3477,11 @@ describe("App drafts, queue restore and forks across session switches", () => {
               Effect.sync(() => ({
                 steering: [],
                 followUp: [
-                  {
-                    _tag: "FollowUp" satisfies "FollowUp",
+                  QueueEntryInfo.cases.FollowUp.make({
                     id: userMessageIdForRequest(sends[0]?.requestId ?? "none"),
                     content: sends[0]?.content ?? "",
                     createdAt: 0,
-                  },
+                  }),
                 ],
               })).pipe(Effect.ensuring(Deferred.complete(drained, Effect.void))),
           },
@@ -3983,7 +4002,7 @@ describe("App cancel and quit keys during a turn", () => {
       const sessionId = SessionId.make("session-cancel")
       const branchId = BranchId.make("branch-cancel")
       const running = runningNow()
-      const idle = { _tag: idleTag, queue: emptyQueueSnapshot() }
+      const idle = SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() })
       const runtime = yield* Queue.unbounded<typeof running | typeof idle>()
       yield* Queue.offer(runtime, running)
       const { setup, client } = yield* mountApp({
@@ -4283,6 +4302,7 @@ describe("App slash commands", () => {
   )
   // A server command the server refuses says so on the status row: the
   // extension's own reason, on one row that fits 60 columns.
+  // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
   const auditRefused = Schema.decodeSync(GentRpcError)({
     _tag: "ExtensionProtocolError",
     extensionId: "@test/server-audit",
@@ -5832,21 +5852,22 @@ const nextSession: Session = Session.make({
   updatedAt: dateFromMillis(0),
 })
 
-const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnapshot => ({
-  _tag: "Degraded",
-  healthyExtensions: [],
-  degradedExtensions: [
-    {
-      manifest: { id },
-      scope: "builtin",
-      sourcePath: "builtin",
-      _tag: "Degraded",
-      issues: [{ _tag: "ActivationFailed", phase: "startup", error }],
-    },
-  ],
-})
+const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnapshot =>
+  ExtensionHealthSnapshot.cases.Degraded.make({
+    healthyExtensions: [],
+    degradedExtensions: [
+      ExtensionHealth.cases.Degraded.make({
+        manifest: { id },
+        scope: "builtin",
+        sourcePath: "builtin",
+        issues: [ExtensionHealthIssue.cases.ActivationFailed.make({ phase: "startup", error })],
+      }),
+    ],
+  })
 
-const healthyHealth: ExtensionHealthSnapshot = { _tag: "Healthy", extensions: [] }
+const healthyHealth: ExtensionHealthSnapshot = ExtensionHealthSnapshot.cases.Healthy.make({
+  extensions: [],
+})
 
 const HealthControlsProbe = (props: {
   expose: (controls: { switchSession: () => void; switchBranchSameSession: () => void }) => void
@@ -6541,7 +6562,7 @@ describe("TUI renderer surfaces", () => {
                 reasoningLevel: absent,
                 resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
                 agent: AgentName.make("primary"),
-                runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+                runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
                 metrics: { turns: 3, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
               }),
           },
@@ -6560,25 +6581,23 @@ describe("TUI renderer surfaces", () => {
         const branchId = BranchId.make("branch-queue")
         const queue = new QueueSnapshot({
           steering: [
-            {
-              _tag: "Steering",
+            QueueEntryInfo.cases.Steering.make({
               id: MessageId.make("steer-queue"),
               content: "STEER-WAIT",
               createdAt: 0,
               metadata: { fromClient: true },
-            },
+            }),
           ],
           followUp: [
-            {
-              _tag: "FollowUp",
+            QueueEntryInfo.cases.FollowUp.make({
               id: MessageId.make("follow-queue"),
               content: "FOLLOW-WAIT",
               createdAt: 1,
               metadata: { fromClient: true },
-            },
+            }),
           ],
         })
-        const running = { _tag: "Running" satisfies "Running", startedAtMs: 0, queue }
+        const running = SessionRuntimeStateSchema.cases.Running.make({ startedAtMs: 0, queue })
         const runtimes = yield* Queue.unbounded<typeof running>()
         const events = yield* Queue.unbounded<EventEnvelope>()
         const sent: string[] = []
@@ -6704,26 +6723,23 @@ describe("TUI renderer surfaces", () => {
       Effect.gen(function* () {
         const sessionId = SessionId.make("session-agent-queue")
         const branchId = BranchId.make("branch-agent-queue")
-        const reader: QueueEntryInfo = {
-          _tag: "FollowUp",
+        const reader: QueueEntryInfo = QueueEntryInfo.cases.FollowUp.make({
           id: MessageId.make("reader-queue"),
           content: "READER-WAIT",
           createdAt: 1,
           metadata: { fromClient: true },
-        }
+        })
         // A child's `Session.send` with delivery `queue`: no client origin.
-        const agent: QueueEntryInfo = {
-          _tag: "FollowUp",
+        const agent: QueueEntryInfo = QueueEntryInfo.cases.FollowUp.make({
           id: MessageId.make("agent-queue"),
           content: "AGENT-WAIT",
           createdAt: 0,
           metadata: { extensionId: "@gent/session-tools" },
-        }
-        const running = {
-          _tag: "Running" satisfies "Running",
+        })
+        const running = SessionRuntimeStateSchema.cases.Running.make({
           startedAtMs: 0,
           queue: new QueueSnapshot({ steering: [], followUp: [agent, reader] }),
-        }
+        })
         const runtimes = yield* Queue.unbounded<typeof running>()
         const events = yield* Queue.unbounded<EventEnvelope>()
         const { setup } = yield* mountApp({
@@ -6805,13 +6821,12 @@ describe("TUI renderer surfaces", () => {
             <QueueWidget
               steerMessages={[]}
               queuedMessages={[
-                {
-                  _tag: "FollowUp",
+                QueueEntryInfo.cases.FollowUp.make({
                   id: MessageId.make("long-queue"),
                   content: "QUEUE-START " + "wide text ".repeat(20) + "QUEUE-END",
                   createdAt: 0,
                   metadata: { fromClient: true },
-                },
+                }),
               ]}
               messageRenderers={new Map()}
             />
@@ -6854,13 +6869,13 @@ describe("TUI renderer surfaces", () => {
     "a waiting entry names its other lines, and past three entries the rest count",
     () =>
       Effect.gen(function* () {
-        const entry = (id: string, content: string): QueueEntryInfo => ({
-          _tag: "FollowUp",
-          id: MessageId.make(id),
-          content,
-          createdAt: 0,
-          metadata: { fromClient: true },
-        })
+        const entry = (id: string, content: string): QueueEntryInfo =>
+          QueueEntryInfo.cases.FollowUp.make({
+            id: MessageId.make(id),
+            content,
+            createdAt: 0,
+            metadata: { fromClient: true },
+          })
         const setup = yield* renderScoped(
           () => (
             <QueueWidget
@@ -6904,11 +6919,10 @@ describe("TUI renderer surfaces", () => {
         const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
         const sessionId = SessionId.make("session-timer")
         const branchId = BranchId.make("branch-timer")
-        const running = {
-          _tag: "Running" satisfies "Running",
+        const running = SessionRuntimeStateSchema.cases.Running.make({
           startedAtMs: 0,
           queue: emptyQueueSnapshot(),
-        }
+        })
         const runtimes = yield* Queue.unbounded<{
           readonly _tag: "Running" | "WaitingForInteraction"
           readonly startedAtMs: number
@@ -6979,21 +6993,26 @@ describe("TUI renderer surfaces", () => {
         yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
         yield* waitForFrame(setup, (next) => next.includes("✻ Generating (7s)"), "the answer")
         // An ask inside the turn: the same turn, the same count.
-        yield* Queue.offer(runtimes, {
-          ...running,
-          _tag: "WaitingForInteraction" satisfies "WaitingForInteraction",
-        })
+        yield* Queue.offer(
+          runtimes,
+          SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
+            startedAtMs: running.startedAtMs,
+            queue: running.queue,
+          }),
+        )
         yield* waitForFrame(
           setup,
           (next) => next.includes("✻ Waiting for your answer (7s)"),
           "the ask",
         )
         // The next turn counts from its own start.
-        yield* Queue.offer(runtimes, {
-          ...running,
-          _tag: "Running" satisfies "Running",
-          startedAtMs: clock.currentTimeMillisUnsafe(),
-        })
+        yield* Queue.offer(
+          runtimes,
+          SessionRuntimeStateSchema.cases.Running.make({
+            startedAtMs: clock.currentTimeMillisUnsafe(),
+            queue: running.queue,
+          }),
+        )
         yield* waitForFrame(
           setup,
           (next) => next.includes("✻ Generating ·") && !next.includes("(7s)"),
@@ -7012,11 +7031,10 @@ describe("TUI renderer surfaces", () => {
         const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
         const sessionId = SessionId.make("session-retry-phase")
         const branchId = BranchId.make("branch-retry-phase")
-        const running = {
-          _tag: "Running" satisfies "Running",
+        const running = SessionRuntimeStateSchema.cases.Running.make({
           startedAtMs: 0,
           queue: emptyQueueSnapshot(),
-        }
+        })
         const events = yield* Queue.unbounded<EventEnvelope>()
         const { setup } = yield* mountApp({
           runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
@@ -7093,11 +7111,10 @@ describe("TUI renderer surfaces", () => {
       const onClock = createMockRuntime(new Map([[Clock.Clock.key, clock]]))
       const sessionId = SessionId.make("session-live-line")
       const branchId = BranchId.make("branch-live-line")
-      const running = {
-        _tag: "Running" satisfies "Running",
+      const running = SessionRuntimeStateSchema.cases.Running.make({
         startedAtMs: 100,
         queue: emptyQueueSnapshot(),
-      }
+      })
       const events = yield* Queue.unbounded<EventEnvelope>()
       const view = yield* mountApp({
         runtime: { ...createMockRuntime(), cast: onClock.cast, fork: onClock.fork },
@@ -7368,22 +7385,20 @@ describe("TUI renderer surfaces", () => {
   it.scopedLive("QueueWidget renders steer and queued summaries", () =>
     Effect.gen(function* () {
       const steerMessages: QueueEntryInfo[] = [
-        {
-          _tag: "Steering",
+        QueueEntryInfo.cases.Steering.make({
           id: MessageId.make("m1"),
           content: "switch to secondary",
           createdAt: 0,
           metadata: { fromClient: true },
-        },
+        }),
       ]
       const queuedMessages: QueueEntryInfo[] = [
-        {
-          _tag: "FollowUp",
+        QueueEntryInfo.cases.FollowUp.make({
           id: MessageId.make("m2"),
           content: "line one\nline two\nline three",
           createdAt: 0,
           metadata: { fromClient: true },
-        },
+        }),
       ]
       const setup = yield* renderScoped(() => (
         <QueueWidget
@@ -7413,25 +7428,24 @@ describe("TUI renderer surfaces", () => {
         client: createMockClient({
           extension: {
             listStatus: () =>
-              Effect.succeed({
-                _tag: "Degraded",
-                healthyExtensions: [],
-                degradedExtensions: [
-                  {
-                    manifest: { id: "@gent/memory" },
-                    scope: "builtin",
-                    sourcePath: "builtin",
-                    _tag: "Degraded",
-                    issues: [
-                      {
-                        _tag: "ActivationFailed",
-                        phase: "startup",
-                        error: "startup boom",
-                      },
-                    ],
-                  },
-                ],
-              }),
+              Effect.succeed(
+                ExtensionHealthSnapshot.cases.Degraded.make({
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    ExtensionHealth.cases.Degraded.make({
+                      manifest: { id: "@gent/memory" },
+                      scope: "builtin",
+                      sourcePath: "builtin",
+                      issues: [
+                        ExtensionHealthIssue.cases.ActivationFailed.make({
+                          phase: "startup",
+                          error: "startup boom",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ),
           },
         }),
       })
@@ -7449,26 +7463,25 @@ describe("TUI renderer surfaces", () => {
         client: createMockClient({
           extension: {
             listStatus: () =>
-              Effect.succeed({
-                _tag: "Degraded",
-                healthyExtensions: [],
-                degradedExtensions: [
-                  {
-                    manifest: { id: "@user/notes" },
-                    scope: "user",
-                    sourcePath: "/home/u/.gent/extensions/notes.ts",
-                    _tag: "Degraded",
-                    issues: [
-                      {
-                        _tag: "ActivationFailed",
-                        phase: "setup",
-                        error: "setup boom",
-                        runningVersion: "0123456789abcdef0123",
-                      },
-                    ],
-                  },
-                ],
-              }),
+              Effect.succeed(
+                ExtensionHealthSnapshot.cases.Degraded.make({
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    ExtensionHealth.cases.Degraded.make({
+                      manifest: { id: "@user/notes" },
+                      scope: "user",
+                      sourcePath: "/home/u/.gent/extensions/notes.ts",
+                      issues: [
+                        ExtensionHealthIssue.cases.ActivationFailed.make({
+                          phase: "setup",
+                          error: "setup boom",
+                          runningVersion: "0123456789abcdef0123",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ),
           },
         }),
       })
@@ -7483,25 +7496,24 @@ describe("TUI renderer surfaces", () => {
         client: createMockClient({
           extension: {
             listStatus: () =>
-              Effect.succeed({
-                _tag: "Degraded",
-                healthyExtensions: [],
-                degradedExtensions: [
-                  {
-                    manifest: { id: "@user/local-models" },
-                    scope: "user",
-                    sourcePath: "/home/.gent/extensions/local-models.ts",
-                    _tag: "Degraded",
-                    issues: [
-                      {
-                        _tag: "ModelCatalogFailed",
-                        driverId: "ollama",
-                        error: "connect ECONNREFUSED",
-                      },
-                    ],
-                  },
-                ],
-              }),
+              Effect.succeed(
+                ExtensionHealthSnapshot.cases.Degraded.make({
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    ExtensionHealth.cases.Degraded.make({
+                      manifest: { id: "@user/local-models" },
+                      scope: "user",
+                      sourcePath: "/home/.gent/extensions/local-models.ts",
+                      issues: [
+                        ExtensionHealthIssue.cases.ModelCatalogFailed.make({
+                          driverId: "ollama",
+                          error: "connect ECONNREFUSED",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ),
           },
         }),
       })
@@ -7517,24 +7529,25 @@ describe("TUI renderer surfaces", () => {
     createMockClient({
       extension: {
         listStatus: () =>
-          Effect.succeed({
-            _tag: "Degraded",
-            healthyExtensions: [],
-            degradedExtensions: [
-              {
-                manifest: { id: "@gent/providers" },
-                scope: "builtin",
-                sourcePath: "builtin",
-                _tag: "Degraded",
-                issues: Array.from({ length: count }, (_, index) => ({
-                  _tag: "ModelCatalogFailed" as const,
-                  driverId: `driver-${index + 1}`,
-                  error:
-                    "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
-                })),
-              },
-            ],
-          }),
+          Effect.succeed(
+            ExtensionHealthSnapshot.cases.Degraded.make({
+              healthyExtensions: [],
+              degradedExtensions: [
+                ExtensionHealth.cases.Degraded.make({
+                  manifest: { id: "@gent/providers" },
+                  scope: "builtin",
+                  sourcePath: "builtin",
+                  issues: Arr.makeBy(count, (index) =>
+                    ExtensionHealthIssue.cases.ModelCatalogFailed.make({
+                      driverId: `driver-${index + 1}`,
+                      error:
+                        "models.dev catalog unavailable: no snapshot stored and models.dev unreachable",
+                    }),
+                  ),
+                }),
+              ],
+            }),
+          ),
       },
     })
   it.scopedLive("ConnectionWidget folds to one line at collapsed, at 120 and 60 columns", () =>
@@ -7581,22 +7594,28 @@ describe("TUI renderer surfaces", () => {
         client: createMockClient({
           extension: {
             listStatus: () =>
-              Effect.succeed({
-                _tag: "Degraded",
-                healthyExtensions: [],
-                degradedExtensions: [
-                  {
-                    manifest: { id: "@gent/memory" },
-                    scope: "builtin",
-                    sourcePath: "builtin",
-                    _tag: "Degraded",
-                    issues: [
-                      { _tag: "ActivationFailed", phase: "startup", error: "startup boom" },
-                      { _tag: "ModelCatalogFailed", driverId: "ollama", error: "ECONNREFUSED" },
-                    ],
-                  },
-                ],
-              }),
+              Effect.succeed(
+                ExtensionHealthSnapshot.cases.Degraded.make({
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    ExtensionHealth.cases.Degraded.make({
+                      manifest: { id: "@gent/memory" },
+                      scope: "builtin",
+                      sourcePath: "builtin",
+                      issues: [
+                        ExtensionHealthIssue.cases.ActivationFailed.make({
+                          phase: "startup",
+                          error: "startup boom",
+                        }),
+                        ExtensionHealthIssue.cases.ModelCatalogFailed.make({
+                          driverId: "ollama",
+                          error: "ECONNREFUSED",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ),
           },
         }),
         width: 60,
@@ -7621,25 +7640,24 @@ describe("TUI renderer surfaces", () => {
           extension: {
             listStatus: ({ scope }: { scope: ExtensionStatusScope }) => {
               scopes.push(scope)
-              return Effect.succeed({
-                _tag: "Degraded",
-                healthyExtensions: [],
-                degradedExtensions: [
-                  {
-                    manifest: { id: "@gent/plan" },
-                    scope: "builtin",
-                    sourcePath: "builtin",
-                    _tag: "Degraded",
-                    issues: [
-                      {
-                        _tag: "ActivationFailed",
-                        phase: "startup",
-                        error: "launchd boom",
-                      },
-                    ],
-                  },
-                ],
-              })
+              return Effect.succeed(
+                ExtensionHealthSnapshot.cases.Degraded.make({
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    ExtensionHealth.cases.Degraded.make({
+                      manifest: { id: "@gent/plan" },
+                      scope: "builtin",
+                      sourcePath: "builtin",
+                      issues: [
+                        ExtensionHealthIssue.cases.ActivationFailed.make({
+                          phase: "startup",
+                          error: "launchd boom",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              )
             },
           },
         }),
@@ -7649,7 +7667,8 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("1 extension failed")
       expect(frame).toContain("@gent/plan")
       expect(scopes).not.toHaveLength(0)
-      for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+      for (const scope of scopes)
+        expect(scope).toEqual(ExtensionStatusScope.cases.Session.make({ id: testSession.id }))
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.scopedLive(
@@ -7661,25 +7680,22 @@ describe("TUI renderer surfaces", () => {
         )
         let callCount = 0
         const scopes: Array<ExtensionStatusScope> = []
-        let currentHealth: ExtensionHealthSnapshot = {
-          _tag: "Degraded",
+        let currentHealth: ExtensionHealthSnapshot = ExtensionHealthSnapshot.cases.Degraded.make({
           healthyExtensions: [],
           degradedExtensions: [
-            {
+            ExtensionHealth.cases.Degraded.make({
               manifest: { id: "@gent/plan" },
               scope: "builtin",
               sourcePath: "builtin",
-              _tag: "Degraded",
               issues: [
-                {
-                  _tag: "ActivationFailed",
+                ExtensionHealthIssue.cases.ActivationFailed.make({
                   phase: "startup",
                   error: "launchd boom",
-                },
+                }),
               ],
-            },
+            }),
           ],
-        }
+        })
         const setup = yield* renderScoped(() => <ConnectionWidget disclosure="preview" />, {
           initialSession: testSession,
           runtime: lifecycle.runtime,
@@ -7695,10 +7711,9 @@ describe("TUI renderer surfaces", () => {
         })
         expect(renderFrame(setup)).toContain("1 extension failed")
         expect(callCount).toBe(1)
-        currentHealth = {
-          _tag: "Healthy",
+        currentHealth = ExtensionHealthSnapshot.cases.Healthy.make({
           extensions: [],
-        }
+        })
         lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
         yield* Effect.yieldNow
         yield* Effect.promise(() => setup.renderOnce())
@@ -7709,7 +7724,8 @@ describe("TUI renderer surfaces", () => {
           "the status read again",
         )
         expect(callCount).toBe(2)
-        for (const scope of scopes) expect(scope).toEqual({ _tag: "Session", id: testSession.id })
+        for (const scope of scopes)
+          expect(scope).toEqual(ExtensionStatusScope.cases.Session.make({ id: testSession.id }))
         expect(frame).not.toContain("1 extension failed")
         expect(frame).not.toContain("@gent/plan")
       }).pipe(Effect.timeout("10 seconds")),
@@ -7873,13 +7889,13 @@ describe("client extension status", () => {
             extensionId: ExtensionId.make("pulse-source"),
           }),
         )
-      const idle = { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() }
+      const idle = SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() })
       const client = {
         extension: {
           listStatus: () =>
             Effect.sync(() => {
               healthReads += 1
-              return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+              return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: [] })
             }),
         },
         session: {
@@ -8112,7 +8128,7 @@ export default defineClientExtension("@test/there", {
             listStatus: () =>
               Effect.sync(() => {
                 healthReads += 1
-                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+                return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: [] })
               }),
           },
         }),

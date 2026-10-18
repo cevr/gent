@@ -802,8 +802,8 @@ describe("BashTool execution", () => {
           ).pipe(provideBun),
         )
 
+        expect(error._tag).toBe("BackgroundBashError")
         expect(error).toMatchObject({
-          _tag: "BackgroundBashError",
           message: "Background bash requires a host-owned tool call",
         })
       }).pipe(withProcessTimeout),

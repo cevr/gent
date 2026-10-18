@@ -133,12 +133,12 @@ export class AppBootstrapError extends Schema.TaggedError<
 const InteractiveState = Schema.Union([
   Schema.TaggedStruct("session", {
     session: DomainSession,
-    prompt: Schema.optionalKey(Schema.String),
+    prompt: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("branchPicker", {
     session: DomainSession,
     branches: Schema.Array(Branch),
-    prompt: Schema.optionalKey(Schema.String),
+    prompt: Schema.optional(Schema.String),
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 type InteractiveState = Schema.Schema.Type<typeof InteractiveState>
@@ -281,14 +281,9 @@ const resumeState = (
     const promptText = Option.getOrUndefined(prompt)
     const branches = yield* client.branch.list({ sessionId: session.id })
     if (branches.length > 1) {
-      return {
-        _tag: "branchPicker",
-        session,
-        branches,
-        prompt: promptText,
-      } satisfies InteractiveState
+      return InteractiveState.cases.branchPicker.make({ session, branches, prompt: promptText })
     }
-    return { _tag: "session", session, prompt: promptText } satisfies InteractiveState
+    return InteractiveState.cases.session.make({ session, prompt: promptText })
   })
 
 /** The session `-H` runs its prompt in: the one `-s` names, else a new one. */
@@ -352,7 +347,7 @@ export const resolveInteractiveState = (input: {
 
     const promptText = Option.getOrUndefined(prompt)
     const created = yield* createAndLoadSession({ client, cwd })
-    return { _tag: "session", session: created, prompt: promptText } satisfies InteractiveState
+    return InteractiveState.cases.session.make({ session: created, prompt: promptText })
   })
 
 // ── connection widget ───────────────────────────────────────────────────────

@@ -311,9 +311,9 @@ describe("wake", () => {
   )
 
   test("an alarm's message names its id, its due time and its note", () => {
-    expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
-      "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
-    )
+    expect(
+      wakeMessage(WakeEntry.cases.alarm.make({ wakeId: "w1", dueAt: 1_200_000, note: "check CI" })),
+    ).toBe("Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI")
   })
 
   test("a monitor's message names its outcome, its checks and the tail of its output", () => {
@@ -444,7 +444,8 @@ describe("wake", () => {
             "the notice is listed alone",
           )
           const noticed = yield* list()
-          expect(noticed.entries).toMatchObject([{ _tag: "notice", note: "stand up" }])
+          expect(noticed.entries.map((entry) => entry._tag)).toEqual(["notice"])
+          expect(noticed.entries).toMatchObject([{ note: "stand up" }])
           const idle = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(idle.runtime._tag).toBe("Idle")
           expect(hasWake(idle.messages)).toBe(false)
@@ -577,7 +578,13 @@ describe("wake", () => {
           const fs = yield* FileSystem.FileSystem
           const file = yield* writeWakeFile(
             home,
-            [{ _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" }],
+            [
+              WakeEntry.cases.alarm.make({
+                wakeId: "left-over",
+                dueAt: 1_000,
+                note: "check the build",
+              }),
+            ],
             branchId,
           )
           yield* client.message.send({ sessionId, branchId, content: "I'm back" })
@@ -609,7 +616,7 @@ describe("wake", () => {
           const dueAt = (yield* Clock.currentTimeMillis) + 1_500
           const file = yield* writeWakeFile(
             home,
-            [{ _tag: "alarm", wakeId: "ahead", dueAt, note: "check the build" }],
+            [WakeEntry.cases.alarm.make({ wakeId: "ahead", dueAt, note: "check the build" })],
             branchId,
           )
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -642,7 +649,14 @@ describe("wake", () => {
           const { sessionId, branchId, restart } = yield* restartedSession(home)
           yield* writeWakeFile(
             home,
-            [{ _tag: "alarm", wakeId: "missed", dueAt: 1_000, mode: "notify", note: "stand up" }],
+            [
+              WakeEntry.cases.alarm.make({
+                wakeId: "missed",
+                dueAt: 1_000,
+                mode: "notify",
+                note: "stand up",
+              }),
+            ],
             branchId,
           )
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
@@ -673,7 +687,11 @@ describe("wake", () => {
           const { sessionId, branchId, restart } = yield* restartedSession(home)
           const fs = yield* FileSystem.FileSystem
           const leftOver: ReadonlyArray<WakeEntry> = [
-            { _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" },
+            WakeEntry.cases.alarm.make({
+              wakeId: "left-over",
+              dueAt: 1_000,
+              note: "check the build",
+            }),
           ]
           const file = yield* writeWakeFile(home, leftOver, branchId)
           const woke = yield* LanguageModelLayers.sequence([
@@ -899,8 +917,9 @@ describe("wake.list", () => {
               ),
             }),
           )(listed[0])
+          expect(listing.entries.map((entry) => entry._tag)).toEqual(["alarm"])
           expect(listing.entries).toMatchObject([
-            { _tag: "alarm", note: "check CI", everySeconds: 600, mode: "wake" },
+            { note: "check CI", everySeconds: 600, mode: "wake" },
           ])
           const millis = (iso: string) =>
             Option.getOrElse(Option.map(DateTime.make(iso), DateTime.toEpochMillis), () => NaN)
@@ -1061,8 +1080,7 @@ describe("notices", () => {
           yield* client.message.send({ sessionId, branchId, content: "hold on" })
           yield* Deferred.await(streaming)
           yield* client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-holding-turn"),
@@ -1136,15 +1154,18 @@ describe("notices", () => {
         const home = yield* makeTempDirectoryScoped("wake-rearm-failed-")
         const turn = yield* wakeTurnHooks(home)
         yield* turn.write([
-          {
-            _tag: "notice",
+          WakeEntry.cases.notice.make({
             wakeId: "earlier",
             outcome: "fired",
             firedAt: 1_000,
             content: "Alarm earlier fired. stand up",
             note: "stand up",
-          },
-          { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
+          }),
+          WakeEntry.cases.alarm.make({
+            wakeId: "later",
+            dueAt: Number.MAX_SAFE_INTEGER,
+            note: "much later",
+          }),
         ])
         const shown = yield* turn.project
         expect(shown.text).toContain("stand up")
@@ -1152,14 +1173,13 @@ describe("notices", () => {
         // though it fired before the turn started.
         yield* turn.write([
           ...(yield* turn.stored),
-          {
-            _tag: "notice",
+          WakeEntry.cases.notice.make({
             wakeId: "unread",
             outcome: "fired",
             firedAt: 1_000,
             content: "Alarm unread fired. check CI",
             note: "check CI",
-          },
+          }),
         ])
         yield* turn.end(shown.keys)
         // The turn read the earlier notice and answered, so it is gone; the
@@ -1176,14 +1196,13 @@ describe("notices", () => {
         const home = yield* makeTempDirectoryScoped("wake-unanswered-")
         const turn = yield* wakeTurnHooks(home)
         yield* turn.write([
-          {
-            _tag: "notice",
+          WakeEntry.cases.notice.make({
             wakeId: "earlier",
             outcome: "fired",
             firedAt: 1_000,
             content: "Alarm earlier fired. stand up",
             note: "stand up",
-          },
+          }),
         ])
         expect((yield* turn.project).text).toContain("stand up")
         // The runtime hands back nothing for a turn that did not answer.
@@ -1222,14 +1241,13 @@ describe("notices", () => {
           const file = yield* writeWakeFile(
             home,
             [
-              {
-                _tag: "notice",
+              WakeEntry.cases.notice.make({
                 wakeId: "old-blocked",
                 outcome: "blocked",
                 firedAt: 1_000,
                 content: "Monitor old-blocked was not re-armed: it was never approved. check",
                 note: "check",
-              },
+              }),
             ],
             branchId,
           )
@@ -1740,15 +1758,14 @@ describe("monitor recovery and deadline", () => {
         yield* fs.makeDirectory(`${home}/sub`)
         // A row an older binary stored before the cwd was resolved at arm time.
         yield* writeWakeFile(home, [
-          {
-            _tag: "monitor",
+          WakeEntry.cases.monitor.make({
             wakeId: "old-relative",
             command: "pwd",
             cwd: "sub",
             everySeconds: 1,
             deadline: 60_000,
             note: "where",
-          },
+          }),
         ])
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const fired = yield* Deferred.make<boolean>()
@@ -1945,14 +1962,13 @@ describe("wake store", () => {
         // the notice for due time 1_000 is in, and the row still waits at 1_000.
         yield* writeWakeFile(home, [
           alarm,
-          {
-            _tag: "notice",
+          WakeEntry.cases.notice.make({
             wakeId: "tick",
             outcome: "fired",
             firedAt: 1_000,
             content: wakeMessage(alarm),
             note: "stretch",
-          },
+          }),
         ])
         yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
         yield* TestClock.adjust("1 second")
@@ -2022,8 +2038,8 @@ describe("wake store", () => {
         contextWith(home, queued, Option.some(fired)),
       )
       yield* writeWakeFile(home, [
-        { _tag: "alarm", wakeId: "past", dueAt: 1_000, note: "CI should be done" },
-        { _tag: "alarm", wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
+        WakeEntry.cases.alarm.make({ wakeId: "past", dueAt: 1_000, note: "CI should be done" }),
+        WakeEntry.cases.alarm.make({ wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" }),
       ])
       yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       const alarms = yield* WakeAlarms
@@ -2085,7 +2101,7 @@ describe("wake store", () => {
           ),
       })
       yield* writeWakeFile(home, [
-        { _tag: "alarm", wakeId: "once", dueAt: 1_000, note: "CI should be done" },
+        WakeEntry.cases.alarm.make({ wakeId: "once", dueAt: 1_000, note: "CI should be done" }),
       ])
       const alarms = yield* WakeAlarms
       const rearm = rearmPendingAlarms().pipe(
@@ -2212,14 +2228,13 @@ describe("wake store", () => {
           note: "stand up",
         })
       yield* writeWakeFile(home, [
-        {
-          _tag: "alarm",
+        WakeEntry.cases.alarm.make({
           wakeId: "repeating",
           dueAt: 10_000_000,
           everySeconds: 60,
           mode: "notify",
           note: "stand up",
-        },
+        }),
         notice(1_000),
         notice(2_000),
       ])
@@ -2412,12 +2427,10 @@ describe("auto-resume", () => {
             "the resume is stored",
           )
           // The virtual clock starts at 0: the limit resets at 60 s, the resume is due 30 s later.
-          expect((yield* pendingOf(client, ids)).entries).toMatchObject([
-            {
-              _tag: "alarm",
-              dueAt: 90_000,
-              resume: { attempt: 1, maxResumes: 3, resetAt: 60_000 },
-            },
+          const entries = (yield* pendingOf(client, ids)).entries
+          expect(entries.map((entry) => entry._tag)).toEqual(["alarm"])
+          expect(entries).toMatchObject([
+            { dueAt: 90_000, resume: { attempt: 1, maxResumes: 3, resetAt: 60_000 } },
           ])
           expect(yield* Ref.get(calls)).toBe(1)
           yield* advanceUntil(
@@ -2533,7 +2546,8 @@ describe("auto-resume", () => {
           const pending = yield* pendingOf(client, ids)
           expect(pending.entries).toHaveLength(1)
           const [notice] = pending.entries
-          expect(notice).toMatchObject({ _tag: "notice", resume: {} })
+          expect(notice?._tag).toBe("notice")
+          expect(notice).toMatchObject({ resume: {} })
           if (notice?._tag === "notice") {
             expect(notice.note).toBe("auto-resume stopped after 3 attempts")
             expect(notice.content).toContain("Auto-resume stopped after 3 attempts")
@@ -2565,13 +2579,12 @@ describe("auto-resume", () => {
           yield* writeWakeFile(
             home,
             [
-              {
-                _tag: "alarm",
+              WakeEntry.cases.alarm.make({
                 wakeId: `resume:m-limited:${resetAt}`,
                 dueAt,
                 note: "continue after the usage limit resets",
                 resume: { attempt: 1, maxResumes: 3, resetAt, messageId: "m-limited" },
-              },
+              }),
             ],
             branchId,
           )
@@ -2584,12 +2597,9 @@ describe("auto-resume", () => {
             5_000,
             "the notice is listed",
           )
+          expect(shown.entries.map((entry) => entry._tag)).toEqual(["notice"])
           expect(shown.entries).toMatchObject([
-            {
-              _tag: "notice",
-              note: "auto-resume skipped: gent was not running",
-              resume: { resetAt },
-            },
+            { note: "auto-resume skipped: gent was not running", resume: { resetAt } },
           ])
           const after = yield* client.session.getSnapshot({ sessionId, branchId })
           expect(after.runtime._tag).toBe("Idle")
@@ -2765,8 +2775,7 @@ describe("auto-resume", () => {
             "the stopped turn ended",
           )
           yield* client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Interject",
+            command: SteerCommand.cases.Interject.make({
               ...ids,
               requestId: RequestId.make("parked-steer"),
               message: "first look at the loader",
@@ -2917,9 +2926,9 @@ describe("auto-resume", () => {
               ),
             "the second turn's resume is stored",
           )
-          expect((yield* pendingOf(client, ids)).entries).toMatchObject([
-            { _tag: "alarm", resume: { attempt: 2, maxResumes: 3 } },
-          ])
+          const entries = (yield* pendingOf(client, ids)).entries
+          expect(entries.map((entry) => entry._tag)).toEqual(["alarm"])
+          expect(entries).toMatchObject([{ resume: { attempt: 2, maxResumes: 3 } }])
           expect(yield* Ref.get(calls)).toBe(2)
         }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
       ),
@@ -2964,9 +2973,9 @@ describe("auto-resume", () => {
             (pending) => pending.entries.some(isResumeAlarm),
             "the third turn's resume is stored",
           )
-          expect((yield* pendingOf(client, ids)).entries).toMatchObject([
-            { _tag: "alarm", resume: { attempt: 1 } },
-          ])
+          const entries = (yield* pendingOf(client, ids)).entries
+          expect(entries.map((entry) => entry._tag)).toEqual(["alarm"])
+          expect(entries).toMatchObject([{ resume: { attempt: 1 } }])
           expect(yield* Ref.get(calls)).toBe(3)
         }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("12 seconds")),
       ),
@@ -3034,9 +3043,9 @@ describe("auto-resume", () => {
       }
       yield* resumeAfterTurn(ended).pipe(Effect.provideService(ExtensionContext, ctx))
       yield* resumeAfterTurn(ended).pipe(Effect.provideService(ExtensionContext, ctx))
-      expect(yield* storedEntries(home)).toMatchObject([
-        { _tag: "alarm", wakeId: "resume:m-limited:60000", dueAt: 90_000 },
-      ])
+      const entries = yield* storedEntries(home)
+      expect(entries.map((entry) => entry._tag)).toEqual(["alarm"])
+      expect(entries).toMatchObject([{ wakeId: "resume:m-limited:60000", dueAt: 90_000 }])
       expect(yield* (yield* WakeAlarms).pending).toEqual(["resume:m-limited:60000"])
     }).pipe(storeTest),
   )

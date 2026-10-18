@@ -25,6 +25,7 @@ import {
   catalogModelEntry,
   type CatalogPlan,
   clampEffort,
+  ImageCost,
   type JsonRecord,
   Model,
   omitUndefined,
@@ -1252,7 +1253,6 @@ const reasoningInField =
     })
 
 type ImageCostOf = NonNullable<ApiClassContribution["imageCost"]>
-type ImageCost = ReturnType<ImageCostOf>
 
 /**
  * OpenAI's image costs at the `high` detail, by model name, most specific
@@ -1261,21 +1261,21 @@ type ImageCost = ReturnType<ImageCostOf>
  * `high` detail shrinks an image to) for the newer ones.
  */
 export const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
-  [/^gpt-4o-mini/, { _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }],
-  [/^gpt-4o/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
-  [/^gpt-4\.1-mini/, { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }],
-  [/^gpt-4\.1-nano/, { _tag: "Patches", multiplier: 2.46, maxPatches: 1_536 }],
-  [/^gpt-4\.1/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
-  [/^o4-mini/, { _tag: "Patches", multiplier: 1.72, maxPatches: 1_536 }],
-  [/^o[13]/, { _tag: "Tiles", baseTokens: 75, tileTokens: 150 }],
-  [/^gpt-5-nano/, { _tag: "Patches", multiplier: 1.5, maxPatches: 1_536 }],
-  [/^gpt-5-mini/, { _tag: "Patches", multiplier: 1.2, maxPatches: 1_536 }],
-  [/^gpt-5\.2/, { _tag: "Patches", multiplier: 1.2, maxPatches: 6_144 }],
-  [/^gpt-5(\.1)?($|-)/, { _tag: "Tiles", baseTokens: 70, tileTokens: 140 }],
+  [/^gpt-4o-mini/, ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })],
+  [/^gpt-4o/, ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 })],
+  [/^gpt-4\.1-mini/, ImageCost.cases.Patches.make({ multiplier: 1.62, maxPatches: 6_144 })],
+  [/^gpt-4\.1-nano/, ImageCost.cases.Patches.make({ multiplier: 2.46, maxPatches: 1_536 })],
+  [/^gpt-4\.1/, ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 })],
+  [/^o4-mini/, ImageCost.cases.Patches.make({ multiplier: 1.72, maxPatches: 1_536 })],
+  [/^o[13]/, ImageCost.cases.Tiles.make({ baseTokens: 75, tileTokens: 150 })],
+  [/^gpt-5-nano/, ImageCost.cases.Patches.make({ multiplier: 1.5, maxPatches: 1_536 })],
+  [/^gpt-5-mini/, ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 1_536 })],
+  [/^gpt-5\.2/, ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 6_144 })],
+  [/^gpt-5(\.1)?($|-)/, ImageCost.cases.Tiles.make({ baseTokens: 70, tileTokens: 140 })],
 ]
 
 /** A newer OpenAI model (GPT-5.4 on) counts patches at 1.2, shrunk to 2,500 at the `high` detail. */
-const OPENAI_PATCH_COST: ImageCost = { _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }
+const OPENAI_PATCH_COST = ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 })
 
 /** What one image costs an OpenAI model (`Model.imageCost`), read from its name. */
 export const openAiImageCost: ImageCostOf = (entry) => {

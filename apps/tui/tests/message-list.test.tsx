@@ -17,14 +17,14 @@ import {
   formatTurnLine,
   holdUntilRendererDestroyed,
   getSessionEventLabel,
-  type Message as ListMessage,
+  Message as ListMessage,
   MessageList,
   NativeTranscript,
   promptOnScreen,
   readerPrompt,
-  type AssistantSegment,
+  AssistantSegment,
   type RetryOutcome,
-  type SessionEvent,
+  SessionEvent,
   type SessionItem,
   splitFooterHeight,
   type ToolCall,
@@ -160,8 +160,7 @@ describe("split footer height", () => {
 describe("session event labels", () => {
   test("formats retrying progress", () => {
     const createdAt = 1_000
-    const event: SessionEvent = {
-      _tag: "retrying",
+    const event: SessionEvent = SessionEvent.cases.retrying.make({
       attempt: 1,
       maxAttempts: 3,
       delayMs: 2000,
@@ -169,7 +168,7 @@ describe("session event labels", () => {
       reason: "overloaded (529)",
       createdAt,
       seq: 1,
-    }
+    })
 
     expect(getSessionEventLabel(event, createdAt)).toBe("Retrying in 2s · 1/3 · overloaded (529)")
     expect(getSessionEventLabel(event, createdAt + 1_100)).toBe(
@@ -187,13 +186,12 @@ describe("session event labels", () => {
   test("an error with a reset time names the wall-clock reset after its first line", () => {
     const utc = () => DateTime.zoneMakeOffset(0)
     const now = Date.parse("2026-10-04T12:00:00Z")
-    const event: SessionEvent = {
-      _tag: "error",
+    const event: SessionEvent = SessionEvent.cases.error.make({
       error: "Rate limit exceeded\nThe usage limit has been reached",
       retryAt: Date.parse("2026-10-04T17:05:00Z"),
       createdAt: now,
       seq: 1,
-    }
+    })
     expect(getSessionEventLabel(event, now, utc)).toBe(
       "Rate limit exceeded · resets 17:05\nThe usage limit has been reached",
     )
@@ -211,21 +209,24 @@ describe("session event labels", () => {
       zoneReads += 1
       return DateTime.zoneMakeOffset(0)
     }
-    const plain: SessionEvent = { _tag: "error", error: event.error, createdAt: now, seq: 1 }
+    const plain: SessionEvent = SessionEvent.cases.error.make({
+      error: event.error,
+      createdAt: now,
+      seq: 1,
+    })
     expect(getSessionEventLabel(plain, now, counted)).toBe(event.error)
     expect(zoneReads).toBe(0)
   })
 
   test("an interruption row joins its parts with the separator every row uses", () => {
-    const event: SessionEvent = { _tag: "interruption", createdAt: 1, seq: 1 }
+    const event: SessionEvent = SessionEvent.cases.interruption.make({ createdAt: 1, seq: 1 })
     expect(getSessionEventLabel(event)).toBe("Interrupted · what should gent do instead?")
   })
 
   // A settled retry shows at the preview level, where it happened.
   it.scopedLive("a wrapped retry row hangs its next line under the text", () =>
     Effect.gen(function* () {
-      const event: SessionEvent = {
-        _tag: "retrying",
+      const event: SessionEvent = SessionEvent.cases.retrying.make({
         attempt: 1,
         maxAttempts: 3,
         delayMs: 2000,
@@ -233,7 +234,7 @@ describe("session event labels", () => {
         reason: "overloaded (529) the provider asked us to slow down",
         createdAt: 1,
         seq: 1,
-      }
+      })
       const setup = yield* renderScoped(
         () => <MessageList items={[event]} disclosure="preview" syntaxStyle={syntaxStyle} />,
         { width: 40, height: 10 },
@@ -249,8 +250,7 @@ describe("session event labels", () => {
   )
 
   test("a retry the turn's cancel cut short is not called finished", () => {
-    const event: SessionEvent = {
-      _tag: "retrying",
+    const event: SessionEvent = SessionEvent.cases.retrying.make({
       attempt: 2,
       maxAttempts: 3,
       delayMs: 2000,
@@ -258,7 +258,7 @@ describe("session event labels", () => {
       reason: "overloaded (529)",
       createdAt: 1_000,
       seq: 1,
-    }
+    })
     expect(getSessionEventLabel(event, 30_000)).toBe("Retry 2/3 cancelled · overloaded (529)")
     // The runtime went idle before the feed saw how the retry ended.
     expect(getSessionEventLabel({ ...event, outcome: "stopped" }, 30_000)).toBe(
@@ -275,13 +275,13 @@ describe("turn line", () => {
   const ended = (
     counted: typeof emptyTurnSteps,
     durationSeconds = 108,
-  ): Extract<SessionEvent, { _tag: "turn-ended" }> => ({
-    _tag: "turn-ended",
-    durationSeconds,
-    steps: counted,
-    createdAt: 0,
-    seq: 1,
-  })
+  ): Extract<SessionEvent, { _tag: "turn-ended" }> =>
+    SessionEvent.cases["turn-ended"].make({
+      durationSeconds,
+      steps: counted,
+      createdAt: 0,
+      seq: 1,
+    })
 
   test("the turn line names the time, the retries, the tokens and the cost", () => {
     expect(getSessionEventLabel(ended(addRetry(addRetry(steps))))).toBe(
@@ -334,13 +334,14 @@ describe("model-call budget rows", () => {
       modelAttempts: { used: 6, limit: 8 },
     },
   ].reduce(addStep, addRetry(addRetry(emptyTurnSteps)))
-  const turnLine: Extract<SessionEvent, { _tag: "turn-ended" }> = {
-    _tag: "turn-ended",
+  const turnLine: Extract<SessionEvent, { _tag: "turn-ended" }> = SessionEvent.cases[
+    "turn-ended"
+  ].make({
     durationSeconds: 108,
     steps: budgeted,
     createdAt: 1,
     seq: 1,
-  }
+  })
   const notice: ListMessage = {
     ...userMessage("regular-message", "m1:model-attempts", "BUDGET-NOTICE-BODY"),
     metadata: { customType: MODEL_ATTEMPTS_MESSAGE_TYPE, details: { used: 5, limit: 8 } },
@@ -467,16 +468,16 @@ const userMessage = (
  *
  * The segments own a message's tool calls, as the feed writes them.
  */
-const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage => ({
-  _tag: "regular-message",
-  id,
-  role: "assistant",
-  content: "",
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  segments: [{ _tag: "tool-call", toolCall }],
-})
+const assistantToolMessage = (id: string, toolCall: ToolCall): ListMessage =>
+  ListMessage.cases["regular-message"].make({
+    id,
+    role: "assistant",
+    content: "",
+    reasoning: "",
+    images: [],
+    createdAt: 0,
+    segments: [AssistantSegment.cases["tool-call"].make({ toolCall })],
+  })
 
 /**
  * A failed call as the runner stores it: the output is `{ error }` as pretty
@@ -612,22 +613,22 @@ const bashOutputMessage = (
     output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({ ...output, exitCode: 0 }),
   })
 
-const compactionMessage = (): ListMessage => ({
-  _tag: "regular-message",
-  id: "context-handoff:b1:m3",
-  role: "user",
-  content: "Context handoff: the user renamed the loader.",
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  metadata: {
-    customType: "context-window",
-    details: {
-      keepFromMessageId: "m4",
-      summarized: { firstMessageId: "m1", lastMessageId: "m3", count: 3 },
+const compactionMessage = (): ListMessage =>
+  ListMessage.cases["regular-message"].make({
+    id: "context-handoff:b1:m3",
+    role: "user",
+    content: "Context handoff: the user renamed the loader.",
+    reasoning: "",
+    images: [],
+    createdAt: 0,
+    metadata: {
+      customType: "context-window",
+      details: {
+        keepFromMessageId: "m4",
+        summarized: { firstMessageId: "m1", lastMessageId: "m3", count: 3 },
+      },
     },
-  },
-})
+  })
 
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
   const renderers = useToolRenderers()
@@ -878,16 +879,15 @@ describe("transcript message rows", () => {
         const savedText: string[] = []
         // Native history waits for client extensions; the checks start after they load.
         let extensionsLoaded = () => false
-        const answer: ListMessage = {
-          _tag: "regular-message",
+        const answer: ListMessage = ListMessage.cases["regular-message"].make({
           id: "last-answer",
           role: "assistant",
           content: "ANSWER-END",
           reasoning: "",
           images: [],
           createdAt: 0,
-          segments: [{ _tag: "text", content: "ANSWER-END" }],
-        }
+          segments: [AssistantSegment.cases.text.make({ content: "ANSWER-END" })],
+        })
         const items: SessionItem[] = [
           userMessage(
             "regular-message",
@@ -1124,16 +1124,17 @@ describe("transcript message rows", () => {
   it.scopedLive("shares one resize subscription across transcript event rows", () =>
     Effect.gen(function* () {
       const outcomes: ReadonlyArray<RetryOutcome> = [...Array(11).fill("retried"), "pending"]
-      const items: SessionItem[] = outcomes.map((outcome, seq) => ({
-        _tag: "retrying",
-        attempt: seq + 1,
-        maxAttempts: 12,
-        delayMs: 1_000,
-        outcome,
-        reason: "overloaded",
-        createdAt: seq,
-        seq,
-      }))
+      const items: SessionItem[] = outcomes.map((outcome, seq) =>
+        SessionEvent.cases.retrying.make({
+          attempt: seq + 1,
+          maxAttempts: 12,
+          delayMs: 1_000,
+          outcome,
+          reason: "overloaded",
+          createdAt: seq,
+          seq,
+        }),
+      )
       const setup = yield* renderScoped(() => (
         <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
       ))
@@ -1837,6 +1838,7 @@ describe("tool frame identity", () => {
           error: "The cell worker state was lost. Its source was not replayed.",
           stateLost: true,
           operations: [
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the JSON a cell's output carries, which this test encodes as the wire text
             {
               _tag: "Completed",
               operationId: "op-1",
@@ -2611,27 +2613,25 @@ describe("transcript block spacing", () => {
         },
       ],
     }
-    return {
-      _tag: "regular-message",
+    return ListMessage.cases["regular-message"].make({
       id: `cell-step-${index}`,
       role: "assistant",
       content: "",
       reasoning: "",
       images: [],
       createdAt: index,
-      segments: [{ _tag: "tool-call", toolCall }],
-    }
+      segments: [AssistantSegment.cases["tool-call"].make({ toolCall })],
+    })
   }
-  const answer: ListMessage = {
-    _tag: "regular-message",
+  const answer: ListMessage = ListMessage.cases["regular-message"].make({
     id: "cell-steps-done",
     role: "assistant",
     content: "done",
     reasoning: "",
     images: [],
     createdAt: 9,
-    segments: [{ _tag: "text", content: "done" }],
-  }
+    segments: [AssistantSegment.cases.text.make({ content: "done" })],
+  })
   const items: SessionItem[] = [
     cellStep(1, "git status --short", ""),
     cellStep(2, "seq 1 3", "1\n2\n3\n"),
@@ -2947,32 +2947,32 @@ describe("answers and tool runs", () => {
     summary: absent,
     output: encodeJson({ stdout: "1\n2\n3\n", stderr: "", exitCode: 0 }),
   }
-  const message = (id: string, segments: NonNullable<ListMessage["segments"]>): ListMessage => ({
-    _tag: "regular-message",
-    id,
-    role: "assistant",
-    content: segments
-      .flatMap((segment) => {
-        if (segment._tag === "text") return [segment.content]
-        return []
-      })
-      .join(""),
-    reasoning: "",
-    images: [],
-    createdAt: 0,
-    segments,
-  })
+  const message = (id: string, segments: NonNullable<ListMessage["segments"]>): ListMessage =>
+    ListMessage.cases["regular-message"].make({
+      id,
+      role: "assistant",
+      content: segments
+        .flatMap((segment) => {
+          if (segment._tag === "text") return [segment.content]
+          return []
+        })
+        .join(""),
+      reasoning: "",
+      images: [],
+      createdAt: 0,
+      segments,
+    })
   const items: SessionItem[] = [
     message("text-then-run", [
-      { _tag: "text", content: "Inspected the relevant files." },
-      { _tag: "tool-call", toolCall: readCall },
+      AssistantSegment.cases.text.make({ content: "Inspected the relevant files." }),
+      AssistantSegment.cases["tool-call"].make({ toolCall: readCall }),
     ]),
     message("answer-after-run", [
-      { _tag: "text", content: "The duplicate chrome came from both." },
+      AssistantSegment.cases.text.make({ content: "The duplicate chrome came from both." }),
     ]),
     message("run-then-text", [
-      { _tag: "tool-call", toolCall: bashCall },
-      { _tag: "text", content: "Ran it and it passed." },
+      AssistantSegment.cases["tool-call"].make({ toolCall: bashCall }),
+      AssistantSegment.cases.text.make({ content: "Ran it and it passed." }),
     ]),
   ]
   for (const width of [100, 60, 40]) {
@@ -3029,8 +3029,7 @@ describe("failure hue on a tool run", () => {
     summary: absent,
     output: encodeJson({ stdout: "", stderr: "ls: cannot access 'd.ts'", exitCode: 2 }),
   }
-  const run: ListMessage = {
-    _tag: "regular-message",
+  const run: ListMessage = ListMessage.cases["regular-message"].make({
     id: "hue-run",
     role: "assistant",
     content: "",
@@ -3038,10 +3037,10 @@ describe("failure hue on a tool run", () => {
     images: [],
     createdAt: 0,
     segments: [
-      { _tag: "tool-call", toolCall: failedRead },
-      { _tag: "tool-call", toolCall: exitedBash },
+      AssistantSegment.cases["tool-call"].make({ toolCall: failedRead }),
+      AssistantSegment.cases["tool-call"].make({ toolCall: exitedBash }),
     ],
-  }
+  })
   for (const disclosure of ["collapsed", "preview"] as const) {
     for (const width of [100, 60, 40]) {
       it.scopedLive(
@@ -3456,16 +3455,16 @@ describe("write row", () => {
 // ── native transcript markdown ──────────────────────────────────────────────
 
 /** An answer as the streaming path writes it: `_tag` first, and no metadata. */
-const assistant = (id: string, content: string): ListMessage => ({
-  _tag: "regular-message",
-  id,
-  role: "assistant",
-  content,
-  reasoning: "",
-  images: [],
-  createdAt: 0,
-  segments: [{ _tag: "text", content }],
-})
+const assistant = (id: string, content: string): ListMessage =>
+  ListMessage.cases["regular-message"].make({
+    id,
+    role: "assistant",
+    content,
+    reasoning: "",
+    images: [],
+    createdAt: 0,
+    segments: [AssistantSegment.cases.text.make({ content })],
+  })
 
 /** A prompt the reader typed: the server stamps its client origin. */
 const clientPrompt = (id: string, text: string): ListMessage => ({
@@ -4357,13 +4356,13 @@ const bottomTranscript = (
  * The row a turn's end adds to the transcript (`● Worked for …`), with its
  * spacer: as many rows as the activity row and its spacer give back.
  */
-const turnEnded = (seq: number): SessionItem => ({
-  _tag: "turn-ended",
-  durationSeconds: 5,
-  steps: emptyTurnSteps,
-  createdAt: seq,
-  seq,
-})
+const turnEnded = (seq: number): SessionItem =>
+  SessionEvent.cases["turn-ended"].make({
+    durationSeconds: 5,
+    steps: emptyTurnSteps,
+    createdAt: seq,
+    seq,
+  })
 
 /** The blank rows right above the composer row of `frame`. */
 const blankRowsAboveComposer = (frame: string): number => {
@@ -5644,9 +5643,10 @@ const rebuiltMessage = (id: string, content: string): ListMessage => {
     reasoning: "",
     images: [],
     createdAt: 0,
-    segments: [{ _tag: "text", content }],
+    segments: [AssistantSegment.cases.text.make({ content })],
     metadata: absent,
   }
+  // oxlint-disable-next-line effect/preferTaggedConstructors -- the rebuild path under test puts `_tag` last in key order; a constructor puts it first
   return { ...body, _tag: "regular-message" }
 }
 
@@ -5676,16 +5676,24 @@ describe("transcript fingerprint", () => {
       output: absent,
     }
     const base = rebuiltMessage("m1", "hello")
-    const running: ListMessage = { ...base, segments: [{ _tag: "tool-call", toolCall: call }] }
+    const running: ListMessage = {
+      ...base,
+      segments: [AssistantSegment.cases["tool-call"].make({ toolCall: call })],
+    }
     const done: ListMessage = {
       ...base,
-      segments: [{ _tag: "tool-call", toolCall: { ...call, status: "completed", output: "ok" } }],
+      segments: [
+        AssistantSegment.cases["tool-call"].make({
+          toolCall: { ...call, status: "completed", output: "ok" },
+        }),
+      ],
     }
     expect(transcriptFingerprint(running)).not.toBe(transcriptFingerprint(done))
   })
 
   test("a session event agrees across key orders", () => {
-    const first: SessionItem = { _tag: "interruption", createdAt: 5, seq: 2 }
+    const first: SessionItem = SessionEvent.cases.interruption.make({ createdAt: 5, seq: 2 })
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- this literal spells `_tag` last on purpose: the test proves the fingerprint ignores key order
     const second: SessionItem = { createdAt: 5, seq: 2, _tag: "interruption" }
     expect(transcriptFingerprint(first)).toBe(transcriptFingerprint(second))
   })
@@ -6131,16 +6139,15 @@ describe("sticky last prompt", () => {
   })
   const reply = (id: string, lines: number): ListMessage => {
     const text = Array.from({ length: lines }, (_, index) => `${id} line ${index + 1}`).join("\n\n")
-    return {
-      _tag: "regular-message",
+    return ListMessage.cases["regular-message"].make({
       id,
       role: "assistant",
       content: text,
       reasoning: "",
       images: [],
       createdAt: 0,
-      segments: [{ _tag: "text", content: text }],
-    }
+      segments: [AssistantSegment.cases.text.make({ content: text })],
+    })
   }
   const count = (frame: string, text: string) => frame.split(text).length - 1
 
@@ -6757,17 +6764,15 @@ describe("message rows", () => {
   it.scopedLive("a steer row draws its text, and an answer its reasoning from the preview on", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [
-        {
-          _tag: "interjection-message",
+        ListMessage.cases["interjection-message"].make({
           id: "user-1",
           role: "user",
           content: "Stop and switch agent",
           reasoning: "",
           images: [],
           createdAt: 0,
-        } satisfies ListMessage,
-        {
-          _tag: "regular-message",
+        }),
+        ListMessage.cases["regular-message"].make({
           id: "assistant-1",
           role: "assistant",
           content: "Switching now",
@@ -6778,10 +6783,10 @@ describe("message rows", () => {
           // with the flat fields alongside for readers that want the whole
           // text at once.
           segments: [
-            { _tag: "reasoning", content: "Considering current todo state" },
-            { _tag: "text", content: "Switching now" },
+            AssistantSegment.cases.reasoning.make({ content: "Considering current todo state" }),
+            AssistantSegment.cases.text.make({ content: "Switching now" }),
           ],
-        } satisfies ListMessage,
+        }),
       ]
       const setup = yield* renderScoped(() => (
         <MessageList items={items} disclosure="preview" syntaxStyle={syntaxStyle} />
@@ -6829,8 +6834,7 @@ describe("tool runs across steps", () => {
         }),
       })),
     }
-    return {
-      _tag: "regular-message",
+    return ListMessage.cases["regular-message"].make({
       id,
       role: "assistant",
       content: "",
@@ -6839,13 +6843,14 @@ describe("tool runs across steps", () => {
       createdAt: 0,
       segments: [
         ...(options.before ?? []),
-        { _tag: "tool-call", toolCall },
+        AssistantSegment.cases["tool-call"].make({ toolCall }),
         ...(options.after ?? []),
       ],
-    }
+    })
   }
-  const text = (content: string): AssistantSegment => ({ _tag: "text", content })
-  const reasoning = (content: string): AssistantSegment => ({ _tag: "reasoning", content })
+  const text = (content: string): AssistantSegment => AssistantSegment.cases.text.make({ content })
+  const reasoning = (content: string): AssistantSegment =>
+    AssistantSegment.cases.reasoning.make({ content })
   const headers = (frame: string) =>
     frame
       .split("\n")
@@ -7192,16 +7197,16 @@ describe("tool runs across steps", () => {
     "a running turn's steps write history only for their own rows, however long the session",
     () =>
       Effect.gen(function* () {
-        const thinking = (id: string): ListMessage => ({
-          _tag: "regular-message",
-          id,
-          role: "assistant",
-          content: "",
-          reasoning: "",
-          images: [],
-          createdAt: 0,
-          segments: [reasoning(`THOUGHT ${id}`)],
-        })
+        const thinking = (id: string): ListMessage =>
+          ListMessage.cases["regular-message"].make({
+            id,
+            role: "assistant",
+            content: "",
+            reasoning: "",
+            images: [],
+            createdAt: 0,
+            segments: [reasoning(`THOUGHT ${id}`)],
+          })
         const joined = (id: string, command: string) =>
           step(id, [command], { before: [reasoning(`THOUGHT ${id}`)] })
         const turnOutput = (answers: number) =>
@@ -7314,30 +7319,29 @@ describe("collapse ladder", () => {
     reasoningText: string,
     operations: ReadonlyArray<ToolCall>,
     display = "",
-  ): ListMessage => ({
-    _tag: "regular-message",
-    id,
-    role: "assistant",
-    content: "",
-    reasoning: reasoningText,
-    images: [],
-    createdAt: 0,
-    segments: [
-      { _tag: "reasoning", content: reasoningText },
-      {
-        _tag: "tool-call",
-        toolCall: {
-          id: `${id}-cell`,
-          toolName: "cell",
-          status: "completed",
-          input: { code: "await tools.bash({ command: 'x' })" },
-          summary: absent,
-          output: encodeJson({ display, bindings: [], truncated: false }),
-          operations: [...operations],
-        },
-      },
-    ],
-  })
+  ): ListMessage =>
+    ListMessage.cases["regular-message"].make({
+      id,
+      role: "assistant",
+      content: "",
+      reasoning: reasoningText,
+      images: [],
+      createdAt: 0,
+      segments: [
+        AssistantSegment.cases.reasoning.make({ content: reasoningText }),
+        AssistantSegment.cases["tool-call"].make({
+          toolCall: {
+            id: `${id}-cell`,
+            toolName: "cell",
+            status: "completed",
+            input: { code: "await tools.bash({ command: 'x' })" },
+            summary: absent,
+            output: encodeJson({ display, bindings: [], truncated: false }),
+            operations: [...operations],
+          },
+        }),
+      ],
+    })
   const file = (name: string) => `gent-debug-tools/${name}.ts`
   /** The scripted `debug tools` turn: six steps, the last bash exits 2, then the answer. */
   const debugTurn = (): SessionItem[] => [
@@ -7397,8 +7401,10 @@ describe("collapse ladder", () => {
       ...assistant("dbg-answer", "The check for d.ts failed: it does not exist yet."),
       reasoning: "Summarize.",
       segments: [
-        { _tag: "reasoning", content: "Summarize." },
-        { _tag: "text", content: "The check for d.ts failed: it does not exist yet." },
+        AssistantSegment.cases.reasoning.make({ content: "Summarize." }),
+        AssistantSegment.cases.text.make({
+          content: "The check for d.ts failed: it does not exist yet.",
+        }),
       ],
     },
   ]
@@ -7508,6 +7514,7 @@ describe("collapse ladder", () => {
           status: "error",
           input: { code: "try { await tools.read({ path: 'missing.ts' }) } catch {}; throw x" },
           summary: message,
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the JSON text of a cell failure, the output bytes the row parses
           output: encodeJson({
             _tag: "CellEvaluationError",
             phase: "execute",
@@ -7579,6 +7586,7 @@ describe("collapse ladder", () => {
         error: "The tool did not finish: the turn was interrupted.",
         reason: "Interrupted",
       })
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the JSON text of a cell cancel, the output bytes the row parses
       const kernelCancel = encodeJson({
         _tag: "CellKernelError",
         reason: "cancelled",
@@ -7645,7 +7653,7 @@ describe("collapse ladder", () => {
   const thinkingOnly = (id: string, content: string): ListMessage => ({
     ...assistant(id, ""),
     reasoning: content,
-    segments: [{ _tag: "reasoning", content }],
+    segments: [AssistantSegment.cases.reasoning.make({ content })],
   })
 
   it.scopedLive(
@@ -7693,8 +7701,8 @@ describe("collapse ladder", () => {
             ...assistant("thought-answer", "All green."),
             reasoning: reasoningText,
             segments: [
-              { _tag: "reasoning", content: reasoningText },
-              { _tag: "text", content: "All green." },
+              AssistantSegment.cases.reasoning.make({ content: reasoningText }),
+              AssistantSegment.cases.text.make({ content: "All green." }),
             ],
           },
         ]
@@ -7747,8 +7755,8 @@ describe("collapse ladder", () => {
           ...assistant("closing-answer", longBody("ANSWER")),
           reasoning: "CLOSING-THOUGHT",
           segments: [
-            { _tag: "reasoning", content: "CLOSING-THOUGHT" },
-            { _tag: "text", content: longBody("ANSWER") },
+            AssistantSegment.cases.reasoning.make({ content: "CLOSING-THOUGHT" }),
+            AssistantSegment.cases.text.make({ content: longBody("ANSWER") }),
           ],
         }
         const steps = [
@@ -7845,7 +7853,9 @@ describe("collapse ladder", () => {
   it.scopedLive("a long session error keeps four lines below full and counts the rest", () =>
     Effect.gen(function* () {
       const body = Array.from({ length: 10 }, (_, index) => `PROVIDER-LINE-${index + 1}`).join("\n")
-      const items: SessionItem[] = [{ _tag: "error", error: body, createdAt: 1, seq: 1 }]
+      const items: SessionItem[] = [
+        SessionEvent.cases.error.make({ error: body, createdAt: 1, seq: 1 }),
+      ]
       for (const width of [120, 60]) {
         for (const disclosure of ["collapsed", "preview"] as const) {
           const frame = lines(yield* draw(items, disclosure, width)).filter(
@@ -7865,7 +7875,7 @@ describe("collapse ladder", () => {
       }
       // A short error shows whole at every level.
       const short = yield* draw(
-        [{ _tag: "error", error: "one\ntwo", createdAt: 1, seq: 1 }],
+        [SessionEvent.cases.error.make({ error: "one\ntwo", createdAt: 1, seq: 1 })],
         "collapsed",
         60,
       )
@@ -7880,15 +7890,14 @@ describe("collapse ladder", () => {
     { outcome: "ToolCalls", costUsd: 0.02, usage: { inputTokens: 20_000, outputTokens: 1_200 } },
     { outcome: "Answered", costUsd: 0.02, usage: { inputTokens: 18_000, outputTokens: 900 } },
   ].reduce(addStep, emptyTurnSteps)
-  const turnLine = (retries = 0): SessionItem => ({
-    _tag: "turn-ended",
-    durationSeconds: 23,
-    steps: Array.from({ length: retries }).reduce(addRetry, usedSteps),
-    createdAt: 1,
-    seq: 1,
-  })
-  const settledRetry: SessionItem = {
-    _tag: "retrying",
+  const turnLine = (retries = 0): SessionItem =>
+    SessionEvent.cases["turn-ended"].make({
+      durationSeconds: 23,
+      steps: Array.from({ length: retries }).reduce(addRetry, usedSteps),
+      createdAt: 1,
+      seq: 1,
+    })
+  const settledRetry: SessionItem = SessionEvent.cases.retrying.make({
     attempt: 1,
     maxAttempts: 3,
     delayMs: 1_000,
@@ -7896,7 +7905,7 @@ describe("collapse ladder", () => {
     reason: "Rate limit exceeded",
     createdAt: 1,
     seq: 1,
-  }
+  })
   /** The rows a frame draws, from its first drawn row to its last. */
   const drawnRows = (frame: string) => {
     const all = lines(frame)
@@ -8049,18 +8058,17 @@ describe("collapse ladder", () => {
       () =>
         Effect.gen(function* () {
           const items: SessionItem[] = [
-            { _tag: "error", error: "provider failed", createdAt: 1, seq: 1 },
-            { _tag: "interruption", createdAt: 2, seq: 2 },
+            SessionEvent.cases.error.make({ error: "provider failed", createdAt: 1, seq: 1 }),
+            SessionEvent.cases.interruption.make({ createdAt: 2, seq: 2 }),
             turnLine(),
-            {
-              _tag: "notice",
+            SessionEvent.cases.notice.make({
               key: "miss",
               glyph: "◌",
               color: "textMuted",
               text: "cache miss",
               createdAt: 4,
               seq: 4,
-            },
+            }),
           ]
           for (const disclosure of ["collapsed", "preview"] as const) {
             const rows = drawnRows(yield* draw(items, disclosure, width))

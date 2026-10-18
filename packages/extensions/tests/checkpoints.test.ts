@@ -688,10 +688,11 @@ describe("turn reverts", () => {
           yield* session.turn("change things", "done 1")
           yield* sh(repo, "printf 'mine\\n' > user.txt")
           const outcome = yield* session.revert("revert-1", filesOf(1))
-          expect(outcome).toEqual({
-            _tag: "Reverted",
-            files: ["a.txt", "crlf.txt", "new/made.txt"],
-          })
+          expect(outcome).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["a.txt", "crlf.txt", "new/made.txt"],
+            }),
+          )
           expect(yield* contentOf(repo, "a.txt")).toBe("one")
           expect(yield* sh(repo, "od -An -c crlf.txt")).toBe("x  \\r  \\n   y  \\r  \\n")
           expect(yield* sh(repo, "test -e new && echo there || echo gone")).toBe("gone")
@@ -720,15 +721,16 @@ describe("turn reverts", () => {
           yield* session.turn("change a", "done 1")
           yield* sh(repo, "printf 'mine\\n' > a.txt")
           const refused = yield* session.revert("revert-1", filesOf(1))
-          expect(refused).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(refused._tag).toBe("Refused")
+          expect(refused).toMatchObject({ conflicts: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("mine")
           expect((yield* session.list).undo).toBeUndefined()
           const overwritten = yield* session.revert("revert-2", filesOf(1), true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(overwritten).toEqual(RevertOutcome.cases.Reverted.make({ files: ["a.txt"] }))
           expect(yield* contentOf(repo, "a.txt")).toBe("one")
           expect((yield* session.list).undo).toEqual({ requestId: "revert-2", files: 1 })
           const undone = yield* session.revert("undo-1", UNDO)
-          expect(undone).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(undone).toEqual(RevertOutcome.cases.Reverted.make({ files: ["a.txt"] }))
           expect(yield* contentOf(repo, "a.txt")).toBe("mine")
         }),
       ),
@@ -749,25 +751,28 @@ describe("turn reverts", () => {
             textStep("done 1"),
           ])
           yield* session.turn("change a", "done 1")
-          expect(yield* session.revert("revert-1", filesOf(1))).toEqual({
-            _tag: "Reverted",
-            files: ["a.txt"],
-          })
+          expect(yield* session.revert("revert-1", filesOf(1))).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["a.txt"],
+            }),
+          )
           expect((yield* session.list).undo).toEqual({ requestId: "revert-1", files: 1 })
-          expect(yield* session.revert("undo-1", UNDO)).toEqual({
-            _tag: "Reverted",
-            files: ["a.txt"],
-          })
+          expect(yield* session.revert("undo-1", UNDO)).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["a.txt"],
+            }),
+          )
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
           const listed = yield* session.list
           expect(listed.undo).toBeUndefined()
           expect(listed.unfinished).toBeUndefined()
-          expect(yield* session.revert("undo-2", UNDO)).toMatchObject({ _tag: "Refused" })
+          expect((yield* session.revert("undo-2", UNDO))._tag).toBe("Refused")
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
-          expect(yield* session.revert("revert-2", filesOf(1))).toEqual({
-            _tag: "Reverted",
-            files: ["a.txt"],
-          })
+          expect(yield* session.revert("revert-2", filesOf(1))).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["a.txt"],
+            }),
+          )
           expect((yield* session.list).undo).toEqual({ requestId: "revert-2", files: 1 })
         }),
       ),
@@ -815,7 +820,7 @@ describe("turn reverts", () => {
           yield* session.client.message.send({ ...away, content: "work there" })
           yield* session.controls.waitForCall(3)
           const reverted = yield* session.revert("revert-2", filesOf(1))
-          expect(reverted).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(reverted).toEqual(RevertOutcome.cases.Reverted.make({ files: ["a.txt"] }))
           yield* session.controls.emitAll(3)
         }),
       ),
@@ -858,7 +863,7 @@ describe("turn reverts", () => {
             ["change a", "captured"],
           ])
           const first = yield* session.revert("revert-2", bothOf(2))
-          expect(first).toMatchObject({ _tag: "Refused" })
+          expect(first._tag).toBe("Refused")
           if (first._tag === "Refused") expect(first.reason).toContain("this is the first turn")
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
         }),
@@ -886,7 +891,7 @@ describe("turn reverts", () => {
           yield* sh(repo, "printf 'two\\n' > a.txt")
           expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
           const finished = yield* session.revert("finish-1", FINISH)
-          expect(finished).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(finished).toEqual(RevertOutcome.cases.Reverted.make({ files: ["a.txt"] }))
           expect(yield* contentOf(repo, "a.txt")).toBe("one")
           expect((yield* session.list).unfinished).toBeUndefined()
         }),
@@ -941,12 +946,15 @@ describe("turn reverts", () => {
             ["add b", 1, 1, 0],
             ["change a", 2, 2, 1],
           ])
-          expect(yield* session.revert("revert-1", filesOf(1))).toEqual({
-            _tag: "Reverted",
-            files: ["b.txt"],
-          })
+          expect(yield* session.revert("revert-1", filesOf(1))).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["b.txt"],
+            }),
+          )
           const older = yield* session.revert("revert-2", filesOf(2))
-          expect(older).toEqual({ _tag: "Reverted", files: ["a.txt", "child.txt"] })
+          expect(older).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: ["a.txt", "child.txt"] }),
+          )
           expect(yield* contentOf(repo, "child.txt")).toBe("<absent>")
           expect(yield* contentOf(repo, "other.txt")).toBe("other")
         }),
@@ -970,12 +978,13 @@ describe("turn reverts", () => {
           yield* sh(repo, "head -c 3145728 /dev/urandom > notes.txt")
           const sum = yield* sh(repo, "sha256sum notes.txt")
           const refused = yield* session.revert("revert-1", filesOf(1))
-          expect(refused).toMatchObject({ _tag: "Refused", conflicts: ["notes.txt"] })
+          expect(refused._tag).toBe("Refused")
+          expect(refused).toMatchObject({ conflicts: ["notes.txt"] })
           const overwritten = yield* session.revert("revert-2", filesOf(1), true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: ["notes.txt"] })
+          expect(overwritten).toEqual(RevertOutcome.cases.Reverted.make({ files: ["notes.txt"] }))
           expect(yield* contentOf(repo, "notes.txt")).toBe("v1")
           const undone = yield* session.revert("undo-1", UNDO)
-          expect(undone).toEqual({ _tag: "Reverted", files: ["notes.txt"] })
+          expect(undone).toEqual(RevertOutcome.cases.Reverted.make({ files: ["notes.txt"] }))
           expect(yield* sh(repo, "sha256sum notes.txt")).toBe(sum)
         }),
       ),
@@ -1002,17 +1011,21 @@ describe("turn reverts", () => {
           yield* sh(repo, "printf 'edited\\n' > a.txt")
           expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
           const finish = yield* session.revert("finish-1", FINISH)
-          expect(finish).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(finish._tag).toBe("Refused")
+          expect(finish).toMatchObject({ conflicts: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("edited")
           const retry = yield* session.revert("revert-1", filesOf(1))
-          expect(retry).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(retry._tag).toBe("Refused")
+          expect(retry).toMatchObject({ conflicts: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("edited")
           const overwritten = yield* session.revert("finish-1", FINISH, true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] })
+          expect(overwritten).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: ["a.txt"], kept: ["a.txt"] }),
+          )
           expect(yield* contentOf(repo, "a.txt")).toBe("one")
           expect((yield* session.list).unfinished).toBeUndefined()
           const undone = yield* session.revert("undo-1", UNDO)
-          expect(undone).toEqual({ _tag: "Reverted", files: ["a.txt"] })
+          expect(undone).toEqual(RevertOutcome.cases.Reverted.make({ files: ["a.txt"] }))
           expect(yield* contentOf(repo, "a.txt")).toBe("edited")
         }),
       ),
@@ -1039,7 +1052,8 @@ describe("turn reverts", () => {
             ["revert-2", true],
           ] as const) {
             const outcome = yield* session.revert(id, filesOf(1), overwrite)
-            expect(outcome).toMatchObject({ _tag: "Refused", conflicts: ["d"] })
+            expect(outcome._tag).toBe("Refused")
+            expect(outcome).toMatchObject({ conflicts: ["d"] })
           }
           expect(yield* sh(repo, "test -L d && echo link || echo other")).toBe("link")
           expect(yield* sh(elsewhere, "ls -A | wc -l")).toBe("0")
@@ -1062,7 +1076,9 @@ describe("turn reverts", () => {
           yield* session.turn("make a file", "done 1")
           yield* sh(repo, "printf 'mine\\n' > new/mine.txt")
           const outcome = yield* session.revert("revert-1", filesOf(1))
-          expect(outcome).toEqual({ _tag: "Reverted", files: ["new/deep/made.txt"] })
+          expect(outcome).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: ["new/deep/made.txt"] }),
+          )
           expect(yield* sh(repo, "test -e new/deep && echo there || echo gone")).toBe("gone")
           expect(yield* contentOf(repo, "new/mine.txt")).toBe("mine")
         }),
@@ -1086,10 +1102,10 @@ describe("turn reverts", () => {
           yield* session.turn("flatten d", "done 1")
           expect(yield* contentOf(repo, "d")).toBe("now a file")
           const outcome = yield* session.revert("revert-1", filesOf(1))
-          expect(outcome).toEqual({ _tag: "Reverted", files: ["d", "d/a.txt"] })
+          expect(outcome).toEqual(RevertOutcome.cases.Reverted.make({ files: ["d", "d/a.txt"] }))
           expect(yield* contentOf(repo, "d/a.txt")).toBe("dee")
           const undone = yield* session.revert("undo-1", UNDO)
-          expect(undone).toEqual({ _tag: "Reverted", files: ["d", "d/a.txt"] })
+          expect(undone).toEqual(RevertOutcome.cases.Reverted.make({ files: ["d", "d/a.txt"] }))
           expect(yield* contentOf(repo, "d")).toBe("now a file")
         }),
       ),
@@ -1114,7 +1130,8 @@ describe("turn reverts", () => {
           const other = yield* session.client.session.create({ cwd: repo })
           yield* session.at(other).turn("other work", "other 1")
           const outcome = yield* session.revert("revert-1", filesOf(1))
-          expect(outcome).toMatchObject({ _tag: "Refused", conflicts: ["a.txt"] })
+          expect(outcome._tag).toBe("Refused")
+          expect(outcome).toMatchObject({ conflicts: ["a.txt"] })
           expect(yield* contentOf(repo, "a.txt")).toBe("two")
         }),
       ),
@@ -1143,7 +1160,9 @@ describe("turn reverts", () => {
           expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
           yield* sh(repo, "chmod 755 locked")
           const finished = yield* session.revert("finish-1", FINISH)
-          expect(finished).toEqual({ _tag: "Reverted", files: ["locked/made.txt"] })
+          expect(finished).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: ["locked/made.txt"] }),
+          )
           expect(yield* sh(repo, "test -e locked && echo there || echo gone")).toBe("gone")
         }),
       ),
@@ -1166,13 +1185,14 @@ describe("turn reverts", () => {
           yield* session.turn("make a quoted name", "done 1")
           yield* fs.writeFileString(`${repo}/${quoted}`, "user\n")
           const overwritten = yield* session.revert("revert-1", filesOf(1), true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: [quoted] })
+          expect(overwritten).toEqual(RevertOutcome.cases.Reverted.make({ files: [quoted] }))
           expect(yield* fs.exists(`${repo}/${quoted}`)).toBe(false)
           expect(yield* fs.readFileString(`${repo}/a`)).toBe("neighbor\n")
-          expect(yield* session.revert("undo-1", UNDO)).toEqual({
-            _tag: "Reverted",
-            files: [quoted],
-          })
+          expect(yield* session.revert("undo-1", UNDO)).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: [quoted],
+            }),
+          )
           expect(yield* fs.readFileString(`${repo}/${quoted}`)).toBe("user\n")
           expect(yield* fs.readFileString(`${repo}/a`)).toBe("neighbor\n")
         }),
@@ -1201,9 +1221,11 @@ describe("turn reverts", () => {
           yield* session.turn("make odd names", "done 1")
           for (const name of names) yield* fs.writeFileString(`${repo}/${name}`, `user ${name}`)
           const overwritten = yield* session.revert("revert-1", filesOf(1), true)
-          expect(overwritten).toEqual({ _tag: "Reverted", files: names })
+          expect(overwritten).toEqual(RevertOutcome.cases.Reverted.make({ files: names }))
           for (const name of names) expect(yield* fs.exists(`${repo}/${name}`)).toBe(false)
-          expect(yield* session.revert("undo-1", UNDO)).toEqual({ _tag: "Reverted", files: names })
+          expect(yield* session.revert("undo-1", UNDO)).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: names }),
+          )
           for (const name of names)
             expect(yield* fs.readFileString(`${repo}/${name}`)).toBe(`user ${name}`)
         }),
@@ -1238,13 +1260,16 @@ describe("turn reverts", () => {
           yield* fs.writeFileString(`${repo}/${aside}`, "late\n")
           expect((yield* session.list).unfinished).toEqual({ requestId: "revert-1" })
           const finished = yield* session.revert("finish-1", FINISH)
-          expect(finished).toEqual({ _tag: "Reverted", files: ["a.txt"], kept: ["a.txt"] })
+          expect(finished).toEqual(
+            RevertOutcome.cases.Reverted.make({ files: ["a.txt"], kept: ["a.txt"] }),
+          )
           expect(yield* fs.readFileString(`${repo}/a.txt`)).toBe("one\n")
           expect(yield* fs.exists(`${repo}/${aside}`)).toBe(false)
-          expect(yield* session.revert("undo-1", UNDO)).toEqual({
-            _tag: "Reverted",
-            files: ["a.txt"],
-          })
+          expect(yield* session.revert("undo-1", UNDO)).toEqual(
+            RevertOutcome.cases.Reverted.make({
+              files: ["a.txt"],
+            }),
+          )
           expect(yield* fs.readFileString(`${repo}/a.txt`)).toBe("late\n")
         }),
       ),
@@ -1294,7 +1319,7 @@ describe("turn reverts", () => {
               expect([replacement.name, stop, finished]).toEqual([
                 replacement.name,
                 stop,
-                { _tag: "Reverted", files: ["d", "d/a.txt"] },
+                RevertOutcome.cases.Reverted.make({ files: ["d", "d/a.txt"] }),
               ])
               expect(yield* sh(repo, replacement.target)).toBe(replacement.expected)
             }

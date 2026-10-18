@@ -397,13 +397,13 @@ export class SlashCommandInfo extends Schema.Class<
 /**
  * The profile whose extension health `extension.listStatus` reads: a
  * session's, or the launch profile the server started in. Only `gent doctor`,
- * which has no session, asks for `Launch`. Each tag is a plain literal with no
- * constructor default: the RPC client builds the payload with the schema's
- * constructor, and a defaulted tag would turn `{ scope: {} }` into `Launch`.
+ * which has no session, asks for `Launch`. `Launch`'s tag is a plain literal
+ * with no constructor default: the RPC client builds the payload with the
+ * schema's constructor, and a defaulted tag would turn `{ scope: {} }` into
+ * `Launch`. `Session` needs its `id`, so its tag defaults.
  */
 export const ExtensionStatusScope = Schema.Union([
-  // @effect-diagnostics-next-line schemaStructWithTag:off -- the RPC client builds the payload with make, and a defaulted tag would read { scope: {} } as Launch.
-  Schema.Struct({ _tag: Schema.Literal("Session"), id: SessionId }),
+  Schema.TaggedStruct("Session", { id: SessionId }),
   // @effect-diagnostics-next-line schemaStructWithTag:off -- the RPC client builds the payload with make, and a defaulted tag would read { scope: {} } as Launch.
   Schema.Struct({ _tag: Schema.Literal("Launch") }),
 ]).pipe(Schema.toTaggedUnion("_tag"))

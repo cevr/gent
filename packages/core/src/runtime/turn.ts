@@ -3496,7 +3496,7 @@ const computeStreamEndedCost: (params: {
  * Policy (continue, stop, run tools) matches on this; nothing else inspects
  * the response parts, and the tag travels on the step's `StreamEnded` event.
  */
-const StepOutcome = Schema.TaggedUnion({
+export const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
   /**
    * The stream failed; `partialOutput` says whether observable output was saved

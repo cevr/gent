@@ -714,7 +714,7 @@ const pullRequestKey = (checkout: Option.Option<Checkout>): string =>
  * in `cwd`, or what turn `#n` of the branch in view changed (1 is the newest,
  * as the `/revert` pane numbers it).
  */
-const ReviewTarget = Schema.TaggedUnion({
+export const ReviewTarget = Schema.TaggedUnion({
   WorkTree: { cwd: Schema.String, pathspecs: Schema.Array(Schema.String) },
   PullRequest: { cwd: Schema.String },
   Turn: { cwd: Schema.String, n: Schema.Int },

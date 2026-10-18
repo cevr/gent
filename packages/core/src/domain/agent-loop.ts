@@ -583,7 +583,7 @@ const StopMessageFields = {
   requester: Schema.optional(RequesterBranch),
 }
 
-const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
+export const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
   Present: { value: Schema.Unknown },
   Missing: {},
 })

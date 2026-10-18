@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {
+  DriverFailureId,
   emptyQueueSnapshot,
   testAgent,
   ErrorOccurred,
@@ -11,7 +12,7 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref } from "effect"
 import {
   AgentEvent,
   AgentName,
@@ -19,6 +20,7 @@ import {
   ConnectionState,
   dateFromMillis,
   EventEnvelope,
+  ExtensionHealthSnapshot,
   GentRpcError,
   Message,
   Model,
@@ -26,6 +28,7 @@ import {
   ModelId,
   ProviderId,
   SessionId,
+  SessionRuntimeStateSchema,
   SessionSnapshot,
   type ReasoningEffort,
   type UpdateSessionSettingsInput,
@@ -296,10 +299,9 @@ const snapshotOf = (
     reasoningLevel: absent,
     resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
     agent: AgentName.make("primary"),
-    runtime: {
-      _tag: "Idle",
+    runtime: SessionRuntimeStateSchema.cases.Idle.make({
       queue: emptyQueueSnapshot(),
-    },
+    }),
     metrics: {
       turns: 1,
       durationMs: 10,
@@ -708,7 +710,7 @@ describe("ClientProvider session lifecycle", () => {
             reasoningLevel: absent,
             resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
             agent: AgentName.make("secondary"),
-            runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
             metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
           }),
         )
@@ -778,10 +780,7 @@ describe("ClientProvider session lifecycle", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const answered = yield* Deferred.make<void>()
-      const refused = yield* Schema.decodeEffect(GentRpcError)({
-        _tag: "InvalidStateError",
-        message: "create refused",
-      })
+      const refused = GentRpcError.cases.InvalidStateError.make({ message: "create refused" })
       const client = createMockClient({
         session: {
           create: () =>
@@ -812,7 +811,10 @@ describe("ClientProvider session lifecycle", () => {
         ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
         modelId: model,
         reasoningLevel: "high",
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+        runtime: SessionRuntimeStateSchema.cases.Running.make({
+          queue: emptyQueueSnapshot(),
+          startedAtMs: 0,
+        }),
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       const session = client.session()
@@ -833,7 +835,10 @@ describe("ClientProvider session lifecycle", () => {
         })
         client.applySessionSnapshot({
           ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
-          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
         })
         const nextBranch = BranchId.make("branch-metrics-next")
         // The feed's order: the event goes to the client, then the feed routes.
@@ -891,7 +896,9 @@ describe("ClientProvider session lifecycle", () => {
                 Effect.andThen(
                   Effect.suspend(() => {
                     if (outcome === "refusal")
-                      return Effect.fail({ _tag: "NotFoundError", message: "session gone" })
+                      return Effect.fail(
+                        GentRpcError.cases.NotFoundError.make({ message: "session gone" }),
+                      )
                     return Effect.succeed({
                       modelId: ModelId.make("openai/gpt-5.6-luna"),
                       reasoningLevel: absent,
@@ -939,7 +946,10 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("main"),
-          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
           metrics: {
             turns: 1,
             durationMs: 0,
@@ -949,10 +959,9 @@ describe("ClientProvider session lifecycle", () => {
         }),
       )
       expect(client.isStreaming()).toBe(true)
-      const runtime = {
-        _tag: "Idle",
+      const runtime = SessionRuntimeStateSchema.cases.Idle.make({
         queue: emptyQueueSnapshot(),
-      } satisfies Parameters<ClientContextValue["applySessionRuntime"]>[0]["runtime"]
+      })
       client.applySessionRuntime({ sessionId, branchId: BranchId.make("old-branch"), runtime })
       expect(client.isStreaming()).toBe(true)
       client.applySessionRuntime({ sessionId, branchId, runtime })
@@ -991,7 +1000,10 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("main"),
-          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
           metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
         }),
       )
@@ -1003,7 +1015,7 @@ describe("ClientProvider session lifecycle", () => {
       client.applySessionRuntime({
         sessionId,
         branchId,
-        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
       })
       client.setError("provider refused the request")
       yield* notify('Unknown driver "nope".')
@@ -1016,11 +1028,12 @@ describe("ClientProvider session lifecycle", () => {
       const mockClient = createMockClient({
         model: {
           list: () =>
-            Effect.fail({
-              _tag: "DriverError",
-              driver: "openai",
-              reason: "catalog filter failed",
-            }),
+            Effect.fail(
+              GentRpcError.cases.DriverError.make({
+                driver: DriverFailureId.make("openai"),
+                reason: "catalog filter failed",
+              }),
+            ),
         },
       })
       const { setup, client } = yield* mountClient({
@@ -1042,7 +1055,12 @@ describe("ClientProvider session lifecycle", () => {
             Effect.suspend(() => {
               listings += 1
               if (listings === 1) {
-                return Effect.fail({ _tag: "DriverError", driver: "openai", reason: "dropped" })
+                return Effect.fail(
+                  GentRpcError.cases.DriverError.make({
+                    driver: DriverFailureId.make("openai"),
+                    reason: "dropped",
+                  }),
+                )
               }
               return Effect.succeed([])
             }),
@@ -1078,7 +1096,12 @@ describe("ClientProvider session lifecycle", () => {
             return Deferred.succeed(secondAsked, void 0).pipe(
               Effect.andThen(Deferred.await(answer)),
               Effect.andThen(
-                Effect.fail({ _tag: "DriverError", driver: "anthropic", reason: "offline" }),
+                Effect.fail(
+                  GentRpcError.cases.DriverError.make({
+                    driver: DriverFailureId.make("anthropic"),
+                    reason: "offline",
+                  }),
+                ),
               ),
             )
           },
@@ -1188,7 +1211,7 @@ describe("ClientProvider session lifecycle", () => {
                     Launch: () => Option.none(),
                   }),
                 )
-                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+                return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: [] })
               }),
           },
         })
@@ -1239,7 +1262,8 @@ describe("ClientProvider session lifecycle", () => {
       Effect.gen(function* () {
         const mockClient = createMockClient({
           branch: {
-            create: () => Effect.fail({ _tag: "NotFoundError", message: "branch gone" }),
+            create: () =>
+              Effect.fail(GentRpcError.cases.NotFoundError.make({ message: "branch gone" })),
           },
         })
         const { client } = yield* mountClient({
@@ -1266,10 +1290,9 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Idle",
+          runtime: SessionRuntimeStateSchema.cases.Idle.make({
             queue: emptyQueueSnapshot(),
-          },
+          }),
           metrics: {
             turns: 1,
             durationMs: 0,
@@ -1305,10 +1328,9 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: "high",
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Idle",
+          runtime: SessionRuntimeStateSchema.cases.Idle.make({
             queue: emptyQueueSnapshot(),
-          },
+          }),
           metrics: {
             turns: 0,
             durationMs: 0,
@@ -1352,11 +1374,10 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: "high",
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Running",
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
             queue: emptyQueueSnapshot(),
             startedAtMs: 0,
-          },
+          }),
           metrics: {
             turns: 9,
             durationMs: 0,
@@ -1401,11 +1422,10 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: "medium",
           resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
           agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Running",
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
             queue: emptyQueueSnapshot(),
             startedAtMs: 0,
-          },
+          }),
           metrics: {
             turns: 1,
             durationMs: 0,
@@ -1448,10 +1468,9 @@ describe("ClientProvider session lifecycle", () => {
             reasoningLevel: absent,
             resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
             agent: AgentName.make("primary"),
-            runtime: {
-              _tag: "Idle",
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({
               queue: emptyQueueSnapshot(),
-            },
+            }),
             metrics: {
               turns: 1,
               durationMs: 0,
@@ -1489,7 +1508,7 @@ const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelo
  * once. A refusal is an answer, and it is final at once.
  */
 describe("ClientProvider send", () => {
-  const refused = Schema.decodeSync(GentRpcError)({ _tag: "InvalidStateError", message: "refused" })
+  const refused = GentRpcError.cases.InvalidStateError.make({ message: "refused" })
   const target = { sessionId: FIRST.sessionId, branchId: FIRST.branchId }
   type Failure = GentRpcError | RpcClientError
   /**
@@ -1708,11 +1727,10 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(idle)
       client.setErrorIn(FIRST, "send refused")
       // The connection drops; a queued message starts the next turn meanwhile.
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       client.applySessionSnapshot({ ...idle, runtime: running })
       expect(client.isStreaming()).toBe(true)
       expect(client.error()).toEqual(Option.none())
@@ -1724,11 +1742,10 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       const midTurn = { ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }), runtime: running }
       client.applySessionSnapshot(midTurn)
       client.setErrorIn(FIRST, "interject refused")
@@ -1738,7 +1755,7 @@ describe("ClientProvider errors", () => {
       // It ends while the connection is down; no new turn starts.
       client.applySessionSnapshot({
         ...midTurn,
-        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
         metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
       })
       expect(client.error()).toEqual(Option.some("interject refused"))
@@ -1750,11 +1767,10 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       client.applySessionRuntime({ ...FIRST, runtime: running })
       client.setError('No model matches "typo"')
       expect(client.isStreaming()).toBe(true)
@@ -1789,11 +1805,11 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const runningSince = (startedAtMs: number): SessionSnapshot["runtime"] => ({
-        _tag: "Running",
-        queue: emptyQueueSnapshot(),
-        startedAtMs,
-      })
+      const runningSince = (startedAtMs: number): SessionSnapshot["runtime"] =>
+        SessionRuntimeStateSchema.cases.Running.make({
+          queue: emptyQueueSnapshot(),
+          startedAtMs,
+        })
       client.applySessionRuntime({ ...FIRST, runtime: runningSince(40) })
       expect(client.isStreaming()).toBe(true)
       client.applySessionEvent(

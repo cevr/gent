@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Predicate } from "effect"
+import { Effect, Layer, Option, Predicate, Schema } from "effect"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import { FetchHttpClient, HttpClient } from "effect/http"
@@ -36,15 +36,11 @@ interface FakeResponse {
  * A responder returns this to make the fetch reject, as a broken connection
  * does: `FetchHttpClient` fails the request with `HttpClientError(TransportError)`.
  */
-interface TransportFailure {
-  readonly _tag: "TransportFailure"
-  readonly message: string
-}
+const TransportFailure = Schema.TaggedStruct("TransportFailure", { message: Schema.String })
+type TransportFailure = typeof TransportFailure.Type
 
-export const transportFailure = (message: string): TransportFailure => ({
-  _tag: "TransportFailure",
-  message,
-})
+export const transportFailure = (message: string): TransportFailure =>
+  TransportFailure.make({ message })
 
 type FakeAnswer = FakeResponse | TransportFailure
 

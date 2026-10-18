@@ -25,7 +25,12 @@ import {
   SessionMutationsLive,
   RpcHandlersLive,
 } from "../../src/server/server"
-import { ExtensionHealthSnapshot, GentRpcs } from "../../src/server/rpc"
+import {
+  ExtensionHealth,
+  ExtensionHealthIssue,
+  ExtensionHealthSnapshot,
+  GentRpcs,
+} from "../../src/server/rpc"
 import {
   BranchId,
   CurrentWorkspaceId,
@@ -56,7 +61,7 @@ import {
   dateFromMillis,
   Message,
   Session,
-  type SteerCommand,
+  SteerCommand,
 } from "../../src/domain/message"
 import { e2ePreset } from "../helpers/test-preset"
 import {
@@ -106,6 +111,7 @@ import { Socket } from "effect/socket"
 import { SqlClient } from "effect/sql"
 import { Auth, ModelResolver, textStep } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
 
@@ -199,11 +205,11 @@ const sessionRuntimeLayer = (
       drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>
-        Effect.succeed({
-          _tag: "Idle",
-          agent: AgentName.make("primary"),
-          queue: emptyQueueSnapshot(),
-        }),
+        Effect.succeed(
+          SessionRuntimeStateSchema.cases.Idle.make({
+            queue: emptyQueueSnapshot(),
+          }),
+        ),
       watchState: () => Effect.succeed(Stream.empty),
       terminateSession: () => Effect.void,
       ...overrides,
@@ -402,32 +408,28 @@ describe("extension health snapshot", () => {
 
     expect(snapshot.healthyExtensions).toEqual([])
     expect(snapshot.degradedExtensions).toEqual([
-      {
+      ExtensionHealth.cases.Degraded.make({
         manifest: { id: "@gent/memory" },
         scope: "builtin",
         sourcePath: "builtin",
-        _tag: "Degraded",
         issues: [
-          {
-            _tag: "ActivationFailed",
+          ExtensionHealthIssue.cases.ActivationFailed.make({
             phase: "startup",
             error: "startup boom",
-          },
+          }),
         ],
-      },
-      {
+      }),
+      ExtensionHealth.cases.Degraded.make({
         manifest: { id: "@gent/plan" },
         scope: "builtin",
         sourcePath: "builtin",
-        _tag: "Degraded",
         issues: [
-          {
-            _tag: "ActivationFailed",
+          ExtensionHealthIssue.cases.ActivationFailed.make({
             phase: "setup",
             error: "setup boom",
-          },
+          }),
         ],
-      },
+      }),
     ])
   })
 
@@ -440,30 +442,33 @@ describe("extension health snapshot", () => {
       }),
     ])
 
-    expect(snapshot).toEqual({
-      _tag: "Healthy",
-      extensions: [
-        {
-          _tag: "Healthy",
-          manifest: { id: ExtensionId.make("@gent/memory") },
-          scope: "builtin",
-          sourcePath: "builtin",
-        },
-      ],
-    })
+    expect(snapshot).toEqual(
+      ExtensionHealthSnapshot.cases.Healthy.make({
+        extensions: [
+          ExtensionHealth.cases.Healthy.make({
+            manifest: { id: ExtensionId.make("@gent/memory") },
+            scope: "builtin",
+            sourcePath: "builtin",
+          }),
+        ],
+      }),
+    )
   })
 
   test("transport uses tagged extension health states and issues", () => {
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes
     const wire = {
       _tag: "Degraded",
       healthyExtensions: [],
       degradedExtensions: [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes
         {
           manifest: { id: "@gent/plan" },
           scope: "builtin",
           sourcePath: "builtin",
           _tag: "Degraded",
           issues: [
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes
             {
               _tag: "ActivationFailed",
               phase: "startup",
@@ -477,19 +482,23 @@ describe("extension health snapshot", () => {
     const decoded = Schema.decodeUnknownSync(ExtensionHealthSnapshot)(wire)
     expect(decoded._tag).toBe("Degraded")
     if (decoded._tag !== "Degraded") return
-    expect(decoded.degradedExtensions[0]?.issues[0]).toEqual({
-      _tag: "ActivationFailed",
-      phase: "startup",
-      error: "launchd boom",
-    })
+    expect(decoded.degradedExtensions[0]?.issues[0]).toEqual(
+      ExtensionHealthIssue.cases.ActivationFailed.make({
+        phase: "startup",
+        error: "launchd boom",
+      }),
+    )
 
     const encoded = Schema.encodeSync(ExtensionHealthSnapshot)(decoded)
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded form this test asserts
     expect(encoded).toMatchObject({
       _tag: "Degraded",
       degradedExtensions: [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded form this test asserts
         {
           _tag: "Degraded",
           issues: [
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded form this test asserts
             {
               _tag: "ActivationFailed",
               phase: "startup",
@@ -503,14 +512,17 @@ describe("extension health snapshot", () => {
 
   test("transport rejects healthy snapshots containing degraded rows", () => {
     expect(() =>
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
         _tag: "Healthy",
         extensions: [
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
           {
             manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
             sourcePath: "builtin",
             _tag: "Degraded",
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
             issues: [{ _tag: "ActivationFailed", phase: "startup", error: "startup boom" }],
           },
         ],
@@ -520,6 +532,7 @@ describe("extension health snapshot", () => {
 
   test("transport rejects degraded snapshots without degraded rows", () => {
     expect(() =>
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
         _tag: "Degraded",
         healthyExtensions: [],
@@ -530,10 +543,12 @@ describe("extension health snapshot", () => {
 
   test("transport rejects degraded rows without issues", () => {
     expect(() =>
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
       Schema.decodeUnknownSync(ExtensionHealthSnapshot)({
         _tag: "Degraded",
         healthyExtensions: [],
         degradedExtensions: [
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the wire form this test decodes, which the schema rejects
           {
             manifest: { id: ExtensionId.make("@gent/memory") },
             scope: "builtin",
@@ -2679,13 +2694,12 @@ describe("requestId idempotency", () => {
         )
         const created = yield* client.session.create({ cwd: "/nonexistent/rpc-steer-idem" })
 
-        const command = {
-          _tag: "Interject",
+        const command = SteerCommand.cases.Interject.make({
           sessionId: created.sessionId,
           branchId: created.branchId,
           requestId: "req-rpc-steer-interject",
           message: "steer once",
-        } satisfies SteerCommand
+        })
         yield* client.steer.command({ command })
         yield* client.steer.command({ command })
 
@@ -2723,13 +2737,12 @@ describe("requestId idempotency", () => {
         )
         const created = yield* client.session.create({ cwd: "/nonexistent/rpc-drain-idem" })
         yield* client.steer.command({
-          command: {
-            _tag: "Interject",
+          command: SteerCommand.cases.Interject.make({
             sessionId: created.sessionId,
             branchId: created.branchId,
             requestId: "req-rpc-drain-steer",
             message: "drain me",
-          },
+          }),
         })
 
         const first = yield* client.queue.drain({

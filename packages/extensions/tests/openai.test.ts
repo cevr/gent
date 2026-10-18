@@ -23,15 +23,11 @@ import {
   buildOpenAIModelDriver,
   type OAuthError,
   type OpenAICredentialIO,
-  type OpenAICredentials,
+  OpenAICredentials,
   makeOpenAICredentialCache,
   OAuthRedirectPort,
 } from "../src/openai.js"
-import {
-  type CredentialCacheCell,
-  credentialCells,
-  EMPTY_CREDENTIAL_CELL,
-} from "../src/providers.js"
+import { CredentialCacheCell, credentialCells, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
   defineExtension,
   ExtensionHost,
@@ -1397,12 +1393,12 @@ const NOW_MS = 1_700_000_000_000
 const makeOAuthInfo = (): ProviderAuthInfo =>
   oauthInfo({ access: "test-access", refresh: "r", expires: FAR_FUTURE_MS })
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
-const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICredentials> => ({
-  _tag: "Durable",
-  creds,
-  at: NOW_MS,
-  invalidated: false,
-})
+const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICredentials> =>
+  CredentialCacheCell(OpenAICredentials).cases.Durable.make({
+    creds,
+    at: NOW_MS,
+    invalidated: false,
+  })
 const openaiResponsesBody = {
   id: "resp-test-1",
   object: "response",
@@ -2777,10 +2773,11 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         })
       // A refusal proves the sign-in is gone: a turn may move to the next credential.
       const refused = yield* refreshFailure({ status: 400, body: '{"error":"invalid_grant"}' })
-      expect(refused).toMatchObject({ _tag: "ProviderAuthError", credentialFailure: "Rejected" })
+      expect(refused._tag).toBe("ProviderAuthError")
+      expect(refused).toMatchObject({ credentialFailure: "Rejected" })
       // An unreadable reply proves nothing: the turn stays on the sign-in.
       const garbled = yield* refreshFailure({ status: 200, body: '{"unexpected":true}' })
-      expect(garbled).toMatchObject({ _tag: "ProviderAuthError" })
+      expect(garbled._tag).toBe("ProviderAuthError")
       expect(garbled.message).toContain("response invalid")
       expect(
         Schema.is(ProviderAuthError)(garbled) &&

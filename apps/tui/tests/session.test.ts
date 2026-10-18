@@ -22,6 +22,7 @@ import {
   clearQueue,
   closeAuthGateState,
   completeAuthCheck,
+  ComposerInteractionEvent,
   ComposerInteractionState,
   failAuthCheck,
   filterModels,
@@ -33,6 +34,9 @@ import {
   recordPrompt,
   resolveModelQuery,
   overlayHoldsComposer,
+  SessionOverlayState,
+  SessionUiEffect,
+  SessionUiEvent,
   SessionUiState,
   setQueue,
   transitionComposerInteraction,
@@ -68,6 +72,7 @@ import {
   Message,
   projectMessage,
   QueueSnapshot,
+  SessionRuntimeStateSchema,
   SessionSnapshot,
   ToolCallId,
   ToolInteraction,
@@ -76,6 +81,7 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
 import type { Command } from "../src/commands"
+import { PromptSearchEvent, PromptSearchState } from "../src/pickers"
 import { emptyFrecencyStore, frecencyLookup, recordPick } from "../src/autocomplete"
 import { emptyQueueSnapshot, EventId, type SessionRuntimeState } from "@gent/core/test-utils"
 import type { GentRuntime } from "@gent/sdk"
@@ -294,7 +300,7 @@ describe("transitionComposerInteraction", () => {
   test("derives mention autocomplete from draft changes", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "ask @dee" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "ask @dee" }),
       testContributions,
     )
 
@@ -309,14 +315,20 @@ describe("transitionComposerInteraction", () => {
   })
 
   test("shell mode suppresses autocomplete until exit", () => {
-    const shell = transitionComposerInteraction(ComposerInteractionState.initial(), {
-      _tag: "EnterShell",
-    })
-    const edited = transitionComposerInteraction(shell, {
-      _tag: "DraftChanged",
-      text: "ls -la",
-    })
-    const exited = transitionComposerInteraction(edited, { _tag: "ExitShell" })
+    const shell = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      ComposerInteractionEvent.cases.EnterShell.make({}),
+    )
+    const edited = transitionComposerInteraction(
+      shell,
+      ComposerInteractionEvent.cases.DraftChanged.make({
+        text: "ls -la",
+      }),
+    )
+    const exited = transitionComposerInteraction(
+      edited,
+      ComposerInteractionEvent.cases.ExitShell.make({}),
+    )
 
     expect(edited.mode).toBe("shell")
     expect(Option.isNone(edited.autocomplete)).toBe(true)
@@ -326,7 +338,7 @@ describe("transitionComposerInteraction", () => {
   test("detects inline trigger $ from contributions", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "use $eff" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "use $eff" }),
       testContributions,
     )
     expect(next.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
@@ -338,14 +350,14 @@ describe("transitionComposerInteraction", () => {
     for (const text of ["line one\n@src", "line one\t@src"]) {
       const next = transitionComposerInteraction(
         ComposerInteractionState.initial(),
-        { _tag: "DraftChanged", text },
+        ComposerInteractionEvent.cases.DraftChanged.make({ text }),
         testContributions,
       )
       expect(next.autocomplete).toEqual(Option.some({ type: "@", filter: "src", triggerPos: 9 }))
     }
     const skill = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "one\n$eff" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "one\n$eff" }),
       testContributions,
     )
     expect(skill.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
@@ -356,7 +368,7 @@ describe("transitionComposerInteraction", () => {
   test("an open quote after a trigger is one filter, spaces included", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: 'see @"my dir/no' },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: 'see @"my dir/no' }),
       testContributions,
     )
     expect(next.autocomplete).toEqual(
@@ -364,7 +376,7 @@ describe("transitionComposerInteraction", () => {
     )
     const closed = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: 'see @"my notes.md" ' },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: 'see @"my notes.md" ' }),
       testContributions,
     )
     expect(Option.isNone(closed.autocomplete)).toBe(true)
@@ -373,7 +385,7 @@ describe("transitionComposerInteraction", () => {
   test("does not detect unregistered prefix", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "use #tag" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "use #tag" }),
       testContributions,
     )
     expect(Option.isNone(next.autocomplete)).toBe(true)
@@ -383,7 +395,7 @@ describe("transitionComposerInteraction", () => {
     const custom: AutocompleteContribution[] = [{ prefix: "#", title: "Tags", items: () => [] }]
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "use #tag" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "use #tag" }),
       custom,
     )
     expect(next.autocomplete).toEqual(Option.some({ type: "#", filter: "tag", triggerPos: 4 }))
@@ -392,7 +404,7 @@ describe("transitionComposerInteraction", () => {
   test("no contributions means no autocomplete detection", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "ask @dee" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "ask @dee" }),
       [],
     )
     expect(Option.isNone(next.autocomplete)).toBe(true)
@@ -401,16 +413,21 @@ describe("transitionComposerInteraction", () => {
   test("restore and clear draft close autocomplete", () => {
     const withAutocomplete = transitionComposerInteraction(
       ComposerInteractionState.initial(),
-      { _tag: "DraftChanged", text: "/" },
+      ComposerInteractionEvent.cases.DraftChanged.make({ text: "/" }),
       testContributions,
     )
     expect(Option.isSome(withAutocomplete.autocomplete)).toBe(true)
 
-    const restored = transitionComposerInteraction(withAutocomplete, {
-      _tag: "RestoreDraft",
-      text: "previous prompt",
-    })
-    const cleared = transitionComposerInteraction(restored, { _tag: "ClearDraft" })
+    const restored = transitionComposerInteraction(
+      withAutocomplete,
+      ComposerInteractionEvent.cases.RestoreDraft.make({
+        text: "previous prompt",
+      }),
+    )
+    const cleared = transitionComposerInteraction(
+      restored,
+      ComposerInteractionEvent.cases.ClearDraft.make({}),
+    )
 
     expect(restored.draft).toBe("previous prompt")
     expect(Option.isNone(restored.autocomplete)).toBe(true)
@@ -655,24 +672,30 @@ describe("session controller state", () => {
       steering: [],
       followUp: [queueEntry("FollowUp", "m1", "next")],
     })
-    const running = applyRuntime(initialSessionControllerState(), {
-      _tag: "Running",
-      startedAtMs: 1_000,
-      queue,
-    })
+    const running = applyRuntime(
+      initialSessionControllerState(),
+      SessionRuntimeStateSchema.cases.Running.make({
+        startedAtMs: 1_000,
+        queue,
+      }),
+    )
     expect(running.turn).toEqual(Option.some({ startedAt: 1_000, waitingForAnswer: false }))
     expect(running.queue).toEqual(queue)
     // An ask inside the turn is the same turn: the start stays.
-    const waiting = applyRuntime(running, {
-      _tag: "WaitingForInteraction",
-      startedAtMs: 1_000,
-      queue,
-    })
+    const waiting = applyRuntime(
+      running,
+      SessionRuntimeStateSchema.cases.WaitingForInteraction.make({
+        startedAtMs: 1_000,
+        queue,
+      }),
+    )
     expect(waiting.turn).toEqual(Option.some({ startedAt: 1_000, waitingForAnswer: true }))
-    const idle = applyRuntime(waiting, {
-      _tag: "Idle",
-      queue: QueueSnapshot.make({ steering: [], followUp: [] }),
-    })
+    const idle = applyRuntime(
+      waiting,
+      SessionRuntimeStateSchema.cases.Idle.make({
+        queue: QueueSnapshot.make({ steering: [], followUp: [] }),
+      }),
+    )
     expect(idle.turn).toEqual(Option.none())
     expect(queuedDraftText(idle.queue)).toEqual(Option.none())
   })
@@ -943,178 +966,243 @@ describe("transcript disclosure", () => {
     expect(nextDisclosure("collapsed")).toBe("preview")
     expect(nextDisclosure("preview")).toBe("full")
     expect(nextDisclosure("full")).toBe("collapsed")
-    const once = transitionSessionUi(SessionUiState.initial(), { _tag: "CycleDisclosure" })
-    const twice = transitionSessionUi(once.state, { _tag: "CycleDisclosure" })
+    const once = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.CycleDisclosure.make({}),
+    )
+    const twice = transitionSessionUi(once.state, SessionUiEvent.cases.CycleDisclosure.make({}))
     expect(once.state.disclosure).toBe("preview")
     expect(twice.state.disclosure).toBe("full")
   })
 
   test("escape returns any level to collapsed without touching the transcript view", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), { _tag: "ToggleTranscript" })
-    const full = transitionSessionUi(
-      transitionSessionUi(opened.state, { _tag: "CycleDisclosure" }).state,
-      { _tag: "CycleDisclosure" },
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.ToggleTranscript.make({}),
     )
-    const collapsed = transitionSessionUi(full.state, { _tag: "CollapseDisclosure" })
+    const full = transitionSessionUi(
+      transitionSessionUi(opened.state, SessionUiEvent.cases.CycleDisclosure.make({})).state,
+      SessionUiEvent.cases.CycleDisclosure.make({}),
+    )
+    const collapsed = transitionSessionUi(
+      full.state,
+      SessionUiEvent.cases.CollapseDisclosure.make({}),
+    )
     expect(collapsed.state.disclosure).toBe("collapsed")
     expect(collapsed.state.transcriptExpanded).toBe(true)
   })
 
   test("clearing the display keeps the chosen level", () => {
-    const preview = transitionSessionUi(SessionUiState.initial(), { _tag: "CycleDisclosure" })
-    const cleared = transitionSessionUi(preview.state, { _tag: "ClearDisplay" })
+    const preview = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.CycleDisclosure.make({}),
+    )
+    const cleared = transitionSessionUi(preview.state, SessionUiEvent.cases.ClearDisplay.make({}))
     expect(cleared.state.disclosure).toBe("preview")
   })
 })
 
 describe("one pane slot", () => {
   const open = (id: string) =>
-    transitionSessionUi(SessionUiState.initial(), { _tag: "OpenPane", id }).state
+    transitionSessionUi(SessionUiState.initial(), SessionUiEvent.cases.OpenPane.make({ id })).state
 
   test("an extension pane replaces the open settings picker", () => {
-    const picker = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "OpenSettingsPicker",
-      picker: "model",
-    }).state
-    const pane = transitionSessionUi(picker, { _tag: "OpenPane", id: "agents.pane" }).state
-    expect(pane.overlay).toEqual({ _tag: "pane", id: "agents.pane" })
+    const picker = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.OpenSettingsPicker.make({
+        picker: "model",
+      }),
+    ).state
+    const pane = transitionSessionUi(
+      picker,
+      SessionUiEvent.cases.OpenPane.make({ id: "agents.pane" }),
+    ).state
+    expect(pane.overlay).toEqual(SessionOverlayState.cases.pane.make({ id: "agents.pane" }))
   })
 
   test("a second pane replaces the first", () => {
-    const next = transitionSessionUi(open("btw.pane"), { _tag: "OpenPane", id: "thread.pane" })
-    expect(next.state.overlay).toEqual({ _tag: "pane", id: "thread.pane" })
+    const next = transitionSessionUi(
+      open("btw.pane"),
+      SessionUiEvent.cases.OpenPane.make({ id: "thread.pane" }),
+    )
+    expect(next.state.overlay).toEqual(SessionOverlayState.cases.pane.make({ id: "thread.pane" }))
   })
 
   test("a settings picker replaces an open pane", () => {
-    const picker = transitionSessionUi(open("btw.pane"), {
-      _tag: "OpenSettingsPicker",
-      picker: "reasoning",
-    })
-    expect(picker.state.overlay).toEqual({ _tag: "reasoning" })
+    const picker = transitionSessionUi(
+      open("btw.pane"),
+      SessionUiEvent.cases.OpenSettingsPicker.make({
+        picker: "reasoning",
+      }),
+    )
+    expect(picker.state.overlay).toEqual(SessionOverlayState.cases.reasoning.make({}))
   })
 
   test("closing a pane that was replaced leaves the open one", () => {
-    const thread = transitionSessionUi(open("btw.pane"), { _tag: "OpenPane", id: "thread.pane" })
-    const late = transitionSessionUi(thread.state, { _tag: "ClosePane", id: "btw.pane" })
-    expect(late.state.overlay).toEqual({ _tag: "pane", id: "thread.pane" })
-    const closed = transitionSessionUi(late.state, { _tag: "ClosePane", id: "thread.pane" })
-    expect(closed.state.overlay).toEqual({ _tag: "none" })
+    const thread = transitionSessionUi(
+      open("btw.pane"),
+      SessionUiEvent.cases.OpenPane.make({ id: "thread.pane" }),
+    )
+    const late = transitionSessionUi(
+      thread.state,
+      SessionUiEvent.cases.ClosePane.make({ id: "btw.pane" }),
+    )
+    expect(late.state.overlay).toEqual(SessionOverlayState.cases.pane.make({ id: "thread.pane" }))
+    const closed = transitionSessionUi(
+      late.state,
+      SessionUiEvent.cases.ClosePane.make({ id: "thread.pane" }),
+    )
+    expect(closed.state.overlay).toEqual(SessionOverlayState.cases.none.make({}))
   })
 
   test("the boot branch picker and an enforced sign-in keep the slot until they close", () => {
     const opens: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
-      { _tag: "OpenPane", id: "agents.pane" },
-      { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenAuth", enforceAuth: false },
-      { _tag: "OpenSettingsPicker", picker: "model" },
-      { _tag: "OpenBranches", branches: [] },
-      { _tag: "PromptSearch", event: { _tag: "Open", draftBeforeOpen: "draft" } },
-      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
+      SessionUiEvent.cases.OpenPane.make({ id: "agents.pane" }),
+      SessionUiEvent.cases.OpenFork.make({ messages: [] }),
+      SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false }),
+      SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" }),
+      SessionUiEvent.cases.OpenBranches.make({ branches: [] }),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "draft" }),
+      }),
+      SessionUiEvent.cases.PromptSearch.make({ event: PromptSearchEvent.cases.Cancel.make({}) }),
     ]
     const branches = SessionUiState.initial(Option.some([]))
-    const signIn = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "OpenAuth",
-      enforceAuth: true,
-    }).state
+    const signIn = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.OpenAuth.make({
+        enforceAuth: true,
+      }),
+    ).state
     for (const held of [branches, signIn]) {
       const kept = opens.filter((event) => transitionSessionUi(held, event).state === held)
       expect(kept).toEqual([...opens])
-      expect(transitionSessionUi(held, { _tag: "CloseOverlay" }).state.overlay).toEqual({
-        _tag: "none",
-      })
+      expect(
+        transitionSessionUi(held, SessionUiEvent.cases.CloseOverlay.make({})).state.overlay,
+      ).toEqual(SessionOverlayState.cases.none.make({}))
     }
     // A sign-in the reader opened is theirs to leave for another pane.
-    const optional = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "OpenAuth",
-      enforceAuth: false,
-    }).state
-    const pane = transitionSessionUi(optional, { _tag: "OpenPane", id: "agents.pane" })
-    expect(pane.state.overlay).toEqual({ _tag: "pane", id: "agents.pane" })
+    const optional = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.OpenAuth.make({
+        enforceAuth: false,
+      }),
+    ).state
+    const pane = transitionSessionUi(
+      optional,
+      SessionUiEvent.cases.OpenPane.make({ id: "agents.pane" }),
+    )
+    expect(pane.state.overlay).toEqual(SessionOverlayState.cases.pane.make({ id: "agents.pane" }))
   })
 
   test("a pane leaves the composer and the session keys live; a picker holds them", () => {
     expect(overlayHoldsComposer(open("agents.pane").overlay)).toBe(false)
-    expect(overlayHoldsComposer({ _tag: "model" })).toBe(true)
-    expect(overlayHoldsComposer({ _tag: "none" })).toBe(false)
+    expect(overlayHoldsComposer(SessionOverlayState.cases.model.make({}))).toBe(true)
+    expect(overlayHoldsComposer(SessionOverlayState.cases.none.make({}))).toBe(false)
   })
 })
 
 describe("settings picker overlay", () => {
   test("/model and /think open their pane and escape closes it", () => {
-    const model = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "OpenSettingsPicker",
-      picker: "model",
-    })
-    expect(model.state.overlay).toEqual({ _tag: "model" })
-    const reasoning = transitionSessionUi(model.state, {
-      _tag: "OpenSettingsPicker",
-      picker: "reasoning",
-    })
-    expect(reasoning.state.overlay).toEqual({ _tag: "reasoning" })
-    const closed = transitionSessionUi(reasoning.state, { _tag: "CloseOverlay" })
-    expect(closed.state.overlay).toEqual({ _tag: "none" })
+    const model = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.OpenSettingsPicker.make({
+        picker: "model",
+      }),
+    )
+    expect(model.state.overlay).toEqual(SessionOverlayState.cases.model.make({}))
+    const reasoning = transitionSessionUi(
+      model.state,
+      SessionUiEvent.cases.OpenSettingsPicker.make({
+        picker: "reasoning",
+      }),
+    )
+    expect(reasoning.state.overlay).toEqual(SessionOverlayState.cases.reasoning.make({}))
+    const closed = transitionSessionUi(reasoning.state, SessionUiEvent.cases.CloseOverlay.make({}))
+    expect(closed.state.overlay).toEqual(SessionOverlayState.cases.none.make({}))
   })
 })
 
 describe("prompt search overlay", () => {
   test("opening docks the palette over the draft", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "PromptSearch",
-      event: { _tag: "Open", draftBeforeOpen: "draft" },
-    })
-    expect(opened.state.overlay).toEqual({
-      _tag: "prompt-search",
-      state: { _tag: "open", draftBeforeOpen: "draft", highlighted: Option.none() },
-    })
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "draft" }),
+      }),
+    )
+    expect(opened.state.overlay).toEqual(
+      SessionOverlayState.cases["prompt-search"].make({
+        state: PromptSearchState.cases.open.make({
+          draftBeforeOpen: "draft",
+          highlighted: Option.none(),
+        }),
+      }),
+    )
     expect(opened.effects).toEqual([])
   })
 
   test("accepting a highlighted entry restores it to the composer and closes the palette", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "PromptSearch",
-      event: { _tag: "Open", draftBeforeOpen: "draft" },
-    })
-    const moved = transitionSessionUi(opened.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Highlight", entry: Option.some("second") },
-    })
-    expect(moved.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
-    const accepted = transitionSessionUi(moved.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Accept" },
-    })
-    expect(accepted.state.overlay).toEqual({ _tag: "none" })
-    expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "second" }])
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "draft" }),
+      }),
+    )
+    const moved = transitionSessionUi(
+      opened.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Highlight.make({ entry: Option.some("second") }),
+      }),
+    )
+    expect(moved.effects).toEqual([SessionUiEffect.make({ text: "second" })])
+    const accepted = transitionSessionUi(
+      moved.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Accept.make({}),
+      }),
+    )
+    expect(accepted.state.overlay).toEqual(SessionOverlayState.cases.none.make({}))
+    expect(accepted.effects).toEqual([SessionUiEffect.make({ text: "second" })])
   })
 
   test("an overlay that replaces a previewing search gives the draft back, and a late event is ignored", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "PromptSearch",
-      event: { _tag: "Open", draftBeforeOpen: "mine" },
-    })
-    const previewing = transitionSessionUi(opened.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Highlight", entry: Option.some("older prompt") },
-    }).state
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "mine" }),
+      }),
+    )
+    const previewing = transitionSessionUi(
+      opened.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Highlight.make({ entry: Option.some("older prompt") }),
+      }),
+    ).state
     const replacers: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
-      { _tag: "OpenPane", id: "agents.pane" },
-      { _tag: "OpenFork", messages: [] },
-      { _tag: "OpenAuth", enforceAuth: false },
-      { _tag: "OpenSettingsPicker", picker: "model" },
-      { _tag: "OpenBranches", branches: [] },
-      { _tag: "CloseOverlay" },
+      SessionUiEvent.cases.OpenPane.make({ id: "agents.pane" }),
+      SessionUiEvent.cases.OpenFork.make({ messages: [] }),
+      SessionUiEvent.cases.OpenAuth.make({ enforceAuth: false }),
+      SessionUiEvent.cases.OpenSettingsPicker.make({ picker: "model" }),
+      SessionUiEvent.cases.OpenBranches.make({ branches: [] }),
+      SessionUiEvent.cases.CloseOverlay.make({}),
     ]
     for (const event of replacers) {
       const replaced = transitionSessionUi(previewing, event)
       expect(replaced.state.overlay._tag).not.toBe("prompt-search")
-      expect(replaced.effects).toEqual([{ _tag: "RestoreComposer", text: "mine" }])
+      expect(replaced.effects).toEqual([SessionUiEffect.make({ text: "mine" })])
     }
     // The list's cleanup runs after the pane took the slot: it changes nothing.
-    const pane = transitionSessionUi(previewing, { _tag: "OpenPane", id: "agents.pane" }).state
+    const pane = transitionSessionUi(
+      previewing,
+      SessionUiEvent.cases.OpenPane.make({ id: "agents.pane" }),
+    ).state
     const lates: ReadonlyArray<Parameters<typeof transitionSessionUi>[1]> = [
-      { _tag: "PromptSearch", event: { _tag: "Highlight", entry: Option.none() } },
-      { _tag: "PromptSearch", event: { _tag: "Cancel" } },
-      { _tag: "PromptSearch", event: { _tag: "Accept" } },
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Highlight.make({ entry: Option.none() }),
+      }),
+      SessionUiEvent.cases.PromptSearch.make({ event: PromptSearchEvent.cases.Cancel.make({}) }),
+      SessionUiEvent.cases.PromptSearch.make({ event: PromptSearchEvent.cases.Accept.make({}) }),
     ]
     for (const late of lates) {
       const after = transitionSessionUi(pane, late)
@@ -1124,34 +1212,44 @@ describe("prompt search overlay", () => {
   })
 
   test("a list that emptied previews the draft, and accepting before a move keeps it", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "PromptSearch",
-      event: { _tag: "Open", draftBeforeOpen: "draft" },
-    })
-    const emptied = transitionSessionUi(opened.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Highlight", entry: Option.none() },
-    })
-    expect(emptied.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
-    const accepted = transitionSessionUi(opened.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Accept" },
-    })
-    expect(accepted.state.overlay).toEqual({ _tag: "none" })
-    expect(accepted.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "draft" }),
+      }),
+    )
+    const emptied = transitionSessionUi(
+      opened.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Highlight.make({ entry: Option.none() }),
+      }),
+    )
+    expect(emptied.effects).toEqual([SessionUiEffect.make({ text: "draft" })])
+    const accepted = transitionSessionUi(
+      opened.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Accept.make({}),
+      }),
+    )
+    expect(accepted.state.overlay).toEqual(SessionOverlayState.cases.none.make({}))
+    expect(accepted.effects).toEqual([SessionUiEffect.make({ text: "draft" })])
   })
 
   test("cancelling restores the draft the palette opened over", () => {
-    const opened = transitionSessionUi(SessionUiState.initial(), {
-      _tag: "PromptSearch",
-      event: { _tag: "Open", draftBeforeOpen: "draft" },
-    })
-    const cancelled = transitionSessionUi(opened.state, {
-      _tag: "PromptSearch",
-      event: { _tag: "Cancel" },
-    })
-    expect(cancelled.state.overlay).toEqual({ _tag: "none" })
-    expect(cancelled.effects).toEqual([{ _tag: "RestoreComposer", text: "draft" }])
+    const opened = transitionSessionUi(
+      SessionUiState.initial(),
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Open.make({ draftBeforeOpen: "draft" }),
+      }),
+    )
+    const cancelled = transitionSessionUi(
+      opened.state,
+      SessionUiEvent.cases.PromptSearch.make({
+        event: PromptSearchEvent.cases.Cancel.make({}),
+      }),
+    )
+    expect(cancelled.state.overlay).toEqual(SessionOverlayState.cases.none.make({}))
+    expect(cancelled.effects).toEqual([SessionUiEffect.make({ text: "draft" })])
   })
 })
 
@@ -1338,10 +1436,9 @@ const snapshotFor = (
     lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
     resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
     agent: AgentName.make("primary"),
-    runtime: {
-      _tag: "Idle",
+    runtime: SessionRuntimeStateSchema.cases.Idle.make({
       queue: emptyQueueSnapshot(),
-    },
+    }),
     metrics: {
       turns: 0,
       durationMs: 0,
@@ -1350,10 +1447,10 @@ const snapshotFor = (
     },
   })
 
-const runtimeSnapshot = (): SessionRuntimeState => ({
-  _tag: "Idle",
-  queue: emptyQueueSnapshot(),
-})
+const runtimeSnapshot = (): SessionRuntimeState =>
+  SessionRuntimeStateSchema.cases.Idle.make({
+    queue: emptyQueueSnapshot(),
+  })
 
 const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelope =>
   EventEnvelope.make({
@@ -1846,8 +1943,8 @@ describe("useSessionFeed", () => {
         expect(toolSegments?.[0]?.toolCall.durationMs).toBe(1_200)
         expect(events.map((event) => event._tag)).toEqual(["turn-ended", "retrying", "error"])
         // The single StreamEnded before TurnCompleted is the turn's only step.
+        expect(events[0]?._tag).toBe("turn-ended")
         expect(events[0]).toMatchObject({
-          _tag: "turn-ended",
           steps: { count: 1, toolCalls: 1, costUsd: 0.01 },
         })
         // The retry ran and failed; the error row says how the turn ended.

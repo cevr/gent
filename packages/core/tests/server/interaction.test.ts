@@ -47,7 +47,7 @@ import { InteractionStorage, MessageStorage, SqliteStorage } from "../../src/sto
 import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
-import { Message } from "../../src/domain/message"
+import { Message, SteerCommand } from "../../src/domain/message"
 
 // ── interaction commands ────────────────────────────────────────────────────
 
@@ -837,14 +837,13 @@ describe("interaction.respondInteraction", () => {
           yield* origin.approves(
             child,
             client.steer.command({
-              command: {
-                _tag: "Interject",
+              command: SteerCommand.cases.Interject.make({
                 ...child,
                 requestId: RequestId.make("forged-origin"),
                 message: "steer the child",
                 metadata: { extensionId: originProbeId, fromClient: false },
                 wake: true,
-              },
+              }),
             }),
             "approve from the client's steer?",
             "child steer done",
@@ -1043,14 +1042,13 @@ describe("interaction.respondInteraction", () => {
 
           // A client owns neither mark.
           yield* client.steer.command({
-            command: {
-              _tag: "Interject",
+            command: SteerCommand.cases.Interject.make({
               ...top,
               requestId: RequestId.make("forged-marks"),
               message: "a steer marked as the loop's",
               metadata: { joinedTurn: true, customType: "continuation" },
               wake: true,
-            },
+            }),
           })
           yield* waitForReply({ client, ...top, reply: "steer answered" })
           const steered = yield* stored("a steer marked as the loop's")
@@ -1104,6 +1102,7 @@ describe("interaction.respondInteraction", () => {
           // What an older build left for the child: its prompt stored with no
           // origin, and the queue row holding it in flight beside the retired
           // `interactive: false`.
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the legacy stored row an older build wrote, which this test decodes
           const legacyMessage = {
             _tag: "regular",
             id: "legacy-in-flight",
@@ -2287,7 +2286,11 @@ describe("interaction.respondInteraction", () => {
             "parked on OLD",
           )
           yield* client.steer.command({
-            command: { _tag: "Cancel", sessionId, branchId, requestId: "req-cancel-old" },
+            command: SteerCommand.cases.Cancel.make({
+              sessionId,
+              branchId,
+              requestId: "req-cancel-old",
+            }),
           })
           yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),

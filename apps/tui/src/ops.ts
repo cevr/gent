@@ -1144,6 +1144,7 @@ export const readDoctorExtensionHealth = (
         yield* bundle.runtime.lifecycle.waitForReady
         // The doctor has no session: it reads the profile the server started in.
         const snapshot = yield* bundle.client.extension.listStatus({
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- `Launch` has no tag default on purpose (`ExtensionStatusScope`), so its value spells the tag
           scope: { _tag: "Launch" },
         })
         return extensionHealthFromSnapshot(snapshot)
@@ -1275,7 +1276,7 @@ class UpgradeError extends Schema.TaggedError<UpgradeError, { readonly brand: un
   },
 ) {}
 
-const UpgradeOutcome = Schema.TaggedUnion({
+export const UpgradeOutcome = Schema.TaggedUnion({
   /** The release's install.sh switched the install to `to`; `report` is what it said. */
   Upgraded: { from: Schema.String, to: Schema.String, report: Schema.String },
   /** The running build is the version asked for. */

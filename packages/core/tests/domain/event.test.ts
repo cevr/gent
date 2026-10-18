@@ -459,6 +459,7 @@ describe("agent event wire shape", () => {
   test("SessionStarted encodes to its tag and fields and decodes back", () => {
     const evt = AgentEvent.cases.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded form this test asserts
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
     const decoded = Schema.decodeSync(AgentEvent)(encoded)
     expect(Schema.is(AgentEvent.cases.SessionStarted)(decoded)).toBe(true)

@@ -3,7 +3,7 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Str
 import { BunServices } from "@effect/platform-bun"
 import { ExtensionId, ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
 import { BunPlatformLive } from "@gent/core/host-bun"
-import { messagePartsText } from "@gent/core/protocol"
+import { ExtensionStatusScope, messagePartsText } from "@gent/core/protocol"
 import {
   ApprovalService,
   ConfigService,
@@ -107,8 +107,9 @@ describe("extensions.status", () => {
           succeeded.output,
         )
         const byId = new Map(statuses.map((status) => [status.id, status]))
-        expect(byId.get("@test/draft")).toMatchObject({ _tag: "Failed", phase: "setup" })
-        expect(byId.get("@gent/extension-admin")).toMatchObject({ _tag: "Active" })
+        expect(byId.get("@test/draft")?._tag).toBe("Failed")
+        expect(byId.get("@test/draft")).toMatchObject({ phase: "setup" })
+        expect(byId.get("@gent/extension-admin")?._tag).toBe("Active")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
@@ -182,9 +183,9 @@ describe("extensions.status", () => {
         expect(outputs).toHaveLength(2)
         const [statusOutput = "", probeOutput = ""] = outputs
         const { extensions } = yield* Schema.decodeEffect(StatusOutput)(statusOutput)
+        expect(extensions.map((status) => status._tag)).toEqual(["Active"])
         expect(extensions).toEqual([
           expect.objectContaining({
-            _tag: "Active",
             id: "@test/probe",
             reloadFailed: expect.objectContaining({ phase: "load" }),
           }),
@@ -192,15 +193,15 @@ describe("extensions.status", () => {
         expect(String(probeOutput)).toContain("first version")
 
         const health = yield* client.extension.listStatus({
-          scope: { _tag: "Session", id: sessionId },
+          scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
         })
         if (health._tag !== "Degraded") return expect.unreachable()
         const degraded = health.degradedExtensions.find(
           (entry) => entry.manifest.id === "@test/probe",
         )
+        expect(degraded?.issues.map((issue) => issue._tag)).toEqual(["ActivationFailed"])
         expect(degraded?.issues).toEqual([
           expect.objectContaining({
-            _tag: "ActivationFailed",
             phase: "load",
             runningVersion: expect.any(String),
           }),
@@ -348,9 +349,9 @@ describe("extension admin verbs", () => {
         const [disabled = ""] = succeededOutputs(first)
         const verb = yield* decodeVerb(disabled)
         expect(verb.applied).toBe(true)
-        expect(verb.extensions).toContainEqual(
-          expect.objectContaining({ _tag: "Disabled", id: "@test/probe" }),
-        )
+        expect(
+          verb.extensions.filter((status) => status._tag === "Disabled").map((status) => status.id),
+        ).toContain("@test/probe")
         // The other keys stay as the user wrote them.
         const written = yield* fs.readFileString(server.userConfig)
         expect(written).toContain('"trustedProjects":["/nowhere"]')
@@ -497,9 +498,11 @@ describe("extension admin verbs", () => {
         const [addOutput = "", removeOutput = ""] = succeededOutputs(events)
         const added = yield* decodeVerb(addOutput)
         expect(added.applied).toBe(true)
-        expect(added.extensions).toContainEqual(
-          expect.objectContaining({ _tag: "Active", id: "@test/draft", scope: "user" }),
-        )
+        expect(
+          added.extensions
+            .filter((status) => status._tag === "Active" && status.scope === "user")
+            .map((status) => status.id),
+        ).toContain("@test/draft")
         const removed = yield* decodeVerb(removeOutput)
         expect(removed.applied).toBe(true)
         expect(removed.extensions.map((status) => status.id)).not.toContain("@test/draft")
@@ -601,9 +604,9 @@ describe("extension admin pane requests", () => {
         id: "@test/probe",
         enabled: false,
       })
-      expect(off.extensions).toContainEqual(
-        expect.objectContaining({ _tag: "Disabled", id: "@test/probe" }),
-      )
+      expect(
+        off.extensions.filter((status) => status._tag === "Disabled").map((status) => status.id),
+      ).toContain("@test/probe")
       expect(yield* disabledIn(server.userConfig)).toEqual(["@test/probe"])
       const offTurn = yield* server.run("is it off?", false)
       expect(offTurn.some((event) => event._tag === "InteractionPresented")).toBe(false)
@@ -612,9 +615,9 @@ describe("extension admin pane requests", () => {
         id: "@test/probe",
         enabled: true,
       })
-      expect(on.extensions).toContainEqual(
-        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
-      )
+      expect(
+        on.extensions.filter((status) => status._tag === "Active").map((status) => status.id),
+      ).toContain("@test/probe")
       expect(yield* disabledIn(server.userConfig)).toEqual([])
       yield* server.run("is it on?", false)
       yield* server.controls.assertDone
@@ -669,9 +672,9 @@ describe("extension admin pane requests", () => {
       )
       const status = yield* paneRequest(server, "extensions.pane.status", {})
       expect(status.detail).toBe("")
-      expect(status.extensions).toContainEqual(
-        expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
-      )
+      expect(
+        status.extensions.filter((status) => status._tag === "Active").map((status) => status.id),
+      ).toContain("@test/probe")
       yield* paneRequest(server, "extensions.pane.set-enabled", {
         id: "@test/probe",
         enabled: false,
@@ -694,9 +697,11 @@ describe("extension admin pane requests", () => {
 
         const reloaded = yield* paneRequest(server, "extensions.pane.reload", { id: "@test/probe" })
         expect(reloaded.detail).toContain("@test/probe")
-        expect(reloaded.extensions).toContainEqual(
-          expect.objectContaining({ _tag: "Active", id: "@test/probe" }),
-        )
+        expect(
+          reloaded.extensions
+            .filter((status) => status._tag === "Active")
+            .map((status) => status.id),
+        ).toContain("@test/probe")
 
         // An extension that is off is never set up: a reload of it would do nothing.
         yield* paneRequest(server, "extensions.pane.set-enabled", {

@@ -206,7 +206,7 @@ export type RetryOutcome = Schema.Schema.Type<typeof RetryOutcome>
 
 const SessionEventPlacement = { createdAt: Schema.Finite, seq: Schema.Finite }
 
-const SessionEvent = Schema.Union([
+export const SessionEvent = Schema.Union([
   Schema.TaggedStruct("turn-ended", {
     durationSeconds: Schema.Finite,
     steps: TurnSteps,
@@ -522,21 +522,22 @@ const rowCounts = (call: ToolCall): string => {
   })
 }
 
-interface MessageMetadataInfo {
-  customType?: string
-  hidden?: boolean
-  details?: unknown
+const MessageMetadataInfo = Schema.Struct({
+  customType: Schema.optional(Schema.String),
+  hidden: Schema.optional(Schema.Boolean),
+  details: Schema.optional(Schema.Unknown),
   /** The server stamps it on every message a client sent: the reader typed it. */
-  fromClient?: boolean
+  fromClient: Schema.optional(Schema.Boolean),
   /** The extension that sent the message (`Session.send`). */
-  extensionId?: string
-}
+  extensionId: Schema.optional(Schema.String),
+})
+type MessageMetadataInfo = typeof MessageMetadataInfo.Type
 
 const ImagePartProjectionSchema: Schema.Codec<ImagePartProjection> = Schema.Struct({
   mediaType: Schema.String,
 })
 
-const AssistantSegment = Schema.Union([
+export const AssistantSegment = Schema.Union([
   /** The feed appends streamed text to the last text segment in place. */
   Schema.TaggedStruct("text", { content: Schema.mutableKey(Schema.String) }),
   Schema.TaggedStruct("reasoning", { content: Schema.String }),
@@ -545,35 +546,30 @@ const AssistantSegment = Schema.Union([
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type AssistantSegment = Schema.Schema.Type<typeof AssistantSegment>
 
-interface MessageBase {
-  id: string
-  role: "user" | "assistant" | "system" | "tool"
-  /** Concatenated text content (derived — used by picker, search) */
-  content: string
+const MessageFields = {
+  id: Schema.String,
+  role: Schema.Literals(["user", "assistant", "system", "tool"]),
+  /** Concatenated text content (derived — used by picker, search); the feed appends streamed text in place. */
+  content: Schema.mutableKey(Schema.String),
   /** Concatenated reasoning (derived) */
-  reasoning: string
-  images: ReadonlyArray<ImagePartProjection>
-  createdAt: number
+  reasoning: Schema.String,
+  images: Schema.Array(ImagePartProjectionSchema),
+  createdAt: Schema.Finite,
   /** Ordered parts for interleaved rendering; the one owner of the message's tool calls. */
-  segments?: AssistantSegment[]
-  metadata?: MessageMetadataInfo
+  segments: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(AssistantSegment)))),
+  metadata: Schema.optional(MessageMetadataInfo),
   /** An answer built from streamed chunks: the step's stored answer replaces it. */
-  draft?: true
+  draft: Schema.optional(Schema.Literal(true)),
 }
 
-interface RegularMessage extends MessageBase {
-  _tag: "regular-message"
-}
-
-interface InterjectionMessage extends MessageBase {
-  _tag: "interjection-message"
-  role: "user"
-}
-
-export type Message = RegularMessage | InterjectionMessage
+export const Message = Schema.Union([
+  Schema.TaggedStruct("regular-message", MessageFields),
+  Schema.TaggedStruct("interjection-message", { ...MessageFields, role: Schema.Literal("user") }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type Message = typeof Message.Type
 
 /** The tool calls a message shows inline, in segment order. */
-export const messageToolCalls = (message: Pick<MessageBase, "segments">): ReadonlyArray<ToolCall> =>
+export const messageToolCalls = (message: Pick<Message, "segments">): ReadonlyArray<ToolCall> =>
   Option.getOrElse(Option.fromNullishOr(message.segments), (): AssistantSegment[] => []).flatMap(
     (segment) => {
       if (segment._tag === "tool-call") return [segment.toolCall]

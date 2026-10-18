@@ -421,18 +421,22 @@ describe("error text", () => {
     const decode = Schema.decodeUnknownSync(GentRpcError)
     const cases: ReadonlyArray<readonly [unknown, string]> = [
       [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error this test decodes
         { _tag: "ConfigLoadError", path: "/nonexistent/gent-probe-x/config.json", message: "bad" },
         "Config /nonexistent/gent-probe-x/config.json: bad",
       ],
       [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error this test decodes
         { _tag: "ConfigWriteError", path: "/nonexistent/gent-probe-x/config.json", message: "ro" },
         "Config /nonexistent/gent-probe-x/config.json: ro",
       ],
       [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error this test decodes
         { _tag: "InteractionDecisionConflictError", message: "answered", requestId: "req-1" },
         "Interaction: answered",
       ],
       [
+        // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error this test decodes
         {
           _tag: "InteractionRequestMismatchError",
           message: "not the open request",

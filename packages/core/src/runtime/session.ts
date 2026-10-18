@@ -38,6 +38,7 @@ import {
   AgentLoopError,
   FollowUpQueueFull,
   entityIdOf,
+  ExtensionRequestInputEnvelope,
   listWorkspaceLoops,
   type SendUserMessagePayload,
   type SessionRuntimeState,
@@ -413,8 +414,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             extensionId: input.extensionId,
             capabilityId: input.capabilityId,
             input: Option.match(Option.fromUndefinedOr(input.input), {
-              onNone: () => ({ _tag: "Missing" }),
-              onSome: (value) => ({ _tag: "Present", value }),
+              onNone: () => ExtensionRequestInputEnvelope.cases.Missing.make({}),
+              onSome: (value) => ExtensionRequestInputEnvelope.cases.Present.make({ value }),
             }),
             ...ids,
           }),

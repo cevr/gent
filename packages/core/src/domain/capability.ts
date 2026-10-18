@@ -204,7 +204,6 @@ interface ToolDeclarations {
  * branded `RequestCapability` is in the request section below.
  */
 interface RequestCapabilityApi {
-  readonly _tag: "request"
   readonly id: RpcId
   readonly input: unknown
   readonly output: unknown
@@ -419,7 +418,6 @@ export function request(input: {
   // The factory applies its private brand and typed reference here; the
   // public overload restores the author's Input/Output.
   const capability: RequestCapability = {
-    _tag: "request",
     id: rpcId,
     slash: input.slash,
     description: input.description,

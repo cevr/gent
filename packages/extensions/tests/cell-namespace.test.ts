@@ -285,7 +285,7 @@ describe("cell namespace restore and handoff", () => {
           Effect.provideService(ExtensionContext, flaky),
           Effect.flip,
         )
-        expect(lost).toMatchObject({ _tag: "StorageError" })
+        expect(lost._tag).toBe("StorageError")
         const next = yield* runCell(owner, retried).pipe(
           Effect.provideService(ExtensionContext, flaky),
         )
@@ -657,8 +657,7 @@ describe("model context directives from a cell", () => {
           yield* client.message.send({ sessionId, branchId, content: "schedule then wait" })
           yield* Deferred.await(scheduled)
           yield* client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-context-directive"),

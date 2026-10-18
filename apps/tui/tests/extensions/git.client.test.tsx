@@ -36,6 +36,7 @@ import gitExtension, {
   parseStatus,
   readCheckout,
   readPullRequest,
+  ReviewTarget,
   reviewTarget,
   pageWorkTree,
   pagerCommand,
@@ -633,37 +634,45 @@ describe("git status row", () => {
 
 describe("git review commands", () => {
   test("/diff names the work tree, some paths in it, or the branch's pull request", () => {
-    expect(reviewTarget("", "/r")).toEqual({ _tag: "WorkTree", cwd: "/r", pathspecs: [] })
-    expect(reviewTarget(" a.ts  src/b.ts ", "/r")).toEqual({
-      _tag: "WorkTree",
-      cwd: "/r",
-      pathspecs: ["a.ts", "src/b.ts"],
-    })
-    expect(reviewTarget("pr", "/r")).toEqual({ _tag: "PullRequest", cwd: "/r" })
+    expect(reviewTarget("", "/r")).toEqual(
+      ReviewTarget.cases.WorkTree.make({ cwd: "/r", pathspecs: [] }),
+    )
+    expect(reviewTarget(" a.ts  src/b.ts ", "/r")).toEqual(
+      ReviewTarget.cases.WorkTree.make({
+        cwd: "/r",
+        pathspecs: ["a.ts", "src/b.ts"],
+      }),
+    )
+    expect(reviewTarget("pr", "/r")).toEqual(ReviewTarget.cases.PullRequest.make({ cwd: "/r" }))
   })
 
   test("/diff turn names the newest turn, /diff turn 2 the second newest, and anything else stays paths", () => {
-    expect(reviewTarget("turn", "/r")).toEqual({ _tag: "Turn", cwd: "/r", n: 1 })
-    expect(reviewTarget(" turn  2 ", "/r")).toEqual({ _tag: "Turn", cwd: "/r", n: 2 })
-    expect(reviewTarget("turn 0", "/r")).toEqual({
-      _tag: "WorkTree",
-      cwd: "/r",
-      pathspecs: ["turn", "0"],
-    })
-    expect(reviewTarget("turn a.ts", "/r")).toEqual({
-      _tag: "WorkTree",
-      cwd: "/r",
-      pathspecs: ["turn", "a.ts"],
-    })
-    expect(reviewTarget("turn 2 3", "/r")).toEqual({
-      _tag: "WorkTree",
-      cwd: "/r",
-      pathspecs: ["turn", "2", "3"],
-    })
+    expect(reviewTarget("turn", "/r")).toEqual(ReviewTarget.cases.Turn.make({ cwd: "/r", n: 1 }))
+    expect(reviewTarget(" turn  2 ", "/r")).toEqual(
+      ReviewTarget.cases.Turn.make({ cwd: "/r", n: 2 }),
+    )
+    expect(reviewTarget("turn 0", "/r")).toEqual(
+      ReviewTarget.cases.WorkTree.make({
+        cwd: "/r",
+        pathspecs: ["turn", "0"],
+      }),
+    )
+    expect(reviewTarget("turn a.ts", "/r")).toEqual(
+      ReviewTarget.cases.WorkTree.make({
+        cwd: "/r",
+        pathspecs: ["turn", "a.ts"],
+      }),
+    )
+    expect(reviewTarget("turn 2 3", "/r")).toEqual(
+      ReviewTarget.cases.WorkTree.make({
+        cwd: "/r",
+        pathspecs: ["turn", "2", "3"],
+      }),
+    )
   })
 
   test("hunk reviews the work tree against the checkout's base", () => {
-    const all = { _tag: "WorkTree" as const, cwd: "/r", pathspecs: [] }
+    const all = ReviewTarget.cases.WorkTree.make({ cwd: "/r", pathspecs: [] })
     const one = { ...all, pathspecs: ["a.ts"] }
     // Against HEAD, so a staged change shows as the pane counts it.
     expect(workTreeCommand(all, "HEAD")).toEqual(["hunk", ["diff", "--watch", "HEAD"]])
@@ -793,6 +802,7 @@ const turnServer = (asked: Array<unknown>) =>
           asked.push(request.input)
           if (Predicate.hasProperty(request.input, "n") && request.input.n === 2)
             return { n: 2, prompt: "add turn.txt", patch: TURN_PATCH }
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
           const refusal = yield* Schema.decodeEffect(GentRpcError)({
             _tag: "ExtensionProtocolError",
             extensionId: "@gent/checkpoints",
@@ -1069,7 +1079,9 @@ describe("git pane", () => {
           },
         })
         const review = yield* Effect.forkChild(
-          handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD")),
+          handover(
+            pageWorkTree(ReviewTarget.cases.WorkTree.make({ cwd: repo, pathspecs: [] }), "HEAD"),
+          ),
         )
         const pagerPid = Number((yield* waitForLog(pager.log, (log) => log.endsWith("\n"))).trim())
         watched.push(pagerPid)
@@ -1096,7 +1108,9 @@ describe("git pane", () => {
         const pager = yield* fakeProgram("pager", () => ["exec head -c 4096 > /dev/null"])
         yield* git(repo, "config", "core.pager", pager.program)
         const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
-        yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
+        yield* handover(
+          pageWorkTree(ReviewTarget.cases.WorkTree.make({ cwd: repo, pathspecs: [] }), "HEAD"),
+        )
         expect(yield* childGits).toBe("")
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
     12_000,
@@ -1119,7 +1133,9 @@ describe("git pane", () => {
         ])
         yield* git(repo, "config", "core.pager", pager.program)
         const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
-        yield* handover(pageWorkTree({ _tag: "WorkTree", cwd: repo, pathspecs: [] }, "HEAD"))
+        yield* handover(
+          pageWorkTree(ReviewTarget.cases.WorkTree.make({ cwd: repo, pathspecs: [] }), "HEAD"),
+        )
         const paged = plain(yield* pager.log)
         expect(paged).toContain("+a line of the untracked file")
         expect(paged).not.toContain("z-after.txt")

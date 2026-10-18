@@ -32,7 +32,6 @@ import {
 import {
   type AgentEvent,
   ApprovalDecisionSchema,
-  type ApprovalResult,
   assistantMessageIdForTurn,
   Branch,
   type BranchId,
@@ -114,16 +113,16 @@ import { createStore, produce, type SetStoreFunction, unwrap } from "solid-js/st
 import {
   addRetry,
   addStep,
-  type AssistantSegment,
+  AssistantSegment,
   currentMillis,
   emptyTurnSteps,
   getSessionEventLabel,
   leaveTerminal,
   isMessageItem,
-  type Message,
+  Message,
   messageToolCalls,
   type RetryOutcome,
-  type SessionEvent,
+  SessionEvent,
   type SessionItem,
 } from "./message-list"
 import type { ToolCall } from "./tool-renderers"
@@ -517,11 +516,11 @@ export const ComposerEvent = Schema.TaggedUnion({
 })
 export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
 
-type ComposerEffect = {
-  readonly _tag: "DispatchInteractionResult"
-  readonly interaction: InteractionPresented
-  readonly result: ApprovalResult
-}
+const ComposerEffect = Schema.TaggedStruct("DispatchInteractionResult", {
+  interaction: InteractionPresented,
+  result: ApprovalDecisionSchema,
+})
+type ComposerEffect = typeof ComposerEffect.Type
 
 interface TransitionResult {
   readonly state: ComposerState
@@ -532,17 +531,13 @@ function transition(state: ComposerState, event: ComposerEvent): TransitionResul
   return Match.value(event).pipe(
     Match.tagsExhaustive({
       EnterInteraction: ({ interaction }): TransitionResult => ({
-        state: { _tag: "interaction", interaction },
+        state: ComposerState.cases.interaction.make({ interaction }),
       }),
       ResolveInteraction: ({ result }): TransitionResult => {
         if (state._tag !== "interaction") return { state }
         return {
           state: ComposerState.cases.idle.make({}),
-          effect: {
-            _tag: "DispatchInteractionResult",
-            interaction: state.interaction,
-            result,
-          },
+          effect: ComposerEffect.make({ interaction: state.interaction, result }),
         }
       },
       // Only the interaction on screen is dismissed; a late dismissal of another is dropped.
@@ -937,7 +932,7 @@ const useComposerDrafts = () => useComposerMemory().drafts
 
 // ── session UI state ────────────────────────────────────────────────────────
 
-const SessionOverlayState = Schema.Union([
+export const SessionOverlayState = Schema.Union([
   Schema.TaggedStruct("none", {}),
   Schema.TaggedStruct("fork", { messages: Schema.Array(DurableMessage) }),
   Schema.TaggedStruct("auth", { enforceAuth: Schema.Boolean }),
@@ -988,12 +983,13 @@ export const SessionUiState = {
     displayRevision: 0,
     overlay: Option.match(initialBranches, {
       onNone: (): SessionOverlayState => SessionOverlayState.cases.none.make({}),
-      onSome: (branches): SessionOverlayState => ({ _tag: "branches", branches }),
+      onSome: (branches): SessionOverlayState =>
+        SessionOverlayState.cases.branches.make({ branches }),
     }),
   }),
 }
 
-const SessionUiEvent = Schema.TaggedUnion({
+export const SessionUiEvent = Schema.TaggedUnion({
   CycleDisclosure: {},
   CollapseDisclosure: {},
   ToggleTranscript: {},
@@ -1010,7 +1006,8 @@ const SessionUiEvent = Schema.TaggedUnion({
 })
 type SessionUiEvent = Schema.Schema.Type<typeof SessionUiEvent>
 
-type SessionUiEffect = { readonly _tag: "RestoreComposer"; readonly text: string }
+export const SessionUiEffect = Schema.TaggedStruct("RestoreComposer", { text: Schema.String })
+type SessionUiEffect = typeof SessionUiEffect.Type
 
 interface SessionUiTransitionResult {
   readonly state: SessionUiState
@@ -1041,7 +1038,7 @@ const composerEffects = (
 ): readonly SessionUiEffect[] =>
   effects
     .filter((effect) => effect._tag === "Preview")
-    .map((effect): SessionUiEffect => ({ _tag: "RestoreComposer", text: effect.text }))
+    .map((effect) => SessionUiEffect.make({ text: effect.text }))
 
 /**
  * What an overlay leaves behind when something else takes its slot: its own
@@ -1089,14 +1086,14 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
       OpenFork: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
-          overlay: { _tag: "fork", messages: event.messages },
+          overlay: SessionOverlayState.cases.fork.make({ messages: event.messages }),
         },
         effects: [],
       }),
       OpenAuth: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
-          overlay: { _tag: "auth", enforceAuth: event.enforceAuth },
+          overlay: SessionOverlayState.cases.auth.make({ enforceAuth: event.enforceAuth }),
         },
         effects: [],
       }),
@@ -1110,24 +1107,27 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
       OpenBranches: (event): SessionUiTransitionResult => ({
         state: {
           ...state,
-          overlay: { _tag: "branches", branches: event.branches },
+          overlay: SessionOverlayState.cases.branches.make({ branches: event.branches }),
         },
         effects: [],
       }),
       OpenPane: (event): SessionUiTransitionResult => ({
-        state: { ...state, overlay: { _tag: "pane", id: event.id } },
+        state: { ...state, overlay: SessionOverlayState.cases.pane.make({ id: event.id }) },
         effects: [],
       }),
       ClosePane: (event): SessionUiTransitionResult => {
         if (state.overlay._tag !== "pane" || state.overlay.id !== event.id) {
           return { state, effects: [] }
         }
-        return { state: { ...state, overlay: { _tag: "none" } }, effects: [] }
+        return {
+          state: { ...state, overlay: SessionOverlayState.cases.none.make({}) },
+          effects: [],
+        }
       },
       CloseOverlay: (): SessionUiTransitionResult => ({
         state: {
           ...state,
-          overlay: { _tag: "none" },
+          overlay: SessionOverlayState.cases.none.make({}),
         },
         effects: [],
       }),
@@ -1141,9 +1141,9 @@ function transitionSlot(state: SessionUiState, event: SessionUiEvent): SessionUi
         if (state.overlay._tag === "prompt-search") promptState = state.overlay.state
         const result = transitionPromptSearch(promptState, event.event)
         const effects = composerEffects(result.effects)
-        let nextOverlay: SessionOverlayState = { _tag: "none" }
+        let nextOverlay: SessionOverlayState = SessionOverlayState.cases.none.make({})
         if (result.state._tag === "open") {
-          nextOverlay = { _tag: "prompt-search", state: result.state }
+          nextOverlay = SessionOverlayState.cases["prompt-search"].make({ state: result.state })
         }
         return {
           state: {
@@ -1966,15 +1966,15 @@ export const noticeRowItems = (
     for (const row of Option.getOrElse(rows, () => [])) {
       next.set(
         row,
-        previous.get(row) ?? {
-          _tag: "notice",
-          key: `${source.id}:${row.key}`,
-          glyph: row.glyph,
-          color: row.color,
-          text: row.text,
-          createdAt: row.createdAt,
-          seq: 0,
-        },
+        previous.get(row) ??
+          SessionEvent.cases.notice.make({
+            key: `${source.id}:${row.key}`,
+            glyph: row.glyph,
+            color: row.color,
+            text: row.text,
+            createdAt: row.createdAt,
+            seq: 0,
+          }),
       )
     }
   }
@@ -2001,15 +2001,19 @@ const buildSegments = (
   return projected.flatMap((segment) =>
     Match.value(segment).pipe(
       Match.tagsExhaustive({
-        Text: (value): AssistantSegment[] => [{ _tag: "text", content: value.content }],
-        Reasoning: (value): AssistantSegment[] => [{ _tag: "reasoning", content: value.content }],
+        Text: (value): AssistantSegment[] => [
+          AssistantSegment.cases.text.make({ content: value.content }),
+        ],
+        Reasoning: (value): AssistantSegment[] => [
+          AssistantSegment.cases.reasoning.make({ content: value.content }),
+        ],
         Image: (value): AssistantSegment[] => [
-          { _tag: "image", image: { mediaType: value.mediaType } },
+          AssistantSegment.cases.image.make({ image: { mediaType: value.mediaType } }),
         ],
         ToolCall: (value): AssistantSegment[] => {
           const toolCall = Option.fromNullishOr(interactionsById.get(String(value.toolCallId)))
           if (Option.isNone(toolCall)) return []
-          return [{ _tag: "tool-call", toolCall: toolCall.value }]
+          return [AssistantSegment.cases["tool-call"].make({ toolCall: toolCall.value })]
         },
       }),
     ),
@@ -2031,8 +2035,7 @@ const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): 
   let segments = Option.none<AssistantSegment[]>()
   if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
   if (m._tag === "interjection")
-    return {
-      _tag: "interjection-message",
+    return Message.cases["interjection-message"].make({
       id: m.id,
       role: "user",
       content: messagePartsText(m.parts),
@@ -2041,9 +2044,8 @@ const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): 
       createdAt: m.createdAt.getTime(),
       segments: Option.getOrUndefined(segments),
       metadata: m.metadata,
-    }
-  return {
-    _tag: "regular-message",
+    })
+  return Message.cases["regular-message"].make({
     id: m.id,
     role: m.role,
     content: messagePartsText(m.parts),
@@ -2052,7 +2054,7 @@ const buildMessage = (m: ProjectedMessage, toolCalls: ReadonlyArray<ToolCall>): 
     createdAt: m.createdAt.getTime(),
     segments: Option.getOrUndefined(segments),
     metadata: m.metadata,
-  }
+  })
 }
 
 /**
@@ -2136,23 +2138,24 @@ const ensureAssistantMessage = (
           if (Option.isSome(lastSeg) && lastSeg.value._tag === "text") {
             lastSeg.value.content += content
           } else {
-            segments.value.push({ _tag: "text", content })
+            segments.value.push(AssistantSegment.cases.text.make({ content }))
           }
         }
         return
       }
 
-      draft.messages.push({
-        _tag: "regular-message",
-        id,
-        role: "assistant",
-        content,
-        reasoning: "",
-        images: [],
-        createdAt,
-        segments: [{ _tag: "text", content }],
-        draft: true,
-      })
+      draft.messages.push(
+        Message.cases["regular-message"].make({
+          id,
+          role: "assistant",
+          content,
+          reasoning: "",
+          images: [],
+          createdAt,
+          segments: [AssistantSegment.cases.text.make({ content })],
+          draft: true,
+        }),
+      )
     }),
   )
 }
@@ -2343,7 +2346,7 @@ const startToolCall = (
       // Cold interaction resume starts the same call again, not a new call.
       if (messageToolCalls(message).some((call) => call.id === event.toolCallId)) return
       if (Option.isNone(Option.fromNullishOr(message.segments))) message.segments = []
-      message.segments?.push({ _tag: "tool-call", toolCall })
+      message.segments?.push(AssistantSegment.cases["tool-call"].make({ toolCall }))
     },
     (message) => {
       if (Option.isSome(parentToolCallId)) {
@@ -2435,16 +2438,18 @@ export function useSessionFeed(
         settleRetryingEvents(setStore, "retried")
         // The turn line counts it: the settled row is detail the preview shows.
         turnSteps = addRetry(turnSteps)
-        appendSessionEvent(setStore, {
-          _tag: "retrying",
-          attempt: event.attempt,
-          maxAttempts: event.maxAttempts,
-          delayMs: event.delayMs,
-          outcome: "pending",
-          reason: event.error,
-          createdAt: stampedAt,
-          seq: eventSeq++,
-        })
+        appendSessionEvent(
+          setStore,
+          SessionEvent.cases.retrying.make({
+            attempt: event.attempt,
+            maxAttempts: event.maxAttempts,
+            delayMs: event.delayMs,
+            outcome: "pending",
+            reason: event.error,
+            createdAt: stampedAt,
+            seq: eventSeq++,
+          }),
+        )
         // The retry's request goes out `delayMs` after its row; an answer not
         // yet drawn dates from then, so the row sits above it. Core's own
         // clock readers date the request the same way (`knownRequestStart`).
@@ -2456,27 +2461,31 @@ export function useSessionFeed(
         if (event.notice === true) {
           if (live) client.log.warn("sessionFeed.notice", { error: event.error, seq: eventSeq })
           const seq = eventSeq++
-          appendSessionEvent(setStore, {
-            _tag: "notice",
-            key: `error:${stampedAt}:${seq}`,
-            glyph: "●",
-            color: "textMuted",
-            text: event.error,
-            createdAt: stampedAt,
-            seq,
-          })
+          appendSessionEvent(
+            setStore,
+            SessionEvent.cases.notice.make({
+              key: `error:${stampedAt}:${seq}`,
+              glyph: "●",
+              color: "textMuted",
+              text: event.error,
+              createdAt: stampedAt,
+              seq,
+            }),
+          )
           return
         }
         // The retry ran and failed; the error row says how the turn ended.
         settleRetryingEvents(setStore, "retried")
         if (live) client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
-        appendSessionEvent(setStore, {
-          _tag: "error",
-          error: event.error,
-          retryAt: event.retryAt,
-          createdAt: stampedAt,
-          seq: eventSeq++,
-        })
+        appendSessionEvent(
+          setStore,
+          SessionEvent.cases.error.make({
+            error: event.error,
+            retryAt: event.retryAt,
+            createdAt: stampedAt,
+            seq: eventSeq++,
+          }),
+        )
         return
 
       default:
@@ -2585,16 +2594,21 @@ export function useSessionFeed(
   ) => {
     const steps = takeTurnSteps()
     if (event.interrupted === true) {
-      appendSessionEvent(setStore, { _tag: "interruption", createdAt: stampedAt, seq: eventSeq++ })
+      appendSessionEvent(
+        setStore,
+        SessionEvent.cases.interruption.make({ createdAt: stampedAt, seq: eventSeq++ }),
+      )
       return
     }
-    appendSessionEvent(setStore, {
-      _tag: "turn-ended",
-      durationSeconds: Math.round(event.durationMs / 1000),
-      steps,
-      createdAt: stampedAt,
-      seq: eventSeq++,
-    })
+    appendSessionEvent(
+      setStore,
+      SessionEvent.cases["turn-ended"].make({
+        durationSeconds: Math.round(event.durationMs / 1000),
+        steps,
+        createdAt: stampedAt,
+        seq: eventSeq++,
+      }),
+    )
   }
   // The session view mounts keyed on the identity (app.tsx), so one feed
   // serves one session and branch for its whole life: a switch remounts it,

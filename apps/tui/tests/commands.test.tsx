@@ -8,7 +8,7 @@ import {
   useCommand,
 } from "../src/commands"
 import { createEffect, ErrorBoundary, For, onCleanup, onMount } from "solid-js"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option } from "effect"
 import { BranchId, dateFromMillis, GentRpcError, Session, SessionId } from "@gent/core/protocol"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
@@ -270,10 +270,7 @@ describe("CommandPalette renderer", () => {
         branch: {
           list: () =>
             Effect.fail(
-              Schema.decodeSync(GentRpcError)({
-                _tag: "InvalidStateError",
-                message: "branch list refused",
-              }),
+              GentRpcError.cases.InvalidStateError.make({ message: "branch list refused" }),
             ),
         },
       })

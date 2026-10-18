@@ -416,7 +416,7 @@ export const SteerCommand = Schema.Union([
      */
     wake: Schema.optional(Schema.Boolean),
   }),
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type SteerCommand = typeof SteerCommand.Type
 
 // Message

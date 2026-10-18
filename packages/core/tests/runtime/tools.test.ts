@@ -563,9 +563,9 @@ describe("tool execution", () => {
       expect(result.sessionId).toBe(SessionId.make("session-pending"))
       expect(result.branchId).toBe(BranchId.make("branch-pending"))
       expect(eventTags).toEqual(["ToolCallStarted"])
+      expect(events.map((event) => event._tag)).toEqual(["ToolCallStarted"])
       expect(events).toEqual([
         expect.objectContaining({
-          _tag: "ToolCallStarted",
           sessionId: SessionId.make("session-pending"),
           branchId: BranchId.make("branch-pending"),
           toolCallId: ToolCallId.make("tc-pending"),

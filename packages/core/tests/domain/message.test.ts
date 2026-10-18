@@ -18,6 +18,7 @@ import {
   messagePartsReasoning,
   messagePartsText,
   messagePartsTextLines,
+  MessageSegment,
   messagePartsToolCallParts,
   projectMessagesWithToolInteractions,
   normalizeResponseParts,
@@ -34,6 +35,7 @@ import * as Response from "effect/ai/Response"
 
 describe("steer command", () => {
   test("a stored Interrupt row still decodes", () => {
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the stored row this test decodes
     const decoded = Schema.decodeSync(SteerCommand)({
       _tag: "Interrupt",
       sessionId: "stored-session",
@@ -444,12 +446,12 @@ describe("message part projection", () => {
       ]),
     ])
     expect(projected?.segments).toEqual([
-      { _tag: "Reasoning", content: "thinking" },
-      { _tag: "Text", content: "before" },
-      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-1") },
-      { _tag: "Text", content: "after" },
+      MessageSegment.cases.Reasoning.make({ content: "thinking" }),
+      MessageSegment.cases.Text.make({ content: "before" }),
+      MessageSegment.cases.ToolCall.make({ toolCallId: ToolCallId.make("tc-1") }),
+      MessageSegment.cases.Text.make({ content: "after" }),
       // A call still running carries a segment; its interaction says "running".
-      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-2") },
+      MessageSegment.cases.ToolCall.make({ toolCallId: ToolCallId.make("tc-2") }),
     ])
     expect(projected?.toolInteractions.map((entry) => entry.status)).toEqual([
       "completed",
@@ -479,7 +481,9 @@ describe("message part projection", () => {
     })
     const projected = projectMessagesWithToolInteractions([assistant, user])
     // A non-image file carries no transcript segment.
-    expect(projected[0]?.segments).toEqual([{ _tag: "Image", mediaType: "image/png" }])
+    expect(projected[0]?.segments).toEqual([
+      MessageSegment.cases.Image.make({ mediaType: "image/png" }),
+    ])
     expect(projected[1]?.segments).toEqual([])
   })
 

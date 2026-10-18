@@ -3449,7 +3449,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/core/src/server/rpc.ts",
     text: "schemaStructWithTag:off -- the RPC client builds the payload with make, and a defaulted tag would read { scope: {} } as Launch.",
-    count: 2,
   },
   {
     // `new AgentDefinition` must be as strict as `make`: a key the schema

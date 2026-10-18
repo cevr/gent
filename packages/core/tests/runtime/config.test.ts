@@ -584,6 +584,7 @@ describe("user configuration", () => {
             trustedProjects: ["/x"],
             futureField: { nested: [1, 2] },
             agents: { main: { reasoningEffort: "high" } },
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
             driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
           })
           // Clearing the last override removes the key it owns, and only that.
@@ -649,7 +650,9 @@ describe("user configuration", () => {
             userConfigPath,
             encodeJson({
               driverOverrides: {
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test writes
                 main: { _tag: "Model", id: "openai", futureOption: true },
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test writes
                 helper: { _tag: "Model", id: "openai", futureOption: "kept" },
               },
             }),
@@ -658,13 +661,16 @@ describe("user configuration", () => {
           yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
           expect(yield* readRaw).toEqual({
             driverOverrides: {
+              // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
               main: { _tag: "Model", id: "anthropic", futureOption: true },
+              // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
               helper: { _tag: "Model", id: "openai", futureOption: "kept" },
             },
           })
           // Clearing one override deletes that entry, and only that entry.
           yield* cfg.clearDriverOverride(AgentName.make("main"))
           expect(yield* readRaw).toEqual({
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
             driverOverrides: { helper: { _tag: "Model", id: "openai", futureOption: "kept" } },
           })
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
@@ -828,6 +834,7 @@ describe("user configuration", () => {
               )
             expect(written).toEqual({
               trustedProjects: ["/x"],
+              // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test reads back
               driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
             })
             // The staged file lands beside the target, then renames over it.
@@ -891,6 +898,7 @@ describe("user configuration", () => {
         // Every write fails, the way a full disk or a read-only home does.
         const denied = (method: string, target: string) =>
           Effect.fail(
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
             PlatformError.systemError({
               _tag: "PermissionDenied",
               module: "FileSystem",
@@ -1280,6 +1288,7 @@ describe("user configuration", () => {
         Effect.gen(function* () {
           const configDir = path.join(cwd, ".gent")
           const configText = encodeJson({
+            // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw config file JSON this test writes
             driverOverrides: { [agent]: { _tag: "Model", id: driverId } },
           })
           yield* fs.makeDirectory(configDir, { recursive: true })

@@ -1446,7 +1446,7 @@ describe("Auth", () => {
         })
         expect(stored[0]).toMatchObject(withAnswers)
         expect(reread).toEqual(stored[0])
-        expect(stored[1]).toEqual({ _tag: "Api", type: "api", key: "sk-older" })
+        expect(stored[1]).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-older" }))
       }).pipe(Effect.provide(fileLockHost)),
     )
 
@@ -3162,6 +3162,7 @@ describe("classifier credential order", () => {
                     if (Predicate.isNotUndefined(failure)) return Effect.fail(failure)
                     return Effect.succeed({
                       answers: {
+                        // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderClassifyAnswer has no constructor
                         team: {
                           _tag: "Classify" as const,
                           label: "billing",

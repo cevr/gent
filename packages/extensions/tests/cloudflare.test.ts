@@ -332,8 +332,8 @@ describe("Cloudflare chat", () => {
         Effect.scoped,
         Effect.flip,
       )
+      expect(error.reason._tag).toBe("NetworkError")
       expect(error.reason).toMatchObject({
-        _tag: "NetworkError",
         reason: "TransportError",
         description: "connection lost while reading the response",
       })
@@ -500,11 +500,13 @@ describe("Cloudflare Clef decisions", () => {
     Effect.gen(function* () {
       const driver = yield* fixtureDriver()
       const error = yield* Effect.flip(resolveOn(driver, CLEF, signedIn({ accountId: "a" })))
-      expect(error).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
+      expect(error._tag).toBe("DriverError")
+      expect(error).toMatchObject({ reason: expect.stringContaining(CLEF) })
       // The earlier id names the same model, so it is refused the same way,
       // never sent to Chat Completions.
       const earlier = yield* Effect.flip(resolveOn(driver, "clef", signedIn({ accountId: "a" })))
-      expect(earlier).toMatchObject({ _tag: "DriverError", reason: expect.stringContaining(CLEF) })
+      expect(earlier._tag).toBe("DriverError")
+      expect(earlier).toMatchObject({ reason: expect.stringContaining(CLEF) })
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 })

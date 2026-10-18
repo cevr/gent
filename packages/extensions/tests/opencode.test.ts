@@ -1062,8 +1062,8 @@ describe("OpenCode catalog", () => {
       expect(ids).not.toContain(ModelId.make("opencode/gemini-3.6-flash"))
       // An expected failure: a typed driver error, not a defect.
       const error = yield* Effect.flip(resolveOn(zen, "gemini-3.6-flash", apiAuth))
+      expect(error._tag).toBe("DriverError")
       expect(error).toMatchObject({
-        _tag: "DriverError",
         driver: "opencode",
         reason:
           'OpenCode model "gemini-3.6-flash" speaks the @ai-sdk/google wire format, which gent does not support',

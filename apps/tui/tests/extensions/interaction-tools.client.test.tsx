@@ -3,7 +3,7 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
 import { createRoot, createSignal } from "solid-js"
 import { type OpenQuestionType, QUESTION_ANSWER_TYPE } from "@gent/extensions/client"
-import { MessageId } from "@gent/core/protocol"
+import { MessageId, QueueEntryInfo } from "@gent/core/protocol"
 import { QueueWidget } from "../../src/app"
 import interactionToolsExtension, {
   answeredLabel,
@@ -325,8 +325,7 @@ describe("a waiting answer in the queue", () => {
         () => (
           <QueueWidget
             steerMessages={[
-              {
-                _tag: "Steering",
+              QueueEntryInfo.cases.Steering.make({
                 id: MessageId.make("answer-1"),
                 content,
                 createdAt: 0,
@@ -345,7 +344,7 @@ describe("a waiting answer in the queue", () => {
                     ],
                   },
                 },
-              },
+              }),
             ]}
             queuedMessages={[]}
             messageRenderers={renderers}

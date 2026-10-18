@@ -29,7 +29,14 @@ import {
 } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import { SingleRunner } from "effect/cluster"
-import { Branch, dateFromMillis, Message, QueueSnapshot, Session } from "../../src/domain/message"
+import {
+  Branch,
+  dateFromMillis,
+  Message,
+  QueueSnapshot,
+  Session,
+  SteerCommand,
+} from "../../src/domain/message"
 import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
 import {
   CurrentWorkspaceId,
@@ -380,9 +387,9 @@ describe("SessionRuntime", () => {
         yield* queueDirect
         const queue = yield* sessionRuntime.getQueuedMessages(target)
         expect(queue.steering).toEqual([])
+        expect(queue.followUp.map((entry) => entry._tag)).toEqual(["FollowUp"])
         expect(queue.followUp).toEqual([
           expect.objectContaining({
-            _tag: "FollowUp",
             id: expect.stringContaining(":direct-follow-up"),
             content: "direct follow-up",
           }),
@@ -412,12 +419,13 @@ describe("SessionRuntime", () => {
       yield* Effect.gen(function* () {
         const sessionRuntime = yield* SessionRuntime
         const { sessionId, branchId } = yield* createCwdSessionBranch
-        yield* sessionRuntime.steer({
-          _tag: "Cancel",
-          sessionId,
-          branchId,
-          requestId: RequestId.make("req-cancel-profile-free"),
-        })
+        yield* sessionRuntime.steer(
+          SteerCommand.cases.Cancel.make({
+            sessionId,
+            branchId,
+            requestId: RequestId.make("req-cancel-profile-free"),
+          }),
+        )
         yield* sessionRuntime.respondInteraction({
           sessionId,
           branchId,
@@ -538,13 +546,14 @@ describe("SessionRuntime", () => {
         yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
         yield* controls.waitForCall(0)
         yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "queued" })
-        yield* sessionRuntime.steer({
-          _tag: "Interject",
-          sessionId,
-          branchId,
-          requestId: RequestId.make("req-interject-queued"),
-          message: "steer now",
-        })
+        yield* sessionRuntime.steer(
+          SteerCommand.cases.Interject.make({
+            sessionId,
+            branchId,
+            requestId: RequestId.make("req-interject-queued"),
+            message: "steer now",
+          }),
+        )
         yield* controls.emitAll(0)
         const messages = yield* waitFor(
           messageStorage.listMessages(branchId),
@@ -696,9 +705,8 @@ describe("SessionRuntime", () => {
           branchId,
           requestId: "req-drain-follow-up",
         })
-        expect(drained.followUp).toEqual([
-          expect.objectContaining({ _tag: "FollowUp", content: "drain me" }),
-        ])
+        expect(drained.followUp.map((entry) => entry._tag)).toEqual(["FollowUp"])
+        expect(drained.followUp).toEqual([expect.objectContaining({ content: "drain me" })])
         expect(retried).toEqual(drained)
         expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual(
           QueueSnapshot.make({

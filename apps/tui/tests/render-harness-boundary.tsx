@@ -54,6 +54,8 @@ import {
   SessionSnapshot,
   type GentNamespacedClient,
   ConnectionState,
+  SessionRuntimeStateSchema,
+  ExtensionHealthSnapshot,
 } from "@gent/core/protocol"
 import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 
@@ -157,7 +159,7 @@ export const snapshotNaming = (agent: AgentName) => ({
       reasoningLevel: undefined,
       resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
       agent,
-      runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
+      runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
       metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
     }),
 })
@@ -270,10 +272,11 @@ export const createMockClient = (
       request: () => noRpcError(absent),
       listSlashCommands: () => noRpcError([]),
       listStatus: () =>
-        noRpcError({
-          _tag: "Healthy",
-          extensions: [],
-        }),
+        noRpcError(
+          ExtensionHealthSnapshot.cases.Healthy.make({
+            extensions: [],
+          }),
+        ),
     },
     actor: {
       sendUserMessage: () => noRpcError(absent),
@@ -769,7 +772,7 @@ export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName)
       lastEventId: null,
       resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
       agent,
-      runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+      runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
       metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
     }),
   )

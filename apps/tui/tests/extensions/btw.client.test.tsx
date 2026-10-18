@@ -21,6 +21,7 @@ import {
   provideClientServices,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
+import { QueueEntryInfo } from "@gent/core/protocol"
 
 // ── fork pane ───────────────────────────────────────────────────────────────
 
@@ -699,14 +700,13 @@ describe("ForkMergeRow", () => {
         () => (
           <QueueWidget
             steerMessages={[
-              {
-                _tag: "Steering",
+              QueueEntryInfo.cases.Steering.make({
                 id: MessageId.make("merge-1"),
                 content: "The user merged a /btw fork back into this session: …",
                 createdAt: 0,
                 // The reader's merge: only the reader's waiting messages draw.
                 metadata: { fromClient: true, customType: BTW_MERGE_TYPE, details: mergeDetails },
-              },
+              }),
             ]}
             queuedMessages={[]}
             messageRenderers={renderers}

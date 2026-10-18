@@ -92,6 +92,7 @@ import {
 } from "../../src/domain/driver.js"
 import {
   DeleteAuthKeyInput,
+  ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
   ExtensionStatusScope,
   SetAuthKeyInput,
@@ -239,7 +240,9 @@ describe("ExtensionRpcs", () => {
   test("driver.set names a driver; a ref with no id is not a second way to clear", () => {
     const decode = Schema.decodeUnknownExit(SetDriverOverrideInput)
     const named = { agentName: "main", sessionId: "session-a" }
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded input this test decodes, which the schema rejects
     expect(Exit.isFailure(decode({ ...named, driver: { _tag: "Model" } }))).toBe(true)
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded input this test decodes
     expect(Exit.isSuccess(decode({ ...named, driver: { _tag: "Model", id: "anthropic" } }))).toBe(
       true,
     )
@@ -580,7 +583,7 @@ describe("driver callbacks use the selected profile", () => {
       Effect.gen(function* () {
         const { client, sessionId } = yield* profileDriverHarness()
         const status = yield* client.extension.listStatus({
-          scope: { _tag: "Session", id: sessionId },
+          scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
         })
         expect(status._tag).toBe("Healthy")
       }).pipe(Effect.timeout("4 seconds")),
@@ -2354,9 +2357,9 @@ describe("extension requests and slash commands", () => {
           })
           const queue = yield* client.queue.get({ sessionId, branchId })
           expect(queue.steering).toEqual([])
+          expect(queue.followUp.map((entry) => entry._tag)).toEqual(["FollowUp"])
           expect(queue.followUp).toEqual([
             expect.objectContaining({
-              _tag: "FollowUp",
               content: "queued through public rpc",
             }),
           ])
@@ -2861,7 +2864,7 @@ describe("extension health", () => {
             allowFailedExtensions: true,
           })
           const status = yield* client.extension.listStatus({
-            scope: { _tag: "Session", id: sessionId },
+            scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
           })
           expect(status._tag).toBe("Degraded")
           if (status._tag !== "Degraded") return
@@ -2869,11 +2872,10 @@ describe("extension health", () => {
           expect(status.degradedExtensions).toHaveLength(1)
           expect(status.degradedExtensions[0]?.manifest.id).toBe("@test/failing-status")
           expect(status.degradedExtensions[0]?.issues).toEqual([
-            {
-              _tag: "ActivationFailed",
+            ExtensionHealthIssue.cases.ActivationFailed.make({
               phase: "setup",
               error: "setup boom",
-            },
+            }),
           ])
         }).pipe(Effect.timeout("4 seconds")),
       )
@@ -2910,17 +2912,22 @@ describe("extension health", () => {
           cwd: project,
         })
         const broken = configIssues(
-          yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+          yield* client.extension.listStatus({
+            scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
+          }),
         )
         expect(broken).toHaveLength(1)
-        expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
+        expect(broken[0]?._tag).toBe("ActivationFailed")
+        expect(broken[0]).toMatchObject({ phase: "load" })
         expect(broken[0]?.error).toContain(projectConfig)
 
         // Fixed on disk, same server: the next read has no config issue.
         yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
         expect(
           configIssues(
-            yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+            yield* client.extension.listStatus({
+              scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
+            }),
           ),
         ).toEqual([])
       }).pipe(Effect.timeout("4 seconds"))
@@ -2971,7 +2978,7 @@ describe("extension health", () => {
           const models = yield* client.model.list({ sessionId })
           expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
           const status = yield* client.extension.listStatus({
-            scope: { _tag: "Session", id: sessionId },
+            scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
           })
           expect(status._tag).toBe("Degraded")
           if (status._tag !== "Degraded") return
@@ -2979,11 +2986,10 @@ describe("extension health", () => {
             (extension) => extension.manifest.id === "@test/catalog-drivers",
           )
           expect(degraded?.issues).toEqual([
-            {
-              _tag: "ModelCatalogFailed",
+            ExtensionHealthIssue.cases.ModelCatalogFailed.make({
               driverId: "local",
               error: "connect ECONNREFUSED 127.0.0.1:11434",
-            },
+            }),
           ])
         }).pipe(Effect.timeout("4 seconds")),
       )
@@ -3025,23 +3031,25 @@ describe("extension health", () => {
             }),
           )
           // No run yet: health runs the catalog once, then reads that record.
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- `Launch` has no tag default on purpose (`ExtensionStatusScope`), so its value spells the tag
           const first = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- `Launch` has no tag default on purpose (`ExtensionStatusScope`), so its value spells the tag
           const second = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
           expect(localCalls).toBe(1)
           const { sessionId } = yield* client.session.create({})
           yield* client.model.list({ sessionId })
           expect(localCalls).toBe(2)
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- `Launch` has no tag default on purpose (`ExtensionStatusScope`), so its value spells the tag
           const third = yield* client.extension.listStatus({ scope: { _tag: "Launch" } })
           expect(localCalls).toBe(2)
           for (const status of [first, second, third]) {
             expect(status._tag).toBe("Degraded")
             if (status._tag !== "Degraded") continue
             expect(status.degradedExtensions.flatMap((extension) => extension.issues)).toEqual([
-              {
-                _tag: "ModelCatalogFailed",
+              ExtensionHealthIssue.cases.ModelCatalogFailed.make({
                 driverId: "local",
                 error: "connect ECONNREFUSED 127.0.0.1:11434",
-              },
+              }),
             ])
           }
         }).pipe(Effect.timeout("4 seconds")),
@@ -3087,7 +3095,8 @@ describe("event subscriptions", () => {
         const replayed = yield* untilMarker(0)
         const marker = replayed[replayed.length - 1]
         const events = replayed.slice(0, -1)
-        expect(marker?.event).toMatchObject({ _tag: "StreamSynchronized", sessionId, branchId })
+        expect(marker?.event._tag).toBe("StreamSynchronized")
+        expect(marker?.event).toMatchObject({ sessionId, branchId })
         expect(events.length).toBeGreaterThan(1)
         expect(events.every((env) => env.event._tag !== "StreamSynchronized")).toBe(true)
         expect(marker?.id).toBe(events[events.length - 1]?.id)
@@ -4346,7 +4355,9 @@ describe("session profile lookup", () => {
             (yield* Effect.flip(client.model.list({ sessionId })))._tag,
             (yield* Effect.flip(client.driver.list({ sessionId })))._tag,
             (yield* Effect.flip(
-              client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+              client.extension.listStatus({
+                scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
+              }),
             ))._tag,
             (yield* Effect.flip(client.extension.listSlashCommands({ sessionId })))._tag,
           ]
@@ -4362,7 +4373,7 @@ describe("session profile lookup", () => {
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const { sessionId } = yield* client.session.create({})
         const { drivers } = yield* client.driver.list({ sessionId })
-        const driver = { _tag: "Model" as const, id: drivers[0]?.id ?? "none" }
+        const driver = SetDriverOverrideInput.fields.driver.make({ id: drivers[0]?.id ?? "none" })
         yield* client.session.delete({ sessionId })
         const tagOf = <A, E extends { readonly _tag: string }, R>(call: Effect.Effect<A, E, R>) =>
           Effect.match(call, { onFailure: (error) => error._tag, onSuccess: () => "answered" })
@@ -4382,7 +4393,9 @@ describe("session profile lookup", () => {
           "auth.setKey": tagOf(client.auth.setKey({ provider: driver.id, key: "sk", sessionId })),
           "auth.deleteKey": tagOf(client.auth.deleteKey({ provider: driver.id, sessionId })),
           "extension.listStatus": tagOf(
-            client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } }),
+            client.extension.listStatus({
+              scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
+            }),
           ),
           "extension.listSlashCommands": tagOf(client.extension.listSlashCommands({ sessionId })),
         }
@@ -4439,7 +4452,7 @@ describe("session profile lookup", () => {
     // @ts-expect-error -- driver.set names its session
     const setDriver: Parameters<Client["driver"]["set"]>[0] = {
       agentName: DEFAULT_AGENT_NAME,
-      driver: { _tag: "Model", id: provider },
+      driver: SetDriverOverrideInput.fields.driver.make({ id: provider }),
     }
     // @ts-expect-error -- driver.list names its session
     const listDrivers: Parameters<Client["driver"]["list"]>[0] = {}
@@ -4469,6 +4482,7 @@ describe("session profile lookup", () => {
 
   test("a session-scoped payload that names no session does not decode", () => {
     const statusPayload = Schema.Struct({ scope: ExtensionStatusScope })
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded input this test decodes
     const driver = { _tag: "Model", id: "anthropic" }
     const exits: ReadonlyArray<Exit.Exit<unknown, Schema.SchemaError>> = [
       Schema.decodeUnknownExit(SetAuthKeyInput)({ provider: "anthropic", key: "sk" }),
@@ -4478,6 +4492,7 @@ describe("session profile lookup", () => {
       Schema.decodeUnknownExit(statusPayload)({}),
     ]
     expect(exits.map((exit) => Exit.isFailure(exit))).toEqual([true, true, true, true, true])
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded input this test decodes
     expect(Exit.isSuccess(Schema.decodeExit(statusPayload)({ scope: { _tag: "Launch" } }))).toBe(
       true,
     )
@@ -4544,7 +4559,7 @@ describe("session profile lookup", () => {
           expect(drivers.map((driver) => driver.id)).toEqual(["project-models"])
           yield* client.driver.set({
             agentName: DEFAULT_AGENT_NAME,
-            driver: { _tag: "Model", id: "project-models" },
+            driver: SetDriverOverrideInput.fields.driver.make({ id: "project-models" }),
             sessionId,
           })
 
@@ -4577,7 +4592,9 @@ describe("session profile lookup", () => {
           extensionInputs: [...e2ePreset.extensionInputs, counted],
           providerLayer,
         })
-        yield* client.extension.listStatus({ scope: { _tag: "Session", id: sessionId } })
+        yield* client.extension.listStatus({
+          scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
+        })
         expect(yield* Ref.get(setups)).toBe(1)
       }).pipe(Effect.timeout("4 seconds")),
     ),

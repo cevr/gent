@@ -38,7 +38,7 @@ import {
   type RunEffort,
   type SessionId,
 } from "@gent/core/extensions/api"
-import type { AgentEvent } from "@gent/core/protocol"
+import { type AgentEvent, ExtensionHealthIssue, ExtensionStatusScope } from "@gent/core/protocol"
 import {
   collectTestContributions,
   createRpcHarness,
@@ -122,6 +122,7 @@ const judgeExtension = (answers: ReadonlyArray<JudgeAnswer>, calls: Array<JudgeC
                     if (decision._tag !== "Classify") return Option.none()
                     return Option.some(Object.keys(decision.criteria))
                   })
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderClassifyAnswer has no constructor
                 const classified = (labels: ReadonlyArray<string>, label: string) => ({
                   _tag: "Classify" as const,
                   label,
@@ -375,7 +376,7 @@ describe("router config", () => {
         expect(models.some((model) => model.id === AUTO)).toBe(false)
         // Health names the bad entry under the router's extension, as it does a failed catalog.
         const status = yield* session.client.extension.listStatus({
-          scope: { _tag: "Session", id: session.sessionId },
+          scope: ExtensionStatusScope.cases.Session.make({ id: session.sessionId }),
         })
         expect(status._tag).toBe("Degraded")
         if (status._tag !== "Degraded") return
@@ -384,11 +385,10 @@ describe("router config", () => {
             .filter((extension) => extension.manifest.id === "@gent/router")
             .flatMap((extension) => extension.issues),
         ).toEqual([
-          {
-            _tag: "ModelCatalogFailed",
+          ExtensionHealthIssue.cases.ModelCatalogFailed.make({
             driverId: "router",
             error: `${AUTO}: choices 1 and 2 are each marked "default": true; mark one`,
-          },
+          }),
         ])
         yield* session.send("route me")
         const events = yield* session.afterTurns(1)
@@ -694,7 +694,7 @@ describe("effort auto", () => {
           model: thinkerOf(["low", "medium", "high"]),
         })
         const status = yield* unrouted.client.extension.listStatus({
-          scope: { _tag: "Session", id: unrouted.sessionId },
+          scope: ExtensionStatusScope.cases.Session.make({ id: unrouted.sessionId }),
         })
         expect(status._tag).toBe("Degraded")
         if (status._tag !== "Degraded") return
@@ -703,11 +703,10 @@ describe("effort auto", () => {
             .filter((extension) => extension.manifest.id === "@gent/router")
             .flatMap((extension) => extension.issues),
         ).toEqual([
-          {
-            _tag: "ModelCatalogFailed",
+          ExtensionHealthIssue.cases.ModelCatalogFailed.make({
             driverId: "router",
             error: `${EFFORT}: choice 1 names a model; an effort choice sets only an effort`,
-          },
+          }),
         ])
         expect(routedEvents(unrouted.events)).toEqual([])
         // The main agent's own level.

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { DateTime, Effect, Option, Queue } from "effect"
 import { createSignal } from "solid-js"
-import { WAKE_EXTENSION_ID, type WakePendingType } from "@gent/extensions/client"
+import { WAKE_EXTENSION_ID, WakeEntry, type WakePendingType } from "@gent/extensions/client"
 import { BranchId, SessionId } from "@gent/core/extensions/api"
 import wakeExtension, { WakeTray, wakeLabel, wakeTrayLines } from "../../src/extensions/wake.client"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
@@ -23,15 +23,18 @@ const cancelKey = KeyHints.cancel
 const pending: WakePendingType = {
   now: 1_000_000,
   entries: [
-    {
-      _tag: "monitor",
+    WakeEntry.cases.monitor.make({
       wakeId: "m1",
       command: "gh run view 12 --exit-status",
       everySeconds: 60,
       deadline: 1_000_000 + 25 * 60_000,
       note: "merge when green",
-    },
-    { _tag: "alarm", wakeId: "a1", dueAt: 1_000_000 + 95_000, note: "check the deploy" },
+    }),
+    WakeEntry.cases.alarm.make({
+      wakeId: "a1",
+      dueAt: 1_000_000 + 95_000,
+      note: "check the deploy",
+    }),
   ],
 }
 
@@ -41,14 +44,13 @@ describe("wakeTrayLines", () => {
       const long: WakePendingType = {
         now: 0,
         entries: [
-          {
-            _tag: "monitor",
+          WakeEntry.cases.monitor.make({
             wakeId: "m",
             command: "true",
             everySeconds: 45,
             deadline: 3_720_000,
             note: "soak",
-          },
+          }),
         ],
       }
       expect(wakeTrayLines(long, 0, 80)).toEqual([
@@ -65,12 +67,13 @@ describe("wakeTrayLines", () => {
       ])
       const many: WakePendingType = {
         now: 0,
-        entries: [1, 2, 3, 4, 5].map((n) => ({
-          _tag: "alarm",
-          wakeId: `a${n}`,
-          dueAt: n * 1000,
-          note: `task ${n}`,
-        })),
+        entries: [1, 2, 3, 4, 5].map((n) =>
+          WakeEntry.cases.alarm.make({
+            wakeId: `a${n}`,
+            dueAt: n * 1000,
+            note: `task ${n}`,
+          }),
+        ),
       }
       const lines = wakeTrayLines(many, 0, 80)
       expect(lines.length).toBe(4)
@@ -78,14 +81,13 @@ describe("wakeTrayLines", () => {
       const repeating: WakePendingType = {
         now: 0,
         entries: [
-          {
-            _tag: "alarm",
+          WakeEntry.cases.alarm.make({
             wakeId: "r",
             dueAt: 60_000,
             everySeconds: 300,
             mode: "notify",
             note: "stretch",
-          },
+          }),
         ],
       }
       expect(wakeTrayLines(repeating, 0, 80)).toEqual([
@@ -94,15 +96,14 @@ describe("wakeTrayLines", () => {
       const noticed: WakePendingType = {
         now: 120_000,
         entries: [
-          { _tag: "alarm", wakeId: "a", dueAt: 130_000, note: "later" },
-          {
-            _tag: "notice",
+          WakeEntry.cases.alarm.make({ wakeId: "a", dueAt: 130_000, note: "later" }),
+          WakeEntry.cases.notice.make({
             wakeId: "n",
             outcome: "fired",
             firedAt: 0,
             content: "Alarm n fired.",
             note: "stand up",
-          },
+          }),
         ],
       }
       expect(wakeTrayLines(noticed, 120_000, 80)).toEqual([
@@ -130,13 +131,12 @@ const RESUME_NOW = 1_000_000
 const resumePending: WakePendingType = {
   now: RESUME_NOW,
   entries: [
-    {
-      _tag: "alarm",
+    WakeEntry.cases.alarm.make({
       wakeId: "resume:m-limited:3790000",
       dueAt: RESUME_NOW + 47 * 60_000,
       note: "continue after the usage limit resets",
       resume: { attempt: 1, maxResumes: 3, resetAt: 3_790_000, messageId: "m-limited" },
-    },
+    }),
   ],
 }
 
@@ -197,24 +197,22 @@ describe("auto-resume rows", () => {
       const notices: WakePendingType = {
         now: RESUME_NOW,
         entries: [
-          {
-            _tag: "notice",
+          WakeEntry.cases.notice.make({
             wakeId: "resume:m-capped:4600000",
             outcome: "fired",
             firedAt: RESUME_NOW - 60_000,
             content: "Auto-resume stopped after 3 attempts.",
             note: "auto-resume stopped after 3 attempts",
             resume: { resetAt: 4_600_000 },
-          },
-          {
-            _tag: "notice",
+          }),
+          WakeEntry.cases.notice.make({
             wakeId: "resume:m-late:0",
             outcome: "fired",
             firedAt: RESUME_NOW - 120_000,
             content: "Auto-resume skipped.",
             note: "auto-resume skipped: gent was not running",
             resume: { resetAt: 0 },
-          },
+          }),
         ],
       }
       expect(wakeTrayLines(notices, RESUME_NOW, 80, utc)).toEqual([
@@ -306,12 +304,12 @@ describe("auto-resume rows", () => {
     "a pending resume keeps its row when more entries than the tray shows are due first",
     () =>
       Effect.sync(() => {
-        const alarm = (wakeId: string, inSeconds: number) => ({
-          _tag: "alarm" as const,
-          wakeId,
-          dueAt: RESUME_NOW + inSeconds * 1000,
-          note: `check ${wakeId}`,
-        })
+        const alarm = (wakeId: string, inSeconds: number) =>
+          WakeEntry.cases.alarm.make({
+            wakeId,
+            dueAt: RESUME_NOW + inSeconds * 1000,
+            note: `check ${wakeId}`,
+          })
         const crowded: WakePendingType = {
           now: RESUME_NOW,
           entries: [alarm("a1", 60), alarm("a2", 120), alarm("a3", 180), ...resumePending.entries],
@@ -332,7 +330,11 @@ describe("Wake tray", () => {
       const wide: WakePendingType = {
         now: 1_000_000,
         entries: [
-          { _tag: "alarm", wakeId: "a2", dueAt: 1_000_000 + 60_000, note: "部署を確認する" },
+          WakeEntry.cases.alarm.make({
+            wakeId: "a2",
+            dueAt: 1_000_000 + 60_000,
+            note: "部署を確認する",
+          }),
         ],
       }
       const [line] = wakeTrayLines(wide, wide.now, 24)

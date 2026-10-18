@@ -944,12 +944,12 @@ const errorMessageFromAiError = (toolName: string, failure: ToolExecutionError) 
   const fallback = `Tool '${toolName}' failed: ${String(failure)}`
   if (!AiError.isAiError(failure)) return fallback
   return Match.type<AiError.AiError["reason"]>().pipe(
-    Match.when(
-      { _tag: "ToolParameterValidationError" },
+    Match.tag(
+      "ToolParameterValidationError",
       (reason) => `Tool '${toolName}' input failed:\n${reason.description}`,
     ),
-    Match.when(
-      { _tag: "ToolResultEncodingError" },
+    Match.tag(
+      "ToolResultEncodingError",
       (reason) => `Tool '${toolName}' failed: ${reason.description}`,
     ),
     Match.orElse(() => fallback),
@@ -959,7 +959,7 @@ const errorMessageFromAiError = (toolName: string, failure: ToolExecutionError) 
 const isToolParameterValidationError = (failure: ToolExecutionError): boolean => {
   if (!AiError.isAiError(failure)) return false
   return Match.type<AiError.AiError["reason"]>().pipe(
-    Match.when({ _tag: "ToolParameterValidationError" }, () => true),
+    Match.tag("ToolParameterValidationError", () => true),
     Match.orElse(() => false),
   )(failure.reason)
 }

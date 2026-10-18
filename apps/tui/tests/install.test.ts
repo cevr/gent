@@ -14,8 +14,8 @@ import {
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { runProcess } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
-import { BunGentPlatformLive, makeTempDirectoryScoped } from "@gent/core/test-utils"
-import { formatUpgradeOutcome, markVersionInUse, upgradeInstall } from "../src/ops"
+import { BunGentPlatformLive, GentBuild, makeTempDirectoryScoped } from "@gent/core/test-utils"
+import { formatUpgradeOutcome, markVersionInUse, UpgradeOutcome, upgradeInstall } from "../src/ops"
 
 // ── a release host on loopback ──────────────────────────────────────────────
 
@@ -610,9 +610,8 @@ const upgradeAs = (
     ),
   )
 
-type GentBuild = Effect.Success<GentPlatform["Service"]["build"]>
-
-const compiled = (version: string): GentBuild => ({ _tag: "Compiled", id: "4f9c2e1a", version })
+const compiled = (version: string): GentBuild =>
+  GentBuild.cases.Compiled.make({ id: "4f9c2e1a", version })
 
 /** A scratch home where install.sh installed each of `versions`, in order. */
 const installedHome = (releases: string, versions: ReadonlyArray<string>) =>
@@ -650,7 +649,8 @@ describe("gent upgrade", () => {
         compiled("1.2.0"),
         releases,
       )
-      expect(outcome).toMatchObject({ _tag: "Upgraded", from: "1.2.0", to: "1.3.0" })
+      expect(outcome._tag).toBe("Upgraded")
+      expect(outcome).toMatchObject({ from: "1.2.0", to: "1.3.0" })
       const after = yield* layout(home)
       expect(after).toEqual({
         root: before.root,
@@ -688,7 +688,7 @@ describe("gent upgrade", () => {
         compiled("1.3.0"),
         releases,
       )
-      expect(latest).toEqual({ _tag: "Current", version: "1.3.0" })
+      expect(latest).toEqual(UpgradeOutcome.cases.Current.make({ version: "1.3.0" }))
       expect(formatUpgradeOutcome(latest)).toBe("Already at gent v1.3.0.")
     }).pipe(Effect.timeout("60 seconds"), Effect.provide(services)),
   )
@@ -766,7 +766,7 @@ describe("gent upgrade", () => {
         compiled("1.2.0"),
         "http://127.0.0.1:9/releases",
       )
-      expect(outcome).toEqual({ _tag: "PackageManager", executable })
+      expect(outcome).toEqual(UpgradeOutcome.cases.PackageManager.make({ executable }))
       expect(formatUpgradeOutcome(outcome)).toContain("upgrade it with that package manager")
     }).pipe(Effect.timeout("30 seconds"), Effect.provide(services)),
   )
@@ -777,7 +777,7 @@ describe("gent upgrade", () => {
       const source = yield* upgradeAs(
         "/nonexistent/loop-probe-x",
         "/nonexistent/loop-probe-x/bun",
-        { _tag: "Source" },
+        GentBuild.cases.Source.make({}),
         nowhere,
       ).pipe(Effect.flip)
       expect(source.message).toContain("this gent runs from a source checkout")
@@ -879,7 +879,9 @@ describe("the in-use marker", () => {
         whileOpen: [],
         after: [],
       })
-      expect(yield* markedAs(path.join(versionDir, "gent"), { _tag: "Source" })).toEqual({
+      expect(
+        yield* markedAs(path.join(versionDir, "gent"), GentBuild.cases.Source.make({})),
+      ).toEqual({
         whileOpen: [],
         after: [],
       })

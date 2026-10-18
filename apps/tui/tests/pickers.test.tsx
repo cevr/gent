@@ -20,7 +20,7 @@ import {
   DEFAULT_ROW_ID,
   MessagePicker,
   modelRows,
-  type PromptSearchEvent,
+  PromptSearchEvent,
   promptSearchItems,
   PromptSearchPalette,
   openPromptSearch,
@@ -491,10 +491,9 @@ describe("PromptSearchPalette renderer", () => {
       expect(frame).toContain("type to filter · ↑↓ move · enter select · esc close")
       // Typing and moving both report the entry under the cursor; the last
       // report is the second match in rank order.
-      expect(events.at(-1)).toEqual({
-        _tag: "Highlight",
-        entry: Option.some("fix the session queue bug"),
-      })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("fix the session queue bug") }),
+      )
     }),
   )
 
@@ -507,7 +506,9 @@ describe("PromptSearchPalette renderer", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("first prompt"), "open")
       setup.mockInput.pressKeys(["z", "z", "z"])
       yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "empty")
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.none() })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.none() }),
+      )
     }),
   )
 
@@ -521,15 +522,19 @@ describe("PromptSearchPalette renderer", () => {
 
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("gamma") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("gamma") }),
+      )
 
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("alpha") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("alpha") }),
+      )
 
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
     }),
   )
 
@@ -543,10 +548,12 @@ describe("PromptSearchPalette renderer", () => {
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("café"))
       yield* waitForFrame(setup, (frame) => !frame.includes("gamma"), "narrowed by the paste")
       expect(renderFrame(setup)).toContain("› café")
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("café order") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("café order") }),
+      )
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
     }),
   )
 
@@ -557,7 +564,7 @@ describe("PromptSearchPalette renderer", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("Nothing here"), "open")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, () => events.at(-1)?._tag === "Cancel", "cancelled")
     }),

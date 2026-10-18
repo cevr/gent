@@ -8,6 +8,7 @@ import {
   ModelId,
   SessionId,
   SessionSnapshot,
+  SessionRuntimeStateSchema,
 } from "@gent/core/protocol"
 import { emptyQueueSnapshot } from "@gent/core/test-utils"
 import { type ClientContextValue, useClient } from "../../src/client"
@@ -170,6 +171,7 @@ describe("transport", () => {
   // extension's own words, not the transport's.
   it.scopedLive("an extension's refusal is the request's message", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
       const refusal = yield* Schema.decodeEffect(GentRpcError)({
         _tag: "ExtensionProtocolError",
         extensionId: "@gent/wake",
@@ -223,7 +225,7 @@ describe("sessionQuery", () => {
             reasoningLevel: session.reasoningLevel,
             resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
             agent: AgentName.make("primary"),
-            runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
             metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
           }),
         )

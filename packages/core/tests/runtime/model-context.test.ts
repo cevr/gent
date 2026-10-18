@@ -2442,12 +2442,14 @@ describe("model context window", () => {
       ),
     ).toEqual(Option.none())
     expect(
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- details the runtime never wrote: the test proves they are rejected
       contextWindowOf(typed("no-anchor", { customType: type, details: { _tag: type } })),
     ).toEqual(Option.none())
     expect(
       contextWindowOf(
         typed("bad-summary", {
           customType: type,
+          // oxlint-disable-next-line effect/preferTaggedConstructors -- details the runtime never wrote: the test proves they are rejected
           details: { _tag: type, keepFromMessageId: "u2", summarized: { firstMessageId: "u1" } },
         }),
       ),

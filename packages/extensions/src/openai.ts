@@ -902,7 +902,7 @@ export interface OpenAICredentials {
   readonly accountId: Option.Option<string>
 }
 
-const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
+export const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
   access: Schema.String,
   refresh: Schema.String,
   expires: Schema.Finite,

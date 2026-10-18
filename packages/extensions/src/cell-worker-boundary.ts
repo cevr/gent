@@ -841,8 +841,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         request = { ...request, timeoutMs: options.timeoutMs }
       return namespaceCall(namespaceCallName("models", "decide"), request)
     },
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the decision's wire spelling: the host decodes and checks it
     classify: (options: DecisionOptions) => ({ _tag: "Classify", ...options }),
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the decision's wire spelling: the host decodes and checks it
     rate: (options: DecisionOptions) => ({ _tag: "Rate", ...options }),
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the decision's wire spelling: the host decodes and checks it
     probability: (options: DecisionOptions) => ({ _tag: "Probability", ...options }),
   }
   installHostNamespace("tools", toolsNamespace)

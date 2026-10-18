@@ -100,7 +100,7 @@ import {
   messagePartsToolCallParts,
   type QueuedTurnItem,
   Session,
-  type SteerCommand,
+  SteerCommand,
   toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import {
@@ -184,6 +184,7 @@ import {
   buildIdleState,
   buildRunningState,
   entityIdOf,
+  ExtensionRequestInputEnvelope,
   type FollowUpQueueFull,
   interjectionMessageId,
   type LoopState,
@@ -1276,8 +1277,8 @@ describe("tool projection reconciliation", () => {
           // and the model is not called again for this turn.
           const events = yield* Ref.get(eventsRef)
           const failed = events.find((event) => event._tag === "ToolCallFailed")
+          expect(failed?._tag).toBe("ToolCallFailed")
           expect(failed).toMatchObject({
-            _tag: "ToolCallFailed",
             toolCallId,
             toolName: "echo",
             assistantMessageId,
@@ -2258,13 +2259,12 @@ describe("a turn's joined steers", () => {
       yield* Deferred.await(streaming)
       const requestId = RequestId.make("req-joined-steer")
       yield* client.steer.command({
-        command: {
-          _tag: "Interject",
+        command: SteerCommand.cases.Interject.make({
           sessionId,
           branchId,
           requestId,
           message: "steer now",
-        } satisfies SteerCommand,
+        }),
       })
       yield* Deferred.succeed(steered, void 0)
       const [ended] = yield* waitFor(
@@ -2546,12 +2546,11 @@ describe("a step that does not settle", () => {
       })
       yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
       yield* interruptedRun.client.steer.command({
-        command: {
-          _tag: "Cancel",
+        command: SteerCommand.cases.Cancel.make({
           sessionId: interruptedRun.sessionId,
           branchId: interruptedRun.branchId,
           requestId: "req-interrupted-step-model",
-        } satisfies SteerCommand,
+        }),
       })
 
       const brokenSteps = yield* endedSteps(brokenRun)
@@ -2616,12 +2615,11 @@ describe("turn lifecycle hooks", () => {
       yield* client.message.send({ sessionId, branchId, content: "answer me" })
       yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
       yield* client.steer.command({
-        command: {
-          _tag: "Cancel",
+        command: SteerCommand.cases.Cancel.make({
           sessionId,
           branchId,
           requestId: "req-lifecycle-interrupt",
-        } satisfies SteerCommand,
+        }),
       })
 
       const outcomes = yield* waitFor(
@@ -3407,12 +3405,11 @@ describe("turn stop", () => {
       yield* client.message.send({ sessionId, branchId, content: "wait" })
       yield* Deferred.await(started)
       yield* client.steer.command({
-        command: {
-          _tag: "Cancel",
+        command: SteerCommand.cases.Cancel.make({
           sessionId,
           branchId,
           requestId: "req-turn-stop-interrupt",
-        } satisfies SteerCommand,
+        }),
       })
       expect(yield* Deferred.await(seen)).toBe(false)
       yield* Fiber.join(completed)
@@ -4735,7 +4732,7 @@ const requestExtensionViaActor = (input: {
         commandId: input.commandId,
         extensionId: TEST_REQUEST_EXTENSION_ID,
         capabilityId: input.capabilityId,
-        input: { _tag: "Present", value: input.input },
+        input: ExtensionRequestInputEnvelope.cases.Present.make({ value: input.input }),
       }),
     )
   })
@@ -5535,13 +5532,14 @@ describe("queued follow-ups drain", () => {
             })
             const fiber = yield* Effect.forkChild(submitAgentLoop(turn).pipe(Effect.ignore))
             yield* controls.waitForCall(0)
-            yield* steerAgentLoop({
-              _tag: "Interject",
-              sessionId,
-              branchId,
-              requestId: "req-steer-transcript-first",
-              message: "answer this too",
-            })
+            yield* steerAgentLoop(
+              SteerCommand.cases.Interject.make({
+                sessionId,
+                branchId,
+                requestId: "req-steer-transcript-first",
+                message: "answer this too",
+              }),
+            )
             yield* controls.emitAll(0)
             yield* Fiber.join(fiber).pipe(Effect.ignore)
             // The submit returns once the turn is admitted, not once it ends.
@@ -5819,12 +5817,13 @@ describe("interaction", () => {
             const first = makeIntMessage("interrupt me mid tool call")
             const running = yield* Effect.forkChild(runAgentLoop(first))
             yield* Deferred.await(toolCallArrived)
-            yield* steerAgentLoop({
-              _tag: "Cancel",
-              sessionId: intSessionId,
-              branchId: intBranchId,
-              requestId: "req-interrupt-mid-tool-call",
-            })
+            yield* steerAgentLoop(
+              SteerCommand.cases.Cancel.make({
+                sessionId: intSessionId,
+                branchId: intBranchId,
+                requestId: "req-interrupt-mid-tool-call",
+              }),
+            )
             yield* Fiber.join(running)
             expect(yield* Ref.get(executed)).toBe(0)
 
@@ -5883,12 +5882,13 @@ describe("interaction", () => {
           const first = makeIntMessage("run the stuck tool")
           const running = yield* Effect.forkChild(runAgentLoop(first))
           yield* Deferred.await(started)
-          yield* steerAgentLoop({
-            _tag: "Cancel",
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: "req-interrupt-running-tool",
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Cancel.make({
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: "req-interrupt-running-tool",
+            }),
+          )
           yield* Deferred.await(stopped)
           yield* Fiber.join(running)
           const result = yield* (yield* MessageStorage).getMessage(
@@ -5970,12 +5970,13 @@ describe("interaction", () => {
             { sessionId: intSessionId, branchId: intBranchId },
             "WaitingForInteraction",
           )
-          yield* steerAgentLoop({
-            _tag: "Cancel",
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: "req-interrupt-waiting-interaction",
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Cancel.make({
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: "req-interrupt-waiting-interaction",
+            }),
+          )
           yield* Fiber.join(fiber)
           const stateAfter = yield* agentLoop.getState({
             sessionId: intSessionId,
@@ -6062,12 +6063,13 @@ describe("interaction", () => {
             { sessionId: intSessionId, branchId: intBranchId },
             "WaitingForInteraction",
           )
-          yield* steerAgentLoop({
-            _tag: "Cancel",
-            sessionId: intSessionId,
-            branchId: intBranchId,
-            requestId: "req-interrupt-parked-call",
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Cancel.make({
+              sessionId: intSessionId,
+              branchId: intBranchId,
+              requestId: "req-interrupt-parked-call",
+            }),
+          )
           yield* Fiber.join(fiber)
           const results = yield* (yield* MessageStorage).getMessage(
             toolResultMessageIdForTurn(message.id, 1),
@@ -6584,13 +6586,14 @@ describe("turn scheduling", () => {
           const sessionId = SessionId.make("pre-admission-cancel-session")
           const branchId = BranchId.make("pre-admission-cancel-branch")
           const cancelled = makeMessage(sessionId, branchId, "cancel before start")
-          yield* steerAgentLoop({
-            _tag: "Cancel",
-            sessionId,
-            branchId,
-            requestId: RequestId.make("cancel-before-admission"),
-            messageId: cancelled.id,
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Cancel.make({
+              sessionId,
+              branchId,
+              requestId: RequestId.make("cancel-before-admission"),
+              messageId: cancelled.id,
+            }),
+          )
           yield* runAgentLoop(cancelled)
           expect(yield* controls.callCount).toBe(0)
           expect(
@@ -6627,13 +6630,14 @@ describe("turn scheduling", () => {
           const running = yield* runAgentLoop(second).pipe(Effect.forkChild)
           yield* controls.waitForCall(1)
           // This helper awaits the actual actor handler, not only durable send admission.
-          yield* steerAgentLoop({
-            _tag: "Cancel",
-            sessionId,
-            branchId,
-            requestId: RequestId.make("late-first-cancel"),
-            messageId: first.id,
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Cancel.make({
+              sessionId,
+              branchId,
+              requestId: RequestId.make("late-first-cancel"),
+              messageId: first.id,
+            }),
+          )
           expect((yield* loop.getState({ sessionId, branchId }))._tag).toBe("Running")
           yield* controls.emitAll(1)
           yield* Fiber.join(running)
@@ -6728,12 +6732,13 @@ describe("turn scheduling", () => {
           yield* controls.waitForCall(0)
           yield* controls.waitForCall(1)
           // No writer sends `Interrupt` now; a stored steer row with it still cancels.
-          yield* steerAgentLoop({
-            _tag: "Interrupt",
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            requestId: "req-interrupt-s1",
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Interrupt.make({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              requestId: "req-interrupt-s1",
+            }),
+          )
           // A ends on the interrupt alone: both model gates stay shut.
           yield* Fiber.join(fiberA).pipe(Effect.timeout("2 seconds"))
           const statusB = fiberB.pollUnsafe()
@@ -6917,13 +6922,14 @@ describe("a failed turn", () => {
         // One steering write fails while storage is down; the caller hears it.
         yield* Ref.set(failWrites, true)
         const steered = yield* Effect.exit(
-          steerAgentLoop({
-            _tag: "Interject",
-            sessionId,
-            branchId,
-            requestId: "req-stale-persistence",
-            message: "parked while storage is down",
-          }),
+          steerAgentLoop(
+            SteerCommand.cases.Interject.make({
+              sessionId,
+              branchId,
+              requestId: "req-stale-persistence",
+              message: "parked while storage is down",
+            }),
+          ),
         )
         expect(steered._tag).toBe("Failure")
         // Storage recovers. A turn submitted now owes nothing to that failure.
@@ -7153,13 +7159,14 @@ describe("queued follow-ups", () => {
   it.live("a cancel aimed at a queued follow-up stops that follow-up only", () =>
     queuedFollowUpScenario("cancel", (context) =>
       Effect.gen(function* () {
-        yield* steerAgentLoop({
-          _tag: "Cancel",
-          sessionId: context.sessionId,
-          branchId: context.branchId,
-          requestId: "req-cancel-queued-y",
-          messageId: context.y.id,
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Cancel.make({
+            sessionId: context.sessionId,
+            branchId: context.branchId,
+            requestId: "req-cancel-queued-y",
+            messageId: context.y.id,
+          }),
+        )
         yield* context.release
         yield* context.settled
         // The cancelled follow-up never reaches the model; its neighbour does.
@@ -7332,23 +7339,24 @@ describe("queued follow-ups", () => {
           yield* Deferred.await(firstStarted)
           yield* submitAgentLoop(queuedA)
           yield* submitAgentLoop(queuedB)
-          yield* steerAgentLoop({
-            _tag: "Interject",
-            sessionId: SessionId.make("s1"),
-            branchId: BranchId.make("b1"),
-            requestId: "req-interject-visible-queue",
-            message: "steer now",
-          })
+          yield* steerAgentLoop(
+            SteerCommand.cases.Interject.make({
+              sessionId: SessionId.make("s1"),
+              branchId: BranchId.make("b1"),
+              requestId: "req-interject-visible-queue",
+              message: "steer now",
+            }),
+          )
           const snapshot = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
           })
-          expect(snapshot.steering).toEqual([
-            expect.objectContaining({ _tag: "Steering", content: "steer now" }),
-          ])
+          expect(snapshot.steering.map((entry) => entry._tag)).toEqual(["Steering"])
+          expect(snapshot.steering).toEqual([expect.objectContaining({ content: "steer now" })])
+          expect(snapshot.followUp.map((entry) => entry._tag)).toEqual(["FollowUp", "FollowUp"])
           expect(snapshot.followUp).toEqual([
-            expect.objectContaining({ _tag: "FollowUp", content: "queued a" }),
-            expect.objectContaining({ _tag: "FollowUp", content: "queued b" }),
+            expect.objectContaining({ content: "queued a" }),
+            expect.objectContaining({ content: "queued b" }),
           ])
           const secondSnapshot = yield* agentLoop.getQueue({
             sessionId: SessionId.make("s1"),
@@ -7423,8 +7431,9 @@ describe("queued follow-ups", () => {
             sessionId: SessionId.make("s1"),
             branchId: BranchId.make("b1"),
           })
+          expect(snapshotWhileRunning.followUp.map((entry) => entry._tag)).toEqual(["FollowUp"])
           expect(snapshotWhileRunning.followUp).toEqual([
-            expect.objectContaining({ _tag: "FollowUp", content: "queued after failure" }),
+            expect.objectContaining({ content: "queued after failure" }),
           ])
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber).pipe(Effect.exit)
@@ -7477,12 +7486,13 @@ describe("provider retry in a turn", () => {
           5_000,
           "the retry wait began",
         )
-        yield* steerAgentLoop({
-          _tag: "Cancel",
-          sessionId,
-          branchId,
-          requestId: "req-cancel-retry-wait",
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Cancel.make({
+            sessionId,
+            branchId,
+            requestId: "req-cancel-retry-wait",
+          }),
+        )
         // The cancel reaches the wait: the turn ends well before 20 seconds.
         const ended = yield* Fiber.join(turn).pipe(Effect.timeoutOption("2 seconds"))
         expect(Option.isSome(ended)).toBe(true)
@@ -7613,9 +7623,9 @@ describe("provider retry in a turn", () => {
           expect.objectContaining({ messageId: message.id, step: 1 }),
         ])
         const completion = events.find((event) => event._tag === "TurnCompleted")
+        expect(completion?._tag).toBe("TurnCompleted")
         expect(completion).toEqual(
           expect.objectContaining({
-            _tag: "TurnCompleted",
             messageId: message.id,
             streamFailed: true,
           }),

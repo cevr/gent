@@ -11,6 +11,7 @@ import {
   Session,
   SessionId,
 } from "@gent/core/protocol"
+import { windowMarkerMessage } from "@gent/core/test-utils"
 import {
   detailFor,
   makeThreadController,
@@ -60,21 +61,15 @@ const message = (id: string, role: "user" | "assistant", text: string, at: numbe
   })
 
 const marker = (anchor: string, summary: string, count: number, at: number): Message =>
-  Message.cases.regular.make({
-    id: MessageId.make(`context-handoff:${branchId}:${anchor}`),
+  windowMarkerMessage({
     sessionId,
     branchId,
-    role: "user",
-    parts: [
-      Prompt.textPart({ text: `Context handoff. Ids stay durable.\n\nSummary:\n${summary}` }),
-    ],
-    metadata: {
-      customType: "context-window",
-      details: {
-        _tag: "context-window",
-        keepFromMessageId: anchor,
-        summarized: { firstMessageId: `${anchor}-first`, lastMessageId: `${anchor}-last`, count },
-      },
+    keepFromMessageId: MessageId.make(anchor),
+    notice: `Context handoff. Ids stay durable.\n\nSummary:\n${summary}`,
+    summarized: {
+      firstMessageId: MessageId.make(`${anchor}-first`),
+      lastMessageId: MessageId.make(`${anchor}-last`),
+      count,
     },
     createdAt: dateFromMillis(at),
   })

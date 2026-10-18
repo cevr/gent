@@ -29,6 +29,7 @@ import {
   MODEL_ATTEMPTS_MESSAGE_TYPE,
   Session,
   type SessionAdmission,
+  SteerCommand,
 } from "../../src/domain/message"
 import * as Response from "effect/ai/Response"
 import {
@@ -43,6 +44,7 @@ import {
   recordToolOutcome,
   resolveSessionRoute,
   signalActiveStreamInterrupt,
+  StepOutcome,
   findPersistedToolResults,
   persistAssistantPartsWithBindings,
   ToolResultReplayError,
@@ -121,6 +123,7 @@ import {
   type ResolvedToolCapability,
   resolveReplayToolBinding,
   resolveStoredToolBinding,
+  ToolBindingReplayError,
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   ToolRunner,
@@ -470,111 +473,126 @@ describe("classifyStep", () => {
   })
 
   test("a failed stream records whether observable output arrived first", () => {
-    expect(classifyStep(collected([], { streamFailed: true }))).toEqual({
-      _tag: "Failed",
-      partialOutput: false,
-      contextOverflow: false,
-    })
-    expect(classifyStep(collected([textDeltaPart("some")], { streamFailed: true }))).toEqual({
-      _tag: "Failed",
-      partialOutput: true,
-      contextOverflow: false,
-    })
-    expect(classifyStep(collected([], { streamFailed: true, contextOverflow: true }))).toEqual({
-      _tag: "Failed",
-      partialOutput: false,
-      contextOverflow: true,
-    })
+    expect(classifyStep(collected([], { streamFailed: true }))).toEqual(
+      StepOutcome.cases.Failed.make({
+        partialOutput: false,
+        contextOverflow: false,
+      }),
+    )
+    expect(classifyStep(collected([textDeltaPart("some")], { streamFailed: true }))).toEqual(
+      StepOutcome.cases.Failed.make({
+        partialOutput: true,
+        contextOverflow: false,
+      }),
+    )
+    expect(classifyStep(collected([], { streamFailed: true, contextOverflow: true }))).toEqual(
+      StepOutcome.cases.Failed.make({
+        partialOutput: false,
+        contextOverflow: true,
+      }),
+    )
   })
 
   test("tool calls are counted", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("thinking"), toolCallPart("a", {}), toolCallPart("b", {})]),
     )
-    expect(outcome).toEqual({ _tag: "ToolCalls", count: 2, contextOverflow: false })
+    expect(outcome).toEqual(StepOutcome.cases.ToolCalls.make({ count: 2, contextOverflow: false }))
   })
 
   test("a plain reply is Answered with neither flag", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("done"), finishPart({ finishReason: "stop" })]),
     )
-    expect(outcome).toEqual({
-      _tag: "Answered",
-      empty: false,
-      truncated: false,
-      contextOverflow: false,
-      blocked: false,
-    })
+    expect(outcome).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: false,
+        contextOverflow: false,
+        blocked: false,
+      }),
+    )
   })
 
   test("no observable output is an empty answer", () => {
     const outcome = classifyStep(collected([finishPart({ finishReason: "stop" })]))
-    expect(outcome).toEqual({
-      _tag: "Answered",
-      empty: true,
-      truncated: false,
-      contextOverflow: false,
-      blocked: false,
-    })
+    expect(outcome).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: true,
+        truncated: false,
+        contextOverflow: false,
+        blocked: false,
+      }),
+    )
   })
 
   test("a length finish marks the answer truncated", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("cut off"), finishPart({ finishReason: "length" })]),
     )
-    expect(outcome).toEqual({
-      _tag: "Answered",
-      empty: false,
-      truncated: true,
-      contextOverflow: false,
-      blocked: false,
-    })
+    expect(outcome).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: true,
+        contextOverflow: false,
+        blocked: false,
+      }),
+    )
   })
 
   test("an unknown finish alone is a finished answer", () => {
     const outcome = classifyStep(
       collected([textDeltaPart("done"), finishPart({ finishReason: "unknown" })]),
     )
-    expect(outcome).toEqual({
-      _tag: "Answered",
-      empty: false,
-      truncated: false,
-      contextOverflow: false,
-      blocked: false,
-    })
+    expect(outcome).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: false,
+        contextOverflow: false,
+        blocked: false,
+      }),
+    )
   })
 
   test("a full window marks the answer truncated and hands off when the turn may", () => {
     const parts = [textDeltaPart("cut off"), finishPart({ finishReason: "unknown" })]
-    expect(classifyStep(collected(parts, { windowFull: true, contextOverflow: true }))).toEqual({
-      _tag: "Answered",
-      empty: false,
-      truncated: true,
-      contextOverflow: true,
-      blocked: false,
-    })
+    expect(classifyStep(collected(parts, { windowFull: true, contextOverflow: true }))).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: true,
+        contextOverflow: true,
+        blocked: false,
+      }),
+    )
     // A window already handed off this turn is only continued.
-    expect(classifyStep(collected(parts, { windowFull: true }))).toEqual({
-      _tag: "Answered",
-      empty: false,
-      truncated: true,
-      contextOverflow: false,
-      blocked: false,
-    })
+    expect(classifyStep(collected(parts, { windowFull: true }))).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: true,
+        contextOverflow: false,
+        blocked: false,
+      }),
+    )
   })
 
   test("a content-filter finish marks the answer blocked, with or without text", () => {
     const blockedFinish = finishPart({ finishReason: "content-filter" })
-    expect(classifyStep(collected([blockedFinish]))).toMatchObject({
-      _tag: "Answered",
-      empty: true,
-      blocked: true,
-    })
-    expect(classifyStep(collected([textDeltaPart("partial"), blockedFinish]))).toMatchObject({
-      _tag: "Answered",
-      empty: false,
-      blocked: true,
-    })
+    expect(classifyStep(collected([blockedFinish]))).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: true,
+        truncated: false,
+        contextOverflow: false,
+        blocked: true,
+      }),
+    )
+    expect(classifyStep(collected([textDeltaPart("partial"), blockedFinish]))).toEqual(
+      StepOutcome.cases.Answered.make({
+        empty: false,
+        truncated: false,
+        contextOverflow: false,
+        blocked: true,
+      }),
+    )
   })
 })
 
@@ -944,13 +962,14 @@ describe("continuation", () => {
         const turn = makeContMessage("steer at step boundary")
         const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
-        yield* steerAgentLoop({
-          _tag: "Interject",
-          sessionId: contSessionId,
-          branchId: contBranchId,
-          requestId: "req-interject-step-boundary",
-          message: "steer now",
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Interject.make({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId: "req-interject-step-boundary",
+            message: "steer now",
+          }),
+        )
         yield* controls.emitAll(0)
         yield* Fiber.join(fiber)
         // One turn, two model calls: the steering did not interrupt the stream.
@@ -985,14 +1004,15 @@ describe("continuation", () => {
         const turn = makeContMessage("a sender steers this turn")
         const fiber = yield* Effect.forkChild(runAgentLoop(turn))
         yield* controls.waitForCall(0)
-        yield* steerAgentLoop({
-          _tag: "Interject",
-          sessionId: contSessionId,
-          branchId: contBranchId,
-          requestId: "req-interject-keeps-custom-type",
-          message: "from another session",
-          metadata: { customType: "session-message", details: { from: "sender" } },
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Interject.make({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId: "req-interject-keeps-custom-type",
+            message: "from another session",
+            metadata: { customType: "session-message", details: { from: "sender" } },
+          }),
+        )
         yield* controls.emitAll(0)
         yield* Fiber.join(fiber)
         const messages = yield* messageStorage.listMessages(contBranchId)
@@ -1039,14 +1059,15 @@ describe("continuation", () => {
           runAgentLoop(makeContMessage("a turn the sender does not own")),
         )
         yield* controls.waitForCall(0)
-        yield* steerAgentLoop({
-          _tag: "Interject",
-          sessionId: contSessionId,
-          branchId: contBranchId,
-          requestId,
-          message: "TAKEN-BACK",
-          wake: true,
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Interject.make({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId,
+            message: "TAKEN-BACK",
+            wake: true,
+          }),
+        )
         const stop = {
           sessionId: contSessionId,
           branchId: contBranchId,
@@ -1114,14 +1135,13 @@ describe("continuation", () => {
           }),
         ).toBe(false)
         yield* steerAgentLoop(
-          {
-            _tag: "Interject",
+          SteerCommand.cases.Interject.make({
             sessionId: contSessionId,
             branchId: contBranchId,
             requestId,
             message: "LATE-CORRECTION",
             wake: true,
-          },
+          }),
           parent,
         )
         yield* controls.emitAll(0)
@@ -1189,14 +1209,13 @@ describe("continuation", () => {
         yield* controls.waitForCall(0)
         const steer = (requestId: string, text: string, sender: typeof parent) =>
           steerAgentLoop(
-            {
-              _tag: "Interject",
+            SteerCommand.cases.Interject.make({
               sessionId: contSessionId,
               branchId: contBranchId,
               requestId,
               message: text,
               wake: true,
-            },
+            }),
             sender,
           )
         yield* steer("req-parent-correction", "PARENT-CORRECTION", parent)
@@ -1253,14 +1272,15 @@ describe("continuation", () => {
         const messageStorage = yield* MessageStorage
         // No turn is running: nothing for the steering to join. The queue would
         // hold it forever if the actor did not start a turn on an idle branch.
-        yield* steerAgentLoop({
-          _tag: "Interject",
-          sessionId: idleSessionId,
-          branchId: idleBranchId,
-          requestId: "req-interject-idle-start",
-          message: "answer me",
-          wake: true,
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Interject.make({
+            sessionId: idleSessionId,
+            branchId: idleBranchId,
+            requestId: "req-interject-idle-start",
+            message: "answer me",
+            wake: true,
+          }),
+        )
         yield* waitForPhase(agentLoop, { sessionId: idleSessionId, branchId: idleBranchId }, "Idle")
         expect(yield* controls.callCount).toBe(1)
         const events = yield* Ref.get(eventsRef)
@@ -1281,12 +1301,13 @@ describe("continuation", () => {
       yield* Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(runAgentLoop(makeContMessage("interrupt test")))
         yield* controls.waitForCall(1)
-        yield* steerAgentLoop({
-          _tag: "Cancel",
-          sessionId: contSessionId,
-          branchId: contBranchId,
-          requestId: "req-continuation-interrupt-first",
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Cancel.make({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId: "req-continuation-interrupt-first",
+          }),
+        )
         yield* controls.emitAll(1)
         yield* Fiber.join(fiber)
         expect(yield* controls.callCount).toBe(2)
@@ -1349,12 +1370,13 @@ describe("continuation", () => {
         // `actor.call(Interrupt)` which is serialized request-reply — by the
         // time it returns, the actor has already set `interruptedRef = true`
         // and signalled the active stream. No additional wait needed.
-        yield* steerAgentLoop({
-          _tag: "Cancel",
-          sessionId: contSessionId,
-          branchId: contBranchId,
-          requestId: "req-continuation-interrupt-second",
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Cancel.make({
+            sessionId: contSessionId,
+            branchId: contBranchId,
+            requestId: "req-continuation-interrupt-second",
+          }),
+        )
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)
         // Wait for the follow-up to complete: the second TurnCompleted, which
@@ -1904,13 +1926,14 @@ describe("max turn steps", () => {
           }),
         )
         yield* controls.waitForCall(0)
-        yield* steerAgentLoop({
-          _tag: "Interject",
-          sessionId,
-          branchId,
-          requestId: "req-interject-last-step",
-          message: "steer late",
-        })
+        yield* steerAgentLoop(
+          SteerCommand.cases.Interject.make({
+            sessionId,
+            branchId,
+            requestId: "req-interject-last-step",
+            message: "steer late",
+          }),
+        )
         yield* controls.emitAll(0)
         yield* Fiber.join(fiber)
         yield* controls.waitForCall(1)
@@ -5656,6 +5679,7 @@ const routeJudgeDriver: ModelDriverContribution = {
                   const last = labels.length - 1
                   return [
                     name,
+                    // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderClassifyAnswer has no constructor
                     {
                       _tag: "Classify" as const,
                       label: labels[last] ?? "",
@@ -7436,8 +7460,8 @@ describe("tool binding replay", () => {
         }).pipe(Effect.exit)
         expect(Exit.isFailure(refused)).toBe(true)
         if (Exit.isFailure(refused)) {
+          expect(Cause.squash(refused.cause)).toBeInstanceOf(ToolBindingReplayError)
           expect(Cause.squash(refused.cause)).toMatchObject({
-            _tag: "ToolBindingReplayError",
             reason: "MissingSourceIdentity",
           })
         }
@@ -7612,8 +7636,8 @@ describe("tool binding replay", () => {
             expect(result.value.capability).toBe(capability)
             return
           }
+          expect(Cause.squash(result.cause)).toBeInstanceOf(ToolBindingReplayError)
           expect(Cause.squash(result.cause)).toMatchObject({
-            _tag: "ToolBindingReplayError",
             reason: scenario.reason,
           })
           expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
@@ -7659,10 +7683,11 @@ describe("tool binding replay", () => {
         expect(current.value.binding).toBeUndefined()
         const identity = yield* innerOperationBindingIdentity(current.value, generationId)
         if (Option.isNone(identity)) return yield* Effect.die("Expected process-local identity")
-        expect(identity.value.source).toEqual({
-          _tag: "ProcessLocal",
-          sourceRevision: ToolSourceRevision.make(`process:${generationId}`),
-        })
+        expect(identity.value.source).toEqual(
+          ToolBindingSource.cases.ProcessLocal.make({
+            sourceRevision: ToolSourceRevision.make(`process:${generationId}`),
+          }),
+        )
 
         const live = yield* resolveStoredToolBinding({
           ...address,
@@ -7681,7 +7706,8 @@ describe("tool binding replay", () => {
           }),
           generationId,
         }).pipe(Effect.flip)
-        expect(retired).toMatchObject({ _tag: "ToolBindingReplayError", reason: "SourceMismatch" })
+        expect(retired._tag).toBe("ToolBindingReplayError")
+        expect(retired).toMatchObject({ reason: "SourceMismatch" })
       }).pipe(
         Effect.provideServiceEffect(ExtensionRegistry, hostProfileRegistry),
         Effect.provide(layer),

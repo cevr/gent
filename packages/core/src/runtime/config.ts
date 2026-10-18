@@ -623,6 +623,7 @@ export const configSnapshotFileSystem = (
             Effect.succeed(read(text)),
           Missing: () =>
             Effect.fail(
+              // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
               PlatformError.systemError({
                 _tag: "NotFound",
                 module: "FileSystem",
@@ -633,6 +634,7 @@ export const configSnapshotFileSystem = (
             ),
           Unreadable: ({ message }) =>
             Effect.fail(
+              // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
               PlatformError.systemError({
                 _tag: "Unknown",
                 module: "FileSystem",

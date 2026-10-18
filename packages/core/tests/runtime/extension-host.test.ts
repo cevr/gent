@@ -140,6 +140,7 @@ import {
   type MessageMetadata,
   messagePartsDisplayText,
   QueueSnapshot,
+  SteerCommand,
 } from "../../src/domain/message"
 import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
 import { omitUndefined } from "../../src/domain/guards"
@@ -197,6 +198,7 @@ import { attachToolBindingIdentity, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
+import { ExtensionStatusScope } from "../../src/server/rpc"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
@@ -1385,9 +1387,11 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           const cache = yield* SessionProfileCache
           yield* writeFileAtomic(entry, serverFeedSource("one", { marks, reader: "broken" }))
           const profile = yield* Effect.scoped(cache.resolve(launch))
-          expect(
-            profile.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
-          ).toMatchObject({ _tag: "Failed", phase: "startup" })
+          const entryStatus = profile.resolved.extensionStatuses.find(
+            (info) => info.sourcePath === entry,
+          )
+          expect(entryStatus?._tag).toBe("Failed")
+          expect(entryStatus).toMatchObject({ phase: "startup" })
           expect(Option.isNone(Context.getOption(profile.layerContext, ServerFeed))).toBe(true)
           expect(yield* fs.readDirectory(marks)).toEqual([])
           expect(Context.get(profile.layerContext, ServerResourceProbe).build).toBe(1)
@@ -1446,9 +1450,11 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
 
           yield* writeFileAtomic(entry, serverFeedSource("three", { marks, reader: "broken" }))
           const kept = yield* resolve
-          expect(
-            kept.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
-          ).toMatchObject({ _tag: "Active", reloadFailed: { phase: "startup" } })
+          const keptStatus = kept.resolved.extensionStatuses.find(
+            (info) => info.sourcePath === entry,
+          )
+          expect(keptStatus?._tag).toBe("Active")
+          expect(keptStatus).toMatchObject({ reloadFailed: { phase: "startup" } })
           expect(visible(kept)).toEqual(Option.some("two"))
           expect(seen(kept)).toEqual(Option.some({ version: "two", closed: false }))
           expect(yield* open).toEqual(["two"])
@@ -1533,9 +1539,11 @@ export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };
           expect(reentry.resolved).toBe(true)
           expect(Exit.isSuccess(ended)).toBe(true)
           const kept = yield* ended
-          expect(
-            kept.resolved.extensionStatuses.find((info) => info.sourcePath === entry),
-          ).toMatchObject({ _tag: "Active", reloadFailed: { phase: "startup" } })
+          const keptStatus = kept.resolved.extensionStatuses.find(
+            (info) => info.sourcePath === entry,
+          )
+          expect(keptStatus?._tag).toBe("Active")
+          expect(keptStatus).toMatchObject({ reloadFailed: { phase: "startup" } })
           expect(Context.get(kept.layerContext, ServerFeed).version).toBe("two")
         }).pipe(
           Effect.timeout("20 seconds"),
@@ -2312,8 +2320,8 @@ export default defineExtension({
             const kept = yield* resolve
             expect(marker(kept)).toEqual(Option.some("first"))
             expect(kept.resolved.failedExtensions).toEqual([])
+            expect(status(kept)?._tag).toBe("Active")
             expect(status(kept)).toMatchObject({
-              _tag: "Active",
               version: firstStatus.version,
               reloadFailed: { phase, error: expect.stringContaining("") },
             })
@@ -2330,7 +2338,9 @@ export default defineExtension({
           yield* fs.remove(entry)
           expect(marker(yield* resolve)).toEqual(Option.none())
           yield* write("load", "")
-          expect(status(yield* resolve)).toMatchObject({ _tag: "Failed", phase: "load" })
+          const loadFailed = status(yield* resolve)
+          expect(loadFailed?._tag).toBe("Failed")
+          expect(loadFailed).toMatchObject({ phase: "load" })
 
           // A disable removes it the same way.
           yield* write("good", "again")
@@ -2339,10 +2349,12 @@ export default defineExtension({
             userConfig,
             encodeJson({ disabledExtensions: ["profile-last-good"] }),
           )
-          expect(status(yield* resolve)).toMatchObject({ _tag: "Disabled" })
+          expect(status(yield* resolve)?._tag).toBe("Disabled")
           yield* writeFileAtomic(userConfig, encodeJson({ disabledExtensions: [] }))
           yield* write("setup", "")
-          expect(status(yield* resolve)).toMatchObject({ _tag: "Failed", phase: "setup" })
+          const setupFailed = status(yield* resolve)
+          expect(setupFailed?._tag).toBe("Failed")
+          expect(setupFailed).toMatchObject({ phase: "setup" })
         }).pipe(
           Effect.timeout("20 seconds"),
           Effect.provide(
@@ -2436,10 +2448,8 @@ export default defineExtension({
           const again = yield* resolve
           expect(value(again)).toBe("third")
           const status = again.resolved.extensionStatuses.find((info) => info.id === "chain-a")
-          expect(status).toMatchObject({
-            _tag: "Active",
-            reloadFailed: { phase: "startup" },
-          })
+          expect(status?._tag).toBe("Active")
+          expect(status).toMatchObject({ reloadFailed: { phase: "startup" } })
           yield* Scope.close(runningTurn, Exit.void)
         }).pipe(
           Effect.timeout("20 seconds"),
@@ -2472,13 +2482,14 @@ export default defineExtension({
           for (const phase of ["setup", "startup"] as const) {
             yield* chain.remove("c")
             yield* chain.write("a", chainSource.a(`good before ${phase}`, "chain.common"))
-            expect(statusOf(yield* resolve, "chain-a")).toMatchObject({ _tag: "Active" })
+            expect(statusOf(yield* resolve, "chain-a")?._tag).toBe("Active")
 
             yield* chain.write("a", chainSource.a(phase, "chain.fresh"))
             yield* chain.write("c", chainSource.c("chain.common"))
             const profile = yield* resolve
-            expect(statusOf(profile, "chain-a")).toMatchObject({ _tag: "Failed", phase })
-            expect(statusOf(profile, "chain-c")).toMatchObject({ _tag: "Active" })
+            expect(statusOf(profile, "chain-a")?._tag).toBe("Failed")
+            expect(statusOf(profile, "chain-a")).toMatchObject({ phase })
+            expect(statusOf(profile, "chain-c")?._tag).toBe("Active")
             expect(Option.isNone(Context.getOption(profile.layerContext, ChainService))).toBe(true)
           }
         }).pipe(
@@ -2510,25 +2521,24 @@ export default defineExtension({
           const statusOf = (profile: SessionProfile) =>
             profile.resolved.extensionStatuses.find((info) => info.id === "chain-a")
           yield* chain.write("a", chainSource.a("first", "chain.common"))
-          expect(statusOf(yield* resolve)).toMatchObject({ _tag: "Active" })
+          expect(statusOf(yield* resolve)?._tag).toBe("Active")
 
           // The last good version collides with c, so a fails; a turn holds it.
           const runningTurn = yield* Scope.make()
           yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
           yield* chain.write("c", chainSource.c("chain.common"))
           const failed = yield* cache.resolve(chain.launch).pipe(Scope.provide(runningTurn))
-          expect(statusOf(failed)).toMatchObject({ _tag: "Failed", phase: "startup" })
+          expect(statusOf(failed)?._tag).toBe("Failed")
+          expect(statusOf(failed)).toMatchObject({ phase: "startup" })
 
           yield* chain.write("a", chainSource.a("third", "chain.fresh"))
-          expect(statusOf(yield* resolve)).toMatchObject({ _tag: "Active" })
+          expect(statusOf(yield* resolve)?._tag).toBe("Active")
 
           // The same broken bytes again: the third version runs in their place.
           yield* chain.write("a", chainSource.a("startup", "chain.fresh"))
           const again = yield* resolve
-          expect(statusOf(again)).toMatchObject({
-            _tag: "Active",
-            reloadFailed: { phase: "startup" },
-          })
+          expect(statusOf(again)?._tag).toBe("Active")
+          expect(statusOf(again)).toMatchObject({ reloadFailed: { phase: "startup" } })
           expect(Context.get(again.layerContext, ChainService).value).toBe("third")
           yield* Scope.close(runningTurn, Exit.void)
         }).pipe(
@@ -2706,8 +2716,10 @@ export default defineExtension({
           // The cached profile outlives a fix to the file, so it holds no config
           // failure; the live health read reports the file.
           expect(profile.resolved.failedExtensions).toEqual([])
-          expect(yield* configHealthStatuses(project)).toMatchObject([
-            { sourcePath: projectConfig, scope: "project", phase: "load", _tag: "Failed" },
+          const configStatuses = yield* configHealthStatuses(project)
+          expect(configStatuses.map((status) => status._tag)).toEqual(["Failed"])
+          expect(configStatuses).toMatchObject([
+            { sourcePath: projectConfig, scope: "project", phase: "load" },
           ])
         }).pipe(
           Effect.provide(
@@ -4392,7 +4404,7 @@ describe("extension activation isolation", () => {
         phase: "setup",
       })
       expect(profile.resolved.failedExtensions[0]?.error).toContain("setup boom")
-      expect(profile.resolved.extensionStatuses[0]).toMatchObject({ _tag: "Active" })
+      expect(profile.resolved.extensionStatuses[0]?._tag).toBe("Active")
     }).pipe(Effect.provide(Layer.mergeAll(fsLayer, ConfigService.Test(), profileStorageLayer))),
   )
 
@@ -7307,12 +7319,11 @@ describe("a queue sent on a condition", () => {
       )
       // Without `wake`, a steer on an idle branch waits for the next turn.
       yield* harness.client.steer.command({
-        command: {
-          _tag: "Interject",
+        command: SteerCommand.cases.Interject.make({
           ...ids,
           requestId: RequestId.make("parked"),
           message: "look at the loader first",
-        },
+        }),
       })
       yield* queueIfLatest(harness, {
         ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
@@ -7391,6 +7402,7 @@ describe("models facet via RPC", () => {
                     if (decision._tag === "Classify") labels = Object.keys(decision.criteria)
                     return [
                       name,
+                      // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderClassifyAnswer has no constructor
                       {
                         _tag: "Classify" as const,
                         label: labels[0] ?? "",
@@ -8111,17 +8123,17 @@ describe("extensions facet via RPC", () => {
             Schema.fromJsonString(ExtensionStatuses),
           )(succeeded.output)
           const byId = new Map(statuses.map((status) => [status.id, status]))
-          expect(byId.get("@test/broken")).toMatchObject({ _tag: "Failed", phase: "setup" })
-          expect(byId.get("half")).toMatchObject({ _tag: "Failed", phase: "load" })
-          expect(byId.get("@test/switched-off")).toMatchObject({
-            _tag: "Disabled",
-            scope: "builtin",
-          })
-          expect(byId.get("@test/extensions-status")).toMatchObject({ _tag: "Active" })
+          expect(byId.get("@test/broken")?._tag).toBe("Failed")
+          expect(byId.get("@test/broken")).toMatchObject({ phase: "setup" })
+          expect(byId.get("half")?._tag).toBe("Failed")
+          expect(byId.get("half")).toMatchObject({ phase: "load" })
+          expect(byId.get("@test/switched-off")?._tag).toBe("Disabled")
+          expect(byId.get("@test/switched-off")).toMatchObject({ scope: "builtin" })
+          expect(byId.get("@test/extensions-status")?._tag).toBe("Active")
 
           // Health lists the disabled extension apart from the others.
           const health = yield* client.extension.listStatus({
-            scope: { _tag: "Session", id: sessionId },
+            scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }),
           })
           expect(health.disabledExtensions?.map((entry) => entry.manifest.id)).toEqual([
             "@test/switched-off",

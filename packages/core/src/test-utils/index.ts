@@ -74,6 +74,7 @@ export {
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
 export { BunGentPlatformLive, BunProviderLockLive } from "../runtime/gent-platform-bun.js"
+export { GentBuild } from "../runtime/gent-platform.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
