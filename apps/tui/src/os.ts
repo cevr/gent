@@ -214,21 +214,21 @@ interface TerminalHolder {
  * not interrupt. Interrupting the caller interrupts its handover too.
  */
 export const makeHandover = (terminal: {
-  readonly suspend: () => void
-  readonly resume: () => void
+  readonly suspend: Effect.Effect<void>
+  readonly resume: Effect.Effect<void>
 }): TerminalHolder => {
   const holder = Semaphore.makeUnsafe(1)
   const owner = Scope.makeUnsafe()
   const handover: Handover = (effect) =>
     Effect.acquireUseRelease(
-      Effect.sync(terminal.suspend),
+      terminal.suspend,
       () =>
         passTerminalSignals(
           Effect.updateService(effect, ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
             ChildProcessSpawner.make((command) => spawner.spawn(inForeground(command))),
           ),
         ),
-      () => Effect.sync(terminal.resume),
+      () => terminal.resume,
     ).pipe(
       holder.withPermits(1),
       Effect.forkIn(owner),

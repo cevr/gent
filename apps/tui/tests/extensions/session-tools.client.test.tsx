@@ -37,7 +37,7 @@ import { useTheme } from "../../src/theme"
 
 // eslint-disable-next-line effect/noNullish -- a wire field the server leaves unset is present and undefined.
 const absent = undefined
-const syntaxStyle = () => SyntaxStyle.create()
+const syntaxStyle = () => SyntaxStyle.create(useRenderer().nativeScene)
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 const starterSession: Session = {
   sessionId: SessionId.make("session-starter"),

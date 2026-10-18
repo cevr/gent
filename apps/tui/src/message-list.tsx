@@ -121,7 +121,7 @@ import {
   RuntimeUserMessageType,
 } from "@gent/core/protocol"
 import { DiagramLibraryContext, diagramsDrawable, useDiagramCodeBlocks } from "./mermaid"
-import { insert, RendererContext, useRenderer } from "@opentui/solid"
+import { insert, RenderableContext, RendererContext, useRenderer } from "@opentui/solid"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
 
@@ -2161,14 +2161,32 @@ export const leaveTerminal = (
   flushTranscriptForExit(renderer).pipe(
     Effect.ensuring(
       Effect.sync(() => {
-        if (renderer.isDestroyed) return
+        if (renderer.isDestroyed) return Option.none()
         const regionRows = Option.liftPredicate(
           renderer.height,
           () => renderer.screenMode === "split-footer",
         )
         renderer.destroy()
-        Option.map(regionRows, (rows) => writeTerminal(cursorUp(rows)))
-      }),
+        return Option.some(regionRows)
+      }).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            // The destroy restores the terminal after it returns: the cursor
+            // moves once the renderer's last bytes are out (`closed`, which
+            // fails after a second when the terminal does not read them).
+            onSome: (regionRows) =>
+              Effect.tryPromise(() => renderer.closed).pipe(
+                Effect.ignore,
+                Effect.andThen(
+                  Effect.sync(() =>
+                    Option.map(regionRows, (rows) => writeTerminal(cursorUp(rows))),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      ),
     ),
   )
 
@@ -2269,7 +2287,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * the Yoga layout: a step whose call its run's head took draws none.
    */
   const measureItem = (item: SessionItem, box: BoxRenderable) => {
-    const rows = Math.max(0, Math.round(box.getLayoutNode().getComputedHeight()))
+    const rows = Math.max(0, Math.round(box.getLayout().height))
     if (itemHeights.get(item) === rows) return
     itemHeights.set(item, rows)
     setMeasurementVersion((version) => version + 1)
@@ -2491,16 +2509,21 @@ export function NativeTranscript(props: NativeTranscriptProps) {
         const dispose = Option.fromNullishOr(
           runWithOwner(owner, () =>
             createRoot((dispose) => {
+              // Solid makes each node in the scene `RenderableContext` names,
+              // which the transcript's own root sets to the screen's: the
+              // surface's nodes belong to its scene.
               insert(surface.root, () => (
-                <RendererContext.Provider value={surfaceRenderer}>
-                  <PlainHistoryContext.Provider value={plain}>
-                    <ToolRunsContext.Provider value={Option.some(toolRuns)}>
-                      <box flexDirection="column" paddingRight={FREE_LAST_COLUMN}>
-                        {props.renderItems(items)}
-                      </box>
-                    </ToolRunsContext.Provider>
-                  </PlainHistoryContext.Provider>
-                </RendererContext.Provider>
+                <RenderableContext.Provider value={() => surfaceRenderer}>
+                  <RendererContext.Provider value={surfaceRenderer}>
+                    <PlainHistoryContext.Provider value={plain}>
+                      <ToolRunsContext.Provider value={Option.some(toolRuns)}>
+                        <box flexDirection="column" paddingRight={FREE_LAST_COLUMN}>
+                          {props.renderItems(items)}
+                        </box>
+                      </ToolRunsContext.Provider>
+                    </PlainHistoryContext.Provider>
+                  </RendererContext.Provider>
+                </RenderableContext.Provider>
               ))
               return dispose
             }),
@@ -2787,7 +2810,9 @@ export function NativeTranscript(props: NativeTranscriptProps) {
    * commit starts under the last history row, which ends mid-row.
    */
   const enterRegion = () => {
-    renderer.screenMode = "split-footer"
+    // Only a change: OpenTUI applies a mode set mid-frame after the frame,
+    // with the footer height the region had, over one `sizeRegion` set since.
+    if (renderer.screenMode !== "split-footer") renderer.screenMode = "split-footer"
     renderer.externalOutputMode = "capture-stdout"
     renderer.useMouse = false
   }
@@ -3381,7 +3406,7 @@ export function NativeTranscript(props: NativeTranscriptProps) {
       // A basis, not the content's height: hidden rows must not end the measure.
       flexBasis={stickyRows() + viewportHeight()}
       renderBefore={function () {
-        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        const rows = Math.max(0, Math.round(this.getLayout().height))
         if (!Option.contains(rowsShown(), rows)) setRowsShown(Option.some(rows))
         if (!tailCheckPending && tailHeightStale()) {
           tailCheckPending = true

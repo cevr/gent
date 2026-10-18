@@ -625,9 +625,17 @@ const countShutdowns = (setup: TestSetup) =>
     setup.renderer.destroy = () => {
       shutdowns += 1
     }
+    // A destroyed renderer settles `closed` once its terminal is restored;
+    // the counted one is never destroyed, so its terminal is restored at once.
+    Object.defineProperty(setup.renderer, "closed", {
+      // oxlint-disable-next-line effect/noNewPromise -- The stub stands in for OpenTUI's Promise-typed `closed`.
+      value: Promise.resolve(),
+      configurable: true,
+    })
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         setup.renderer.destroy = destroy
+        Reflect.deleteProperty(setup.renderer, "closed")
       }),
     )
     return { shutdowns: () => shutdowns, destroy }
@@ -6125,7 +6133,11 @@ describe("App clipboard", () => {
       setup.mockInput.pressKey("y", { ctrl: true })
       yield* waitUntil(() => runs.length > 0, "the tmux run")
       expect(runs).toEqual([{ args: ["load-buffer", "-w", "-"], stdin: deviceUrl }])
-      expect(output.written()).toContain(Base64.encode(deviceUrl))
+      // OpenTUI queues the OSC 52 write behind the frames it has not yet sent.
+      yield* waitUntil(
+        () => output.written().includes(Base64.encode(deviceUrl)),
+        "the wrapped OSC 52 copy",
+      )
     }).pipe(Effect.timeout("8 seconds")),
   )
 

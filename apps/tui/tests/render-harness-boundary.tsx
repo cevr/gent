@@ -14,12 +14,13 @@ import {
   Scope,
   Stream,
 } from "effect"
-import type {
-  CapturedLine,
-  CliRenderer,
-  CliRendererExternalOutputEvent,
-  RGBA,
-  TerminalColors,
+import {
+  type CapturedLine,
+  type CliRenderer,
+  type CliRendererExternalOutputEvent,
+  RendererControlState,
+  type RGBA,
+  type TerminalColors,
 } from "@opentui/core"
 import { render } from "@opentui/solid"
 import { createTestRenderer, type TestRendererOptions } from "@opentui/core/testing"
@@ -565,8 +566,8 @@ export const renderWithProviders = (
       yield* Effect.promise(() => setup.renderer.setupTerminal())
       // The terminal's holder, as the root makes it with its renderer.
       const terminal = makeHandover({
-        suspend: () => setup.renderer.suspend(),
-        resume: () => setup.renderer.resume(),
+        suspend: Effect.promise(() => setup.renderer.suspend()),
+        resume: Effect.promise(() => setup.renderer.resume()),
       })
       const history: Array<string> = []
       setup.renderer.on("external_output", (event: CliRendererExternalOutputEvent) => {
@@ -637,8 +638,17 @@ export const renderWithProviders = (
     }),
   )
 
-export const renderFrame = (setup: TestRenderSetup) =>
-  setup.captureCharFrame().replaceAll("\u00a0", " ")
+/** The last frame each renderer drew: a suspended renderer has no frame to read. */
+const lastFrames = new WeakMap<CliRenderer, string>()
+
+export const renderFrame = (setup: TestRenderSetup) => {
+  if (setup.renderer.controlState === RendererControlState.EXPLICIT_SUSPENDED) {
+    return lastFrames.get(setup.renderer) ?? ""
+  }
+  const frame = setup.captureCharFrame().replaceAll("\u00a0", " ")
+  lastFrames.set(setup.renderer, frame)
+  return frame
+}
 
 /** The rows each render committed to native history, in commit order. */
 const histories = new WeakMap<CliRenderer, Array<string>>()

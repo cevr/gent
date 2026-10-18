@@ -1,12 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Clock, Effect, Option } from "effect"
+import { Clock, Effect, Fiber, Match, Option } from "effect"
 import { createSignal, type JSX, Show } from "solid-js"
 import {
   type CliRenderer,
-  NativeSpanFeed,
   OptimizedBuffer,
-  resolveRenderLib,
+  ResourceContext,
   RGBA,
   TextAttributes,
   TextRenderable,
@@ -45,7 +44,7 @@ import {
   renderScoped,
   TerminalOutput,
 } from "./render-harness-boundary"
-import { waitForFrame } from "./helpers-boundary"
+import { waitForFrame, waitUntil, waitUntilAdvancing } from "./helpers-boundary"
 import {
   BranchId,
   dateFromMillis,
@@ -1333,26 +1332,63 @@ describe("box borders under a scissor", () => {
   const groundColor = RGBA.fromInts(90, 90, 90, 255)
   const box = { x: 2, y: 1, width: 20, height: 6, border: true, borderColor } as const
 
-  /** A buffer with a dot in every cell, so a cell a draw changed shows. */
-  const groundBuffer = Effect.acquireRelease(
-    Effect.sync(() => {
-      const buffer = OptimizedBuffer.create(WIDTH, HEIGHT, "unicode")
-      for (let y = 0; y < HEIGHT; y++) buffer.drawText(".".repeat(WIDTH), 0, y, groundColor)
-      return buffer
-    }),
-    (buffer) => Effect.sync(() => buffer.destroy()),
+  /** A native context with no renderer: it owns the test's buffers. */
+  const resourceContext = Effect.acquireRelease(
+    Effect.sync(() => new ResourceContext({ objectCapacity: 64, renderCellsMax: WIDTH * HEIGHT })),
+    (owner) => Effect.sync(() => owner.destroy()),
   )
 
-  /** Every cell as its char, colors and attributes. */
+  /** A buffer with a dot in every cell, so a cell a draw changed shows. */
+  const groundBuffer = Effect.gen(function* () {
+    const owner = yield* resourceContext
+    return yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const buffer = OptimizedBuffer.create(WIDTH, HEIGHT, "unicode", { owner })
+        for (let y = 0; y < HEIGHT; y++) buffer.drawText(".".repeat(WIDTH), 0, y, groundColor)
+        return buffer
+      }),
+      (buffer) => Effect.sync(() => buffer.destroy()),
+    )
+  })
+
+  /** The char bits that mark a grapheme's start cell, and its continuation cells. */
+  const CHAR_TYPE = 0xc000_0000
+  const GRAPHEME_START = 0x8000_0000
+  const CONTINUATION = 0xc000_0000
+  const GRAPHEME_ID = 0x03ff_ffff
+
+  /**
+   * Every cell as its text, colors and attributes. A wide character's cells
+   * hold an id its buffer's grapheme pool gave it, which differs between two
+   * buffers that show the same text: its start cell reads as its text and its
+   * width bits, a continuation cell as its width bits.
+   */
   const cellsOf = (buffer: OptimizedBuffer): string[] => {
-    const { char, fg, bg, attributes } = buffer.buffers
-    return Array.from({ length: WIDTH * HEIGHT }, (_, at) =>
-      [
-        char[at],
-        ...fg.subarray(at * 4, at * 4 + 4),
-        ...bg.subarray(at * 4, at * 4 + 4),
-        attributes[at],
-      ].join(","),
+    const segmenter = new Intl.Segmenter()
+    // Each cell's text, a continuation cell's none, a row to a line.
+    const lines = new TextDecoder().decode(buffer.getRealCharBytes(true)).split("\n")
+    return buffer.withBuffers(({ char, fg, bg, attributes }) =>
+      Array.from({ length: HEIGHT }, (_, y) => {
+        const texts = Array.from(segmenter.segment(lines[y] ?? ""), ({ segment }) => segment)
+        let next = 0
+        return Array.from({ length: WIDTH }, (_, x) => {
+          const at = y * WIDTH + x
+          const code = char[at] ?? 0
+          const type = (code & CHAR_TYPE) >>> 0
+          const width = (code & ~GRAPHEME_ID & ~CHAR_TYPE) >>> 0
+          const text = Match.value(type).pipe(
+            Match.when(CONTINUATION, () => `continuation ${width}`),
+            Match.when(GRAPHEME_START, () => `${texts[next++] ?? "?"} ${width}`),
+            Match.orElse(() => `${texts[next++] ?? "?"}`),
+          )
+          return [
+            text,
+            ...fg.subarray(at * 4, at * 4 + 4),
+            ...bg.subarray(at * 4, at * 4 + 4),
+            attributes[at],
+          ].join(",")
+        })
+      }).flat(),
     )
   }
 
@@ -1472,17 +1508,51 @@ describe("box borders under a scissor", () => {
 /**
  * A split region that grows at the terminal's bottom sends the rows it covers
  * to scrollback with line feeds, and the native frame that moves the region
- * counts those rows (`noteViewportScroll`). The line feeds and the count
- * belong to one admitted native frame. Bytes an earlier write left in the
- * output feed make the native frame skip; when the line feeds went out before
- * that skip, a second growth before the retry counted too few rows, and the
- * history rows after it did not join the rows before it (`patches/README.md`).
- * Each case runs the same session, with and without the skip, and reads the
- * whole terminal.
+ * counts those rows (`noteViewportScroll`). OpenTUI scrolls with `CSI n S`,
+ * which xterm and xterm.js drop: the rows never reach scrollback. The line
+ * feeds go out before the native frame, and a frame the output feed has no
+ * room for is skipped after them; until a frame counts them the region keeps
+ * its size, so a second growth before the retry counts from the rows that
+ * moved (`patches/README.md`). Each case runs the same session, with and
+ * without the skip, and reads the whole terminal.
  */
 describe("split region growth", () => {
   const WIDTH = 45
   const HEIGHT = 15
+
+  /**
+   * The terminal's output stream, which can stop taking writes: a held write
+   * keeps its spans in OpenTUI's output feed until `release` lets it finish.
+   */
+  class HeldOutput extends TerminalOutput {
+    private holding = false
+    private held = Option.none<() => void>()
+    private heldWrites = 0
+
+    override _write(chunk: Uint8Array, encoding: string, callback: () => void) {
+      if (!this.holding) return super._write(chunk, encoding, callback)
+      this.heldWrites += 1
+      this.held = Option.some(() => super._write(chunk, encoding, callback))
+    }
+
+    /** Holds every write from now on. */
+    hold() {
+      this.holding = true
+    }
+
+    /** The number of writes held so far. */
+    writesHeld() {
+      return this.heldWrites
+    }
+
+    /** Lets the held write finish; `holding` false takes every later write too. */
+    release(holding: boolean) {
+      this.holding = holding
+      const held = this.held
+      this.held = Option.none()
+      Option.map(held, (finish) => finish())
+    }
+  }
 
   /** One history row, ended as gent ends a transcript row: no newline after it. */
   const commit = (renderer: CliRenderer, text: string) =>
@@ -1492,19 +1562,27 @@ describe("split region growth", () => {
       trailingNewline: false,
     }))
 
+  /** Waits until the stream holds `writes` writes. */
+  const writesHeld = (output: HeldOutput, writes: number) =>
+    waitUntil(() => output.writesHeld() >= writes, `${writes} held writes`)
+
   /**
-   * Leaves bytes in the renderer's output feed that no frame sent. The next
-   * native frame sends them first and is skipped, as when an earlier write is
-   * still pending.
+   * Fills OpenTUI's output feed to one span short of its capacity, so the
+   * next write takes the last span and the frame after it finds no room.
+   * Each clipboard write is one span; the first goes out alone and is held,
+   * the rest queue until the feed refuses one. Letting the first finish frees
+   * its span and sends the rest as one held write.
    */
-  const holdFeedBytes = (renderer: CliRenderer) =>
+  const fillOutputFeed = (renderer: CliRenderer, output: HeldOutput) =>
     Effect.gen(function* () {
-      // OpenTUI keeps the feed private; the test reads it to hold bytes in it.
-      const feed: unknown = renderer["_feed"]
-      if (!(feed instanceof NativeSpanFeed)) {
-        return yield* Effect.die("a custom stdout gives the renderer an output feed")
-      }
-      resolveRenderLib().streamWrite(feed.streamPtr, "\u001b[0m")
+      output.hold()
+      expect(renderer.copyToClipboardOSC52("x")).toBe(true)
+      yield* writesHeld(output, 1)
+      let accepted = 1
+      while (renderer.copyToClipboardOSC52("x")) accepted++
+      output.release(true)
+      yield* writesHeld(output, 2)
+      return accepted
     })
 
   /** Every row the terminal holds, scrollback first, each without its trailing spaces. */
@@ -1540,7 +1618,7 @@ describe("split region growth", () => {
    */
   const session = (skipFirstGrowthFrame: boolean) =>
     Effect.gen(function* () {
-      const output = new TerminalOutput(WIDTH, HEIGHT)
+      const output = new HeldOutput(WIDTH, HEIGHT)
       const { renderer, renderOnce } = yield* Effect.acquireRelease(
         Effect.promise(() =>
           createTestRenderer({
@@ -1554,6 +1632,10 @@ describe("split region growth", () => {
         (setup) => Effect.sync(() => setup.renderer.destroy()),
       )
       const frame = Effect.promise(() => renderOnce())
+      let presented = 0
+      renderer.on("frame", () => {
+        presented++
+      })
       yield* Effect.promise(() => renderer.setupTerminal())
       renderer.footerHeight = 4
       renderer.screenMode = "split-footer"
@@ -1563,13 +1645,24 @@ describe("split region growth", () => {
         commit(renderer, `row-${row}`)
         yield* frame
       }
-      if (skipFirstGrowthFrame) yield* holdFeedBytes(renderer)
-      const beforeGrowth = output.written().length
+      yield* Effect.promise(() => renderer.idle())
+      if (skipFirstGrowthFrame) yield* fillOutputFeed(renderer, output)
+      const beforeGrowth = presented
       renderer.footerHeight = 6
-      yield* frame
-      const growthFrameBytes = output.written().slice(beforeGrowth)
+      const growth = yield* Effect.forkChild(frame)
+      // A skipped frame ends at once; a frame the feed took waits for the held
+      // output to drain, which the release below starts.
+      const growthEnded = Option.isSome(
+        yield* Fiber.await(growth).pipe(Effect.timeoutOption("1 second")),
+      )
+      const growthFramesPresented = presented - beforeGrowth
       renderer.footerHeight = 7
-      yield* frame
+      if (growthEnded) yield* frame
+      // The feed drains, and a frame goes out: the skipped one's retry.
+      output.release(false)
+      yield* Fiber.join(growth)
+      const beforeRetry = presented
+      yield* waitUntilAdvancing(frame, () => presented !== beforeRetry, "the retried frame")
       yield* frame
       renderer.footerHeight = 4
       yield* frame
@@ -1577,7 +1670,8 @@ describe("split region growth", () => {
       yield* frame
       commit(renderer, "SECOND-HISTORY")
       yield* frame
-      return { growthFrameBytes, rows: yield* terminalRows(output.written()) }
+      yield* Effect.promise(() => renderer.idle())
+      return { growthEnded, growthFramesPresented, rows: yield* terminalRows(output.written()) }
     })
 
   // The shrink from seven rows to four freed three rows above the region; the
@@ -1592,7 +1686,8 @@ describe("split region growth", () => {
 
   it.live("a growth without a skipped frame keeps every history row once and in order", () =>
     Effect.gen(function* () {
-      const { rows } = yield* session(false)
+      const { growthEnded, growthFramesPresented, rows } = yield* session(false)
+      expect([growthEnded, growthFramesPresented]).toEqual([true, 1])
       expect(rows).toEqual(expectedRows)
     }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
@@ -1601,9 +1696,9 @@ describe("split region growth", () => {
     "a growth whose frame is skipped and that grows again before the retry keeps every history row once and in order",
     () =>
       Effect.gen(function* () {
-        const { growthFrameBytes, rows } = yield* session(true)
-        // The skipped frame sends the held bytes and scrolls nothing.
-        expect(growthFrameBytes).toBe("\u001b[0m")
+        const { growthEnded, growthFramesPresented, rows } = yield* session(true)
+        // The output feed had no room for the growth's frame.
+        expect([growthEnded, growthFramesPresented]).toEqual([true, 0])
         expect(rows).toEqual(expectedRows)
       }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )

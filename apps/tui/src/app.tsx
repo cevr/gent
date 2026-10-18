@@ -26,6 +26,7 @@ import {
 import type { DisclosureLevel } from "./extensions/client-facets"
 import { textWidth } from "./bun-adapter"
 import { createEffect, createMemo, createSignal, ErrorBoundary, For, on, Show } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import {
   buildSyntaxStyle,
   DEFAULT_THEMES,
@@ -737,7 +738,8 @@ export function Session(props: SessionProps) {
       Option.flatMap((known) => known.root),
     )
 
-  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
+  const renderer = useRenderer()
+  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme, renderer.nativeScene))
   const [footerHeight, setFooterHeight] = createSignal(4)
   const paneOpen = useDockPaneOpen()
   // The sign-in docks in the footer like every pane. It stays mounted while

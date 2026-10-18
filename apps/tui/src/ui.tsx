@@ -181,7 +181,7 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
         if (props.ref) props.ref(value)
       }}
       renderBefore={function () {
-        const laidOut = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        const laidOut = Math.max(0, Math.round(this.getLayout().height))
         if (!Option.contains(rows(), laidOut)) {
           setRows(Option.some(laidOut))
           if (props.onRows) props.onRows(laidOut)
@@ -419,7 +419,7 @@ export function DockFooter(props: {
         if (props.onSizeChange) props.onSizeChange(this.height)
       }}
       renderBefore={function () {
-        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        const rows = Math.max(0, Math.round(this.getLayout().height))
         if (Option.isSome(dock)) dock.value.reportFooterRoom(props.maxHeight - rows)
       }}
     >
@@ -771,7 +771,7 @@ export function PickerFrame(
       // OpenTUI reports a box of no rows as one, and reports no change between
       // them, so the frame reads its laid-out rows before each draw.
       renderBefore={function () {
-        const rows = Math.max(0, Math.round(this.getLayoutNode().getComputedHeight()))
+        const rows = Math.max(0, Math.round(this.getLayout().height))
         if (!Option.contains(measured(), rows)) setMeasured(Option.some(rows))
       }}
     >

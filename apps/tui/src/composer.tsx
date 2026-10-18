@@ -26,6 +26,7 @@ import {
   onMount,
   Show,
 } from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import {
   type AutocompleteState,
   type StatusRowLabel,
@@ -931,7 +932,7 @@ function useComposerController(): ComposerController {
   let inputRef = Option.none<TextareaRenderable>()
 
   // Token highlighting — colors autocomplete-resolved tokens with theme.primary
-  const tokenStyle = SyntaxStyle.create()
+  const tokenStyle = SyntaxStyle.create(useRenderer().nativeScene)
   let tokenStyleId = Option.none<number>()
   const resolvedTokens: Array<string> = []
 

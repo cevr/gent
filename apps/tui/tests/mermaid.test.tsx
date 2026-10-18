@@ -17,7 +17,7 @@ import { waitForFrame } from "./helpers-boundary"
 
 // ── mermaid diagrams ────────────────────────────────────────────────────────
 
-const syntaxStyle = () => SyntaxStyle.create()
+const syntaxStyle = () => SyntaxStyle.create(useRenderer().nativeScene)
 
 /** The frame of an answer that holds one closed ```mermaid fence. */
 const drawn = (source: string, width = 120) =>

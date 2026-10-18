@@ -49,8 +49,8 @@ describe("external editor", () => {
       Effect.gen(function* () {
         const steps: Array<string> = []
         const { handover } = makeHandover({
-          suspend: () => steps.push("suspend"),
-          resume: () => steps.push("resume"),
+          suspend: Effect.sync(() => void steps.push("suspend")),
+          resume: Effect.sync(() => void steps.push("resume")),
         })
         const run = (editor: string) => openExternalEditor("draft", handover, editor)
         const applied = yield* run("true")
@@ -79,8 +79,8 @@ describe("terminal handover", () => {
     Effect.gen(function* () {
       const steps: Array<string> = []
       const { handover } = makeHandover({
-        suspend: () => steps.push("suspend"),
-        resume: () => steps.push("resume"),
+        suspend: Effect.sync(() => void steps.push("suspend")),
+        resume: Effect.sync(() => void steps.push("resume")),
       })
       const firstHolds = yield* Deferred.make<void>()
       const releaseFirst = yield* Deferred.make<void>()
@@ -108,8 +108,8 @@ describe("terminal handover", () => {
     Effect.gen(function* () {
       const steps: Array<string> = []
       const { handover } = makeHandover({
-        suspend: () => steps.push("suspend"),
-        resume: () => steps.push("resume"),
+        suspend: Effect.sync(() => void steps.push("suspend")),
+        resume: Effect.sync(() => void steps.push("resume")),
       })
       const before = signalListeners()
       const failed = yield* handover(Effect.fail("boom")).pipe(Effect.flip)
@@ -132,8 +132,8 @@ describe("terminal handover", () => {
     Effect.gen(function* () {
       const steps: Array<string> = []
       const terminal = makeHandover({
-        suspend: () => steps.push("suspend"),
-        resume: () => steps.push("resume"),
+        suspend: Effect.sync(() => void steps.push("suspend")),
+        resume: Effect.sync(() => void steps.push("resume")),
       })
       const holding = yield* Deferred.make<void>()
       const running = yield* Effect.forkChild(
@@ -164,7 +164,10 @@ describe("terminal handover", () => {
     "a program the handover runs joins the terminal's foreground group, and gent's ctrl+c and ctrl+\\ listeners wait for the terminal back",
     () =>
       Effect.gen(function* () {
-        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({
+          suspend: Effect.void,
+          resume: Effect.void,
+        })
         // The group the program runs in, then its parent's: this process's.
         const groups = runProcess("sh", ["-c", "ps -o pgid= -p $$; ps -o pgid= -p $PPID"]).pipe(
           Effect.map((result) => result.stdout.split("\n").map((line) => line.trim())),
@@ -197,8 +200,8 @@ describe("terminal handover", () => {
       // puts it back when it resumes, as OpenTUI's exit listener does.
       const renderer = (signal: string) => heard.push(`renderer ${signal}`)
       const { handover } = makeHandover({
-        suspend: () => process.removeListener("SIGQUIT", renderer),
-        resume: () => process.on("SIGQUIT", renderer),
+        suspend: Effect.sync(() => void process.removeListener("SIGQUIT", renderer)),
+        resume: Effect.sync(() => void process.on("SIGQUIT", renderer)),
       })
       yield* Effect.acquireRelease(
         Effect.sync(() => process.on("SIGQUIT", renderer)),

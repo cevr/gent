@@ -1,4 +1,4 @@
-import type { JSX } from "@opentui/solid"
+import { type JSX, useRenderer } from "@opentui/solid"
 import { createPatch, structuredPatch } from "diff"
 import { Match, Option, Predicate, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
@@ -1387,7 +1387,8 @@ const renderDiffLine = (
 export function EditToolRenderer(props: ToolRendererProps) {
   const { pathPlace } = useClient()
   const { theme } = useTheme()
-  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme))
+  const renderer = useRenderer()
+  const syntaxStyle = createMemo(() => buildSyntaxStyle(theme, renderer.nativeScene))
 
   // The diff is drawn once per input, not once per read.
   const editData = createMemo(() => getEditUnifiedDiff(props.toolCall.input))

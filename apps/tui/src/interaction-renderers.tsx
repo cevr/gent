@@ -1,5 +1,14 @@
 /** @jsxImportSource @opentui/solid */
-import { createEffect, createSignal, createUniqueId, For, type JSX, Show } from "solid-js"
+import {
+  createEffect,
+  createSignal,
+  createUniqueId,
+  For,
+  type JSX,
+  onCleanup,
+  Show,
+} from "solid-js"
+import { useRenderer } from "@opentui/solid"
 import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core"
 import { Effect, Option, Schema } from "effect"
 import { useTheme } from "./theme"
@@ -45,8 +54,6 @@ import { openExternalEditor, resolveEditor, useHandover } from "./os"
  * terminal and draws its own hint row.
  */
 
-const markdownSyntaxStyle = SyntaxStyle.create()
-
 /** One pick of an option list. */
 interface OptionListChoice {
   readonly label: string
@@ -70,6 +77,8 @@ interface OptionListProps {
 
 export function OptionList(props: OptionListProps): JSX.Element {
   const { theme } = useTheme()
+  const markdownSyntaxStyle = SyntaxStyle.create(useRenderer().nativeScene)
+  onCleanup(() => markdownSyntaxStyle.destroy())
   const dimensions = useTerminalDimensions()
   const framed = useInPickerFrame()
 

@@ -386,8 +386,8 @@ const runGent = ({
     // The terminal's holder lives with the renderer it suspends: gent's exit
     // ends its handovers before it leaves the terminal.
     const terminal = makeHandover({
-      suspend: () => renderer.suspend(),
-      resume: () => renderer.resume(),
+      suspend: Effect.promise(() => renderer.suspend()),
+      resume: Effect.promise(() => renderer.resume()),
     })
     yield* Effect.promise(() =>
       render(

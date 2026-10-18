@@ -1073,10 +1073,10 @@ describe("git pane", () => {
         const watched: Array<number> = []
         let aliveAtResume: ReadonlyArray<number> = [-1]
         const { handover } = makeHandover({
-          suspend: () => {},
-          resume: () => {
+          suspend: Effect.void,
+          resume: Effect.sync(() => {
             aliveAtResume = watched.filter(isAlive)
-          },
+          }),
         })
         const review = yield* Effect.forkChild(
           handover(
@@ -1107,7 +1107,7 @@ describe("git pane", () => {
         // The reader reads a screen and quits: the pager closes the pipe under the patch.
         const pager = yield* fakeProgram("pager", () => ["exec head -c 4096 > /dev/null"])
         yield* git(repo, "config", "core.pager", pager.program)
-        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({ suspend: Effect.void, resume: Effect.void })
         yield* handover(
           pageWorkTree(ReviewTarget.cases.WorkTree.make({ cwd: repo, pathspecs: [] }), "HEAD"),
         )
@@ -1132,7 +1132,7 @@ describe("git pane", () => {
           `cat >> '${dir}/log'`,
         ])
         yield* git(repo, "config", "core.pager", pager.program)
-        const { handover } = makeHandover({ suspend: () => {}, resume: () => {} })
+        const { handover } = makeHandover({ suspend: Effect.void, resume: Effect.void })
         yield* handover(
           pageWorkTree(ReviewTarget.cases.WorkTree.make({ cwd: repo, pathspecs: [] }), "HEAD"),
         )

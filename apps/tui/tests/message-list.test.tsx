@@ -433,7 +433,7 @@ const absent = undefined
 
 // ── message list render ─────────────────────────────────────────────────────
 
-const syntaxStyle = () => SyntaxStyle.create()
+const syntaxStyle = () => SyntaxStyle.create(useRenderer().nativeScene)
 
 const userMessage = (
   tag: "regular-message" | "interjection-message",
@@ -912,9 +912,8 @@ describe("transcript message rows", () => {
               // The answer has no border: only the user rows are checked.
               if (text.includes("ANSWER-END")) return
               for (let row = 0; row < snapshot.height; row++) {
-                const cells = snapshot.buffers.char.subarray(
-                  row * snapshot.width,
-                  (row + 1) * snapshot.width,
+                const cells = snapshot.withBuffers(({ char }) =>
+                  char.slice(row * snapshot.width, (row + 1) * snapshot.width),
                 )
                 const first = Option.fromUndefinedOr(
                   cells.find((cell) => cell !== 0 && cell !== 32),
@@ -3671,12 +3670,15 @@ describe("native transcript markdown", () => {
 
 /** Headings draw bold once highlighted; the draft before the highlight is plain. */
 const boldHeadings = () =>
-  SyntaxStyle.fromTheme([
-    {
-      scope: ["markup.heading", "markup.heading.1", "markup.heading.2"],
-      style: { bold: true },
-    },
-  ])
+  SyntaxStyle.fromTheme(
+    [
+      {
+        scope: ["markup.heading", "markup.heading.1", "markup.heading.2"],
+        style: { bold: true },
+      },
+    ],
+    useRenderer().nativeScene,
+  )
 
 /** The attributes of each cell of `text` in a committed snapshot, or `None` when it is not there. */
 const cellsOf = (
@@ -3684,7 +3686,10 @@ const cellsOf = (
   text: string,
 ): Option.Option<ReadonlyArray<number>> => {
   const { snapshot } = event
-  const { char, attributes } = snapshot.buffers
+  const { char, attributes } = snapshot.withBuffers((cells) => ({
+    char: cells.char.slice(),
+    attributes: cells.attributes.slice(),
+  }))
   for (let row = 0; row < snapshot.height; row++) {
     const line = Array.from({ length: snapshot.width }, (_, column) =>
       String.fromCodePoint(char[row * snapshot.width + column] ?? 32),
@@ -3938,7 +3943,10 @@ describe("native transcript rows in history", () => {
               extensionsLoaded = useExtensionUI().loaded
               const capture = (event: CliRendererExternalOutputEvent) => {
                 const { snapshot } = event
-                const { char, bg } = snapshot.buffers
+                const { char, bg } = snapshot.withBuffers((cells) => ({
+                  char: cells.char.slice(),
+                  bg: cells.bg.slice(),
+                }))
                 const filled = (row: number, column: number) => {
                   const at = (row * snapshot.width + column) * 4
                   // The snapshot keeps each channel as a byte.
@@ -5520,14 +5528,12 @@ describe("native transcript exit", () => {
         const renderer = Option.getOrThrow(screen)
         renderer.once("destroy", () => steps.push("destroy"))
         const terminal = makeHandover({
-          suspend: () => {
-            steps.push("suspend")
-            renderer.suspend()
-          },
-          resume: () => {
-            steps.push("resume")
-            renderer.resume()
-          },
+          suspend: Effect.sync(() => steps.push("suspend")).pipe(
+            Effect.andThen(Effect.promise(() => renderer.suspend())),
+          ),
+          resume: Effect.sync(() => steps.push("resume")).pipe(
+            Effect.andThen(Effect.promise(() => renderer.resume())),
+          ),
         })
         const holding = yield* Deferred.make<void>()
         const program = yield* Effect.forkChild(

@@ -6,145 +6,120 @@ until it is regenerated for the new release. An Effect patch follows
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
-## `@opentui/core@0.5.17`
+## `@opentui/core@0.6.6`
 
-The split footer forgets its history state when it leaves for the alternate
-screen. `syncSplitFooterState` resets the native split scrollback (its row
-count and the column the last history row ends on), and the return to
-`capture-stdout` seeds it again from the cursor row at column 0. The
-terminal keeps the main screen behind the alternate one, so that state was
-still true. gent's commits end mid-row (no trailing newline), so after the
-return the next commit starts at column 1 of the last history row and
-overwrites it. Also, `setupTerminal(false)` on the return writes `height - 1`
-newlines from the cursor that the alternate screen restored. When the region
-left from the screen's top row, the cursor is in the region (no clear moved
-it), and the newlines push the screen's rows into scrollback: a second copy.
+The patch changes the split footer in the Bun and Node renderer bundles
+(`chunk-bun-6qjat6qa.js`, `chunk-node-2rg7pskw.js`) the same way. Native code
+is not changed. 0.6 moves layout, paint and terminal output into native code;
+the split footer's history state, its transitions and its output feed stay
+behind `sessionSplitControl` and `NativeSession.write`, which the patch uses.
 
-The patch keeps the state while the alternate screen covers the split
-(`parkedSplitScrollback`, the region's surface offset). While it is held,
-`syncSplitFooterState` does not reset the native split scrollback or the tail
-column. Before the return's terminal setup, the cursor goes to the region's
-top row, so the reserved newlines stay inside the region's rows. The first
-change to `capture-stdout` after the return takes the region's offset back
-(clamped by `syncSplitScrollback`) instead of the cursor seed. A resize, any
-`resetSplitScrollback` (`resetSplitFooterForReplay` too) and a change to
-`main-screen` drop the held state; then the return seeds from the cursor as
-before. The Bun and Node bundles get the same change; native code is not
-changed. The PTY tests in `packages/e2e/tests/scrollback.test.ts` ("a picker
-closed over …") and the picker tests in
-`apps/tui/tests/message-list.test.tsx` cover it.
+**The split footer keeps its history state across the alternate screen.**
+`syncSplitFooterState` resets the native split scrollback (its row count and
+the column the last history row ends on) when the region leaves for the
+alternate screen, and the return to `capture-stdout` seeds it again from the
+cursor row at column 0. The terminal keeps the main screen behind the
+alternate one, so the old state was still true. gent's commits end mid-row,
+so after the return the next commit started at column 1 of the last history
+row and overwrote it. The patch keeps the state while the alternate screen
+covers the split (`parkedSplitScrollback`: the region's surface offset and
+tail column). While it is held, `syncSplitFooterState` does not reset the
+native split scrollback. The return (`applyScreenMode` from the alternate
+screen, or the first change to `capture-stdout` after it) takes the region's
+offset back through the `render-offset` and `sync` controls
+(`restoreParkedSplitScrollback`) instead of the cursor seed. A resize, any
+`resetSplitScrollback` (a replay too) and a change to `main-screen` drop the
+held state. 0.6 returns with `exitAltScreen` and writes no newlines, so the
+0.5 patch's cursor move before the terminal setup is gone. The picker tests
+in `apps/tui/tests/message-list.test.tsx` ("a picker on the alternate screen
+gives the region back as it was", "a picker that closes over a short session
+…", "a turn that ends behind a picker …", "after a picker closes …") and the
+PTY tests in `packages/e2e/tests/scrollback.test.ts` ("a picker closed over
+…") cover it.
 
-The patch also crops a box's border to the scissor of the boxes around it.
-The native `drawBox` checks only that the box overlaps the scissor. Its fast
-path for an opaque border on a clear background then writes the border cells
-straight into the buffer, past the scissor. A prompt's left rail that the
-live tail cuts off at its top (history holds the prompt's top rows) then
-draws on the rows above the tail. `OptimizedBuffer` keeps a copy of the
-native scissor stack (`_scissorRects`, intersected as the native stack is).
-`drawBox` gives the native draw the box as it is, so the box and its titles
-keep their layout, and keeps the border cells outside the top scissor: it
-saves them before the draw and puts back each one the draw changed to a
-border glyph. Only the fast path writes there, and only with no grapheme or
-link in the buffer, so a saved cell holds no grapheme reference. The other
-paths and the titles (`drawText`) already respect the scissor. The Bun and
-Node buffer bundles (`chunk-bun-6rvkxs1v.js`, `chunk-node-tfvyz31s.js`) get
-the same change. "box borders under a scissor" in `apps/tui/tests/ui.test.tsx`
-(left, centered, right and wide-character titles, nested scissors, a solid
-background) and "a prompt cut by history draws its rail only beside its own
-rows" in `apps/tui/tests/message-list.test.tsx` cover it.
+**A growing region scrolls its rows into scrollback with line feeds.** When
+the split region grows at the terminal's bottom, the native frame
+(`applyPendingSplitFooterTransition` in `renderer.zig`) scrolls the screen up
+with `CSI n S`. xterm and xterm.js drop the rows that leave the top on
+`CSI S`; they do not go to scrollback. A long session's turn that retries
+lost prompt and answer rows that way. The native split control refuses a
+transition change while a frame paints, so the patch changes the transition
+when it is set: `setPendingSplitFooterTransition` sends the native side a
+viewport scroll whose source row is its target row, so the native frame
+keeps its row count (`noteViewportScroll`) and writes no `CSI S`. The
+renderer keeps the transition as computed, for the next resize or growth to
+start from. Before the native frame (`presentNativeScene`, and each frame of
+`flushNativeSplitOutput`), `openSplitFrame` writes the scroll itself: it
+opens the synchronized update the native frame then closes, saves the
+cursor, writes `n` line feeds at the screen's last row (a line feed there
+sends the top row to scrollback) and restores the cursor. The immediate
+scroll in `applyScreenMode` uses the same line feeds
+(`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
+(`codex-rs/tui/src/tui/scrollback.rs`, `grow_viewport`).
 
-The patch also keeps the rows a growing region pushes off the screen. When
-the split region grows at the terminal's bottom, the native frame scrolls the
-screen up with `CSI n S`. xterm and xterm.js drop the rows that leave the top
-on `CSI S`; they do not go to scrollback. A long session's turn that retries
-lost prompt and answer rows that way. Before each native frame
-(`flushPendingSplitCommits`, `renderNative`), `openSplitFrame`
-writes the scroll itself: it opens the synchronized update the native frame
-then closes, saves the cursor, writes `n` line feeds at the screen's last row
-(a line feed there sends the top row to scrollback) and restores the cursor.
-It then sends the native transition again with its source row at the target
-row, so the native frame keeps its row accounting (`noteViewportScroll`) and
-writes no `CSI S`. The immediate scroll in `applyScreenMode` uses the same
-line feeds (`ANSI.scrollIntoHistory`). Codex repairs the same fault this way
-(`codex-rs/tui/src/tui/scrollback.rs`, `grow_viewport`). The renderer bundles
-(`chunk-bun-h3ggawd9.js`, `chunk-node-kc1sqq2a.js`) get the same change. "a
-long session's retried multiline prompt keeps every prompt and answer row
-once at 45x15" in `packages/e2e/tests/scrollback.test.ts` covers it.
+The line feeds go out before the native frame that counts them, and the
+output feed can still refuse that frame (`FeedBackend.prepareFrame`: the
+queued and in-flight spans reach the feed's capacity of 128, or no chunk is
+free). The native frame then rolls back and keeps its transition, so its
+retry counts the rows. Until a frame counts them
+(`splitViewportScrollUncounted`), `applyScreenMode` and `processResize`
+wait, as they wait for queued commits: a growth or resize before the retry
+would replace the transition from rows that already moved, and later history
+would not join the rows before it. A write the feed refuses writes nothing,
+and the frame waits for output idle. "split region growth" in
+`apps/tui/tests/ui.test.tsx` (a growth, then a growth whose frame the feed
+refuses and a second growth before the retry, a shrink and two commits, read
+in xterm) and "a long session's retried multiline prompt keeps every prompt
+and answer row once at 45x15" in `packages/e2e/tests/scrollback.test.ts`
+cover it.
 
-The line feeds and their count belong to one native frame. JS cannot write
-inside a native frame, so the line feeds go out only when the native frame
-after them is admitted (`splitFrameAdmitsViewportScroll`). A native frame is
-skipped only for its output feed (a custom stdout): when the feed holds bytes
-that no write committed, or when the queued and in-flight spans reach the
-feed's capacity (4096). The patch first commits held bytes, as the native
-frame would (`streamCommit`), and writes the line feeds only when the feed
-has no queued or in-flight span; one span then cannot reach the capacity.
-Otherwise it writes nothing, keeps the transition as it is, and retries once
-the feed is idle (`scheduleRenderAfterFeedIdle`). A later resize then
-replaces the transition from rows that did not move, as unpatched OpenTUI
-does. Before, the line feeds went out and the native frame could still skip:
-a resize before the retry counted only its own rows, and later history did
-not join the rows before it. A buffered stdout without a render thread (gent
-on Linux) admits every frame. With a render thread (the macOS default), a
-frame is skipped while the thread holds its lock; the line feed write waits
-for the thread's last write, so only the short hold before the thread waits
-again can skip the frame. "split region growth" in `apps/tui/tests/ui.test.tsx`
-(a growth frame skipped, a second growth before the retry, a shrink and two
-commits, read in xterm) covers it.
-
-The patch also writes a replay's clear inside the frame after it. A terminal
-shows a synchronized update whole, and bytes outside one as they arrive.
-`resetSplitFooterForReplay` wrote its clear (`ESC[r ESC[0m ESC[H ESC[2J`,
-`ESC[3J` with `clearSavedLines`) at once, and a split resize that narrows
-the screen wrote its `moveCursorAndClear` at once: the terminal showed an
-empty screen until the next frames wrote history and the region again. Both
-now add their bytes to `pendingSplitFramePrefix`. `openSplitFrame` writes the
-prefix after the `ESC[?2026h` that opens the next native frame, under the same
-admission check as the line feeds, before them. A frame that opens with a
-prefix also drains every queued commit (as `drainAll` does), not
-`maxSplitCommitsPerFrame`: the clear, all the history rows queued with it and
-the region go out in one update. A change of screen mode that writes at once
-(`applyScreenMode` without the deferred split transition) writes a held
-prefix first, so the bytes keep their order. `resetSplitFooterForReplay` no
-longer flushes the queued output before it resets: the flush repainted the
-region from the empty next buffer, a blank frame in an update of its own,
-and the rows it wrote were the ones the clear removes. The reset drops the
-queue and applies a pending output mode, as the flush did once the queue was
-empty. Codex keeps its frame on screen
-until the next synchronized draw in the same way
-(`codex-rs/tui/src/tui.rs`, `defer_thread_switch_clear`). gent queues a
-replay's history in one step with the reset (`writeOffers` in
+**A replay's clear goes out inside the frame after it.** A terminal shows a
+synchronized update whole, and bytes outside one as they arrive.
+`applySplitFooterReplayReset` writes its clear (`ESC[r ESC[0m ESC[H
+ESC[2J`, `ESC[3J` with `clearSavedLines`) at once, and a split resize that
+narrows the screen writes its `moveCursorAndClear` with the resize: the
+terminal showed an empty screen until the next frames wrote history and the
+region again. Both now add their bytes to `pendingSplitFramePrefix`, and the
+narrowing resize is a plain `NativeSession.resize`. `openSplitFrame` writes
+the prefix after the `ESC[?2026h` that opens the next frame, before the line
+feeds. A frame that opens with a prefix takes every queued commit, not
+`maxSplitCommitsPerFrame` (the queue still caps a batch by its cells): the
+clear, the history rows queued with it and the region go out in one update.
+A change of screen mode that writes at once (`applyScreenMode` without the
+deferred split transition) writes a held prefix first, so the bytes keep
+their order, and a flush (`suspend`, `destroy`) writes a prefix that no
+frame took. Codex keeps its frame on screen until the next synchronized draw
+in the same way (`codex-rs/tui/src/tui.rs`, `defer_thread_switch_clear`).
+gent queues a replay's history in one step with the reset (`writeOffers` in
 `apps/tui/src/message-list.tsx`). "a replay writes its clear and all of
-history in one synchronized update" in `apps/tui/tests/message-list.test.tsx`
-covers it.
+history in one synchronized update" in
+`apps/tui/tests/message-list.test.tsx` covers it.
 
-The patch also retries a split commit the native side skips when the
-renderer has no output feed. `flushPendingSplitCommits` retried a skipped
-commit with `scheduleRenderAfterFeedIdle`, which does nothing without a feed;
-gent on macOS writes to process stdout through the render thread, so it has
-none. A direct flush that the thread's lock skips (the `footerHeight` and
-`externalOutputMode` setters) then left its commits queued with no retry:
-`idle()` resolved with them queued, and `destroy()` wrote `[snapshot WxH]`
-for each. The patch retries with `scheduleRenderAfterBackpressure`, a timer
-without a feed and the feed's idle with one, in both renderer bundles. gent's
-exit flush waits for `idle()` (`flushTranscriptForExit` in
-`apps/tui/src/message-list.tsx`). "SIGTERM during a handover …" in
-`packages/e2e/tests/scrollback.test.ts` covers it: under CPU load it lost the
-second message's rows 3 runs in 14 before, and 0 in 28 after. 0.6.6 waits for
-the native split output in `destroy()`.
+Each test above fails on 0.6.6 without its part of the patch and passes with
+it (2026-10-17: the patch built without each part in turn; without the
+growth and resize wait, only the refused-frame growth case fails).
 
-Remove this patch when an OpenTUI release keeps the split's history state
-across the alternate screen, crops a box's border to the scissor, grows
-the split region without `CSI S` and writes the replay's clear inside a
-frame. Checked on 2026-10-04: `main` after 0.5.14 still resets the state,
-its `drawVisibleBox` border fast path still writes past the scissor, and
-`applyPendingSplitFooterTransition` still writes `CSI S`. Checked on
-2026-10-05 (`main` at 684d70ce): `resetSplitFooterForReplay` still writes
-its clear at once. Rechecked on 2026-10-10: 0.5.17 changes none of these paths.
-It clamps a negative scissor size before the native push, and the patch's
-`_scissorRects` copy takes the same clamped size. 0.6.0 moves layout and
-paint into native code, and its split footer still resets the history state
-and writes the replay clear at once; gent stays on 0.5.
+Three faults the 0.5.17 patch fixed are gone. 0.6's native `drawBox` crops a
+border to the scissor; "box borders under a scissor" in
+`apps/tui/tests/ui.test.tsx` stays as its regression test. 0.6 has no
+feed-idle retry for a skipped split commit: `destroy()` waits for the native
+split flush and writes the queued commits before it closes, so the
+`scheduleRenderAfterBackpressure` retry is not ported; "SIGTERM during a
+handover …" in `packages/e2e/tests/scrollback.test.ts` still covers it. A
+destroy no longer writes `[snapshot WxH]` for a queued commit. gent's exit
+still waits for `renderer.idle()` after its last commit
+(`flushTranscriptForExit` in `apps/tui/src/message-list.tsx`), so the commits
+reach the terminal before the destroy, and then awaits `renderer.closed`.
+
+Checked on 2026-10-17 against `anomalyco/opentui` `main` at f8f608e (0.6.6
+and one diff-gutter commit): `syncSplitFooterState` and the return to
+`capture-stdout` still reset the split scrollback,
+`applyPendingSplitFooterTransition` still writes `CSI S`, and
+`applySplitFooterReplayReset` and `processResize` still write their clears
+outside a frame. Remove this patch when an OpenTUI release keeps the split's
+history state across the alternate screen, grows the split region without
+`CSI S` (and counts the scroll in the frame that writes it), and writes the
+replay and narrowing clears inside a frame.
 
 ## Effect SDKs (no patch since 4.0.5)
 
