@@ -66,12 +66,12 @@ retry counts the rows. Until a frame counts them
 wait, as they wait for queued commits: a growth or resize before the retry
 would replace the transition from rows that already moved, and later history
 would not join the rows before it. A write the feed refuses writes nothing,
-and the frame waits for output idle. "split region growth" in
-`apps/tui/tests/ui.test.tsx` (a growth, then a growth whose frame the feed
-refuses and a second growth before the retry, a shrink and two commits, read
-in xterm) and "a long session's retried multiline prompt keeps every prompt
-and answer row once at 45x15" in `packages/e2e/tests/scrollback.test.ts`
-cover it.
+and the frame waits for output idle. The growth cases of "split region
+history" in `apps/tui/tests/ui.test.tsx` (a growth, then a growth whose frame
+the feed refuses and a second growth before the retry, a shrink and two
+commits, read in xterm) and "a long session's retried multiline prompt keeps
+every prompt and answer row once at 45x15" in
+`packages/e2e/tests/scrollback.test.ts` cover it.
 
 **A replay's clear goes out inside the frame after it.** A terminal shows a
 synchronized update whole, and bytes outside one as they arrive.
@@ -95,6 +95,23 @@ gent queues a replay's history in one step with the reset (`writeOffers` in
 history in one synchronized update" in
 `apps/tui/tests/message-list.test.tsx` covers it.
 
+**A blank history row that ends without a newline keeps its row.** 0.6
+paints a scrollback snapshot natively (`renderSnapshot`, `preserveUnwritten`),
+so a cell nothing drew holds no character, where 0.5 held a space. The native
+split scrollback counts a row by its last drawn cell (`snapshotRowEnd`): a
+blank row is zero columns, and a commit that ends on it without a newline
+leaves the tail column at 0. The next commit then does not start a new row
+(`starts_mid_line` in `appendSplitFooterSnapshotCommit`) and writes over the
+blank row. gent ends each commit on its last row and lets the next one start
+its own row (`landDrawn` in `apps/tui/src/message-list.tsx`), so the spacers
+between items left history as the footer grew at a turn's start.
+`enqueueRenderedScrollbackCommit` now draws a space with transparent colors
+in the first cell of such a last row: the row is one column wide, and the
+next commit starts a new row after it. "a blank history row ended without a
+newline keeps its row" in `apps/tui/tests/ui.test.tsx` and "a turn that
+starts from idle keeps every transcript row once, in order, while it runs,
+at 60x20" in `packages/e2e/tests/scrollback.test.ts` cover it.
+
 Each test above fails on 0.6.6 without its part of the patch and passes with
 it (2026-10-17: the patch built without each part in turn; without the
 growth and resize wait, only the refused-frame growth case fails).
@@ -116,10 +133,12 @@ and one diff-gutter commit): `syncSplitFooterState` and the return to
 `capture-stdout` still reset the split scrollback,
 `applyPendingSplitFooterTransition` still writes `CSI S`, and
 `applySplitFooterReplayReset` and `processResize` still write their clears
-outside a frame. Remove this patch when an OpenTUI release keeps the split's
-history state across the alternate screen, grows the split region without
-`CSI S` (and counts the scroll in the frame that writes it), and writes the
-replay and narrowing clears inside a frame.
+outside a frame, and `snapshotRowEnd` still counts a blank row as zero
+columns. Remove this patch when an OpenTUI release keeps the split's history
+state across the alternate screen, grows the split region without `CSI S`
+(and counts the scroll in the frame that writes it), writes the replay and
+narrowing clears inside a frame, and keeps a blank last row that ends without
+a newline.
 
 ## Effect SDKs (no patch since 4.0.5)
 

@@ -1503,7 +1503,7 @@ describe("box borders under a scissor", () => {
   }
 })
 
-// ── split region growth ─────────────────────────────────────────────────────
+// ── split region history ────────────────────────────────────────────────────
 
 /**
  * A split region that grows at the terminal's bottom sends the rows it covers
@@ -1516,7 +1516,7 @@ describe("box borders under a scissor", () => {
  * moved (`patches/README.md`). Each case runs the same session, with and
  * without the skip, and reads the whole terminal.
  */
-describe("split region growth", () => {
+describe("split region history", () => {
   const WIDTH = 45
   const HEIGHT = 15
 
@@ -1701,6 +1701,49 @@ describe("split region growth", () => {
         expect([growthEnded, growthFramesPresented]).toEqual([true, 0])
         expect(rows).toEqual(expectedRows)
       }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
+  )
+
+  // A row gent commits ends without a newline, and the next commit starts its
+  // own row. A blank row has no cell drawn, and OpenTUI counts a row by the
+  // cells drawn on it: the next commit would start on the blank row and write
+  // over it, so the spacer between two items left history (`patches/README.md`).
+  it.live("a blank history row ended without a newline keeps its row", () =>
+    Effect.gen(function* () {
+      const output = new HeldOutput(WIDTH, HEIGHT)
+      const { renderer, renderOnce } = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          createTestRenderer({
+            width: WIDTH,
+            height: HEIGHT,
+            stdout: output.stdout(),
+            bufferedOutput: "stdout",
+            clock: new ManualClock(),
+          }),
+        ),
+        (setup) => Effect.sync(() => setup.renderer.destroy()),
+      )
+      const frame = Effect.promise(() => renderOnce())
+      yield* Effect.promise(() => renderer.setupTerminal())
+      renderer.footerHeight = 4
+      renderer.screenMode = "split-footer"
+      renderer.externalOutputMode = "capture-stdout"
+      yield* frame
+      for (const text of ["FIRST", "", "SECOND", "", "", "THIRD"]) {
+        renderer.writeToScrollback(({ renderContext }) => ({
+          root: new TextRenderable(renderContext, {
+            content: text,
+            width: Math.max(1, text.length),
+            height: 1,
+          }),
+          startOnNewLine: true,
+          trailingNewline: false,
+        }))
+        yield* frame
+      }
+      yield* Effect.promise(() => renderer.idle())
+      const rows = yield* terminalRows(output.written())
+      expect(rows.slice(0, 6)).toEqual(["FIRST", "", "SECOND", "", "", "THIRD"])
+    }).pipe(Effect.scoped, Effect.timeout("8 seconds")),
   )
 })
 
