@@ -1110,6 +1110,31 @@ const startWorker = (
     return decodeThread(started?.result)
   })
 
+/**
+ * One call made again until `ready` holds its result. Each attempt has its
+ * own id (`<id>-<attempt>`): a provider refuses a context that holds one
+ * tool call id twice, so a repeated id fails every later turn of the branch.
+ */
+const callUntil = (
+  client: Client,
+  place: SessionKey,
+  [name, id, input]: readonly [tool: string, id: string, input: Schema.Json],
+  ready: (found: Effect.Success<ReturnType<typeof call>>[number]) => boolean,
+  label: string,
+) =>
+  Effect.suspend(() => {
+    let attempt = 0
+    return waitFor(
+      Effect.suspend(() => {
+        attempt += 1
+        return call(client, place, [[name, `${id}-${attempt}`, input]])
+      }),
+      ([found]) => ready(found),
+      8_000,
+      label,
+    ).pipe(Effect.map(([found]) => found))
+  })
+
 /** The round read by `place` until `ready` holds. */
 const readRoundUntil = (
   client: Client,
@@ -1118,12 +1143,13 @@ const readRoundUntil = (
   id: string,
   ready: (text: string) => boolean,
 ) =>
-  waitFor(
-    call(client, place, [["thread.round", id, { round }]]),
-    ([found]) => found?.failed === false && ready(textOf(found.result)),
-    8_000,
+  callUntil(
+    client,
+    place,
+    ["thread.round", id, { round }],
+    (found) => found?.failed === false && ready(textOf(found.result)),
     `round ${round} is read as ready`,
-  ).pipe(Effect.map(([found]) => found))
+  )
 
 /**
  * A tool that never returns: a worker's `BLOCK` round runs it, so its turn
@@ -1290,10 +1316,11 @@ describe("thread rounds", () => {
             ["thread.send", "send-4", { thread: rev.thread, message: "ECHO for the user" }],
           ])
           const quiet = decodeRound(sentQuiet?.result)
-          const [readQuiet] = yield* waitFor(
-            call(client, starter, [["thread.round", "read-4", { round: quiet.round }]]),
-            ([found]) => textOf(found?.result).includes('"status":"ended"'),
-            8_000,
+          const readQuiet = yield* callUntil(
+            client,
+            starter,
+            ["thread.round", "read-4", { round: quiet.round }],
+            (found) => textOf(found?.result).includes('"status":"ended"'),
             "the user's round ended",
           )
           expect(readQuiet?.result).toMatchObject({ text: "for the user" })
@@ -1418,10 +1445,11 @@ describe("thread rounds", () => {
 
           yield* call(client, starter, [["thread.stop", "stop-listed", { thread: impl.thread }]])
           // Once stopped, no round is open and the stopped one is the last, as stopped.
-          const [listed] = yield* waitFor(
-            call(client, starter, [["thread.list", "list-stopped", {}]]),
-            ([found]) => byThread(found?.result)[impl.thread]?.lastRound?.round === open.round,
-            8_000,
+          const listed = yield* callUntil(
+            client,
+            starter,
+            ["thread.list", "list-stopped", {}],
+            (found) => byThread(found?.result)[impl.thread]?.lastRound?.round === open.round,
             "the stopped round is the thread's last",
           )
           const row = byThread(listed?.result)[impl.thread]
