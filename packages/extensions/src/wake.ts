@@ -19,6 +19,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { Hex } from "effect/encoding"
 import type { ChildProcessSpawner } from "effect/process"
 import {
   type AgentEvent,
@@ -40,14 +41,17 @@ import {
   tool,
   type TurnAfterInput,
   type TurnNotice,
+  type WakeDueInput,
+  WakeNext,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { runBashCommand, wholeCommandOutputText } from "./exec-tools.js"
 import { makeRegexMatcher } from "./regex-matcher.js"
 
 // Test seam: only tests read these exports. WakeAlarms and
-// WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
-// restart path directly, and resumeAfterTurn a repeated turn end.
+// WakeAlarmsLive let a test hold and cancel monitor timers; rearmPendingAlarms
+// runs the loop-open repair directly, wakeDue a core record's fire, and
+// resumeAfterTurn a repeated turn end.
 // wakeMessage, monitorMessage, nextDueAt and dueAtOf are pure functions with
 // unit tests. WakeTool, MonitorTool and CancelTool are the
 // capabilities the cell signature tests render.
@@ -130,6 +134,7 @@ export const WakeEntry = Schema.TaggedUnion({
 export type WakeEntry = typeof WakeEntry.Type
 type AlarmEntry = Extract<WakeEntry, { readonly _tag: "alarm" }>
 type PendingWakeEntry = Exclude<WakeEntry, { readonly _tag: "notice" }>
+type MonitorEntry = Extract<WakeEntry, { readonly _tag: "monitor" }>
 
 const modeOf = (entry: PendingWakeEntry): WakeMode =>
   Option.getOrElse(Option.fromUndefinedOr(entry.mode), () => "wake")
@@ -161,14 +166,19 @@ export type WakeDetails = typeof WakeDetails.Type
  * interval) when it is waiting on CI, a deploy, or a remote queue, then
  * answers and goes idle. When the entry fires the extension queues a
  * user-role `wake` message on the same branch and wakes the loop, so the
- * next turn starts with the note the model left itself. Timers live in a
- * branch-scoped resource; the entries themselves live in one file per branch
- * under `<data dir>/wakes` (`resolveDataDir`: `GENT_DATA_DIR`, else
- * `~/.gent`), so the branch's loop, when it opens after a restart, re-arms
- * what is still pending and fires at once what came due while the process
- * was down.
+ * next turn starts with the note the model left itself. The entries live in
+ * one file per branch under `<data dir>/wakes` (`resolveDataDir`:
+ * `GENT_DATA_DIR`, else `~/.gent`); the file is the truth. Each pending entry
+ * also has a core wake record (`Session.wakeAt`, source `wake:<wakeId>`),
+ * which is only the trigger: an alarm's record is due at its time, so core
+ * fires it on a passivated branch and at the first start after a time that
+ * passed while no server ran; a monitor's record has no time, so each server
+ * start opens its branch and the monitor polls again. The `wakeDue` hook reads
+ * the entry by its id every time and derives what to do from it.
  * A repeating alarm advances its stored due time on every fire; ticks missed
- * while the process was down collapse into one fire. In `notify` mode a fire
+ * while the process was down collapse into one fire. A `wake` alarm that fires
+ * more than `PAST_DUE_MS` late starts no turn: it leaves a notice, since no
+ * user may be present. In `notify` mode a fire
  * starts no turn: it leaves a `notice` entry in the same file, the tray shows
  * it at once, every step of the next turns reads every notice into a turn
  * notice, and a turn that answered clears the notices it showed. A `wake`
@@ -429,11 +439,12 @@ export const nextDueAt = (dueAt: number, everySeconds: number, now: number): num
 /** The resume is due this long after the limit resets: a margin for the provider's clock. */
 const RESUME_MARGIN_MS = 30_000
 /**
- * A resume this far past due when it fires (gent was not running at the
- * reset, or the machine slept) starts no turn: no user may be present to
- * pay for it. It leaves a notice instead.
+ * An alarm in `wake` mode this far past due when it fires (gent was not
+ * running at its time, or the machine slept) starts no turn: no user may be
+ * present to pay for it. It leaves a notice instead. A resume is such an
+ * alarm.
  */
-const RESUME_PAST_DUE_MS = 10 * 60_000
+const PAST_DUE_MS = 10 * 60_000
 
 const resumeMessage = (resume: Pick<ResumeAlarm, "resetAt">) =>
   `The usage limit reset at ${isoOf(resume.resetAt)}. Continue the task where it stopped.`
@@ -448,49 +459,6 @@ const lateResumeNotice = (entry: AlarmEntry, resume: ResumeAlarm, firedAt: numbe
     resume: { resetAt: resume.resetAt },
   })
 
-/**
- * Fires one resume. Past due by more than `RESUME_PAST_DUE_MS`, it leaves a
- * notice in the row's place. Otherwise it queues the one resume line on a
- * condition (`ifLatest`): the loop admits it, and starts its turn, only while
- * the branch is idle, nothing waits in its queue, and the stopped turn's
- * opener is still the branch's newest step. A message the user sent, or a
- * steer they parked, since the turn stopped takes the resume's place. The
- * loop decides in the admission itself, so no send lands between a read and
- * the queue. The row goes either way.
- *
- * The fire holds the alarms' lifecycle, as a dismiss does: a dismiss that
- * comes while the line is queued waits for the fire and then finds no row,
- * so it reports that nothing was cancelled.
- */
-const fireResume = Effect.fn("Wake.fireResume")(function* (entry: AlarmEntry, resume: ResumeAlarm) {
-  const alarms = yield* WakeAlarms
-  yield* Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
-    const firedAt = yield* Clock.currentTimeMillis
-    if (firedAt - entry.dueAt > RESUME_PAST_DUE_MS) {
-      yield* Effect.logInfo("wake.resume.late").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-      yield* store.update((current) => [
-        ...dropPendingRow(entry.wakeId)(current),
-        lateResumeNotice(entry, resume, firedAt),
-      ])
-      return yield* ctx.State.changed()
-    }
-    yield* queueWake(
-      entry,
-      resumeMessage(resume),
-      {
-        outcome: "fired",
-        note: entry.note,
-        firedAt,
-        resume: { attempt: resume.attempt, resetAt: resume.resetAt },
-      },
-      dropPendingRow(entry.wakeId),
-      Option.some(MessageId.make(resume.messageId)),
-    )
-    yield* ctx.State.changed()
-  }).pipe(alarms.withLifecycle)
-})
-
 /** What a timer needs while it runs: the branch context, its file, and the monitor's shell. */
 type WakeWorkServices =
   | ExtensionContext
@@ -500,43 +468,6 @@ type WakeWorkServices =
   | ChildProcessSpawner.ChildProcessSpawner
 
 type WakeWorkError = ExtensionServiceError | PlatformError.PlatformError | WakeError
-
-/** Sleeps to each tick and fires it, in one loop: a repeat's fiber does not grow per tick. */
-const alarmWork = (
-  first: Extract<WakeEntry, { readonly _tag: "alarm" }>,
-): Effect.Effect<void, WakeWorkError, WakeWorkServices> =>
-  Effect.gen(function* () {
-    let entry = first
-    for (;;) {
-      const now = yield* Clock.currentTimeMillis
-      yield* Effect.logInfo("wake.armed").pipe(
-        Effect.annotateLogs({ wakeId: entry.wakeId, dueInMs: entry.dueAt - now }),
-      )
-      yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
-      yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-      // A resume never repeats.
-      if (Predicate.isNotUndefined(entry.resume)) return yield* fireResume(entry, entry.resume)
-      const firedAt = yield* Clock.currentTimeMillis
-      const details: WakeDetails & { readonly firedAt: number } = {
-        outcome: "fired",
-        note: entry.note,
-        firedAt,
-      }
-      if (Predicate.isUndefined(entry.everySeconds)) {
-        return yield* queueWake(entry, wakeMessage(entry), details, dropPendingRow(entry.wakeId))
-      }
-      // The next tick is stored with the fire, before the timer sleeps again, so a restart in between re-arms it.
-      const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
-      // Only the pending alarm row moves; a notify fire's notice shares its wakeId and stays.
-      yield* queueWake(entry, wakeMessage(entry), details, (current) =>
-        current.map((candidate) => {
-          if (candidate._tag === "alarm" && candidate.wakeId === next.wakeId) return next
-          return candidate
-        }),
-      )
-      entry = next
-    }
-  })
 
 const matches = Effect.fn("Wake.monitorMatches")(function* (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
@@ -665,44 +596,80 @@ const monitorWork = (
     }
   })
 
-const workFor = Match.type<PendingWakeEntry>().pipe(
-  Match.tagsExhaustive({
-    alarm: (entry) => alarmWork(entry),
-    monitor: (entry) => monitorWork(entry),
-  }),
-)
+// ── The core record: the trigger ──
+
+const WAKE_SOURCE_PREFIX = "wake:"
 
 /**
- * Starts the timer for one stored entry. A settled fire (or a fire that
- * failed) drops the entry from the file; an interrupt does not, so a branch
- * close or a shutdown leaves the row for the next re-arm, and a cancel cleans
- * the file itself. A repeating alarm never settles; only a cancel ends it. An
- * id already running is left alone.
- *
- * A pending timer holds its branch's loop resident until it fires or is
- * cancelled: an idle loop that nothing holds is passivated, and the branch
- * scope the timer runs in closes with it.
+ * The core wake record's source for one entry: the SHA-256 of the entry's
+ * id, so a repeat writes the same record. Core bounds a source at 200
+ * characters and an id is not bounded: a resume's names the message that
+ * opened its turn, and a resumed turn's opener is named by the resume line.
  */
-const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
+const wakeSourceOf = Effect.fn("Wake.sourceOf")(function* (wakeId: string) {
+  const digest = yield* (yield* Crypto.Crypto).digest("SHA-256", new TextEncoder().encode(wakeId))
+  return `${WAKE_SOURCE_PREFIX}${Hex.encode(digest)}`
+})
+
+/**
+ * Writes the core record of one pending entry: an alarm's is due at its time,
+ * a monitor's has none, so it fires at each server start. A repeat replaces
+ * the record, so a write for an entry that has one already is harmless.
+ */
+const publishWake = Effect.fn("Wake.publish")(function* (entry: PendingWakeEntry) {
   const ctx = yield* ExtensionContext
-  // The timer outlives this call, so it keeps the services it runs against.
+  const sourceId = yield* wakeSourceOf(entry.wakeId)
+  if (entry._tag === "alarm") return yield* ctx.Session.wakeAt({ sourceId, at: entry.dueAt })
+  yield* ctx.Session.wakeAt({ sourceId })
+})
+
+/** Removes the core record of one entry, once its file entry is gone. */
+const withdrawWake = Effect.fn("Wake.withdraw")(function* (wakeId: string) {
+  const ctx = yield* ExtensionContext
+  yield* ctx.Session.cancelWake({ sourceId: yield* wakeSourceOf(wakeId) })
+})
+
+/**
+ * Starts the poll of one stored monitor. A settled fire (or a fire that
+ * failed) drops the entry from the file and then its core record; an
+ * interrupt drops neither, so a branch close or a shutdown leaves both for
+ * the next start or open. A cancel cleans both itself. An id already running
+ * is left alone.
+ *
+ * A running monitor holds its branch's loop resident until it fires or is
+ * cancelled: it runs a command on an interval, and an idle loop that nothing
+ * holds is passivated, and the branch scope the poll runs in closes with it.
+ * An alarm holds nothing: core fires its record.
+ */
+const armMonitor = Effect.fn("WakeTool.arm")(function* (entry: MonitorEntry) {
+  const ctx = yield* ExtensionContext
+  // The poll outlives this call, so it keeps the services it runs against.
   const platform = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
   >()
   const alarms = yield* WakeAlarms
-  const work = workFor(entry)
   // A settled fire moved its own row; a failed one drops the pending entry here.
   const forget = store.update(dropPendingRow(entry.wakeId)).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
     ctx.Session.holdResident.pipe(
-      Effect.andThen(work),
+      Effect.andThen(monitorWork(entry)),
       Effect.scoped,
+      // An interrupt keeps the entry and its record: it skips the withdrawal.
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("wake.fire.failed").pipe(
+            Effect.annotateLogs({ wakeId: entry.wakeId, cause: Cause.pretty(cause) }),
+            Effect.andThen(forget),
+          ),
+      ),
+      // The file entry is gone first; the record goes after it.
+      Effect.andThen(withdrawWake(entry.wakeId)),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void
-        return Effect.logWarning("wake.fire.failed").pipe(
+        return Effect.logWarning("wake.withdraw.failed").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, cause: Cause.pretty(cause) }),
-          Effect.andThen(forget),
         )
       }),
       Effect.provideService(ExtensionContext, ctx),
@@ -713,12 +680,17 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
 })
 
 /**
- * Re-arms every entry the file still holds; past-due alarms fire at once.
+ * The loop-open repair: every entry the file holds gets its core record
+ * again, and every monitor its poll. The publication order already leaves no
+ * entry without a record; this covers a file an earlier version wrote before
+ * the records existed, and a record core dropped while the extension was not
+ * loaded. A rewrite moves the record's version, so a fire that built this
+ * loop finds its answer superseded and fires once more, and the hook finds
+ * the entry's state then.
  *
- * The read and the arming run under the branch file's lock. A fire drops its
- * entry under the same lock before its timer ends, so an entry read here
- * still has its timer, or has none and is not dropped by a fire. A fire that
- * ended between an unlocked read and the arm was armed again and fired twice.
+ * The read and the arming run under the branch file's lock. A monitor's fire
+ * drops its entry under the same lock before its poll ends, so an entry read
+ * here still has its poll, or has none and is not dropped by a fire.
  */
 export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
   const alarms = yield* WakeAlarms
@@ -727,7 +699,9 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
       Effect.gen(function* () {
         yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: current.length }))
         for (const entry of current) {
-          if (entry._tag !== "notice") yield* armEntry(entry)
+          if (entry._tag === "notice") continue
+          yield* publishWake(entry)
+          if (entry._tag === "monitor") yield* armMonitor(entry)
         }
         // The file stays as read: returning it skips the write.
         return { next: current, result: current.length }
@@ -736,11 +710,142 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
     .pipe(alarms.withLifecycle)
 })
 
+/**
+ * Stores one new entry. The core record is written first and the file entry
+ * second: a stop between them leaves a record with no entry, which fires
+ * once and goes. The other order would leave an entry nothing fires.
+ */
 const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingWakeEntry) {
   const alarms = yield* WakeAlarms
   yield* Effect.gen(function* () {
+    yield* publishWake(entry)
     yield* store.update((current) => [...current, entry])
-    yield* armEntry(entry)
+    if (entry._tag === "monitor") yield* armMonitor(entry)
+  }).pipe(alarms.withLifecycle)
+})
+
+// ── Firing a record ──
+
+/**
+ * Fires one resume. Past due by more than `PAST_DUE_MS`, it leaves a notice
+ * in the row's place. Otherwise it queues the one resume line on a condition
+ * (`ifLatest`): the loop admits it, and starts its turn, only while the branch
+ * is idle, nothing waits in its queue, and the stopped turn's opener is still
+ * the branch's newest step. A message the user sent, or a steer they parked,
+ * since the turn stopped takes the resume's place. The loop decides in the
+ * admission itself, so no send lands between a read and the queue. The row
+ * goes either way.
+ */
+const fireResume = Effect.fn("Wake.fireResume")(function* (
+  entry: AlarmEntry,
+  resume: ResumeAlarm,
+  firedAt: number,
+) {
+  const ctx = yield* ExtensionContext
+  if (firedAt - entry.dueAt > PAST_DUE_MS) {
+    yield* Effect.logInfo("wake.resume.late").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
+    yield* store.update((current) => [
+      ...dropPendingRow(entry.wakeId)(current),
+      lateResumeNotice(entry, resume, firedAt),
+    ])
+    return yield* ctx.State.changed()
+  }
+  yield* queueWake(
+    entry,
+    resumeMessage(resume),
+    {
+      outcome: "fired",
+      note: entry.note,
+      firedAt,
+      resume: { attempt: resume.attempt, resetAt: resume.resetAt },
+    },
+    dropPendingRow(entry.wakeId),
+    Option.some(MessageId.make(resume.messageId)),
+  )
+  yield* ctx.State.changed()
+})
+
+/** The notice a `wake` alarm leaves when it fires past `PAST_DUE_MS`. */
+const lateAlarmMessage = (entry: AlarmEntry, firedAt: number) =>
+  `Alarm ${entry.wakeId} was due at ${isoOf(entry.dueAt)} and fired late, at ${isoOf(firedAt)}, so it started no turn. ${entry.note}`
+
+/**
+ * Fires one alarm whose record came due, and answers what its record does
+ * next. The entry's own time is checked first: a repeat stores its next tick
+ * in the file update that settles a fire, so a stop before core moved the
+ * record leaves the record on the old tick, and its fire here only moves the
+ * record to the stored one.
+ */
+const fireAlarm = Effect.fn("Wake.fireAlarm")(function* (entry: AlarmEntry) {
+  const firedAt = yield* Clock.currentTimeMillis
+  if (entry.dueAt > firedAt) return WakeNext.cases.At.make({ at: entry.dueAt })
+  yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
+  // A resume never repeats.
+  if (Predicate.isNotUndefined(entry.resume)) {
+    yield* fireResume(entry, entry.resume, firedAt)
+    return WakeNext.cases.Done.make({})
+  }
+  const details: WakeDetails & { readonly firedAt: number } = {
+    outcome: "fired",
+    note: entry.note,
+    firedAt,
+  }
+  // Late in `wake` mode, the fire is a notice: the same write, no turn.
+  const late = modeOf(entry) === "wake" && firedAt - entry.dueAt > PAST_DUE_MS
+  const fireAs = (settle: SettleRow) => {
+    if (!late) return queueWake(entry, wakeMessage(entry), details, settle)
+    return queueWake(
+      { ...entry, mode: "notify" },
+      lateAlarmMessage(entry, firedAt),
+      details,
+      settle,
+    )
+  }
+  if (Predicate.isUndefined(entry.everySeconds)) {
+    yield* fireAs(dropPendingRow(entry.wakeId))
+    return WakeNext.cases.Done.make({})
+  }
+  const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
+  // Only the pending alarm row moves; a notify fire's notice shares its wakeId and stays.
+  yield* fireAs((current) =>
+    current.map((candidate) => {
+      if (candidate._tag === "alarm" && candidate.wakeId === next.wakeId) return next
+      return candidate
+    }),
+  )
+  return WakeNext.cases.At.make({ at: next.dueAt })
+})
+
+/** One pending entry whose record fired: an alarm fires, and a monitor gets its poll back. */
+const fireEntry = Effect.fn("Wake.fireEntry")(function* (entry: PendingWakeEntry) {
+  if (entry._tag === "alarm") return yield* fireAlarm(entry)
+  yield* armMonitor(entry)
+  return WakeNext.cases.AtStart.make({})
+})
+
+/**
+ * The `wakeDue` hook: one core record of this extension fired. The file is
+ * the truth, read by the entry's id every time: no entry (a stop after the
+ * record was written and before the entry, or after a cancel removed the
+ * entry and before the record) is `Done`, and nothing is sent. A monitor's
+ * record gets its poll back and stays for the next start. An alarm fires as
+ * its entry says.
+ *
+ * The fire holds the alarms' lifecycle, as a dismiss does: a dismiss that
+ * comes while the line is queued waits for the fire and then finds no row,
+ * so it reports that nothing was cancelled.
+ */
+export const wakeDue = Effect.fn("Wake.due")(function* (input: WakeDueInput) {
+  const alarms = yield* WakeAlarms
+  return yield* Effect.gen(function* () {
+    const pending = (yield* store.read()).filter(
+      (candidate): candidate is PendingWakeEntry => candidate._tag !== "notice",
+    )
+    const entry = yield* Effect.findFirst(pending, (candidate) =>
+      Effect.map(wakeSourceOf(candidate.wakeId), (sourceId) => sourceId === input.sourceId),
+    )
+    if (Option.isNone(entry)) return WakeNext.cases.Done.make({})
+    return yield* fireEntry(entry.value)
   }).pipe(alarms.withLifecycle)
 })
 
@@ -751,21 +856,31 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
     const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
       Effect.succeed({
         next: current.filter(keep),
-        // A repeating notify alarm and its unread notices share one id.
-        result: [
-          ...new Set(
-            current
-              .values()
-              .filter((entry) => !keep(entry))
-              .map((entry) => entry.wakeId),
-          ),
-        ],
+        result: {
+          // A repeating notify alarm and its unread notices share one id.
+          ids: [
+            ...new Set(
+              current
+                .values()
+                .filter((entry) => !keep(entry))
+                .map((entry) => entry.wakeId),
+            ),
+          ],
+          pending: current
+            .values()
+            .filter((entry) => entry._tag !== "notice" && !keep(entry))
+            .map((entry) => entry.wakeId)
+            .toArray(),
+        },
       }),
     )
-    // A stored entry may have no timer yet (before the loop's open re-arms it); an
-    // interrupted timer leaves the file alone, which is why it is cleaned here first.
-    yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
-    return removed
+    // A stored monitor may have no poll yet (before the loop's open re-arms it);
+    // an interrupted poll leaves the file alone, which is why it is cleaned here
+    // first. The core records go last: a stop before them leaves a record with
+    // no entry, which fires once and goes.
+    yield* Effect.forEach(removed.ids, (wakeId) => alarms.cancel(wakeId), { discard: true })
+    yield* Effect.forEach(removed.pending, withdrawWake, { discard: true })
+    return removed.ids
   }).pipe(alarms.withLifecycle)
 })
 
@@ -944,7 +1059,7 @@ const isPendingResume = (entry: WakeEntry): entry is AlarmEntry =>
 
 /**
  * The branch's one resume follows its latest turn: a resume an earlier turn
- * armed leaves with its timer, and the turn's own entry is stored once, so
+ * armed leaves with its core record, and the turn's own entry is stored once, so
  * a repeat of the same turn end stores nothing new. A turn that leaves
  * nothing and finds no resume does not take the file's lock.
  */
@@ -953,6 +1068,11 @@ const settleResume = Effect.fn("Wake.settleResume")(function* (planned: Option.O
   const alarms = yield* WakeAlarms
   const plannedId = Option.map(planned, (entry) => entry.wakeId)
   const changed = yield* Effect.gen(function* () {
+    // The record first, as for any new entry; a repeat of the same turn end
+    // rewrites the record it already has.
+    if (Option.isSome(planned) && planned.value._tag === "alarm") {
+      yield* publishWake(planned.value)
+    }
     const { superseded, added } = yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
       const superseded = current
         .values()
@@ -974,8 +1094,7 @@ const settleResume = Effect.fn("Wake.settleResume")(function* (planned: Option.O
         result: { superseded, added },
       })
     })
-    yield* Effect.forEach(superseded, (wakeId) => alarms.cancel(wakeId), { discard: true })
-    if (Option.isSome(added) && added.value._tag === "alarm") yield* armEntry(added.value)
+    yield* Effect.forEach(superseded, withdrawWake, { discard: true })
     return superseded.length > 0 || Option.isSome(added)
   }).pipe(alarms.withLifecycle)
   if (changed) yield* (yield* ExtensionContext).State.changed()
@@ -1398,12 +1517,13 @@ export const WakeExtension = defineExtension({
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending, WakeRpc.Dismiss)
     yield* host.on("sessionDeleted", ({ branchIds }) => store.removeBranches(branchIds))
+    // A core record of this extension came due: the file says what it fires.
+    yield* host.on("wakeDue", (input) => wakeDue(input))
     // The branch resource starts without a session facade, so the loop's open
-    // is where stored entries get their timers back: after a restart or a
-    // branch close, as soon as anything reaches the branch, and for each new
-    // build of the resource (an edit, a disable and enable), once the build
-    // before it closed with its timers. A past-due alarm
-    // fires at once; a notify one leaves its notice and starts no turn.
+    // is where stored monitors get their polls back and every entry its core
+    // record: after a restart or a branch close, as soon as anything reaches
+    // the branch, and for each new build of the resource (an edit, a disable
+    // and enable), once the build before it closed with its polls.
     yield* host.on("loopOpen", () =>
       rearmPendingAlarms().pipe(
         Effect.catchCause((cause) =>

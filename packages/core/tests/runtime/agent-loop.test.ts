@@ -32,7 +32,9 @@ import {
   RequestId,
   SessionId,
   ToolCallId,
+  CurrentWorkspaceId,
   DefaultWorkspaceId,
+  WorkspaceId,
 } from "../../src/domain/ids"
 import {
   AgentLoopLiveActor,
@@ -46,6 +48,8 @@ import {
   makeLoopInbox,
   type TurnWork,
   wantsWakeOnRecovery,
+  WAKE_CLOCK_MAX_SLEEP,
+  WakeFireOpenings,
 } from "../../src/runtime/agent-loop"
 import { TestClock } from "effect/testing"
 import {
@@ -115,8 +119,11 @@ import {
   tool,
   type ToolCapability,
   type TurnAfterInput,
+  type WakeDueInput,
+  WakeNext,
 } from "@gent/core/extensions/api"
 import type { RequestCapability } from "../../src/domain/capability"
+import type { GentNamespacedClient } from "../../src/server/rpc"
 import {
   AgentLoopQueueStorage,
   BranchStorage,
@@ -4671,6 +4678,7 @@ const makeRuntimeLayer = (
     CredentialPlacement.Memory,
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
+    WakeFireOpenings.Live,
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
@@ -7941,3 +7949,751 @@ const makeLiveToolLayer = (
     eventStore: eventStoreLayer,
     toolRunner: ToolRunner.Live,
   })
+
+// ── durable wakes ───────────────────────────────────────────────────────────
+
+const WAKER_ID = ExtensionId.make("@test/waker")
+
+/** The branch generation a run reads: the number of the waker's branch Resource build. */
+class WakerGeneration extends Context.Service<WakerGeneration, { readonly number: number }>()(
+  "@gent/core/tests/runtime/agent-loop.test/WakerGeneration",
+) {}
+
+interface WakeFire {
+  readonly input: WakeDueInput
+  /** The branch Resource build the hook ran beside; none when its run built none. */
+  readonly generation: Option.Option<number>
+}
+
+interface WakerProbe {
+  readonly builds: Ref.Ref<number>
+  readonly releases: Ref.Ref<number>
+  readonly fired: Ref.Ref<ReadonlyArray<WakeFire>>
+}
+
+const makeWakerProbe = Effect.gen(function* () {
+  const probe: WakerProbe = {
+    builds: yield* Ref.make(0),
+    releases: yield* Ref.make(0),
+    fired: yield* Ref.make<ReadonlyArray<WakeFire>>([]),
+  }
+  return probe
+})
+
+type OnWake = (
+  input: WakeDueInput,
+  call: number,
+) => Effect.Effect<WakeNext, string, ExtensionContext>
+
+const wakeDone: OnWake = () => Effect.succeed(WakeNext.cases.Done.make({}))
+
+/**
+ * A fixture extension: `arm` and `cancel` requests over `Session.wakeAt` and
+ * `cancelWake`, a `wakeDue` handler that records each fire and answers with
+ * `onWake`, and a branch Resource that counts its builds and releases. A
+ * release is the branch passivating, or its root closing.
+ */
+const wakerExtension = (probe: WakerProbe, onWake: OnWake) => {
+  const generation = defineResource({
+    id: "@test/waker/generation",
+    scope: "branch",
+    layer: Layer.effect(
+      WakerGeneration,
+      Effect.acquireRelease(
+        Ref.updateAndGet(probe.builds, (n) => n + 1).pipe(
+          Effect.map((number) => WakerGeneration.of({ number })),
+        ),
+        () => Ref.update(probe.releases, (n) => n + 1),
+      ),
+    ),
+  })
+  return defineExtension({
+    id: WAKER_ID,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register("resource", generation)
+      yield* host.register(
+        "request",
+        request({
+          id: "arm",
+          input: Schema.Struct({ sourceId: Schema.String, at: Schema.optional(Schema.Finite) }),
+          output: Schema.Void,
+          resources: [generation],
+          execute: ({ sourceId, at }) =>
+            Effect.gen(function* () {
+              yield* WakerGeneration
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.wakeAt({ sourceId, ...omitUndefined({ at }) })
+            }),
+        }),
+        request({
+          id: "cancel",
+          input: Schema.Struct({ sourceId: Schema.String }),
+          output: Schema.Boolean,
+          execute: ({ sourceId }) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              return yield* ctx.Session.cancelWake({ sourceId })
+            }),
+        }),
+      )
+      yield* host.on("wakeDue", (input) =>
+        Effect.gen(function* () {
+          const built = yield* Effect.serviceOption(WakerGeneration)
+          const call = (yield* Ref.updateAndGet(probe.fired, (all) => [
+            ...all,
+            { input, generation: Option.map(built, (g) => g.number) },
+          ])).length
+          return yield* onWake(input, call)
+        }),
+      )
+    }),
+  })
+}
+
+const armWake = (
+  client: GentNamespacedClient,
+  ids: { readonly sessionId: SessionId; readonly branchId: BranchId },
+  input: { readonly sourceId: string; readonly at?: number },
+) => client.extension.request({ ...ids, extensionId: WAKER_ID, capabilityId: "arm", input })
+
+interface WakeRowView {
+  readonly sourceId: string
+  readonly at: Option.Option<number>
+  readonly version: number
+  readonly attempts: number
+}
+
+/** The stored wake records, read from the table, never through an operation. */
+const wakeRows = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{
+    readonly source_id: string
+    readonly timed: number
+    readonly at: number
+    readonly version: number
+    readonly attempts: number
+  }>`SELECT source_id, at IS NOT NULL AS timed, COALESCE(at, 0) AS at, version, attempts
+     FROM branch_wakes ORDER BY source_id`
+  return rows.map((row): WakeRowView => ({
+    sourceId: row.source_id,
+    at: Option.filter(Option.some(row.at), () => row.timed === 1),
+    version: row.version,
+    attempts: row.attempts,
+  }))
+})
+
+/**
+ * One root of a server over `storagePath` with the waker extension, and an
+ * in-process client over it. `read` runs an effect against the root's
+ * services, as a storage read beside the server.
+ */
+const wakeRoot = (config: {
+  readonly storagePath?: string
+  readonly cwd?: string
+  readonly home?: string
+  readonly providerLayer: Layer.Layer<LanguageModel.LanguageModel>
+  readonly probe: WakerProbe
+  readonly onWake: OnWake
+}) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      createE2ELayer({
+        ...e2ePreset,
+        providerLayer: config.providerLayer,
+        extensionInputs: [
+          ...e2ePreset.extensionInputs,
+          wakerExtension(config.probe, config.onWake),
+        ],
+        ...omitUndefined({ storagePath: config.storagePath, cwd: config.cwd, home: config.home }),
+      }),
+    )
+    const { client } = yield* createRpcClient(Layer.succeedContext(context))
+    const read = <A, E>(
+      effect: Effect.Effect<A, E, Layer.Success<ReturnType<typeof createE2ELayer>>>,
+    ) => effect.pipe(Effect.provideContext(context))
+    return { client, read }
+  })
+
+/** The real clock, beside the `TestClock` a wake test runs on. */
+const wallClock = Clock.Clock.defaultValue()
+
+/**
+ * Moves the virtual clock in steps until `done` holds. A sleep that starts
+ * after one big jump would never see the clock move; stepping reaches it.
+ * Each step lets the work it released run on the wall clock. Exhaustion
+ * fails loudly.
+ */
+const advanceUntil = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  label: string,
+  step: Duration.Input,
+  adjust: (step: Duration.Input) => Effect.Effect<void> = TestClock.adjust,
+) =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 6_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      if (done(yield* read)) return
+      yield* adjust(step)
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
+      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    expect(`still waiting: ${label}`).toBe(label)
+  })
+
+/** Whether `deferred` completes within `within` of wall time. */
+const completesWithin = <A>(deferred: Deferred.Deferred<A>, within: Duration.Input) =>
+  Deferred.await(deferred).pipe(
+    Effect.timeoutOption(within),
+    Effect.map(Option.isSome),
+    Effect.provideService(Clock.Clock, wallClock),
+  )
+
+/** The workspace a stored session belongs to, read from its row. */
+const sessionWorkspace = (sessionId: SessionId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql<{
+      readonly workspace_id: string
+    }>`SELECT workspace_id FROM sessions WHERE id = ${sessionId}`
+    return WorkspaceId.make(rows[0]?.workspace_id ?? "")
+  })
+
+/** Runs a storage effect in the workspace of a stored session, as its loop does. */
+const inSessionWorkspace = <A, E, R>(sessionId: SessionId, effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(sessionWorkspace(sessionId), (workspaceId) =>
+    effect.pipe(Effect.provideService(CurrentWorkspaceId, workspaceId)),
+  )
+
+/** The branch's stored queue, read from its row, never through an operation. */
+const storedQueue = (ids: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+  inSessionWorkspace(
+    ids.sessionId,
+    Effect.gen(function* () {
+      return yield* (yield* AgentLoopQueueStorage).getQueueState(ids.sessionId, ids.branchId)
+    }),
+  )
+
+/** The branch's stored events. */
+const storedBranchEvents = (ids: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+  inSessionWorkspace(
+    ids.sessionId,
+    Effect.gen(function* () {
+      return yield* (yield* EventStorage).listEvents(ids)
+    }),
+  )
+
+describe("durable wakes", () => {
+  it.scopedLive(
+    "a due wake reaches a new generation of a branch that passivated, through the RPC path",
+    () =>
+      Effect.gen(function* () {
+        const probe = yield* makeWakerProbe
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
+        const { client, read } = yield* wakeRoot({ providerLayer, probe, onWake: wakeDone })
+        const ids = yield* client.session.create({})
+        const at = (yield* Clock.currentTimeMillis) + 5 * 60_000
+        yield* armWake(client, ids, { sourceId: "c0", at })
+        expect(yield* Ref.get(probe.builds)).toBe(1)
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "c0", at: Option.some(at), version: 1, attempts: 0 },
+        ])
+
+        // Idle past the entity idle limit: no client holds the branch, so
+        // it passivates, and its generation closes before the record is due.
+        yield* advanceUntil(
+          Ref.get(probe.releases),
+          (n) => n >= 1,
+          "the branch passivated",
+          "1 second",
+        )
+        expect(yield* Clock.currentTimeMillis).toBeLessThan(at)
+        expect(yield* Ref.get(probe.fired)).toEqual([])
+
+        yield* advanceUntil(
+          Ref.get(probe.fired),
+          (all) => all.length > 0,
+          "the wake fired",
+          "1 second",
+        )
+        const fired = yield* Ref.get(probe.fired)
+        expect(fired).toEqual([
+          {
+            input: { sourceId: "c0", at: Option.some(at), cause: "due" },
+            generation: Option.some(2),
+          },
+        ])
+        expect(yield* Clock.currentTimeMillis).toBeGreaterThanOrEqual(at)
+        yield* advanceUntil(
+          read(wakeRows),
+          (rows) => rows.length === 0,
+          "Done removed the record",
+          "1 second",
+        )
+        // The fire ran no turn.
+        expect(yield* controls.callCount).toBe(0)
+        expect(yield* Ref.get(probe.fired)).toHaveLength(1)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a start-only record fires at each server start until its hook answers Done",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-wake-start-")
+        const cwd = yield* makeTempDirectoryScoped("gent-wake-start-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-wake-start-home-")
+        const storagePath = `${dir}/gent.db`
+        const probe = yield* makeWakerProbe
+        const answer = yield* Ref.make<WakeNext>(WakeNext.cases.AtStart.make({}))
+        const onWake: OnWake = () => Ref.get(answer)
+        const rootOf = Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          return yield* wakeRoot({ storagePath, cwd, home, providerLayer, probe, onWake })
+        })
+
+        // Root 1 arms the record with no time; its own start pass is past.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client, read } = yield* rootOf
+            const ids = yield* client.session.create({})
+            yield* armWake(client, ids, { sourceId: "boot" })
+            expect(yield* read(wakeRows)).toEqual([
+              { sourceId: "boot", at: Option.none(), version: 1, attempts: 0 },
+            ])
+          }),
+        )
+        expect(yield* Ref.get(probe.fired)).toEqual([])
+
+        // Root 2 makes no client call: its start pass fires the record, and
+        // `AtStart` keeps it.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { read } = yield* rootOf
+            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "root 2 fired")
+            expect((yield* Ref.get(probe.fired))[0]?.input).toEqual({
+              sourceId: "boot",
+              at: Option.none(),
+              cause: "start",
+            })
+            expect(yield* read(wakeRows)).toEqual([
+              { sourceId: "boot", at: Option.none(), version: 1, attempts: 0 },
+            ])
+          }),
+        )
+
+        // Root 3 fires it again; `Done` removes it.
+        yield* Ref.set(answer, WakeNext.cases.Done.make({}))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { read } = yield* rootOf
+            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 2, 5_000, "root 3 fired")
+            expect((yield* Ref.get(probe.fired))[1]?.input.cause).toBe("start")
+            yield* waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "Done removed it")
+          }),
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a repeat arm replaces the record's time, cancel removes it, and a deleted session takes it",
+    () =>
+      Effect.gen(function* () {
+        const probe = yield* makeWakerProbe
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, read } = yield* wakeRoot({ providerLayer, probe, onWake: wakeDone })
+        const ids = yield* client.session.create({})
+        const now = yield* Clock.currentTimeMillis
+        yield* armWake(client, ids, { sourceId: "same", at: now + 3_600_000 })
+        yield* armWake(client, ids, { sourceId: "same", at: now + 7_200_000 })
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "same", at: Option.some(now + 7_200_000), version: 2, attempts: 0 },
+        ])
+        const cancel = (sourceId: string) =>
+          client.extension.request({
+            ...ids,
+            extensionId: WAKER_ID,
+            capabilityId: "cancel",
+            input: { sourceId },
+          })
+        expect(yield* cancel("same")).toBe(true)
+        expect(yield* cancel("same")).toBe(false)
+        expect(yield* read(wakeRows)).toEqual([])
+
+        yield* armWake(client, ids, { sourceId: "kept", at: now + 3_600_000 })
+        yield* client.session.delete({ sessionId: ids.sessionId })
+        expect(yield* read(wakeRows)).toEqual([])
+        expect(yield* Ref.get(probe.fired)).toEqual([])
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  // The fire read version 1. A newer arm while its hook runs is version 2;
+  // the second fire of the record starts only once the first fire's answer
+  // was written, so it sees what that write left.
+  for (const ending of ["Done", "a failure"] as const) {
+    it.scopedLive(`an arm during a fire stands when the hook answers ${ending}`, () =>
+      Effect.gen(function* () {
+        const probe = yield* makeWakerProbe
+        const firstEntered = yield* Deferred.make<void>()
+        const firstRelease = yield* Deferred.make<void>()
+        const secondEntered = yield* Deferred.make<void>()
+        const onWake: OnWake = (_input, call) =>
+          Effect.gen(function* () {
+            if (call > 1) {
+              yield* Deferred.succeed(secondEntered, void 0)
+              return WakeNext.cases.Done.make({})
+            }
+            yield* Deferred.succeed(firstEntered, void 0)
+            yield* Deferred.await(firstRelease)
+            if (ending === "a failure") return yield* Effect.fail("the hook failed")
+            return WakeNext.cases.Done.make({})
+          })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, read } = yield* wakeRoot({ providerLayer, probe, onWake })
+        const ids = yield* client.session.create({})
+        yield* armWake(client, ids, { sourceId: "guarded", at: yield* Clock.currentTimeMillis })
+        yield* Deferred.await(firstEntered)
+
+        const later = (yield* Clock.currentTimeMillis) + 50
+        yield* armWake(client, ids, { sourceId: "guarded", at: later })
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "guarded", at: Option.some(later), version: 2, attempts: 0 },
+        ])
+        yield* Deferred.succeed(firstRelease, void 0)
+
+        // Without the guard, `Done` removes the newer record and nothing
+        // fires again; a failure counts an attempt on it.
+        expect(yield* completesWithin(secondEntered, "4 seconds")).toBe(true)
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "guarded", at: Option.some(later), version: 2, attempts: 0 },
+        ])
+        expect((yield* Ref.get(probe.fired)).map((fire) => fire.input.sourceId)).toEqual([
+          "guarded",
+          "guarded",
+        ])
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
+
+  it.scopedLive(
+    "the clock fires within its longest sleep after the wall time jumps forward, and never early after it jumps back",
+    () =>
+      Effect.gen(function* () {
+        const skew = { ms: 0 }
+        const base = yield* Layer.build(TestClock.layer())
+        const test = yield* TestClock.testClockWith(Effect.succeed).pipe(
+          Effect.provideContext(base),
+        )
+        // The wall time is the virtual time plus `skew`; sleeps are the
+        // virtual clock's, as a monotonic sleep ignores a wall-clock jump.
+        const wall: Clock.Clock = {
+          currentTimeMillisUnsafe: () => test.currentTimeMillisUnsafe() + skew.ms,
+          currentTimeMillis: Effect.sync(() => test.currentTimeMillisUnsafe() + skew.ms),
+          currentTimeNanosUnsafe: () =>
+            test.currentTimeNanosUnsafe() + BigInt(skew.ms) * 1_000_000n,
+          currentTimeNanos: Effect.sync(
+            () => test.currentTimeNanosUnsafe() + BigInt(skew.ms) * 1_000_000n,
+          ),
+          monotonicTimeNanosUnsafe: () => test.monotonicTimeNanosUnsafe(),
+          monotonicTimeNanos: Effect.sync(() => test.monotonicTimeNanosUnsafe()),
+          sleep: (duration) => test.sleep(duration),
+        }
+        const clocks = Layer.succeedContext(Context.add(base, Clock.Clock, wall))
+        yield* Effect.gen(function* () {
+          const probe = yield* makeWakerProbe
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client } = yield* wakeRoot({ providerLayer, probe, onWake: wakeDone })
+          const ids = yield* client.session.create({})
+          const firedSources = Ref.get(probe.fired).pipe(
+            Effect.map((all) => all.map((fire) => fire.input.sourceId)),
+          )
+
+          // Forward: due in an hour, then the wall time jumps two hours.
+          yield* armWake(client, ids, {
+            sourceId: "forward",
+            at: (yield* Clock.currentTimeMillis) + 3_600_000,
+          })
+          // The clock reads the new record and goes to sleep.
+          // oxlint-disable-next-line effect/noFixedWaitInTests -- the clock reads the table over real I/O before it sleeps, and no signal says it slept
+          yield* Effect.sleep("50 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+          skew.ms += 7_200_000
+          const jumpedAt = test.currentTimeMillisUnsafe()
+          yield* advanceUntil(
+            firedSources,
+            (sources) => sources.includes("forward"),
+            "the forward jump fired the record",
+            "1 second",
+            (duration) => test.adjust(duration),
+          )
+          expect(test.currentTimeMillisUnsafe() - jumpedAt).toBeLessThanOrEqual(
+            Duration.toMillis(WAKE_CLOCK_MAX_SLEEP) + 1_000,
+          )
+
+          // Backward: due in an hour, then the wall time jumps back a day.
+          // An hour of sleep passes, and the wall time is still a day early.
+          yield* armWake(client, ids, {
+            sourceId: "backward",
+            at: (yield* Clock.currentTimeMillis) + 3_600_000,
+          })
+          // oxlint-disable-next-line effect/noFixedWaitInTests -- as above: the clock reads the record over real I/O, then sleeps
+          yield* Effect.sleep("50 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+          skew.ms -= 86_400_000
+          const backAt = test.currentTimeMillisUnsafe()
+          yield* advanceUntil(
+            Effect.sync(() => test.currentTimeMillisUnsafe() - backAt),
+            (slept) => slept >= 3_660_000,
+            "an hour of sleep passed",
+            "10 seconds",
+            (duration) => test.adjust(duration),
+          )
+          expect(yield* firedSources).toEqual(["forward"])
+          // The record is kept: once the wall time is back, it fires.
+          skew.ms += 86_400_000
+          yield* advanceUntil(
+            firedSources,
+            (sources) => sources.includes("backward"),
+            "the record fired once the wall time came back",
+            "1 second",
+            (duration) => test.adjust(duration),
+          )
+        }).pipe(Effect.provide(clocks))
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+})
+
+describe("deferred recovery", () => {
+  it.scopedLive(
+    "a wake at boot resumes no cut-short turn, and the next client operation runs it before the hook's line",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-wake-deferred-")
+        const cwd = yield* makeTempDirectoryScoped("gent-wake-deferred-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-wake-deferred-home-")
+        const storagePath = `${dir}/gent.db`
+        const probe = yield* makeWakerProbe
+        const hookSent = yield* Deferred.make<void>()
+        const onWake: OnWake = () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            yield* ctx.Session.send({
+              delivery: "queue",
+              content: "the hook's line",
+              sourceId: "hook-line",
+              wake: true,
+            }).pipe(Effect.mapError(String))
+            yield* Deferred.succeed(hookSent, void 0)
+            return WakeNext.cases.Done.make({})
+          })
+
+        // Root 1: the start-only record, then a user message the server
+        // received and never answered. No turn ran, so no keep-alive waits:
+        // the cut-short turn is in the history alone.
+        const ids = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+            const { client, read } = yield* wakeRoot({
+              storagePath,
+              cwd,
+              home,
+              providerLayer,
+              probe,
+              onWake,
+            })
+            const ids = yield* client.session.create({})
+            yield* armWake(client, ids, { sourceId: "boot" })
+            yield* read(
+              Effect.gen(function* () {
+                const workspaceId = yield* sessionWorkspace(ids.sessionId)
+                const message = Message.cases.regular.make({
+                  id: MessageId.make("cut-short"),
+                  sessionId: ids.sessionId,
+                  branchId: ids.branchId,
+                  role: "user",
+                  parts: [Prompt.textPart({ text: "recover me" })],
+                  createdAt: dateFromMillis(1_767_225_600_000),
+                })
+                yield* (yield* EventStorage)
+                  .appendEvent(MessageReceived.make({ message }))
+                  .pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+              }),
+            )
+            return ids
+          }),
+        )
+
+        // Root 2: no client call. The start pass fires; the hook queues its
+        // line with `wake`, and nothing starts.
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([])
+        const modelCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            yield* Ref.update(prompts, (all) => [
+              ...all,
+              lastConversationText(Prompt.make(options.prompt)),
+            ])
+            yield* Deferred.succeed(modelCalled, void 0)
+            return Stream.fromIterable([
+              textDeltaPart("answered"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const { client, read } = yield* wakeRoot({
+          storagePath,
+          cwd,
+          home,
+          providerLayer,
+          probe,
+          onWake,
+        })
+        yield* Deferred.await(hookSent).pipe(Effect.timeout("5 seconds"))
+        yield* waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "the fire settled")
+        // A drain that started a turn would reach the model in this window.
+        expect(yield* completesWithin(modelCalled, "1 second")).toBe(false)
+        const queue = yield* read(storedQueue(ids))
+        expect(queue.inFlight).toBeUndefined()
+        expect(queue.followUp.map((item) => messagePartsText(item.message.parts))).toEqual([
+          "the hook's line",
+        ])
+        const completed = (yield* read(storedBranchEvents(ids))).filter(
+          ({ event }) => event._tag === "TurnCompleted",
+        )
+        expect(completed).toEqual([])
+
+        // A client's state read promotes recovery: the cut-short turn runs
+        // first, then the hook's line.
+        yield* client.session.getSnapshot(ids)
+        yield* waitFor(Ref.get(prompts), (all) => all.length === 2, 5_000, "both turns ran")
+        expect(yield* Ref.get(prompts)).toEqual(["recover me", "the hook's line"])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a wake at boot leaves a stored in-flight item in its slot, and the next client operation runs it once",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-wake-in-flight-")
+        const cwd = yield* makeTempDirectoryScoped("gent-wake-in-flight-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-wake-in-flight-home-")
+        const storagePath = `${dir}/gent.db`
+        const probe = yield* makeWakerProbe
+        const hookSent = yield* Deferred.make<void>()
+        const planted = MessageId.make("planted-in-flight")
+        const onWake: OnWake = () =>
+          Effect.gen(function* () {
+            const ctx = yield* ExtensionContext
+            // A conditional line: not admitted while recovery is deferred.
+            yield* ctx.Session.send({
+              delivery: "queue",
+              content: "the conditional line",
+              sourceId: "conditional-line",
+              ifLatest: planted,
+            }).pipe(Effect.mapError(String))
+            // A plain line that asks for a turn: its drain starts nothing.
+            yield* ctx.Session.send({
+              delivery: "queue",
+              content: "the hook's line",
+              sourceId: "hook-line",
+              wake: true,
+            }).pipe(Effect.mapError(String))
+            yield* Deferred.succeed(hookSent, void 0)
+            return WakeNext.cases.Done.make({})
+          })
+
+        // Root 1: the start-only record, then an item an earlier server
+        // accepted into the in-flight slot and never ran.
+        const ids = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+            const { client, read } = yield* wakeRoot({
+              storagePath,
+              cwd,
+              home,
+              providerLayer,
+              probe,
+              onWake,
+            })
+            const ids = yield* client.session.create({})
+            yield* armWake(client, ids, { sourceId: "boot" })
+            yield* read(
+              inSessionWorkspace(
+                ids.sessionId,
+                Effect.gen(function* () {
+                  yield* (yield* AgentLoopQueueStorage).putQueueState(ids.sessionId, ids.branchId, {
+                    steering: [],
+                    followUp: [],
+                    inFlight: {
+                      message: Message.cases.regular.make({
+                        id: planted,
+                        sessionId: ids.sessionId,
+                        branchId: ids.branchId,
+                        role: "user",
+                        parts: [Prompt.textPart({ text: "the accepted line" })],
+                        createdAt: dateFromMillis(1_767_225_600_000),
+                      }),
+                      wake: true,
+                    },
+                  })
+                }),
+              ),
+            )
+            return ids
+          }),
+        )
+
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([])
+        const modelCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            yield* Ref.update(prompts, (all) => [
+              ...all,
+              lastConversationText(Prompt.make(options.prompt)),
+            ])
+            yield* Deferred.succeed(modelCalled, void 0)
+            return Stream.fromIterable([
+              textDeltaPart("answered"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const { client, read } = yield* wakeRoot({
+          storagePath,
+          cwd,
+          home,
+          providerLayer,
+          probe,
+          onWake,
+        })
+        yield* Deferred.await(hookSent).pipe(Effect.timeout("5 seconds"))
+        yield* waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "the fire settled")
+        expect(yield* completesWithin(modelCalled, "1 second")).toBe(false)
+        const queue = yield* read(storedQueue(ids))
+        expect(queue.inFlight?.message.id).toBe(planted)
+        expect(queue.followUp.map((item) => messagePartsText(item.message.parts))).toEqual([
+          "the hook's line",
+        ])
+
+        yield* client.session.getSnapshot(ids)
+        yield* waitFor(Ref.get(prompts), (all) => all.length === 2, 5_000, "both turns ran")
+        expect(yield* Ref.get(prompts)).toEqual(["the accepted line", "the hook's line"])
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot(ids),
+          (current) => current.runtime._tag === "Idle",
+          5_000,
+          "the branch went idle",
+        )
+        expect(
+          snapshot.messages.filter(
+            (message) => messagePartsText(message.parts) === "the conditional line",
+          ),
+        ).toEqual([])
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+})

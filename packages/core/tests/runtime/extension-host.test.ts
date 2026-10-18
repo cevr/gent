@@ -200,7 +200,11 @@ import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { ExtensionStatusScope } from "../../src/server/rpc"
-import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import {
+  AgentLoopLiveActor,
+  AgentLoopSessionGovernance,
+  WakeFireOpenings,
+} from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient host context ─────────────────────────────────────────────────────
@@ -6653,6 +6657,7 @@ const makeMutationsLayer = (
     GentPlatform.Test(),
     fixedSessionProfiles(new Map([[cwd, launchProfile]])),
     AgentLoopSessionGovernance.Live,
+    WakeFireOpenings.Live,
   )
   const sessionRuntimeLayer = Layer.provide(
     Layer.provideMerge(AgentLoopLiveActor, SessionRuntime.Client),

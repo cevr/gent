@@ -9,7 +9,11 @@ import {
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
 import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
-import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
+import {
+  AgentLoopSessionGovernance,
+  AgentLoopTestActor,
+  WakeFireOpenings,
+} from "../../src/runtime/agent-loop"
 import {
   Auth,
   CredentialPlacement,
@@ -311,7 +315,9 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
   )
   return AgentLoopTestActor.pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, AgentLoopSessionGovernance.Live)),
+    Layer.provideMerge(
+      Layer.mergeAll(deps, AgentLoopSessionGovernance.Live, WakeFireOpenings.Live),
+    ),
   )
 }
 export const makeLayer = (

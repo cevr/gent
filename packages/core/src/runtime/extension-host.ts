@@ -28,6 +28,7 @@ import {
 import {
   type AnyExtensionHook,
   type AnyResourceContribution,
+  BranchWakes,
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
@@ -44,6 +45,7 @@ import {
   type ExtensionSetupServices,
   type ExtensionExtensionsService,
   type ExtensionStateFacet,
+  type ExtensionWakesFacet,
   type DisabledExtension,
   ExtensionStatus,
   type TurnNotice,
@@ -70,6 +72,8 @@ import {
   type ToolCallInput,
   type TurnAfterInput,
   validateExtensionPackage,
+  type WakeDueInput,
+  WakeNext,
 } from "../domain/extension.js"
 import {
   type BranchId,
@@ -350,6 +354,17 @@ export interface CompiledExtensionHooks {
   readonly emitSessionDeleted: (
     input: SessionDeletedInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
+  /**
+   * Runs one extension's `wakeDue` hook; none when it registered none. The
+   * exit is the hook's own: the caller decides what a failure does to the
+   * record, so nothing here swallows it.
+   */
+  readonly runWakeDue: (
+    extensionId: ExtensionId,
+    input: WakeDueInput,
+  ) => Option.Option<
+    Effect.Effect<Exit.Exit<WakeNext, unknown>, never, CurrentExtensionHostContext>
+  >
   /** Whether any extension judges tool calls; without one a call runs unjudged. */
   readonly judgesToolCalls: boolean
   /** The strictest verdict of every `toolCall` hook; `Allow` with none. */
@@ -387,6 +402,11 @@ interface HookTurnProjectionSlot {
 interface RegisteredHook<Input> {
   readonly extensionId: ExtensionId
   readonly handler: (input: Input) => Effect.Effect<void, unknown, unknown>
+}
+
+interface RegisteredWakeDueHook {
+  readonly extensionId: ExtensionId
+  readonly handler: (input: WakeDueInput) => Effect.Effect<WakeNext, unknown, unknown>
 }
 
 interface RegisteredToolCallHook {
@@ -519,6 +539,7 @@ const collectHookSlot = (
     turnAfter: RegisteredHook<TurnAfterInput>[]
     loopOpen: RegisteredHook<void>[]
     sessionDeleted: RegisteredHook<SessionDeletedInput>[]
+    wakeDue: RegisteredWakeDueHook[]
     toolCall: RegisteredToolCallHook[]
   },
 ) => {
@@ -550,6 +571,12 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "wakeDue":
+      slots.wakeDue.push({
+        extensionId: ext.manifest.id,
+        handler: (input) => eraseHookEffect(slot.hook.handler(input)),
+      })
+      return
     case "toolCall":
       slots.toolCall.push({
         extensionId: ext.manifest.id,
@@ -575,6 +602,7 @@ export const compileExtensionHooks = (
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
   const loopOpenSlots: RegisteredHook<void>[] = []
   const sessionDeletedSlots: RegisteredHook<SessionDeletedInput>[] = []
+  const wakeDueSlots: RegisteredWakeDueHook[] = []
   const toolCallSlots: RegisteredToolCallHook[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
@@ -582,6 +610,7 @@ export const compileExtensionHooks = (
     turnAfter: turnAfterSlots,
     loopOpen: loopOpenSlots,
     sessionDeleted: sessionDeletedSlots,
+    wakeDue: wakeDueSlots,
     toolCall: toolCallSlots,
   }
 
@@ -692,6 +721,24 @@ export const compileExtensionHooks = (
             ),
           ),
         { concurrency: Math.max(sessionDeletedSlots.length, 1), discard: true },
+      ),
+
+    // The package check keeps one `wakeDue` hook per extension.
+    runWakeDue: (extensionId, input) =>
+      Option.map(
+        Option.fromUndefinedOr(wakeDueSlots.find((slot) => slot.extensionId === extensionId)),
+        (slot) =>
+          exitErasedEffect(() =>
+            // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.
+            slot.handler(input).pipe(
+              // The membrane erased the answer's type too: a value that is not
+              // a `WakeNext` is a failure, so the record is kept.
+              Effect.filterOrFail(Schema.is(WakeNext), () => ({
+                message: "wakeDue answered a value that is not Done, At or AtStart",
+              })),
+              provideExtensionLeaf({ extensionId }),
+            ),
+          ),
       ),
 
     judgesToolCalls: toolCallSlots.length > 0,
@@ -3961,6 +4008,9 @@ interface ExtensionSessionControlService {
   readonly holdResident: Effect.Effect<void, never, ScopeType.Scope>
 }
 
+/** The longest wake `sourceId`; the table's CHECK holds the same bound. */
+const WAKE_SOURCE_ID_MAX = 200
+
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
@@ -4254,6 +4304,71 @@ export const makeExtensionHostContextProvider = (
         ),
       )
 
+    // Wake records belong to the extension that armed them, which only the
+    // leaf knows; a context with no extension id (a stub run) arms nothing.
+    const branchWakes = yield* facet(BranchWakes, "BranchWakes")
+    const wakesFor =
+      (runInfo: MakeExtensionHostContextRunInfo): ExtensionWakesFacet =>
+      (extensionId) => {
+        const named = (operation: string) =>
+          Effect.fromOption(extensionId).pipe(
+            Effect.mapError(
+              () =>
+                new ExtensionServiceError({
+                  service: "ExtensionSession",
+                  operation,
+                  message: "Extension id unavailable for a wake record",
+                }),
+            ),
+          )
+        const keyFor = (
+          operation: string,
+          params: {
+            readonly sourceId: string
+            readonly sessionId?: SessionId
+            readonly branchId?: BranchId
+          },
+        ) =>
+          Effect.gen(function* () {
+            const id = yield* named(operation)
+            if (params.sourceId.length === 0 || params.sourceId.length > WAKE_SOURCE_ID_MAX) {
+              return yield* new ExtensionServiceError({
+                service: "ExtensionSession",
+                operation,
+                message: `A wake sourceId has 1 to ${WAKE_SOURCE_ID_MAX} characters; this one has ${params.sourceId.length}`,
+              })
+            }
+            const target = targetIn(runInfo, params)
+            yield* requireTarget(operation, target)
+            return { ...target, extensionId: id, sourceId: params.sourceId }
+          })
+        return {
+          wakeAt: (params) =>
+            Effect.gen(function* () {
+              if (Predicate.isNotUndefined(params.at) && !Number.isFinite(params.at)) {
+                return yield* new ExtensionServiceError({
+                  service: "ExtensionSession",
+                  operation: "wakeAt",
+                  message: `A wake time is a finite epoch time in ms, not ${params.at}`,
+                })
+              }
+              const key = yield* keyFor("wakeAt", params)
+              yield* branchWakes((wakes) =>
+                wakes.arm({ ...key, at: Option.fromUndefinedOr(params.at) }),
+              ).pipe(Effect.mapError(sessionError("wakeAt")))
+            }).pipe(inWorkspace),
+          cancelWake: (params) =>
+            keyFor("cancelWake", params).pipe(
+              Effect.flatMap((key) =>
+                branchWakes((wakes) => wakes.cancel(key)).pipe(
+                  Effect.mapError(sessionError("cancelWake")),
+                ),
+              ),
+              inWorkspace,
+            ),
+        }
+      }
+
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
@@ -4295,6 +4410,7 @@ export const makeExtensionHostContextProvider = (
               ),
           }),
         })) satisfies ExtensionStateFacet,
+      Wakes: wakesFor(runInfo),
 
       Session: {
         getSession: (sessionId) =>

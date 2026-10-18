@@ -90,7 +90,11 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import {
+  AgentLoopLiveActor,
+  AgentLoopSessionGovernance,
+  WakeFireOpenings,
+} from "../../src/runtime/agent-loop"
 import { EventStore } from "../../src/domain/event"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import { ToolRunner } from "../../src/runtime/tools"
@@ -186,6 +190,7 @@ const makeRuntimeLayer = (
     CredentialPlacement.Memory,
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
+    WakeFireOpenings.Live,
   )
   let toolRunnerLayer = Layer.provide(ToolRunner.Test(), baseDeps)
   if (options.toolRunner === "live") toolRunnerLayer = Layer.provide(ToolRunner.Live, baseDeps)

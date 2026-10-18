@@ -119,7 +119,13 @@ import {
   pathWithin,
   resolveLinks,
 } from "../runtime/gent-platform.js"
-import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../runtime/agent-loop.js"
+import {
+  AgentLoopLiveActor,
+  AgentLoopSessionGovernance,
+  BranchWakesLive,
+  WakeFireOpenings,
+  branchWakeClockLive,
+} from "../runtime/agent-loop.js"
 import {
   admitChildSessionDepth,
   EventStoreLive,
@@ -2311,6 +2317,10 @@ export const createDependencies = (config: DependenciesConfig) => {
       // One usage table per server: accounts are not per workspace.
       CredentialPlacement.Live,
       FileLockService.layer,
+      // The wake records and the latch every facade's `wakeAt` opens.
+      BranchWakesLive,
+      // Which loops a wake fire is opening now: those keep recovery deferred.
+      WakeFireOpenings.Live,
       AgentLoopSessionGovernance.Live,
       ...Option.getOrElse(Option.fromUndefinedOr(config.overrides?.extraLayers), () => []),
     ),
@@ -2322,9 +2332,14 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.provideMerge(SessionRuntime.Client, tools),
   )
   const actor = Layer.provideMerge(AgentLoopLiveActor, sessions)
+  // Above the actor: both reach branches through their loops. The wake clock
+  // fires the records `Session.wakeAt` armed, from the startup pass on.
   // Every cluster id fits what the client reads back: a client without
   // 64-bit reads (a Durable Object's) gets ids under 2^53.
-  return Layer.provideMerge(interactionRecoveryLive, actor).pipe(withClusterIdSpace)
+  return Layer.provideMerge(
+    Layer.mergeAll(interactionRecoveryLive, branchWakeClockLive),
+    actor,
+  ).pipe(withClusterIdSpace)
 }
 
 // ── websocket lifecycle tracing ─────────────────────────────────────────────

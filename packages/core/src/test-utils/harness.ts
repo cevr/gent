@@ -219,6 +219,8 @@ const defaultSession = (): ExtensionSessionService => ({
   dequeueFollowUp: () => die("Session.dequeueFollowUp"),
   // A test context runs outside a loop: there is no entity to hold.
   holdResident: Effect.void,
+  wakeAt: () => die("Session.wakeAt"),
+  cancelWake: () => die("Session.cancelWake"),
   listBranches: die("Session.listBranches"),
   listSessions: () => die("Session.listSessions"),
   listActiveLoops: die("Session.listActiveLoops"),
@@ -290,6 +292,12 @@ export const testExtensionHostContext = (
   Models: overrides.Models ?? testExtensionModels(),
   Extensions: overrides.Extensions ?? testExtensionExtensions(),
   State: overrides.State ?? (() => testExtensionState()),
+  Wakes:
+    overrides.Wakes ??
+    (() => ({
+      wakeAt: overrides.Session?.wakeAt ?? (() => die("Session.wakeAt")),
+      cancelWake: overrides.Session?.cancelWake ?? (() => die("Session.cancelWake")),
+    })),
 })
 
 // ── test-root ───────────────────────────────────────────────────────────────
@@ -374,7 +382,7 @@ export const testTurnExtension = defineExtension({
  * production does.
  */
 export type TestToolContext = ExtensionHostContext &
-  Omit<ExtensionContextService, "State"> & {
+  Omit<ExtensionContextService, "State" | "Session"> & {
     readonly toolCallId: ToolCallId
   }
 
@@ -405,6 +413,8 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     FileLock: resolvedFileLock,
     Models: overrides?.Models ?? testExtensionModels(),
     Extensions: overrides?.Extensions ?? testExtensionExtensions(),
+    // The leaf reads the wake verbs from here, under its extension id.
+    Wakes: () => ({ wakeAt: defaultSession().wakeAt, cancelWake: defaultSession().cancelWake }),
     ...overrides,
     State: () => resolvedState,
   }
@@ -1828,6 +1838,8 @@ const replayHook = (host: ExtensionHostService, slot: AnyExtensionHook): Effect.
     case "loopOpen":
       return host.on(slot.kind, slot.hook.handler)
     case "sessionDeleted":
+      return host.on(slot.kind, slot.hook.handler)
+    case "wakeDue":
       return host.on(slot.kind, slot.hook.handler)
     case "toolCall":
       return host.on(slot.kind, slot.hook.handler)

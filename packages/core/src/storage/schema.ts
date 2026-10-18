@@ -896,6 +896,36 @@ const toolImageReferencesMigration = Effect.gen(function* () {
   )
 })
 
+/**
+ * The durable wake records an extension arms with `Session.wakeAt`: one row
+ * per branch, extension and source. `at` is when the record fires (epoch
+ * ms); a NULL `at` fires only at the next server start. `version` grows with
+ * every arm, and every write after a fire names the version it read, so a
+ * newer arm during the fire stands. Each row goes with its branch (and so
+ * with its session) by foreign key. Additive: no other table changes.
+ */
+const branchWakesMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS branch_wakes (
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      extension_id TEXT NOT NULL,
+      source_id TEXT NOT NULL CHECK (length(source_id) <= 200),
+      at INTEGER,
+      version INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, branch_id, extension_id, source_id),
+      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
+    )
+  `)
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS idx_branch_wakes_due ON branch_wakes(at) WHERE at IS NOT NULL`,
+  )
+})
+
 const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
     assertMigrationStateCompatible().pipe(
@@ -934,6 +964,7 @@ const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient>
         "023_session_admission": sessionAdmissionMigration,
         "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
         "025_tool_image_references": toolImageReferencesMigration,
+        "026_branch_wakes": branchWakesMigration,
       }),
       table: "gent_storage_migrations",
     }).pipe(Effect.mapError(storageError("Storage migration failed"))),

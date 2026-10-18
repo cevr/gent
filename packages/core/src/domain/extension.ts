@@ -619,10 +619,12 @@ export interface TurnUsage {
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
 // turn seams, before each tool call runs (`toolCall`), once when a branch's
-// loop opens in this process (`loopOpen`), and once when a session is deleted
-// (`sessionDeleted`). Registered with `host.on(kind, handler)` inside `setup`.
-// Failures are always isolated: the runtime logs a warning and lets later hooks
-// still fire. A failed `toolCall` hook answers `Ask`: the call fails closed.
+// loop opens in this process (`loopOpen`), when a wake record comes due
+// (`wakeDue`), and once when a session is deleted (`sessionDeleted`).
+// Registered with `host.on(kind, handler)` inside `setup`. Failures are always
+// isolated: the runtime logs a warning and lets later hooks still fire. A
+// failed `toolCall` hook answers `Ask`: the call fails closed; a failed
+// `wakeDue` hook keeps its record for a retry.
 
 export type ExtensionHook<Input, Output, E = never, R = never> = {
   readonly handler: (input: Input) => Effect.Effect<Output, E, R>
@@ -644,10 +646,12 @@ interface ExtensionHookSignatures {
   readonly toolCall: { readonly input: ToolCallInput; readonly output: ToolCallVerdict }
   /**
    * The branch's loop was built in this process: at the first operation after
-   * a restart, or after the loop closed. It runs once per build, after the
-   * loop resumed a turn a restart cut short, before or beside any turn. The
-   * branch comes from `ExtensionContext`. A handler repairs what the previous
-   * process left: it re-arms timers, resumes children, reports lost work.
+   * a restart, at a wake record's fire, or after the loop closed. It runs
+   * once per build, before or beside any turn, such as one the build
+   * resumed after a restart cut it short. A build for a wake fire resumes no
+   * turn: the first ordinary operation does. The branch comes from `ExtensionContext`.
+   * A handler repairs what the previous process left: it re-arms timers,
+   * resumes children, reports lost work.
    * No user watches it, so it cannot ask.
    */
   readonly loopOpen: { readonly input: void; readonly output: void }
@@ -663,6 +667,44 @@ interface ExtensionHookSignatures {
    * then interrupts it and logs a warning.
    */
   readonly sessionDeleted: { readonly input: SessionDeletedInput; readonly output: void }
+  /**
+   * A wake record this extension armed with `Session.wakeAt` came due on
+   * the branch `ExtensionContext` names. It runs in the branch's context, as
+   * `loopOpen` does, beside any turn: a passivated branch is opened for it,
+   * with any turn a restart cut short left for the next ordinary operation.
+   * No user watches it, so it cannot ask. The answer says what happens to
+   * the record; a failure, or a handler that runs past
+   * `WAKE_DUE_HOOK_TIMEOUT` (runtime/agent-loop.ts), keeps it and fires it
+   * again after a backoff. An extension registers at most one.
+   */
+  readonly wakeDue: { readonly input: WakeDueInput; readonly output: WakeNext }
+}
+
+/** What a `wakeDue` handler asks for next. */
+export const WakeNext = Schema.TaggedUnion({
+  /** The work is done: the record goes. */
+  Done: {},
+  /** Fire again at this time (epoch ms). */
+  At: { at: Schema.Finite },
+  /** Keep the record; fire it again only at the next server start. */
+  AtStart: {},
+})
+export type WakeNext = typeof WakeNext.Type
+
+/**
+ * Why a wake record fired. `due`: its time came while the server ran.
+ * `start`: the startup pass fired it (a start-only record, or one whose time
+ * passed while no server ran).
+ */
+export const WakeCause = Schema.Literals(["due", "start"])
+export type WakeCause = typeof WakeCause.Type
+
+/** One wake record that fired, as a `wakeDue` handler reads it. */
+export interface WakeDueInput {
+  readonly sourceId: string
+  /** The time the record was due; none for a start-only record. */
+  readonly at: Option.Option<number>
+  readonly cause: WakeCause
 }
 
 /** One tool call before it runs, as a `toolCall` hook reads it. */
@@ -1226,6 +1268,29 @@ export interface ExtensionSessionService {
    * for as long as it is pending. Outside a loop there is nothing to hold.
    */
   readonly holdResident: Effect.Effect<void, never, Scope.Scope>
+  /**
+   * Asks core to run this extension's `wakeDue` hook on a branch (the current
+   * one when none is named): at `at` (epoch ms), or, with no `at`, at the next
+   * server start. The record is durable and survives passivation and restarts.
+   * The calling extension and `sourceId` (at most 200 characters) name it: a
+   * repeat with the same `sourceId` replaces `at` (no `at` keeps an earlier
+   * time already set). Any extension may wake any branch of the workspace; a
+   * fire runs only the calling extension's own hook there. Derive `sourceId`
+   * from the extension's own ids, never from a random value, so a repeat
+   * writes the same record.
+   */
+  readonly wakeAt: (params: {
+    readonly sourceId: string
+    readonly at?: number
+    readonly sessionId?: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<void, ExtensionServiceError>
+  /** Removes this extension's wake record; false when there was none. */
+  readonly cancelWake: (params: {
+    readonly sourceId: string
+    readonly sessionId?: SessionId
+    readonly branchId?: BranchId
+  }) => Effect.Effect<boolean, ExtensionServiceError>
   readonly listBranches: Effect.Effect<ReadonlyArray<Branch>, ExtensionServiceError>
   /**
    * Every session in the workspace, or with `thread` only the sessions of
@@ -1357,11 +1422,20 @@ export type ExtensionStateFacet = (
   extensionId: Option.Option<ExtensionId>,
 ) => ExtensionStateServiceApi
 
+/** The two session verbs that name the calling extension: its wake records. */
+type ExtensionWakesApi = Pick<ExtensionSessionService, "wakeAt" | "cancelWake">
+
+/**
+ * The run's half of the wake verbs: a record belongs to the extension that
+ * armed it, which only the leaf knows.
+ */
+export type ExtensionWakesFacet = (extensionId: Option.Option<ExtensionId>) => ExtensionWakesApi
+
 /**
  * Every facet, built once per run by the provider that owns its inputs.
  * A leaf adds only the two facts a run does not carry: the tool call the
  * leaf runs under (for example the `thread.start` create key), and the
- * extension id `State.changed` reports under.
+ * extension id `State.changed` and the wake verbs act under.
  */
 export interface ExtensionHostContext {
   readonly extensionId?: ExtensionId
@@ -1371,13 +1445,16 @@ export interface ExtensionHostContext {
   readonly cwd: string
   readonly home: string
   readonly host: ExtensionHostPlatform
-  readonly Session: ExtensionSessionService
+  /** The leaf adds the wake verbs from `Wakes`. */
+  readonly Session: Omit<ExtensionSessionService, keyof ExtensionWakesApi>
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
   readonly Extensions: ExtensionExtensionsService
   /** Reports under the leaf's extension id, which a run does not know. */
   readonly State: ExtensionStateFacet
+  /** Arms and cancels the leaf's extension's wake records. */
+  readonly Wakes: ExtensionWakesFacet
 }
 
 export interface ExtensionContextService {
@@ -1405,7 +1482,8 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
  * facts only a leaf knows. `toolCallId` names the call a leaf runs under, and
  * `State.changed` reports under the leaf's extension id. Every other facet is
  * forwarded, because the run already built it over the services that own its
- * inputs.
+ * inputs. The wake verbs act under the leaf's extension id too, as
+ * `State.changed` does.
  */
 export const extensionServicesFromHostContext = (
   ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
@@ -1426,7 +1504,7 @@ export const extensionServicesFromHostContext = (
       toolCallId: ctx.toolCallId,
       cwd: ctx.cwd,
       home: ctx.home,
-      Session: { ...ctx.Session, send },
+      Session: { ...ctx.Session, send, ...ctx.Wakes(extensionIdOption) },
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
       Models: ctx.Models,
@@ -1666,6 +1744,18 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
   return Option.none()
 }
 
+/**
+ * A wake record names its extension, and a fire runs that extension's one
+ * `wakeDue` handler: a second would leave the record's answer ambiguous.
+ */
+const validateHooks = (contribs: ExtensionContributions): Option.Option<string> => {
+  const wakeDue = (contribs.hooks ?? []).filter((slot) => slot.kind === "wakeDue")
+  if (wakeDue.length <= 1) return Option.none()
+  return Option.some(
+    `hooks: ${wakeDue.length} wakeDue handlers; an extension registers at most one`,
+  )
+}
+
 export const validateExtensionPackage = (
   manifest: ExtensionManifest,
   contribs: ExtensionContributions,
@@ -1677,6 +1767,7 @@ export const validateExtensionPackage = (
       validateLeafResources,
       validateAgents,
       validateDriverIds,
+      validateHooks,
     ]
     for (const check of checks) {
       const message = check(contribs)
@@ -1758,6 +1849,37 @@ const fileLockService = (locksRef: FileLockTable) =>
         ),
     })
   })
+
+// ── branch-wakes ────────────────────────────────────────────────────────────
+
+/** One wake record's key: the branch, the extension that armed it, and its source. */
+export interface BranchWakeKey {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly extensionId: ExtensionId
+  readonly sourceId: string
+}
+
+/**
+ * The durable wake records an extension arms through `Session.wakeAt`, and
+ * the latch that tells the wake clock to read them again. Each `arm` and
+ * `cancel` opens the latch after its write, so a record due sooner than the
+ * clock's sleep fires on time. The records are in the current workspace.
+ */
+interface BranchWakesService {
+  /** One upsert: a repeat bumps the version, clears the attempts, and keeps an earlier time when it names none. */
+  readonly arm: (
+    wake: BranchWakeKey & { readonly at: Option.Option<number> },
+  ) => Effect.Effect<void, StorageError>
+  /** False when there was no record. */
+  readonly cancel: (key: BranchWakeKey) => Effect.Effect<boolean, StorageError>
+  /** Waits for the latch to open; writes made while nobody waits open it once. */
+  readonly changed: Effect.Effect<void>
+}
+
+export class BranchWakes extends Context.Service<BranchWakes, BranchWakesService>()(
+  "@gent/core/src/domain/extension/BranchWakes",
+) {}
 
 // ── session-mutations ───────────────────────────────────────────────────────
 

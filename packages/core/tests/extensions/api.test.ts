@@ -15,6 +15,7 @@ import {
   runProcess,
   type RequestInput,
   type ToolInput,
+  WakeNext,
 } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
 import {
@@ -398,6 +399,37 @@ describe("defineExtension", () => {
         expect(rendered).toContain("ExtensionLoadError")
         expect(rendered).toContain("tools[0] (blanky): tool requires a non-empty `description`")
       }
+    }))
+
+  // A wake record names its extension, and a fire runs that extension's one
+  // handler: a second would leave the record's answer ambiguous.
+  test("an extension with two wakeDue handlers is rejected at package validation", () =>
+    Effect.gen(function* () {
+      const ext = defineExtension({
+        id: "two-wake-handlers",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("wakeDue", () => Effect.succeed(WakeNext.cases.Done.make({})))
+          yield* host.on("wakeDue", () => Effect.succeed(WakeNext.cases.AtStart.make({})))
+        }),
+      })
+      const contributions = yield* setupOf(ext)
+      const exit = yield* Effect.exit(validateExtensionPackage(ext.manifest, contributions))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.pretty(exit.cause)).toContain(
+          "hooks: 2 wakeDue handlers; an extension registers at most one",
+        )
+      }
+      const one = defineExtension({
+        id: "one-wake-handler",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("wakeDue", () => Effect.succeed(WakeNext.cases.Done.make({})))
+        }),
+      })
+      const valid = yield* Effect.exit(validateExtensionPackage(one.manifest, yield* setupOf(one)))
+      expect(valid._tag).toBe("Success")
     }))
 
   // The model sees a tool's parameters as JSON Schema; a schema that cannot be

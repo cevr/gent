@@ -16,7 +16,8 @@ Revised once after the design review; see "Review round 1" at the end.
   `wakeDue` hook there. A record with a time fires at that time. A record with
   no time fires at the next server start. The hook says what happens next.
 - A fire opens the loop without recovery's turn start (D1). The loop holds its
-  recovery deferred until the next ordinary operation promotes it (A11).
+  recovery deferred until the next ordinary operation promotes it (A11). Any
+  other build promotes at once, as before (Commit 1 facts, F1).
 - Machines, warm pre-lapse handoffs and `@gent/wake` alarms all use it. No
   extension sweeps sessions at startup. Core reads only the rows that
   extensions wrote.
@@ -251,6 +252,9 @@ Every root goes through `createDependencies` (`packages/core/src/test-utils/harn
 
 1. **Startup pass.** The clock reads every row with `at IS NULL` or
    `at <= now`, oldest `created_at` first, and fires each one, eight at a time.
+   `now` is read as the server builds, and a start-only row counts only when
+   it was created by then: one armed in this process waits for the next start
+   (F4).
 2. **Clock loop.** After the pass, the clock loops. Each turn reads the wall
    time (`Clock.currentTimeMillis`), fires every row with `at <= now`, and
    sleeps until the smallest remaining `at`, or for 30 seconds, whichever comes
@@ -264,7 +268,7 @@ Every root goes through `createDependencies` (`packages/core/src/test-utils/harn
 3. **Fire.** The clock sends `FireWake` to the branch's entity. A passivated
    entity is built again by the cluster. Its constructor opens the loop
    (`agent-loop.ts:3343-3352`), and the open runs the `loopOpen` activations.
-   The open never starts a recovered turn (A11).
+   A build for a fire never starts a recovered turn (A11, F1).
 4. **Handler.** The handler calls `ensureTarget` and checks the termination
    marker. A terminated or missing session answers `Gone`. Then it calls
    `ensureOpen` (A11), which opens the loop and does not promote its
@@ -301,7 +305,9 @@ The fire concurrency bounds hook calls, not model work. A hook can start a
 turn (a wake alarm) or a thread round (a machine). The bound on model work at
 boot comes from four rules, each in the place that owns the work:
 
-- **User turns:** none. A fire does not promote recovery (D1, A11).
+- **User turns:** none from a fire. A fire does not promote recovery (D1,
+  A11). A turn a hard kill cut short still resumes at boot through the
+  redelivered keep-alive, as it did before this stage (F1).
 - **Wake alarms:** an alarm in `wake` mode more than ten minutes past due
   leaves a notice and starts no turn (A9). Only alarms that came due in the
   last ten minutes start turns.
@@ -349,8 +355,8 @@ is active, and kicks it with `at: now` when another place changes the run.
 
 - **Publication order.** The core row is written first, the file entry second.
   `storeAndArm` (`wake.ts:739-745`) calls
-  `wakeAt({ sourceId: "wake:<wakeId>", at: dueAt })` for an alarm and for an
-  auto-resume, then writes the file entry. A crash between the two leaves a row
+  `wakeAt({ sourceId: "wake:<sha256 of wakeId>", at: dueAt })` for an alarm
+  and for an auto-resume, then writes the file entry (F12). A crash between the two leaves a row
   with no entry. It fires once, the hook finds no entry and returns `Done`,
   and nothing is sent. The tool call that armed the alarm failed, so the model
   knows it was not set. The other order loses the alarm: a file entry with no
@@ -379,13 +385,15 @@ is active, and kicks it with `at: now` when another place changes the run.
 - Alarms no longer hold the loop resident. The branch can passivate during a
   24-hour wait.
 - Monitors keep their in-process polling and their `holdResident`, since they
-  run a command. Each monitor also arms `wake:<wakeId>` with no time, before
+  run a command. Each monitor also arms its `wake:` row with no time, before
   its file entry, so a restart arms it again with no open. Its hook arms the
   monitor fiber and returns `AtStart`. Its end calls `cancelWake` after its
   file update.
 - The `loopOpen` re-arm (`wake.ts:723-737`) stays. For every file entry it
   upserts the core row (idempotent) and arms monitors. It is no longer the only
-  repair: the publication order already covers a crash.
+  repair: the publication order already covers a crash. It still repairs a
+  row that core settled as `Unhandled` while the extension was disabled
+  (F13).
 - `cancelWakes` (`wake.ts:748`) also calls `cancelWake` for each removed id.
 - **Alarms stay in the JSON file.** One transactional store would need the
   wake entries in SQL and a facade verb that joins core's `branch_wakes` write
@@ -453,7 +461,9 @@ is active, and kicks it with `at: now` when another place changes the run.
   `handle.start` and `writeInitialQueue`, and drops the recovery block at
   `agent-loop.ts:3297-3318` from its chain. `runOpenHooks` still runs at its
   end (`agent-loop.ts:3334-3337`). The constructor's eager open
-  (`agent-loop.ts:3343-3352`) is unchanged, and now never starts a turn.
+  (`agent-loop.ts:3343-3352`) then promotes recovery under the startup
+  permit, unless a wake fire is reaching the entity (F1). Only a fire's build
+  starts no turn.
 - **Promotion.** A new `promoteRecovery(handle)` runs the old block once per
   generation. `LoopInbox` gains `settleRecovery: Effect<boolean>`, one queue
   transaction that clears `recoveryDeferred` and answers whether it was set
@@ -492,9 +502,10 @@ function moved out of `openLoop`, and one variant of `ensureStarted`. No
 persisted format changes.
 
 **What a user sees.** A cut-short turn on a branch that only a wake opened
-resumes when the user (or another loop) next reaches that branch, as today. A
-wake line queued on that branch while deferred waits behind the recovered
-turn.
+resumes when the user (or another loop) next reaches that branch. A wake line
+queued on that branch while deferred waits behind the recovered turn. A turn
+that held the branch resident when the process died resumes at boot, as it
+did before (F1).
 
 ## Part B. The machine schema and execution
 
@@ -1168,9 +1179,10 @@ Checked against `makeThreads` (`threads.ts:2620-2642`) and the inputs at
 
 ### C0b. Deferred recovery (core, D1)
 
-- **Incomplete history.** Root 1: a user message is received, the model blocks
-  (`LanguageModelLayers.signal`), the fixture arms a wake row with no time, and
-  the root's scope closes mid-turn. Root 2: no client call. The row fires; the
+- **Incomplete history.** Root 1: the fixture arms a wake row with no time,
+  and a received user message is stored with no turn (F1: a root closed
+  mid-turn leaves the turn's keep-alive, which resumes it at boot and races
+  the fire). Root 2: no client call. The row fires; the
   hook sends one `queue` line with `wake: true` to its own branch. Assert that
   the hook ran, that the model saw no call, that the queue snapshot (read from
   storage, not through an op) holds the hook's line, and that the cut-short
@@ -1179,13 +1191,13 @@ Checked against `makeThreads` (`threads.ts:2620-2642`) and the inputs at
 - **In flight only.** Plant an item in the in-flight slot with `wake: true`,
   admitted under an `ifLatest` that is no longer the newest step
   (`plantInFlightTurn` from `@gent/core/test-utils`, `harness.ts:724`). The row
-  fires, and the hook sends an `ifLatest` line: assert that it is not
-  admitted, and that the model saw no call. Then a client op: assert that the
+  fires, and the hook sends an `ifLatest` line and a plain `wake` line (F5):
+  assert that the first is not admitted, and that the model saw no call. Then a client op: assert that the
   planted item runs once, with no new test of its condition, and that the
   hook's line never ran.
 - **The regression proof.** With `canStartTurnNow` reverted, the first case
   sees a model call before the client op, and the second runs the planted item
-  on the hook's send.
+  on the hook's plain send.
 
 ### C1. A track machine with no owner turn between rounds
 
@@ -1452,7 +1464,7 @@ against the code first. All are accepted.
 
 | #   | Finding                                                      | Checked against                                             | How the note handles it now                                                                                                                                                        |
 | --- | ------------------------------------------------------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | D1 needs deferred recovery state                             | `agent-loop.ts:429-432`, `agent-loop.ts:3343-3386`: true    | A11: a `recoveryDeferred` flag gates `canStartTurnNow`; construction never promotes; `ensureStarted` promotes once; `FireWake` uses `ensureOpen`; tests in C0b                     |
+| 1   | D1 needs deferred recovery state                             | `agent-loop.ts:429-432`, `agent-loop.ts:3343-3386`: true    | A11: a `recoveryDeferred` flag gates `canStartTurnNow`; a fire's build never promotes (F1); `ensureStarted` promotes once; `FireWake` uses `ensureOpen`; tests in C0b              |
 | 2   | An answer can consume its wake before its commit             | B6 as written: true                                         | B4, B6: the run's row stays `AtStart` while the run is active; the answer commits, then kicks                                                                                      |
 | 3   | A lost alarm trigger between the file write and `wakeAt`     | `wake.ts:723-737`, `wake.ts:1400-1416`: true                | A9: the core row first, the file entry second; a row with no entry fires once and goes. The move to SQL is rejected there, with the reason                                         |
 | 4   | A poke can reach a driver about to exit                      | `FiberMap.ts:188-220`: true                                 | B4: an asking driver stays on its poke queue; exit and `arm` share one lock, and the exit rereads `seq`                                                                            |
@@ -1472,3 +1484,102 @@ against the code first. All are accepted.
 
 No decision in this round is the owner's. D1 was decided before the review
 (NORTH_STAR.md:87), and A11 is its mechanism.
+
+## Commit 1 facts
+
+Commit 1 built Part A in core. The code disagreed with the note in these
+places; the note above now follows the code.
+
+- **F1. A cut-short turn already resumes at boot, with no user.** A11 and D1
+  said that a cut-short turn resumes on the next ordinary operation, "as
+  today". That is false. A running turn holds the entity resident through
+  `Entity.keepAlive`, a persisted cluster request that is answered only when
+  the hold ends (`effect/cluster` `entityManager.js`, the keep-alive case). A
+  hard kill or an eviction leaves it unanswered, and the next process's
+  cluster delivers it again at boot. That builds the entity with no
+  operation, and the old constructor recovery resumed the turn.
+  `hosted-storage.test.ts` ("resumes from the alarm entry alone, with no
+  client") asserts this, and it failed when the build stopped promoting. So
+  the build keeps promoting, and only a build for a fire does not: the clock
+  marks the entity while it sends `FireWake` (`WakeFireOpenings`, a count in
+  this process; `SingleRunner` holds every entity), and the constructor skips
+  the promotion when the mark is set. D1 holds for the fire; the keep-alive
+  resume is unchanged. One race is left and named in `ARCHITECTURE.md` (Known
+  gaps): at a boot with both a pending keep-alive and a due wake on one
+  branch, the first build decides whether the turn resumes then or at the
+  next operation. The cluster gives no signal when its redelivery is done, and
+  reading `cluster_messages` would tie gent to the library's tables.
+- **F2. Deferral only when there is work.** A11 set `recoveryDeferred` on
+  every build. It is set only when the build finds a cut-short turn, or a
+  stored queue that wakes on recovery. A branch with none starts turns at
+  once, so a fire on it can start the turn its hook asks for (the machines'
+  rounds need that). `recoveryDeferred` is a required boolean, not an
+  optional `true`. The cut-short turn is read once per build and promotion
+  reuses it: no turn runs while the deferral holds, so the answer cannot
+  change.
+- **F3. Every take is gated.** A11 gated the idle takes through
+  `canStartTurnNow`. `withdrawAdmittedTurn` takes the next item with no idle
+  test, so the inbox take itself (`LoopInbox.take`) returns nothing while
+  recovery is deferred.
+- **F4. A start-only row armed during this start waits.** The start pass read
+  every `at IS NULL` row whenever it ran, so a row armed before the forked
+  pass read the table fired at once. The pass now reads the time as the
+  server builds and takes only start-only rows created by then.
+- **F5. An `ifLatest` line is refused before the gate.** With an item in the
+  in-flight slot, `admit` refuses an `ifLatest` line because the queue is not
+  empty, whatever `canStartTurnNow` says. So C0b's second case also sends a
+  plain `wake` line, the drain that would take the in-flight item.
+- **F6. The facade's wake verbs name the leaf's extension.** A run's
+  `ExtensionHostContext.Session` holds no wake verbs; a `Wakes` facet built
+  per run takes the leaf's extension id, as `State.changed` does, and the
+  leaf adds the verbs to `ExtensionContext.Session`. A record always names the
+  extension that armed it.
+- **F7. Each fire is its own message.** The `FireWake` payload also carries the
+  row's `version` and `attempts`, and its primary key names them, so a retry
+  or a re-armed record is not taken for a duplicate of an earlier fire.
+- **F8. The state read opens without promotion.** The registered state `get`
+  (an extension's `listActiveLoops`) reaches the loop through `ensureOpen`; a
+  client's `watchRuntime` still promotes, as a client operation.
+- **F9. C0 uses requests, not a tool.** The fixture arms and cancels through
+  extension requests over `createRpcClient` (the production RPC handlers), so
+  no model turn is needed to arm a record.
+- **F10. The seam guard wants the adapter in the same commit.** The guard
+  `findUnadaptedSeams` (`packages/tooling/src/guards.ts`) fails a hook kind
+  that no file under `packages/extensions/src/` or `apps/` implements. So the
+  seam (commit 1) and `@gent/wake` on it (commit 2) are one commit: every
+  commit passes the gate, and the seam lands with its first adapter.
+
+## Commit 2 facts
+
+Commit 2 moved `@gent/wake` onto the seam (A9, C5). The code disagreed with
+the note in these places; the note above now follows the code.
+
+- **F11. Alarms have no timers.** An alarm is a core row and a file entry; the
+  clock fires it and `wakeDue` delivers it. Only a monitor forks work in the
+  branch scope, and only a monitor holds the loop resident. The test "a re-arm
+  that read an alarm while it fired does not fire it a second time" is
+  deleted: its subject, two timers for one alarm, cannot occur.
+- **F12. The source id is a digest.** A record's `sourceId` is capped at 200
+  characters, and a resume id (`resume:<messageId>:<resetAt>`) reached 228. The
+  row is `wake:` and the SHA-256 hex of the wake id (69 characters). The hook
+  digests each pending entry's id to find the one that fired.
+- **F13. The repair stays unconditional, and it costs one extra fire.**
+  `wakeAt` always bumps the version. A fire that builds a closed loop runs
+  `loopOpen`, whose repair upserts every entry's row, so the fire's answer is
+  superseded and the row fires once more; the hook reads the file again and
+  answers `Done` or `At`, and nothing is sent twice (the `fireKey`). The repair
+  cannot skip rows that exist: core settles a row `Unhandled` (deletes it)
+  while no hook is loaded, so a disabled `@gent/wake` loses every row, and only
+  the next open puts them back.
+- **F14. Lateness covers every `wake` alarm.** `RESUME_PAST_DUE_MS` is now
+  `PAST_DUE_MS`. A `wake`-mode alarm (a resume included) more than ten minutes
+  past due leaves a notice and starts no turn; a repeat still moves to its next
+  tick. A `notify` alarm leaves its notice as before.
+- **F15. C5's crash cases stop a write, not a process.** The unit tests run
+  the hook against a fake core (a map of rows in the test context's `Wakes`
+  facet) and stop the record write or the file rename at each point. The
+  disable test now uses a monitor, since an alarm needs no repair to fire. Two
+  integration tests run the real clock: an alarm due while no process ran
+  fires at the next start, and one more than ten minutes past due leaves a
+  notice. The passivation test closes an idle branch under a 24-hour alarm and
+  sees the branch scope close, then the fire.

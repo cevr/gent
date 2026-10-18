@@ -23,6 +23,7 @@ import {
 } from "./ids.js"
 import { ModelAttempts, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
+import { WakeCause, WakeNext } from "./extension.js"
 import { omitUndefined } from "./guards.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import * as Prompt from "effect/ai/Prompt"
@@ -656,6 +657,35 @@ const RequestExtensionFields = {
   input: ExtensionRequestInputEnvelope,
 }
 
+/**
+ * One wake record that came due, sent to its branch's loop. The record in
+ * `branch_wakes` is the durable copy, so the message is not persisted;
+ * `version` and `attempts` make each fire its own message.
+ */
+const FireWakeFields = {
+  ...WorkspaceFields,
+  sessionId: SessionId,
+  branchId: BranchId,
+  extensionId: ExtensionId,
+  sourceId: Schema.String,
+  at: Schema.OptionFromOptionalKey(Schema.Finite),
+  cause: WakeCause,
+  version: Schema.Int,
+  attempts: Schema.Int,
+}
+
+/**
+ * What a fire did. `Handled`: the extension's `wakeDue` hook answered.
+ * `Gone`: the session is terminated or the branch is gone. `Unhandled`: the
+ * branch's profile has no such extension, or it has no `wakeDue` hook.
+ */
+export const WakeFired = Schema.TaggedUnion({
+  Handled: { next: WakeNext },
+  Gone: {},
+  Unhandled: {},
+})
+export type WakeFired = typeof WakeFired.Type
+
 type FieldsInput<F extends Schema.Struct.Fields> = Schema.Struct<F>["Type"]
 export type TurnSubmissionInput = FieldsInput<typeof TurnSubmissionFields>
 export type QueueFollowUpInput = FieldsInput<typeof QueueFollowUpFields>
@@ -665,6 +695,7 @@ export type BranchCommandInput = FieldsInput<typeof BranchCommandFields>
 export type RemoveFollowUpInput = FieldsInput<typeof MessageCommandFields>
 export type StopMessageInput = FieldsInput<typeof StopMessageFields>
 export type RequestExtensionInput = FieldsInput<typeof RequestExtensionFields>
+export type FireWakeInput = FieldsInput<typeof FireWakeFields>
 export type HandlerRequest<Operation> = {
   readonly operation: Operation & { readonly _tag: string }
 }
@@ -762,6 +793,20 @@ export const AgentLoop = Actor.fromEntity(
       id: branchTarget,
     },
     /**
+     * Run one extension's `wakeDue` hook on the branch: the wake clock sends
+     * it when a record comes due. The loop opens without resuming a turn a
+     * restart cut short (deferred recovery), and the hook runs beside any turn.
+     */
+    FireWake: {
+      payload: FireWakeFields,
+      success: WakeFired,
+      error: AgentLoopError,
+      id: (p: FireWakeInput) => ({
+        entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
+        primaryKey: `wake:${p.extensionId}:${p.sourceId}:${p.version}:${p.attempts}`,
+      }),
+    },
+    /**
      * `TerminateBranch` shuts down a single branch's loop inside the entity's
      * own scope, so the branch's resources close there. The
      * `AgentLoopSessionGovernance`-driven `terminateSession` sweep sends it.
@@ -857,6 +902,13 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
   yield* Effect.logInfo("session-runtime.message.submitted").pipe(
     Effect.annotateLogs({ sessionId: input.sessionId, branchId: input.branchId }),
   )
+})
+
+/** Fire one wake record on its branch's loop. The record names its workspace. */
+export const fireWakeOn = Effect.fn("AgentLoop.client.fireWake")(function* (input: FireWakeInput) {
+  const clientFor = yield* AgentLoop.Context
+  const ref = yield* clientFor(entityIdOf(input.workspaceId, input.sessionId, input.branchId))
+  return yield* ref.execute(AgentLoop.FireWake.make(input))
 })
 
 /**

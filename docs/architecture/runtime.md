@@ -25,13 +25,71 @@ Shape:
   re-entrant admission's asked-for start (`wakeAfterPermit`), until the start
   is decided; each watcher of the loop's runtime state
   (`session.watchRuntime`, so an idle client's stream does not end); and each
-  extension hold through `ExtensionContext.Session.holdResident` (a pending
-  wake alarm or monitor). Every hold is scoped, so completion, failure,
+  extension hold through `ExtensionContext.Session.holdResident` (a running
+  wake monitor). Every hold is scoped, so completion, failure,
   interruption, a fire, or a cancel releases it, and an entity nothing holds
   expires. Each hand-over takes the next hold before the last one ends
   (a wake's send, then its start, then its turn): the switch-on is an
   asynchronous keep-alive message, so a count that reached zero in between
   would let the reaper take a loop whose woken turn is about to start.
+  The switch-on is a persisted cluster request (`Cluster/Entity/keepAlive`),
+  answered only when the hold ends. A process that dies while a hold stands
+  (a hard kill, a Durable Object eviction) leaves it unanswered, and the next
+  process's cluster delivers it again at boot: that builds the entity with no
+  operation, and the build resumes the turn the hold kept (deferred
+  recovery, below).
+- Durable wakes (the `durable wakes` section of `agent-loop.ts`): an
+  extension arms a wake record on a branch with
+  `ExtensionContext.Session.wakeAt({ sourceId, at? })` and removes it with
+  `cancelWake({ sourceId })`. The record lives in `branch_wakes` (migration
+  `026_branch_wakes`, keyed by session, branch, extension and `sourceId`,
+  with a foreign key to its branch, so a session delete removes it); a
+  repeat with the same `sourceId` is one upsert that replaces `at` (no `at`
+  keeps the time set), bumps `version` and clears `attempts`. A record with
+  no `at` fires only at the next server start. The verbs are uniform facade
+  verbs: the record names the calling extension, and a fire runs that
+  extension's one `wakeDue` hook (`host.on("wakeDue", ...)`; package
+  validation refuses a second). The wake clock (`branchWakeClockLive`, a
+  server fiber above the actor in `server.ts`) has a start pass, which fires
+  every start-only record an earlier process armed and every record whose
+  time passed while no server ran (`cause: "start"`), then a loop: it reads
+  the wall time, fires each record due by then (`cause: "due"`), and sleeps
+  until the next record is due or for `WAKE_CLOCK_MAX_SLEEP` (30 s),
+  whichever is first; an arm, a cancel or a fire's end ends the sleep. A
+  sleep is relative time and every turn reads the wall time again, so a
+  forward jump of the system clock fires within 30 s and a backward jump
+  fires nothing early. A fire sends the `FireWake` actor operation (not
+  persisted; the clock owns the retry), so a passivated branch is built for
+  it. The handler answers `Gone` for a terminated session or a branch that
+  is gone, opens the loop with `ensureOpen` (recovery stays deferred), holds
+  the entity resident, and runs the hook in the branch's profile with a
+  non-client opener, beside any turn and with no permit, for at most
+  `WAKE_DUE_HOOK_TIMEOUT` (30 s). The hook answers `Done` (the record goes),
+  `At` (fire again then) or `AtStart` (fire at the next start). The clock
+  applies the answer with one conditional write on the version the fire read
+  (`settle`, `reschedule`): a `wakeAt` that landed during the fire stands as
+  written. A fire that fails, or a hook past its timeout, counts an attempt
+  and fires again after 5 s, twice as long each time, at most 10 minutes
+  later (`retry`, guarded the same way). A record whose fire still runs is
+  not fired again, and at most 8 fires run at once.
+- Deferred recovery: the open of a loop starts no turn. The loop is built
+  with `recoveryDeferred` set when it finds work a restart left (a user turn
+  in the history with no completion, or a stored queue that wakes on
+  recovery); while it is set, `canStartTurnNow` is false and no take
+  leaves the queue, so an `ifLatest` line is not admitted, a plain line only
+  queues, and the in-flight item keeps its slot and its accepted condition.
+  `promoteRecovery` clears it once (`LoopInbox.settleRecovery`) and runs that
+  work as the open used to: the cut-short turn, else the queue's next item
+  as the queue stands now. The actor's build promotes at once unless a wake
+  fire is reaching the entity (`WakeFireOpenings`, a count in this process;
+  one runner holds every entity), so a build for an operation or for a
+  redelivered keep-alive resumes the turn as before, and a build for a fire
+  resumes nothing: no paid turn starts with no user present
+  (`NORTH_STAR.md`, fail-closed). A loop reopened after it closed promotes
+  at its first ordinary operation (`ensureStarted`); a fire and an
+  extension's `listActiveLoops` read open it with `ensureOpen` and leave the
+  work deferred. A `wakeDue` hook's sends to its own branch then queue behind
+  the cut-short turn.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 
 - A session takes its name from its first user message: at a turn end,

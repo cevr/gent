@@ -213,7 +213,7 @@ describe("session admission", () => {
           yield* sql`UPDATE sessions SET admission_json = NULL`
           // The migrator runs only what follows the last applied migration, so
           // the database forgets every migration from `session_admission` on.
-          yield* sql`DELETE FROM gent_storage_migrations WHERE name IN ('session_admission', 'model_catalog_snapshots', 'tool_image_references')`
+          yield* sql`DELETE FROM gent_storage_migrations WHERE name IN ('session_admission', 'model_catalog_snapshots', 'tool_image_references', 'branch_wakes')`
         }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
 
         yield* Effect.gen(function* () {

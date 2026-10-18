@@ -190,6 +190,9 @@ export {
   type ExtensionContextService,
   type ExtensionModelsService,
   type TurnNotice,
+  // A `wakeDue` handler's input and its answer: what happens to the record.
+  type WakeDueInput,
+  WakeNext,
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, type JsonRecord, omitUndefined } from "../domain/guards.js"
 // `runProcess` runs a command to completion over the Effect `ChildProcessSpawner`.

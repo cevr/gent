@@ -16,7 +16,7 @@ code diverges. A guard (`findSteeringBudgetOverruns`) holds this index to
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
 - `Resource` — long-lived scoped services and extension-owned state.
-- `Hook` — `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen`, `sessionDeleted`, and `toolCall` handlers registered with `host.on` for prompt, policy, turn follow-up, branch repair after a restart, cleanup after a session delete, and a verdict on each tool call before it runs.
+- `Hook` — `systemPrompt`, `turnProjection`, `turnAfter`, `loopOpen`, `wakeDue`, `sessionDeleted`, and `toolCall` handlers registered with `host.on` for prompt, policy, turn follow-up, branch repair after a restart, a durable wake record that came due, cleanup after a session delete, and a verdict on each tool call before it runs.
 
 Everything else is adapter code around those nouns.
 
@@ -54,7 +54,7 @@ when to read it.
 - `rules.md` — the rules above in full, with receipts and known gaps; read when a change touches an invariant or you review one.
 - `server.md` — package map, system shape, transport boundary, app services and storage, platform seams, shared server discovery, distribution, observability, key files; read when you change startup wiring, storage, the RPC contract, release or logs.
 - `profiles.md` — the runtime profile: extension loading, profile cache and leases, shared Resource builds, last good versions, reload, prompt sections and notices; read when you change extension activation, config reads or the request prefix.
-- `runtime.md` — the session runtime and agent loop: residency, steering, follow-up admission, orphan reconciliation, retry, cancellation, `TurnCompleted`; read when you change the loop, a turn's lifecycle or its receipts.
+- `runtime.md` — the session runtime and agent loop: residency, durable wakes and deferred recovery, steering, follow-up admission, orphan reconciliation, retry, cancellation, `TurnCompleted`; read when you change the loop, a turn's lifecycle or its receipts.
 - `context.md` — model context: compaction, project instructions, the system prompt, tool-result spill, classifier models, virtual models, the effort router; read when you change what a request carries or how a model is chosen.
 - `threads.md` — threads and agent runs: rounds, `thread_rounds`, `session.send`, snapshot threads, the agents pane and tray, child depth; read when you change child sessions or the thread tools.
 - `agents.md` — `AgentDefinition`, agent config, run specs, tool and path admission, session admission, model and effort precedence; read when you change agents or what a run may do.

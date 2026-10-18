@@ -5,8 +5,10 @@ import {
   DateTime,
   Deferred,
   Effect,
+  Duration,
   Exit,
   Fiber,
+  FiberMap,
   FileSystem,
   HashMap,
   HashSet,
@@ -58,6 +60,9 @@ import {
 } from "../domain/message.js"
 import {
   AgentLoopQueueStorage,
+  type BranchWake,
+  BranchWakeStorage,
+  BranchStorage,
   EventStorage,
   type EventStorageError,
   type InteractionStorage,
@@ -76,6 +81,7 @@ import {
   type BranchCommandInput,
   buildIdleState,
   buildRunningState,
+  entityIdOf,
   followUpMessageIdForSource,
   interjectionMessageId,
   FollowUpQueueFull,
@@ -84,6 +90,8 @@ import {
   parseEntityId,
   type QueueFollowUpInput,
   dequeueFollowUpOn,
+  type FireWakeInput,
+  fireWakeOn,
   queueFollowUpOn,
   type RemoveFollowUpInput,
   type StopMessageInput,
@@ -99,9 +107,18 @@ import {
   toWaitingForInteractionState,
   type TurnSubmissionInput,
   type WaitingForInteractionState,
+  WakeFired,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
-import { BranchAddress, type FailedExtension } from "../domain/extension.js"
+import {
+  BranchAddress,
+  BranchWakes,
+  type BranchWakeKey,
+  type FailedExtension,
+  type WakeCause,
+  type WakeDueInput,
+  WakeNext,
+} from "../domain/extension.js"
 import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
@@ -503,14 +520,24 @@ export interface AgentLoopState {
     readonly error: AgentLoopError
   }
   readonly startingState?: LoopState
+  /**
+   * The loop was built over work a restart left (a turn it cut short, or a
+   * stored queue that wakes) and has not promoted it yet. Until it does,
+   * nothing starts a turn and nothing leaves the queue: the in-flight item
+   * keeps its slot and its accepted condition. In memory only; each build
+   * derives it again from storage (deferred recovery, see the actor).
+   */
+  readonly recoveryDeferred: boolean
 }
 
 export const buildInitialAgentLoopState = (params: {
   state: LoopState
   queue?: LoopQueueState
+  recoveryDeferred?: boolean
 }): AgentLoopState => ({
   state: params.state,
   queue: Option.getOrElse(Option.fromUndefinedOr(params.queue), emptyLoopQueueState),
+  recoveryDeferred: params.recoveryDeferred === true,
 })
 
 /**
@@ -553,10 +580,13 @@ const turnAdmitted = (s: AgentLoopState, messageId: MessageId): boolean =>
  * already forked (`startInLoop`), to move a phase another turn holds, with its
  * item in neither the queue nor the transcript. Both admission paths ask this
  * one question.
+ *
+ * A loop whose recovery is deferred starts nothing either: the work a
+ * restart left runs first, once an ordinary operation promotes it.
  */
 
 const canStartTurnNow = (s: AgentLoopState): boolean =>
-  s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
+  s.state._tag === "Idle" && Predicate.isUndefined(s.startingState) && !s.recoveryDeferred
 
 /** How many failures this branch had recorded, or 0 if it has had none. */
 const turnFailureEpoch = (state: AgentLoopState): number =>
@@ -702,6 +732,11 @@ export type LoopInbox = {
   /** Does the loop still own this message, anywhere? */
   readonly holds: (state: AgentLoopState, messageId: MessageId) => boolean
   readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
+  /**
+   * End the recovery deferral and answer whether it was set: one queue
+   * transaction, so exactly one caller promotes the work a restart left.
+   */
+  readonly settleRecovery: Effect.Effect<boolean, AgentLoopError>
 }
 
 const mergeConcurrentLoopMetadata = (
@@ -785,7 +820,11 @@ export const makeLoopInbox = (
      */
     const moveToPhase = (state: LoopState): Effect.Effect<void> =>
       TxSubscriptionRef.update(scope.loopRef, (current) => {
-        const next: AgentLoopState = { state, queue: current.queue }
+        const next: AgentLoopState = {
+          state,
+          queue: current.queue,
+          recoveryDeferred: current.recoveryDeferred,
+        }
         if (!Predicate.isUndefined(current.turnFailure)) {
           return Object.assign(next, { turnFailure: current.turnFailure })
         }
@@ -902,7 +941,9 @@ export const makeLoopInbox = (
       const queuedCreatedAt = yield* DateTime.nowAsDate
       const startedAtMs = yield* Clock.currentTimeMillis
       return yield* commitQueueTransaction("dequeued turn", (s) => {
-        if (options.onlyIfIdle && !canStartTurnNow(s)) {
+        // While recovery is deferred nothing leaves the queue, for any
+        // caller: no turn runs then, so no take is the next turn's.
+        if (s.recoveryDeferred || (options.onlyIfIdle && !canStartTurnNow(s))) {
           return { value: Option.none(), next: s, persist: false }
         }
         const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
@@ -1026,6 +1067,12 @@ export const makeLoopInbox = (
       ),
     )
 
+    const settleRecovery = commitQueueTransaction("settled recovery", (s) => ({
+      value: s.recoveryDeferred,
+      next: { ...s, recoveryDeferred: false },
+      persist: false,
+    })).pipe(Effect.withSpan("LoopInbox.settleRecovery"))
+
     return {
       read,
       changes,
@@ -1034,6 +1081,7 @@ export const makeLoopInbox = (
       snapshot,
       phase,
       writeInitialQueue,
+      settleRecovery,
       admit,
       takeIfIdle: takeFromState({ onlyIfIdle: true }),
       take: takeFromState({ onlyIfIdle: false }),
@@ -1493,10 +1541,12 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   })
 
   /**
-   * Start the turn a restart cut short. Only a loop that is opening calls
-   * this: no turn has run and no admission has reached it, so it is idle and
-   * holds no reservation. The item needs no admission either — it may still
-   * sit in the in-flight slot, and its turn clears that slot when it settles.
+   * Start the turn a restart cut short. Only recovery promotion calls this,
+   * once per build, after it cleared the deferral. Admissions may wait in the
+   * queue by then, but none holds a reservation: while recovery was deferred
+   * `canStartTurnNow` refused them all, so the loop is idle and holds no
+   * reservation. The item needs no admission either — it may still sit in
+   * the in-flight slot, and its turn clears that slot when it settles.
    */
   const startRecovered = Effect.fn("AgentLoop.startRecovered")((item: QueuedTurnItem) =>
     startInLoop(
@@ -1681,6 +1731,11 @@ type AgentLoopBehavior = {
    * it; what a reopened loop resumes.
    */
   incompleteUserTurn: Effect.Effect<Option.Option<QueuedTurnItem>>
+  /**
+   * The turn a restart cut short, as the build read it: what promotion
+   * resumes. Nothing changes it while recovery is deferred.
+   */
+  recoveredTurn: Option.Option<QueuedTurnItem>
   /** Whether this session has ever written to the branch; a cold loop with history wakes. */
   hasPriorHistory: Effect.Effect<boolean>
   /**
@@ -1701,7 +1756,15 @@ type AgentLoopBehavior = {
    * puts them in the run's capability context.
    */
   branchContext: Context.Context<ModelContextLedger>
-  /** Start the turn a restart cut short; only an opening loop calls it. */
+  /**
+   * Run one extension's `wakeDue` hook in the branch's profile and answer
+   * its exit; none when the profile has no such extension or it has no hook.
+   */
+  runWakeDue: (
+    extensionId: ExtensionId,
+    input: WakeDueInput,
+  ) => Effect.Effect<Option.Option<Exit.Exit<WakeNext, unknown>>, AgentLoopError>
+  /** Start the turn a restart cut short; only recovery promotion calls it. */
   startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
   startNextIfIdle: () => Effect.Effect<void, AgentLoopError>
@@ -2333,9 +2396,74 @@ const makeAgentLoopBehavior = (
     const turnWorkerQueue = yield* TxQueue.unbounded<TurnWork>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
+    // A failed recovery read leaves the loop cold; the log names the read.
+    const recoveryReadFailed =
+      (read: string) =>
+      (error: EventStorageError): Effect.Effect<ReadonlyArray<never>> =>
+        Effect.logWarning("agent-loop.recovery-read-failed").pipe(
+          Effect.annotateLogs({ read, sessionId, branchId, error: String(error) }),
+          Effect.as([]),
+        )
+
+    const hasPriorHistory = messageStorage.listMessages(branchId).pipe(
+      Effect.catchEager(recoveryReadFailed("messages")),
+      Effect.map((messages) => messages.some((message) => message.sessionId === sessionId)),
+    )
+
+    const incompleteUserTurn = Effect.gen(function* () {
+      const envelopes = yield* recoveryEvents
+        .listEvents({ sessionId, branchId })
+        .pipe(Effect.catchEager(recoveryReadFailed("events")))
+      const completed = new Set(
+        envelopes.flatMap(({ event }) => {
+          if (event._tag === "TurnCompleted" && Predicate.isNotUndefined(event.messageId)) {
+            return [event.messageId]
+          }
+          return []
+        }),
+      )
+      // A turn that died writes no receipt. Once a later turn has completed,
+      // the dead one is history the branch moved past, so only messages received
+      // after the last completion can be the turn a restart cut short.
+      const lastCompletion = envelopes.findLastIndex(({ event }) => event._tag === "TurnCompleted")
+      // Continuation prompts, handoff markers, and model-change notices are
+      // the runtime's own user-role lines; none completes on its own and none
+      // must start a turn of its own.
+      const incomplete = envelopes.slice(lastCompletion + 1).flatMap(({ event }) => {
+        if (
+          event._tag === "MessageReceived" &&
+          event.message.role === "user" &&
+          !isRuntimeUserMessage(event.message) &&
+          !completed.has(event.message.id)
+        ) {
+          return [event.message]
+        }
+        return []
+      })
+      const message = incomplete.at(-1)
+      if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
+      // The session names the agent the resumed turn runs as.
+      return Option.some<QueuedTurnItem>({ message })
+    })
+
+    // Recovery is deferred only when the build found work a restart left: a
+    // turn it cut short, or a stored queue that wakes on recovery. A branch
+    // with none starts turns as soon as it is open, so a wake fired at boot
+    // can start one. The read happens once per build: while the deferral
+    // holds, no turn runs, so no turn can complete and change the answer.
+    const recoveredTurn = yield* incompleteUserTurn
+    const queueWakes = wantsWakeOnRecovery(initialQueue)
+    let recoveryDeferred = Option.isSome(recoveredTurn)
+    if (!recoveryDeferred && Option.isSome(queueWakes)) {
+      recoveryDeferred = queueWakes.value.unconditional || (yield* hasPriorHistory)
+    }
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
-      buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
+      buildInitialAgentLoopState({
+        state: initialLoopState,
+        queue: initialQueue,
+        recoveryDeferred,
+      }),
     )
     const queuePersistenceSemaphore = yield* Semaphore.make(1)
     const persistenceFailures = yield* TxSubscriptionRef.make<PersistenceFailureMark>({
@@ -2573,57 +2701,28 @@ const makeAgentLoopBehavior = (
       }),
     ).pipe(Effect.ignore)
 
-    // A failed recovery read leaves the loop cold; the log names the read.
-    const recoveryReadFailed =
-      (read: string) =>
-      (error: EventStorageError): Effect.Effect<ReadonlyArray<never>> =>
-        Effect.logWarning("agent-loop.recovery-read-failed").pipe(
-          Effect.annotateLogs({ read, sessionId, branchId, error: String(error) }),
-          Effect.as([]),
+    // A wake fire runs one extension's hook in the branch's profile, as an
+    // activation runs `loopOpen`: beside any turn, with no permit, and no
+    // client opened the run, so it cannot ask. A profile that builds a new
+    // generation asks for its activation, as a turn's resolve does.
+    const runWakeDue = (extensionId: ExtensionId, input: WakeDueInput) =>
+      Effect.gen(function* () {
+        const profile = yield* resolveTurnProfile(
+          RunOpener.cases.Turn.make({ openedByClient: false }),
         )
-
-    const hasPriorHistory = messageStorage.listMessages(branchId).pipe(
-      Effect.catchEager(recoveryReadFailed("messages")),
-      Effect.map((messages) => messages.some((message) => message.sessionId === sessionId)),
-    )
-
-    const incompleteUserTurn = Effect.gen(function* () {
-      const envelopes = yield* recoveryEvents
-        .listEvents({ sessionId, branchId })
-        .pipe(Effect.catchEager(recoveryReadFailed("events")))
-      const completed = new Set(
-        envelopes.flatMap(({ event }) => {
-          if (event._tag === "TurnCompleted" && Predicate.isNotUndefined(event.messageId)) {
-            return [event.messageId]
-          }
-          return []
-        }),
-      )
-      // A turn that died writes no receipt. Once a later turn has completed,
-      // the dead one is history the branch moved past, so only messages received
-      // after the last completion can be the turn a restart cut short.
-      const lastCompletion = envelopes.findLastIndex(({ event }) => event._tag === "TurnCompleted")
-      // Continuation prompts, handoff markers, and model-change notices are
-      // the runtime's own user-role lines; none completes on its own and none
-      // must start a turn of its own.
-      const incomplete = envelopes.slice(lastCompletion + 1).flatMap(({ event }) => {
-        if (
-          event._tag === "MessageReceived" &&
-          event.message.role === "user" &&
-          !isRuntimeUserMessage(event.message) &&
-          !completed.has(event.message.id)
-        ) {
-          return [event.message]
-        }
-        return []
-      })
-      const message = incomplete.at(-1)
-      if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
-      // The session names the agent the resumed turn runs as.
-      return Option.some<QueuedTurnItem>({ message })
-    })
+        const run = turnRegistry(profile)
+          .getResolved()
+          .extensionHooks.runWakeDue(extensionId, input)
+        if (Option.isNone(run)) return Option.none<Exit.Exit<WakeNext, unknown>>()
+        const exit = yield* run.value.pipe(
+          runAgentLoopTurnProfile(profile),
+          Effect.provideContext(branchContext),
+        )
+        return Option.some(exit)
+      }).pipe(Effect.scoped)
 
     return {
+      runWakeDue,
       persistenceFailureEpoch: Effect.map(
         TxSubscriptionRef.get(persistenceFailures),
         (mark) => mark.epoch,
@@ -2645,6 +2744,7 @@ const makeAgentLoopBehavior = (
           )
         }),
       inbox,
+      recoveredTurn,
       incompleteUserTurn,
       hasPriorHistory,
       withdrawFollowUp: (messageId) =>
@@ -2856,6 +2956,55 @@ const awaitTurnCompletion = (
     // so the failure is checked once more after the race settles.
     Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline.turn, messageId)),
   )
+
+interface WakeFireOpeningsService {
+  /** Marks `entityId` as reached by a wake fire while `effect` runs. */
+  readonly during: <A, E, R>(
+    entityId: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>
+  /** Whether a wake fire is reaching `entityId` now. */
+  readonly reaching: (entityId: string) => Effect.Effect<boolean>
+}
+
+/**
+ * The entities a wake fire is reaching now, in this process. A loop built
+ * for a fire keeps its recovery deferred. Any other build promotes it at
+ * once: an operation, and also the cluster's redelivery of a turn's
+ * persisted keep-alive after a restart, which builds the entity with no
+ * operation at all. One runner holds every entity (`SingleRunner`), so a
+ * count in this process is the whole truth.
+ */
+export class WakeFireOpenings extends Context.Service<WakeFireOpenings, WakeFireOpeningsService>()(
+  "@gent/core/src/runtime/agent-loop/WakeFireOpenings",
+) {
+  static Live: Layer.Layer<WakeFireOpenings> = Layer.effect(
+    WakeFireOpenings,
+    Effect.gen(function* () {
+      const counts = yield* Ref.make<ReadonlyMap<string, number>>(new Map())
+      const add = (entityId: string, by: number) =>
+        Ref.update(counts, (current) => {
+          const next = new Map(current)
+          const count = (current.get(entityId) ?? 0) + by
+          if (count > 0) next.set(entityId, count)
+          else next.delete(entityId)
+          return next
+        })
+      return WakeFireOpenings.of({
+        during: (entityId, effect) =>
+          Effect.acquireUseRelease(
+            add(entityId, 1),
+            () => effect,
+            () => add(entityId, -1),
+          ),
+        reaching: Effect.fn("WakeFireOpenings.reaching")(function* (entityId: string) {
+          return (yield* Ref.get(counts)).has(entityId)
+        }),
+      })
+    }),
+  )
+}
+
 /**
  * `Actor.toLayer` handler layer for `AgentLoop`.
  *
@@ -2882,6 +3031,7 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   const startupSemaphore = yield* Semaphore.make(1)
   const residency = yield* makeAgentLoopResidency
   const sessionGovernance = yield* AgentLoopSessionGovernance
+  const fireOpenings = yield* WakeFireOpenings
   const platform = yield* GentPlatform
   const fileSystem = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -2897,6 +3047,7 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   const provideActorWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
   const queueStorage = yield* AgentLoopQueueStorage
+  const branchStorage = yield* BranchStorage
   const operations = yield* SessionOperationStorage
   const operationSeen = yield* Ref.make(false)
 
@@ -3291,32 +3442,13 @@ const agentLoopActorHandlers = Effect.gen(function* () {
       return
     }
 
+    // The open starts no turn: the work a restart left waits, deferred, for
+    // `promoteRecovery`. The actor's build promotes it at once unless a wake
+    // fire built the loop (`WakeFireOpenings`); a reopen promotes it at the
+    // first ordinary operation. A wake fire runs its hook with no user
+    // present, so it must not resume a turn nobody asked to continue now.
     const exit = yield* Effect.exit(
-      handle.start.pipe(
-        Effect.andThen(handle.inbox.writeInitialQueue),
-        Effect.andThen(
-          Effect.gen(function* () {
-            const incompleteTurn = yield* handle.incompleteUserTurn
-            if (Option.isSome(incompleteTurn)) {
-              yield* handle
-                .startRecovered(incompleteTurn.value)
-                .pipe(
-                  Effect.catchEager((error) =>
-                    closeBehaviorWithHeldStartupPermit(handle).pipe(
-                      Effect.andThen(Effect.fail(error)),
-                    ),
-                  ),
-                )
-              return
-            }
-            const recovered = wantsWakeOnRecovery(initialQueue)
-            if (Option.isNone(recovered)) return
-            if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
-              yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
-            }
-          }),
-        ),
-      ),
+      handle.start.pipe(Effect.andThen(handle.inbox.writeInitialQueue)),
     )
     // One write settles the cycle: success leaves the published `Open`, and
     // a failure replaces it with the error every later op will be handed.
@@ -3332,16 +3464,62 @@ const agentLoopActorHandlers = Effect.gen(function* () {
       )
       return
     }
-    // Once per build, after startup and the recovery above: the extensions
-    // repair what a previous process or a closed loop left on this branch.
+    // Once per build, after startup: the extensions repair what a previous
+    // process or a closed loop left on this branch.
     yield* handle.runOpenHooks
   })
+
+  /**
+   * Run the work a restart left, once per build: the turn it cut short, else
+   * the stored queue's next item when the queue wakes on recovery. The queue
+   * is read as it stands now, not as the build found it: nothing could take
+   * its in-flight item while recovery was deferred, and items queued since
+   * count as items queued before a restart do. The caller holds the startup
+   * permit. A failure closes the behavior, as a failed open does.
+   */
+  const promoteRecovery = (handle: AgentLoopBehavior) =>
+    Effect.gen(function* () {
+      if (!(yield* handle.inbox.settleRecovery)) return
+      if (Option.isSome(handle.recoveredTurn)) {
+        yield* handle
+          .startRecovered(handle.recoveredTurn.value)
+          .pipe(
+            Effect.catchEager((error) =>
+              closeBehaviorWithHeldStartupPermit(handle).pipe(Effect.andThen(Effect.fail(error))),
+            ),
+          )
+        return
+      }
+      const recovered = wantsWakeOnRecovery((yield* handle.inbox.read).queue)
+      if (Option.isNone(recovered)) return
+      if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
+        yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
+      }
+    }).pipe(
+      Effect.tapError((error) =>
+        Ref.set(lifecycleRef, LoopLifecycle.cases.Failed.make({ handle, error })),
+      ),
+    )
 
   // An open that fails (the session cannot be read) leaves `Building`, and
   // the next op opens again. A terminated session does not open: every op
   // on it is refused.
+  //
+  // The build promotes recovery at once unless a wake fire is reaching the
+  // entity. The cluster builds an entity with no operation when it redelivers
+  // the persisted keep-alive of a turn a restart cut short; that turn resumes
+  // here, with no client, as before. A fire's build leaves it deferred, and
+  // the next ordinary operation promotes it.
   if (!(yield* sessionGovernance.isTerminated(workspaceId, sessionId))) {
-    yield* openLoop.pipe(
+    const forFire = yield* fireOpenings.reaching(addr.entityId)
+    yield* Effect.gen(function* () {
+      yield* openLoop
+      if (forFire) return
+      const lifecycle = yield* Ref.get(lifecycleRef)
+      if (lifecycle._tag !== "Open") return
+      yield* promoteRecovery(lifecycle.handle)
+    }).pipe(
+      startupSemaphore.withPermits(1),
       provideActorWorkspace,
       Effect.catchEager((error) =>
         Effect.logWarning("agent loop open failed").pipe(
@@ -3362,7 +3540,7 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   // observe a partially-rebuilt loop. The rebuild and the read share one
   // permit window, so the handle a caller is handed belongs to the cycle
   // this call just settled.
-  const ensureStarted = Effect.gen(function* () {
+  const openHandle = Effect.gen(function* () {
     const before = (yield* Ref.get(lifecycleRef))._tag
     if (before === "Closed" || before === "Building") {
       yield* openLoop.pipe(provideActorWorkspace)
@@ -3383,11 +3561,30 @@ const agentLoopActorHandlers = Effect.gen(function* () {
         Building: () => unavailable,
       }),
     )(yield* Ref.get(lifecycleRef))
-  }).pipe(startupSemaphore.withPermits(1))
+  })
 
+  /**
+   * The open loop, with the work a restart left promoted (deferred
+   * recovery). Every ordinary operation reaches the loop through this, so
+   * the first one after a fire's build resumes a cut-short turn.
+   */
+  const ensureStarted = openHandle.pipe(
+    Effect.tap(promoteRecovery),
+    startupSemaphore.withPermits(1),
+  )
+
+  /**
+   * The open loop, its recovery still deferred. A wake fire and a state read
+   * take this: neither is a user reaching the branch, so neither resumes a
+   * turn nobody asked to continue now.
+   */
+  const ensureOpen = openHandle.pipe(startupSemaphore.withPermits(1))
+
+  // An extension's `listActiveLoops` reads this through the state registry:
+  // a listing does not promote recovery. A client's watch does (below).
   const currentRegisteredState = Effect.gen(function* () {
     yield* rejectIfTerminated
-    const handle = yield* ensureStarted
+    const handle = yield* ensureOpen
     return yield* handle.inbox.runtimeState
   })
 
@@ -3608,6 +3805,50 @@ const agentLoopActorHandlers = Effect.gen(function* () {
     }
   })
 
+  /**
+   * Run one wake record's hook. A terminated session or a branch that is gone
+   * answers `Gone`. The loop opens without promoting its recovery
+   * (`ensureOpen`), so the fire resumes no cut-short turn: the hook's own
+   * sends queue behind that turn. The hook runs beside any turn with no
+   * permit, and the fire holds the entity resident while it runs; work that
+   * must outlive it takes its own `holdResident`. A failure, or a hook past
+   * `WAKE_DUE_HOOK_TIMEOUT`, fails the fire, and the clock keeps the record.
+   */
+  const fireWake = Effect.fn("AgentLoopActor.fireWake")(function* (operation: FireWakeInput) {
+    yield* ensureTarget(operation)
+    if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
+      return WakeFired.cases.Gone.make({})
+    }
+    const branch = yield* branchStorage
+      .getBranch(branchId)
+      .pipe(asAgentLoopError(`Failed to read branch ${sessionId}/${branchId}`))
+    if (Predicate.isUndefined(branch) || branch.sessionId !== sessionId) {
+      return WakeFired.cases.Gone.make({})
+    }
+    const handle = yield* ensureOpen
+    yield* residency.held
+    const ran = yield* handle
+      .runWakeDue(operation.extensionId, {
+        sourceId: operation.sourceId,
+        at: operation.at,
+        cause: operation.cause,
+      })
+      .pipe(Effect.timeoutOption(WAKE_DUE_HOOK_TIMEOUT))
+    if (Option.isNone(ran)) {
+      return yield* new AgentLoopError({
+        message: `wakeDue of ${operation.extensionId} ran past ${Duration.format(WAKE_DUE_HOOK_TIMEOUT)}`,
+      })
+    }
+    if (Option.isNone(ran.value)) return WakeFired.cases.Unhandled.make({})
+    const exit = ran.value.value
+    if (Exit.isFailure(exit)) {
+      return yield* new AgentLoopError({
+        message: `wakeDue of ${operation.extensionId} failed: ${Cause.pretty(exit.cause)}`,
+      })
+    }
+    return WakeFired.cases.Handled.make({ next: exit.value })
+  }, Effect.scoped)
+
   return AgentLoop.of({
     Submit: Effect.fn("AgentLoop.Submit")(({ operation }: HandlerRequest<TurnSubmissionInput>) =>
       submitTurn(operation).pipe(provideActorWorkspace),
@@ -3717,6 +3958,9 @@ const agentLoopActorHandlers = Effect.gen(function* () {
           provideActorWorkspace,
         ),
     ),
+    FireWake: Effect.fn("AgentLoop.FireWake")(({ operation }: HandlerRequest<FireWakeInput>) =>
+      fireWake(operation).pipe(provideActorWorkspace),
+    ),
     TerminateBranch: Effect.fn("AgentLoop.TerminateBranch")(
       ({ operation }: HandlerRequest<BranchCommandInput>) =>
         Effect.gen(function* () {
@@ -3762,3 +4006,197 @@ export const AgentLoopTestActor = Layer.unwrap(
     ),
   ),
 ).pipe(Layer.provide(ProcessLocalToolReplay.Live))
+
+// ── durable wakes ───────────────────────────────────────────────────────────
+//
+// An extension arms a wake record with `Session.wakeAt`; the record lives in
+// `branch_wakes`, so it outlives passivation and restarts. The clock below
+// reads the table, sends `FireWake` to each record's branch when it comes
+// due, and applies the hook's answer with one write on the version the fire
+// read: a newer `wakeAt` during the fire stands. It is one concern with
+// residency: a branch nothing holds may passivate, and a fire opens it again.
+
+/** How long a `wakeDue` hook may run before its fire fails and the record is kept. */
+const WAKE_DUE_HOOK_TIMEOUT = Duration.seconds(30)
+
+/**
+ * The longest the clock sleeps. It reads the wall time again on every wake,
+ * so a forward jump of the system clock fires a due record within this, and
+ * a backward jump fires nothing early: sleeps are relative time.
+ */
+export const WAKE_CLOCK_MAX_SLEEP = Duration.seconds(30)
+
+/** How many fires run at once, at the startup pass and after it. */
+const WAKE_FIRE_CONCURRENCY = 8
+
+export const BranchWakesLive: Layer.Layer<BranchWakes, never, BranchWakeStorage> = Layer.effect(
+  BranchWakes,
+  Effect.gen(function* () {
+    const storage = yield* BranchWakeStorage
+    // One slot: writes made while the clock is busy open the latch once.
+    const latch = yield* Queue.sliding<void>(1)
+    const open = Queue.offer(latch, void 0).pipe(Effect.asVoid)
+    return BranchWakes.of({
+      arm: Effect.fn("BranchWakes.arm")((wake) => storage.arm(wake).pipe(Effect.tap(() => open))),
+      cancel: Effect.fn("BranchWakes.cancel")((key) =>
+        storage.cancel(key).pipe(Effect.tap(() => open)),
+      ),
+      changed: Queue.take(latch),
+    })
+  }),
+)
+
+const wakeKeyOf = (wake: BranchWake): BranchWakeKey => ({
+  sessionId: wake.sessionId,
+  branchId: wake.branchId,
+  extensionId: wake.extensionId,
+  sourceId: wake.sourceId,
+})
+
+/** The record's identity across workspaces, for the in-flight map. */
+const wakeFiberKey = (wake: BranchWake) =>
+  `${wake.workspaceId}\u0000${wake.sessionId}\u0000${wake.branchId}\u0000${wake.extensionId}\u0000${wake.sourceId}`
+
+/**
+ * The wake clock: a server fiber over every workspace's records.
+ *
+ * 1. The startup pass fires every start-only record an earlier process armed
+ *    and every record whose time passed while no server ran, the oldest
+ *    first, with `cause: "start"`.
+ * 2. Then it loops: it reads the wall time, fires every record due by then
+ *    with `cause: "due"`, and sleeps until the next time a record is due, or
+ *    for `WAKE_CLOCK_MAX_SLEEP`, whichever comes first. An arm or a cancel,
+ *    or a fire that ends, ends the sleep early.
+ *
+ * A record whose fire still runs is not fired again. Each fire's answer is
+ * one conditional write; a fire that fails retries after a backoff.
+ */
+export const branchWakeClockLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const storage = yield* BranchWakeStorage
+    const wakes = yield* BranchWakes
+    const loopClient = yield* AgentLoop.Context
+    const fireOpenings = yield* WakeFireOpenings
+    const firing = yield* FiberMap.make<string>()
+    const permits = yield* Semaphore.make(WAKE_FIRE_CONCURRENCY)
+    // A fire that ends wakes the loop: its answer may name a sooner time.
+    const fireEnded = yield* Queue.sliding<void>(1)
+
+    const answer = (wake: BranchWake, fired: WakeFired) => {
+      const key = wakeKeyOf(wake)
+      return WakeFired.match(fired, {
+        Handled: ({ next }) =>
+          WakeNext.match(next, {
+            Done: () => storage.settle(key, wake.version),
+            At: ({ at }) => storage.reschedule(key, wake.version, Option.some(at)),
+            AtStart: () => storage.reschedule(key, wake.version, Option.none()),
+          }),
+        Gone: () => storage.settle(key, wake.version),
+        Unhandled: () =>
+          Effect.logWarning("branch-wake.unhandled").pipe(
+            Effect.annotateLogs({
+              sessionId: wake.sessionId,
+              branchId: wake.branchId,
+              extensionId: wake.extensionId,
+              sourceId: wake.sourceId,
+            }),
+            Effect.andThen(storage.settle(key, wake.version)),
+          ),
+      })
+    }
+
+    const fire = (wake: BranchWake, cause: WakeCause) =>
+      Effect.gen(function* () {
+        // Marked while the fire is sent: a loop the fire builds keeps its
+        // recovery deferred (`WakeFireOpenings`).
+        const fired = yield* fireOpenings.during(
+          entityIdOf(wake.workspaceId, wake.sessionId, wake.branchId),
+          fireWakeOn({
+            workspaceId: wake.workspaceId,
+            sessionId: wake.sessionId,
+            branchId: wake.branchId,
+            extensionId: wake.extensionId,
+            sourceId: wake.sourceId,
+            at: wake.at,
+            cause,
+            version: wake.version,
+            attempts: wake.attempts,
+          }).pipe(Effect.provideService(AgentLoop.Context, loopClient), Effect.exit),
+        )
+        if (Exit.isSuccess(fired)) {
+          yield* answer(wake, fired.value)
+          return
+        }
+        yield* Effect.logWarning("branch-wake.fire.failed").pipe(
+          Effect.annotateLogs({
+            sessionId: wake.sessionId,
+            branchId: wake.branchId,
+            extensionId: wake.extensionId,
+            sourceId: wake.sourceId,
+            attempts: wake.attempts,
+            error: Cause.pretty(fired.cause),
+          }),
+        )
+        yield* storage.retry(wakeKeyOf(wake), wake.version, yield* Clock.currentTimeMillis)
+      }).pipe(
+        permits.withPermits(1),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("branch-wake.answer.failed").pipe(
+            Effect.annotateLogs({ sourceId: wake.sourceId, error: Cause.pretty(cause) }),
+          ),
+        ),
+        Effect.ensuring(Queue.offer(fireEnded, void 0)),
+      )
+
+    // The key is registered when the fire is forked, so the next read of
+    // the table skips a record whose fire still runs.
+    const fireAll = (due: ReadonlyArray<BranchWake>, cause: WakeCause) =>
+      Effect.forEach(
+        due,
+        (wake) =>
+          FiberMap.run(firing, wakeFiberKey(wake), fire(wake, cause), { onlyIfMissing: true }),
+        { discard: true },
+      )
+
+    // Read as the server builds, before any client can arm a record: a
+    // start-only record armed in this process waits for the next start.
+    const startedAt = yield* Clock.currentTimeMillis
+    const startup = Effect.suspend(() =>
+      Effect.flatMap(storage.listAtStart(startedAt), (due) => fireAll(due, "start")),
+    )
+
+    const sleepUntilNext = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const next = yield* storage.nextAt(now)
+      const sleep = Option.match(next, {
+        onNone: () => WAKE_CLOCK_MAX_SLEEP,
+        onSome: (at) => Duration.min(Duration.millis(at - now), WAKE_CLOCK_MAX_SLEEP),
+      })
+      yield* Effect.raceAll([Effect.sleep(sleep), wakes.changed, Queue.take(fireEnded)])
+    })
+
+    const turn = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      yield* fireAll(yield* storage.listDue(now), "due")
+      yield* sleepUntilNext
+    }).pipe(
+      // A read that fails waits one full sleep and reads again.
+      Effect.catchCause((cause) =>
+        Effect.logWarning("branch-wake.clock.failed").pipe(
+          Effect.annotateLogs({ error: Cause.pretty(cause) }),
+          Effect.andThen(Effect.sleep(WAKE_CLOCK_MAX_SLEEP)),
+        ),
+      ),
+    )
+
+    yield* startup.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("branch-wake.startup.failed").pipe(
+          Effect.annotateLogs({ error: Cause.pretty(cause) }),
+        ),
+      ),
+      Effect.andThen(Effect.forever(turn)),
+      Effect.forkScoped,
+    )
+  }),
+)

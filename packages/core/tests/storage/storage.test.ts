@@ -19,6 +19,7 @@ import {
 import { SqlClient } from "effect/sql"
 import {
   AgentLoopQueueStorage,
+  BranchWakeStorage,
   BranchStorage,
   DurableOperations,
   emptyTurnRecord,
@@ -349,6 +350,7 @@ describe("Sessions", () => {
           "session_admission",
           "model_catalog_snapshots",
           "tool_image_references",
+          "branch_wakes",
         ])
       }).pipe(Effect.provide(layer))
 
@@ -384,6 +386,7 @@ describe("Sessions", () => {
           "session_admission",
           "model_catalog_snapshots",
           "tool_image_references",
+          "branch_wakes",
         ])
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
@@ -2852,5 +2855,129 @@ describe("InteractionStorage", () => {
       expect(legacyRow?.requestId).toBe(InteractionRequestId.make("req-legacy"))
       expect(legacyRow?.owner).toBeUndefined()
     }).pipe(Effect.provide(interactionStorageLive)),
+  )
+})
+
+describe("Branch wakes", () => {
+  const sessionId = SessionId.make("wake-session")
+  const branchId = BranchId.make("wake-branch")
+  const key = {
+    sessionId,
+    branchId,
+    extensionId: ExtensionId.make("@test/waker"),
+    sourceId: "nightly",
+  }
+  const rowsOf = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    return yield* sql<{
+      readonly timed: number
+      readonly at: number
+      readonly version: number
+      readonly attempts: number
+    }>`SELECT at IS NOT NULL AS timed, COALESCE(at, 0) AS at, version, attempts
+       FROM branch_wakes ORDER BY source_id`
+  })
+  // The rows compare with the time as an Option: a record with none is start-only.
+  const readRows = rowsOf.pipe(
+    Effect.map((rows) =>
+      rows.map(({ timed, at, ...row }) => ({
+        at: Option.filter(Option.some(at), () => timed === 1),
+        ...row,
+      })),
+    ),
+  )
+
+  it.live("a repeat arm keeps one record, bumps its version and restarts its attempts", () =>
+    Effect.gen(function* () {
+      const wakes = yield* BranchWakeStorage
+      yield* ensureStorageParents({ sessionId, branchId })
+      yield* wakes.arm({ ...key, at: Option.some(1_000) })
+      yield* wakes.retry(key, 1, 0)
+      expect(yield* readRows).toEqual([{ at: Option.some(5_000), version: 1, attempts: 1 }])
+      yield* wakes.arm({ ...key, at: Option.some(2_000) })
+      expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 2, attempts: 0 }])
+      // A repeat with no time keeps the time already set.
+      yield* wakes.arm({ ...key, at: Option.none() })
+      expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 3, attempts: 0 }])
+    }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
+  it.live("a write after a fire changes nothing once a newer arm replaced the record", () =>
+    Effect.gen(function* () {
+      const wakes = yield* BranchWakeStorage
+      yield* ensureStorageParents({ sessionId, branchId })
+      yield* wakes.arm({ ...key, at: Option.some(1_000) })
+      // The fire read version 1; a newer arm lands while it runs.
+      yield* wakes.arm({ ...key, at: Option.some(9_000) })
+      yield* wakes.settle(key, 1)
+      yield* wakes.reschedule(key, 1, Option.some(3_000))
+      yield* wakes.retry(key, 1, 0)
+      expect(yield* readRows).toEqual([{ at: Option.some(9_000), version: 2, attempts: 0 }])
+      // The write on the version it read applies.
+      yield* wakes.reschedule(key, 2, Option.none())
+      expect(yield* readRows).toEqual([{ at: Option.none(), version: 2, attempts: 0 }])
+      yield* wakes.settle(key, 2)
+      expect(yield* readRows).toEqual([])
+    }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
+  it.live("a failed fire retries after 5 seconds, twice as long each time, up to 10 minutes", () =>
+    Effect.gen(function* () {
+      const wakes = yield* BranchWakeStorage
+      yield* ensureStorageParents({ sessionId, branchId })
+      yield* wakes.arm({ ...key, at: Option.some(0) })
+      const delays: Array<Option.Option<number>> = []
+      for (let attempt = 0; attempt < 9; attempt++) {
+        yield* wakes.retry(key, 1, 0)
+        delays.push(...(yield* readRows).map((row) => row.at))
+      }
+      expect(delays).toEqual(
+        [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 320_000, 600_000, 600_000].map((ms) =>
+          Option.some(ms),
+        ),
+      )
+      expect((yield* readRows)[0]?.attempts).toBe(9)
+    }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
+  it.live("the start pass lists start-only and past records; the due pass only timed ones", () =>
+    Effect.gen(function* () {
+      const wakes = yield* BranchWakeStorage
+      yield* ensureStorageParents({ sessionId, branchId })
+      const started = yield* Clock.currentTimeMillis
+      yield* wakes.arm({ ...key, sourceId: "past", at: Option.some(started - 500) })
+      yield* wakes.arm({ ...key, sourceId: "start-only", at: Option.none() })
+      yield* wakes.arm({ ...key, sourceId: "later", at: Option.some(started + 60_000) })
+      const now = yield* Clock.currentTimeMillis
+      const sources = (rows: ReadonlyArray<{ readonly sourceId: string }>) =>
+        rows.map((row) => row.sourceId)
+      expect(sources(yield* wakes.listAtStart(now))).toEqual(["past", "start-only"])
+      // A start-only record armed after the start waits for the next one.
+      expect(sources(yield* wakes.listAtStart(started - 1))).toEqual(["past"])
+      expect(sources(yield* wakes.listDue(now))).toEqual(["past"])
+      expect(yield* wakes.nextAt(now)).toEqual(Option.some(started + 60_000))
+      expect(yield* wakes.nextAt(started + 60_000)).toEqual(Option.none())
+    }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
+  it.live(
+    "cancel answers whether a record was there, and a deleted session takes its records",
+    () =>
+      Effect.gen(function* () {
+        const wakes = yield* BranchWakeStorage
+        const sessions = yield* SessionStorage
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        expect(yield* wakes.cancel(key)).toBe(true)
+        expect(yield* wakes.cancel(key)).toBe(false)
+        // Another workspace's cancel does not reach this workspace's record.
+        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        const elsewhere = yield* wakes
+          .cancel(key)
+          .pipe(Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))))
+        expect(elsewhere).toBe(false)
+        yield* sessions.deleteSession(sessionId)
+        expect(yield* readRows).toEqual([])
+      }).pipe(Effect.provide(testSqliteStorage)),
   )
 })

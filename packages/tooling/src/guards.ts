@@ -3472,7 +3472,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   {
     file: "packages/core/src/runtime/extension-host.ts",
     text: "anyUnknownInErrorContext:off -- the extension membrane erases the author effect channels and seals them here.",
-    count: 9,
+    count: 10,
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",

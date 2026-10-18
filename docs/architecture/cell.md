@@ -90,10 +90,14 @@ host's.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately. A build that
-starts cleanly starts the loop's `loopOpen` activations in the loop scope, after
-the recovered turn (if any) started; closing the loop interrupts them. Loops are
-lazy: no startup pass rebuilds them, so a session nobody opens runs no
-`loopOpen` until a client or another loop reaches it (a snapshot is enough).
+starts cleanly starts the loop's `loopOpen` activations in the loop scope;
+the actor's build then resumes the turn a restart cut short (if any, and not
+for a wake fire, see Deferred recovery in `runtime.md`); closing the loop interrupts them.
+Loops are lazy: only three things build one with no client, the cluster's
+redelivery of a turn's keep-alive, the wake clock's fire of a record on the
+branch, and another loop's operation, so a session nobody opens and nothing
+wakes runs no `loopOpen` until a client or another loop reaches it (a
+snapshot is enough).
 A terminated session opens no loop: each operation that would start one
 (a submit, a queued follow-up, an extension request, a mutation) checks the
 termination marker first and fails with `Session terminated`, and an actor

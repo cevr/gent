@@ -16,6 +16,7 @@ import { SqlClient, SqlError } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
 import {
   BranchId,
+  ExtensionId,
   type InteractionRequestId,
   MessageId,
   type RequestId,
@@ -35,6 +36,7 @@ import {
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
+import type { BranchWakeKey } from "../domain/extension.js"
 import {
   branchFromRow,
   type BranchRow,
@@ -1385,6 +1387,192 @@ export class InteractionStorage extends Context.Service<
   )
 }
 
+// ── branch-wake-storage ─────────────────────────────────────────────────────
+
+const BranchWakeRow = Schema.Struct({
+  workspace_id: WorkspaceId,
+  session_id: SessionId,
+  branch_id: BranchId,
+  extension_id: ExtensionId,
+  source_id: Schema.String,
+  at: Schema.OptionFromNullOr(Schema.Finite),
+  version: Schema.Int,
+  attempts: Schema.Int,
+})
+const decodeBranchWakeRows = Schema.decodeUnknownEffect(Schema.Array(BranchWakeRow))
+
+/** One wake record, with the version a write after its fire names. */
+export interface BranchWake extends BranchWakeKey {
+  readonly workspaceId: WorkspaceId
+  readonly at: Option.Option<number>
+  readonly version: number
+  readonly attempts: number
+}
+
+const BRANCH_WAKE_COLUMNS =
+  "workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts"
+
+const decodeNextWakeRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ next: Schema.OptionFromNullOr(Schema.Finite) })),
+)
+
+/** The first retry waits this long; each later one twice the one before. */
+const BRANCH_WAKE_RETRY_BASE_MS = 5_000
+/** No retry waits longer. */
+const BRANCH_WAKE_RETRY_MAX_MS = 600_000
+
+interface BranchWakeStorageService {
+  /**
+   * One upsert in the current workspace. A new record has version 1; a
+   * repeat bumps the version and clears the attempts, and with no `at`
+   * keeps the time already set.
+   */
+  readonly arm: (
+    wake: BranchWakeKey & { readonly at: Option.Option<number> },
+  ) => Effect.Effect<void, StorageError>
+  /** Removes a record of the current workspace; false when there was none. */
+  readonly cancel: (key: BranchWakeKey) => Effect.Effect<boolean, StorageError>
+  /**
+   * Every record of every workspace a server start fires: start-only ones
+   * armed by `now`, and those due by `now`, the oldest first. A start-only
+   * record armed later waits for the next start.
+   */
+  readonly listAtStart: (now: number) => Effect.Effect<ReadonlyArray<BranchWake>, StorageError>
+  /** Every record of every workspace due by `now`, the earliest first. */
+  readonly listDue: (now: number) => Effect.Effect<ReadonlyArray<BranchWake>, StorageError>
+  /** The earliest time after `now` any record is due; none when no timed record waits. */
+  readonly nextAt: (now: number) => Effect.Effect<Option.Option<number>, StorageError>
+  /**
+   * The writes after a fire. Each is one statement on the version the fire
+   * read and changes nothing when a newer `arm` replaced the record during
+   * the fire: the newer record stands as it was written.
+   */
+  readonly settle: (key: BranchWakeKey, version: number) => Effect.Effect<void, StorageError>
+  /** Fire again at `at`, or with none only at the next start; the attempts restart. */
+  readonly reschedule: (
+    key: BranchWakeKey,
+    version: number,
+    at: Option.Option<number>,
+  ) => Effect.Effect<void, StorageError>
+  /**
+   * A failed fire: count the attempt and fire again after
+   * `min(BRANCH_WAKE_RETRY_BASE_MS × 2^attempts, BRANCH_WAKE_RETRY_MAX_MS)`.
+   */
+  readonly retry: (
+    key: BranchWakeKey,
+    version: number,
+    now: number,
+  ) => Effect.Effect<void, StorageError>
+}
+
+export class BranchWakeStorage extends Context.Service<
+  BranchWakeStorage,
+  BranchWakeStorageService
+>()("@gent/core/src/storage/storage/BranchWakeStorage") {
+  static Live: Layer.Layer<BranchWakeStorage, never, SqlClient.SqlClient> = Layer.effect(
+    BranchWakeStorage,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+
+      const keyIs = (key: BranchWakeKey) =>
+        sql`session_id = ${key.sessionId} AND branch_id = ${key.branchId} AND extension_id = ${key.extensionId} AND source_id = ${key.sourceId}`
+
+      const listRows = (rows: ReadonlyArray<unknown>) =>
+        decodeBranchWakeRows(rows).pipe(
+          Effect.map((decoded) =>
+            decoded.map((row): BranchWake => ({
+              workspaceId: row.workspace_id,
+              sessionId: row.session_id,
+              branchId: row.branch_id,
+              extensionId: row.extension_id,
+              sourceId: row.source_id,
+              at: row.at,
+              version: row.version,
+              attempts: row.attempts,
+            })),
+          ),
+        )
+
+      // 2^7 × 5 s passes the cap: the shift stops there, so no attempt count overflows.
+      const retryDelay = sql`MIN(${BRANCH_WAKE_RETRY_BASE_MS} * (1 << MIN(attempts, 7)), ${BRANCH_WAKE_RETRY_MAX_MS})`
+
+      return BranchWakeStorage.of({
+        arm: Effect.fn("BranchWakeStorage.arm")(
+          function* (wake) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const createdAt = yield* Clock.currentTimeMillis
+            const at = toSqlNull(Option.getOrUndefined(wake.at))
+            yield* sql`INSERT INTO branch_wakes (workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts, created_at)
+              VALUES (${workspaceId}, ${wake.sessionId}, ${wake.branchId}, ${wake.extensionId}, ${wake.sourceId}, ${at}, 1, 0, ${createdAt})
+              ON CONFLICT (session_id, branch_id, extension_id, source_id) DO UPDATE SET
+                at = COALESCE(excluded.at, branch_wakes.at),
+                version = branch_wakes.version + 1,
+                attempts = 0`
+          },
+          Effect.mapError(storageError("Failed to arm wake record")),
+        ),
+        cancel: Effect.fn("BranchWakeStorage.cancel")(
+          function* (key) {
+            const workspaceId = yield* CurrentWorkspaceId
+            const removed = yield* sql`DELETE FROM branch_wakes
+              WHERE ${keyIs(key)} AND workspace_id = ${workspaceId}
+              RETURNING source_id`
+            return removed.length > 0
+          },
+          Effect.mapError(storageError("Failed to cancel wake record")),
+        ),
+        listAtStart: Effect.fn("BranchWakeStorage.listAtStart")(
+          function* (now) {
+            const rows = yield* sql`SELECT ${sql.literal(BRANCH_WAKE_COLUMNS)} FROM branch_wakes
+              WHERE (at IS NULL AND created_at <= ${now}) OR at <= ${now}
+              ORDER BY created_at ASC, rowid ASC`
+            return yield* listRows(rows)
+          },
+          Effect.mapError(storageError("Failed to list wake records at start")),
+        ),
+        listDue: Effect.fn("BranchWakeStorage.listDue")(
+          function* (now) {
+            const rows = yield* sql`SELECT ${sql.literal(BRANCH_WAKE_COLUMNS)} FROM branch_wakes
+              WHERE at IS NOT NULL AND at <= ${now}
+              ORDER BY at ASC, rowid ASC`
+            return yield* listRows(rows)
+          },
+          Effect.mapError(storageError("Failed to list due wake records")),
+        ),
+        nextAt: Effect.fn("BranchWakeStorage.nextAt")(
+          function* (now) {
+            const rows = yield* sql`SELECT MIN(at) AS next FROM branch_wakes WHERE at > ${now}`
+            const decoded = yield* decodeNextWakeRows(rows)
+            return Option.flatMap(Arr.head(decoded), (row) => row.next)
+          },
+          Effect.mapError(storageError("Failed to read the next wake time")),
+        ),
+        settle: Effect.fn("BranchWakeStorage.settle")(
+          function* (key, version) {
+            yield* sql`DELETE FROM branch_wakes WHERE ${keyIs(key)} AND version = ${version}`
+          },
+          Effect.mapError(storageError("Failed to settle wake record")),
+        ),
+        reschedule: Effect.fn("BranchWakeStorage.reschedule")(
+          function* (key, version, at) {
+            const next = toSqlNull(Option.getOrUndefined(at))
+            yield* sql`UPDATE branch_wakes SET at = ${next}, attempts = 0
+              WHERE ${keyIs(key)} AND version = ${version}`
+          },
+          Effect.mapError(storageError("Failed to reschedule wake record")),
+        ),
+        retry: Effect.fn("BranchWakeStorage.retry")(
+          function* (key, version, now) {
+            yield* sql`UPDATE branch_wakes SET at = ${now} + ${retryDelay}, attempts = attempts + 1
+              WHERE ${keyIs(key)} AND version = ${version}`
+          },
+          Effect.mapError(storageError("Failed to retry wake record")),
+        ),
+      })
+    }),
+  )
+}
+
 // ── agent-loop-queue-storage ────────────────────────────────────────────────
 
 /**
@@ -2467,6 +2655,7 @@ type FocusedStorage =
   | ToolCallBindingStorage
   | TurnRecordStorage
   | ModelCatalogSnapshotStorage
+  | BranchWakeStorage
   | ClusterMessageStorage.MessageStorage
 
 /**
@@ -2490,6 +2679,7 @@ const provideFocusedRepositories = <E, R>(
       ToolCallBindingStorage.Live,
       TurnRecordStorage.Live,
       ModelCatalogSnapshotStorage.Live,
+      BranchWakeStorage.Live,
       encoreSqlMessageStorage(),
       InteractionStorage.Live,
     ),

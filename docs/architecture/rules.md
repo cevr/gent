@@ -343,6 +343,12 @@ names the decision that left it open.
   (`ExtensionContext.Session.listActiveLoops`) and the stored catalog (`session.list`, `packages/core/src/server/rpc.ts`) differ after a
   restart; folding the view into the client would need a core RPC or one
   snapshot read per session per tick. Rejected as R6 in the same ledger.
+- **A boot with both a cut-short turn and a due wake on one branch.** The
+  cluster's redelivery of the turn's keep-alive and the wake clock's start
+  pass both build the branch's entity, and the cluster gives no signal when
+  its redelivery is done. When the keep-alive builds it first, the turn
+  resumes at boot; when the fire does, the turn waits, deferred, for the next
+  ordinary operation. Neither order runs a turn twice or loses one.
 - **Compaction is measured on long sessions only by hand.** The handoff
   count (`ModelContextProjected.compacted`) after the spill comes from gamut
   runs, not from a test; the receipt in
