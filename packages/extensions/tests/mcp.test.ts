@@ -2748,17 +2748,7 @@ describe("mcp images", () => {
       ),
     ).toEqual({
       text: "a dot",
-      images: [
-        {
-          _tag: "ToolImage",
-          sha256: "a".repeat(64),
-          mediaType: "image/png",
-          width: 1,
-          height: 1,
-          bytes: 70,
-          path: "/data/blobs/a.png",
-        },
-      ],
+      images: [{ ...image, path: "/data/blobs/a.png" }],
       omitted: [
         { type: "audio", mimeType: "audio/wav", bytes: 3, path: "/nonexistent/gent-probe-x/a.wav" },
       ],
@@ -3072,9 +3062,11 @@ describe("mcp tools in the cell", () => {
           Stream.take(5),
           Stream.runCollect,
         )
+        expect(inner.map((envelope) => envelope.event._tag)).toEqual(
+          Array.from({ length: 5 }, () => "ToolCallStarted"),
+        )
         expect(inner.map((envelope) => envelope.event)).toMatchObject(
           ["echo", "structured", "fail", "echo", "count"].map((name) => ({
-            _tag: "ToolCallStarted",
             toolName: `mcp.fixture.${name}`,
             parentToolCallId: cellToolCallId,
           })),

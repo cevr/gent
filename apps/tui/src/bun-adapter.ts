@@ -40,10 +40,10 @@ export const readonlySqlite = (dbPath: string) =>
  */
 
 /** Bun could not compile a client file; `cause` is its error or its build logs. */
-class ClientExtensionBuildError extends Schema.TaggedError<ClientExtensionBuildError>()(
-  "ClientExtensionBuildError",
-  { cause: Schema.Unknown },
-) {}
+class ClientExtensionBuildError extends Schema.TaggedError<
+  ClientExtensionBuildError,
+  { readonly brand: unique symbol }
+>()("ClientExtensionBuildError", { cause: Schema.Unknown }) {}
 
 /** How a client build treats the bare names its files import. */
 export interface ClientBuildNames {

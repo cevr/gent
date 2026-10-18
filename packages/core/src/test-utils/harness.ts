@@ -2359,7 +2359,7 @@ export const apiKeyAuth = (
     }).pipe(Effect.orDie),
   ).pipe(Layer.provide(Auth.Test()))
 
-class WaitForError extends Schema.TaggedError<WaitForError>()(
+class WaitForError extends Schema.TaggedError<WaitForError, { readonly brand: unique symbol }>()(
   "@gent/core/src/test-utils/harness/WaitForError",
   { message: Schema.String },
 ) {}

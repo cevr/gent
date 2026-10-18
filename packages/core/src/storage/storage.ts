@@ -697,7 +697,10 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
 const LatestEventIdRow = Schema.Struct({ id: Schema.Finite })
 const decodeLatestEventIdRow = Schema.decodeUnknownEffect(LatestEventIdRow)
 
-export class EventDecodeError extends Schema.TaggedError<EventDecodeError>()("EventDecodeError", {
+export class EventDecodeError extends Schema.TaggedError<
+  EventDecodeError,
+  { readonly brand: unique symbol }
+>()("EventDecodeError", {
   eventId: EventId,
   operation: Schema.Literals(["listEvents", "listToolResultWindow"]),
   error: Schema.String,

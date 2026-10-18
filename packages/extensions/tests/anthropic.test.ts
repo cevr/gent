@@ -9,7 +9,7 @@ import {
   buildAnthropicModelDriver as buildAnthropicModelDriverLive,
   buildBillingHeaderValue as buildBillingHeaderValueEffect,
   buildKeychainTransformClient,
-  type ClaudeCredentials,
+  ClaudeCredentials,
   extractFirstUserMessageText,
   getModelBetas,
   MESSAGES_CLASS,
@@ -70,7 +70,7 @@ import {
 import { resolveShipped } from "./helpers/api-classes.js"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/http"
 import {
-  type CredentialCacheCell,
+  CredentialCacheCell,
   type CredentialFailure,
   CredentialRefreshUnavailable,
   EMPTY_CREDENTIAL_CELL,
@@ -1395,7 +1395,8 @@ const FUTURE_MS = 1_800_000_000_000
 const makeDurableCell = (
   creds: ClaudeCredentials,
   at: number,
-): CredentialCacheCell<ClaudeCredentials> => ({ _tag: "Durable", creds, at, invalidated: false })
+): CredentialCacheCell<ClaudeCredentials> =>
+  CredentialCacheCell(ClaudeCredentials).cases.Durable.make({ creds, at, invalidated: false })
 const testPlatform = AnthropicPlatform.of({
   platform: "darwin",
   home: "/nonexistent/gent-test-home",
@@ -1606,8 +1607,8 @@ describe("Anthropic lost connection", () => {
         Effect.scoped,
         Effect.flip,
       )
+      expect(error.reason._tag).toBe("NetworkError")
       expect(error.reason).toMatchObject({
-        _tag: "NetworkError",
         reason: "TransportError",
         description: "connection lost while reading the response",
       })
@@ -2423,6 +2424,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
             Effect.andThen(Deferred.await(release)),
             Effect.andThen(
               Effect.fail(
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
                 PlatformError.systemError({
                   _tag: "TimedOut",
                   module: "FileSystem",
@@ -2707,6 +2709,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
             ...fs,
             rename: () =>
               Effect.fail(
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
                 PlatformError.systemError({
                   _tag: "PermissionDenied",
                   module: "FileSystem",

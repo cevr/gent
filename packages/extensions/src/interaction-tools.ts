@@ -391,7 +391,10 @@ export const QuestionAnswerDetails = Schema.Struct({
 })
 export type QuestionAnswerDetails = typeof QuestionAnswerDetails.Type
 
-class QuestionsError extends Schema.TaggedError<QuestionsError>()("QuestionsError", {
+class QuestionsError extends Schema.TaggedError<
+  QuestionsError,
+  { readonly brand: unique symbol }
+>()("QuestionsError", {
   message: Schema.String,
 }) {}
 
@@ -554,7 +557,7 @@ export const AskUserAsyncTool = tool({
     // A call always has an id when the loop runs it; a direct run gets a fresh one.
     const crypto = yield* Crypto.Crypto
     const callId = yield* Option.match(Option.fromUndefinedOr(ctx.toolCallId), {
-      onNone: () => crypto.randomUUIDv7,
+      onNone: () => crypto.randomUUIDv7(),
       onSome: (id) => Effect.succeed(String(id)),
     })
     const asked = params.questions.map((question, index): OpenQuestion => ({

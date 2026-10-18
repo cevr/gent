@@ -32,10 +32,10 @@ const AdminScope = Schema.Literals(["user", "project"])
 type AdminScope = typeof AdminScope.Type
 
 /** A verb that cannot run as asked; the message says what would let it. */
-class ExtensionAdminRefused extends Schema.TaggedError<ExtensionAdminRefused>()(
-  "ExtensionAdminRefused",
-  { message: Schema.String },
-) {}
+class ExtensionAdminRefused extends Schema.TaggedError<
+  ExtensionAdminRefused,
+  { readonly brand: unique symbol }
+>()("ExtensionAdminRefused", { message: Schema.String }) {}
 
 const refuse = (message: string) => new ExtensionAdminRefused({ message })
 

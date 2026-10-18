@@ -4,7 +4,7 @@ import {
   BranchCreated,
   BranchSwitched,
   ErrorOccurred,
-  type EventEnvelope,
+  EventEnvelope,
   EventId,
   EventStore,
   type EventStoreService,
@@ -172,7 +172,11 @@ describe("EventStore publish and delivery", () => {
           Effect.sync(() => {
             persisted.push(event._tag)
             nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS }
+            return EventEnvelope.make({
+              id: EventId.make(nextId),
+              event,
+              createdAt: FIXED_NOW_MILLIS,
+            })
           }),
         broadcast: (envelope: EventEnvelope) =>
           Effect.sync(() => {
@@ -197,11 +201,13 @@ describe("EventStore publish and delivery", () => {
       const releaseBroadcast = yield* Deferred.make<void>()
       const customEventStore = makeEventStoreLayer({
         append: (event) =>
-          Effect.succeed({
-            id: EventId.make(1),
-            event,
-            createdAt: FIXED_NOW_MILLIS,
-          }),
+          Effect.succeed(
+            EventEnvelope.make({
+              id: EventId.make(1),
+              event,
+              createdAt: FIXED_NOW_MILLIS,
+            }),
+          ),
         broadcast: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(broadcastStarted, void 0)
@@ -227,13 +233,13 @@ describe("EventStore publish and delivery", () => {
       const firstBroadcastStarted = yield* Deferred.make<void>()
       const releaseFirstBroadcast = yield* Deferred.make<void>()
       const broadcastCount = yield* Ref.make(0)
-      const envelope = {
+      const envelope = EventEnvelope.make({
         id: EventId.make(1),
         event: toolCallStarted("session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
-      }
+      })
       const customEventStore = makeEventStoreLayer({
-        append: (event) => Effect.succeed({ ...envelope, event }),
+        append: (event) => Effect.succeed(EventEnvelope.make({ ...envelope, event })),
         broadcast: () =>
           Effect.gen(function* () {
             yield* Ref.update(broadcastCount, (count) => count + 1)
@@ -258,13 +264,13 @@ describe("EventStore publish and delivery", () => {
   it.live("broadcast defects fail the caller without killing the delivery worker", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0)
-      const envelope = {
+      const envelope = EventEnvelope.make({
         id: EventId.make(1),
         event: toolCallStarted("session-1", "branch-1"),
         createdAt: FIXED_NOW_MILLIS,
-      }
+      })
       const customEventStore = makeEventStoreLayer({
-        append: (event) => Effect.succeed({ ...envelope, event }),
+        append: (event) => Effect.succeed(EventEnvelope.make({ ...envelope, event })),
         broadcast: () =>
           Ref.updateAndGet(attempts, (count) => count + 1).pipe(
             Effect.flatMap((count) => {
@@ -453,6 +459,7 @@ describe("agent event wire shape", () => {
   test("SessionStarted encodes to its tag and fields and decodes back", () => {
     const evt = AgentEvent.cases.SessionStarted.make({ sessionId, branchId })
     const encoded = Schema.encodeUnknownSync(AgentEvent)(evt)
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded form this test asserts
     expect(encoded).toEqual({ _tag: "SessionStarted", sessionId, branchId })
     const decoded = Schema.decodeSync(AgentEvent)(encoded)
     expect(Schema.is(AgentEvent.cases.SessionStarted)(decoded)).toBe(true)

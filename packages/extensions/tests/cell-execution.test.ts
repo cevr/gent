@@ -215,11 +215,10 @@ describe("recorded cell execution", () => {
         yield* Fiber.join(stopping)
         expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true)
         // Recovery reads this record: the cell did not start, not a lost worker.
-        expect(
-          yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId }),
-        ).toMatchObject(
+        const saved = yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId })
+        expect(Option.map(saved, (execution) => execution._tag)).toEqual(Option.some("Completed"))
+        expect(saved).toMatchObject(
           Option.some({
-            _tag: "Completed",
             result: {
               isFailure: true,
               result: { message: "Cell did not start because execution was cancelled." },
@@ -255,8 +254,8 @@ describe("recorded cell execution", () => {
         )
         const cells = yield* openCellOwner(unusedWorker)
         const incomplete = yield* runCell(cells, cell).pipe(Effect.flip)
+        expect(incomplete._tag).toBe("CellExecutionIncomplete")
         expect(incomplete).toMatchObject({
-          _tag: "CellExecutionIncomplete",
           message:
             "The cell has no recorded result. 2 operations ran with no recorded result; their effects may have occurred. Its source was not replayed.",
         })
@@ -294,9 +293,9 @@ describe("recorded cell execution", () => {
           isFailure: true,
           result: { reason: "cancelled", message: "Cell cancelled. Its source was not replayed." },
         })
-        expect(
-          yield* (yield* CellStorage).executions.get({ ...cell, sessionId, branchId }),
-        ).toMatchObject(Option.some({ _tag: "Completed", result: cancelled }))
+        const saved = yield* (yield* CellStorage).executions.get({ ...cell, sessionId, branchId })
+        expect(Option.map(saved, (execution) => execution._tag)).toEqual(Option.some("Completed"))
+        expect(saved).toMatchObject(Option.some({ result: cancelled }))
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -318,9 +317,10 @@ describe("recorded cell execution", () => {
         })
         const cells = yield* openCellOwner(worker)
         const failed = yield* runCell(cells, uncaught, host)
+        expect(failed.result).toHaveProperty("_tag", "CellEvaluationError")
         expect(failed).toMatchObject({
           isFailure: true,
-          result: { _tag: "CellEvaluationError", message: refusal, output: "before" },
+          result: { message: refusal, output: "before" },
         })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
@@ -975,10 +975,8 @@ describe("recorded cell execution", () => {
             expect(yield* execution.run(first)).toEqual(saved)
             const error = yield* execution.run(failed)
             expect(error.isFailure).toBe(true)
-            expect(error.result).toMatchObject({
-              _tag: "CellEvaluationError",
-              message: expect.stringContaining("cell failed"),
-            })
+            expect(error.result).toHaveProperty("_tag", "CellEvaluationError")
+            expect(error.result).toMatchObject({ message: expect.stringContaining("cell failed") })
             expect(yield* execution.run(failed)).toEqual(error)
             expect((yield* execution.run(next)).result).toMatchObject({ display: "2" })
             expect(yield* fs.readFileString(output)).toBe("x")
@@ -1056,12 +1054,13 @@ describe("recorded cell execution", () => {
         const execution = yield* openCellOwner(worker, { maximumFailedLaunches: 1 })
         const failed = yield* runCell(execution, first)
         expect(failed.isFailure).toBe(true)
-        expect(failed.result).toMatchObject({ _tag: "CellProcessError", phase: "launch" })
+        expect(failed.result).toHaveProperty("_tag", "CellProcessError")
+        expect(failed.result).toMatchObject({ phase: "launch" })
         // The worker is back, but one failed launch already reached the limit of one.
         yield* fs.rename(savedWorker, worker.scriptPath)
         const refused = yield* runCell(execution, next)
+        expect(refused.result).toHaveProperty("_tag", "CellProcessError")
         expect(refused.result).toMatchObject({
-          _tag: "CellProcessError",
           phase: "launch",
           message: expect.stringContaining("failed to launch 1 times in a row"),
         })

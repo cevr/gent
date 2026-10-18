@@ -11,9 +11,12 @@ import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 
 /** A git command that did not run, or that git refused; `message` is git's last line. */
-export class GitError extends Schema.TaggedError<GitError>()("GitError", {
-  message: Schema.String,
-}) {}
+export class GitError extends Schema.TaggedError<GitError, { readonly brand: unique symbol }>()(
+  "GitError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 const GIT_TIMEOUT = Duration.minutes(2)
 

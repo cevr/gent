@@ -59,7 +59,10 @@ interface OxlintRun {
 }
 
 /** One oxlint run did not produce a report. */
-class OxlintRunError extends Schema.TaggedError<OxlintRunError>()("OxlintRunError", {
+class OxlintRunError extends Schema.TaggedError<
+  OxlintRunError,
+  { readonly brand: unique symbol }
+>()("OxlintRunError", {
   message: Schema.String,
 }) {}
 

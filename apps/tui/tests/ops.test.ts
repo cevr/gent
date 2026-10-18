@@ -119,7 +119,10 @@ const writeLog = (dir: string, name: string, ageRank: number) =>
     return path
   })
 
-class UnknownAgentError extends Schema.TaggedError<UnknownAgentError>()("NotFoundError", {
+class UnknownAgentError extends Schema.TaggedError<
+  UnknownAgentError,
+  { readonly brand: unique symbol }
+>()("NotFoundError", {
   message: Schema.String,
 }) {}
 

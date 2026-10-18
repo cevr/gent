@@ -131,7 +131,14 @@ export {
   sessionAccount,
   stepSessionMetrics,
 } from "../domain/agent-loop.js"
-export { clampEffort, Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.js"
+export {
+  clampEffort,
+  ImageCost,
+  Model,
+  ModelId,
+  type ModelPricing,
+  ProviderId,
+} from "../domain/agent.js"
 // What a prompt-cache write costs and how long it lives: a router prices a switch with them.
 export { cacheWriteRate, promptCacheTtlMsFor } from "../domain/agent.js"
 export { AuthMethod } from "../domain/driver.js"

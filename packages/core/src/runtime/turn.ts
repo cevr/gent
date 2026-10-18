@@ -1205,15 +1205,15 @@ type ToolTerminalEvent = Extract<
   { readonly _tag: "ToolCallSucceeded" | "ToolCallFailed" }
 >
 
-export class ToolResultReplayError extends Schema.TaggedError<ToolResultReplayError>()(
-  "ToolResultReplayError",
-  {
-    assistantMessageId: MessageId,
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class ToolResultReplayError extends Schema.TaggedError<
+  ToolResultReplayError,
+  { readonly brand: unique symbol }
+>()("ToolResultReplayError", {
+  assistantMessageId: MessageId,
+  toolCallId: ToolCallId,
+  toolName: Schema.String,
+  message: Schema.String,
+}) {}
 
 const isToolTerminalEvent: (event: AgentEvent) => event is ToolTerminalEvent = Predicate.or(
   Predicate.and(Predicate.isTagged("ToolCallSucceeded"), Schema.is(ToolCallSucceeded)),
@@ -3772,6 +3772,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
               toolkit: convertTools([...resolved.tools]),
               toolChoice: "none",
               disableToolCallResolution: true,
+              toolCallValidation: "deferred",
             }),
           )
         }
@@ -3784,12 +3785,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             toolkit: convertTools([...resolved.replyTools]),
             toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
             disableToolCallResolution: true,
+            toolCallValidation: "deferred",
           }),
         )
       }
       // No tool goes on the request, but the reply can still call one: the
       // tool runner answers it (`Unknown tool: <id>`), as for any step.
-      return answered(model.streamText({ prompt, disableToolCallResolution: true }))
+      return answered(
+        model.streamText({
+          prompt,
+          disableToolCallResolution: true,
+          toolCallValidation: "deferred",
+        }),
+      )
     }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
@@ -3966,7 +3974,7 @@ const computeStreamEndedCost: (params: {
  * Policy (continue, stop, run tools) matches on this; nothing else inspects
  * the response parts, and the tag travels on the step's `StreamEnded` event.
  */
-const StepOutcome = Schema.TaggedUnion({
+export const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
   /**
    * The stream failed; `partialOutput` says whether observable output was saved

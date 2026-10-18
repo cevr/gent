@@ -185,6 +185,33 @@ describe("the repo's compiler options", () => {
       expect(failure.some((line) => line.includes("extendsNativeError"))).toBe(true)
     }).pipe(Effect.timeout("25 seconds")),
   )
+  contextTest("a block keeps the identity keys its reader writes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repoRoot = path.resolve(yield* path.fromFileUrl(new URL("../../..", import.meta.url)))
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-guide-keys-" })
+      const blocks = guideCodeBlocks(
+        "docs/extensions.md",
+        [
+          "```ts",
+          'import { Context } from "effect"',
+          'export class Tally extends Context.Service<Tally, number>()("tally-ext/Tally") {}',
+          "```",
+        ].join("\n"),
+      )
+      const names = blocks.map((block, index) => guideBlockFile(index, block))
+      yield* Effect.forEach(blocks, (block, index) =>
+        fs
+          .makeDirectory(path.dirname(path.join(directory, names[index]!)), { recursive: true })
+          .pipe(
+            Effect.andThen(fs.writeFileString(path.join(directory, names[index]!), block.code)),
+          ),
+      )
+      const failures = yield* compileContext(repoRoot, directory, extension, names)
+      expect(failures.filter((line) => line.includes("deterministicKeys"))).toEqual([])
+    }).pipe(Effect.timeout("25 seconds")),
+  )
 })
 
 describe("the steering files the check reads", () => {

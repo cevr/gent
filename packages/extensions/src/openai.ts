@@ -74,7 +74,6 @@ import {
   effortCarrier,
   keepsEffortPrefix,
   effortFor,
-  endpointClient,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
   authorizedClient,
@@ -95,7 +94,6 @@ import {
   sampledTemperature,
   sdkApiKey,
   takesLowVerbosity,
-  withEncryptedReasoning,
   modelReasons,
   withHeaders,
   ResponsesTransientStreamEvent,
@@ -180,25 +178,28 @@ const decodeDeviceError = Schema.decodeUnknownOption(Schema.fromJsonString(Devic
  * `buildOpenAIModelDriver`'s `authorize`/`callback` preserves structure
  * in `cause`, not just a string.
  */
-export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
-  reason: Schema.Literals([
-    "token-exchange-failed",
-    "token-refresh-failed",
-    "token-endpoint-unavailable",
-    "callback-error",
-    "missing-code",
-    "state-mismatch",
-    "callback-timeout",
-    "pkce-failed",
-    "server-failed",
-    "device-code-failed",
-    "device-code-denied",
-    "device-code-timeout",
-  ]),
-  message: Schema.String,
-  /** The token endpoint answered with a refusal: a 4xx other than a rate limit. */
-  refused: Schema.optional(Schema.Literal(true)),
-}) {}
+export class OAuthError extends Schema.TaggedError<OAuthError, { readonly brand: unique symbol }>()(
+  "OAuthError",
+  {
+    reason: Schema.Literals([
+      "token-exchange-failed",
+      "token-refresh-failed",
+      "token-endpoint-unavailable",
+      "callback-error",
+      "missing-code",
+      "state-mismatch",
+      "callback-timeout",
+      "pkce-failed",
+      "server-failed",
+      "device-code-failed",
+      "device-code-denied",
+      "device-code-timeout",
+    ]),
+    message: Schema.String,
+    /** The token endpoint answered with a refusal: a 4xx other than a rate limit. */
+    refused: Schema.optional(Schema.Literal(true)),
+  },
+) {}
 
 /**
  * ChatGPT OAuth reaches the Codex backend for the GPT-5 and GPT-6 families
@@ -901,7 +902,7 @@ export interface OpenAICredentials {
   readonly accountId: Option.Option<string>
 }
 
-const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
+export const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
   access: Schema.String,
   refresh: Schema.String,
   expires: Schema.Finite,
@@ -1312,7 +1313,10 @@ type OpenAiResponsesConfig = Required<
  * The Responses request, for both auth paths and every provider that speaks
  * the API: not stored, the conversation as the prompt cache key, the model's
  * text verbosity, and the effort the catalog's effort list accepts with a
- * reasoning summary. OpenAI runs a reasoning model at its default effort when
+ * reasoning summary. Whether the model reasons is the catalog's word
+ * (`reasoningModel`), not the SDK's guess from the model name: a reasoning
+ * model gets its system prompt as a `developer` message, and a request
+ * without store asks for the encrypted reasoning a later request sends back. OpenAI runs a reasoning model at its default effort when
  * the request names none, so a hint of "none" names the lowest effort the
  * model lists. `max_output_tokens` counts reasoning tokens too, so on a
  * reasoning model a small cap (the 768-token compaction summary) is shared
@@ -1324,7 +1328,7 @@ const responsesConfig = (
   entry: CatalogModel,
   hints: Option.Option<ProviderHints>,
 ): OpenAiResponsesConfig => {
-  let config: OpenAiResponsesConfig = { store: false }
+  let config: OpenAiResponsesConfig = { store: false, reasoningModel: modelReasons(entry, hints) }
   if (takesLowVerbosity(entry.id)) config = { ...config, text: { verbosity: "low" } }
   const cacheKey = Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey))
   if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
@@ -1446,26 +1450,19 @@ const withEffortUpdates =
     return { ...body, input: updated, reasoning: pinnedReasoning }
   }
 
-/**
- * The body rewrite of a request on the OpenAI driver's own paths: the
- * encrypted reasoning (`withEncryptedReasoning`) and the effort updates.
- */
+/** The body rewrite of a request on the OpenAI driver's own paths: the effort updates. */
 const openAiBody = (
   entry: CatalogModel,
   hints: Option.Option<ProviderHints>,
 ): ((body: Schema.JsonObject) => Schema.JsonObject) => {
-  const reasons = modelReasons(entry, hints)
   const carrier = responsesEffortCarrier(entry, hints)
-  const encrypted = withEncryptedReasoning(reasons)
-  const updates = withEffortUpdates(carrier)
-  return (body) => updates(encrypted(body))
+  return withEffortUpdates(carrier)
 }
 
 /**
  * The OpenAI Responses API, for any provider whose models.dev entry names
  * `@ai-sdk/openai` or the `responses` shape (the OpenCode gateways' GPT
- * models). The body asks for the encrypted reasoning
- * (`withEncryptedReasoning`).
+ * models).
  */
 export const RESPONSES_CLASS: ApiClassContribution = {
   id: "openai-responses",
@@ -1476,11 +1473,10 @@ export const RESPONSES_CLASS: ApiClassContribution = {
   imagePartOptions: OPENAI_IMAGE_PART_OPTIONS,
   resolveModel: (request) =>
     Effect.map(loadOpenAiSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
-      const reasons = modelReasons(request.model, request.hints)
       const client = OpenAiClient.layer({
         apiKey: sdkApiKey(request.apiKey),
         apiUrl: Option.getOrUndefined(request.baseUrl),
-        transformClient: endpointClient(request, rewriteJsonBody(withEncryptedReasoning(reasons))),
+        transformClient: Option.getOrUndefined(request.transformClient),
       }).pipe(Layer.provide(ModelHttpClient))
       return AiModel.make(
         request.providerId,
@@ -1539,9 +1535,10 @@ const SummaryRefusal = Schema.fromJsonString(
 const decodeSummaryRefusal = Schema.decodeUnknownOption(SummaryRefusal)
 
 /** Drives the one retry after a summary refusal; carries the refusal for when no retry is left. */
-class SummaryRefusedError extends Schema.TaggedError<SummaryRefusedError>(
-  "@gent/extensions/src/openai/SummaryRefusedError",
-)("SummaryRefusedError", {
+class SummaryRefusedError extends Schema.TaggedError<
+  SummaryRefusedError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/openai/SummaryRefusedError")("SummaryRefusedError", {
   response: HttpResponseField,
 }) {}
 
@@ -1635,9 +1632,10 @@ const decodeEncryptedContentRejection = Schema.decodeUnknownOption(EncryptedCont
 type RejectedReasoning = Ref.Ref<HashSet.HashSet<string>>
 
 /** Drives the one retry after a rejection; carries the response for when no retry is left. */
-class ReasoningRejectedError extends Schema.TaggedError<ReasoningRejectedError>(
-  "@gent/extensions/src/openai/ReasoningRejectedError",
-)("ReasoningRejectedError", {
+class ReasoningRejectedError extends Schema.TaggedError<
+  ReasoningRejectedError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/openai/ReasoningRejectedError")("ReasoningRejectedError", {
   response: HttpResponseField,
 }) {}
 
@@ -1707,7 +1705,7 @@ const rejectionCheck = (
 
 /**
  * The client both auth paths run over, next to the transport: rewrites the
- * body (`openAiBody`: the encrypted reasoning and the effort updates), leaves
+ * body (`openAiBody`: the effort updates), leaves
  * rejected reasoning out, and on a rejection records it and retries once. The
  * rewrite runs after rejected reasoning is left out, so the effort updates
  * count the runs the request sends.
@@ -1912,6 +1910,7 @@ const explainedClientLayer = (
         createResponse: (options) => explain(inner.createResponse(options)),
         createResponseStream: (options) => explain(inner.createResponseStream(options)),
         createEmbedding: (options) => explain(inner.createEmbedding(options)),
+        createDecisions: (options) => explain(inner.createDecisions(options)),
       }
     }),
   )

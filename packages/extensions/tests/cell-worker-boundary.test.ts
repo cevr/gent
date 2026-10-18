@@ -564,6 +564,7 @@ describe("cell worker", () => {
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 /** The data fields of a tool image whose digest repeats `digit`, as an MCP result names one. */
+// oxlint-disable-next-line effect/preferTaggedConstructors -- the image JSON a host call answers the cell, with its file path: the encoded bytes the cell prints
 const toolImageFields = (digit: string) => ({
   _tag: "ToolImage",
   sha256: digit.repeat(64),

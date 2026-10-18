@@ -711,13 +711,13 @@ const clientModuleProblem = (value: unknown): Option.Option<string> => {
 const isExtensionClientModule = (value: unknown): value is AnyExtensionClientModule =>
   Option.isNone(clientModuleProblem(value))
 
-class TuiExtensionImportError extends Schema.TaggedError<TuiExtensionImportError>()(
-  "TuiExtensionImportError",
-  {
-    message: Schema.String,
-    cause: Schema.Unknown,
-  },
-) {}
+class TuiExtensionImportError extends Schema.TaggedError<
+  TuiExtensionImportError,
+  { readonly brand: unique symbol }
+>()("TuiExtensionImportError", {
+  message: Schema.String,
+  cause: Schema.Unknown,
+}) {}
 
 interface ImportedExtension {
   readonly module: AnyExtensionClientModule

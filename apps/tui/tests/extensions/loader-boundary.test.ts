@@ -1222,10 +1222,10 @@ export default defineClientExtension("@test/overlap", {
  * returns the items; a failed request is reported and gives no rows.
  */
 
-class AutocompleteTestError extends Schema.TaggedError<AutocompleteTestError>()(
-  "AutocompleteTestError",
-  { message: Schema.String },
-) {}
+class AutocompleteTestError extends Schema.TaggedError<
+  AutocompleteTestError,
+  { readonly brand: unique symbol }
+>()("AutocompleteTestError", { message: Schema.String }) {}
 const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"), {
   ListThingsRpc: request({
     id: "list-things",

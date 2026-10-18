@@ -18,8 +18,10 @@ import {
   Model,
   ModelId,
   ProviderId,
+  Session,
   SessionId,
   ToolCallId,
+  SessionRuntimeStateSchema,
 } from "@gent/core/protocol"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import {
@@ -662,7 +664,9 @@ describe("scanCacheMisses", () => {
         return onlyMiss(scanCacheMisses(history.envelopes))
       }
       const moved = across(receipt("default", 1), receipt("personal", 2))
-      expect(moved.cause).toEqual({ _tag: "CredentialMove", from: "default", to: "personal" })
+      expect(moved.cause).toEqual(
+        CacheMissCause.cases.CredentialMove.make({ from: "default", to: "personal" }),
+      )
       expect(missText(moved, 0)).toStartWith("cache miss after a move from default to personal")
       const again = across(receipt("default", 1), receipt("default", 5))
       expect(missText(again, 0)).toStartWith("cache miss after default signed in again")
@@ -1342,7 +1346,7 @@ const renderResumed = (opts: {
             lastEventId,
             resolvedModelId: SONNET,
             agent: AgentName.make("main"),
-            runtime: { _tag: "Idle" satisfies "Idle", queue: emptyQueueSnapshot() },
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
             metrics: {
               turns: 3,
               durationMs: 0,
@@ -1370,13 +1374,13 @@ const renderResumed = (opts: {
       builtins: [opts.extension],
       width: opts.width ?? 100,
       height: 30,
-      initialSession: {
+      initialSession: Session.make({
         id: sessionId,
         activeBranchId: branchId,
         name: "Cache",
         createdAt: dateFromMillis(0),
         updatedAt: dateFromMillis(0),
-      },
+      }),
     })
     return { rendered, feedOpened: () => opened }
   })

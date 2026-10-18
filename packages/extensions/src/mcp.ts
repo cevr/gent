@@ -985,11 +985,14 @@ const REPLAYABLE: ReadonlySet<string> = new Set([
  * The server refused the OAuth token, and no refresh gave one it takes.
  * `loggedIn`: a stored login sent a token; without one, no login was made.
  */
-class LoginRequired extends Schema.TaggedError<LoginRequired>()("LoginRequired", {
-  server: Schema.String,
-  message: Schema.String,
-  loggedIn: Schema.Boolean,
-}) {}
+class LoginRequired extends Schema.TaggedError<LoginRequired, { readonly brand: unique symbol }>()(
+  "LoginRequired",
+  {
+    server: Schema.String,
+    message: Schema.String,
+    loggedIn: Schema.Boolean,
+  },
+) {}
 
 const loginMessage = (name: string) =>
   `the ${name} MCP server needs a login: run /mcp login ${name}`
@@ -1346,9 +1349,12 @@ const AUTH_LOCK_WAIT = Duration.millis(50)
 const AUTH_LOCK_TRIES = 1200
 
 /** Another writer held the auth lock for longer than a stale lock lives. */
-class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {
-  message: Schema.String,
-}) {}
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy, { readonly brand: unique symbol }>()(
+  "AuthLockBusy",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * Runs an effect while holding the lock of the login file: `<data
@@ -1671,14 +1677,17 @@ const serveRedirect = (
 
 // ── connections ─────────────────────────────────────────────────────────────
 
-class McpError extends Schema.TaggedError<McpError>()("McpError", {
-  server: Schema.String,
-  message: Schema.String,
-  /** The HTTP status the server answered a connect with, when it did. */
-  status: Schema.optional(Schema.Int),
-  /** The server refused the connect of an OAuth entry that has no stored login. */
-  loggedOut: Schema.optional(Schema.Boolean),
-}) {}
+class McpError extends Schema.TaggedError<McpError, { readonly brand: unique symbol }>()(
+  "McpError",
+  {
+    server: Schema.String,
+    message: Schema.String,
+    /** The HTTP status the server answered a connect with, when it did. */
+    status: Schema.optional(Schema.Int),
+    /** The server refused the connect of an OAuth entry that has no stored login. */
+    loggedOut: Schema.optional(Schema.Boolean),
+  },
+) {}
 
 /** The cause is a refusal of an OAuth entry that has no stored login. */
 const isLoggedOut = (cause: unknown) => Schema.is(LoginRequired)(cause) && !cause.loggedIn
@@ -2047,11 +2056,14 @@ const callFailureMessage = (name: string, cause: unknown) =>
   })
 
 /** A failed call on one connection, and whether that connection had served a call before. */
-class CallFailed extends Schema.TaggedError<CallFailed>()("CallFailed", {
-  kind: CallFailureKind,
-  reused: Schema.Boolean,
-  message: Schema.String,
-}) {}
+class CallFailed extends Schema.TaggedError<CallFailed, { readonly brand: unique symbol }>()(
+  "CallFailed",
+  {
+    kind: CallFailureKind,
+    reused: Schema.Boolean,
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A server's health as `mcp.status` reports it: `healthy` once a connect and

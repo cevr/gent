@@ -18,6 +18,7 @@ import {
   messagePartsReasoning,
   messagePartsText,
   messagePartsTextLines,
+  MessageSegment,
   messagePartsToolCallParts,
   projectMessagesWithToolInteractions,
   normalizeResponseParts,
@@ -26,6 +27,7 @@ import {
   SteerCommand,
   tailChars,
   toolCallReceipts,
+  ToolInteraction,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Predicate, Schema } from "effect"
@@ -33,6 +35,7 @@ import * as Response from "effect/ai/Response"
 
 describe("steer command", () => {
   test("a stored Interrupt row still decodes", () => {
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the stored row this test decodes
     const decoded = Schema.decodeSync(SteerCommand)({
       _tag: "Interrupt",
       sessionId: "stored-session",
@@ -443,12 +446,12 @@ describe("message part projection", () => {
       ]),
     ])
     expect(projected?.segments).toEqual([
-      { _tag: "Reasoning", content: "thinking" },
-      { _tag: "Text", content: "before" },
-      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-1") },
-      { _tag: "Text", content: "after" },
+      MessageSegment.cases.Reasoning.make({ content: "thinking" }),
+      MessageSegment.cases.Text.make({ content: "before" }),
+      MessageSegment.cases.ToolCall.make({ toolCallId: ToolCallId.make("tc-1") }),
+      MessageSegment.cases.Text.make({ content: "after" }),
       // A call still running carries a segment; its interaction says "running".
-      { _tag: "ToolCall", toolCallId: ToolCallId.make("tc-2") },
+      MessageSegment.cases.ToolCall.make({ toolCallId: ToolCallId.make("tc-2") }),
     ])
     expect(projected?.toolInteractions.map((entry) => entry.status)).toEqual([
       "completed",
@@ -478,7 +481,9 @@ describe("message part projection", () => {
     })
     const projected = projectMessagesWithToolInteractions([assistant, user])
     // A non-image file carries no transcript segment.
-    expect(projected[0]?.segments).toEqual([{ _tag: "Image", mediaType: "image/png" }])
+    expect(projected[0]?.segments).toEqual([
+      MessageSegment.cases.Image.make({ mediaType: "image/png" }),
+    ])
     expect(projected[1]?.segments).toEqual([])
   })
 
@@ -1565,24 +1570,28 @@ describe("message part projection", () => {
       makeMessage("m-tool-2", "tool", [secondResult]),
     ])
 
-    expect(projected[0]?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc-1"),
-      toolName: "read",
-      status: "completed",
-      input: { path: "first.txt" },
-      summary: "first result",
-      output: "first result",
-      durationMs: absent,
-    })
-    expect(projected[2]?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc-1"),
-      toolName: "read",
-      status: "completed",
-      input: { path: "second.txt" },
-      summary: "second result",
-      output: "second result",
-      durationMs: absent,
-    })
+    expect(projected[0]?.toolInteractions[0]).toEqual(
+      ToolInteraction.make({
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "first.txt" },
+        summary: "first result",
+        output: "first result",
+        durationMs: absent,
+      }),
+    )
+    expect(projected[2]?.toolInteractions[0]).toEqual(
+      ToolInteraction.make({
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "second.txt" },
+        summary: "second result",
+        output: "second result",
+        durationMs: absent,
+      }),
+    )
   })
 
   test("pairs same-message duplicate provider tool ids by part order", () => {
@@ -1620,7 +1629,7 @@ describe("message part projection", () => {
     ])
 
     expect(projected[0]?.toolInteractions).toEqual([
-      {
+      ToolInteraction.make({
         id: ToolCallId.make("tc-1"),
         toolName: "read",
         status: "completed",
@@ -1628,8 +1637,8 @@ describe("message part projection", () => {
         summary: "first result",
         output: "first result",
         durationMs: absent,
-      },
-      {
+      }),
+      ToolInteraction.make({
         id: ToolCallId.make("tc-1"),
         toolName: "read",
         status: "completed",
@@ -1637,7 +1646,7 @@ describe("message part projection", () => {
         summary: "second result",
         output: "second result",
         durationMs: absent,
-      },
+      }),
     ])
   })
 
@@ -1873,7 +1882,7 @@ describe("message part projection", () => {
       callThenResult("tc-failed", "File not found", true),
     )
     expect(projected?.toolInteractions).toEqual([
-      {
+      ToolInteraction.make({
         id: ToolCallId.make("tc-failed"),
         toolName: "read",
         status: "error",
@@ -1881,7 +1890,7 @@ describe("message part projection", () => {
         summary: "File not found",
         output: "File not found",
         durationMs: absent,
-      },
+      }),
     ])
   })
 

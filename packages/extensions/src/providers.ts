@@ -25,6 +25,7 @@ import {
   catalogModelEntry,
   type CatalogPlan,
   clampEffort,
+  ImageCost,
   type JsonRecord,
   Model,
   omitUndefined,
@@ -106,9 +107,10 @@ export const freshEnoughAt = (expiresAt: number, now: number): boolean =>
  * retryable and the loop tries again. A `ProviderAuthError` is permanent:
  * the user must sign in again.
  */
-export class CredentialRefreshUnavailable extends Schema.TaggedError<CredentialRefreshUnavailable>(
-  "@gent/extensions/src/providers/CredentialRefreshUnavailable",
-)("CredentialRefreshUnavailable", {
+export class CredentialRefreshUnavailable extends Schema.TaggedError<
+  CredentialRefreshUnavailable,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/providers/CredentialRefreshUnavailable")("CredentialRefreshUnavailable", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -811,31 +813,6 @@ export const takesLowVerbosity = (modelName: string): boolean => {
   return /^gpt-5\.[1-6](-|$)/.test(id) || /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(id)
 }
 
-/**
- * A Responses request with `store: false` keeps no reasoning on the server,
- * so a reasoning item can go back to the model only with its
- * `encrypted_content`, and a reply carries that only when `include` asks for
- * it. `@effect/ai-openai` asks only for the model prefixes it knows (`o1`,
- * `o3`, `o4-mini`, `codex-mini`, `gpt-5`), and its computed `include`
- * replaces any the config names. So every request without store to a model
- * that reasons asks for it here. A reasoning model reasons at its default
- * effort when the request names none, so the model decides, not the body's
- * `reasoning` field.
- */
-const ENCRYPTED_REASONING = "reasoning.encrypted_content"
-
-export const withEncryptedReasoning =
-  (reasons: boolean) =>
-  (body: Schema.JsonObject): Schema.JsonObject => {
-    if (body["store"] !== false || !reasons) return body
-    const include = Option.getOrElse(
-      Option.filter(Option.fromUndefinedOr(body["include"]), isArray),
-      (): ReadonlyArray<Schema.Json> => [],
-    )
-    if (include.includes(ENCRYPTED_REASONING)) return body
-    return { ...body, include: [...include, ENCRYPTED_REASONING] }
-  }
-
 // ── oauth token endpoint ────────────────────────────────────────────────────
 
 /**
@@ -845,9 +822,10 @@ export const withEncryptedReasoning =
 const OAUTH_TOKEN_TIMEOUT = "15 seconds"
 
 /** A token POST that never produced a response: transport failure or timeout. */
-class OAuthTokenPostError extends Schema.TaggedError<OAuthTokenPostError>(
-  "@gent/extensions/src/providers/OAuthTokenPostError",
-)("OAuthTokenPostError", {
+class OAuthTokenPostError extends Schema.TaggedError<
+  OAuthTokenPostError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/providers/OAuthTokenPostError")("OAuthTokenPostError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -1207,7 +1185,7 @@ export const sdkApiKey = (apiKey: Option.Option<string>) =>
  * The client a class's SDK sends through: the class's own body rewrite next
  * to the SDK, then the endpoint's transform (its headers, its signing).
  */
-export const endpointClient =
+const endpointClient =
   (endpoint: ApiClassRequest, rewrite: (client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     Option.match(endpoint.transformClient, {
@@ -1229,11 +1207,11 @@ const isJsonString = Schema.is(Schema.String)
  * The Chat Completions request: `reasoning_effort` from the catalog's effort
  * list (OpenCode sends nothing for a toggle or a budget on this format), and
  * tools without strict schemas, which the OpenAI-compatible upstreams do not
- * all take. `replayReasoning` is the patched SDK's opt-in: the model's
- * reasoning goes back on its own assistant message (see `patches/README.md`).
+ * all take. The SDK sends the model's reasoning back on the assistant message
+ * that holds it (`reasoningInField` moves it to the model's field).
  */
 const chatConfig = (entry: CatalogModel, hints: Option.Option<ProviderHints>): ChatConfig => {
-  let config: ChatConfig = { strictJsonSchema: false, replayReasoning: true }
+  let config: ChatConfig = { strictJsonSchema: false }
   const maxTokens = maxTokensOf(hints)
   if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
   const temperature = sampledTemperature(entry, hints)
@@ -1247,8 +1225,9 @@ const chatConfig = (entry: CatalogModel, hints: Option.Option<ProviderHints>): C
  * The reasoning a model wrote goes back to it on its assistant message, in the
  * field its catalog entry names (`interleaved.field`). DeepSeek needs the field
  * on every assistant message, empty when it wrote none (OpenCode's
- * `normalizeMessages`). The patched SDK writes the text as `reasoning_content`;
- * a model without the field gets none.
+ * `normalizeMessages`). The SDK writes the text in the field the reply read it
+ * from (`reasoning` or `reasoning_content`, the latter when the part does not
+ * say); a model without a catalog field gets none.
  */
 const reasoningInField =
   (reasoningField: Option.Option<string>) =>
@@ -1259,10 +1238,13 @@ const reasoningInField =
         ...body,
         messages: messages.map((message): Schema.Json => {
           if (!isJsonObject(message) || message["role"] !== "assistant") return message
-          const { reasoning_content: written, ...rest } = message
+          const { reasoning_content: content, reasoning, ...rest } = message
           if (Option.isNone(reasoningField)) return rest
           const text = Option.getOrElse(
-            Option.filter(Option.fromUndefinedOr(written), isJsonString),
+            Option.firstSomeOf([
+              Option.filter(Option.fromUndefinedOr(content), isJsonString),
+              Option.filter(Option.fromUndefinedOr(reasoning), isJsonString),
+            ]),
             () => "",
           )
           return { ...rest, [reasoningField.value]: text }
@@ -1271,7 +1253,6 @@ const reasoningInField =
     })
 
 type ImageCostOf = NonNullable<ApiClassContribution["imageCost"]>
-type ImageCost = ReturnType<ImageCostOf>
 
 /**
  * OpenAI's image costs at the `high` detail, by model name, most specific
@@ -1280,21 +1261,21 @@ type ImageCost = ReturnType<ImageCostOf>
  * `high` detail shrinks an image to) for the newer ones.
  */
 export const OPENAI_IMAGE_COSTS: ReadonlyArray<readonly [RegExp, ImageCost]> = [
-  [/^gpt-4o-mini/, { _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }],
-  [/^gpt-4o/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
-  [/^gpt-4\.1-mini/, { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }],
-  [/^gpt-4\.1-nano/, { _tag: "Patches", multiplier: 2.46, maxPatches: 1_536 }],
-  [/^gpt-4\.1/, { _tag: "Tiles", baseTokens: 85, tileTokens: 170 }],
-  [/^o4-mini/, { _tag: "Patches", multiplier: 1.72, maxPatches: 1_536 }],
-  [/^o[13]/, { _tag: "Tiles", baseTokens: 75, tileTokens: 150 }],
-  [/^gpt-5-nano/, { _tag: "Patches", multiplier: 1.5, maxPatches: 1_536 }],
-  [/^gpt-5-mini/, { _tag: "Patches", multiplier: 1.2, maxPatches: 1_536 }],
-  [/^gpt-5\.2/, { _tag: "Patches", multiplier: 1.2, maxPatches: 6_144 }],
-  [/^gpt-5(\.1)?($|-)/, { _tag: "Tiles", baseTokens: 70, tileTokens: 140 }],
+  [/^gpt-4o-mini/, ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 })],
+  [/^gpt-4o/, ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 })],
+  [/^gpt-4\.1-mini/, ImageCost.cases.Patches.make({ multiplier: 1.62, maxPatches: 6_144 })],
+  [/^gpt-4\.1-nano/, ImageCost.cases.Patches.make({ multiplier: 2.46, maxPatches: 1_536 })],
+  [/^gpt-4\.1/, ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 })],
+  [/^o4-mini/, ImageCost.cases.Patches.make({ multiplier: 1.72, maxPatches: 1_536 })],
+  [/^o[13]/, ImageCost.cases.Tiles.make({ baseTokens: 75, tileTokens: 150 })],
+  [/^gpt-5-nano/, ImageCost.cases.Patches.make({ multiplier: 1.5, maxPatches: 1_536 })],
+  [/^gpt-5-mini/, ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 1_536 })],
+  [/^gpt-5\.2/, ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 6_144 })],
+  [/^gpt-5(\.1)?($|-)/, ImageCost.cases.Tiles.make({ baseTokens: 70, tileTokens: 140 })],
 ]
 
 /** A newer OpenAI model (GPT-5.4 on) counts patches at 1.2, shrunk to 2,500 at the `high` detail. */
-const OPENAI_PATCH_COST: ImageCost = { _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }
+const OPENAI_PATCH_COST = ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 })
 
 /** What one image costs an OpenAI model (`Model.imageCost`), read from its name. */
 export const openAiImageCost: ImageCostOf = (entry) => {
@@ -1309,6 +1290,9 @@ export const openAiImageCost: ImageCostOf = (entry) => {
  * 30,000 patches, which no estimate could foresee.
  */
 export const OPENAI_IMAGE_PART_OPTIONS = { openai: { imageDetail: "high" } }
+
+/** The same detail for the Chat Completions SDK, which reads its own options key. */
+const CHAT_IMAGE_PART_OPTIONS = { "openai-compat": { imageDetail: "high" } }
 
 /**
  * OpenAI Chat Completions, as OpenAI-compatible upstreams speak it. Its
@@ -1327,7 +1311,7 @@ export const CHAT_COMPLETIONS_CLASS: ApiClassContribution = {
   promptCacheTtl: Option.none(),
   imageLimit: { images: 5, base64Chars: 4_000_000 },
   imageCost: openAiImageCost,
-  imagePartOptions: OPENAI_IMAGE_PART_OPTIONS,
+  imagePartOptions: CHAT_IMAGE_PART_OPTIONS,
   resolveModel: (request) =>
     Effect.map(loadChatSdk, ({ OpenAiClient, OpenAiLanguageModel }) => {
       const reasoningField = Option.fromUndefinedOr(request.model.reasoningField)

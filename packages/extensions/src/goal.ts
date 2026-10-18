@@ -163,7 +163,10 @@ const formatGoalStatus = (goal: Option.Option<GoalState>) =>
 
 // ── store ───────────────────────────────────────────────────────────────────
 
-class GoalStoreError extends Schema.TaggedError<GoalStoreError>()("GoalStoreError", {
+class GoalStoreError extends Schema.TaggedError<
+  GoalStoreError,
+  { readonly brand: unique symbol }
+>()("GoalStoreError", {
   message: Schema.String,
 }) {}
 
@@ -237,9 +240,12 @@ export const GoalRpc = defineRequests(GOAL_EXTENSION_ID, {
 
 // ── Errors ──
 
-class GoalError extends Schema.TaggedError<GoalError>()("GoalError", {
-  message: Schema.String,
-}) {}
+class GoalError extends Schema.TaggedError<GoalError, { readonly brand: unique symbol }>()(
+  "GoalError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 // ── State transitions ──
 
@@ -320,7 +326,7 @@ const createGoal = (input: CreateGoalInput) =>
         }
         const time = yield* now
         const created: GoalState = {
-          goalId: yield* crypto.randomUUIDv7,
+          goalId: yield* crypto.randomUUIDv7(),
           branchId: ctx.branchId,
           objective,
           status: "active",

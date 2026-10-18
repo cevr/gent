@@ -95,7 +95,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]
 const cryptoSetupExtension = defineExtension({
   id: "crypto-setup",
   setup: Effect.gen(function* () {
-    const id = yield* (yield* Crypto.Crypto).randomUUIDv7.pipe(Effect.orDie)
+    const id = yield* (yield* Crypto.Crypto).randomUUIDv7().pipe(Effect.orDie)
     const host = yield* ExtensionHost
     yield* host.register(
       "request",

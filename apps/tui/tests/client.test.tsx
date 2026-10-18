@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {
+  DriverFailureId,
   emptyQueueSnapshot,
   testAgent,
   ErrorOccurred,
@@ -11,7 +12,7 @@ import {
   TurnCompleted,
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Predicate, Ref } from "effect"
 import {
   AgentEvent,
   AgentName,
@@ -19,6 +20,7 @@ import {
   ConnectionState,
   dateFromMillis,
   EventEnvelope,
+  ExtensionHealthSnapshot,
   GentRpcError,
   Message,
   Model,
@@ -26,7 +28,8 @@ import {
   ModelId,
   ProviderId,
   SessionId,
-  type SessionSnapshot,
+  SessionRuntimeStateSchema,
+  SessionSnapshot,
   type ReasoningEffort,
   type UpdateSessionSettingsInput,
 } from "@gent/core/protocol"
@@ -287,26 +290,26 @@ const snapshotOf = (
     lastInputTokens: number
     context?: typeof busyContext
   },
-): SessionSnapshot => ({
-  sessionId: session.sessionId,
-  branchId: session.branchId,
-  messages: [],
-  lastEventId: nullValue,
-  reasoningLevel: absent,
-  resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("primary"),
-  runtime: {
-    _tag: "Idle",
-    queue: emptyQueueSnapshot(),
-  },
-  metrics: {
-    turns: 1,
-    durationMs: 10,
-    costUsd: metrics.costUsd,
-    lastInputTokens: metrics.lastInputTokens,
-    context: metrics.context,
-  },
-})
+): SessionSnapshot =>
+  SessionSnapshot.make({
+    sessionId: session.sessionId,
+    branchId: session.branchId,
+    messages: [],
+    lastEventId: nullValue,
+    reasoningLevel: absent,
+    resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+    agent: AgentName.make("primary"),
+    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+      queue: emptyQueueSnapshot(),
+    }),
+    metrics: {
+      turns: 1,
+      durationMs: 10,
+      costUsd: metrics.costUsd,
+      lastInputTokens: metrics.lastInputTokens,
+      context: metrics.context,
+    },
+  })
 
 describe("ClientProvider session metrics", () => {
   it.scopedLive("switching sessions drops the previous session's context projection", () =>
@@ -698,17 +701,19 @@ describe("ClientProvider session lifecycle", () => {
         // No guess before the snapshot: a handoff inherits its parent's agent,
         // so assuming the default would flicker.
         expect(active.agent()).toEqual(Option.none())
-        active.applySessionSnapshot({
-          sessionId: SessionId.make("session-new"),
-          branchId: BranchId.make("branch-new"),
-          messages: [],
-          lastEventId: 1,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-          agent: AgentName.make("secondary"),
-          runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
-          metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-        })
+        active.applySessionSnapshot(
+          SessionSnapshot.make({
+            sessionId: SessionId.make("session-new"),
+            branchId: BranchId.make("branch-new"),
+            messages: [],
+            lastEventId: 1,
+            reasoningLevel: absent,
+            resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+            agent: AgentName.make("secondary"),
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
+            metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+          }),
+        )
         expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
       }),
   )
@@ -775,10 +780,7 @@ describe("ClientProvider session lifecycle", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>()
       const answered = yield* Deferred.make<void>()
-      const refused = yield* Schema.decodeEffect(GentRpcError)({
-        _tag: "InvalidStateError",
-        message: "create refused",
-      })
+      const refused = GentRpcError.cases.InvalidStateError.make({ message: "create refused" })
       const client = createMockClient({
         session: {
           create: () =>
@@ -809,7 +811,10 @@ describe("ClientProvider session lifecycle", () => {
         ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
         modelId: model,
         reasoningLevel: "high",
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+        runtime: SessionRuntimeStateSchema.cases.Running.make({
+          queue: emptyQueueSnapshot(),
+          startedAtMs: 0,
+        }),
       })
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       const session = client.session()
@@ -830,7 +835,10 @@ describe("ClientProvider session lifecycle", () => {
         })
         client.applySessionSnapshot({
           ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
-          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
         })
         const nextBranch = BranchId.make("branch-metrics-next")
         // The feed's order: the event goes to the client, then the feed routes.
@@ -888,7 +896,9 @@ describe("ClientProvider session lifecycle", () => {
                 Effect.andThen(
                   Effect.suspend(() => {
                     if (outcome === "refusal")
-                      return Effect.fail({ _tag: "NotFoundError", message: "session gone" })
+                      return Effect.fail(
+                        GentRpcError.cases.NotFoundError.make({ message: "session gone" }),
+                      )
                     return Effect.succeed({
                       modelId: ModelId.make("openai/gpt-5.6-luna"),
                       reasoningLevel: absent,
@@ -927,27 +937,31 @@ describe("ClientProvider session lifecycle", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(sessionId, branchId, "Runtime"),
       })
-      client.applySessionSnapshot({
-        sessionId,
-        branchId,
-        messages: [],
-        lastEventId: 42,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId,
+          branchId,
+          messages: [],
+          lastEventId: 42,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("main"),
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       expect(client.isStreaming()).toBe(true)
-      const runtime = {
-        _tag: "Idle",
+      const runtime = SessionRuntimeStateSchema.cases.Idle.make({
         queue: emptyQueueSnapshot(),
-      } satisfies Parameters<ClientContextValue["applySessionRuntime"]>[0]["runtime"]
+      })
       client.applySessionRuntime({ sessionId, branchId: BranchId.make("old-branch"), runtime })
       expect(client.isStreaming()).toBe(true)
       client.applySessionRuntime({ sessionId, branchId, runtime })
@@ -977,17 +991,22 @@ describe("ClientProvider session lifecycle", () => {
           clientRuntime,
           ClientContext.use(({ shell }) => Effect.sync(() => shell.notify(message))),
         )
-      client.applySessionSnapshot({
-        sessionId,
-        branchId,
-        messages: [],
-        lastEventId: 1,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
-        metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId,
+          branchId,
+          messages: [],
+          lastEventId: 1,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("main"),
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
+          metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+        }),
+      )
       yield* notify("Usage: /driver <agent> <driver-id|default>")
       // Esc cancels a streaming turn; a notice must not turn it into a quit.
       expect(client.isStreaming()).toBe(true)
@@ -996,7 +1015,7 @@ describe("ClientProvider session lifecycle", () => {
       client.applySessionRuntime({
         sessionId,
         branchId,
-        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
       })
       client.setError("provider refused the request")
       yield* notify('Unknown driver "nope".')
@@ -1009,11 +1028,12 @@ describe("ClientProvider session lifecycle", () => {
       const mockClient = createMockClient({
         model: {
           list: () =>
-            Effect.fail({
-              _tag: "DriverError",
-              driver: "openai",
-              reason: "catalog filter failed",
-            }),
+            Effect.fail(
+              GentRpcError.cases.DriverError.make({
+                driver: DriverFailureId.make("openai"),
+                reason: "catalog filter failed",
+              }),
+            ),
         },
       })
       const { setup, client } = yield* mountClient({
@@ -1035,7 +1055,12 @@ describe("ClientProvider session lifecycle", () => {
             Effect.suspend(() => {
               listings += 1
               if (listings === 1) {
-                return Effect.fail({ _tag: "DriverError", driver: "openai", reason: "dropped" })
+                return Effect.fail(
+                  GentRpcError.cases.DriverError.make({
+                    driver: DriverFailureId.make("openai"),
+                    reason: "dropped",
+                  }),
+                )
               }
               return Effect.succeed([])
             }),
@@ -1071,7 +1096,12 @@ describe("ClientProvider session lifecycle", () => {
             return Deferred.succeed(secondAsked, void 0).pipe(
               Effect.andThen(Deferred.await(answer)),
               Effect.andThen(
-                Effect.fail({ _tag: "DriverError", driver: "anthropic", reason: "offline" }),
+                Effect.fail(
+                  GentRpcError.cases.DriverError.make({
+                    driver: DriverFailureId.make("anthropic"),
+                    reason: "offline",
+                  }),
+                ),
               ),
             )
           },
@@ -1181,7 +1211,7 @@ describe("ClientProvider session lifecycle", () => {
                     Launch: () => Option.none(),
                   }),
                 )
-                return { _tag: "Healthy" satisfies "Healthy", extensions: [] }
+                return ExtensionHealthSnapshot.cases.Healthy.make({ extensions: [] })
               }),
           },
         })
@@ -1232,7 +1262,8 @@ describe("ClientProvider session lifecycle", () => {
       Effect.gen(function* () {
         const mockClient = createMockClient({
           branch: {
-            create: () => Effect.fail({ _tag: "NotFoundError", message: "branch gone" }),
+            create: () =>
+              Effect.fail(GentRpcError.cases.NotFoundError.make({ message: "branch gone" })),
           },
         })
         const { client } = yield* mountClient({
@@ -1250,25 +1281,26 @@ describe("ClientProvider session lifecycle", () => {
       const { setup, client } = yield* mountClient({
         initialSession: sessionFixture("session-model", "branch-model", "M"),
       })
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-model"),
-        branchId: BranchId.make("branch-model"),
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Idle",
-          queue: emptyQueueSnapshot(),
-        },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-model"),
+          branchId: BranchId.make("branch-model"),
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: SessionRuntimeStateSchema.cases.Idle.make({
+            queue: emptyQueueSnapshot(),
+          }),
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => Option.contains(client.model(), ModelId.make("anthropic/claude-haiku-4-5-20251001")),
@@ -1286,26 +1318,27 @@ describe("ClientProvider session lifecycle", () => {
       const { setup, client } = yield* mountClient({
         initialSession: sessionFixture("session-refresh", "branch-refresh", "Stale"),
       })
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-refresh"),
-        branchId: BranchId.make("branch-refresh"),
-        name: "Fresh",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "high",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Idle",
-          queue: emptyQueueSnapshot(),
-        },
-        metrics: {
-          turns: 0,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-refresh"),
+          branchId: BranchId.make("branch-refresh"),
+          name: "Fresh",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "high",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: SessionRuntimeStateSchema.cases.Idle.make({
+            queue: emptyQueueSnapshot(),
+          }),
+          metrics: {
+            turns: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => client.session().name === "Fresh" && client.session().reasoningLevel === "high",
@@ -1331,27 +1364,28 @@ describe("ClientProvider session lifecycle", () => {
         BranchId.make("branch-target"),
         "Target",
       )
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-source"),
-        branchId: BranchId.make("branch-source"),
-        name: "Foreign",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "high",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Running",
-          queue: emptyQueueSnapshot(),
-          startedAtMs: 0,
-        },
-        metrics: {
-          turns: 9,
-          durationMs: 0,
-          costUsd: 123,
-          lastInputTokens: 456,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-source"),
+          branchId: BranchId.make("branch-source"),
+          name: "Foreign",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "high",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
+          metrics: {
+            turns: 9,
+            durationMs: 0,
+            costUsd: 123,
+            lastInputTokens: 456,
+          },
+        }),
+      )
       expect(client.session()).toEqual({
         sessionId: SessionId.make("session-target"),
         branchId: BranchId.make("branch-target"),
@@ -1378,27 +1412,28 @@ describe("ClientProvider session lifecycle", () => {
         BranchId.make("branch-new"),
         "New",
       )
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-branch-race"),
-        branchId: BranchId.make("branch-old"),
-        name: "Old Snapshot",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "medium",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Running",
-          queue: emptyQueueSnapshot(),
-          startedAtMs: 0,
-        },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 12,
-          lastInputTokens: 34,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-branch-race"),
+          branchId: BranchId.make("branch-old"),
+          name: "Old Snapshot",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "medium",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 12,
+            lastInputTokens: 34,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => client.session().branchId === BranchId.make("branch-new"),
@@ -1424,25 +1459,26 @@ describe("ClientProvider session lifecycle", () => {
         const { setup, client } = yield* mountClient({
           initialSession: sessionFixture("session-prev", "branch-prev", "P"),
         })
-        client.applySessionSnapshot({
-          sessionId: SessionId.make("session-prev"),
-          branchId: BranchId.make("branch-prev"),
-          messages: [],
-          lastEventId: nullValue,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-          agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Idle",
-            queue: emptyQueueSnapshot(),
-          },
-          metrics: {
-            turns: 1,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          },
-        })
+        client.applySessionSnapshot(
+          SessionSnapshot.make({
+            sessionId: SessionId.make("session-prev"),
+            branchId: BranchId.make("branch-prev"),
+            messages: [],
+            lastEventId: nullValue,
+            reasoningLevel: absent,
+            resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+            agent: AgentName.make("primary"),
+            runtime: SessionRuntimeStateSchema.cases.Idle.make({
+              queue: emptyQueueSnapshot(),
+            }),
+            metrics: {
+              turns: 1,
+              durationMs: 0,
+              costUsd: 0,
+              lastInputTokens: 0,
+            },
+          }),
+        )
         yield* waitForFrame(
           setup,
           () =>
@@ -1472,7 +1508,7 @@ const makeEnvelope = (id: number, event: AgentEvent, createdAt = 0): EventEnvelo
  * once. A refusal is an answer, and it is final at once.
  */
 describe("ClientProvider send", () => {
-  const refused = Schema.decodeSync(GentRpcError)({ _tag: "InvalidStateError", message: "refused" })
+  const refused = GentRpcError.cases.InvalidStateError.make({ message: "refused" })
   const target = { sessionId: FIRST.sessionId, branchId: FIRST.branchId }
   type Failure = GentRpcError | RpcClientError
   /**
@@ -1691,11 +1727,10 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(idle)
       client.setErrorIn(FIRST, "send refused")
       // The connection drops; a queued message starts the next turn meanwhile.
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       client.applySessionSnapshot({ ...idle, runtime: running })
       expect(client.isStreaming()).toBe(true)
       expect(client.error()).toEqual(Option.none())
@@ -1707,11 +1742,10 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       const midTurn = { ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }), runtime: running }
       client.applySessionSnapshot(midTurn)
       client.setErrorIn(FIRST, "interject refused")
@@ -1721,7 +1755,7 @@ describe("ClientProvider errors", () => {
       // It ends while the connection is down; no new turn starts.
       client.applySessionSnapshot({
         ...midTurn,
-        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
         metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
       })
       expect(client.error()).toEqual(Option.some("interject refused"))
@@ -1733,11 +1767,10 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const running: SessionSnapshot["runtime"] = {
-        _tag: "Running",
+      const running: SessionSnapshot["runtime"] = SessionRuntimeStateSchema.cases.Running.make({
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
-      }
+      })
       client.applySessionRuntime({ ...FIRST, runtime: running })
       client.setError('No model matches "typo"')
       expect(client.isStreaming()).toBe(true)
@@ -1772,11 +1805,11 @@ describe("ClientProvider errors", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
-      const runningSince = (startedAtMs: number): SessionSnapshot["runtime"] => ({
-        _tag: "Running",
-        queue: emptyQueueSnapshot(),
-        startedAtMs,
-      })
+      const runningSince = (startedAtMs: number): SessionSnapshot["runtime"] =>
+        SessionRuntimeStateSchema.cases.Running.make({
+          queue: emptyQueueSnapshot(),
+          startedAtMs,
+        })
       client.applySessionRuntime({ ...FIRST, runtime: runningSince(40) })
       expect(client.isStreaming()).toBe(true)
       client.applySessionEvent(

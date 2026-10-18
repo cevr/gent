@@ -68,7 +68,10 @@ import {
 
 // ── records ─────────────────────────────────────────────────────────────────
 
-export class WorkspaceError extends Schema.TaggedError<WorkspaceError>()("WorkspaceError", {
+export class WorkspaceError extends Schema.TaggedError<
+  WorkspaceError,
+  { readonly brand: unique symbol }
+>()("WorkspaceError", {
   message: Schema.String,
 }) {}
 

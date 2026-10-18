@@ -413,6 +413,7 @@ describe("goal store", () => {
           fs.writeFileString(path, "").pipe(
             Effect.andThen(
               Effect.fail(
+                // oxlint-disable-next-line effect/preferTaggedConstructors -- `_tag` is the reason option systemError takes, not a tagged value
                 PlatformError.systemError({
                   _tag: "Unknown",
                   module: "FileSystem",
@@ -775,8 +776,7 @@ const interruptedGoalHarness = (firstStep: ReadonlyArray<StepPart>) =>
     })
     yield* Deferred.await(stalled)
     yield* client.steer.command({
-      command: SteerCommand.make({
-        _tag: "Cancel",
+      command: SteerCommand.cases.Cancel.make({
         sessionId,
         branchId,
         requestId: RequestId.make("interrupt-goal-turn"),

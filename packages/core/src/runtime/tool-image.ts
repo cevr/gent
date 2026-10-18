@@ -71,7 +71,10 @@ export const ToolImage = Schema.TaggedStruct("ToolImage", {
 })
 export type ToolImage = typeof ToolImage.Type
 
-export class ToolImageError extends Schema.TaggedError<ToolImageError>()("ToolImageError", {
+export class ToolImageError extends Schema.TaggedError<
+  ToolImageError,
+  { readonly brand: unique symbol }
+>()("ToolImageError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

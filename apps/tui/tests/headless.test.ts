@@ -61,10 +61,10 @@ import {
 import { createMockClient } from "./render-harness-boundary"
 import { RpcClientError } from "effect/rpc/RpcClientError"
 import { SocketCloseError } from "effect/socket/Socket"
-class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
-  "HeadlessRunnerTestError",
-  { message: Schema.String },
-) {}
+class HeadlessRunnerTestError extends Schema.TaggedError<
+  HeadlessRunnerTestError,
+  { readonly brand: unique symbol }
+>()("HeadlessRunnerTestError", { message: Schema.String }) {}
 const BashOutputJson = Schema.fromJsonString(
   Schema.Struct({
     stdout: Schema.String,

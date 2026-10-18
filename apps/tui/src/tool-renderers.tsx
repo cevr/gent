@@ -71,14 +71,14 @@ export const ToolCallSchema: Schema.Codec<ToolCall> = Schema.Struct({
   toolName: Schema.String,
   status: Schema.Literals(["running", "completed", "error"]),
   input: Schema.Unknown,
-  summary: Schema.optionalKey(Schema.String),
-  output: Schema.optionalKey(Schema.String),
-  operations: Schema.optionalKey(
+  summary: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
+  operations: Schema.optional(
     Schema.mutable(Schema.Array(Schema.suspend((): Schema.Codec<ToolCall> => ToolCallSchema))),
   ),
-  startedAt: Schema.optionalKey(Schema.Finite),
-  durationMs: Schema.optionalKey(Schema.Finite),
-  cuts: Schema.optionalKey(Schema.Array(OutputCut)),
+  startedAt: Schema.optional(Schema.Finite),
+  durationMs: Schema.optional(Schema.Finite),
+  cuts: Schema.optional(Schema.Array(OutputCut)),
 })
 
 export interface ToolRendererProps {
@@ -326,11 +326,11 @@ const truncationMarker = (counted: string): string => `... [${counted} truncated
  * output, before or after a reload. A cut inside one line draws that line
  * once, its two ends joined by a marker of the characters left out.
  */
-const numberedLine = (text: string, lineNum: number): WindowedLine => ({
-  _tag: "line",
-  text,
-  lineNum,
-})
+const numberedLine = (text: string, lineNum: number): WindowedLine =>
+  WindowedLine.cases.line.make({
+    text,
+    lineNum,
+  })
 
 const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows =>
   Option.match(cut, {
@@ -365,7 +365,7 @@ const cutRows = (text: string, cut: TextCut): OutputRows => {
   // Whole lines left out, else only the characters of a line cut in two.
   const skipped = tailLine - head.length - 1
   if (skipped === 0) {
-    const gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
+    const gap: WindowedLine = WindowedLine.cases.elision.make({ count: chars, unit: "chars" })
     return { rows: [...headRows, gap, ...tailRows], total: lines }
   }
   // The gap counts whole lines, so a head or tail line cut short is marked
@@ -383,7 +383,7 @@ const cutRows = (text: string, cut: TextCut): OutputRows => {
   if (cut.headCut === true) headDrawn = marked(headRows, headRows.length - 1, "end")
   let tailDrawn: ReadonlyArray<WindowedLine> = tailRows
   if (cut.tailCut === true) tailDrawn = marked(tailRows, 0, "start")
-  const gap: WindowedLine = { _tag: "elision", count: skipped, unit: "lines" }
+  const gap: WindowedLine = WindowedLine.cases.elision.make({ count: skipped, unit: "lines" })
   return { rows: [...headDrawn, gap, ...tailDrawn], total: lines }
 }
 
@@ -416,7 +416,7 @@ const windowRows = (
   const hidden = rows.slice(headEnd, tailStart).reduce((sum, row) => sum + rowLines(row), 0)
   return [
     ...rows.slice(0, headEnd),
-    { _tag: "elision", count: hidden, unit: "lines" },
+    WindowedLine.cases.elision.make({ count: hidden, unit: "lines" }),
     ...rows.slice(tailStart),
   ]
 }
@@ -433,7 +433,7 @@ const gutterParts = (rows: ReadonlyArray<WindowedLine>): ReadonlyArray<GutterPar
   let run: Array<string> = []
   let runStart = 0
   const flush = () => {
-    if (run.length > 0) parts.push({ _tag: "run", startLine: runStart, lines: run })
+    if (run.length > 0) parts.push(GutterPart.cases.run.make({ startLine: runStart, lines: run }))
     run = []
   }
   for (const row of rows) {
@@ -1399,14 +1399,15 @@ export function EditToolRenderer(props: ToolRendererProps) {
       // An input that does not decode draws no diff.
       onNone: () => [],
       onSome: (data) => {
-        const lines: DiffLine[] = diffHunkLines(data.diff).map((text) => ({
-          _tag: "line",
-          text,
-          kind: diffLineKind(text),
-        }))
+        const lines: DiffLine[] = diffHunkLines(data.diff).map((text) =>
+          DiffLine.cases.line.make({
+            text,
+            kind: diffLineKind(text),
+          }),
+        )
         const { head, tail, truncatedCount } = headTail(lines, 6)
         if (truncatedCount === 0) return head
-        return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
+        return [...head, DiffLine.cases.elision.make({ count: truncatedCount }), ...tail]
       },
     }),
   )
@@ -1593,16 +1594,17 @@ function parseGrepOutput(call: ToolCall): Option.Option<GrepOutput> {
  */
 function grepParts(output: GrepOutput): ReadonlyArray<GrepPart> {
   const byFile = (matches: ReadonlyArray<GrepMatch>): ReadonlyArray<GrepPart> =>
-    Array.from(groupByFile(matches), ([file, fileMatches]): GrepPart => ({
-      _tag: "file",
-      file,
-      matches: fileMatches,
-    }))
+    Array.from(groupByFile(matches), ([file, fileMatches]): GrepPart =>
+      GrepPart.cases.file.make({
+        file,
+        matches: fileMatches,
+      }),
+    )
   return Option.match(output.headMatches, {
     onNone: () => byFile(output.matches),
     onSome: (headCount) => [
       ...byFile(output.matches.slice(0, headCount)),
-      { _tag: "gap", count: output.total - output.matches.length },
+      GrepPart.cases.gap.make({ count: output.total - output.matches.length }),
       ...byFile(output.matches.slice(headCount)),
     ],
   })

@@ -194,7 +194,10 @@ const ToolOperation = Schema.Struct({
 })
 type ToolOperation = typeof ToolOperation.Type
 
-export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+export class ToolInteraction extends Schema.Class<
+  ToolInteraction,
+  { readonly brand: unique symbol }
+>("ToolInteraction")({
   ...ToolInteractionFields,
   /**
    * The calls a cell admitted, from the branch's tool receipts. Wire only,
@@ -413,7 +416,7 @@ export const SteerCommand = Schema.Union([
      */
     wake: Schema.optional(Schema.Boolean),
   }),
-])
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type SteerCommand = typeof SteerCommand.Type
 
 // Message
@@ -594,7 +597,7 @@ export type SessionAdmission = typeof SessionAdmission.Type
  */
 export const DEFAULT_SESSION_NAME = "New Chat"
 
-export class Session extends Schema.Class<Session>("Session")({
+export class Session extends Schema.Class<Session, { readonly brand: unique symbol }>("Session")({
   id: SessionId,
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
@@ -643,7 +646,7 @@ export const isSpawnedSession = (
 
 // Branch
 
-export class Branch extends Schema.Class<Branch>("Branch")({
+export class Branch extends Schema.Class<Branch, { readonly brand: unique symbol }>("Branch")({
   id: BranchId,
   sessionId: SessionId,
   parentBranchId: Schema.optional(BranchId),
@@ -696,10 +699,10 @@ export const isRuntimeUserMessage = (message: {
 // ── tool-output ─────────────────────────────────────────────────────────────
 
 /** Structured failure data. The runner, not the tool, owns transcript identity. */
-export class ToolResultFailure extends Schema.TaggedError<ToolResultFailure>()(
-  "ToolResultFailure",
-  { message: Schema.String, result: Schema.Json },
-) {}
+export class ToolResultFailure extends Schema.TaggedError<
+  ToolResultFailure,
+  { readonly brand: unique symbol }
+>()("ToolResultFailure", { message: Schema.String, result: Schema.Json }) {}
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
@@ -1680,24 +1683,26 @@ const messagePartsToolInteractions = (
       ),
       Option.map((found) => settledOperations(found, status)),
     )
-    interactions.push({
-      id,
-      toolName: toolCall.toolName,
-      status,
-      input: toolCall.input,
-      summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
-      output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
-      durationMs: Option.getOrUndefined(
-        Option.orElse(
-          Option.fromUndefinedOr(receipts.durations.get(callKey(Option.some(messageId), id))),
-          () => Option.fromUndefinedOr(receipts.durations.get(callKey(Option.none(), id))),
+    interactions.push(
+      ToolInteraction.make({
+        id,
+        toolName: toolCall.toolName,
+        status,
+        input: toolCall.input,
+        summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
+        output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
+        durationMs: Option.getOrUndefined(
+          Option.orElse(
+            Option.fromUndefinedOr(receipts.durations.get(callKey(Option.some(messageId), id))),
+            () => Option.fromUndefinedOr(receipts.durations.get(callKey(Option.none(), id))),
+          ),
         ),
-      ),
-      ...Option.match(operations, {
-        onNone: () => ({}),
-        onSome: (value) => ({ operations: value }),
+        ...Option.match(operations, {
+          onNone: () => ({}),
+          onSome: (value) => ({ operations: value }),
+        }),
       }),
-    })
+    )
   }
   return interactions
 }
@@ -1810,7 +1815,9 @@ export type SteeringQueueEntryInfo = typeof QueueEntryInfo.cases.Steering.Type
 export const FollowUpQueueEntryInfo = QueueEntryInfo.cases.FollowUp
 export type FollowUpQueueEntryInfo = typeof QueueEntryInfo.cases.FollowUp.Type
 
-export class QueueSnapshot extends Schema.Class<QueueSnapshot>("QueueSnapshot")({
+export class QueueSnapshot extends Schema.Class<QueueSnapshot, { readonly brand: unique symbol }>(
+  "QueueSnapshot",
+)({
   steering: Schema.Array(QueueEntryInfo),
   followUp: Schema.Array(QueueEntryInfo),
 }) {}

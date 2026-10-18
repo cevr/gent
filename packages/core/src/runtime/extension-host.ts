@@ -183,7 +183,7 @@ import {
   type MessageMetadata,
   type RequesterBranch,
   type Session,
-  type SteerCommand,
+  SteerCommand,
   turnCanAsk,
   isSpawnedSession,
 } from "../domain/message.js"
@@ -4451,14 +4451,13 @@ export const makeExtensionHostContextProvider = (
                     const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
                     yield* control((loop) =>
                       loop.steer(
-                        {
-                          _tag: "Interject",
+                        SteerCommand.cases.Interject.make({
                           ...target,
                           requestId,
                           message: steered.content,
                           metadata: steered.metadata,
                           wake: steered.wake,
-                        },
+                        }),
                         clientRequestGrant(runInfo, target),
                       ),
                     ).pipe(Effect.mapError(sessionError("send")))
@@ -4472,9 +4471,9 @@ export const makeExtensionHostContextProvider = (
             const target = targetIn(runInfo, params)
             yield* requireTarget("stop", target)
             const requestId = params.requestId ?? RequestId.make(yield* host.randomId)
-            yield* control((loop) => loop.steer({ _tag: "Cancel", ...target, requestId })).pipe(
-              Effect.mapError(sessionError("stop")),
-            )
+            yield* control((loop) =>
+              loop.steer(SteerCommand.cases.Cancel.make({ ...target, requestId })),
+            ).pipe(Effect.mapError(sessionError("stop")))
           }).pipe(inWorkspace),
         stopMessage: (params) =>
           Effect.gen(function* () {

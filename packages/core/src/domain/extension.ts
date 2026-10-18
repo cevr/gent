@@ -501,9 +501,10 @@ export const sortExtensionsByScope = (
 
 // Extension Load Error
 
-export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
-  "@gent/core/src/domain/extension/ExtensionLoadError",
-)("ExtensionLoadError", {
+export class ExtensionLoadError extends Schema.TaggedError<
+  ExtensionLoadError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/extension/ExtensionLoadError")("ExtensionLoadError", {
   extensionId: ExtensionId,
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -961,15 +962,15 @@ export const makeCollectingExtensionHost = (
 
 // ── extension-services ──────────────────────────────────────────────────────
 
-export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceError>()(
-  "@gent/core/src/domain/extension/ExtensionServiceError",
-  {
-    service: Schema.String,
-    operation: Schema.String,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  },
-) {}
+export class ExtensionServiceError extends Schema.TaggedError<
+  ExtensionServiceError,
+  { readonly brand: unique symbol }
+>()("@gent/core/src/domain/extension/ExtensionServiceError", {
+  service: Schema.String,
+  operation: Schema.String,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 /**
  * An extension asked the `Session` facet to act on a session outside the
@@ -977,14 +978,14 @@ export class ExtensionServiceError extends Schema.TaggedError<ExtensionServiceEr
  * (`getThreadTree`). Authority follows the calling run, so a tool in a child
  * cannot delete its parent or a sibling, or copy their history.
  */
-export class SessionReachError extends Schema.TaggedError<SessionReachError>()(
-  "SessionReachError",
-  {
-    message: Schema.String,
-    operation: Schema.String,
-    sessionId: SessionId,
-  },
-) {}
+export class SessionReachError extends Schema.TaggedError<
+  SessionReachError,
+  { readonly brand: unique symbol }
+>()("SessionReachError", {
+  message: Schema.String,
+  operation: Schema.String,
+  sessionId: SessionId,
+}) {}
 
 export const extensionServiceError =
   (service: string, operation: string) =>

@@ -8,8 +8,8 @@ import {
   useCommand,
 } from "../src/commands"
 import { createEffect, ErrorBoundary, For, onCleanup, onMount } from "solid-js"
-import { Effect, Option, Schema } from "effect"
-import { BranchId, dateFromMillis, GentRpcError, SessionId } from "@gent/core/protocol"
+import { Effect, Option } from "effect"
+import { BranchId, dateFromMillis, GentRpcError, Session, SessionId } from "@gent/core/protocol"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { createMockClient, mountClient, renderFrame, renderScoped } from "./render-harness-boundary"
@@ -152,13 +152,13 @@ const rootBranchId = BranchId.make("branch-root")
 const delegateId = SessionId.make("session-delegate")
 const delegateBranchId = BranchId.make("branch-delegate")
 
-const rootSession = {
+const rootSession = Session.make({
   id: rootId,
   activeBranchId: rootBranchId,
   name: "Root",
   createdAt: dateFromMillis(0),
   updatedAt: dateFromMillis(3),
-}
+})
 
 /**
  * Three stored sessions and no live loop: a root, the handoff that continues
@@ -270,10 +270,7 @@ describe("CommandPalette renderer", () => {
         branch: {
           list: () =>
             Effect.fail(
-              Schema.decodeSync(GentRpcError)({
-                _tag: "InvalidStateError",
-                message: "branch list refused",
-              }),
+              GentRpcError.cases.InvalidStateError.make({ message: "branch list refused" }),
             ),
         },
       })

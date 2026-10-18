@@ -20,7 +20,10 @@ import { useRequiredContext } from "./utils"
 
 // ── link opening ────────────────────────────────────────────────────────────
 
-export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
+export class LinkOpenerError extends Schema.TaggedError<
+  LinkOpenerError,
+  { readonly brand: unique symbol }
+>()("LinkOpenerError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -270,7 +273,7 @@ export function parseEditorCommand(editor: string): [string, ...string[]] {
   return [cmd.value, ...parts.slice(1)]
 }
 
-const EditorResult = Schema.Union([
+export const EditorResult = Schema.Union([
   Schema.TaggedStruct("applied", { content: Schema.String }),
   Schema.TaggedStruct("cancelled", {}),
   Schema.TaggedStruct("error", { message: Schema.String }),

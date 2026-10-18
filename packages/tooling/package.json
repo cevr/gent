@@ -8,7 +8,7 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ./src/test-preload.ts --timeout=30000 --reporter=dots ./tests/ ../../testbeds/gamut/tests/"
   },
   "devDependencies": {
-    "oxc-parser": "0.153.0",
+    "oxc-parser": "0.154.0",
     "picomatch": "catalog:"
   }
 }

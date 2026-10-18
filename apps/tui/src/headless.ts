@@ -216,10 +216,10 @@ export const renderHeadlessToolCall = (toolCall: HeadlessToolCall, place: PathPl
  * connection fault. Failing here is what gives a scripted caller a non-zero
  * exit — a silent exit 0 with no output is indistinguishable from success.
  */
-class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
-  "HeadlessUnansweredError",
-  { message: Schema.String },
-) {}
+class HeadlessUnansweredError extends Schema.TaggedError<
+  HeadlessUnansweredError,
+  { readonly brand: unique symbol }
+>()("HeadlessUnansweredError", { message: Schema.String }) {}
 
 export interface HeadlessOptions {
   /**

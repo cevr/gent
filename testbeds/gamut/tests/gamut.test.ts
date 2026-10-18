@@ -514,7 +514,7 @@ describe("gamut status", () => {
     const pulse = (extensionId: string) =>
       db.run("INSERT INTO events (event_tag, event_json) VALUES (?, ?)", [
         "ExtensionStateChanged",
-        // oxlint-disable-next-line effect/noGlobals -- a raw SQLite row for the driver's queries, as the stored JSON spells it
+        // oxlint-disable-next-line effect/noGlobals, effect/preferTaggedConstructors -- a raw SQLite row for the driver's queries, as the stored JSON spells it
         JSON.stringify({ _tag: "ExtensionStateChanged", extensionId }),
       ])
     expect(extensionPulses(db)).toEqual([])

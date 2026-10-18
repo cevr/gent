@@ -18,12 +18,11 @@ import {
   Layer,
   Option,
   Schedule,
-  Schema,
   type Scope,
 } from "effect"
 import { runProcess } from "@gent/core/extensions/api"
 import {
-  type InteractionPresented,
+  InteractionPresented,
   BranchId,
   dateFromMillis,
   type GentClientRpcError,
@@ -42,6 +41,7 @@ import {
   type SessionController,
   type SlashSubmission,
   SessionControllerContext,
+  SessionOverlayState,
   SessionUiState,
   slashAutocompleteItems,
   transitionComposerInteraction,
@@ -557,7 +557,7 @@ function TestComposer(props: {
     // Suspended: a session pane (the model picker) holds the composer.
     uiState: (): SessionUiState => {
       if (props.suspended !== true) return SessionUiState.initial()
-      return { ...SessionUiState.initial(), overlay: { _tag: "model" } }
+      return { ...SessionUiState.initial(), overlay: SessionOverlayState.cases.model.make({}) }
     },
     composerState: props.composerState ?? (() => ComposerState.cases.idle.make({})),
     promptSearch: {
@@ -673,19 +673,18 @@ describe("Composer renderer", () => {
         setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
       })
       const dispatched: Array<ComposerEvent["_tag"]> = []
-      const interaction = {
-        _tag: "InteractionPresented",
+      const interaction = InteractionPresented.make({
         sessionId: SessionId.make("s"),
         branchId: BranchId.make("b"),
         requestId: InteractionRequestId.make("req-pending"),
         text: "Ship the release?",
         metadata: { type: "ask-user", questions: [{ question: "Ship the release?" }] },
-      } satisfies InteractionPresented
+      })
       const setup = yield* renderScoped(
         () => (
           <TestComposer
             onSubmit={() => {}}
-            composerState={() => ({ _tag: "interaction", interaction })}
+            composerState={() => ComposerState.cases.interaction.make({ interaction })}
             dispatchComposer={(event) => {
               dispatched.push(event._tag)
             }}
@@ -1213,10 +1212,7 @@ describe("Composer renderer", () => {
 
 const submitTest = it.scopedLive.layer(testLayer)
 
-const refusedSend = Schema.decodeSync(GentRpcError)({
-  _tag: "InvalidStateError",
-  message: "send refused",
-})
+const refusedSend = GentRpcError.cases.InvalidStateError.make({ message: "send refused" })
 
 /** A session rooted in `cwd`, as `session.get` returns it. */
 const storedSessionIn = (cwd: string) => ({
@@ -1577,10 +1573,7 @@ describe("Composer submit", () => {
         <TestComposer
           onSubmit={() => {}}
           sendResult={Effect.fail(
-            Schema.decodeSync(GentRpcError)({
-              _tag: "InvalidStateError",
-              message: "send refused",
-            }),
+            GentRpcError.cases.InvalidStateError.make({ message: "send refused" }),
           )}
         >
           <CaptureClient />

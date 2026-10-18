@@ -27,6 +27,7 @@ import {
   defineExtension,
   ExtensionHost,
   type ExtensionHostService,
+  ImageCost,
   type FailureResponse,
   isRecord,
   isRecordArray,
@@ -745,10 +746,10 @@ const writeCredentialsFile = (
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
 
-class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
-  "ClaudeKeychainNotFoundError",
-  {},
-) {}
+class ClaudeKeychainNotFoundError extends Schema.TaggedError<
+  ClaudeKeychainNotFoundError,
+  { readonly brand: unique symbol }
+>()("ClaudeKeychainNotFoundError", {}) {}
 
 const spawnSecurity = (
   args: readonly string[],
@@ -1501,7 +1502,10 @@ const settleQuarantined = (
  * does not clear it; only moving the file by hand does. Its message is the
  * whole failure, with no sign-in hint after it.
  */
-class LinkedRotationStuck extends Schema.TaggedError<LinkedRotationStuck>()("LinkedRotationStuck", {
+class LinkedRotationStuck extends Schema.TaggedError<
+  LinkedRotationStuck,
+  { readonly brand: unique symbol }
+>()("LinkedRotationStuck", {
   message: Schema.String,
 }) {}
 
@@ -3763,7 +3767,7 @@ export const MESSAGES_CLASS: ApiClassContribution = {
   // An image costs width x height / 750 tokens. Claude 4.7 and later keep high resolution
   // (3,888 tokens for 2000x1500) where older models scale down to about 1,600, so no cap
   // applies: every model is bounded, and an older one is overcounted (compaction comes early).
-  imageCost: () => ({ _tag: "Pixels", pixelsPerToken: 750 }),
+  imageCost: () => ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }),
   // The mark the driver knows a host context update by (`flagHostContextUpdates`).
   hostContextUpdateOptions: { anthropic: { cacheControl: { [HOST_CONTEXT_UPDATE_MARK]: true } } },
   resolveModel: (request) =>

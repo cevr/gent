@@ -4,7 +4,13 @@ import { Deferred, type Duration, Effect, Option, Schedule } from "effect"
 import * as BeautifulMermaid from "beautiful-mermaid"
 import { type CliRendererExternalOutputEvent, SyntaxStyle } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
-import { MessageList, NativeTranscript, type SessionItem } from "../src/message-list"
+import {
+  AssistantSegment,
+  Message,
+  MessageList,
+  NativeTranscript,
+  type SessionItem,
+} from "../src/message-list"
 import { DiagramLibraryContext, DiagramLibraryError, makeDiagramLibrary } from "../src/mermaid"
 import { renderScoped } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
@@ -24,16 +30,15 @@ const drawnAnswer = (content: string, width = 120) =>
       () => (
         <MessageList
           items={[
-            {
-              _tag: "regular-message",
+            Message.cases["regular-message"].make({
               id: "diagram",
               role: "assistant",
               content,
               reasoning: "",
               images: [],
               createdAt: 0,
-              segments: [{ _tag: "text", content }],
-            },
+              segments: [AssistantSegment.cases.text.make({ content })],
+            }),
           ]}
           disclosure="collapsed"
           syntaxStyle={syntaxStyle}
@@ -61,36 +66,33 @@ const diagramThenTail = (): SessionItem[] => {
   const content = "```mermaid\ngraph LR\n  Alpha-->Beta\n```"
   const filler = Array.from({ length: 20 }, (_, index) => `filler line ${index + 1}`).join("\n\n")
   return [
-    {
-      _tag: "regular-message",
+    Message.cases["regular-message"].make({
       id: "diagram",
       role: "assistant",
       content,
       reasoning: "",
       images: [],
       createdAt: 0,
-      segments: [{ _tag: "text", content }],
-    },
-    {
-      _tag: "regular-message",
+      segments: [AssistantSegment.cases.text.make({ content })],
+    }),
+    Message.cases["regular-message"].make({
       id: "tail",
       role: "assistant",
       content: "AFTER-DIAGRAM",
       reasoning: "",
       images: [],
       createdAt: 1,
-      segments: [{ _tag: "text", content: "AFTER-DIAGRAM" }],
-    },
-    {
-      _tag: "regular-message",
+      segments: [AssistantSegment.cases.text.make({ content: "AFTER-DIAGRAM" })],
+    }),
+    Message.cases["regular-message"].make({
       id: "filler",
       role: "assistant",
       content: filler,
       reasoning: "",
       images: [],
       createdAt: 2,
-      segments: [{ _tag: "text", content: filler }],
-    },
+      segments: [AssistantSegment.cases.text.make({ content: filler })],
+    }),
   ]
 }
 
@@ -229,16 +231,15 @@ describe("mermaid diagrams", () => {
         <DiagramLibraryContext.Provider value={library}>
           <MessageList
             items={[
-              {
-                _tag: "regular-message",
+              Message.cases["regular-message"].make({
                 id: "invalid-diagram",
                 role: "assistant",
                 content,
                 reasoning: "",
                 images: [],
                 createdAt: 0,
-                segments: [{ _tag: "text", content }],
-              },
+                segments: [AssistantSegment.cases.text.make({ content })],
+              }),
             ]}
             disclosure="collapsed"
             syntaxStyle={syntaxStyle}

@@ -98,10 +98,10 @@ const ToolReadTokenResource = defineResource({
   layer: Layer.succeed(ToolReadToken, ToolReadToken.of({ read: Effect.succeed("read-ok") })),
 })
 
-class ToolRunnerTestError extends Schema.TaggedError<ToolRunnerTestError>()(
-  "@gent/core/tests/runtime/tools.test/ToolRunnerTestError",
-  { message: Schema.String },
-) {}
+class ToolRunnerTestError extends Schema.TaggedError<
+  ToolRunnerTestError,
+  { readonly brand: unique symbol }
+>()("@gent/core/tests/runtime/tools.test/ToolRunnerTestError", { message: Schema.String }) {}
 
 const ErrorResult = Schema.Struct({ error: Schema.String })
 const errorFromResult = (result: Prompt.ToolResultPart): string =>
@@ -563,9 +563,9 @@ describe("tool execution", () => {
       expect(result.sessionId).toBe(SessionId.make("session-pending"))
       expect(result.branchId).toBe(BranchId.make("branch-pending"))
       expect(eventTags).toEqual(["ToolCallStarted"])
+      expect(events.map((event) => event._tag)).toEqual(["ToolCallStarted"])
       expect(events).toEqual([
         expect.objectContaining({
-          _tag: "ToolCallStarted",
           sessionId: SessionId.make("session-pending"),
           branchId: BranchId.make("branch-pending"),
           toolCallId: ToolCallId.make("tc-pending"),

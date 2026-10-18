@@ -38,6 +38,7 @@ import {
   AgentLoopError,
   FollowUpQueueFull,
   entityIdOf,
+  ExtensionRequestInputEnvelope,
   listWorkspaceLoops,
   type SendUserMessagePayload,
   type SessionRuntimeState,
@@ -217,13 +218,13 @@ export const admitChildSessionDepth = Effect.fn("SessionDepth.admitChildSessionD
 
 const SESSION_TERMINATION_CONCURRENCY = 16
 
-export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
-  "SessionRuntimeError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class SessionRuntimeError extends Schema.TaggedError<
+  SessionRuntimeError,
+  { readonly brand: unique symbol }
+>()("SessionRuntimeError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 interface SessionRuntimeTarget {
   readonly sessionId: SessionId
@@ -413,8 +414,8 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
             extensionId: input.extensionId,
             capabilityId: input.capabilityId,
             input: Option.match(Option.fromUndefinedOr(input.input), {
-              onNone: () => ({ _tag: "Missing" }),
-              onSome: (value) => ({ _tag: "Present", value }),
+              onNone: () => ExtensionRequestInputEnvelope.cases.Missing.make({}),
+              onSome: (value) => ExtensionRequestInputEnvelope.cases.Present.make({ value }),
             }),
             ...ids,
           }),

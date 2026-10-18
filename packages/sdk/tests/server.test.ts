@@ -23,6 +23,7 @@ import {
   BunGentPlatformLive,
   interruptAtEachStep,
   freePort,
+  GentBuild,
   makeTempDirectoryScoped,
   serveModelCatalogFixture,
 } from "@gent/core/test-utils"
@@ -55,7 +56,7 @@ const makeCountingFs = (
           mtime,
           atime: Option.none(),
           birthtime: Option.none(),
-          dev: 0,
+          dev: 0n,
           ino: Option.none(),
           mode: 0,
           nlink: Option.none(),
@@ -103,7 +104,7 @@ const compiledServices = (id: string, counter: Ref.Ref<number>) =>
         return GentPlatform.of({
           ...platform,
           execPath: Effect.succeed("/nonexistent/gent-probe-x/gent"),
-          build: Effect.succeed({ _tag: "Compiled", id, version: "0.1.0" }),
+          build: Effect.succeed(GentBuild.cases.Compiled.make({ id, version: "0.1.0" })),
         })
       }),
     ).pipe(Layer.provide(GentPlatform.Test("bf"))),

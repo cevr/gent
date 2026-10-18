@@ -76,10 +76,10 @@ export interface SiteOptions {
 }
 
 /** Why a release answer is not served as the installer. */
-export class InstallerRejected extends Schema.TaggedError<InstallerRejected>()(
-  "InstallerRejected",
-  { reason: Schema.String },
-) {}
+export class InstallerRejected extends Schema.TaggedError<
+  InstallerRejected,
+  { readonly brand: unique symbol }
+>()("InstallerRejected", { reason: Schema.String }) {}
 
 const reject = (reason: string): Effect.Effect<never, InstallerRejected> =>
   Effect.fail(new InstallerRejected({ reason }))

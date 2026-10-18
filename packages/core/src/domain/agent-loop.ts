@@ -30,7 +30,10 @@ import { Actor } from "effect-encore"
 
 // ── state ───────────────────────────────────────────────────────────────────
 
-export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentLoopError", {
+export class AgentLoopError extends Schema.TaggedError<
+  AgentLoopError,
+  { readonly brand: unique symbol }
+>()("AgentLoopError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -39,10 +42,10 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
  * The branch refused a follow-up because its queue is at the cap. A refusal,
  * not a fault: the loop and its running turn go on untouched.
  */
-export class FollowUpQueueFull extends Schema.TaggedError<FollowUpQueueFull>()(
-  "FollowUpQueueFull",
-  { max: Schema.Int },
-) {
+export class FollowUpQueueFull extends Schema.TaggedError<
+  FollowUpQueueFull,
+  { readonly brand: unique symbol }
+>()("FollowUpQueueFull", { max: Schema.Int }) {
   override get message(): string {
     return `Follow-up queue full (max ${this.max})`
   }
@@ -640,7 +643,7 @@ const StopMessageFields = {
   requester: Schema.optional(RequesterBranch),
 }
 
-const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
+export const ExtensionRequestInputEnvelope = Schema.TaggedUnion({
   Present: { value: Schema.Unknown },
   Missing: {},
 })

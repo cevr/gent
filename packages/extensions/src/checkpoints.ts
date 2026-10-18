@@ -72,7 +72,10 @@ import { WORKSPACE_MARKER_FILE } from "./workspaces.js"
 export const CHECKPOINTS_EXTENSION_ID = ExtensionId.make("@gent/checkpoints")
 
 /** A checkpoint request that cannot answer; `message` says why, in the user's words. */
-class CheckpointsError extends Schema.TaggedError<CheckpointsError>()("CheckpointsError", {
+class CheckpointsError extends Schema.TaggedError<
+  CheckpointsError,
+  { readonly brand: unique symbol }
+>()("CheckpointsError", {
   message: Schema.String,
 }) {}
 

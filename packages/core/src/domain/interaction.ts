@@ -73,9 +73,10 @@ export type ApprovalDecision = Schema.Schema.Type<typeof ApprovalDecisionSchema>
 
 // ── interaction pending signal ──────────────────────────────────────────────
 
-export class InteractionPendingError extends Schema.TaggedError<InteractionPendingError>(
-  "@gent/core/src/domain/interaction/InteractionPendingError",
-)("InteractionPendingError", {
+export class InteractionPendingError extends Schema.TaggedError<
+  InteractionPendingError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionPendingError")("InteractionPendingError", {
   requestId: InteractionRequestId,
   sessionId: SessionId,
   branchId: BranchId,
@@ -85,60 +86,75 @@ export class InteractionPendingError extends Schema.TaggedError<InteractionPendi
  * An ask made outside a tool call the loop dispatched. No turn parks on it and
  * nothing runs it again, so its answer would reach the next call that asks.
  */
-class InteractionOwnerMissingError extends Schema.TaggedError<InteractionOwnerMissingError>(
-  "@gent/core/src/domain/interaction/InteractionOwnerMissingError",
-)("InteractionOwnerMissingError", {
-  message: Schema.String,
-}) {}
+class InteractionOwnerMissingError extends Schema.TaggedError<
+  InteractionOwnerMissingError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionOwnerMissingError")(
+  "InteractionOwnerMissingError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A reply to a request that already has a different answer. The first answer
  * wins; a later reply cannot change what the call was told.
  */
-export class InteractionDecisionConflictError extends Schema.TaggedError<InteractionDecisionConflictError>(
-  "@gent/core/src/domain/interaction/InteractionDecisionConflictError",
-)("InteractionDecisionConflictError", {
-  message: Schema.String,
-  requestId: InteractionRequestId,
-}) {}
+export class InteractionDecisionConflictError extends Schema.TaggedError<
+  InteractionDecisionConflictError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionDecisionConflictError")(
+  "InteractionDecisionConflictError",
+  {
+    message: Schema.String,
+    requestId: InteractionRequestId,
+  },
+) {}
 
 /**
  * An ask by an inner call of a dispatching tool while another call of the
  * same step has parked on an approval. The parked call keeps the branch's one
  * slot until its step runs again, which the dispatcher's step prevents.
  */
-class InteractionSlotBusyError extends Schema.TaggedError<InteractionSlotBusyError>(
-  "@gent/core/src/domain/interaction/InteractionSlotBusyError",
-)("InteractionSlotBusyError", {
+class InteractionSlotBusyError extends Schema.TaggedError<
+  InteractionSlotBusyError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionSlotBusyError")("InteractionSlotBusyError", {
   message: Schema.String,
   requestId: InteractionRequestId,
 }) {}
 
-export class InteractionRequestMismatchError extends Schema.TaggedError<InteractionRequestMismatchError>(
-  "@gent/core/src/domain/interaction/InteractionRequestMismatchError",
-)("InteractionRequestMismatchError", {
-  message: Schema.String,
-  expectedRequestId: Schema.optional(InteractionRequestId),
-  actualRequestId: InteractionRequestId,
-  sessionId: SessionId,
-  branchId: BranchId,
-}) {}
+export class InteractionRequestMismatchError extends Schema.TaggedError<
+  InteractionRequestMismatchError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionRequestMismatchError")(
+  "InteractionRequestMismatchError",
+  {
+    message: Schema.String,
+    expectedRequestId: Schema.optional(InteractionRequestId),
+    actualRequestId: InteractionRequestId,
+    sessionId: SessionId,
+    branchId: BranchId,
+  },
+) {}
 
 /**
  * An ask whose request closed before it had an answer: its turn ended, or a
  * resumed call names a request that keeps no answer.
  */
-export class InteractionClosedError extends Schema.TaggedError<InteractionClosedError>(
-  "@gent/core/src/domain/interaction/InteractionClosedError",
-)("InteractionClosedError", {
+export class InteractionClosedError extends Schema.TaggedError<
+  InteractionClosedError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionClosedError")("InteractionClosedError", {
   message: Schema.String,
   requestId: InteractionRequestId,
 }) {}
 
 /** A question or an answer that its stored JSON form does not fit. */
-class InteractionCodecError extends Schema.TaggedError<InteractionCodecError>(
-  "@gent/core/src/domain/interaction/InteractionCodecError",
-)("InteractionCodecError", {
+class InteractionCodecError extends Schema.TaggedError<
+  InteractionCodecError,
+  { readonly brand: unique symbol }
+>("@gent/core/src/domain/interaction/InteractionCodecError")("InteractionCodecError", {
   message: Schema.String,
   cause: Schema.Defect(),
 }) {}

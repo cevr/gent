@@ -81,9 +81,10 @@ const CLASSIFIERS: ReadonlyArray<CatalogModel> = [
 ]
 
 /** A chat turn asked for a model of a driver that serves only classifiers. */
-class ClassifierOnlyDriver extends Schema.TaggedError<ClassifierOnlyDriver>(
-  "@gent/extensions/src/typesafe/ClassifierOnlyDriver",
-)("ClassifierOnlyDriver", {
+class ClassifierOnlyDriver extends Schema.TaggedError<
+  ClassifierOnlyDriver,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/typesafe/ClassifierOnlyDriver")("ClassifierOnlyDriver", {
   message: Schema.String,
 }) {}
 

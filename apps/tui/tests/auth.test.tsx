@@ -4,8 +4,9 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "ef
 import type { GentRuntime } from "@gent/sdk"
 import {
   AgentName,
-  type AuthAuthorization,
-  type AuthMethod,
+  AuthAuthorization,
+  AuthMethod,
+  type AuthPrompt,
   type AuthProviderInfo,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
@@ -15,7 +16,8 @@ import {
 } from "@gent/core/protocol"
 import {
   Auth,
-  type AuthEvent,
+  AuthEvent,
+  AuthScreen,
   AuthState,
   credentialEntries,
   labelProblem,
@@ -66,8 +68,8 @@ const withCredentials = {
   ],
 } satisfies AuthProviderInfo
 
-const apiMethod = { type: "api", label: "API Key" } satisfies AuthMethod
-const oauthMethod = { type: "oauth", label: "OAuth" } satisfies AuthMethod
+const apiMethod = AuthMethod.make({ type: "api", label: "API Key" })
+const oauthMethod = AuthMethod.make({ type: "oauth", label: "OAuth" })
 const accountPrompt = { key: "accountId", label: "Account ID", placeholder: "e.g. 0123abcd" }
 const gatewayPrompt = { key: "gatewayId", label: "Gateway ID" }
 
@@ -75,33 +77,67 @@ const methods = {
   anthropic: [apiMethod, oauthMethod],
 } satisfies Record<string, ReadonlyArray<AuthMethod>>
 
-const codeAuthorization = {
+const codeAuthorization = AuthAuthorization.make({
   url: "https://example.com/auth",
   method: "code",
   authorizationId: "auth-1",
-} satisfies AuthAuthorization
+})
 
-const autoAuthorization = {
+const autoAuthorization = AuthAuthorization.make({
   ...codeAuthorization,
   method: "auto",
-} satisfies AuthAuthorization
+})
 
 const loaded = (providers: ReadonlyArray<AuthProviderInfo> = [provider]) =>
-  transitionAuth(AuthState.initial(), {
-    _tag: "Loaded",
-    providers,
-    others: [],
-    methods,
-  } satisfies AuthEvent)
+  transitionAuth(
+    AuthState.initial(),
+    AuthEvent.cases.Loaded.make({
+      providers,
+      others: [],
+      methods,
+    }),
+  )
 
 const openOAuth = (authorization: AuthAuthorization) =>
-  transitionAuth(loaded(), {
-    _tag: "OpenOAuth",
+  transitionAuth(
+    loaded(),
+    AuthEvent.cases.OpenOAuth.make({
+      provider: "anthropic",
+      methodIndex: 1,
+      method: oauthMethod,
+      authorization,
+    }),
+  )
+
+/** The OAuth screen `openOAuth` opens, as its events leave it. */
+const oauthScreen = (
+  authorization: AuthAuthorization,
+  fields: {
+    readonly code: string
+    readonly waiting: boolean
+    readonly browserUnavailable: boolean
+  },
+) =>
+  AuthScreen.cases.OAuth.make({
     provider: "anthropic",
     methodIndex: 1,
     method: oauthMethod,
     authorization,
-  } satisfies AuthEvent)
+    ...fields,
+  })
+
+/** The key screen of an `OpenKey` for anthropic. */
+const keyScreen = (fields: {
+  readonly value: string
+  readonly prompts?: ReadonlyArray<AuthPrompt>
+  readonly entered?: ReadonlyArray<string>
+}) =>
+  AuthScreen.cases.Key.make({
+    provider: "anthropic",
+    value: fields.value,
+    prompts: fields.prompts ?? [],
+    entered: fields.entered ?? [],
+  })
 
 describe("auth-state", () => {
   test("the list shows the active providers, and a query finds the others by name or id", () => {
@@ -128,7 +164,7 @@ describe("auth-state", () => {
   test("a load replaces the catalog and shows the provider list", () => {
     const state = loaded()
 
-    expect(state.screen).toEqual({ _tag: "List" })
+    expect(state.screen).toEqual(AuthScreen.cases.List.make({}))
     expect(state.catalog).toEqual(Option.some({ providers: [provider], others: [], methods }))
     expect(state.error).toEqual(Option.none())
   })
@@ -145,22 +181,27 @@ describe("auth-state", () => {
   })
 
   test("a load clears an error left by the attempt before it", () => {
-    const failed = transitionAuth(AuthState.initial(), { _tag: "Failed", error: "boom" })
-    const recovered = transitionAuth(failed, {
-      _tag: "Loaded",
-      providers: [provider],
-      others: [],
-      methods,
-    })
+    const failed = transitionAuth(
+      AuthState.initial(),
+      AuthEvent.cases.Failed.make({ error: "boom" }),
+    )
+    const recovered = transitionAuth(
+      failed,
+      AuthEvent.cases.Loaded.make({
+        providers: [provider],
+        others: [],
+        methods,
+      }),
+    )
 
     expect(failed.error).toEqual(Option.some("boom"))
     expect(recovered.error).toEqual(Option.none())
   })
 
   test("a failure falls back to the provider list and keeps the catalog", () => {
-    const state = transitionAuth(loaded(), { _tag: "Failed", error: "bad key" })
+    const state = transitionAuth(loaded(), AuthEvent.cases.Failed.make({ error: "bad key" }))
 
-    expect(state.screen).toEqual({ _tag: "List" })
+    expect(state.screen).toEqual(AuthScreen.cases.List.make({}))
     expect(state.error).toEqual(Option.some("bad key"))
     expect(Option.map(state.catalog, (catalog) => catalog.providers)).toEqual(
       Option.some([provider]),
@@ -168,122 +209,160 @@ describe("auth-state", () => {
   })
 
   test("choosing a provider then an api method opens an empty key field", () => {
-    const method = transitionAuth(loaded(), { _tag: "OpenMethod", provider: "anthropic" })
-    const key = transitionAuth(method, { _tag: "OpenKey", provider: "anthropic", prompts: [] })
+    const method = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenMethod.make({ provider: "anthropic" }),
+    )
+    const key = transitionAuth(
+      method,
+      AuthEvent.cases.OpenKey.make({ provider: "anthropic", prompts: [] }),
+    )
 
-    expect(method.screen).toEqual({ _tag: "Method", provider: "anthropic" })
-    expect(key.screen).toEqual({
-      _tag: "Key",
-      provider: "anthropic",
-      value: "",
-      prompts: [],
-      entered: [],
-    })
+    expect(method.screen).toEqual(AuthScreen.cases.Method.make({ provider: "anthropic" }))
+    expect(key.screen).toEqual(
+      AuthScreen.cases.Key.make({
+        provider: "anthropic",
+        value: "",
+        prompts: [],
+        entered: [],
+      }),
+    )
   })
 
   test("typing and erasing edit whichever screen holds text", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
-    const typed = transitionAuth(key, { _tag: "Type", text: "sk abc👍🏽" })
+    const key = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenKey.make({ provider: "anthropic", prompts: [] }),
+    )
+    const typed = transitionAuth(key, AuthEvent.cases.Type.make({ text: "sk abc👍🏽" }))
     const erase = (state: typeof typed, unit: "grapheme" | "word" | "line") =>
-      transitionAuth(state, { _tag: "Erase", unit })
+      transitionAuth(state, AuthEvent.cases.Erase.make({ unit }))
 
-    expect(typed.screen).toMatchObject({ _tag: "Key", value: "sk abc👍🏽" })
+    expect(typed.screen).toEqual(keyScreen({ value: "sk abc👍🏽" }))
     // Backspace takes one whole character, never half an emoji.
-    expect(erase(typed, "grapheme").screen).toMatchObject({ _tag: "Key", value: "sk abc" })
+    expect(erase(typed, "grapheme").screen).toEqual(keyScreen({ value: "sk abc" }))
     // Ctrl+W takes the last word, Ctrl+U the whole field, as in the composer.
-    expect(erase(typed, "word").screen).toMatchObject({ _tag: "Key", value: "sk " })
-    expect(erase(typed, "line").screen).toMatchObject({ _tag: "Key", value: "" })
+    expect(erase(typed, "word").screen).toEqual(keyScreen({ value: "sk " }))
+    expect(erase(typed, "line").screen).toEqual(keyScreen({ value: "" }))
   })
 
   test("a method with prompts asks each after the key, and back goes one step", () => {
     const prompts = [accountPrompt, gatewayPrompt]
-    const type = (state: AuthState, text: string) => transitionAuth(state, { _tag: "Type", text })
-    const next = (state: AuthState) => transitionAuth(state, { _tag: "Next" })
-    const back = (state: AuthState) => transitionAuth(state, { _tag: "Back" })
+    const type = (state: AuthState, text: string) =>
+      transitionAuth(state, AuthEvent.cases.Type.make({ text }))
+    const next = (state: AuthState) => transitionAuth(state, AuthEvent.cases.Next.make({}))
+    const back = (state: AuthState) => transitionAuth(state, AuthEvent.cases.Back.make({}))
     const key = type(
-      transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts }),
+      transitionAuth(loaded(), AuthEvent.cases.OpenKey.make({ provider: "anthropic", prompts })),
       "cf-tok",
     )
     const account = type(next(key), "acct-1")
     const gateway = next(account)
 
-    expect(next(key).screen).toMatchObject({ _tag: "Key", value: "", entered: ["cf-tok"] })
-    expect(gateway.screen).toMatchObject({ _tag: "Key", value: "", entered: ["cf-tok", "acct-1"] })
+    expect(next(key).screen).toEqual(keyScreen({ value: "", prompts, entered: ["cf-tok"] }))
+    expect(gateway.screen).toEqual(keyScreen({ value: "", prompts, entered: ["cf-tok", "acct-1"] }))
     // The last field has nothing after it: the pane saves instead.
     expect(next(gateway)).toEqual(gateway)
     // Esc gives the field before back with the text it held.
     expect(back(gateway).screen).toMatchObject({ value: "acct-1", entered: ["cf-tok"] })
     expect(back(back(gateway)).screen).toMatchObject({ value: "cf-tok", entered: [] })
-    expect(back(back(back(gateway))).screen).toEqual({ _tag: "Method", provider: "anthropic" })
+    expect(back(back(back(gateway))).screen).toEqual(
+      AuthScreen.cases.Method.make({ provider: "anthropic" }),
+    )
   })
 
   test("an empty key does not go on to the prompts", () => {
-    const key = transitionAuth(loaded(), {
-      _tag: "OpenKey",
-      provider: "anthropic",
-      prompts: [accountPrompt],
-    })
-    const blank = transitionAuth(key, { _tag: "Type", text: "  " })
+    const key = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenKey.make({
+        provider: "anthropic",
+        prompts: [accountPrompt],
+      }),
+    )
+    const blank = transitionAuth(key, AuthEvent.cases.Type.make({ text: "  " }))
 
-    expect(transitionAuth(key, { _tag: "Next" })).toEqual(key)
-    expect(transitionAuth(blank, { _tag: "Next" })).toEqual(blank)
+    expect(transitionAuth(key, AuthEvent.cases.Next.make({}))).toEqual(key)
+    expect(transitionAuth(blank, AuthEvent.cases.Next.make({}))).toEqual(blank)
   })
 
   test("typing into the oauth code field edits the code, not the key", () => {
-    const typed = transitionAuth(openOAuth(codeAuthorization), { _tag: "Type", text: "1234" })
+    const typed = transitionAuth(
+      openOAuth(codeAuthorization),
+      AuthEvent.cases.Type.make({ text: "1234" }),
+    )
 
-    expect(typed.screen).toMatchObject({ _tag: "OAuth", code: "1234" })
+    expect(typed.screen).toEqual(
+      oauthScreen(codeAuthorization, { code: "1234", waiting: false, browserUnavailable: false }),
+    )
   })
 
   test("typing on the provider list changes nothing", () => {
     const state = loaded()
 
-    expect(transitionAuth(state, { _tag: "Type", text: "x" })).toEqual(state)
-    expect(transitionAuth(state, { _tag: "Erase", unit: "grapheme" })).toEqual(state)
+    expect(transitionAuth(state, AuthEvent.cases.Type.make({ text: "x" }))).toEqual(state)
+    expect(transitionAuth(state, AuthEvent.cases.Erase.make({ unit: "grapheme" }))).toEqual(state)
   })
 
   test("an auto authorization waits for the browser, a code one does not", () => {
     const auto = openOAuth(autoAuthorization)
     const code = openOAuth(codeAuthorization)
 
-    expect(auto.screen).toMatchObject({ _tag: "OAuth", waiting: true, code: "" })
-    expect(code.screen).toMatchObject({ _tag: "OAuth", waiting: false, code: "" })
+    expect(auto.screen).toEqual(
+      oauthScreen(autoAuthorization, { code: "", waiting: true, browserUnavailable: false }),
+    )
+    expect(code.screen).toEqual(
+      oauthScreen(codeAuthorization, { code: "", waiting: false, browserUnavailable: false }),
+    )
   })
 
   test("a failed browser callback stops waiting and asks for a code", () => {
-    const state = transitionAuth(openOAuth(autoAuthorization), {
-      _tag: "OAuthAutoFailed",
-      error: "callback failed",
-    })
+    const state = transitionAuth(
+      openOAuth(autoAuthorization),
+      AuthEvent.cases.OAuthAutoFailed.make({
+        error: "callback failed",
+      }),
+    )
 
-    expect(state.screen).toMatchObject({ _tag: "OAuth", waiting: false })
+    expect(state.screen).toEqual(
+      oauthScreen(autoAuthorization, { code: "", waiting: false, browserUnavailable: false }),
+    )
     expect(state.error).toEqual(Option.some("callback failed"))
   })
 
   test("a failed browser callback on another screen changes nothing", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
+    const key = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenKey.make({ provider: "anthropic", prompts: [] }),
+    )
 
-    expect(transitionAuth(key, { _tag: "OAuthAutoFailed", error: "late" })).toEqual(key)
+    expect(transitionAuth(key, AuthEvent.cases.OAuthAutoFailed.make({ error: "late" }))).toEqual(
+      key,
+    )
   })
 
   test("a missing browser keeps the oauth screen waiting and says so", () => {
-    const state = transitionAuth(openOAuth(autoAuthorization), { _tag: "BrowserUnavailable" })
+    const state = transitionAuth(
+      openOAuth(autoAuthorization),
+      AuthEvent.cases.BrowserUnavailable.make({}),
+    )
 
-    expect(state.screen).toMatchObject({ _tag: "OAuth", waiting: true, browserUnavailable: true })
+    expect(state.screen).toEqual(
+      oauthScreen(autoAuthorization, { code: "", waiting: true, browserUnavailable: true }),
+    )
     expect(state.error).toEqual(Option.none())
   })
 
   test("a missing browser reported on another screen changes nothing", () => {
     const state = loaded()
 
-    expect(transitionAuth(state, { _tag: "BrowserUnavailable" })).toEqual(state)
+    expect(transitionAuth(state, AuthEvent.cases.BrowserUnavailable.make({}))).toEqual(state)
   })
 
   test("closing a screen returns to the list and clears the error", () => {
-    const failed = transitionAuth(loaded(), { _tag: "Failed", error: "bad key" })
-    const closed = transitionAuth(failed, { _tag: "Close" })
+    const failed = transitionAuth(loaded(), AuthEvent.cases.Failed.make({ error: "bad key" }))
+    const closed = transitionAuth(failed, AuthEvent.cases.Close.make({}))
 
-    expect(closed.screen).toEqual({ _tag: "List" })
+    expect(closed.screen).toEqual(AuthScreen.cases.List.make({}))
     expect(closed.error).toEqual(Option.none())
     expect(Option.map(closed.catalog, (catalog) => catalog.providers)).toEqual(
       Option.some([provider]),
@@ -293,76 +372,108 @@ describe("auth-state", () => {
   // "esc back" goes one step: a sign-in screen to its provider's methods,
   // the methods to the provider list.
   test("back from a sign-in screen opens its provider's methods", () => {
-    const key = transitionAuth(loaded(), { _tag: "OpenKey", provider: "anthropic", prompts: [] })
-    const oauth = transitionAuth(openOAuth(autoAuthorization), {
-      _tag: "OAuthAutoFailed",
-      error: "callback failed",
-    })
+    const key = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenKey.make({ provider: "anthropic", prompts: [] }),
+    )
+    const oauth = transitionAuth(
+      openOAuth(autoAuthorization),
+      AuthEvent.cases.OAuthAutoFailed.make({
+        error: "callback failed",
+      }),
+    )
 
     for (const state of [key, oauth]) {
-      const back = transitionAuth(state, { _tag: "Back" })
-      expect(back.screen).toEqual({ _tag: "Method", provider: "anthropic" })
+      const back = transitionAuth(state, AuthEvent.cases.Back.make({}))
+      expect(back.screen).toEqual(AuthScreen.cases.Method.make({ provider: "anthropic" }))
       expect(back.error).toEqual(Option.none())
     }
   })
 
   test("back from the methods opens the provider list", () => {
-    const method = transitionAuth(loaded(), { _tag: "OpenMethod", provider: "anthropic" })
+    const method = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenMethod.make({ provider: "anthropic" }),
+    )
 
-    expect(transitionAuth(method, { _tag: "Back" }).screen).toEqual({ _tag: "List" })
+    expect(transitionAuth(method, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.List.make({}),
+    )
   })
 
   test("back walks a credential's screens to its provider's credentials, then the list", () => {
     const state = loaded([withCredentials])
     const step = (from: typeof state, event: AuthEvent) => transitionAuth(from, event)
-    const label = step(state, { _tag: "OpenLabel", provider: "anthropic" })
-    expect(step(label, { _tag: "Back" }).screen).toEqual({
-      _tag: "Credentials",
-      provider: "anthropic",
-    })
-    const method = step(state, { _tag: "OpenMethod", provider: "anthropic", slot: work })
-    const key = step(method, { _tag: "OpenKey", provider: "anthropic", slot: work, prompts: [] })
-    expect(step(key, { _tag: "Back" }).screen).toEqual({
-      _tag: "Method",
-      provider: "anthropic",
-      slot: work,
-    })
-    expect(step(method, { _tag: "Back" }).screen).toEqual({
-      _tag: "Credentials",
-      provider: "anthropic",
-    })
-    const credentials = step(state, { _tag: "OpenCredentials", provider: "anthropic" })
-    expect(step(credentials, { _tag: "Back" }).screen).toEqual({ _tag: "List" })
+    const label = step(state, AuthEvent.cases.OpenLabel.make({ provider: "anthropic" }))
+    expect(step(label, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.Credentials.make({
+        provider: "anthropic",
+      }),
+    )
+    const method = step(
+      state,
+      AuthEvent.cases.OpenMethod.make({ provider: "anthropic", slot: work }),
+    )
+    const key = step(
+      method,
+      AuthEvent.cases.OpenKey.make({ provider: "anthropic", slot: work, prompts: [] }),
+    )
+    expect(step(key, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.Method.make({
+        provider: "anthropic",
+        slot: work,
+      }),
+    )
+    expect(step(method, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.Credentials.make({
+        provider: "anthropic",
+      }),
+    )
+    const credentials = step(state, AuthEvent.cases.OpenCredentials.make({ provider: "anthropic" }))
+    expect(step(credentials, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.List.make({}),
+    )
     // A provider with its default alone: a new label goes back to the default's methods.
     const single = loaded()
-    const named = step(single, { _tag: "OpenMethod", provider: "anthropic", slot: work })
-    expect(step(named, { _tag: "Back" }).screen).toEqual({ _tag: "Method", provider: "anthropic" })
-    const newLabel = step(single, { _tag: "OpenLabel", provider: "anthropic" })
-    expect(step(newLabel, { _tag: "Back" }).screen).toEqual({
-      _tag: "Method",
-      provider: "anthropic",
-    })
+    const named = step(
+      single,
+      AuthEvent.cases.OpenMethod.make({ provider: "anthropic", slot: work }),
+    )
+    expect(step(named, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.Method.make({ provider: "anthropic" }),
+    )
+    const newLabel = step(single, AuthEvent.cases.OpenLabel.make({ provider: "anthropic" }))
+    expect(step(newLabel, AuthEvent.cases.Back.make({})).screen).toEqual(
+      AuthScreen.cases.Method.make({
+        provider: "anthropic",
+      }),
+    )
   })
 
   test("an oauth method's inputs ask each prompt, and a needed one does not go on blank", () => {
     const directory = { key: "directory", label: "Directory" }
-    const method = {
+    const method = AuthMethod.make({
       type: "oauth",
       label: "Directory import",
       prompts: [directory, gatewayPrompt],
-    } satisfies AuthMethod
-    const inputs = transitionAuth(loaded(), {
-      _tag: "OpenInputs",
-      provider: "anthropic",
-      slot: work,
-      methodIndex: 2,
-      method,
-    } satisfies AuthEvent)
-    expect(transitionAuth(inputs, { _tag: "Next" })).toEqual(inputs)
-    const typed = transitionAuth(inputs, { _tag: "Type", text: "/nonexistent/loop-probe-x" })
-    const next = transitionAuth(typed, { _tag: "Next" })
+    })
+    const inputs = transitionAuth(
+      loaded(),
+      AuthEvent.cases.OpenInputs.make({
+        provider: "anthropic",
+        slot: work,
+        methodIndex: 2,
+        method,
+      }),
+    )
+    expect(transitionAuth(inputs, AuthEvent.cases.Next.make({}))).toEqual(inputs)
+    const typed = transitionAuth(
+      inputs,
+      AuthEvent.cases.Type.make({ text: "/nonexistent/loop-probe-x" }),
+    )
+    const next = transitionAuth(typed, AuthEvent.cases.Next.make({}))
     expect(next.screen).toMatchObject({ value: "", entered: ["/nonexistent/loop-probe-x"] })
-    expect(transitionAuth(next, { _tag: "Back" }).screen).toMatchObject({
+    expect(transitionAuth(next, AuthEvent.cases.Back.make({})).screen).toMatchObject({
       value: "/nonexistent/loop-probe-x",
       entered: [],
     })
@@ -416,7 +527,7 @@ describe("auth-state", () => {
 const absent = undefined
 // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
 const nullValue = null
-const apiMethodRoute = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
+const apiMethodRoute = AuthMethod.make({ label: "API key", type: "api" })
 const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {
   label: string
   type: "oauth"
@@ -2087,12 +2198,14 @@ describe("Auth route", () => {
 
   it.scopedLive("a waiting device flow keeps the code and url over the optional paste line", () =>
     Effect.gen(function* () {
-      const setup = yield* mountOAuth({
-        authorizationId: "auth-device",
-        url: "https://auth.openai.com/codex/device",
-        method: "auto",
-        instructions: "Open the URL and enter this code:\nWXYZ-1234",
-      })
+      const setup = yield* mountOAuth(
+        AuthAuthorization.make({
+          authorizationId: "auth-device",
+          url: "https://auth.openai.com/codex/device",
+          method: "auto",
+          instructions: "Open the URL and enter this code:\nWXYZ-1234",
+        }),
+      )
       for (const height of shortHeights) {
         setup.resize(80, height)
         yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
@@ -2108,12 +2221,14 @@ describe("Auth route", () => {
   it.scopedLive("a long waiting url keeps its rows before the title and the paste line", () =>
     Effect.gen(function* () {
       const url = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&state=${"s".repeat(60)}-END`
-      const setup = yield* mountOAuth({
-        authorizationId: "auth-long",
-        url,
-        method: "auto",
-        instructions: "Complete authorization in your browser.",
-      })
+      const setup = yield* mountOAuth(
+        AuthAuthorization.make({
+          authorizationId: "auth-long",
+          url,
+          method: "auto",
+          instructions: "Complete authorization in your browser.",
+        }),
+      )
       for (const height of shortHeights) {
         setup.resize(80, height)
         yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
@@ -2186,15 +2301,15 @@ describe("Auth provider names", () => {
 
 describe("Auth credentials", () => {
   const sessionId = SessionId.make("session-credentials")
-  const directoryImport = {
+  const directoryImport = AuthMethod.make({
     type: "oauth",
     label: "Directory import",
     credentialTarget: "named",
     prompts: [{ key: "directory", label: "Directory" }],
-  } satisfies AuthMethod
+  })
   const anthropicMethods = [
     apiMethodRoute,
-    { type: "oauth", label: "Claude Code", credentialTarget: "default" },
+    AuthMethod.make({ type: "oauth", label: "Claude Code", credentialTarget: "default" }),
     directoryImport,
   ] satisfies ReadonlyArray<AuthMethod>
   type Info = AuthProviderInfo

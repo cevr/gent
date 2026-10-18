@@ -53,7 +53,7 @@ import {
   ModelId,
   ProviderId,
   SessionId,
-  type Branch,
+  Branch,
 } from "@gent/core/protocol"
 import { BranchPicker, modelRows, SettingsPicker } from "../src/pickers"
 import { useTheme } from "../src/theme"
@@ -841,12 +841,13 @@ const agedWindow = (updatedAt: number): ThreadWindow => ({
   updatedAt,
 })
 
-const branch = (id: string, name: string): Branch => ({
-  id: BranchId.make(id),
-  sessionId,
-  name,
-  createdAt: dateFromMillis(0),
-})
+const branch = (id: string, name: string): Branch =>
+  Branch.make({
+    id: BranchId.make(id),
+    sessionId,
+    name,
+    createdAt: dateFromMillis(0),
+  })
 
 /**
  * A branch whose label cannot fit any terminal.

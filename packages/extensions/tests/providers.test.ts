@@ -23,6 +23,7 @@ import {
   type Model,
   type ModelCatalogView,
   type ModelDriverContribution,
+  ImageCost,
   ModelId,
   ProviderAuthError,
   ProviderAuthInfo,
@@ -206,21 +207,25 @@ describe("driver catalog", () => {
     const high = Option.some({ openai: { imageDetail: "high" } })
     // OpenAI tiles for gpt-4o-mini, at its own rates.
     expect(costOf("gpt-4o-mini", RESPONSES_CLASS)).toEqual([
-      [{ _tag: "Tiles", baseTokens: 2_833, tileTokens: 5_667 }, high],
+      [ImageCost.cases.Tiles.make({ baseTokens: 2_833, tileTokens: 5_667 }), high],
     ])
     expect(costOf("gpt-4o", RESPONSES_CLASS)).toEqual([
-      [{ _tag: "Tiles", baseTokens: 85, tileTokens: 170 }, high],
+      [ImageCost.cases.Tiles.make({ baseTokens: 85, tileTokens: 170 }), high],
     ])
     // Newer OpenAI models count patches, shrunk to the `high` detail's budget.
     expect(costOf("gpt-5.4", RESPONSES_CLASS)).toEqual([
-      [{ _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }, high],
+      [ImageCost.cases.Patches.make({ multiplier: 1.2, maxPatches: 2_500 }), high],
     ])
+    // The Chat Completions SDK reads the detail under its own key.
     expect(costOf("openai/gpt-4.1-mini", CHAT_COMPLETIONS_CLASS)).toEqual([
-      [{ _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }, high],
+      [
+        ImageCost.cases.Patches.make({ multiplier: 1.62, maxPatches: 6_144 }),
+        Option.some({ "openai-compat": { imageDetail: "high" } }),
+      ],
     ])
     // Anthropic counts pixels and needs no part option.
     expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([
-      [{ _tag: "Pixels", pixelsPerToken: 750 }, Option.none()],
+      [ImageCost.cases.Pixels.make({ pixelsPerToken: 750 }), Option.none()],
     ])
   })
 

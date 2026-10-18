@@ -143,23 +143,23 @@ export const dateNotice = (
 // the tool and request sections below both use.
 
 /** Failure raised by a Capability handler. Carries audience + id for diagnostics. */
-export class CapabilityError extends Schema.TaggedError<CapabilityError>()(
-  "@gent/core/src/domain/capability/CapabilityError",
-  {
-    extensionId: ExtensionId,
-    capabilityId: Schema.String,
-    reason: Schema.String,
-  },
-) {}
+export class CapabilityError extends Schema.TaggedError<
+  CapabilityError,
+  { readonly brand: unique symbol }
+>()("@gent/core/src/domain/capability/CapabilityError", {
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+  reason: Schema.String,
+}) {}
 
 /** Failure raised when a Capability is invoked with an id that has no contribution. */
-export class CapabilityNotFoundError extends Schema.TaggedError<CapabilityNotFoundError>()(
-  "@gent/core/src/domain/capability/CapabilityNotFoundError",
-  {
-    extensionId: ExtensionId,
-    capabilityId: Schema.String,
-  },
-) {}
+export class CapabilityNotFoundError extends Schema.TaggedError<
+  CapabilityNotFoundError,
+  { readonly brand: unique symbol }
+>()("@gent/core/src/domain/capability/CapabilityNotFoundError", {
+  extensionId: ExtensionId,
+  capabilityId: Schema.String,
+}) {}
 
 type CapabilityEffect<Input = unknown, Output = unknown, R = never, E = CapabilityError> = {
   bivarianceHack(input: Input): Effect.Effect<Output, E, R>
@@ -204,7 +204,6 @@ interface ToolDeclarations {
  * branded `RequestCapability` is in the request section below.
  */
 interface RequestCapabilityApi {
-  readonly _tag: "request"
   readonly id: RpcId
   readonly input: unknown
   readonly output: unknown
@@ -419,7 +418,6 @@ export function request(input: {
   // The factory applies its private brand and typed reference here; the
   // public overload restores the author's Input/Output.
   const capability: RequestCapability = {
-    _tag: "request",
     id: rpcId,
     slash: input.slash,
     description: input.description,
@@ -576,12 +574,12 @@ export const isToolCapability = (value: unknown): value is ToolCapability => {
  * programmer-misuse-only signal — no runtime code can construct a `ToolCapability`
  * without metadata through the public `tool({...})` factory.
  */
-class ToolMetadataMissingError extends Schema.TaggedError<ToolMetadataMissingError>()(
-  "ToolMetadataMissingError",
-  {
-    toolName: Schema.String,
-  },
-) {
+class ToolMetadataMissingError extends Schema.TaggedError<
+  ToolMetadataMissingError,
+  { readonly brand: unique symbol }
+>()("ToolMetadataMissingError", {
+  toolName: Schema.String,
+}) {
   override get message(): string {
     return `Tool "${this.toolName}" is missing Gent metadata`
   }
@@ -958,10 +956,10 @@ export const ToolCallBindingKey = Schema.Struct({
 export type ToolCallBindingKey = typeof ToolCallBindingKey.Type
 
 /** The immutable row already contains a different binding identity. */
-export class ToolCallBindingConflictError extends Schema.TaggedError<ToolCallBindingConflictError>()(
-  "ToolCallBindingConflictError",
-  {
-    assistantMessageId: MessageId,
-    toolCallId: ToolCallId,
-  },
-) {}
+export class ToolCallBindingConflictError extends Schema.TaggedError<
+  ToolCallBindingConflictError,
+  { readonly brand: unique symbol }
+>()("ToolCallBindingConflictError", {
+  assistantMessageId: MessageId,
+  toolCallId: ToolCallId,
+}) {}

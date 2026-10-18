@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Deferred, Effect, Option, Predicate, Schema } from "effect"
-import type { ExtensionStatus } from "@gent/core/extensions/api"
+import { ExtensionStatus } from "@gent/core/extensions/api"
 import extensionAdminClient, {
   extensionDetail,
   extensionIssue,
@@ -20,34 +20,30 @@ import { makePaneSlot, provideClientServices } from "../extension-test-harness-b
  * and a failure's whole text.
  */
 
-const builtin: ExtensionStatus = {
-  _tag: "Active",
+const builtin: ExtensionStatus = ExtensionStatus.cases.Active.make({
   id: "@gent/memory",
   scope: "builtin",
   sourcePath: "builtin",
-}
-const reloadFailed: ExtensionStatus = {
-  _tag: "Active",
+})
+const reloadFailed: ExtensionStatus = ExtensionStatus.cases.Active.make({
   id: "@user/notes",
   scope: "user",
   sourcePath: "/home/u/.gent/extensions/notes.ts",
   version: "0123456789abcdef0123",
   reloadFailed: { phase: "setup", error: "notes setup boom\n    at setup (notes.ts:4:9)" },
-}
-const failed: ExtensionStatus = {
-  _tag: "Failed",
+})
+const failed: ExtensionStatus = ExtensionStatus.cases.Failed.make({
   id: "@user/broken",
   scope: "user",
   sourcePath: "/home/u/.gent/extensions/broken.ts",
   phase: "load",
   error: "Failed to build broken.ts: Unexpected }",
-}
-const disabled: ExtensionStatus = {
-  _tag: "Disabled",
+})
+const disabled: ExtensionStatus = ExtensionStatus.cases.Disabled.make({
   id: "@project/off",
   scope: "project",
   sourcePath: "/repo/.gent/extensions/off.ts",
-}
+})
 const statuses = [builtin, reloadFailed, failed, disabled]
 
 describe("extensions pane rows", () => {
@@ -144,9 +140,12 @@ const openPaneOn = (
   })
 
 /** A change the server refuses, in its own words. */
-class PaneRefusal extends Schema.TaggedError<PaneRefusal>()("PaneRefusal", {
-  message: Schema.String,
-}) {}
+class PaneRefusal extends Schema.TaggedError<PaneRefusal, { readonly brand: unique symbol }>()(
+  "PaneRefusal",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A server that answers as the real one: a change reads and writes one
@@ -158,19 +157,17 @@ const statefulServer = (initial: ExtensionStatus) =>
     const gates: Array<Deferred.Deferred<void>> = []
     const requests: Array<{ readonly capabilityId: string; readonly input: unknown }> = []
     let current = initial
-    const turnedOn: ExtensionStatus = {
-      _tag: "Active",
+    const turnedOn: ExtensionStatus = ExtensionStatus.cases.Active.make({
       id: initial.id,
       scope: initial.scope,
       sourcePath: initial.sourcePath,
       version: "0123456789abcdef0123",
-    }
-    const turnedOff: ExtensionStatus = {
-      _tag: "Disabled",
+    })
+    const turnedOff: ExtensionStatus = ExtensionStatus.cases.Disabled.make({
       id: initial.id,
       scope: initial.scope,
       sourcePath: initial.sourcePath,
-    }
+    })
     const answer = (request: {
       readonly capabilityId: string
       readonly input: unknown
@@ -366,12 +363,11 @@ describe("extensions pane", () => {
     "the cursor stays on the row the reader turned off when the rows come back in a new order",
     () =>
       Effect.gen(function* () {
-        const notesOff: ExtensionStatus = {
-          _tag: "Disabled",
+        const notesOff: ExtensionStatus = ExtensionStatus.cases.Disabled.make({
           id: reloadFailed.id,
           scope: reloadFailed.scope,
           sourcePath: reloadFailed.sourcePath,
-        }
+        })
         const { setup } = yield* openPane(120, statuses, 30, [builtin, failed, disabled, notesOff])
         setup.mockInput.pressKey(" ")
         yield* waitForFrame(

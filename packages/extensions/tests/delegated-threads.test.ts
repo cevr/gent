@@ -1237,8 +1237,7 @@ describe("the round-end message", () => {
 
 const interruptStarter = (harness: Harness, requestId: string, branchId = harness.branchId) =>
   harness.client.steer.command({
-    command: SteerCommand.make({
-      _tag: "Cancel",
+    command: SteerCommand.cases.Cancel.make({
       sessionId: harness.sessionId,
       branchId,
       requestId: RequestId.make(requestId),
@@ -1344,8 +1343,11 @@ describe("the starter's interrupt", () => {
             Stream.take(1),
             Stream.runHead,
           )
+          expect(Option.map(childEnd, (envelope) => envelope.event._tag)).toEqual(
+            Option.some("TurnCompleted"),
+          )
           expect(Option.map(childEnd, (envelope) => envelope.event)).toMatchObject(
-            Option.some({ _tag: "TurnCompleted", interrupted: true }),
+            Option.some({ interrupted: true }),
           )
           const [row] = yield* waitFor(
             roundsOf(harness.sql),
@@ -1676,10 +1678,8 @@ describe("a start nobody waits for", () => {
         { task: "analyze the codebase", agent: DELEGATE_AGENT_NAME, notify: "starter" },
         ctx,
       ).pipe(Effect.flip)
-      expect(error).toMatchObject({
-        _tag: "ThreadError",
-        message: "thread.start requires a host-owned tool call",
-      })
+      expect(error._tag).toBe("ThreadError")
+      expect(error).toMatchObject({ message: "thread.start requires a host-owned tool call" })
     }),
   )
 
@@ -1851,8 +1851,11 @@ describe("a stop", () => {
                 Stream.take(1),
                 Stream.runHead,
               )
+            expect(Option.map(end, (envelope) => envelope.event._tag)).toEqual(
+              Option.some("TurnCompleted"),
+            )
             expect(Option.map(end, (envelope) => envelope.event)).toMatchObject(
-              Option.some({ _tag: "TurnCompleted", interrupted: true }),
+              Option.some({ interrupted: true }),
             )
           }
         }).pipe(Effect.timeout("14 seconds")),
@@ -2280,8 +2283,7 @@ describe("a failed round-end delivery", () => {
               )
               // An interjection with wake starts the idle thread's next turn.
               yield* client.steer.command({
-                command: SteerCommand.make({
-                  _tag: "Interject",
+                command: SteerCommand.cases.Interject.make({
                   ...thread,
                   requestId: RequestId.make("steer-idle-thread"),
                   message: "STEER-NOTE: one more thing",
@@ -3326,8 +3328,7 @@ describe("a starter's interrupt and the turns its session.send opened", () => {
           // The user stops the thread's correction turn first; its end is held
           // open while the starter is interrupted.
           yield* harness.client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               ...child,
               requestId: RequestId.make("interrupt-thread-before-starter"),
             }),
@@ -3455,8 +3456,7 @@ describe("a starter's interrupt and the turns its session.send opened", () => {
           // The user stops the thread's turn; its end is held open, so the
           // correction still waits to join a turn that is stopping.
           yield* harness.client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               ...child,
               requestId: RequestId.make("user-stops-thread-with-correction-waiting"),
             }),
@@ -3604,8 +3604,7 @@ describe("a starter's interrupt as a thread finishes", () => {
             `CREATE TRIGGER refuse_middle_end BEFORE UPDATE OF ended_at ON thread_rounds WHEN OLD.session_id = '${middle.id}' BEGIN SELECT RAISE(ABORT, 'middle end refused'); END`,
           )
           yield* client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               sessionId: middle.id,
               branchId: middle.activeBranchId,
               requestId: RequestId.make("interrupt-middle"),

@@ -109,6 +109,7 @@ const judgeExtension = (answers: ReadonlyArray<JudgeAnswer>, calls: Array<JudgeC
                 const labels = ["allow", "ask", "deny", answer.label]
                 return Effect.succeed({
                   answers: {
+                    // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderClassifyAnswer has no constructor
                     verdict: {
                       _tag: "Classify" as const,
                       label: answer.label,

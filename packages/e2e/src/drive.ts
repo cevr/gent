@@ -6,7 +6,10 @@ import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Array as Arr, Console, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { DriveScript, runDriveScript } from "./pty-fixture"
 
-class DriveUsageError extends Schema.TaggedError<DriveUsageError>()("@gent/e2e/DriveUsageError", {
+class DriveUsageError extends Schema.TaggedError<
+  DriveUsageError,
+  { readonly brand: unique symbol }
+>()("@gent/e2e/DriveUsageError", {
   message: Schema.String,
 }) {}
 

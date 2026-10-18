@@ -102,6 +102,7 @@ describe("cell process protocol", () => {
     const older = { display: "42", bindings: ["a"], bindingCount: 1, truncated: false }
     expect(decode(older)).toEqual(older)
     expect(decode(older).images).toBeUndefined()
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded stored image this test decodes
     const image = { _tag: "ToolImage", sha256: "a".repeat(64), mediaType: "image/png" }
     expect(decode({ ...older, images: [image] }).images).toEqual([image])
   })

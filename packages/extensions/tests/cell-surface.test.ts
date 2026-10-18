@@ -52,7 +52,7 @@ import { BunServices } from "@effect/platform-bun"
 import { FetchHttpClient } from "effect/http"
 import { Base64 } from "effect/encoding"
 import * as Prompt from "effect/ai/Prompt"
-import { type Decision, DecisionModel } from "effect/ai"
+import { Decision, DecisionModel } from "effect/ai"
 import {
   BranchId,
   MessageId,
@@ -398,6 +398,7 @@ const judgeAnswer = Match.type<Decision.Any>().pipe(
   Match.tagsExhaustive({
     Classify: (decision): DecisionModel.ProviderAnswer => {
       const labels = Object.keys(decision.criteria)
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderAnswer has no constructor
       return {
         _tag: "Classify",
         label: labels[0] ?? "",
@@ -409,14 +410,16 @@ const judgeAnswer = Match.type<Decision.Any>().pipe(
     },
     Rate: (decision): DecisionModel.ProviderAnswer => {
       const last = decision.criteria.length - 1
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderAnswer has no constructor
       return {
         _tag: "Rate",
         rating: last,
         probabilities: Object.fromEntries(
-          decision.criteria.map((level, index) => [level, Number(index === last)]),
+          decision.criteria.map((level, index) => [level.label, Number(index === last)]),
         ),
       }
     },
+    // oxlint-disable-next-line effect/preferTaggedConstructors -- the raw provider answer DecisionModel.make validates; effect/ai's ProviderAnswer has no constructor
     Probability: (): DecisionModel.ProviderAnswer => ({ _tag: "Probability", probability: 0.25 }),
   }),
 )
@@ -673,14 +676,21 @@ describe("cell models host", () => {
         expect(made[0]?.key).toEqual(Option.some("judge-key"))
         expect(made[0]?.options.state).toEqual({ text: "charged twice, fix it today" })
         expect(made[0]?.options.decisions).toEqual({
-          team: {
-            _tag: "Classify",
+          team: Decision.classify({
             instructions: "Which team",
             criteria: { billing: "payments", technical: "bugs" },
-          },
-          mood: { _tag: "Rate", instructions: "How upset", criteria: ["calm", "upset", "angry"] },
+          }),
+          // `Decision.rate` gives each level a label and a description.
+          mood: Decision.rate({
+            instructions: "How upset",
+            criteria: [
+              { label: "calm", description: "calm" },
+              { label: "upset", description: "upset" },
+              { label: "angry", description: "angry" },
+            ],
+          }),
           // A probability without criteria carries none.
-          urgent: { _tag: "Probability", instructions: "Needs action today" },
+          urgent: Decision.probability({ instructions: "Needs action today" }),
         })
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platform)),
     20000,
@@ -1212,14 +1222,16 @@ describe("shipped model surface", () => {
             message.parts.some((part) => part.type === "tool-call" && part.id === cellToolCallId),
         )
         expect(cellAssistant).toBeDefined()
+        expect(innerEvents.map((envelope) => envelope.event._tag)).toEqual([
+          "ToolCallStarted",
+          "ToolCallSucceeded",
+        ])
         expect(innerEvents.map((envelope) => envelope.event)).toMatchObject([
           {
-            _tag: "ToolCallStarted",
             parentToolCallId: cellToolCallId,
             assistantMessageId: cellAssistant?.id,
           },
           {
-            _tag: "ToolCallSucceeded",
             parentToolCallId: cellToolCallId,
             assistantMessageId: cellAssistant?.id,
           },
@@ -1519,10 +1531,8 @@ it.scopedLive("rejects cell dispatch without a branch owner", () =>
       Effect.provideService(ExtensionContext, testLeafContext(testToolContext())),
       Effect.flip,
     )
-    expect(error).toMatchObject({
-      _tag: "AgentLoopError",
-      message: "Cell execution requires a branch-owned runtime",
-    })
+    expect(error._tag).toBe("AgentLoopError")
+    expect(error).toMatchObject({ message: "Cell execution requires a branch-owned runtime" })
   }).pipe(
     Effect.provide(
       createE2ELayer({
@@ -1799,8 +1809,7 @@ describe("branch cell lifetime", () => {
                 const pid = workers[2]
                 if (Predicate.isUndefined(pid)) return yield* Effect.die("Missing active worker")
                 yield* client.steer.command({
-                  command: SteerCommand.make({
-                    _tag: "Cancel",
+                  command: SteerCommand.cases.Cancel.make({
                     sessionId,
                     branchId: targetBranch,
                     requestId: RequestId.make(yield* platform.randomId),
@@ -1835,12 +1844,13 @@ describe("branch cell lifetime", () => {
                   { isFailure: false, result: { display: "23" } },
                 ])
               }
-              if (index === 5)
+              if (index === 5) {
+                expect(results.at(-1)?.result).toHaveProperty("_tag", "CellKernelError")
                 expect(results.at(-1)).toMatchObject({
                   isFailure: true,
-                  result: { _tag: "CellKernelError", reason: "cancelled", stateLost: true },
+                  result: { reason: "cancelled", stateLost: true },
                 })
-              else
+              } else
                 expect(results.at(-1)).toMatchObject({
                   isFailure: false,
                   result: { display: expected[index] },
@@ -2534,7 +2544,9 @@ const discoveryId = tool({
   execute: () => Effect.succeed(true),
 })
 
-class ClassResult extends Schema.Class<ClassResult>("ClassResult")({
+class ClassResult extends Schema.Class<ClassResult, { readonly brand: unique symbol }>(
+  "ClassResult",
+)({
   ok: Schema.Boolean,
   items: Schema.Array(Schema.String),
 }) {}

@@ -40,7 +40,8 @@ import {
   SessionId,
   type Branch,
   ConnectionState,
-  type ExtensionHealthSnapshot,
+  ExtensionHealthSnapshot,
+  ExtensionStatusScope,
   type GentClientRpcError,
   type GentNamespacedClient,
   initialSessionMetrics,
@@ -740,10 +741,9 @@ export type ClientContextValue = ClientTransportValue &
  */
 const ClientContext = createContext<ClientContextValue>()
 
-const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = {
-  _tag: "Healthy",
+const EMPTY_EXTENSION_HEALTH: ExtensionHealthSnapshot = ExtensionHealthSnapshot.cases.Healthy.make({
   extensions: [],
-}
+})
 
 const metricsOf = (metrics: SessionRuntimeMetrics): SessionMetrics => ({
   latestInputTokens: metrics.lastInputTokens,
@@ -1044,7 +1044,7 @@ export function ClientProvider(props: ClientProviderProps) {
           return
         }
 
-        const request = { scope: { _tag: "Session" as const, id: sessionId } }
+        const request = { scope: ExtensionStatusScope.cases.Session.make({ id: sessionId }) }
         cast(
           client.extension.listStatus(request).pipe(
             Effect.tap((nextHealth) =>

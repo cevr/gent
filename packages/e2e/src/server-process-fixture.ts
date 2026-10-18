@@ -23,10 +23,10 @@ export const exitWithin = (
 // bunfig preloads the JSX transform.
 export const tuiDirectory = fileURLToPath(new URL("../../../apps/tui", import.meta.url))
 
-class ServerProcessFixtureError extends Schema.TaggedError<ServerProcessFixtureError>()(
-  "@gent/e2e/src/server-process-fixture/ServerProcessFixtureError",
-  { message: Schema.String },
-) {}
+class ServerProcessFixtureError extends Schema.TaggedError<
+  ServerProcessFixtureError,
+  { readonly brand: unique symbol }
+>()("@gent/e2e/src/server-process-fixture/ServerProcessFixtureError", { message: Schema.String }) {}
 
 const READY_PREFIX = "Gent server ready on "
 const READY_LINE = new RegExp(`${READY_PREFIX}.+`)

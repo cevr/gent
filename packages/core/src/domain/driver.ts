@@ -108,7 +108,9 @@ export type AuthMetadata = typeof AuthMetadata.Type
  * How a provider signs in: an API key or an OAuth login. Either may ask
  * provider-owned `prompts`, in order.
  */
-export class AuthMethod extends Schema.Class<AuthMethod>("AuthMethod")({
+export class AuthMethod extends Schema.Class<AuthMethod, { readonly brand: unique symbol }>(
+  "AuthMethod",
+)({
   type: Schema.Literals(["api", "oauth"]),
   label: Schema.String,
   /** Omitted methods keep legacy applicability to either credential target. */
@@ -132,7 +134,10 @@ export type AuthAuthorizationMethod = typeof AuthAuthorizationMethod.Type
 // ── Failure type ──
 
 /** Failure raised when a driver lookup or dispatch fails. */
-export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
+export class DriverError extends Schema.TaggedError<
+  DriverError,
+  { readonly brand: unique symbol }
+>()("DriverError", {
   driver: DriverFailureId,
   reason: Schema.String,
 }) {}
@@ -153,14 +158,14 @@ export const CredentialFailureReason = Schema.Literals([
 ])
 export type CredentialFailureReason = typeof CredentialFailureReason.Type
 
-export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
-  "ProviderAuthError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-    credentialFailure: Schema.optional(CredentialFailureReason),
-  },
-) {}
+export class ProviderAuthError extends Schema.TaggedError<
+  ProviderAuthError,
+  { readonly brand: unique symbol }
+>()("ProviderAuthError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+  credentialFailure: Schema.optional(CredentialFailureReason),
+}) {}
 
 /**
  * AiError metadata that carries a credential failure through a provider SDK.
@@ -321,12 +326,12 @@ export type HeldRotation = typeof HeldRotation.Type
  * It carries no decode issue: one can quote the file's bytes, which may hold
  * a live token.
  */
-export class HeldRotationUndecodable extends Schema.TaggedError<HeldRotationUndecodable>()(
-  "HeldRotationUndecodable",
-  {
-    file: Schema.String,
-  },
-) {
+export class HeldRotationUndecodable extends Schema.TaggedError<
+  HeldRotationUndecodable,
+  { readonly brand: unique symbol }
+>()("HeldRotationUndecodable", {
+  file: Schema.String,
+}) {
   override get message(): string {
     return `The held token rotation at ${this.file} does not decode`
   }
@@ -374,12 +379,12 @@ export type LockSourceRotation = (
  * wait (another gent process mid-refresh, say): nothing ran, nothing changed,
  * and a later attempt may pass.
  */
-export class CredentialStoreBusy extends Schema.TaggedError<CredentialStoreBusy>()(
-  "CredentialStoreBusy",
-  {
-    provider: Schema.String,
-  },
-) {
+export class CredentialStoreBusy extends Schema.TaggedError<
+  CredentialStoreBusy,
+  { readonly brand: unique symbol }
+>()("CredentialStoreBusy", {
+  provider: Schema.String,
+}) {
   override get message(): string {
     return `gent's credential store is busy: its lock for "${this.provider}" stayed held by another holder for the whole wait`
   }

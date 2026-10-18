@@ -275,25 +275,25 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
 
 // ── request helper ────────────────────────────────────────────────────────
 
-class ClientTransportRequestError extends Schema.TaggedError<ClientTransportRequestError>()(
-  "ClientTransportRequestError",
-  {
-    extensionId: Schema.String,
-    tag: Schema.String,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  },
-) {}
+class ClientTransportRequestError extends Schema.TaggedError<
+  ClientTransportRequestError,
+  { readonly brand: unique symbol }
+>()("ClientTransportRequestError", {
+  extensionId: Schema.String,
+  tag: Schema.String,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
-class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTransportReplyDecodeError>()(
-  "ClientTransportReplyDecodeError",
-  {
-    extensionId: Schema.String,
-    tag: Schema.String,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  },
-) {}
+class ClientTransportReplyDecodeError extends Schema.TaggedError<
+  ClientTransportReplyDecodeError,
+  { readonly brand: unique symbol }
+>()("ClientTransportReplyDecodeError", {
+  extensionId: Schema.String,
+  tag: Schema.String,
+  message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
+}) {}
 
 const requestExtensionAt = <Input, Output>(
   transport: ClientShellTransport,

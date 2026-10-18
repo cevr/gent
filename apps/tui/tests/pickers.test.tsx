@@ -12,7 +12,7 @@ import {
   ModelId,
   ProviderId,
   SessionId,
-  type Branch,
+  Branch,
 } from "@gent/core/protocol"
 import {
   AUTO_ROW_ID,
@@ -20,7 +20,7 @@ import {
   DEFAULT_ROW_ID,
   MessagePicker,
   modelRows,
-  type PromptSearchEvent,
+  PromptSearchEvent,
   promptSearchItems,
   PromptSearchPalette,
   openPromptSearch,
@@ -54,12 +54,13 @@ const message = (id: string, role: "user" | "assistant", text: string): Message 
     createdAt: dateFromMillis(0),
   })
 
-const branch = (id: string, name: string): Branch => ({
-  id: BranchId.make(id),
-  sessionId: SessionId.make("session-test"),
-  name,
-  createdAt: dateFromMillis(0),
-})
+const branch = (id: string, name: string): Branch =>
+  Branch.make({
+    id: BranchId.make(id),
+    sessionId: SessionId.make("session-test"),
+    name,
+    createdAt: dateFromMillis(0),
+  })
 
 describe("Message picker", () => {
   it.scopedLive("moves the cursor down the transcript and forks from the chosen message", () =>
@@ -144,11 +145,12 @@ describe("Branch picker", () => {
   it.scopedLive("two unnamed branches started in the same minute get different labels", () =>
     Effect.gen(function* () {
       // Branch ids are UUIDv7: the head is the start time, the tail is random.
-      const unnamed = (id: string): Branch => ({
-        id: BranchId.make(id),
-        sessionId: SessionId.make("session-test"),
-        createdAt: dateFromMillis(0),
-      })
+      const unnamed = (id: string): Branch =>
+        Branch.make({
+          id: BranchId.make(id),
+          sessionId: SessionId.make("session-test"),
+          createdAt: dateFromMillis(0),
+        })
       const first = unnamed("0199a1b2-c3d4-7e5f-8a6b-111111111111")
       const fork = unnamed("0199a1b2-c3d5-7e5f-8a6b-222222222222")
       const setup = yield* renderScoped(
@@ -489,10 +491,9 @@ describe("PromptSearchPalette renderer", () => {
       expect(frame).toContain("type to filter · ↑↓ move · enter select · esc close")
       // Typing and moving both report the entry under the cursor; the last
       // report is the second match in rank order.
-      expect(events.at(-1)).toEqual({
-        _tag: "Highlight",
-        entry: Option.some("fix the session queue bug"),
-      })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("fix the session queue bug") }),
+      )
     }),
   )
 
@@ -505,7 +506,9 @@ describe("PromptSearchPalette renderer", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("first prompt"), "open")
       setup.mockInput.pressKeys(["z", "z", "z"])
       yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "empty")
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.none() })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.none() }),
+      )
     }),
   )
 
@@ -519,15 +522,19 @@ describe("PromptSearchPalette renderer", () => {
 
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("gamma") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("gamma") }),
+      )
 
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("alpha") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("alpha") }),
+      )
 
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
     }),
   )
 
@@ -541,10 +548,12 @@ describe("PromptSearchPalette renderer", () => {
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("café"))
       yield* waitForFrame(setup, (frame) => !frame.includes("gamma"), "narrowed by the paste")
       expect(renderFrame(setup)).toContain("› café")
-      expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.some("café order") })
+      expect(events.at(-1)).toEqual(
+        PromptSearchEvent.cases.Highlight.make({ entry: Option.some("café order") }),
+      )
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
     }),
   )
 
@@ -555,7 +564,7 @@ describe("PromptSearchPalette renderer", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("Nothing here"), "open")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      expect(events.at(-1)).toEqual({ _tag: "Accept" })
+      expect(events.at(-1)).toEqual(PromptSearchEvent.cases.Accept.make({}))
       setup.mockInput.pressEscape()
       yield* waitForFrame(setup, () => events.at(-1)?._tag === "Cancel", "cancelled")
     }),

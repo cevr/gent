@@ -226,14 +226,14 @@ export const toolDetailsOf = (entry: CellCatalogEntry): CellToolDetails => ({
   signature: entry.signature,
 })
 
-export class CellEvaluationError extends Schema.TaggedError<CellEvaluationError>()(
-  "CellEvaluationError",
-  {
-    phase: Schema.Literals(["source", "compile", "execute"]),
-    message: Schema.String,
-    output: Schema.String,
-  },
-) {}
+export class CellEvaluationError extends Schema.TaggedError<
+  CellEvaluationError,
+  { readonly brand: unique symbol }
+>()("CellEvaluationError", {
+  phase: Schema.Literals(["source", "compile", "execute"]),
+  message: Schema.String,
+  output: Schema.String,
+}) {}
 
 /**
  * Restored names and named omissions from the last host-owned snapshot.
@@ -320,10 +320,10 @@ export type CellResponse = typeof CellResponse.Type
 /** Why a frame was refused, when a caller branches on it: past `maximumCellFrameBytes`. */
 export const CellFrameRefusal = Schema.Literal("frame-too-large")
 
-export class CellProtocolError extends Schema.TaggedError<CellProtocolError>()(
-  "CellProtocolError",
-  { message: Schema.String, reason: Schema.optional(CellFrameRefusal) },
-) {}
+export class CellProtocolError extends Schema.TaggedError<
+  CellProtocolError,
+  { readonly brand: unique symbol }
+>()("CellProtocolError", { message: Schema.String, reason: Schema.optional(CellFrameRefusal) }) {}
 
 const frameTooLarge = () =>
   new CellProtocolError({ message: "Cell frame exceeds the byte limit", reason: "frame-too-large" })

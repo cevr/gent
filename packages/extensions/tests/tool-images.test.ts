@@ -424,15 +424,16 @@ describe("tool image store", () => {
           base64: base64(fixture.bytes),
           source: "shot",
         })
-        expect(image).toEqual({
-          _tag: "ToolImage",
-          sha256: sha256Hex(fixture.bytes),
-          mediaType: fixture.mediaType,
-          width: fixture.width,
-          height: fixture.height,
-          bytes: fixture.bytes.length,
-          source: "shot",
-        })
+        expect(image).toEqual(
+          ToolImage.make({
+            sha256: sha256Hex(fixture.bytes),
+            mediaType: fixture.mediaType,
+            width: fixture.width,
+            height: fixture.height,
+            bytes: fixture.bytes.length,
+            source: "shot",
+          }),
+        )
         const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
         expect(Buffer.from(stored).equals(Buffer.from(fixture.bytes))).toBe(true)
       }
@@ -538,8 +539,7 @@ describe("tool image store", () => {
           const stored = yield* fs.readFile(`${home}/.gent/blobs/${image.sha256}.${fixture.ext}`)
           expect({ name: fixture.name, image }).toEqual({
             name: fixture.name,
-            image: {
-              _tag: "ToolImage",
+            image: ToolImage.make({
               sha256: sha256Hex(stored),
               mediaType: fixture.mediaType,
               width: fixture.size[0],
@@ -548,7 +548,7 @@ describe("tool image store", () => {
               source: fixture.name,
               originalWidth: fixture.original[0],
               originalHeight: fixture.original[1],
-            },
+            }),
           })
           // The blob is the scaled image: its own header names the stored size.
           expect(yield* imageMetadata(stored)).toEqual({
@@ -734,6 +734,7 @@ describe("tool image store", () => {
 
   it.live("a ToolImage stored before scaling, with no original size, still decodes", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded image row an older binary stored, which this test decodes
       const stored = {
         _tag: "ToolImage",
         sha256: "a".repeat(64),
@@ -791,15 +792,16 @@ describe("tool images through a turn", () => {
           return Option.toArray(Option.fromUndefinedOr(event.resultJson))
         })
         expect(resultJson).toHaveLength(1)
-        expect(decodeSaved(resultJson[0]).image).toEqual({
-          _tag: "ToolImage",
-          sha256: sha256Hex(bytes),
-          mediaType: "image/png",
-          width: 64,
-          height: 32,
-          bytes: bytes.length,
-          source: "screens/home.png",
-        })
+        expect(decodeSaved(resultJson[0]).image).toEqual(
+          ToolImage.make({
+            sha256: sha256Hex(bytes),
+            mediaType: "image/png",
+            width: 64,
+            height: 32,
+            bytes: bytes.length,
+            source: "screens/home.png",
+          }),
+        )
         const fs = yield* FileSystem.FileSystem
         expect(yield* fs.exists(`${home}/.gent/blobs/${sha256Hex(bytes)}.png`)).toBe(true)
         yield* controls.assertDone
@@ -1127,6 +1129,7 @@ describe("tool images in a request", () => {
           })
         const prompt = yield* classTurn("claude-sonnet-4-5", MESSAGES_CLASS)
         const openAiPrompt = yield* classTurn("gpt-5.4", RESPONSES_CLASS)
+        const chatPrompt = yield* classTurn("gpt-5.4", CHAT_COMPLETIONS_CLASS)
         const dataUrl = `data:image/png;base64,${SHOT_DATA}`
 
         // Messages: the image joins the tool result in one user turn.
@@ -1160,7 +1163,7 @@ describe("tool images in a request", () => {
 
         // Chat Completions: a user image_url message right after the tool message.
         const chat = itemsOf(
-          yield* requestBody(yield* chatCompletionsModel, openAiPrompt),
+          yield* requestBody(yield* chatCompletionsModel, chatPrompt),
           "messages",
         )
         const toolMessage = chat.findIndex((message) => message["role"] === "tool")

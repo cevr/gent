@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, FileSystem, Option } from "effect"
 import {
-  type InteractionPresented,
+  InteractionPresented,
   type ApprovalResult,
   BranchId,
   type CreateSessionInput,
@@ -19,13 +19,12 @@ import { EnvProvider } from "../src/workspace"
 // ── ask user ────────────────────────────────────────────────────────────────
 
 const interaction = (text: string) =>
-  ({
-    _tag: "InteractionPresented",
+  InteractionPresented.make({
     sessionId: SessionId.make("s"),
     branchId: BranchId.make("b"),
     requestId: InteractionRequestId.make("req-1"),
     text,
-  }) satisfies InteractionPresented
+  })
 
 describe("AskUserRenderer", () => {
   it.scopedLive("renders structured questions", () =>

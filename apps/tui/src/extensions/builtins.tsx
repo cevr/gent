@@ -114,12 +114,15 @@ export function getFileTag(path: string): string {
  * search, and pages through fff's ranking until it holds a full page of them.
  */
 
-class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
-  "FileFinderUnavailableError",
-  {},
-) {}
+class FileFinderUnavailableError extends Schema.TaggedError<
+  FileFinderUnavailableError,
+  { readonly brand: unique symbol }
+>()("FileFinderUnavailableError", {}) {}
 
-class FileFinderError extends Schema.TaggedError<FileFinderError>()("FileFinderError", {
+class FileFinderError extends Schema.TaggedError<
+  FileFinderError,
+  { readonly brand: unique symbol }
+>()("FileFinderError", {
   reason: Schema.String,
 }) {}
 
@@ -489,7 +492,10 @@ interface HerdrTarget {
   readonly paneId: string
 }
 
-class HerdrReportError extends Schema.TaggedError<HerdrReportError>()("HerdrReportError", {
+class HerdrReportError extends Schema.TaggedError<
+  HerdrReportError,
+  { readonly brand: unique symbol }
+>()("HerdrReportError", {
   message: Schema.String,
 }) {}
 

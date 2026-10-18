@@ -120,7 +120,7 @@ const emptyCatalog: AuthCatalog = { providers: [], others: [], methods: {} }
  * `value` the one the line shows now. `Inputs` asks an OAuth method's
  * `prompts` the same way before the sign-in starts.
  */
-const AuthScreen = Schema.TaggedUnion({
+export const AuthScreen = Schema.TaggedUnion({
   List: {},
   Credentials: { provider: Schema.String },
   Label: {

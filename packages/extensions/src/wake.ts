@@ -182,9 +182,12 @@ const MINIMUM_MONITOR_EVERY_SECONDS = 0.1
 const MINIMUM_REPEAT_EVERY_SECONDS = 0.1
 const MONITOR_OUTPUT_TAIL_CHARS = 2_000
 
-class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
-  message: Schema.String,
-}) {}
+class WakeError extends Schema.TaggedError<WakeError, { readonly brand: unique symbol }>()(
+  "WakeError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 // ── Timers: one branch-scoped resource ──
 
@@ -1106,7 +1109,7 @@ export const WakeTool = tool({
     }
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.alarm.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
       dueAt,
       note: params.note,
       ...omitUndefined({ everySeconds: params.everySeconds, mode: params.mode }),
@@ -1221,7 +1224,7 @@ export const MonitorTool = tool({
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
       command: params.command,
       cwd,
       everySeconds,

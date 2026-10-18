@@ -1046,8 +1046,7 @@ describe("ask_user_async", () => {
           })
           yield* Deferred.await(resumed)
           yield* harness.client.steer.command({
-            command: SteerCommand.make({
-              _tag: "Cancel",
+            command: SteerCommand.cases.Cancel.make({
               ...harness.target,
               requestId: RequestId.make("cancel-resumed-hold"),
             }),

@@ -16,6 +16,7 @@ export {
   type CheckpointList as CheckpointListType,
   CheckpointsRpc,
   RevertAction,
+  RevertOutcome,
   type RevertOutcome as RevertOutcomeType,
 } from "./checkpoints.js"
 // The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.
@@ -47,6 +48,7 @@ export {
   WAKE_EXTENSION_ID,
   WAKE_MESSAGE_TYPE,
   WakeDetails,
+  WakeEntry,
   type WakeEntry as WakeEntryType,
   type WakePending as WakePendingType,
   WakeRpc,
