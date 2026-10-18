@@ -1106,7 +1106,7 @@ export const WakeTool = tool({
     }
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.alarm.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
       dueAt,
       note: params.note,
       ...omitUndefined({ everySeconds: params.everySeconds, mode: params.mode }),
@@ -1221,7 +1221,7 @@ export const MonitorTool = tool({
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
-      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7(),
       command: params.command,
       cwd,
       everySeconds,

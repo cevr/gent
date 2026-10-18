@@ -1127,6 +1127,7 @@ describe("tool images in a request", () => {
           })
         const prompt = yield* classTurn("claude-sonnet-4-5", MESSAGES_CLASS)
         const openAiPrompt = yield* classTurn("gpt-5.4", RESPONSES_CLASS)
+        const chatPrompt = yield* classTurn("gpt-5.4", CHAT_COMPLETIONS_CLASS)
         const dataUrl = `data:image/png;base64,${SHOT_DATA}`
 
         // Messages: the image joins the tool result in one user turn.
@@ -1160,7 +1161,7 @@ describe("tool images in a request", () => {
 
         // Chat Completions: a user image_url message right after the tool message.
         const chat = itemsOf(
-          yield* requestBody(yield* chatCompletionsModel, openAiPrompt),
+          yield* requestBody(yield* chatCompletionsModel, chatPrompt),
           "messages",
         )
         const toolMessage = chat.findIndex((message) => message["role"] === "tool")

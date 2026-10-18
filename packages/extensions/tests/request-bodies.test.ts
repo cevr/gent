@@ -991,7 +991,8 @@ const CARRYING: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> 
     "openai",
     "gpt-6.1-sol",
     [
-      "system",
+      // A reasoning model takes its system prompt as a developer message.
+      "developer",
       "user",
       "function_call",
       "function_call_output",

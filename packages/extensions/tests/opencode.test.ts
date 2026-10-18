@@ -1,10 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, Layer, Option, Order, Predicate, Redacted, Schema, Stream } from "effect"
-import { FetchHttpClient } from "effect/http"
-import {
-  OpenAiClient as OpenAiChatClient,
-  OpenAiLanguageModel as OpenAiChatLanguageModel,
-} from "@effect/ai-openai-compat"
+import { Crypto, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
 import { LanguageModel, Prompt } from "effect/ai"
 import { BunCrypto } from "@effect/platform-bun"
 import {
@@ -708,25 +703,37 @@ describe("OpenCode reasoning", () => {
       }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 
-  // The replay is OpenCode's opt-in (`replayReasoning`); every other user of
-  // the compat SDK sends what the unpatched SDK sends.
-  it.live("a compat client without the opt-in sends no reasoning and keeps upstream messages", () =>
+  // The SDK writes reasoning back in the field the reply read it from
+  // (`reasoning` here); the model gets it in its catalog field alone.
+  it.live("reasoning read from a reply's `reasoning` field goes back in the catalog field", () =>
     Effect.gen(function* () {
-      const client = OpenAiChatClient.layer({
-        apiKey: Redacted.make(API_KEY),
-        apiUrl: "https://compat.example/v1",
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-      const model = OpenAiChatLanguageModel.layer({ model: "plain" }).pipe(Layer.provide(client))
-      const state = makeFakeFetchState()
-      yield* oneGenerate(model, state, gatewayReply, reasonedToolStep)
-      const assistants = yield* assistantMessages(lastRequest(state))
-      expect(assistants.map((message) => "reasoning_content" in message)).toEqual([false, false])
-      expect(assistants.map((message) => message["content"])).toEqual([
-        "Reading it.",
-        externalWireNull,
+      const { go, zen } = yield* fixtureDrivers
+      const conversation = Prompt.make([
+        { role: "user", content: "first" },
+        {
+          role: "assistant",
+          content: [
+            Prompt.makePart("reasoning", {
+              text: "thought it through",
+              options: { "openai-compat": { reasoningField: "reasoning" } },
+            }),
+            Prompt.makePart("text", { text: "answer" }),
+          ],
+        },
+        { role: "user", content: "second" },
       ])
-      const calls = yield* Schema.decodeUnknownEffect(ToolCalls)(assistants[1]?.["tool_calls"])
-      expect(calls.map((call) => call.id)).toEqual(["call_read"])
+      const state = makeFakeFetchState()
+      yield* generate(go, "glm-5.3", state, { cacheKey: "s" }, conversation)
+      const withField = yield* assistantMessages(lastRequest(state))
+      expect(
+        withField.map((message) => [message["reasoning_content"], "reasoning" in message]),
+      ).toEqual([["thought it through", false]])
+
+      yield* generate(zen, "qwen3.8-max", state, { cacheKey: "s" }, conversation)
+      const withoutField = yield* assistantMessages(lastRequest(state))
+      expect(
+        withoutField.map((message) => ["reasoning_content" in message, "reasoning" in message]),
+      ).toEqual([[false, false]])
     }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
   )
 

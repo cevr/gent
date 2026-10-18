@@ -554,7 +554,7 @@ export const AskUserAsyncTool = tool({
     // A call always has an id when the loop runs it; a direct run gets a fresh one.
     const crypto = yield* Crypto.Crypto
     const callId = yield* Option.match(Option.fromUndefinedOr(ctx.toolCallId), {
-      onNone: () => crypto.randomUUIDv7,
+      onNone: () => crypto.randomUUIDv7(),
       onSome: (id) => Effect.succeed(String(id)),
     })
     const asked = params.questions.map((question, index): OpenQuestion => ({

@@ -1589,7 +1589,7 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
 /** A random id no earlier request shares, for a request that must not repeat one. */
 const randomNonce = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
-  return yield* crypto.randomUUIDv4
+  return yield* crypto.randomUUIDv4()
 })
 
 /**

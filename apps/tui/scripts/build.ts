@@ -61,7 +61,7 @@ const build = Effect.gen(function* () {
   // The build names itself: a fresh id per build and the version this app's
   // package.json ships as. Discovery attaches only to a server of the same
   // build, and the builtin extensions name their artifact by the id.
-  const id = yield* crypto.randomUUIDv4
+  const id = yield* crypto.randomUUIDv4()
   const { version } = yield* fs
     .readFileString(path.join(rootDir, "package.json"))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PackageVersion)))

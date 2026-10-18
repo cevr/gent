@@ -320,7 +320,7 @@ const createGoal = (input: CreateGoalInput) =>
         }
         const time = yield* now
         const created: GoalState = {
-          goalId: yield* crypto.randomUUIDv7,
+          goalId: yield* crypto.randomUUIDv7(),
           branchId: ctx.branchId,
           objective,
           status: "active",

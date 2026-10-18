@@ -2,7 +2,7 @@
 
 `package.json` `patchedDependencies` applies each file here at install. A
 patch names one exact version, so a version bump leaves the patch unapplied
-until it is regenerated for the new release. The Effect patches follow
+until it is regenerated for the new release. An Effect patch follows
 `catalog.effect`; the guards fail when a patch key names another Effect
 version. These are local dependency patches, not upstream releases.
 
@@ -146,145 +146,61 @@ It clamps a negative scissor size before the native push, and the patch's
 paint into native code, and its split footer still resets the history state
 and writes the replay clear at once; gent stays on 0.5.
 
-## `@effect/ai-anthropic@4.0.2`
+## Effect SDKs (no patch since 4.0.5)
 
-`transformToolCallParams` fails the reply with `ToolNotFoundError` when the
-model calls a tool the request did not declare. The patch passes the call
-on as the model wrote it, as `@effect/ai-openai@4.0.2` below does: the
-loop's tool runner answers it. Remove it with `effect@4.0.2`'s
-undeclared-name part. It patches `dist` only; the shipped `src` copy keeps
-the upstream text.
+`effect` 4.0.5 and its driver SDKs need no patch. Checked on 2026-10-17
+against the published 4.0.5 tarballs:
 
-A later system message (the runtime's turn notices) needs no patch. 4.0.2
-keeps later system messages as `system` messages in history for a model
-that takes one (`supportsMidConversationSystemMessages` in its capability
-table, which `LanguageModel` reports as `supportsSystemMessagesInHistory`)
-when each has a place: after a user turn, and last or before an assistant
-turn. Otherwise, for a model the table marks false or when any one of them
-cannot be placed, it appends every one of them to the top-level `system`,
-which would change the cached prefix each turn. Core decides the role
-before the SDK sees the prompt (`promptForModel` in
-`packages/core/src/runtime/model-context.ts`): a later system message
-stays one only when its text is wholly gent's own, the model reports the
-capability, and it has a place; every other goes as a
-`<host-context-update>` user message at its place, the bytes this patch
-built through 2026-10-11, so the SDK never moves one. The OpenCode
-gateways' Messages models set `midConversationSystemMessages: false`, so
-they get the same form. The table is optimistic: an id it does not know
-counts as taking a later system message. A new Claude model that does not
-would refuse a trusted notice with a 400 where the old wrap always worked,
-so recheck the table on each SDK bump (4.0.3 is held back: it needs
-`effect` 4.0.3).
+- Tool calls. With `disableToolCallResolution: true`,
+  `toolCallValidation: "deferred"` decodes each tool call's parameters as
+  opaque and decodes a call to a name the toolkit does not hold
+  (`withUndeclaredToolCalls`), in `generateText` and `streamText`, with a
+  toolkit, an empty toolkit and no toolkit. `@effect/ai-anthropic`,
+  `@effect/ai-openai` and `@effect/ai-openai-compat` pass a call to an
+  undeclared name on as the model wrote it in that mode
+  (`transformToolCallParams`). This is what the `effect@4.0.2` patch and the
+  undeclared-name part of the three driver patches did. The turn passes the
+  option on each request (`runtime/turn.ts`), so the tool runner
+  (`runtime/tools.ts`) is still the one place that checks a call. One
+  difference: deferred mode checks a provider-executed call's parameters
+  against the tool; gent declares no provider-executed tool. "refused tool
+  calls on the wire", "tool declarations on the wire" and "a turn that
+  advertises no tool" in `packages/extensions/tests/wire-tool-names.test.ts`
+  and "a call the tool runner refuses …" in
+  `packages/core/tests/runtime/tools.test.ts` cover it.
+- Reasoning on Chat Completions. `@effect/ai-openai-compat` sends the
+  reasoning of a prompt message back on its assistant message, in the field
+  the reply read it from (`reasoning` or `reasoning_content`, the latter by
+  default), and sends one prompt message's text, reasoning and tool calls as
+  one chat message. The 4.0.2 patch did this behind `replayReasoning`. The
+  Chat Completions class (`packages/extensions/src/providers.ts`,
+  `reasoningInField`) still moves the text to the field the model's
+  models.dev entry names (`interleaved.field`), or drops it when the entry
+  names none. The SDK's image options key is now `openai-compat`, not
+  `openai`. "OpenCode reasoning" in
+  `packages/extensions/tests/opencode.test.ts` covers it.
+- Child stdin. `@effect/platform-node-shared` keeps a fallback `error`
+  listener on the child's stdin until it closes (`handleInputErrors`), the
+  listener the 4.0.2 patch added. "an interrupted page …" in
+  `apps/tui/tests/extensions/git.client.test.tsx` covers it.
 
-## `@effect/ai-openai-compat@4.0.2`
-
-The SDK reads a model's reasoning from a Chat Completions reply
-(`reasoning_content`), but never sends it back. The prompt conversion drops
-a reasoning part without an OpenAI item id, which every part this SDK
-produces lacks, and `toChatMessages` drops reasoning items. It also starts
-a new assistant message for a tool call that follows text. DeepSeek, Kimi
-and GLM want their reasoning back on the assistant message that holds it,
-and the tool calls on the same message as the text.
-
-The patch adds a model config option, `replayReasoning`, off by default and
-stripped from the request body. Off, the request is the upstream SDK's. On,
-a reasoning part without an id stays a reasoning item, and `toChatMessages`
-puts its text in `reasoning_content` on that prompt message's assistant
-message. A tool call joins the assistant message before it in the same
-prompt message. A `message_boundary` item marks where each prompt message
-starts, so reasoning a reply ended on never reaches a later reply. Only the
-OpenCode driver
-(`packages/extensions/src/opencode.ts`) turns it on, then moves the text to
-the field the model's models.dev entry names (`interleaved.field`), or drops
-it when the entry names none.
-
-The patch also passes a call to a tool the request did not declare on, as
-`@effect/ai-openai@4.0.2` below does.
-
-Remove the reasoning part when the SDK sends the reasoning back itself, and
-the undeclared-name part with `effect@4.0.2`'s. Rechecked on
-2026-10-10: 4.0.2 still drops reasoning without an item id, so the patch was
-regenerated for that release. It patches `dist` only (the `.js` and the option's type in the `.d.ts`); the shipped
-`src` copy keeps the upstream text.
-
-## `@effect/platform-node-shared@4.0.2`
-
-The child process spawner runs a `stdin` stream into the child through a
-sink that listens for the writable's `error` event only while it runs. A
-child that exits before it reads all of its input (a pager the reader
-quits, a pager an interrupt stops) fails a write that Node still holds
-after the sink stopped, and that `error` event has no listener: it throws
-as an uncaught exception and ends gent. The child's stdout and stderr keep
-a listener of their own for this reason; stdin had none.
-
-The patch adds a no-op `error` listener on the child's stdin when the
-spawner creates the stdin sink. The sink still fails on a write error while
-it runs; the child's exit code reports a child that left early. `src` and
-`dist` get the same change. Without it, the interrupt test in
-`apps/tui/tests/extensions/git.client.test.tsx` ("an interrupted page …")
-fails with `EPIPE`; a reader who quits the pager early meets the same race.
-
-Remove this patch when an `@effect/platform-node-shared` release keeps a
-listener on the child's stdin. Checked on 2026-10-10: 4.0.2 has none.
-
-## `effect@4.0.2`
-
-`LanguageModel.streamText` and `generateText` with
-`disableToolCallResolution: true` decode each tool call's parameters against
-the tool's encoded parameter schema (`makeToolkitWithEncodedParameters`). A
-model call whose input the schema refuses (a wrong type, a missing key)
-fails the whole reply with `InvalidOutputError`. gent resolves tool calls
-itself (`runtime/turn.ts`), so that failure is a failed model step: the
-loop retries it as a transient provider error, a paid request that the
-model will likely answer the same way, and the model never reads why its
-call failed. With tool call resolution on, the SDK already decodes the
-parameters as opaque (`makeToolkitWithOpaqueParameters`) and lets the
-Toolkit refuse an invalid call as that call's result.
-
-A call to a name the toolkit does not hold (a tool no extension registers)
-fails the reply the same way: the response schema has a tool call part for
-each toolkit tool only. Before that, each driver SDK fails the reply with
-`ToolNotFoundError` for a name the request did not declare
-(`transformToolCallParams`), which is also every tool the turn did not
-advertise: the request declares the advertised tools only (`oneOf`).
-
-The patch decodes the parameters as opaque on both paths, and on the
-disabled path decodes a call to a name the toolkit does not hold as a call
-to that name with opaque parameters (`withCalledTools`). The driver patches
-(`@effect/ai-anthropic`, `@effect/ai-openai`, `@effect/ai-openai-compat`)
-pass a call to an undeclared name on as the model wrote it. The tool runner
-(`runtime/tools.ts`) is then the one place that checks a call: it answers an
-invalid call with a failed result (`Tool '<id>' input failed`, or `Unknown
-tool: <id>`) that the model reads on its next step. The request is not
-changed: the tool declarations come from the toolkit the turn passes, as
-before. A provider-executed tool call is no longer checked on the disabled
-path; gent declares none. "refused tool calls on the wire" in
-`packages/extensions/tests/wire-tool-names.test.ts` (each shipped driver)
-and "a call the tool runner refuses …" in
-`packages/core/tests/runtime/tools.test.ts` cover it; "tool declarations on
-the wire" in the first file pins each driver's declaration bytes.
-
-A request with no toolkit, or an empty one, takes an early return that
-decodes the reply against `Toolkit.empty`, so any tool call in it fails the
-reply. A turn that advertises no tool sends no toolkit. The patch makes that
-early return decode a called name with opaque parameters too
-(`emptyToolkitFor`, `decodeEmptyToolkitParts`), but only with
-`disableToolCallResolution: true`, which the turn now passes on that path.
-The flag does not go on the request, so the request is the same bytes.
-Without the flag, the early return decodes as upstream does. "a turn that
-advertises no tool" in the same test file covers it.
-
-Remove this patch when an Effect release, with tool call resolution off,
-decodes tool call parameters as opaque and decodes a call to an undeclared
-name, in both `generateText` and `streamText`, and with a toolkit, an empty
-toolkit, and no toolkit. Checked on 2026-10-10: 4.0.2 does neither. It
-patches `dist` only; the shipped `src` copy keeps the upstream text.
-
-## `@effect/ai-openai@4.0.2`
-
-`transformToolCallParams` fails the reply with `ToolNotFoundError` when a
-call names a tool the request did not declare. The patch passes that call on
-with its parameters as the model wrote them; the tool runner answers it
-(`effect@4.0.2` above). Remove this patch with that one's undeclared-name
-part. Checked on 2026-10-10: 4.0.2 fails the reply. It
-patches `dist` only; the shipped `src` copy keeps the upstream text.
+A later Anthropic system message (the runtime's turn notices) needs no
+patch. The SDK keeps later system messages as `system` messages in history
+for a model that takes one (`supportsMidConversationSystemMessages` in its
+capability table, which `LanguageModel` reports as
+`supportsSystemMessagesInHistory`) when each has a place: after a user
+turn, and last or before an assistant turn. Otherwise, for a model the
+table marks false or when any one of them cannot be placed, it appends
+every one of them to the top-level `system`, which would change the cached
+prefix each turn. Core decides the role before the SDK sees the prompt
+(`promptForModel` in `packages/core/src/runtime/model-context.ts`): a later
+system message stays one only when its text is wholly gent's own, the model
+reports the capability, and it has a place; every other goes as a
+`<host-context-update>` user message at its place, so the SDK never moves
+one. The OpenCode gateways' Messages models set
+`midConversationSystemMessages: false`, so they get the same form. The
+table is optimistic: an id it does not know counts as taking a later
+system message. A new Claude model that does not would refuse a trusted
+notice with a 400 where the old wrap always worked, so recheck the table on
+each SDK bump. Rechecked on 2026-10-17: 4.0.5's table is the 4.0.2 table
+(false for the 3.x, 4.0, 4.1 and 4.5 families, true for any other id).

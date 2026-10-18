@@ -3314,6 +3314,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             toolkit: convertTools([...resolved.tools]),
             toolChoice: "none",
             disableToolCallResolution: true,
+            toolCallValidation: "deferred",
           })
         }
         // The reply decodes against every tool the profile registers;
@@ -3324,11 +3325,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
           toolkit: convertTools([...resolved.replyTools]),
           toolChoice: { oneOf: resolved.tools.map((tool) => wireToolName(getToolId(tool))) },
           disableToolCallResolution: true,
+          toolCallValidation: "deferred",
         })
       }
       // No tool goes on the request, but the reply can still call one: the
       // tool runner answers it (`Unknown tool: <id>`), as for any step.
-      return model.streamText({ prompt, disableToolCallResolution: true })
+      return model.streamText({
+        prompt,
+        disableToolCallResolution: true,
+        toolCallValidation: "deferred",
+      })
     }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))

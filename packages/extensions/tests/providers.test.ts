@@ -215,8 +215,12 @@ describe("driver catalog", () => {
     expect(costOf("gpt-5.4", RESPONSES_CLASS)).toEqual([
       [{ _tag: "Patches", multiplier: 1.2, maxPatches: 2_500 }, high],
     ])
+    // The Chat Completions SDK reads the detail under its own key.
     expect(costOf("openai/gpt-4.1-mini", CHAT_COMPLETIONS_CLASS)).toEqual([
-      [{ _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 }, high],
+      [
+        { _tag: "Patches", multiplier: 1.62, maxPatches: 6_144 },
+        Option.some({ "openai-compat": { imageDetail: "high" } }),
+      ],
     ])
     // Anthropic counts pixels and needs no part option.
     expect(costOf("claude-sonnet-4-5", MESSAGES_CLASS)).toEqual([

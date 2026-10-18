@@ -100,7 +100,7 @@ const command = (params: {
         )
         yield* ctx.Session.send({
           delivery: "queue",
-          sourceId: `${params.id}:${yield* crypto.randomUUIDv7}`,
+          sourceId: `${params.id}:${yield* crypto.randomUUIDv7()}`,
           content: params.recipe(input.trim(), quotedPath),
         })
       }),

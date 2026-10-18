@@ -413,7 +413,7 @@ const judgeAnswer = Match.type<Decision.Any>().pipe(
         _tag: "Rate",
         rating: last,
         probabilities: Object.fromEntries(
-          decision.criteria.map((level, index) => [level, Number(index === last)]),
+          decision.criteria.map((level, index) => [level.label, Number(index === last)]),
         ),
       }
     },
@@ -678,7 +678,16 @@ describe("cell models host", () => {
             instructions: "Which team",
             criteria: { billing: "payments", technical: "bugs" },
           },
-          mood: { _tag: "Rate", instructions: "How upset", criteria: ["calm", "upset", "angry"] },
+          // `Decision.rate` gives each level a label and a description.
+          mood: {
+            _tag: "Rate",
+            instructions: "How upset",
+            criteria: [
+              { label: "calm", description: "calm" },
+              { label: "upset", description: "upset" },
+              { label: "angry", description: "angry" },
+            ],
+          },
           // A probability without criteria carries none.
           urgent: { _tag: "Probability", instructions: "Needs action today" },
         })

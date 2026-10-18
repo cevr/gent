@@ -158,7 +158,7 @@ export const buildOpenCodeModelDriver = (
           Option.fromUndefinedOr(value.cacheKey),
         ),
         {
-          onNone: () => crypto.randomUUIDv4.pipe(Effect.orDie),
+          onNone: () => crypto.randomUUIDv4().pipe(Effect.orDie),
           onSome: Effect.succeed,
         },
       )
@@ -176,7 +176,7 @@ export const buildOpenCodeModelDriver = (
   resolveDecisionModel: (modelName, authInfo) =>
     Effect.gen(function* () {
       const apiKey = yield* gatewayApiKey(gateway, Option.fromNullishOr(authInfo), envApiKey)
-      const sessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie)
+      const sessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie)
       return typeSafeDecisionModel(modelName, {
         apiKey,
         apiUrl: `${gateway.origin}/v1`,
