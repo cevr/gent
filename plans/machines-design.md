@@ -211,6 +211,7 @@ persisted formats holds.
 
 ```sql
 CREATE TABLE branch_wakes (
+  incarnation INTEGER PRIMARY KEY AUTOINCREMENT, -- never used again (F20)
   workspace_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   branch_id TEXT NOT NULL,
@@ -219,11 +220,13 @@ CREATE TABLE branch_wakes (
   at INTEGER,                        -- NULL: the next server start only
   version INTEGER NOT NULL,          -- bumped by every wakeAt
   attempts INTEGER NOT NULL DEFAULT 0,
+  armed_boot INTEGER NOT NULL,       -- the server start that inserted it (F21)
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (session_id, branch_id, extension_id, source_id),
+  UNIQUE (session_id, branch_id, extension_id, source_id),
   FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
 );
 CREATE INDEX branch_wakes_due ON branch_wakes (at) WHERE at IS NOT NULL;
+CREATE TABLE branch_wake_boots (id INTEGER PRIMARY KEY CHECK (id = 1), boot INTEGER NOT NULL);
 ```
 
 - **Storage.** `BranchWakeStorage` is a focused repository in
@@ -250,11 +253,13 @@ Every root goes through `createDependencies` (`packages/core/src/test-utils/harn
 
 ### A7. Firing, and the order against passivation
 
-1. **Startup pass.** The clock reads every row with `at IS NULL` or
-   `at <= now`, oldest `created_at` first, and fires each one, eight at a time.
-   `now` is read as the server builds, and a start-only row counts only when
-   it was created by then: one armed in this process waits for the next start
-   (F4).
+1. **Startup pass.** As the server builds, before any client or loop can
+   arm a record, the clock stores this start's number (`beginBoot`) and reads
+   the wall time. It then reads every start-only row an earlier start armed
+   (`armed_boot` below this start's number) and every row with `at <= now`,
+   oldest `created_at` first, and fires each one, eight at a time. One armed
+   in this process waits for the next start (F4, F21). A failed read is read
+   again with the same bounds until it succeeds (F22).
 2. **Clock loop.** After the pass, the clock loops. Each turn reads the wall
    time (`Clock.currentTimeMillis`), fires every row with `at <= now`, and
    sleeps until the smallest remaining `at`, or for 30 seconds, whichever comes
@@ -282,13 +287,14 @@ Every root goes through `createDependencies` (`packages/core/src/test-utils/harn
    idempotent under its own lock, as wake's `withLifecycle` does
    (`wake.ts:192-237`).
 6. **Outcome.** Every write after a fire is one conditional SQL statement on
-   the version the fire read, retries included:
-   - `Done`, `Gone`, `Unhandled`: `DELETE FROM branch_wakes WHERE <key> AND version = ?`.
-   - `At`: `UPDATE branch_wakes SET at = ?, attempts = 0 WHERE <key> AND version = ?`.
+   the incarnation and the version the fire read, retries included (F20):
+   - `Done`, `Gone`, `Unhandled`: `DELETE FROM branch_wakes WHERE <key> AND incarnation = ? AND version = ?`.
+   - `At`: `UPDATE branch_wakes SET at = ?, attempts = 0 WHERE <key> AND incarnation = ? AND version = ?`.
    - `AtStart`: the same, with `at = NULL`.
-   - A failure: `UPDATE branch_wakes SET at = ?, attempts = attempts + 1 WHERE <key> AND version = ?`.
-     A statement that changes no row means that a newer `wakeAt` replaced the
-     record during the fire, so the newer row stands as written. `wakeAt` is one
+   - A failure: `UPDATE branch_wakes SET at = ?, attempts = attempts + 1 WHERE <key> AND incarnation = ? AND version = ?`.
+     A statement that changes no row means that a newer `wakeAt`, or a cancel
+     and a new arm, replaced the record during the fire, so the newer row
+     stands as written. `wakeAt` is one
      `INSERT ... ON CONFLICT DO UPDATE` that sets `version = version + 1` and
      `attempts = 0`. No write reads the row first and writes it after.
 7. **Failure.** A failed or interrupted fire, or a hook that runs past 30
@@ -1610,3 +1616,40 @@ places; the note above now follows the code.
   `ThreadStartInput` alone fails it. Machines (commit 4) are their consumer,
   so they are exported there. G1's and G4's names have one now: the tests
   that check them.
+
+## Review fix facts
+
+A review of commit 1 found five faults. The fix commit corrects them; the
+note above now follows the code.
+
+- **F19. A promotion reserves the turn it ends the deferral for.** Promotion
+  cleared `recoveryDeferred` in one queue transaction and reserved the
+  recovered turn in a later one. A drain between the two (a `wakeDue` hook's
+  queued line, or any send) saw an idle loop and started its own item first.
+  `LoopInbox.settleRecovery` now clears the flag and sets `startingState`
+  for the cut-short turn, or takes the queue's next item and reserves it, in
+  one transaction; the worker forks that start uninterruptibly with the
+  settle.
+- **F20. A record has an incarnation.** A cancel and a new arm of the same
+  key both start at `version = 1`, so a fire of the cancelled record could
+  delete or reschedule the new one. Each row now has `incarnation`, the
+  AUTOINCREMENT key, which SQLite never gives again after a delete; the key
+  of the four columns is a `UNIQUE` constraint, so `wakeAt` stays one
+  upsert. Every settle, reschedule and retry is guarded by key, incarnation
+  and version, and `FireWake` carries the incarnation.
+- **F21. The start pass reads by start number, not time.** F4's cutoff
+  (`created_at <= startedAt`) let a row armed in the same millisecond, or
+  after a backward clock jump, fire at this start. Each start now stores its
+  number in `branch_wake_boots` before the root is exposed; an arm stores the
+  current number in `armed_boot`; the pass reads start-only rows with
+  `armed_boot` below its own. The set is fixed at the build, whenever the
+  read runs.
+- **F22. A failed start read is read again.** One failed `listAtStart`
+  abandoned every start-only record for the process. The read is now retried
+  with the same start number and wall time: 0.5 s, twice as long each time,
+  at most 30 s, logged as `branch-wake.startup.failed`, until it succeeds.
+  The number is stored as the server builds; a failure to store it fails the
+  build, as a failed interaction recovery read does.
+- **Migration 026 was edited in place.** It has not shipped: no release and
+  no user database holds it, only the test databases in temporary
+  directories. So the table gained its columns in 026 itself, not in a 027.

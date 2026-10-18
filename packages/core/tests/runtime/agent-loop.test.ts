@@ -11,10 +11,12 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
   Option,
   Path,
   Predicate,
   Ref,
+  References,
   Schedule,
   Schema,
   Scope,
@@ -5247,13 +5249,12 @@ describe("loop inbox", () => {
       readonly inbox: Effect.Success<ReturnType<typeof makeLoopInbox>>
       readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
     }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
+    initial: AgentLoopState = buildInitialAgentLoopState({
+      state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
+    }),
   ) =>
     Effect.gen(function* () {
-      const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
-        buildInitialAgentLoopState({
-          state: buildRunningState({ message: queuedMessage("busy", "busy") }, { startedAtMs: 0 }),
-        }),
-      )
+      const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(initial)
       const rows = yield* Ref.make(emptyLoopQueueState())
       const inbox = yield* makeLoopInbox({
         sessionId: wakeSessionId,
@@ -5391,6 +5392,81 @@ describe("loop inbox", () => {
         expect((yield* inbox.queue).followUp).toEqual([])
       }),
     ),
+  )
+
+  // The work a restart left starts before anything queued while recovery was
+  // deferred: the promotion reserves its start as it ends the deferral, so
+  // an admission or a take that runs before that start is forked finds the
+  // loop reserved, and queues behind it.
+  const deferredIdle = (queue: LoopQueueStateType) =>
+    buildInitialAgentLoopState({ state: buildIdleState(), queue, recoveryDeferred: true })
+  const hookLine: QueuedTurnItem = {
+    message: queuedMessage("hook-line", "the hook's line"),
+    wake: true,
+  }
+  const reservedId = (state: AgentLoopState) =>
+    Option.map(Option.fromUndefinedOr(state.startingState), (phase) => {
+      if (phase._tag === "Idle") return "idle"
+      return String(phase.message.id)
+    })
+
+  it.effect(
+    "a promotion reserves the cut-short turn as it ends the deferral, so a line sent before its start waits behind it",
+    () =>
+      withInbox(
+        ({ inbox, loopRef }) =>
+          Effect.gen(function* () {
+            const cutShort: QueuedTurnItem = { message: queuedMessage("cut-short", "recover me") }
+            const reserved = yield* inbox.settleRecovery({
+              recovered: Option.some(cutShort),
+              priorHistory: true,
+            })
+            expect(Option.map(reserved, (item) => String(item.message.id))).toEqual(
+              Option.some("cut-short"),
+            )
+            // Between the promotion and its start: another line, and a drain.
+            const late: QueuedTurnItem = { message: queuedMessage("late-line", "late"), wake: true }
+            expect(yield* inbox.admit(late, { queueOnly: false })).toEqual(Option.none())
+            expect(yield* inbox.takeIfIdle).toEqual(Option.none())
+            const state = yield* TxSubscriptionRef.get(loopRef)
+            expect(reservedId(state)).toEqual(Option.some("cut-short"))
+            expect(state.queue.followUp.map((item) => String(item.message.id))).toEqual([
+              "hook-line",
+              "late-line",
+            ])
+            // The deferral ended once: a second promotion reserves nothing.
+            expect(
+              yield* inbox.settleRecovery({ recovered: Option.some(cutShort), priorHistory: true }),
+            ).toEqual(Option.none())
+          }),
+        deferredIdle({ ...emptyLoopQueueState(), followUp: [hookLine] }),
+      ),
+  )
+
+  it.effect(
+    "a promotion over a queue that wakes takes its next item and reserves its start in the same step",
+    () =>
+      withInbox(
+        ({ inbox, loopRef }) =>
+          Effect.gen(function* () {
+            const reserved = yield* inbox.settleRecovery({
+              recovered: Option.none(),
+              priorHistory: false,
+            })
+            expect(Option.map(reserved, (item) => String(item.message.id))).toEqual(
+              Option.some("hook-line"),
+            )
+            const late: QueuedTurnItem = { message: queuedMessage("late-line", "late"), wake: true }
+            expect(yield* inbox.admit(late, { queueOnly: false })).toEqual(Option.none())
+            expect(yield* inbox.takeIfIdle).toEqual(Option.none())
+            const state = yield* TxSubscriptionRef.get(loopRef)
+            expect(reservedId(state)).toEqual(Option.some("hook-line"))
+            expect(state.queue.followUp.map((item) => String(item.message.id))).toEqual([
+              "late-line",
+            ])
+          }),
+        deferredIdle({ ...emptyLoopQueueState(), followUp: [hookLine] }),
+      ),
   )
 
   test("a recovered queue with nothing in it never wakes", () => {
@@ -8299,6 +8375,77 @@ describe("durable wakes", () => {
   )
 
   it.scopedLive(
+    "a start pass whose read fails reads again until it succeeds, and then fires its records",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-wake-retry-")
+        const cwd = yield* makeTempDirectoryScoped("gent-wake-retry-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-wake-retry-home-")
+        const storagePath = `${dir}/gent.db`
+        const probe = yield* makeWakerProbe
+        const rootOf = Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          return yield* wakeRoot({ storagePath, cwd, home, providerLayer, probe, onWake: wakeDone })
+        })
+
+        // Root 1 arms two start-only records and spoils one: its version
+        // no longer decodes, so a read of the start pass fails.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client, read } = yield* rootOf
+            const ids = yield* client.session.create({})
+            yield* armWake(client, ids, { sourceId: "boot" })
+            yield* armWake(client, ids, { sourceId: "spoiled" })
+            yield* read(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient
+                yield* sql`UPDATE branch_wakes SET version = 'spoiled' WHERE source_id = 'spoiled'`
+              }),
+            )
+          }),
+        )
+
+        // Root 2's start pass fails and fires nothing. The repair lands
+        // after that failure; a read again then fires the record.
+        const failures: Array<string> = []
+        const capture = Logger.make(({ message }) => {
+          const text = String(message)
+          if (text.includes("branch-wake.startup.failed")) failures.push(text)
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { read } = yield* rootOf
+            yield* waitFor(
+              Effect.sync(() => failures.length),
+              (count) => count >= 1,
+              5_000,
+              "the start pass failed",
+            )
+            expect(yield* Ref.get(probe.fired)).toEqual([])
+            yield* read(
+              Effect.gen(function* () {
+                const sql = yield* SqlClient.SqlClient
+                yield* sql`DELETE FROM branch_wakes WHERE source_id = 'spoiled'`
+              }),
+            )
+            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "retry fired")
+            expect((yield* Ref.get(probe.fired))[0]?.input).toEqual({
+              sourceId: "boot",
+              at: Option.none(),
+              cause: "start",
+            })
+            yield* waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "Done removed it")
+          }).pipe(
+            Effect.provide(Logger.layer([capture])),
+            // The test preload turns logs off; this test reads one.
+            Effect.provideService(References.MinimumLogLevel, "Warn"),
+          ),
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
     "a repeat arm replaces the record's time, cancel removes it, and a deleted session takes it",
     () =>
       Effect.gen(function* () {
@@ -8341,10 +8488,14 @@ describe("durable wakes", () => {
         const firstEntered = yield* Deferred.make<void>()
         const firstRelease = yield* Deferred.make<void>()
         const secondEntered = yield* Deferred.make<void>()
+        const secondRelease = yield* Deferred.make<void>()
         const onWake: OnWake = (_input, call) =>
           Effect.gen(function* () {
             if (call > 1) {
+              // Held until the test has read the record: its `Done` would
+              // remove it.
               yield* Deferred.succeed(secondEntered, void 0)
+              yield* Deferred.await(secondRelease)
               return WakeNext.cases.Done.make({})
             }
             yield* Deferred.succeed(firstEntered, void 0)
@@ -8375,9 +8526,63 @@ describe("durable wakes", () => {
           "guarded",
           "guarded",
         ])
+        yield* Deferred.succeed(secondRelease, void 0)
       }).pipe(Effect.timeout("10 seconds")),
     )
   }
+
+  // A cancel and a new arm while a fire runs make another record, at
+  // version 1 again: the fire's answer names the record it read, so it
+  // leaves the new one standing.
+  it.scopedLive(
+    "a record cancelled and armed again during a fire stands when the hook answers Done",
+    () =>
+      Effect.gen(function* () {
+        const probe = yield* makeWakerProbe
+        const firstEntered = yield* Deferred.make<void>()
+        const firstRelease = yield* Deferred.make<void>()
+        const secondEntered = yield* Deferred.make<void>()
+        const secondRelease = yield* Deferred.make<void>()
+        const onWake: OnWake = (_input, call) =>
+          Effect.gen(function* () {
+            if (call > 1) {
+              yield* Deferred.succeed(secondEntered, void 0)
+              yield* Deferred.await(secondRelease)
+              return WakeNext.cases.Done.make({})
+            }
+            yield* Deferred.succeed(firstEntered, void 0)
+            yield* Deferred.await(firstRelease)
+            return WakeNext.cases.Done.make({})
+          })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, read } = yield* wakeRoot({ providerLayer, probe, onWake })
+        const ids = yield* client.session.create({})
+        yield* armWake(client, ids, { sourceId: "rearmed", at: yield* Clock.currentTimeMillis })
+        yield* Deferred.await(firstEntered)
+
+        const cancelled = yield* client.extension.request({
+          ...ids,
+          extensionId: WAKER_ID,
+          capabilityId: "cancel",
+          input: { sourceId: "rearmed" },
+        })
+        expect(cancelled).toBe(true)
+        const later = (yield* Clock.currentTimeMillis) + 50
+        yield* armWake(client, ids, { sourceId: "rearmed", at: later })
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "rearmed", at: Option.some(later), version: 1, attempts: 0 },
+        ])
+        yield* Deferred.succeed(firstRelease, void 0)
+
+        // Without the incarnation, the first fire's `Done` removes the new
+        // record and nothing fires again.
+        expect(yield* completesWithin(secondEntered, "4 seconds")).toBe(true)
+        expect(yield* read(wakeRows)).toEqual([
+          { sourceId: "rearmed", at: Option.some(later), version: 1, attempts: 0 },
+        ])
+        yield* Deferred.succeed(secondRelease, void 0)
+      }).pipe(Effect.timeout("10 seconds")),
+  )
 
   it.scopedLive(
     "the clock fires within its longest sleep after the wall time jumps forward, and never early after it jumps back",

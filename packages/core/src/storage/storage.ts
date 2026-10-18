@@ -1390,6 +1390,7 @@ export class InteractionStorage extends Context.Service<
 // ── branch-wake-storage ─────────────────────────────────────────────────────
 
 const BranchWakeRow = Schema.Struct({
+  incarnation: Schema.Int,
   workspace_id: WorkspaceId,
   session_id: SessionId,
   branch_id: BranchId,
@@ -1401,20 +1402,30 @@ const BranchWakeRow = Schema.Struct({
 })
 const decodeBranchWakeRows = Schema.decodeUnknownEffect(Schema.Array(BranchWakeRow))
 
-/** One wake record, with the version a write after its fire names. */
-export interface BranchWake extends BranchWakeKey {
+/**
+ * Which record a fire read, as a write after it names it: `incarnation`
+ * never repeats, so a record cancelled and armed again is another one, and
+ * `version` counts the arms of one incarnation.
+ */
+interface BranchWakeStamp {
+  readonly incarnation: number
+  readonly version: number
+}
+
+/** One wake record, with the stamp a write after its fire names. */
+export interface BranchWake extends BranchWakeKey, BranchWakeStamp {
   readonly workspaceId: WorkspaceId
   readonly at: Option.Option<number>
-  readonly version: number
   readonly attempts: number
 }
 
 const BRANCH_WAKE_COLUMNS =
-  "workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts"
+  "incarnation, workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts"
 
 const decodeNextWakeRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ next: Schema.OptionFromNullOr(Schema.Finite) })),
 )
+const decodeBootRows = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ boot: Schema.Int })))
 
 /** The first retry waits this long; each later one twice the one before. */
 const BRANCH_WAKE_RETRY_BASE_MS = 5_000
@@ -1423,9 +1434,10 @@ const BRANCH_WAKE_RETRY_MAX_MS = 600_000
 
 interface BranchWakeStorageService {
   /**
-   * One upsert in the current workspace. A new record has version 1; a
-   * repeat bumps the version and clears the attempts, and with no `at`
-   * keeps the time already set.
+   * One upsert in the current workspace. A new record is a new incarnation
+   * at version 1, armed in the current server start; a repeat keeps both,
+   * bumps the version and clears the attempts, and with no `at` keeps the
+   * time already set.
    */
   readonly arm: (
     wake: BranchWakeKey & { readonly at: Option.Option<number> },
@@ -1433,25 +1445,36 @@ interface BranchWakeStorageService {
   /** Removes a record of the current workspace; false when there was none. */
   readonly cancel: (key: BranchWakeKey) => Effect.Effect<boolean, StorageError>
   /**
-   * Every record of every workspace a server start fires: start-only ones
-   * armed by `now`, and those due by `now`, the oldest first. A start-only
-   * record armed later waits for the next start.
+   * Begin a server start: the start's number, one past the last, stored
+   * before the server takes a client. Each record names the start that
+   * inserted it.
    */
-  readonly listAtStart: (now: number) => Effect.Effect<ReadonlyArray<BranchWake>, StorageError>
+  readonly beginBoot: Effect.Effect<number, StorageError>
+  /**
+   * Every record of every workspace server start `boot` fires: the
+   * start-only ones an earlier start inserted, and those due by `now`, the
+   * oldest first. A start-only record this start inserted waits for the next
+   * one, whenever this read runs.
+   */
+  readonly listAtStart: (
+    boot: number,
+    now: number,
+  ) => Effect.Effect<ReadonlyArray<BranchWake>, StorageError>
   /** Every record of every workspace due by `now`, the earliest first. */
   readonly listDue: (now: number) => Effect.Effect<ReadonlyArray<BranchWake>, StorageError>
   /** The earliest time after `now` any record is due; none when no timed record waits. */
   readonly nextAt: (now: number) => Effect.Effect<Option.Option<number>, StorageError>
   /**
-   * The writes after a fire. Each is one statement on the version the fire
+   * The writes after a fire. Each is one statement on the stamp the fire
    * read and changes nothing when a newer `arm` replaced the record during
-   * the fire: the newer record stands as it was written.
+   * the fire, or a cancel and a new arm made another: the newer record
+   * stands as it was written.
    */
-  readonly settle: (key: BranchWakeKey, version: number) => Effect.Effect<void, StorageError>
+  readonly settle: (key: BranchWakeKey, stamp: BranchWakeStamp) => Effect.Effect<void, StorageError>
   /** Fire again at `at`, or with none only at the next start; the attempts restart. */
   readonly reschedule: (
     key: BranchWakeKey,
-    version: number,
+    stamp: BranchWakeStamp,
     at: Option.Option<number>,
   ) => Effect.Effect<void, StorageError>
   /**
@@ -1460,7 +1483,7 @@ interface BranchWakeStorageService {
    */
   readonly retry: (
     key: BranchWakeKey,
-    version: number,
+    stamp: BranchWakeStamp,
     now: number,
   ) => Effect.Effect<void, StorageError>
 }
@@ -1476,11 +1499,14 @@ export class BranchWakeStorage extends Context.Service<
 
       const keyIs = (key: BranchWakeKey) =>
         sql`session_id = ${key.sessionId} AND branch_id = ${key.branchId} AND extension_id = ${key.extensionId} AND source_id = ${key.sourceId}`
+      const stampIs = (key: BranchWakeKey, stamp: BranchWakeStamp) =>
+        sql`${keyIs(key)} AND incarnation = ${stamp.incarnation} AND version = ${stamp.version}`
 
       const listRows = (rows: ReadonlyArray<unknown>) =>
         decodeBranchWakeRows(rows).pipe(
           Effect.map((decoded) =>
             decoded.map((row): BranchWake => ({
+              incarnation: row.incarnation,
               workspaceId: row.workspace_id,
               sessionId: row.session_id,
               branchId: row.branch_id,
@@ -1502,8 +1528,9 @@ export class BranchWakeStorage extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const createdAt = yield* Clock.currentTimeMillis
             const at = toSqlNull(Option.getOrUndefined(wake.at))
-            yield* sql`INSERT INTO branch_wakes (workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts, created_at)
-              VALUES (${workspaceId}, ${wake.sessionId}, ${wake.branchId}, ${wake.extensionId}, ${wake.sourceId}, ${at}, 1, 0, ${createdAt})
+            yield* sql`INSERT INTO branch_wakes (workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts, armed_boot, created_at)
+              VALUES (${workspaceId}, ${wake.sessionId}, ${wake.branchId}, ${wake.extensionId}, ${wake.sourceId}, ${at}, 1, 0,
+                COALESCE((SELECT boot FROM branch_wake_boots WHERE id = 1), 0), ${createdAt})
               ON CONFLICT (session_id, branch_id, extension_id, source_id) DO UPDATE SET
                 at = COALESCE(excluded.at, branch_wakes.at),
                 version = branch_wakes.version + 1,
@@ -1521,11 +1548,22 @@ export class BranchWakeStorage extends Context.Service<
           },
           Effect.mapError(storageError("Failed to cancel wake record")),
         ),
+        beginBoot: Effect.gen(function* () {
+          const rows = yield* sql`INSERT INTO branch_wake_boots (id, boot) VALUES (1, 1)
+            ON CONFLICT (id) DO UPDATE SET boot = branch_wake_boots.boot + 1
+            RETURNING boot`
+          const decoded = yield* decodeBootRows(rows)
+          // The upsert returns its one row.
+          return (yield* Effect.fromOption(Arr.head(decoded))).boot
+        }).pipe(
+          Effect.mapError(storageError("Failed to begin the server start")),
+          Effect.withSpan("BranchWakeStorage.beginBoot"),
+        ),
         listAtStart: Effect.fn("BranchWakeStorage.listAtStart")(
-          function* (now) {
+          function* (boot, now) {
             const rows = yield* sql`SELECT ${sql.literal(BRANCH_WAKE_COLUMNS)} FROM branch_wakes
-              WHERE (at IS NULL AND created_at <= ${now}) OR at <= ${now}
-              ORDER BY created_at ASC, rowid ASC`
+              WHERE (at IS NULL AND armed_boot < ${boot}) OR at <= ${now}
+              ORDER BY created_at ASC, incarnation ASC`
             return yield* listRows(rows)
           },
           Effect.mapError(storageError("Failed to list wake records at start")),
@@ -1534,7 +1572,7 @@ export class BranchWakeStorage extends Context.Service<
           function* (now) {
             const rows = yield* sql`SELECT ${sql.literal(BRANCH_WAKE_COLUMNS)} FROM branch_wakes
               WHERE at IS NOT NULL AND at <= ${now}
-              ORDER BY at ASC, rowid ASC`
+              ORDER BY at ASC, incarnation ASC`
             return yield* listRows(rows)
           },
           Effect.mapError(storageError("Failed to list due wake records")),
@@ -1548,23 +1586,23 @@ export class BranchWakeStorage extends Context.Service<
           Effect.mapError(storageError("Failed to read the next wake time")),
         ),
         settle: Effect.fn("BranchWakeStorage.settle")(
-          function* (key, version) {
-            yield* sql`DELETE FROM branch_wakes WHERE ${keyIs(key)} AND version = ${version}`
+          function* (key, stamp) {
+            yield* sql`DELETE FROM branch_wakes WHERE ${stampIs(key, stamp)}`
           },
           Effect.mapError(storageError("Failed to settle wake record")),
         ),
         reschedule: Effect.fn("BranchWakeStorage.reschedule")(
-          function* (key, version, at) {
+          function* (key, stamp, at) {
             const next = toSqlNull(Option.getOrUndefined(at))
             yield* sql`UPDATE branch_wakes SET at = ${next}, attempts = 0
-              WHERE ${keyIs(key)} AND version = ${version}`
+              WHERE ${stampIs(key, stamp)}`
           },
           Effect.mapError(storageError("Failed to reschedule wake record")),
         ),
         retry: Effect.fn("BranchWakeStorage.retry")(
-          function* (key, version, now) {
+          function* (key, stamp, now) {
             yield* sql`UPDATE branch_wakes SET at = ${now} + ${retryDelay}, attempts = attempts + 1
-              WHERE ${keyIs(key)} AND version = ${version}`
+              WHERE ${stampIs(key, stamp)}`
           },
           Effect.mapError(storageError("Failed to retry wake record")),
         ),

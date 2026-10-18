@@ -660,7 +660,7 @@ const RequestExtensionFields = {
 /**
  * One wake record that came due, sent to its branch's loop. The record in
  * `branch_wakes` is the durable copy, so the message is not persisted;
- * `version` and `attempts` make each fire its own message.
+ * `incarnation`, `version` and `attempts` make each fire its own message.
  */
 const FireWakeFields = {
   ...WorkspaceFields,
@@ -670,6 +670,7 @@ const FireWakeFields = {
   sourceId: Schema.String,
   at: Schema.OptionFromOptionalKey(Schema.Finite),
   cause: WakeCause,
+  incarnation: Schema.Int,
   version: Schema.Int,
   attempts: Schema.Int,
 }
@@ -803,7 +804,7 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       id: (p: FireWakeInput) => ({
         entityId: entityIdOf(p.workspaceId, p.sessionId, p.branchId),
-        primaryKey: `wake:${p.extensionId}:${p.sourceId}:${p.version}:${p.attempts}`,
+        primaryKey: `wake:${p.extensionId}:${p.sourceId}:${p.incarnation}:${p.version}:${p.attempts}`,
       }),
     },
     /**

@@ -21,6 +21,7 @@ import {
   Record,
   Ref,
   Result,
+  Schedule,
   Schema,
   Scope,
   Semaphore,
@@ -733,10 +734,19 @@ export type LoopInbox = {
   readonly holds: (state: AgentLoopState, messageId: MessageId) => boolean
   readonly moveToPhase: (next: LoopState) => Effect.Effect<void>
   /**
-   * End the recovery deferral and answer whether it was set: one queue
-   * transaction, so exactly one caller promotes the work a restart left.
+   * End the recovery deferral and reserve the start of the work a restart
+   * left, in one queue transaction: the turn it cut short (`recovered`), else
+   * the queue's next item when the stored queue wakes (unconditionally, or
+   * on a branch with `priorHistory`). Answers the item whose start is
+   * reserved; none when the deferral was not set (another caller promoted
+   * it) or nothing runs. Every admission and take after this one sees the
+   * reservation, so the work a restart left starts before anything queued
+   * meanwhile.
    */
-  readonly settleRecovery: Effect.Effect<boolean, AgentLoopError>
+  readonly settleRecovery: (recovery: {
+    readonly recovered: Option.Option<QueuedTurnItem>
+    readonly priorHistory: boolean
+  }) => Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
 }
 
 const mergeConcurrentLoopMetadata = (
@@ -1067,11 +1077,40 @@ export const makeLoopInbox = (
       ),
     )
 
-    const settleRecovery = commitQueueTransaction("settled recovery", (s) => ({
-      value: s.recoveryDeferred,
-      next: { ...s, recoveryDeferred: false },
-      persist: false,
-    })).pipe(Effect.withSpan("LoopInbox.settleRecovery"))
+    const settleRecovery = Effect.fn("LoopInbox.settleRecovery")(function* (recovery: {
+      readonly recovered: Option.Option<QueuedTurnItem>
+      readonly priorHistory: boolean
+    }) {
+      const queuedCreatedAt = yield* DateTime.nowAsDate
+      const startedAtMs = yield* Clock.currentTimeMillis
+      return yield* commitQueueTransaction("settled recovery", (s) => {
+        const none = Option.none<QueuedTurnItem>()
+        if (!s.recoveryDeferred) return { value: none, next: s, persist: false }
+        const settled: AgentLoopState = { ...s, recoveryDeferred: false }
+        const reserve = (item: QueuedTurnItem) => buildRunningState(item, { startedAtMs })
+        if (Option.isSome(recovery.recovered)) {
+          return {
+            value: recovery.recovered,
+            next: { ...settled, startingState: reserve(recovery.recovered.value) },
+            persist: false,
+          }
+        }
+        // The queue as it stands now: nothing took its in-flight item while
+        // recovery was deferred, and items queued since count as items
+        // queued before a restart do.
+        const wakes = wantsWakeOnRecovery(s.queue)
+        if (Option.isNone(wakes) || !(wakes.value.unconditional || recovery.priorHistory)) {
+          return { value: none, next: settled, persist: false }
+        }
+        const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
+        if (Option.isNone(nextItem)) return { value: nextItem, next: settled, persist: false }
+        return {
+          value: nextItem,
+          next: { ...settled, queue, startingState: reserve(nextItem.value) },
+          persist: queue !== s.queue,
+        }
+      })
+    })
 
     return {
       read,
@@ -1541,18 +1580,31 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   })
 
   /**
-   * Start the turn a restart cut short. Only recovery promotion calls this,
-   * once per build, after it cleared the deferral. Admissions may wait in the
-   * queue by then, but none holds a reservation: while recovery was deferred
-   * `canStartTurnNow` refused them all, so the loop is idle and holds no
-   * reservation. The item needs no admission either — it may still sit in
-   * the in-flight slot, and its turn clears that slot when it settles.
+   * Promote the work a restart left: end the deferral, reserve its start
+   * and fork the start, as one uninterruptible step, so the reservation
+   * always has a start that spends it (as `admitAndStart` does). While
+   * recovery was deferred `canStartTurnNow` refused every admission, so the
+   * loop is idle and holds no other reservation. The cut-short item needs no
+   * admission: it may still sit in the in-flight slot, and its turn clears
+   * that slot when it settles.
    */
-  const startRecovered = Effect.fn("AgentLoop.startRecovered")((item: QueuedTurnItem) =>
-    startInLoop(
-      scope.turnInterruption.beginTurn.pipe(Effect.andThen(advanceOrIdle(Option.some(item)))),
-    ).pipe(Effect.flatMap(awaitStart)),
-  )
+  const promoteRecovered = Effect.fn("AgentLoop.promoteRecovered")(function* (recovery: {
+    readonly recovered: Option.Option<QueuedTurnItem>
+    readonly priorHistory: boolean
+  }) {
+    const start = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const reserved = yield* scope.inbox.settleRecovery(recovery)
+        if (Option.isNone(reserved)) return Option.none<Fiber.Fiber<void, AgentLoopError>>()
+        return Option.some(
+          yield* startInLoop(
+            scope.turnInterruption.beginTurn.pipe(Effect.andThen(advanceOrIdle(reserved))),
+          ),
+        )
+      }),
+    )
+    if (Option.isSome(start)) yield* awaitStart(start.value)
+  })
 
   const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
     (requestId: InteractionRequestId) =>
@@ -1581,7 +1633,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   return {
     turnWorkerLoop,
     startNextIfIdle,
-    startRecovered,
+    promoteRecovered,
     admitAndStart,
     admitAndBegin,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
@@ -1764,8 +1816,11 @@ type AgentLoopBehavior = {
     extensionId: ExtensionId,
     input: WakeDueInput,
   ) => Effect.Effect<Option.Option<Exit.Exit<WakeNext, unknown>>, AgentLoopError>
-  /** Start the turn a restart cut short; only recovery promotion calls it. */
-  startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
+  /** Promote the work a restart left (`LoopInbox.settleRecovery`); only recovery promotion calls it. */
+  promoteRecovered: (recovery: {
+    readonly recovered: Option.Option<QueuedTurnItem>
+    readonly priorHistory: boolean
+  }) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
   startNextIfIdle: () => Effect.Effect<void, AgentLoopError>
   /** Admit one item and start it when the admission reserved the start. */
@@ -2756,7 +2811,7 @@ const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      startRecovered: worker.startRecovered,
+      promoteRecovered: worker.promoteRecovered,
       startNextIfIdle: worker.startNextIfIdle,
       admitAndStart: worker.admitAndStart,
       admitAndBegin: worker.admitAndBegin,
@@ -3140,22 +3195,14 @@ const agentLoopActorHandlers = Effect.gen(function* () {
       return Option.isSome(yield* handle.incompleteUserTurn)
     })
 
-  const startNextQueuedTurnIfIdle = (
-    handle: AgentLoopBehavior,
-    options?: { readonly startupPermitHeld?: boolean },
-  ) =>
-    handle.startNextIfIdle().pipe(
-      Effect.catchEager((error) => {
-        let cleanup = closeBehavior
-        const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
-          Option.map(({ startupPermitHeld: held }) => held),
-        )
-        if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
-          cleanup = closeBehaviorWithHeldStartupPermit
-        }
-        return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
-      }),
-    )
+  const startNextQueuedTurnIfIdle = (handle: AgentLoopBehavior) =>
+    handle
+      .startNextIfIdle()
+      .pipe(
+        Effect.catchEager((error) =>
+          closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error))),
+        ),
+      )
 
   /**
    * Refuse an operation on a terminated session. Every handler runs it before
@@ -3471,30 +3518,24 @@ const agentLoopActorHandlers = Effect.gen(function* () {
 
   /**
    * Run the work a restart left, once per build: the turn it cut short, else
-   * the stored queue's next item when the queue wakes on recovery. The queue
-   * is read as it stands now, not as the build found it: nothing could take
-   * its in-flight item while recovery was deferred, and items queued since
-   * count as items queued before a restart do. The caller holds the startup
-   * permit. A failure closes the behavior, as a failed open does.
+   * the stored queue's next item when the queue wakes on recovery
+   * (`LoopInbox.settleRecovery`, which reserves its start as it ends the
+   * deferral). The caller holds the startup permit. A failure closes the
+   * behavior, as a failed open does.
    */
   const promoteRecovery = (handle: AgentLoopBehavior) =>
     Effect.gen(function* () {
-      if (!(yield* handle.inbox.settleRecovery)) return
-      if (Option.isSome(handle.recoveredTurn)) {
-        yield* handle
-          .startRecovered(handle.recoveredTurn.value)
-          .pipe(
-            Effect.catchEager((error) =>
-              closeBehaviorWithHeldStartupPermit(handle).pipe(Effect.andThen(Effect.fail(error))),
-            ),
-          )
-        return
-      }
-      const recovered = wantsWakeOnRecovery((yield* handle.inbox.read).queue)
-      if (Option.isNone(recovered)) return
-      if (recovered.value.unconditional || (yield* handle.hasPriorHistory)) {
-        yield* startNextQueuedTurnIfIdle(handle, { startupPermitHeld: true })
-      }
+      if (!(yield* handle.inbox.read).recoveryDeferred) return
+      // Read once per build: only a build whose deferral is set gets here.
+      let priorHistory = false
+      if (Option.isNone(handle.recoveredTurn)) priorHistory = yield* handle.hasPriorHistory
+      yield* handle
+        .promoteRecovered({ recovered: handle.recoveredTurn, priorHistory })
+        .pipe(
+          Effect.catchEager((error) =>
+            closeBehaviorWithHeldStartupPermit(handle).pipe(Effect.andThen(Effect.fail(error))),
+          ),
+        )
     }).pipe(
       Effect.tapError((error) =>
         Ref.set(lifecycleRef, LoopLifecycle.cases.Failed.make({ handle, error })),
@@ -4012,8 +4053,9 @@ export const AgentLoopTestActor = Layer.unwrap(
 // An extension arms a wake record with `Session.wakeAt`; the record lives in
 // `branch_wakes`, so it outlives passivation and restarts. The clock below
 // reads the table, sends `FireWake` to each record's branch when it comes
-// due, and applies the hook's answer with one write on the version the fire
-// read: a newer `wakeAt` during the fire stands. It is one concern with
+// due, and applies the hook's answer with one write on the stamp the fire
+// read (`BranchWakeStamp`): a newer `wakeAt` during the fire stands, and so
+// does a record cancelled and armed again. It is one concern with
 // residency: a branch nothing holds may passivate, and a fire opens it again.
 
 /** How long a `wakeDue` hook may run before its fire fails and the record is kept. */
@@ -4025,6 +4067,9 @@ const WAKE_DUE_HOOK_TIMEOUT = Duration.seconds(30)
  * a backward jump fires nothing early: sleeps are relative time.
  */
 export const WAKE_CLOCK_MAX_SLEEP = Duration.seconds(30)
+
+/** A failed startup read is read again after this, twice as long each time, up to the longest sleep. */
+const WAKE_STARTUP_RETRY_BASE = Duration.millis(500)
 
 /** How many fires run at once, at the startup pass and after it. */
 const WAKE_FIRE_CONCURRENCY = 8
@@ -4087,11 +4132,11 @@ export const branchWakeClockLive = Layer.effectDiscard(
       return WakeFired.match(fired, {
         Handled: ({ next }) =>
           WakeNext.match(next, {
-            Done: () => storage.settle(key, wake.version),
-            At: ({ at }) => storage.reschedule(key, wake.version, Option.some(at)),
-            AtStart: () => storage.reschedule(key, wake.version, Option.none()),
+            Done: () => storage.settle(key, wake),
+            At: ({ at }) => storage.reschedule(key, wake, Option.some(at)),
+            AtStart: () => storage.reschedule(key, wake, Option.none()),
           }),
-        Gone: () => storage.settle(key, wake.version),
+        Gone: () => storage.settle(key, wake),
         Unhandled: () =>
           Effect.logWarning("branch-wake.unhandled").pipe(
             Effect.annotateLogs({
@@ -4100,7 +4145,7 @@ export const branchWakeClockLive = Layer.effectDiscard(
               extensionId: wake.extensionId,
               sourceId: wake.sourceId,
             }),
-            Effect.andThen(storage.settle(key, wake.version)),
+            Effect.andThen(storage.settle(key, wake)),
           ),
       })
     }
@@ -4119,6 +4164,7 @@ export const branchWakeClockLive = Layer.effectDiscard(
             sourceId: wake.sourceId,
             at: wake.at,
             cause,
+            incarnation: wake.incarnation,
             version: wake.version,
             attempts: wake.attempts,
           }).pipe(Effect.provideService(AgentLoop.Context, loopClient), Effect.exit),
@@ -4137,7 +4183,7 @@ export const branchWakeClockLive = Layer.effectDiscard(
             error: Cause.pretty(fired.cause),
           }),
         )
-        yield* storage.retry(wakeKeyOf(wake), wake.version, yield* Clock.currentTimeMillis)
+        yield* storage.retry(wakeKeyOf(wake), wake, yield* Clock.currentTimeMillis)
       }).pipe(
         permits.withPermits(1),
         Effect.catchCause((cause) =>
@@ -4158,11 +4204,26 @@ export const branchWakeClockLive = Layer.effectDiscard(
         { discard: true },
       )
 
-    // Read as the server builds, before any client can arm a record: a
-    // start-only record armed in this process waits for the next start.
+    // This start's number is stored as the server builds, before any client
+    // or loop can arm a record: a start-only record this process inserts
+    // names it, and waits for the next start. So the pass's set is fixed
+    // now, whenever its read succeeds, and a failed read is read again with
+    // the same bounds until it succeeds.
+    const boot = yield* storage.beginBoot
     const startedAt = yield* Clock.currentTimeMillis
-    const startup = Effect.suspend(() =>
-      Effect.flatMap(storage.listAtStart(startedAt), (due) => fireAll(due, "start")),
+    const startup = Effect.suspend(() => storage.listAtStart(boot, startedAt)).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("branch-wake.startup.failed").pipe(
+          Effect.annotateLogs({ error: error.message }),
+        ),
+      ),
+      Effect.retry(
+        Schedule.min([
+          Schedule.exponential(WAKE_STARTUP_RETRY_BASE),
+          Schedule.spaced(WAKE_CLOCK_MAX_SLEEP),
+        ]),
+      ),
+      Effect.flatMap((due) => fireAll(due, "start")),
     )
 
     const sleepUntilNext = Effect.gen(function* () {
@@ -4189,14 +4250,6 @@ export const branchWakeClockLive = Layer.effectDiscard(
       ),
     )
 
-    yield* startup.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("branch-wake.startup.failed").pipe(
-          Effect.annotateLogs({ error: Cause.pretty(cause) }),
-        ),
-      ),
-      Effect.andThen(Effect.forever(turn)),
-      Effect.forkScoped,
-    )
+    yield* startup.pipe(Effect.andThen(Effect.forever(turn)), Effect.forkScoped)
   }),
 )

@@ -2877,6 +2877,14 @@ describe("Branch wakes", () => {
     }>`SELECT at IS NOT NULL AS timed, COALESCE(at, 0) AS at, version, attempts
        FROM branch_wakes ORDER BY source_id`
   })
+  /** The stamp a fire of the record from `sourceId` reads now. */
+  const stampOf = (sourceId: string) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      const rows = yield* sql<{ readonly incarnation: number; readonly version: number }>`
+        SELECT incarnation, version FROM branch_wakes WHERE source_id = ${sourceId}`
+      return yield* Effect.fromNullishOr(rows[0]).pipe(Effect.orDie)
+    })
   // The rows compare with the time as an Option: a record with none is start-only.
   const readRows = rowsOf.pipe(
     Effect.map((rows) =>
@@ -2892,13 +2900,16 @@ describe("Branch wakes", () => {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
       yield* wakes.arm({ ...key, at: Option.some(1_000) })
-      yield* wakes.retry(key, 1, 0)
+      const first = yield* stampOf(key.sourceId)
+      yield* wakes.retry(key, first, 0)
       expect(yield* readRows).toEqual([{ at: Option.some(5_000), version: 1, attempts: 1 }])
       yield* wakes.arm({ ...key, at: Option.some(2_000) })
       expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 2, attempts: 0 }])
       // A repeat with no time keeps the time already set.
       yield* wakes.arm({ ...key, at: Option.none() })
       expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 3, attempts: 0 }])
+      // Every arm of one record keeps its incarnation.
+      expect((yield* stampOf(key.sourceId)).incarnation).toBe(first.incarnation)
     }).pipe(Effect.provide(testSqliteStorage)),
   )
 
@@ -2908,15 +2919,17 @@ describe("Branch wakes", () => {
       yield* ensureStorageParents({ sessionId, branchId })
       yield* wakes.arm({ ...key, at: Option.some(1_000) })
       // The fire read version 1; a newer arm lands while it runs.
+      const fired = yield* stampOf(key.sourceId)
       yield* wakes.arm({ ...key, at: Option.some(9_000) })
-      yield* wakes.settle(key, 1)
-      yield* wakes.reschedule(key, 1, Option.some(3_000))
-      yield* wakes.retry(key, 1, 0)
+      yield* wakes.settle(key, fired)
+      yield* wakes.reschedule(key, fired, Option.some(3_000))
+      yield* wakes.retry(key, fired, 0)
       expect(yield* readRows).toEqual([{ at: Option.some(9_000), version: 2, attempts: 0 }])
-      // The write on the version it read applies.
-      yield* wakes.reschedule(key, 2, Option.none())
+      // The write on the stamp it read applies.
+      const newer = yield* stampOf(key.sourceId)
+      yield* wakes.reschedule(key, newer, Option.none())
       expect(yield* readRows).toEqual([{ at: Option.none(), version: 2, attempts: 0 }])
-      yield* wakes.settle(key, 2)
+      yield* wakes.settle(key, newer)
       expect(yield* readRows).toEqual([])
     }).pipe(Effect.provide(testSqliteStorage)),
   )
@@ -2926,9 +2939,10 @@ describe("Branch wakes", () => {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
       yield* wakes.arm({ ...key, at: Option.some(0) })
+      const stamp = yield* stampOf(key.sourceId)
       const delays: Array<Option.Option<number>> = []
       for (let attempt = 0; attempt < 9; attempt++) {
-        yield* wakes.retry(key, 1, 0)
+        yield* wakes.retry(key, stamp, 0)
         delays.push(...(yield* readRows).map((row) => row.at))
       }
       expect(delays).toEqual(
@@ -2940,20 +2954,51 @@ describe("Branch wakes", () => {
     }).pipe(Effect.provide(testSqliteStorage)),
   )
 
+  it.live(
+    "a record cancelled and armed again is a new record, which no write after the older fire reaches",
+    () =>
+      Effect.gen(function* () {
+        const wakes = yield* BranchWakeStorage
+        yield* ensureStorageParents({ sessionId, branchId })
+        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        // A fire read version 1; the record is cancelled and armed again
+        // while it runs, at version 1 once more.
+        const fired = yield* stampOf(key.sourceId)
+        yield* wakes.cancel(key)
+        yield* wakes.arm({ ...key, at: Option.some(9_000) })
+        const replacement = yield* stampOf(key.sourceId)
+        expect(replacement.version).toBe(fired.version)
+        expect(replacement.incarnation).not.toBe(fired.incarnation)
+        yield* wakes.settle(key, fired)
+        yield* wakes.reschedule(key, fired, Option.some(3_000))
+        yield* wakes.retry(key, fired, 0)
+        expect(yield* readRows).toEqual([{ at: Option.some(9_000), version: 1, attempts: 0 }])
+      }).pipe(Effect.provide(testSqliteStorage)),
+  )
+
   it.live("the start pass lists start-only and past records; the due pass only timed ones", () =>
     Effect.gen(function* () {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
       const started = yield* Clock.currentTimeMillis
+      expect(yield* wakes.beginBoot).toBe(1)
       yield* wakes.arm({ ...key, sourceId: "past", at: Option.some(started - 500) })
       yield* wakes.arm({ ...key, sourceId: "start-only", at: Option.none() })
       yield* wakes.arm({ ...key, sourceId: "later", at: Option.some(started + 60_000) })
+      const boot = yield* wakes.beginBoot
+      expect(boot).toBe(2)
+      // Armed in this start, in the same millisecond or after the clock went
+      // back: it waits for the next start all the same.
+      yield* wakes.arm({ ...key, sourceId: "this-start", at: Option.none() })
       const now = yield* Clock.currentTimeMillis
       const sources = (rows: ReadonlyArray<{ readonly sourceId: string }>) =>
         rows.map((row) => row.sourceId)
-      expect(sources(yield* wakes.listAtStart(now))).toEqual(["past", "start-only"])
-      // A start-only record armed after the start waits for the next one.
-      expect(sources(yield* wakes.listAtStart(started - 1))).toEqual(["past"])
+      expect(sources(yield* wakes.listAtStart(boot, now))).toEqual(["past", "start-only"])
+      expect(sources(yield* wakes.listAtStart(boot + 1, now))).toEqual([
+        "past",
+        "start-only",
+        "this-start",
+      ])
       expect(sources(yield* wakes.listDue(now))).toEqual(["past"])
       expect(yield* wakes.nextAt(now)).toEqual(Option.some(started + 60_000))
       expect(yield* wakes.nextAt(started + 60_000)).toEqual(Option.none())

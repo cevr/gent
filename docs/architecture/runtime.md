@@ -45,14 +45,23 @@ Shape:
   `026_branch_wakes`, keyed by session, branch, extension and `sourceId`,
   with a foreign key to its branch, so a session delete removes it); a
   repeat with the same `sourceId` is one upsert that replaces `at` (no `at`
-  keeps the time set), bumps `version` and clears `attempts`. A record with
-  no `at` fires only at the next server start. The verbs are uniform facade
+  keeps the time set), bumps `version` and clears `attempts`. Each record
+  has an `incarnation` (the AUTOINCREMENT key, never used again after a
+  delete), so a record cancelled and armed again is a new record, though its
+  `version` starts at 1 again. A record with no `at` fires only at the next
+  server start: it names the start that armed it (`armed_boot`), and each
+  server start stores its number in `branch_wake_boots` (`beginBoot`) as
+  the server builds, before any client or loop can arm a record. The verbs are uniform facade
   verbs: the record names the calling extension, and a fire runs that
   extension's one `wakeDue` hook (`host.on("wakeDue", ...)`; package
   validation refuses a second). The wake clock (`branchWakeClockLive`, a
   server fiber above the actor in `server.ts`) has a start pass, which fires
-  every start-only record an earlier process armed and every record whose
-  time passed while no server ran (`cause: "start"`), then a loop: it reads
+  every start-only record an earlier start armed (`armed_boot` below this
+  start's number) and every record whose time passed by the build's wall
+  time (`cause: "start"`). A failed read of that set is logged
+  (`branch-wake.startup.failed`) and read again with the same bounds, after
+  0.5 s, twice as long each time, at most 30 s, until it succeeds; then a
+  loop: it reads
   the wall time, fires each record due by then (`cause: "due"`), and sleeps
   until the next record is due or for `WAKE_CLOCK_MAX_SLEEP` (30 s),
   whichever is first; an arm, a cancel or a fire's end ends the sleep. A
@@ -66,9 +75,9 @@ Shape:
   non-client opener, beside any turn and with no permit, for at most
   `WAKE_DUE_HOOK_TIMEOUT` (30 s). The hook answers `Done` (the record goes),
   `At` (fire again then) or `AtStart` (fire at the next start). The clock
-  applies the answer with one conditional write on the version the fire read
-  (`settle`, `reschedule`): a `wakeAt` that landed during the fire stands as
-  written. A fire that fails, or a hook past its timeout, counts an attempt
+  applies the answer with one conditional write on the incarnation and the
+  version the fire read (`settle`, `reschedule`): a `wakeAt` that landed
+  during the fire, or a cancel and a new arm, stands as written. A fire that fails, or a hook past its timeout, counts an attempt
   and fires again after 5 s, twice as long each time, at most 10 minutes
   later (`retry`, guarded the same way). A record whose fire still runs is
   not fired again, and at most 8 fires run at once.
@@ -80,7 +89,9 @@ Shape:
   queues, and the in-flight item keeps its slot and its accepted condition.
   `promoteRecovery` clears it once (`LoopInbox.settleRecovery`) and runs that
   work as the open used to: the cut-short turn, else the queue's next item
-  as the queue stands now. The actor's build promotes at once unless a wake
+  as the queue stands now. The same queue transaction that clears the flag
+  reserves that work's start (`startingState`), so a line a `wakeDue` hook
+  sent, or any send that races the promotion, queues behind it. The actor's build promotes at once unless a wake
   fire is reaching the entity (`WakeFireOpenings`, a count in this process;
   one runner holds every entity), so a build for an operation or for a
   redelivered keep-alive resumes the turn as before, and a build for a fire

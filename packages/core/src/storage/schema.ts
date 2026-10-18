@@ -904,10 +904,16 @@ const toolImageReferencesMigration = Effect.gen(function* () {
  * newer arm during the fire stands. Each row goes with its branch (and so
  * with its session) by foreign key. Additive: no other table changes.
  */
+// `incarnation` never repeats, deletes included (AUTOINCREMENT): a record
+// cancelled and armed again is a new one, which a write after an older fire
+// cannot reach. `armed_boot` is the server start that inserted the record
+// (`branch_wake_boots`), so a start fires the start-only records an earlier
+// start armed and none of its own.
 const branchWakesMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS branch_wakes (
+      incarnation INTEGER PRIMARY KEY AUTOINCREMENT,
       workspace_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
@@ -916,14 +922,21 @@ const branchWakesMigration = Effect.gen(function* () {
       at INTEGER,
       version INTEGER NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
+      armed_boot INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id, extension_id, source_id),
+      UNIQUE (session_id, branch_id, extension_id, source_id),
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
   yield* sql.unsafe(
     `CREATE INDEX IF NOT EXISTS idx_branch_wakes_due ON branch_wakes(at) WHERE at IS NOT NULL`,
   )
+  yield* sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS branch_wake_boots (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      boot INTEGER NOT NULL
+    )
+  `)
 })
 
 const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
