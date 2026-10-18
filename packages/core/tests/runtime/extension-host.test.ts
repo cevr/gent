@@ -7083,13 +7083,16 @@ describe("a queue sent on a condition", () => {
       })
       const ids = branchOf(harness)
       yield* harness.client.message.send({ ...ids, content: "start the task" })
+      // The answer is stored before the turn leaves its phase, and a line
+      // queued on a condition while the turn still runs is refused.
       const [first] = userIds(
         yield* waitFor(
-          harness.client.message.list(ids),
-          (messages) => answered(messages, "first answer"),
+          Effect.all([harness.client.message.list(ids), harness.client.session.getSnapshot(ids)]),
+          ([messages, snapshot]) =>
+            answered(messages, "first answer") && snapshot.runtime._tag === "Idle",
           5_000,
           "the first turn answered",
-        ),
+        ).pipe(Effect.map(([messages]) => messages)),
       )
       yield* queueIfLatest(harness, {
         ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
