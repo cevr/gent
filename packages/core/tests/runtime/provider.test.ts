@@ -4980,6 +4980,7 @@ describe("credential placement", () => {
   const a = CredentialSlot.make("a")
   const b = CredentialSlot.make("b")
   const c = CredentialSlot.make("c")
+  const spreadModel = ModelId.make("spread/model")
   const row = (slot: CredentialSlot, load: number, live: number, held = false) => ({
     slot,
     load,
@@ -5088,7 +5089,7 @@ describe("credential placement", () => {
             slot,
             sessionId: SessionId.make(session),
             costUsd: Option.some(costUsd),
-            ttlMs: 1,
+            ttlMs: Option.some(1),
           })
         const place = (
           session: string,
@@ -5099,11 +5100,12 @@ describe("credential placement", () => {
             placement.place({
               provider: "spread",
               pool: [a, b, c],
+              model: spreadModel,
               sessionId: SessionId.make(session),
               preferred,
               starter: Option.none(),
               left: new Set(left),
-              ttlMs: 1,
+              ttlMs: Option.some(1),
             }),
             (walk) => walk[0],
           )
@@ -5131,19 +5133,117 @@ describe("credential placement", () => {
         // The pool is open while any of its accounts is neither held nor left by the turn.
         const now = yield* Clock.currentTimeMillis
         const open = (left: ReadonlyArray<CredentialSlot>) =>
-          placement.open({ provider: "spread", pool: [a, b], left: new Set(left) })
+          placement.open({
+            provider: "spread",
+            pool: [a, b],
+            model: spreadModel,
+            left: new Set(left),
+          })
         expect(yield* open([])).toBe(true)
         expect(yield* open([a, b])).toBe(false)
-        yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.some(now + 60_000) })
+        yield* placement.refuse({
+          provider: "spread",
+          slot: a,
+          model: Option.none(),
+          retryAt: Option.some(now + 60_000),
+        })
         expect(yield* open([b])).toBe(false)
         yield* placement.refuse({
           provider: "spread",
           slot: b,
+          model: Option.none(),
           retryAt: Option.some(now + 120_000),
         })
         expect(yield* open([])).toBe(false)
         yield* TestClock.adjust("61 seconds")
         expect(yield* open([])).toBe(true)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
+      ),
+  )
+
+  it.effect(
+    "a session the ledger names counts once after a restart, in the hour and on the account of its latest step",
+    () =>
+      Effect.gen(function* () {
+        type Saved = Parameters<
+          Option.Option.Value<Parameters<typeof makeCredentialPlacement>[0]>["save"]
+        >[0]
+        const long = SessionId.make("long")
+        const file = yield* Ref.make<Saved>([])
+        const store = {
+          load: Ref.get(file),
+          save: (buckets: Saved) => Ref.set(file, buckets).pipe(Effect.as(true)),
+        }
+        // A server's life: it reads the ledger, takes one step of "long", and writes it back.
+        const serve = (slot: CredentialSlot) =>
+          Effect.gen(function* () {
+            const placement = yield* makeCredentialPlacement(Option.some(store))
+            yield* placement.noteStep({
+              provider: "spread",
+              slot,
+              sessionId: long,
+              costUsd: Option.some(1),
+              ttlMs: Option.some(1),
+            })
+            yield* placement.flush
+          })
+        const sessionsOn = Effect.map(Ref.get(file), (buckets) =>
+          buckets
+            .filter((bucket) => bucket.sessions.length > 0)
+            .map((bucket) => ({ slot: bucket.slot, sessions: [...bucket.sessions] })),
+        )
+        yield* TestClock.adjust("1 hour")
+        yield* serve(a)
+        // Restarted in the same hour, the session goes on on a: still one session.
+        yield* serve(a)
+        expect(yield* sessionsOn).toEqual([{ slot: a, sessions: [long] }])
+        // Restarted in the same hour again, it goes on on b: it still counts
+        // once, in that hour, where its first step there counted it.
+        yield* serve(b)
+        expect(yield* sessionsOn).toEqual([{ slot: a, sessions: [long] }])
+        // An hour on, restarted again on a: counted in that hour alone.
+        yield* TestClock.adjust("1 hour")
+        yield* serve(a)
+        const buckets = yield* Ref.get(file)
+        expect(yield* sessionsOn).toEqual([{ slot: a, sessions: [long] }])
+        expect(buckets.map((bucket) => bucket.costUsd).reduce((sum, cost) => sum + cost, 0)).toBe(4)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
+      ),
+  )
+
+  it.effect(
+    "a cache with no lifetime never goes cold: its session stays live on its account until it moves",
+    () =>
+      Effect.gen(function* () {
+        const placeAfter = (ttlMs: Option.Option<number>) =>
+          Effect.gen(function* () {
+            const placement = yield* makeCredentialPlacement(Option.none())
+            const place = (session: string) =>
+              Effect.map(
+                placement.place({
+                  provider: "spread",
+                  pool: [a, b],
+                  model: spreadModel,
+                  sessionId: SessionId.make(session),
+                  preferred: Option.none(),
+                  starter: Option.none(),
+                  left: new Set(),
+                  ttlMs,
+                }),
+                (walk) => walk[0],
+              )
+            expect(yield* place("warm")).toBe(a)
+            yield* TestClock.adjust("3 hours")
+            return yield* place("next")
+          })
+        // No lifetime: the first session still warms a, so the next goes to b.
+        expect(yield* placeAfter(Option.none())).toBe(b)
+        // A lifetime of an hour: a went cold, so the next reads both as unused.
+        expect(yield* placeAfter(Option.some(3_600_000))).toBe(a)
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(BunServices.layer, GentPlatform.Test())),
@@ -5156,10 +5256,11 @@ describe("credential placement", () => {
       const request = {
         provider: "spread",
         pool: [a, b] as const,
+        model: spreadModel,
         preferred: Option.none<CredentialSlot>(),
         starter: Option.none<SessionId>(),
         left: new Set<CredentialSlot>(),
-        ttlMs: 1_000,
+        ttlMs: Option.some(1_000),
       }
       const place = (session: string) =>
         Effect.map(
@@ -5172,13 +5273,18 @@ describe("credential placement", () => {
         slot: b,
         sessionId: SessionId.make("spent"),
         costUsd: Option.some(5),
-        ttlMs: 1,
+        ttlMs: Option.some(1),
       })
       yield* TestClock.adjust("1 second")
       expect(yield* place("first")).toBe(a)
       // A refusal that names its reset holds a until then.
       const now = yield* Clock.currentTimeMillis
-      yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.some(now + 600_000) })
+      yield* placement.refuse({
+        provider: "spread",
+        slot: a,
+        model: Option.none(),
+        retryAt: Option.some(now + 600_000),
+      })
       yield* TestClock.adjust("2 seconds")
       expect(yield* place("held-reset")).toBe(b)
       yield* TestClock.adjust("597 seconds")
@@ -5186,7 +5292,12 @@ describe("credential placement", () => {
       yield* TestClock.adjust("1 second")
       expect(yield* place("after-reset")).toBe(a)
       // One that names none holds it 5 minutes.
-      yield* placement.refuse({ provider: "spread", slot: a, retryAt: Option.none() })
+      yield* placement.refuse({
+        provider: "spread",
+        slot: a,
+        model: Option.none(),
+        retryAt: Option.none(),
+      })
       yield* TestClock.adjust("2 seconds")
       expect(yield* place("held-default")).toBe(b)
       yield* TestClock.adjust("298 seconds")
@@ -5195,7 +5306,7 @@ describe("credential placement", () => {
   )
 
   it.scopedLive(
-    "a spread sign-in walks its pool before the rest of its authOrder, and conflicting authSpread entries fail that sign-in only",
+    "a spread sign-in walks its pool before the rest of its authOrder, and conflicting authSpread entries or a pool outside the order fail that sign-in only",
     () =>
       Effect.gen(function* () {
         const owner = makeProvider("spread-owner")
@@ -5217,7 +5328,7 @@ describe("credential placement", () => {
             Effect.map(Option.map((order) => order.slots)),
           )
         const spread: ProviderConfig = {
-          providers: { "spread-owner": { authOrder: [a, fallback], authSpread: [b, a] } },
+          providers: { "spread-owner": { authOrder: [a, b, fallback], authSpread: [b, a] } },
         }
         // Unpinned: the pool first, then what the order adds.
         expect(yield* orderOf(spread, "spread-owner/model")).toEqual(Option.some([b, a, fallback]))
@@ -5272,6 +5383,53 @@ describe("credential placement", () => {
           "spread-owner",
         ])
         expect(rows.find((entry) => entry.provider === other.id)?.orderConflict).toBeUndefined()
+        // A pool names credentials of the order. With no authOrder the order
+        // is the default alone, so a pool there would walk to the default
+        // once both its accounts refused: the sign-in fails instead, and its
+        // row names the entries that hold the order and the pool.
+        const outside = (config: ProviderConfig) =>
+          Effect.gen(function* () {
+            const message = yield* orderOf(config, "spread-owner/model").pipe(
+              Effect.flip,
+              Effect.map((error) => Option.some(error.message)),
+              Effect.orElseSucceed(() => Option.none<string>()),
+            )
+            const listed = yield* listAuthProviders([]).pipe(
+              Effect.provide(
+                Layer.provideMerge(
+                  ModelResolver.Live,
+                  Layer.mergeAll(
+                    Layer.succeed(Auth, auth),
+                    Layer.succeed(ExtensionRegistry, registryOf(config)),
+                    fixtureModelCatalogSource,
+                  ),
+                ),
+              ),
+            )
+            return {
+              message,
+              conflict: listed.find((entry) => entry.provider === owner.id)?.orderConflict,
+            }
+          })
+        expect(yield* outside({ providers: { "spread-owner": { authSpread: [a, b] } } })).toEqual({
+          message: Option.some(
+            `The authSpread of provider "spread-owner" names "a", "b", which its authOrder does not: a pool spreads runs over credentials of the order`,
+          ),
+          conflict: ["spread-owner"],
+        })
+        expect(
+          yield* outside({
+            providers: {
+              "spread-owner": { authOrder: [a, fallback] },
+              "spread-alias": { authSpread: [b, a] },
+            },
+          }),
+        ).toEqual({
+          message: Option.some(
+            `The authSpread of provider "spread-owner" names "b", which its authOrder does not: a pool spreads runs over credentials of the order`,
+          ),
+          conflict: ["spread-alias", "spread-owner"],
+        })
       }).pipe(Effect.timeout("5 seconds")),
   )
 })

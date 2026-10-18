@@ -80,6 +80,7 @@ import {
   textDeltaPart,
   toolCallPart,
   Auth,
+  CredentialPlacement,
   DecisionModelResolver,
   ModelRegistry,
   ModelResolver,
@@ -4662,6 +4663,7 @@ const makeRuntimeLayer = (
       Layer.provide(Auth.Test()),
       Layer.provide(fixtureModelCatalogSource),
     ),
+    CredentialPlacement.Memory,
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )

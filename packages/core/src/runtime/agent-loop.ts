@@ -146,6 +146,7 @@ import { RuntimeEnvironment } from "./config.js"
 import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
 import {
+  type CredentialPlacement,
   type DecisionModelResolver,
   makeExtensionModels,
   type ModelRegistry,
@@ -1644,6 +1645,7 @@ type AgentLoopRuntimeServices =
   | ModelResolver
   | DecisionModelResolver
   | ModelRegistry
+  | CredentialPlacement
   | ToolRunner
   | EventStore
   | InteractionStorage
@@ -1891,6 +1893,7 @@ const makeAgentLoopBehavior = (
   | AgentLoopResidency
   | ConfigService
   | ModelRegistry
+  | CredentialPlacement
   | ChildProcessSpawner
   | GentPlatform
   | RuntimeEnvironment

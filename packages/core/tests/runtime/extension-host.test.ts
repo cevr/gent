@@ -150,6 +150,7 @@ import {
 import { Decision, DecisionModel, Model as AiModel, type LanguageModel } from "effect/ai"
 import {
   Auth,
+  CredentialPlacement,
   DecisionModelResolver,
   listModelCatalog,
   finishPart,
@@ -6632,6 +6633,7 @@ const makeMutationsLayer = (
       Layer.provide(Auth.Test()),
       Layer.provide(fixtureModelCatalogSource),
     ),
+    CredentialPlacement.Memory,
     GentPlatform.Test(),
     fixedSessionProfiles(new Map([[cwd, launchProfile]])),
     AgentLoopSessionGovernance.Live,

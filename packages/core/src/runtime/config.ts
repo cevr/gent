@@ -27,6 +27,7 @@ import {
 } from "../domain/agent.js"
 import type { CredentialSlot } from "../domain/ids.js"
 import { CredentialOrder } from "../domain/driver.js"
+import { omitUndefined } from "../domain/guards.js"
 import { canonicalJsonString } from "effect-encore"
 import { writeFileAtomic } from "./gent-platform.js"
 
@@ -128,7 +129,9 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * of two or more of them that unpinned runs are spread over, each placed on
  * the least-used one where its prompt cache starts over anyway (credential
  * placement, runtime/provider.ts). A pool is opt-in: an order may hold a
- * billed key as a fallback that nobody wants spread onto.
+ * billed key as a fallback that nobody wants spread onto. A pool that names
+ * a credential its order does not (with no `authOrder`, the order is the
+ * default alone) fails that sign-in, as conflicting orders do.
  */
 const ProviderConfigEntry = Schema.Struct({
   authOrder: Schema.optional(CredentialOrder.check(Schema.isMinLength(1))),
@@ -225,8 +228,11 @@ const configUpdates = {
   /**
    * `owner`'s `authOrder` set to `order` (an empty order clears it), and
    * the order of each entry in `aliases` cleared, so one entry holds the
-   * sign-in's order. An entry left with no field is removed. `None` when
-   * nothing changes.
+   * sign-in's order. The pool keeps in step: each `authSpread` the entries
+   * name keeps only the credentials `order` holds, and one left with fewer
+   * than two goes, since a pool spreads over credentials of its order (a
+   * removal takes the credential out of both). An entry left with no field
+   * is removed. `None` when nothing changes.
    */
   setAuthOrder: (
     current: UserConfig,
@@ -237,12 +243,30 @@ const configUpdates = {
     const providers = { ...current.providers }
     let changed = false
     const write = (id: string, next: ReadonlyArray<CredentialSlot>) => {
-      const { authOrder, ...rest } = providers[id] ?? {}
-      const held = authOrder ?? []
-      if (held.length === next.length && next.every((slot, index) => held[index] === slot)) return
+      const { authOrder, authSpread, ...rest } = providers[id] ?? {}
+      const pool = Option.filter(
+        Option.map(Option.fromUndefinedOr(authSpread), (slots) =>
+          slots.filter((slot) => order.includes(slot)),
+        ),
+        (slots) => slots.length >= 2,
+      )
+      const entry = {
+        ...rest,
+        ...omitUndefined({
+          authOrder: Option.getOrUndefined(Option.liftPredicate(next, (slots) => slots.length > 0)),
+          authSpread: Option.getOrUndefined(pool),
+        }),
+      }
+      if (
+        sameSlots(authOrder ?? [], next) &&
+        sameSlots(
+          authSpread ?? [],
+          Option.getOrElse(pool, () => []),
+        )
+      )
+        return
       changed = true
-      if (next.length > 0) providers[id] = { ...rest, authOrder: next }
-      else if (Object.keys(rest).length > 0) providers[id] = rest
+      if (Object.keys(entry).length > 0) providers[id] = entry
       else delete providers[id]
     }
     for (const alias of aliases) if (alias !== owner) write(alias, [])
@@ -252,10 +276,11 @@ const configUpdates = {
   },
   /**
    * The sign-in's order in this file with `from` relabeled `to`, written as
-   * `setAuthOrder` writes it (into `owner`'s entry). The order is the first
+   * `setAuthOrder` writes it (into `owner`'s entry), and each pool an entry
+   * of the sign-in names here relabeled with it. The order is the first
    * one `owner` or an entry in `aliases` names here. `None` when this file
-   * names no order that holds `from`: an order another file holds is never
-   * copied into this one.
+   * names no order or pool that holds `from`: an order another file holds
+   * is never copied into this one.
    */
   renameAuthSlot: (
     current: UserConfig,
@@ -264,22 +289,47 @@ const configUpdates = {
     from: CredentialSlot,
     to: CredentialSlot,
   ): Option.Option<UserConfig> => {
+    const relabel = (slots: ReadonlyArray<CredentialSlot>) =>
+      slots.map((slot) => {
+        if (slot === from) return to
+        return slot
+      })
+    const entries = signInEntryIds(owner, aliases)
+    const providers = { ...current.providers }
+    let changed = false
+    for (const id of entries) {
+      const entry = providers[id]
+      if (Predicate.isUndefined(entry?.authSpread) || !entry.authSpread.includes(from)) continue
+      providers[id] = { ...entry, authSpread: relabel(entry.authSpread) }
+      changed = true
+    }
+    const relabeled = new UserConfig({ ...current, providers: nonEmptyRecord(providers) })
     const held = heldAuthOrder(current, owner, aliases).pipe(
       Option.filter((order) => order.includes(from)),
     )
-    if (Option.isNone(held)) return Option.none()
-    const order = held.value.map((slot) => {
-      if (slot === from) return to
-      return slot
-    })
-    return configUpdates.setAuthOrder(current, owner, order, aliases)
+    if (Option.isNone(held)) return Option.liftPredicate(relabeled, () => changed)
+    const order = relabel(held.value)
+    return Option.orElse(configUpdates.setAuthOrder(relabeled, owner, order, aliases), () =>
+      Option.liftPredicate(relabeled, () => changed),
+    )
   },
 }
 
+/** Whether two credential lists name the same slots in the same order. */
+const sameSlots = (left: ReadonlyArray<CredentialSlot>, right: ReadonlyArray<CredentialSlot>) =>
+  left.length === right.length && left.every((slot, index) => right[index] === slot)
+
+/** The `providers` entries one sign-in reads: its owner's, then each alias's. */
+const signInEntryIds = (owner: string, aliases: ReadonlyArray<string>) => [
+  owner,
+  ...aliases.filter((alias) => alias !== owner),
+]
+
 /**
- * The entries of `project` that win over a user-file order of `owner`'s
- * sign-in: an entry for `owner` replaces the user's whole entry, and an
- * alias entry that names an order is read before the user's.
+ * The entries of `project` that win over a user-file order or pool of
+ * `owner`'s sign-in: an entry for `owner` replaces the user's whole entry,
+ * and an alias entry that names an order or a pool is read before the
+ * user's.
  */
 const shadowingOrderEntries = (
   project: UserConfig,
@@ -287,10 +337,14 @@ const shadowingOrderEntries = (
   aliases: ReadonlyArray<string>,
 ): ReadonlyArray<string> => {
   const entries = project.providers ?? {}
-  return [owner, ...aliases.filter((alias) => alias !== owner)].filter((id) => {
+  return signInEntryIds(owner, aliases).filter((id) => {
     const entry = entries[id]
     if (Predicate.isUndefined(entry)) return false
-    return id === owner || Predicate.isNotUndefined(entry.authOrder)
+    return (
+      id === owner ||
+      Predicate.isNotUndefined(entry.authOrder) ||
+      Predicate.isNotUndefined(entry.authSpread)
+    )
   })
 }
 
@@ -306,6 +360,27 @@ const heldAuthOrder = (
       .find(Predicate.isNotUndefined),
   )
 
+/** What a refusal calls each list of a sign-in's credentials. */
+const LIST_NAME = { authOrder: "order", authSpread: "pool" } as const
+
+/** Every order and pool `entries` of `config` name, by the entry and the field. */
+const credentialLists = (
+  config: UserConfig,
+  entries: ReadonlyArray<string>,
+): ReadonlyArray<{
+  readonly id: string
+  readonly field: "authOrder" | "authSpread"
+  readonly slots: ReadonlyArray<CredentialSlot>
+}> =>
+  entries.flatMap((id) => {
+    const entry = config.providers?.[id]
+    return (["authOrder", "authSpread"] as const).flatMap((field) => {
+      const slots = entry?.[field]
+      if (Predicate.isUndefined(slots)) return []
+      return [{ id, field, slots }]
+    })
+  })
+
 /** The opening of a refusal that names project entries winning over the user file. */
 export const projectEntriesText = (ids: ReadonlyArray<string>) =>
   `The project config (.gent/config.json) has an entry for ${ids.map((id) => `"${id}"`).join(", ")}`
@@ -313,10 +388,11 @@ export const projectEntriesText = (ids: ReadonlyArray<string>) =>
 /**
  * Why `owner`'s credential `from` cannot be relabeled `to`, read before
  * anything moves; none when it can. A project entry that wins over the
- * user file (`shadowingOrderEntries`) and names `from` refuses it: its order
- * would then walk a label no credential holds. An order the user file or
- * such an entry holds that names `to` refuses it: the order would name the
- * moved credential twice, or enrol it where the user never put it.
+ * user file (`shadowingOrderEntries`) and names `from` in its order or its
+ * pool refuses it: that list would then name a label no credential holds.
+ * An order or pool the user file or such an entry holds that names `to`
+ * refuses it: the list would name the moved credential twice, or enrol it
+ * where the user never put it.
  */
 const authSlotRenameRefusal = (params: {
   readonly user: UserConfig
@@ -326,22 +402,26 @@ const authSlotRenameRefusal = (params: {
   readonly from: CredentialSlot
   readonly to: CredentialSlot
 }): Option.Option<string> => {
-  const projectOrders = shadowingOrderEntries(params.project, params.owner, params.aliases).map(
-    (id) => ({ id, order: params.project.providers?.[id]?.authOrder ?? [] }),
+  const projectLists = credentialLists(
+    params.project,
+    shadowingOrderEntries(params.project, params.owner, params.aliases),
   )
-  const keepsFrom = projectOrders.filter(({ order }) => order.includes(params.from))
+  const keepsFrom = projectLists.filter(({ slots }) => slots.includes(params.from))
   if (keepsFrom.length > 0) {
+    const ids = [...new Set(keepsFrom.map(({ id }) => id))]
+    const fields = [...new Set(keepsFrom.map(({ field }) => field))].join(" or ")
     return Option.some(
-      `${projectEntriesText(keepsFrom.map(({ id }) => id))}, whose authOrder names "${params.from}": edit it there first`,
+      `${projectEntriesText(ids)}, whose ${fields} names "${params.from}": edit it there first`,
     )
   }
-  const orders = [
-    Option.getOrElse(heldAuthOrder(params.user, params.owner, params.aliases), () => []),
-    ...projectOrders.map(({ order }) => order),
+  const lists = [
+    ...credentialLists(params.user, signInEntryIds(params.owner, params.aliases)),
+    ...projectLists,
   ]
-  if (orders.some((order) => order.includes(params.to))) {
+  const holdsTo = lists.find(({ slots }) => slots.includes(params.to))
+  if (Predicate.isNotUndefined(holdsTo)) {
     return Option.some(
-      `"${params.to}" is in the authOrder of "${params.owner}": move it out of the order first, or pick another label`,
+      `"${params.to}" is in the ${holdsTo.field} of "${params.owner}": move it out of the ${LIST_NAME[holdsTo.field]} first, or pick another label`,
     )
   }
   return Option.none()

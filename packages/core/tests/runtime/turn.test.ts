@@ -105,6 +105,7 @@ import {
   SessionSettingsUpdated,
   StreamEnded,
   ToolCallSucceeded,
+  type Usage,
   UsageSchema,
   TurnCompleted,
 } from "../../src/domain/event"
@@ -2386,6 +2387,11 @@ describe("credential order", () => {
   const API_WINDOW = 128_000
   const SUBSCRIPTION_WINDOW = 200_000
 
+  /** A usage bucket as the placement's ledger writes it. */
+  type SavedBucket = Parameters<
+    Option.Option.Value<Parameters<typeof makeCredentialPlacement>[0]>["save"]
+  >[0][number]
+
   /** What a request with one credential streams, by how many it sent before. */
   type Reply = (call: number) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
 
@@ -2466,6 +2472,8 @@ describe("credential order", () => {
     readonly placement?: CredentialPlacement["Service"]
     /** The model's cache lifetime; default: the catalog names none. */
     readonly cacheTtlMs?: number
+    /** The catalog lists the model with no context window: each step fails before its request. */
+    readonly windowless?: boolean
     /** The cache lifetime a subscription sign-in lists; default `cacheTtlMs`. */
     readonly subscriptionCacheTtlMs?: number
     /** Answers every request by its credential and prompt, in place of `replies`. */
@@ -2520,9 +2528,13 @@ describe("credential order", () => {
             id: fallbackModel,
             name: "Fallback model",
             provider: ProviderId.make(FALLBACK),
-            contextLength,
             pricing,
-            ...omitUndefined({ promptCacheTtlMs }),
+            ...omitUndefined({
+              promptCacheTtlMs,
+              contextLength: Option.getOrUndefined(
+                Option.liftPredicate(contextLength, () => params.windowless !== true),
+              ),
+            }),
           }),
         ])
       },
@@ -3457,6 +3469,10 @@ describe("credential order", () => {
       return {
         sent: root.sent,
         attemptsUsed,
+        assigned: recorded.flatMap((event) => {
+          if (event._tag !== "CredentialAssigned") return []
+          return [{ slot: event.slot, reason: event.reason }]
+        }),
         ...credentialReport(recorded),
         interrupted: recorded.flatMap((event) => {
           if (event._tag !== "TurnCompleted") return []
@@ -3796,7 +3812,7 @@ describe("credential order", () => {
         slot,
         sessionId: SessionId.make(session),
         costUsd: Option.some(costUsd),
-        ttlMs: 0,
+        ttlMs: Option.some(0),
       })
 
     /** One server's durable state and its placement, shared by every root a test runs. */
@@ -3819,6 +3835,8 @@ describe("credential order", () => {
         readonly retry?: Partial<typeof DEFAULT_RETRY_POLICY>
         readonly held?: Deferred.Deferred<void>
         readonly history?: ReadonlyArray<number>
+        readonly windowless?: boolean
+        readonly compactor?: ModelContextCompactor["Service"]
       } = {},
     ) => {
       const pool = options.pool ?? [a, b]
@@ -3836,6 +3854,8 @@ describe("credential order", () => {
           retry: options.retry,
           held: options.held,
           history: options.history,
+          windowless: options.windowless,
+          compactor: options.compactor,
         }),
       })
     }
@@ -4930,7 +4950,7 @@ describe("credential order", () => {
             slot: a,
             sessionId: SessionId.make("live-on-a"),
             costUsd: Option.none(),
-            ttlMs: HOUR_MS,
+            ttlMs: Option.some(HOUR_MS),
           })
           // Past b's lifetime and the hold on a: b holds no live cache now,
           // so a fresh run goes there, not to a's live one.
@@ -4938,11 +4958,12 @@ describe("credential order", () => {
           const walk = yield* world.placement.place({
             provider: FALLBACK,
             pool: [a, b],
+            model: fallbackModel,
             sessionId: SessionId.make("fresh"),
             preferred: Option.none(),
             starter: Option.none(),
             left: new Set(),
-            ttlMs: 0,
+            ttlMs: Option.some(0),
           })
           expect(walk[0]).toBe(b)
         }).pipe(
@@ -5034,7 +5055,7 @@ describe("credential order", () => {
               slot: a,
               sessionId: SessionId.make(other),
               costUsd: Option.none(),
-              ttlMs: HOUR_MS,
+              ttlMs: Option.some(HOUR_MS),
             })
           // The restart dies again before its first receipt; the third ends the turn.
           const again = yield* Deferred.make<void>()
@@ -5226,11 +5247,12 @@ describe("credential order", () => {
             yield* world.placement.place({
               provider: FALLBACK,
               pool: [b, c],
+              model: fallbackModel,
               sessionId: SessionId.make(other),
               preferred: Option.some(b),
               starter: Option.none(),
               left: new Set([c]),
-              ttlMs: HOUR_MS,
+              ttlMs: Option.some(HOUR_MS),
             })
           const second = spreadRoot(world, "recovered-left-pool", { pool: [b, c] })
           const events = yield* dieAndRecoverTail(world, first, second)
@@ -5263,7 +5285,12 @@ describe("credential order", () => {
               })
               yield* twoTurnsThenDie(first, out)
               for (const slot of [b, c])
-                yield* world.placement.refuse({ provider: FALLBACK, slot, retryAt: Option.none() })
+                yield* world.placement.refuse({
+                  provider: FALLBACK,
+                  slot,
+                  model: Option.none(),
+                  retryAt: Option.none(),
+                })
               const second = credentialRoot({
                 name,
                 order,
@@ -5445,11 +5472,12 @@ describe("credential order", () => {
               yield* placement.place({
                 provider: FALLBACK,
                 pool: [a, b],
+                model: fallbackModel,
                 sessionId: SessionId.make(`crash-${seed}-busy-${other}`),
                 preferred: Option.some(slot),
                 starter: Option.none(),
                 left: new Set([a, b].filter((other) => other !== slot)),
-                ttlMs: HOUR_MS,
+                ttlMs: Option.some(HOUR_MS),
               })
           let requests = 0
           let spent = 0
@@ -5686,6 +5714,219 @@ describe("credential order", () => {
         }).pipe(Effect.timeout("30 seconds")),
     )
 
+    it.live(
+      "an interrupted step whose request a part answered records its placement with its receipt, and one interrupted before its first part records nothing",
+      () =>
+        Effect.gen(function* () {
+          const pool = [a, b]
+          const stopped = (
+            name: string,
+            reply: Reply,
+            before: (seen: Seen) => Effect.Effect<void, Effect.Error<ReturnType<Seen>>>,
+          ) =>
+            stoppedTurn({
+              name,
+              order: pool,
+              spread: pool,
+              stored: keysOf(pool),
+              cacheTtlMs: HOUR_MS,
+              replies: { ...answers(pool), "sk-a": reply },
+              before,
+            })
+          // A part arrived, then the stop: the provider answered the request.
+          const answered = yield* stopped(
+            "stopped-after-part",
+            () => Stream.concat(Stream.make(textDeltaPart("partial")), Stream.never),
+            (seen) => seen("StreamChunk"),
+          )
+          expect(answered.sent).toEqual(["sk-a"])
+          expect(answered.interrupted).toEqual([true])
+          expect(labelsOf(answered.ended)).toEqual([{ provider: fallbackProvider, slot: a }])
+          expect(answered.assigned).toEqual([{ slot: a, reason: "new" }])
+          // The request went out, but no part came before the stop: nothing
+          // proves the provider took it, so the receipt names the account and
+          // no placement is recorded.
+          const requested = yield* Deferred.make<void>()
+          const silent = yield* stopped(
+            "stopped-before-part",
+            () => Stream.unwrap(Deferred.succeed(requested, void 0).pipe(Effect.as(Stream.never))),
+            () => Deferred.await(requested),
+          )
+          expect(silent.sent).toEqual(["sk-a"])
+          expect(silent.interrupted).toEqual([true])
+          expect(labelsOf(silent.ended)).toEqual([{ provider: fallbackProvider, slot: a }])
+          expect(silent.assigned).toEqual([])
+        }),
+    )
+
+    it.live(
+      "a fresh child whose turn ends before its first step releases its warming guard, so its sibling may still be placed on that account",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const parent = spreadRoot(world, "guard-parent")
+          yield* runOn(parent, "first")
+          // a far above b: a fresh child of the parent goes to b.
+          yield* spend(world.placement, a, 50, "elsewhere-a")
+          yield* spend(world.placement, b, 1, "elsewhere-b")
+          // The first child is placed on b and warms it, then its turn fails
+          // before its first request: its catalog entry names no window.
+          const broken = spreadRoot(world, "guard-broken", { windowless: true })
+          yield* createChild(world, broken, parent, false)
+          yield* Effect.exit(runOn(broken, "task"))
+          expect(broken.sent).toEqual([])
+          // Its sibling, placed after that turn ended, finds b free to warm.
+          const sibling = spreadRoot(world, "guard-sibling")
+          yield* createChild(world, sibling, parent, false)
+          yield* runOn(sibling, "task")
+          expect(placementsOf(yield* eventsOf(world, sibling))).toEqual([
+            { slot: b, reason: "spawned", from: a },
+          ])
+          expect(sibling.sent).toEqual(["sk-b"])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a rate limit holds its account for the refused model alone, and an exhausted quota holds it for every model",
+      () =>
+        Effect.gen(function* () {
+          const cases = [
+            {
+              name: "held-rate",
+              reply: () =>
+                failWith(new AiError.RateLimitError({ retryAfter: Duration.minutes(10) })),
+              otherModelOn: a,
+            },
+            { name: "held-quota", reply: quotaSpent, otherModelOn: b },
+          ]
+          for (const { name, reply, otherModelOn } of cases) {
+            const world = yield* spreadWorld
+            const root = spreadRoot(world, name, { replies: { ...answers([a, b]), "sk-a": reply } })
+            yield* runOn(root, "first")
+            expect(root.sent).toEqual(["sk-a", "sk-b"])
+            const placeFor = (model: ModelId, session: string) =>
+              Effect.map(
+                world.placement.place({
+                  provider: FALLBACK,
+                  pool: [a, b],
+                  model,
+                  sessionId: SessionId.make(`${name}-${session}`),
+                  preferred: Option.none(),
+                  starter: Option.none(),
+                  left: new Set(),
+                  ttlMs: Option.some(0),
+                }),
+                (walk) => walk[0],
+              )
+            // The refused model is held off a either way.
+            expect(yield* placeFor(fallbackModel, "same-model")).toBe(b)
+            // Another model: a, unused, unless the refusal held the whole account.
+            expect(yield* placeFor(otherModel, "other-model")).toBe(otherModelOn)
+          }
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    /** A placement whose ledger is a list: each write it saved, oldest first. */
+    const recordedLedger = Effect.gen(function* () {
+      const saved = yield* Ref.make<ReadonlyArray<ReadonlyArray<SavedBucket>>>([])
+      const placement = yield* makeCredentialPlacement(
+        Option.some({
+          load: Effect.succeed([]),
+          save: (buckets: ReadonlyArray<SavedBucket>) =>
+            Ref.update(saved, (all) => [...all, buckets]).pipe(Effect.as(true)),
+        }),
+      )
+      return { placement, saved }
+    })
+
+    /** A compactor whose summary keeps the usage its model reported, so the turn can price it. */
+    const pricedCompactor = ModelContextCompactor.of({
+      compact: (request) =>
+        Effect.gen(function* () {
+          const failed = (error: { readonly message: string }) =>
+            new ModelCompactionError({
+              modelId: request.modelId,
+              reason: error.message,
+              cause: error,
+            })
+          const model = yield* request.summaryModel(1_000).pipe(Effect.mapError(failed))
+          const text: Array<string> = []
+          let usage = Option.none<Usage>()
+          yield* Stream.runForEach(model.streamText({ prompt: "summarize" }), (part) =>
+            Effect.sync(() => {
+              if (part.type === "text-delta") text.push(part.delta)
+              if (part.type === "finish") usage = responseUsage(part.usage)
+            }),
+          ).pipe(Effect.mapError(failed))
+          return {
+            notice: `Summary:\n${text.join("")}`,
+            modelId: request.modelId,
+            ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
+          }
+        }),
+    })
+
+    it.live("a handoff summary's price counts toward the load of the account it ran on", () =>
+      Effect.gen(function* () {
+        const ledger = yield* recordedLedger
+        const world = { ...(yield* spreadWorld), placement: ledger.placement }
+        const root = spreadRoot(world, "summary-load", { compactor: pricedCompactor })
+        yield* runOn(root, "first")
+        // About 150k tokens join the branch: the next turn, warm on a, hands its window off.
+        yield* Effect.gen(function* () {
+          const storage = yield* MessageStorage
+          const now = yield* Clock.currentTimeMillis
+          yield* Effect.forEach(
+            Array.from({ length: 12 }, (_, index) => index),
+            (index) =>
+              storage.createMessage(
+                Message.cases.regular.make({
+                  id: MessageId.make(`summary-load-grown-${index + 1}`),
+                  sessionId: root.sessionId,
+                  branchId: root.branchId,
+                  role: "assistant",
+                  parts: [Prompt.textPart({ text: "x".repeat(50_000) })],
+                  createdAt: dateFromMillis(now + index),
+                }),
+              ),
+            { discard: true },
+          )
+        }).pipe(Effect.provide(world.storage), Effect.orDie)
+        yield* runOn(root, "second")
+        // A step, the summary and a step, all on a: three requests' price.
+        expect(root.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+        yield* ledger.placement.flush
+        const written = (yield* Ref.get(ledger.saved)).at(-1) ?? []
+        const request = (10 * apiPricing.input + 5 * apiPricing.output) / 1_000_000
+        const onA = written
+          .filter((bucket) => bucket.slot === a)
+          .reduce((sum, bucket) => sum + bucket.costUsd, 0)
+        expect(onA).toBeCloseTo(3 * request, 12)
+      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a sign-in with no pool records no usage, so a server where nothing spreads writes no ledger",
+      () =>
+        Effect.gen(function* () {
+          const ledger = yield* recordedLedger
+          const world = yield* spreadWorld
+          const root = credentialRoot({
+            name: "no-pool",
+            order: [a, b],
+            stored: keysOf([a, b]),
+            replies: answers([a, b]),
+            storage: world.storage,
+            placement: ledger.placement,
+            cacheTtlMs: HOUR_MS,
+          })
+          yield* runOn(root, "first")
+          expect(root.sent).toEqual(["sk-a"])
+          yield* ledger.placement.flush
+          expect(yield* Ref.get(ledger.saved)).toEqual([])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
     it.effect(
       "spread usage survives a server restart: the last 7 days of each account's buckets load from the server-wide ledger",
       () =>
@@ -5707,11 +5948,12 @@ describe("credential order", () => {
                 const walk = yield* placement.place({
                   provider: FALLBACK,
                   pool: [a, b],
+                  model: fallbackModel,
                   sessionId: SessionId.make(session),
                   preferred: Option.none(),
                   starter: Option.none(),
                   left: new Set(),
-                  ttlMs: 0,
+                  ttlMs: Option.some(0),
                 })
                 return walk[0]
               }),
@@ -5760,11 +6002,14 @@ describe("credential order", () => {
             expect(yield* fs.exists(file)).toBe(false)
             // The hour closes with the server still up and no step after it.
             yield* TestClock.adjust("1 hour")
-            // The write is real file IO on the woken fiber: wait for it, boundedly.
-            const written = yield* fs
-              .exists(file)
-              .pipe(Effect.repeat({ until: (found) => found, times: 1_000 }))
-            expect(written).toBe(true)
+            // The write is real file IO on the woken fiber: wait for it on the
+            // live clock, a pause between checks, and fail loudly past 5 s.
+            yield* waitFor(
+              fs.exists(file),
+              (found) => found,
+              5_000,
+              "the hourly ledger write",
+            ).pipe(TestClock.withLive)
             expect(yield* fs.readFileString(file)).toContain('"costUsd":2')
           }),
         )

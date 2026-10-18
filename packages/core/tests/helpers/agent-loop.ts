@@ -12,6 +12,7 @@ import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domai
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   Auth,
+  CredentialPlacement,
   DecisionModelResolver,
   ModelRegistry,
   type ModelResolver,
@@ -301,6 +302,7 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
       Layer.provide(Auth.Test()),
       Layer.provide(fixtureModelCatalogSource),
     ),
+    CredentialPlacement.Memory,
     GentPlatform.Test(),
     params.overrides ?? Layer.empty,
   )

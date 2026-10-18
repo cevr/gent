@@ -800,6 +800,112 @@ describe("user configuration", () => {
         }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // A pool (`authSpread`) names credentials of the order: a rename, a
+    // removal and a project entry treat it as they treat the order.
+    it.scopedLive(
+      "the pool keeps in step with the order: a rename relabels it, a removal takes the credential out of it, and a label a pool names is taken",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          const readRaw = fs
+            .readFileString(userConfigPath)
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+          const a = CredentialSlot.make("a")
+          const b = CredentialSlot.make("b")
+          const c = CredentialSlot.make("c")
+          const work = CredentialSlot.make("work")
+          const aliases = ["owner", "alias"]
+          const rename = (from: CredentialSlot, to: CredentialSlot) =>
+            Effect.flatMap(ConfigService, (cfg) =>
+              cfg.renameAuthSlot({ owner: "owner", aliases, from, to, cwd, move: Effect.void }),
+            )
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+            // The pool may sit on an alias entry: it is the sign-in's all the same.
+            yield* fs.writeFileString(
+              userConfigPath,
+              encodeJson({
+                providers: {
+                  owner: { authOrder: ["a", "b", "c", "default"] },
+                  alias: { authSpread: ["a", "b", "c"] },
+                },
+              }),
+            )
+            // A rename relabels the order and the pool: the walk never names a
+            // label no credential holds.
+            expect(yield* rename(a, work)).toEqual(Option.none())
+            expect(yield* readRaw).toEqual({
+              providers: {
+                owner: { authOrder: ["work", "b", "c", "default"] },
+                alias: { authSpread: ["work", "b", "c"] },
+              },
+            })
+            // A label only the pool names is taken too.
+            yield* fs.writeFileString(
+              userConfigPath,
+              encodeJson({
+                providers: {
+                  owner: { authOrder: ["work", "c", "default"] },
+                  alias: { authSpread: ["work", "b"] },
+                },
+              }),
+            )
+            const before = yield* fs.readFileString(userConfigPath)
+            expect(yield* rename(c, b)).toEqual(
+              Option.some(
+                `"b" is in the authSpread of "owner": move it out of the pool first, or pick another label`,
+              ),
+            )
+            expect(yield* fs.readFileString(userConfigPath)).toBe(before)
+            // A removal writes the order without the credential: the pool
+            // loses it too, and a pool left with one credential goes.
+            yield* fs.writeFileString(
+              userConfigPath,
+              encodeJson({
+                providers: {
+                  owner: { authOrder: ["a", "b", "c", "default"], authSpread: ["a", "b", "c"] },
+                },
+              }),
+            )
+            yield* cfg.setAuthOrder("owner", [b, c, DEFAULT_CREDENTIAL_SLOT], aliases, cwd)
+            expect(yield* readRaw).toEqual({
+              providers: { owner: { authOrder: ["b", "c", "default"], authSpread: ["b", "c"] } },
+            })
+            yield* cfg.setAuthOrder("owner", [c, DEFAULT_CREDENTIAL_SLOT], aliases, cwd)
+            expect(yield* readRaw).toEqual({
+              providers: { owner: { authOrder: ["c", "default"] } },
+            })
+            // A reorder keeps the pool as it is.
+            yield* fs.writeFileString(
+              userConfigPath,
+              encodeJson({
+                providers: { owner: { authOrder: ["a", "b", "default"], authSpread: ["a", "b"] } },
+              }),
+            )
+            yield* cfg.setAuthOrder("owner", [DEFAULT_CREDENTIAL_SLOT, b, a], aliases, cwd)
+            expect(yield* readRaw).toEqual({
+              providers: { owner: { authOrder: ["default", "b", "a"], authSpread: ["a", "b"] } },
+            })
+            // A winning project entry whose pool names the old label refuses the rename.
+            yield* fs.makeDirectory(path.join(cwd, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(cwd, ConfigService.CONFIG_RELATIVE),
+              encodeJson({ providers: { alias: { authSpread: ["a", "b"] } } }),
+            )
+            expect(yield* rename(a, work)).toEqual(
+              Option.some(
+                `The project config (.gent/config.json) has an entry for "alias", whose authSpread names "a": edit it there first`,
+              ),
+            )
+          }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+        }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive(
       "a driver write through a symlinked config writes the target and keeps the link",
       () =>

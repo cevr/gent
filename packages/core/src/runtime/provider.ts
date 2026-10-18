@@ -928,22 +928,6 @@ const disagreeing = (
   return orders.map(([id]) => id).sort()
 }
 
-/**
- * The config entries that name different orders or different pools for
- * `provider`'s sign-in (an alias and its owner), sorted; none when they
- * agree. Only that sign-in fails: a conflict never stops the others.
- */
-const orderConflict = (
-  drivers: ModelDrivers,
-  config: ProviderConfig,
-  provider: string,
-): ReadonlyArray<string> => [
-  ...new Set([
-    ...disagreeing(configuredOrders(drivers, config, provider)),
-    ...disagreeing(configuredOrders(drivers, config, provider, "authSpread")),
-  ]),
-]
-
 /** The first list `field` names for `provider`'s sign-in. */
 const configuredList = (
   drivers: ModelDrivers,
@@ -956,11 +940,64 @@ const configuredList = (
     ([, slots]) => Option.liftPredicate(slots, Arr.isReadonlyArrayNonEmpty),
   )
 
+/** The order `provider`'s sign-in walks as its config names it: its `authOrder`, else the default alone. */
+const configuredOrder = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+): Arr.NonEmptyReadonlyArray<CredentialSlot> =>
+  Option.getOrElse(
+    configuredList(drivers, config, provider, "authOrder"),
+    (): Arr.NonEmptyReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
+  )
+
+/**
+ * The credentials `provider`'s pool names that its order does not; none
+ * when it has no pool or every one is in the order. A pool spreads a run
+ * over credentials of its order: without an `authOrder` the order is the
+ * default alone, so a pool there would walk to the default (which can be a
+ * billed environment key) once every pool account refused.
+ */
+const poolOutsideOrder = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+): ReadonlyArray<CredentialSlot> => {
+  const order = configuredOrder(drivers, config, provider)
+  return Option.match(configuredList(drivers, config, provider, "authSpread"), {
+    onNone: () => [],
+    onSome: (pool) => pool.filter((slot) => !order.includes(slot)),
+  })
+}
+
+/**
+ * The config entries that name different orders or different pools for
+ * `provider`'s sign-in (an alias and its owner), or a pool that names a
+ * credential its order does not (each entry that names the order or the
+ * pool), sorted; none when they agree. Only that sign-in fails: a conflict
+ * never stops the others.
+ */
+const orderConflict = (
+  drivers: ModelDrivers,
+  config: ProviderConfig,
+  provider: string,
+): ReadonlyArray<string> => {
+  const orders = configuredOrders(drivers, config, provider)
+  const pools = configuredOrders(drivers, config, provider, "authSpread")
+  // A pool outside its order: every entry that names the order or the pool.
+  const outside = Arr.match(poolOutsideOrder(drivers, config, provider), {
+    onEmpty: () => [],
+    onNonEmpty: () => [...orders, ...pools].map(([id]) => id),
+  })
+  return [...new Set([...disagreeing(orders), ...disagreeing(pools), ...outside])].sort()
+}
+
 /**
  * The credential order of `provider`'s sign-in: its config `authOrder`, read
  * through aliases to the owner, else the default credential alone, and its
  * `authSpread` pool. Config entries that name different orders or pools for
- * one sign-in fail it, never by which entry comes first.
+ * one sign-in fail it, never by which entry comes first, and so does a pool
+ * that names a credential the order does not.
  */
 const credentialOrder = Effect.fn("CredentialOrder.of")(function* (
   drivers: ModelDrivers,
@@ -968,18 +1005,26 @@ const credentialOrder = Effect.fn("CredentialOrder.of")(function* (
   provider: string,
 ) {
   const owner = credentialOwner(drivers, provider)
-  const conflict = orderConflict(drivers, config, provider)
+  const conflict = [
+    ...new Set([
+      ...disagreeing(configuredOrders(drivers, config, provider)),
+      ...disagreeing(configuredOrders(drivers, config, provider, "authSpread")),
+    ]),
+  ]
   if (conflict.length > 0) {
     return yield* new ProviderAuthError({
-      message: `Conflicting credential orders for provider "${owner}": providers ${conflict.join(", ")} name different authOrder or authSpread lists`,
+      message: `Conflicting credential orders for provider "${owner}": providers ${conflict.sort().join(", ")} name different authOrder or authSpread lists`,
+    })
+  }
+  const outside = poolOutsideOrder(drivers, config, provider)
+  if (outside.length > 0) {
+    return yield* new ProviderAuthError({
+      message: `The authSpread of provider "${owner}" names ${outside.map((slot) => `"${slot}"`).join(", ")}, which its authOrder does not: a pool spreads runs over credentials of the order`,
     })
   }
   return {
     provider: owner,
-    slots: Option.getOrElse(
-      configuredList(drivers, config, provider, "authOrder"),
-      (): Arr.NonEmptyReadonlyArray<CredentialSlot> => [DEFAULT_CREDENTIAL_SLOT],
-    ),
+    slots: configuredOrder(drivers, config, provider),
     pool: configuredList(drivers, config, provider, "authSpread"),
   } satisfies CredentialOrder
 })
@@ -3183,15 +3228,17 @@ export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(fun
  * Whether `provider`'s sign-in spreads its unpinned runs over a pool
  * (`authSpread`). A sign-in whose order cannot be read does not.
  */
-export const spreadsRuns = (provider: string, registry: ExtensionRegistryService) =>
-  Effect.gen(function* () {
+export const spreadsRuns = Effect.fn("CredentialOrder.spreads")(
+  function* (provider: string, registry: ExtensionRegistryService) {
     const order = yield* credentialOrder(
       registry.getResolved().modelDrivers,
       yield* registry.providerConfig,
       provider,
     )
     return Option.isSome(order.pool)
-  }).pipe(Effect.orElseSucceed(() => false))
+  },
+  Effect.orElseSucceed(() => false),
+)
 
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
@@ -3468,6 +3515,8 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
 interface PlacementRequest {
   readonly provider: string
   readonly pool: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  /** The run's model: an account held for it alone (`refuse`) is not placed on. */
+  readonly model: ModelId
   readonly sessionId: SessionId
   readonly preferred: Option.Option<CredentialSlot>
   /**
@@ -3478,19 +3527,37 @@ interface PlacementRequest {
   readonly starter: Option.Option<SessionId>
   /** The accounts this turn left: never placed on again in it. */
   readonly left: ReadonlySet<CredentialSlot>
-  /** How long the placed session's cache lives from now. */
-  readonly ttlMs: number
+  /**
+   * How long the placed session's cache lives from now; none when the model
+   * names no lifetime: it never goes cold (`cacheWarm`, turn.ts), so it
+   * counts live there until the session moves.
+   */
+  readonly ttlMs: Option.Option<number>
 }
 
-/** A step that ended on a pool's account. */
-interface PlacementStep {
+/** A priced request on a pool's account: a step, or a handoff summary. */
+interface PlacementSpend {
   readonly provider: string
   readonly slot: CredentialSlot
   readonly sessionId: SessionId
-  /** The step's price; none when unpriced. */
+  /** The request's price; none when unpriced. */
   readonly costUsd: Option.Option<number>
-  /** How long the session's cache lives from now. */
-  readonly ttlMs: number
+}
+
+/** A step that ended on a pool's account: its price counts, and its session's cache lives there. */
+interface PlacementStep extends PlacementSpend {
+  /** How long the session's cache lives from now; none: it never goes cold. */
+  readonly ttlMs: Option.Option<number>
+}
+
+/** What a refusal holds: the whole account, or the account for one model. */
+interface PlacementRefusal {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  /** Some: only `model`'s runs avoid the account (`refusalHoldsModel`); none: every run does. */
+  readonly model: Option.Option<ModelId>
+  /** The reset the failure names; none: held for 5 minutes. */
+  readonly retryAt: Option.Option<number>
 }
 
 interface CredentialPlacementService {
@@ -3500,19 +3567,19 @@ interface CredentialPlacementService {
   ) => Effect.Effect<Arr.NonEmptyReadonlyArray<CredentialSlot>>
   /** A step ended on `slot`: its price counts, its session's cache lives there now. */
   readonly noteStep: (step: PlacementStep) => Effect.Effect<void>
-  /** `slot` refused: held until `retryAt`, else for 5 minutes. */
-  readonly refuse: (params: {
-    readonly provider: string
-    readonly slot: CredentialSlot
-    readonly retryAt: Option.Option<number>
-  }) => Effect.Effect<void>
+  /** A request that keeps no cache (a handoff summary) was priced on `slot`: its price counts. */
+  readonly noteSpend: (spend: PlacementSpend) => Effect.Effect<void>
+  /** `slot` refused: held, for one model or all, until `retryAt`, else for 5 minutes. */
+  readonly refuse: (refusal: PlacementRefusal) => Effect.Effect<void>
   /**
-   * Whether any account of `pool` is eligible now: not held by a refusal and
-   * not `left` by the turn. A run outside the pool returns to it only then.
+   * Whether any account of `pool` is eligible for `model` now: not held by
+   * a refusal and not `left` by the turn. A run outside the pool returns to
+   * it only then.
    */
   readonly open: (params: {
     readonly provider: string
     readonly pool: ReadonlyArray<CredentialSlot>
+    readonly model: ModelId
     readonly left: ReadonlySet<CredentialSlot>
   }) => Effect.Effect<boolean>
   /** The session's turn ended: a warming guard it holds is released. */
@@ -3521,14 +3588,31 @@ interface CredentialPlacementService {
   readonly flush: Effect.Effect<void>
 }
 
+/**
+ * Whether a refusal holds its account for the refused model alone: a
+ * credential a driver proved does not serve the model (`UnsupportedModel`),
+ * or a rate limit, which providers set per model. Any other refusal (a
+ * credential that is gone or refused, an exhausted quota) holds the
+ * account for every model.
+ */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const refusalHoldsModel = (error: unknown): boolean => {
+  if (Option.contains(credentialFailureReason(error), "UnsupportedModel")) return true
+  return AiError.isAiError(error) && error.reason._tag === "RateLimitError"
+}
+
 const UsageBucket = Schema.Struct({
   provider: Schema.String,
   slot: CredentialSlot,
   /** Epoch hours. */
   hour: Schema.Int,
   costUsd: Schema.Finite,
-  /** Sessions whose latest priced step on the provider fell in this hour, counted on the account it first fell on. */
-  sessions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * The sessions whose latest priced request on the provider fell in this
+   * hour, counted on the account it first fell on. Kept by id, so a session
+   * that goes on after a restart moves its count instead of adding one.
+   */
+  sessions: Schema.Array(SessionId),
 })
 type UsageBucket = typeof UsageBucket.Type
 
@@ -3545,44 +3629,51 @@ interface PlacementLedgerStore {
 }
 
 /**
- * The ledger as the file `file`: numbers and labels, never a credential. A
- * missing or undecodable file reads as no usage and is replaced at the next
- * write; a write that fails is logged. The ledger never fails a turn.
+ * The ledger as the file `file`: numbers, labels and session ids, never a
+ * credential. A missing or undecodable file reads as no usage and is
+ * replaced at the next write; a write that fails is logged. The ledger
+ * never fails a turn.
  */
 const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
   const platform = yield* GentPlatform
-  return {
-    load: fs.readFileString(file).pipe(
-      Effect.flatMap(Schema.decodeEffect(PlacementLedger)),
-      Effect.map((read): ReadonlyArray<UsageBucket> => read.buckets),
-      Effect.catch((cause) =>
-        Effect.logDebug("credential-placement.ledger-unread").pipe(
-          Effect.annotateLogs({ error: String(cause) }),
-          Effect.as([]),
-        ),
+  const load = Effect.fn("CredentialPlacement.ledgerLoad")(
+    function* () {
+      const read = yield* Schema.decodeEffect(PlacementLedger)(yield* fs.readFileString(file))
+      return read.buckets
+    },
+    Effect.catch((cause) =>
+      Effect.logDebug("credential-placement.ledger-unread").pipe(
+        Effect.annotateLogs({ error: String(cause) }),
+        Effect.as<ReadonlyArray<UsageBucket>>([]),
       ),
     ),
-    save: (buckets) =>
-      Effect.gen(function* () {
-        const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets })
-        yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
-        yield* writeFileAtomic(file, text, { mode: 0o600 })
-        return true
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, pathService),
-        Effect.provideService(GentPlatform, platform),
-        Effect.catch((cause) =>
-          Effect.logWarning("credential-placement.ledger-write-failed").pipe(
-            Effect.annotateLogs({ error: String(cause) }),
-            Effect.as(false),
-          ),
-        ),
+  )
+  const save = Effect.fn("CredentialPlacement.ledgerSave")(
+    function* (buckets: ReadonlyArray<UsageBucket>) {
+      const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets })
+      yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
+      yield* writeFileAtomic(file, text, { mode: 0o600 })
+      return true
+    },
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, pathService),
+    Effect.provideService(GentPlatform, platform),
+    Effect.catch((cause) =>
+      Effect.logWarning("credential-placement.ledger-write-failed").pipe(
+        Effect.annotateLogs({ error: String(cause) }),
+        Effect.as(false),
       ),
-  } satisfies PlacementLedgerStore
+    ),
+  )
+  return { load: load(), save } satisfies PlacementLedgerStore
 })
+
+/** A bucket as the placement state keeps it: its sessions as a set. */
+interface HeldBucket extends Omit<UsageBucket, "sessions"> {
+  readonly sessions: ReadonlySet<SessionId>
+}
 
 /**
  * The placement state of one server: usage buckets (loaded from `ledger`
@@ -3595,18 +3686,25 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
 ) {
   const lock = yield* Semaphore.make(1)
   const writeLock = yield* Semaphore.make(1)
-  const buckets = new Map<string, UsageBucket>()
+  const buckets = new Map<string, HeldBucket>()
   /** provider, session → the bucket (provider, slot, hour) the session is counted in. */
   const counted = new Map<string, { readonly bucket: string; readonly hour: number }>()
-  /** provider, session → where its cache lives and until when. */
+  /** provider, session → where its cache lives and until when (none: it never goes cold). */
   const live = new Map<
     string,
-    { readonly provider: string; readonly slot: CredentialSlot; readonly until: number }
+    {
+      readonly provider: string
+      readonly slot: CredentialSlot
+      readonly until: Option.Option<number>
+    }
   >()
-  /** provider, slot → held until. */
+  /** provider, slot (and a model, for a hold of one model) → held until. */
   const held = new Map<string, number>()
   /** provider, starter, slot → the fresh children warming it. */
   const warming = new Map<string, Set<SessionId>>()
+  /** Whether `slot` of `provider` is held for `model`'s runs: for all, or for that model. */
+  const isHeld = (provider: string, slot: CredentialSlot, model: ModelId) =>
+    held.has(placementKey(provider, slot)) || held.has(placementKey(provider, slot, model))
   /** The session's first step ended, or its turn did: it warms nothing now. */
   const unguard = (sessionId: SessionId) => {
     for (const [key, children] of warming) {
@@ -3628,32 +3726,91 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const first = windowStart(now)
     for (const [key, bucket] of buckets) if (bucket.hour < first) buckets.delete(key)
     for (const [key, entry] of counted) if (entry.hour < first) counted.delete(key)
-    for (const [key, entry] of live) if (entry.until <= now) live.delete(key)
+    for (const [key, entry] of live)
+      if (Option.exists(entry.until, (until) => until <= now)) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
+  }
+  const lifetimeEnd = (now: number, ttlMs: Option.Option<number>) =>
+    Option.map(ttlMs, (lifetime) => now + lifetime)
+  /**
+   * A priced request of `spend.sessionId` at `hour`: its price adds to its
+   * account's bucket, and the session counts once in the window, in the
+   * hour of its latest priced request (a request in a later hour moves its
+   * count there, so a session that runs for days still counts while the
+   * window holds it). Runs under the lock.
+   */
+  const record = (spend: PlacementSpend, costUsd: number, hour: number) => {
+    const key = placementKey(spend.provider, spend.slot, hour)
+    const bucket: HeldBucket = buckets.get(key) ?? {
+      provider: spend.provider,
+      slot: spend.slot,
+      hour,
+      costUsd: 0,
+      sessions: new Set(),
+    }
+    const sessionKey = placementKey(spend.provider, spend.sessionId)
+    const earlier = counted.get(sessionKey)
+    let sessions = bucket.sessions
+    if (Predicate.isUndefined(earlier) || earlier.hour < hour) {
+      if (Predicate.isNotUndefined(earlier)) {
+        const before = buckets.get(earlier.bucket)
+        if (Predicate.isNotUndefined(before)) {
+          const kept = new Set(before.sessions)
+          kept.delete(spend.sessionId)
+          buckets.set(earlier.bucket, { ...before, sessions: kept })
+        }
+      }
+      counted.set(sessionKey, { bucket: key, hour })
+      sessions = new Set([...sessions, spend.sessionId])
+    }
+    buckets.set(key, { ...bucket, costUsd: bucket.costUsd + costUsd, sessions })
+    version += 1
   }
   if (Option.isSome(ledger)) {
     const first = windowStart(yield* Clock.currentTimeMillis)
-    for (const bucket of yield* ledger.value.load)
-      if (bucket.hour >= first)
-        buckets.set(placementKey(bucket.provider, bucket.slot, bucket.hour), bucket)
+    // Oldest hour first: a session two buckets name counts in the latest.
+    const loaded = [...(yield* ledger.value.load)].sort((left, right) => left.hour - right.hour)
+    for (const bucket of loaded) {
+      if (bucket.hour < first) continue
+      const key = placementKey(bucket.provider, bucket.slot, bucket.hour)
+      for (const sessionId of bucket.sessions) {
+        const sessionKey = placementKey(bucket.provider, sessionId)
+        const earlier = counted.get(sessionKey)
+        const before = Option.flatMap(Option.fromUndefinedOr(earlier), (entry) =>
+          Option.fromUndefinedOr(buckets.get(entry.bucket)),
+        )
+        if (Option.isSome(before) && Predicate.isNotUndefined(earlier)) {
+          const kept = new Set(before.value.sessions)
+          kept.delete(sessionId)
+          buckets.set(earlier.bucket, { ...before.value, sessions: kept })
+        }
+        counted.set(sessionKey, { bucket: key, hour: bucket.hour })
+      }
+      buckets.set(key, { ...bucket, sessions: new Set(bucket.sessions) })
+    }
   }
   const write = Option.match(ledger, {
     onNone: () => Effect.void,
-    onSome: (store) =>
-      Effect.gen(function* () {
-        // Nothing recorded since the last write: the file already holds it.
-        const kept = yield* locked(() =>
-          Option.liftPredicate(
-            { version, buckets: [...buckets.values()] },
-            () => version !== written,
-          ),
-        )
-        if (Option.isNone(kept)) return
-        if (!(yield* store.save(kept.value.buckets))) return
-        yield* locked(() => {
-          written = kept.value.version
-        })
-      }).pipe(writeLock.withPermits(1)),
+    onSome: Effect.fn("CredentialPlacement.flush")(function* (store: PlacementLedgerStore) {
+      // Nothing recorded since the last write: the file already holds it.
+      const kept = yield* locked(() =>
+        Option.liftPredicate(
+          {
+            version,
+            buckets: [...buckets.values()].map((bucket): UsageBucket => ({
+              ...bucket,
+              sessions: [...bucket.sessions],
+            })),
+          },
+          () => version !== written,
+        ),
+      )
+      if (Option.isNone(kept)) return
+      if (!(yield* store.save(kept.value.buckets))) return
+      yield* locked(() => {
+        written = kept.value.version
+      })
+    }, writeLock.withPermits(1)),
   })
   const liveOn = (provider: string, slot: CredentialSlot, except: SessionId) => {
     let count = 0
@@ -3666,118 +3823,109 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         count += 1
     return count
   }
+  const spendAt = Effect.fn("CredentialPlacement.spendAt")(function* (
+    spend: PlacementSpend,
+    cache: Option.Option<{ readonly ttlMs: Option.Option<number> }>,
+  ) {
+    const now = yield* Clock.currentTimeMillis
+    const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
+    yield* locked(() => {
+      trim(now)
+      if (Option.isSome(cache)) {
+        unguard(spend.sessionId)
+        live.set(placementKey(spend.provider, spend.sessionId), {
+          provider: spend.provider,
+          slot: spend.slot,
+          until: lifetimeEnd(now, cache.value.ttlMs),
+        })
+      }
+      if (Option.isSome(spend.costUsd)) record(spend, spend.costUsd.value, hour)
+    })
+  })
   return {
-    place: (request) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        return yield* locked((): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
-          trim(now)
-          const open = request.pool.filter((slot) => !request.left.has(slot))
-          if (!Arr.isReadonlyArrayNonEmpty(open)) return request.pool
-          const first = windowStart(now)
-          // The unit reads every account of the provider, the ones the turn left included.
-          let sessions = 0
-          let spent = 0
-          const load = new Map<CredentialSlot, number>()
-          for (const bucket of buckets.values()) {
-            if (bucket.provider !== request.provider || bucket.hour < first) continue
-            sessions += bucket.sessions
-            spent += bucket.costUsd
-            load.set(bucket.slot, (load.get(bucket.slot) ?? 0) + bucket.costUsd)
-          }
-          const warmedBySibling = (slot: CredentialSlot) =>
-            Option.exists(
-              request.starter,
-              (starter) =>
-                !Option.contains(request.preferred, slot) &&
-                (warming.get(placementKey(request.provider, starter, slot))?.size ?? 0) > 0,
-            )
-          const walk = rankPlacement({
-            slots: Arr.map(open, (slot) => ({
-              slot,
-              load: load.get(slot) ?? 0,
-              live: liveOn(request.provider, slot, request.sessionId),
-              held: held.has(placementKey(request.provider, slot)) || warmedBySibling(slot),
-            })),
-            spent,
-            sessions,
-            preferred: Option.filter(request.preferred, (slot) => !request.left.has(slot)),
-          })
-          const choice = walk[0]
-          live.set(placementKey(request.provider, request.sessionId), {
-            provider: request.provider,
-            slot: choice,
-            until: now + request.ttlMs,
-          })
-          if (Option.isSome(request.starter) && !Option.contains(request.preferred, choice)) {
-            const key = placementKey(request.provider, request.starter.value, choice)
-            const children = warming.get(key) ?? new Set<SessionId>()
-            children.add(request.sessionId)
-            warming.set(key, children)
-          }
-          return walk
-        })
-      }),
-    noteStep: (step) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
-        yield* locked(() => {
-          trim(now)
-          unguard(step.sessionId)
-          live.set(placementKey(step.provider, step.sessionId), {
-            provider: step.provider,
-            slot: step.slot,
-            until: now + step.ttlMs,
-          })
-          if (Option.isNone(step.costUsd)) return
-          const key = placementKey(step.provider, step.slot, hour)
-          const bucket = buckets.get(key) ?? {
-            provider: step.provider,
-            slot: step.slot,
-            hour,
-            costUsd: 0,
-            sessions: 0,
-          }
-          // A session counts once in the window, on the hour of its latest
-          // priced step: a step in a later hour moves its count there, so a
-          // session that runs for days still counts while the window holds it.
-          const sessionKey = placementKey(step.provider, step.sessionId)
-          const earlier = counted.get(sessionKey)
-          let sessions = bucket.sessions
-          if (Predicate.isUndefined(earlier) || earlier.hour < hour) {
-            if (Predicate.isNotUndefined(earlier)) {
-              const before = buckets.get(earlier.bucket)
-              if (Predicate.isNotUndefined(before))
-                buckets.set(earlier.bucket, {
-                  ...before,
-                  sessions: Math.max(before.sessions - 1, 0),
-                })
-            }
-            counted.set(sessionKey, { bucket: key, hour })
-            sessions += 1
-          }
-          buckets.set(key, { ...bucket, costUsd: bucket.costUsd + step.costUsd.value, sessions })
-          version += 1
-        })
-      }),
-    refuse: (params) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        const until = Option.getOrElse(params.retryAt, () => now + PLACEMENT_REFUSAL_HOLD_MS)
-        yield* locked(() => held.set(placementKey(params.provider, params.slot), until))
-      }),
-    open: (params) =>
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis
-        return yield* locked(() => {
-          trim(now)
-          return params.pool.some(
-            (slot) => !params.left.has(slot) && !held.has(placementKey(params.provider, slot)),
+    place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* locked((): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
+        trim(now)
+        const open = request.pool.filter((slot) => !request.left.has(slot))
+        if (!Arr.isReadonlyArrayNonEmpty(open)) return request.pool
+        const first = windowStart(now)
+        // The unit reads every account of the provider, the ones the turn left included.
+        let sessions = 0
+        let spent = 0
+        const load = new Map<CredentialSlot, number>()
+        for (const bucket of buckets.values()) {
+          if (bucket.provider !== request.provider || bucket.hour < first) continue
+          sessions += bucket.sessions.size
+          spent += bucket.costUsd
+          load.set(bucket.slot, (load.get(bucket.slot) ?? 0) + bucket.costUsd)
+        }
+        const warmedBySibling = (slot: CredentialSlot) =>
+          Option.exists(
+            request.starter,
+            (starter) =>
+              !Option.contains(request.preferred, slot) &&
+              (warming.get(placementKey(request.provider, starter, slot))?.size ?? 0) > 0,
           )
+        const walk = rankPlacement({
+          slots: Arr.map(open, (slot) => ({
+            slot,
+            load: load.get(slot) ?? 0,
+            live: liveOn(request.provider, slot, request.sessionId),
+            held: isHeld(request.provider, slot, request.model) || warmedBySibling(slot),
+          })),
+          spent,
+          sessions,
+          preferred: Option.filter(request.preferred, (slot) => !request.left.has(slot)),
         })
-      }),
-    release: (sessionId) => locked(() => unguard(sessionId)),
+        const choice = walk[0]
+        // Live from the decision on, so a burst of placements reads each earlier one.
+        live.set(placementKey(request.provider, request.sessionId), {
+          provider: request.provider,
+          slot: choice,
+          until: lifetimeEnd(now, request.ttlMs),
+        })
+        if (Option.isSome(request.starter) && !Option.contains(request.preferred, choice)) {
+          const key = placementKey(request.provider, request.starter.value, choice)
+          const children = warming.get(key) ?? new Set<SessionId>()
+          children.add(request.sessionId)
+          warming.set(key, children)
+        }
+        return walk
+      })
+    }),
+    noteStep: Effect.fn("CredentialPlacement.noteStep")(function* (step: PlacementStep) {
+      yield* spendAt(step, Option.some({ ttlMs: step.ttlMs }))
+    }),
+    noteSpend: Effect.fn("CredentialPlacement.noteSpend")(function* (spend: PlacementSpend) {
+      yield* spendAt(spend, Option.none())
+    }),
+    refuse: Effect.fn("CredentialPlacement.refuse")(function* (refusal: PlacementRefusal) {
+      const now = yield* Clock.currentTimeMillis
+      const until = Option.getOrElse(refusal.retryAt, () => now + PLACEMENT_REFUSAL_HOLD_MS)
+      const key = Option.match(refusal.model, {
+        onNone: () => placementKey(refusal.provider, refusal.slot),
+        onSome: (model) => placementKey(refusal.provider, refusal.slot, model),
+      })
+      yield* locked(() => held.set(key, until))
+    }),
+    open: Effect.fn("CredentialPlacement.open")(function* (params: {
+      readonly provider: string
+      readonly pool: ReadonlyArray<CredentialSlot>
+      readonly model: ModelId
+      readonly left: ReadonlySet<CredentialSlot>
+    }) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* locked(() => {
+        trim(now)
+        return params.pool.some(
+          (slot) => !params.left.has(slot) && !isHeld(params.provider, slot, params.model),
+        )
+      })
+    }),
+    release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {
+      yield* locked(() => unguard(sessionId))
+    }),
     flush: write,
   } satisfies CredentialPlacementService
 })
@@ -3785,7 +3933,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
 /**
  * The server's credential placement: one per server, so every session of
  * every workspace reads one usage table. Its ledger lives in gent's data
- * directory (`credential-usage.json`), not per workspace, as accounts are not.
+ * directory (`credential-usage.json`), not per workspace, as accounts are
+ * not. `Memory` keeps the table in memory alone, with no ledger: a root
+ * with no data directory to write to (a test's actor).
  */
 export class CredentialPlacement extends Context.Service<
   CredentialPlacement,
@@ -3814,6 +3964,8 @@ export class CredentialPlacement extends Context.Service<
       return placement
     }),
   )
+
+  static Memory = Layer.effect(CredentialPlacement, makeCredentialPlacement(Option.none()))
 }
 
 // ── decision-model-resolver ─────────────────────────────────────────────────

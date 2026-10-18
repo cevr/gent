@@ -54,6 +54,7 @@ import {
   textDeltaPart,
   toolCallPart,
   Auth,
+  CredentialPlacement,
   DecisionModelResolver,
   ModelRegistry,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
@@ -181,6 +182,7 @@ const makeRuntimeLayer = (
       Layer.provide(Auth.Test()),
       Layer.provide(fixtureModelCatalogSource),
     ),
+    CredentialPlacement.Memory,
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
