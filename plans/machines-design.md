@@ -1653,3 +1653,58 @@ note above now follows the code.
 - **Migration 026 was edited in place.** It has not shipped: no release and
   no user database holds it, only the test databases in temporary
   directories. So the table gained its columns in 026 itself, not in a 027.
+
+## Commit 4 facts
+
+Commit 4 adds `packages/extensions/src/machines.ts` and the tests C1 to C4,
+C6 and C7 (`packages/extensions/tests/machines.test.ts`). Where the code
+differs from Part B, the code holds, as follows.
+
+- **Steps.** `MachineStep` and `PendingAction` use `optionalKey` fields, not
+  `NullOr`. Three steps are new: `Recorded { action }` (the pending action
+  gained its receipt: a round's thread and id, a command's process),
+  `PlaceSaved { place }` (the delivery place, saved before a delivery) and
+  `Settled {}` (a stopped run's open round or command was stopped).
+- **Visits.** `visits_json` holds `{ counts, grants }`. A `retry` answer to
+  an `exhausted` ask grants its state one visit past the cap; without the
+  grant, the retry would ask `exhausted` again at once.
+- **Owner place.** `owner_session_id` and `owner_branch_id` hold the place
+  saved for the next owner message, and are cleared after each delivery. A
+  saved place whose session is gone is replaced once.
+- **A refused send returns to the driver.** A round refused as busy or over
+  the cap waits for a poke or a round end (at most 30 s), and the driver then
+  reads the row again before it sends again. B5 retried inside the send, so
+  a stop during a busy wait did not settle while the thread stayed busy. A
+  C6 case covers it.
+- **The compare-and-set has no in-process race to lose.** `bun:sqlite` is
+  synchronous, so one answer's read and commit run with no yield between
+  them. Six identical answers in one step do not interleave: with the `seq`
+  compare removed, the case still passed three runs of three (measured). The
+  case proves the deduplication of an answered ask, not the compare. The
+  compare (and the `(run, seq)` key under it) still guards each commit
+  across an async gap, such as a delivery's send.
+- **What activates a host after a clean stop.** In C2, the threads'
+  recovery of the open round opens the host even with no machine record; in
+  C3, the cluster reads a message the first root left unprocessed for the
+  host's loop, which opens it too (measured: both passed with the record
+  removed). So C1 asserts the record itself: one start-only row while the run
+  is active, none once it settled. C7 plants the records and nothing else.
+- **C7 reads the drivers' waits.** A driver that finds no free step permit
+  logs `machines.step.waiting` at debug level. The test waits for every
+  driver past the first four to log it, so the count of open model calls is
+  read once no more can start.
+- **Test helpers.** The routed starter (`CALL` lines), `call` and
+  `restartableHome` moved to `packages/extensions/tests/helpers/routed-session.ts`.
+  The worker's calls log is a `Ref`, not a file (the roots of one test run in
+  one process), and its lines are `<state>:<visit>`: a template has no
+  attempt number.
+- **Exports.** `threads.ts` exports `currentThreadPlace`, `StartParams`,
+  `ThreadStartInput` and `ThreadSendInput` (G2, G3), since `machines.ts`
+  uses them. `machines.ts` exports `MachinesExtension` and the two message
+  types the tests read.
+- **`machine.list` takes `Tool.EmptyParams`.** An empty `Schema.Struct({})`
+  encodes as `{}` with no `type`, which the shipped-tool schema test refuses
+  for Anthropic structured output (measured). `Tool.EmptyParams` encodes as an
+  object that takes no key. C1 calls `machine.list` while the run asks.
+- **Not in this commit.** The hard-kill cases C2b and C3b (e2e, a spawned
+  process) are not written yet.

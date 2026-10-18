@@ -216,6 +216,42 @@
     `delegate` or `worker` thread is denied `thread.start`. The `#
     Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.
+- Machines (`machines.ts`, `@gent/machines`) run a state machine defined as
+  data with no owner turn between its steps, built only on the public
+  extension API, the `Threads` service and the core wake seam. A definition
+  (`machine.define`, written to `.gent/machines/<name>.json`) names thread
+  roles and `thread`, `run`, `ask` and `final` states; `machine.define`
+  lists every problem at once, a cycle of `exhausted` edges among them.
+  `machine.start` snapshots the definition into a run (`run-` and 16 hex of
+  SHA-256 over the caller's session, branch and tool call id) and returns at
+  admission.
+  - A run is one row in `machine_runs` and an append-only log in
+    `machine_steps` (their own migrations, in `machine_migrations`). Every
+    write compares and sets the row's `seq`. A step records the action it
+    dispatches before it dispatches it (`Dispatched`), and the action's
+    receipt once it has one (`Recorded`: a round's thread and id, a
+    command's process), so a restart never repeats an ambiguous effect: a
+    round is sent again under the same key (`machine:<run>:<seq>`, the same
+    round), and a command no fiber of this process runs becomes an
+    `interrupted` ask, never a second run.
+  - One driver fiber per run, in the host branch's `MachineDrivers`, moves
+    it: it holds the branch resident while the run is running, and leaves
+    only from a settled row it read again under the lock that starts
+    drivers. The run's core record `machine-run:<run>` (no time) stays while
+    the run is active, so each server start activates the host; an answer
+    or a stop from any session commits, then fires the record now. A round
+    goes out with `notify: "none"`; its `thread.reply` value, decoded, names
+    the next state. A dead worker or no verdict runs the round once more on
+    a new thread, then asks `no-verdict`; a round stopped from outside asks
+    `interrupted`. The owner is woken only by an ask (`machine-ask`), a final
+    state or a failure (`machine-end`), each a queued message under a
+    source id the queue drops a repeat of, at a delivery place saved first.
+  - Answers check in one order: an answered ask is decided by its answer
+    (the same choice and note again is admitted, any other conflicts), an
+    ask never answered and no longer current is stale, a choice not offered
+    is invalid. At most four rounds and commands run at once in one server
+    (`MAX_ACTIVE_MACHINE_STEPS`); the runs that held one when the server
+    stopped take the first permits as tickets.
 
 ## Agent runs
 

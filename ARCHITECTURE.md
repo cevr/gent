@@ -56,7 +56,7 @@ when to read it.
 - `profiles.md` — the runtime profile: extension loading, profile cache and leases, shared Resource builds, last good versions, reload, prompt sections and notices; read when you change extension activation, config reads or the request prefix.
 - `runtime.md` — the session runtime and agent loop: residency, durable wakes and deferred recovery, steering, follow-up admission, orphan reconciliation, retry, cancellation, `TurnCompleted`; read when you change the loop, a turn's lifecycle or its receipts.
 - `context.md` — model context: compaction, project instructions, the system prompt, tool-result spill, classifier models, virtual models, the effort router; read when you change what a request carries or how a model is chosen.
-- `threads.md` — threads and agent runs: rounds, `thread_rounds`, `session.send`, snapshot threads, the agents pane and tray, child depth; read when you change child sessions or the thread tools.
+- `threads.md` — threads and agent runs: rounds, `thread_rounds`, `session.send`, snapshot threads, the agents pane and tray, child depth, machines; read when you change child sessions, the thread tools or machines.
 - `agents.md` — `AgentDefinition`, agent config, run specs, tool and path admission, session admission, model and effort precedence; read when you change agents or what a run may do.
 - `interactions.md` — the cold interaction pattern, approvals, owned asks, the `toolCall` gate, the interaction tools; read when you change asks, approvals or their replay.
 - `cell.md` — the Bun cell: tool policy, kernel, worker, namespace, catalog, host calls and their storage; read when you change the cell or how tools reach the model.

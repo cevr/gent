@@ -1390,35 +1390,46 @@ const wakeTargetOf = (round: RoundRow) =>
   )
 
 /**
- * Where a round's end wakes its starter: the starter thread's current
- * session, so a starter that handed off reads it in its new session, also
- * once the session that sent it is deleted. The branch is the one that sent
- * the round while that session is still current.
+ * Where a message for a thread lands now: the thread's newest session, so a
+ * thread that handed off reads it in its new session, also once the session
+ * `sent` names is deleted. The branch is `sent`'s while its session is still
+ * the newest. A round's end wakes its starter here, and a machine's ask
+ * reaches its owner here.
  */
-const starterPlace = Effect.fn("Threads.starterPlace")(function* (round: RoundRow) {
+export const currentThreadPlace = Effect.fn("Threads.currentThreadPlace")(function* (input: {
+  readonly sent: Place
+  readonly thread: string
+}) {
   const ctx = yield* ExtensionContext
-  const sent = {
-    sessionId: SessionId.make(round.starter_session_id),
-    branchId: BranchId.make(round.starter_branch_id),
-  }
+  const sent = input.sent
   const tree = yield* ctx.Session.listSessions({ thread: sent.sessionId })
-  // A deleted sender seeds no tree; its handoffs own the round, so the
-  // starter thread's sessions are read from the workspace by their key.
+  // A deleted sender seeds no tree; its handoffs own the thread, so the
+  // thread's sessions are read from the workspace by their key.
   let sessions = tree
   if (tree.length === 0) sessions = yield* ctx.Session.listSessions()
   const newest = sessions
-    .filter((session) => sessionThread(session) === round.starter_thread)
+    .filter((session) => sessionThread(session) === input.thread)
     .toSorted(byCreation)
     .at(-1)
   if (Predicate.isUndefined(newest) || newest.id === sent.sessionId) return sent
   return Option.getOrElse(
-    Option.map(Option.fromUndefinedOr(newest.activeBranchId), (branchId) => ({
+    Option.map(Option.fromUndefinedOr(newest.activeBranchId), (branchId): Place => ({
       sessionId: newest.id,
       branchId,
     })),
     () => sent,
   )
 })
+
+/** Where a round's end wakes its starter: the starter thread's current place. */
+const starterPlace = (round: RoundRow) =>
+  currentThreadPlace({
+    sent: {
+      sessionId: SessionId.make(round.starter_session_id),
+      branchId: BranchId.make(round.starter_branch_id),
+    },
+    thread: round.starter_thread,
+  })
 
 /**
  * The place a round's end wakes, saved before the first wake is sent. The
@@ -1943,7 +1954,7 @@ const ThreadWorkspace = Schema.Struct({ snapshot: Schema.Literal(true) }).annota
     "{ snapshot: true }: the thread works in its own copy of the git working tree it would work in, and each turn's work comes back as the branch gent/<name> that nothing merges. A copy is not a sandbox.",
 })
 
-const StartParams = Schema.Struct({
+export const StartParams = Schema.Struct({
   task: Schema.optionalKey(
     Schema.String.annotate({
       description:
@@ -2026,7 +2037,7 @@ type StartResult = typeof StartResult.Type
  * session: a tool passes its call id, and the same key returns the same
  * thread and round.
  */
-interface ThreadStartInput extends Omit<Schema.Schema.Type<typeof StartParams>, "notify"> {
+export interface ThreadStartInput extends Omit<Schema.Schema.Type<typeof StartParams>, "notify"> {
   readonly key: string
   readonly notify?: RoundNotify
 }
@@ -2426,7 +2437,7 @@ const SendParams = Schema.Struct({
  * What sends a round. `key` makes the send durable-once, as a start's does;
  * `notify` names who hears its end.
  */
-interface ThreadSendInput extends Omit<Schema.Schema.Type<typeof SendParams>, "notify"> {
+export interface ThreadSendInput extends Omit<Schema.Schema.Type<typeof SendParams>, "notify"> {
   readonly key: string
   readonly notify?: RoundNotify
 }
