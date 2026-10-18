@@ -2267,6 +2267,14 @@ describe("a turn's joined steers", () => {
           message: "steer now",
         }),
       })
+      // `steer.command` returns once the actor has the command, not once it
+      // parked it: release the step only after the steer waits at its boundary.
+      yield* waitFor(
+        client.queue.get({ sessionId, branchId }),
+        (queue) => queue.steering.length === 1,
+        5_000,
+        "the steer parked",
+      )
       yield* Deferred.succeed(steered, void 0)
       const [ended] = yield* waitFor(
         Ref.get(inputs),

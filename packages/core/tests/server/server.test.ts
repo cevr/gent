@@ -2744,6 +2744,14 @@ describe("requestId idempotency", () => {
             message: "drain me",
           }),
         })
+        // `steer.command` returns once the actor has the command, not once it
+        // parked it.
+        yield* waitFor(
+          client.queue.get({ sessionId: created.sessionId, branchId: created.branchId }),
+          (queue) => queue.steering.length === 1,
+          3_000,
+          "the steer parked",
+        )
 
         const first = yield* client.queue.drain({
           sessionId: created.sessionId,

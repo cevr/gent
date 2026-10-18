@@ -7327,6 +7327,14 @@ describe("a queue sent on a condition", () => {
           message: "look at the loader first",
         }),
       })
+      // `steer.command` returns once the actor has the command, not once it
+      // parked it: the line sent before that finds no steer to wait behind.
+      yield* waitFor(
+        harness.client.queue.get(ids),
+        (queue) => queue.steering.length === 1,
+        5_000,
+        "the steer parked",
+      )
       yield* queueIfLatest(harness, {
         ifLatest: Option.getOrThrow(Option.fromUndefinedOr(first)),
         sourceId: "go-on",

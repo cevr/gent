@@ -556,6 +556,14 @@ describe("SessionRuntime", () => {
             message: "steer now",
           }),
         )
+        // `steer` returns once the actor has the command, not once it parked
+        // it: end the first step only after the steer waits at its boundary.
+        yield* waitFor(
+          sessionRuntime.getQueuedMessages({ sessionId, branchId }),
+          (queue) => queue.steering.length === 1,
+          3_000,
+          "the steer parked",
+        )
         yield* controls.emitAll(0)
         const messages = yield* waitFor(
           messageStorage.listMessages(branchId),

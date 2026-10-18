@@ -861,9 +861,10 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
 
 /**
  * `ref.send` is fire-forget at the handler level — INTENTIONAL.
- * `Steer.Interject` semantics: caller needs to know the steering item
- * is registered (handler enqueue complete), not that the interjected
- * turn ran. Switching to `ref.execute` (or `send + waitFor`) deadlocks
+ * `Steer.Interject` semantics: the call returns once the actor holds
+ * the command, before its handler parks the steering item, and long
+ * before the interjected turn runs. A caller that must see the steer in
+ * `queue.get` waits for it there. Switching to `ref.execute` (or `send + waitFor`) deadlocks
  * because `applySteer` itself yields `ensureStarted` while the gated
  * in-flight turn holds the actor; the persisted reply can't drain.
  * The session test "an interjection joins the running turn ahead of

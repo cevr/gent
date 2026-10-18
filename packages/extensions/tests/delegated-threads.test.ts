@@ -2804,11 +2804,22 @@ describe("session.send", () => {
               Effect.as(toolStep("session.send", { to, message: correction }, "send-1")),
             )
           }
-          return Deferred.succeed(delivered, void 0).pipe(Effect.as(reply("ack")))
+          return Effect.succeed(reply("ack"))
         })
         const harness = yield* harnessWithHome(providerLayer)
         const { client, sessionId, branchId } = harness
         yield* sendPrompt(harness, "split the work")
+        yield* Deferred.await(childStarted)
+        // `session.send` returns once the thread's actor has the message, not
+        // once it parked it: end the first step only after it waits there.
+        const running = yield* childOf(harness)
+        yield* waitFor(
+          client.queue.get(running),
+          (queue) => queue.steering.length === 1,
+          3_000,
+          "the correction parked in the thread",
+        )
+        yield* Deferred.succeed(delivered, void 0)
         yield* Deferred.await(childSawCorrection)
         // The starter hears a round once. Its end must carry the answer the
         // thread gave after it read the correction, not the one before.
@@ -3452,6 +3463,14 @@ describe("a starter's interrupt and the turns its session.send opened", () => {
           yield* idle(harness, child, "the thread is idle")
           yield* harness.client.message.send({ ...child, content: "USER-ASKS-THREAD" })
           yield* Deferred.await(parentStreaming)
+          // `session.send` returns once the thread's actor has the
+          // correction, not once it parked it.
+          yield* waitFor(
+            harness.client.queue.get(child),
+            (queue) => queue.steering.length === 1,
+            3_000,
+            "the correction parked in the thread",
+          )
           yield* Ref.set(held, Option.some(child.sessionId))
           // The user stops the thread's turn; its end is held open, so the
           // correction still waits to join a turn that is stopping.
