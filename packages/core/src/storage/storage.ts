@@ -10,6 +10,7 @@ import {
   Option,
   Predicate,
   Schema,
+  type Scope,
 } from "effect"
 import { SqlClient, SqlError } from "effect/sql"
 import type * as Prompt from "effect/ai/Prompt"
@@ -78,7 +79,7 @@ import {
   InteractionRequestStatus,
   type StoredInteractionDecision,
 } from "../domain/interaction.js"
-import type { MessageStorage as ClusterMessageStorage } from "effect/cluster"
+import { type MessageStorage as ClusterMessageStorage, Snowflake } from "effect/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
 const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
@@ -2134,6 +2135,175 @@ export class ModelCatalogSnapshotStorage extends Context.Service<
     }),
   )
 }
+
+// ── cluster ids ─────────────────────────────────────────────────────────────
+
+/**
+ * Effect's cluster message storage reads its snowflake ids under
+ * `SqlClient.SafeIntegers`. A driver that cannot honour it, as a Durable
+ * Object's SQL API cannot (it returns each integer as a JavaScript number),
+ * reads a default snowflake (milliseconds since 2025 shifted 22 bits, past
+ * 2^53 from late January 2025 on) as its nearest double, and a reply then
+ * names another row.
+ * On such a driver every cluster id stays at or under 2^53 - 1, which a
+ * number holds exactly; a driver that reads 64-bit integers keeps Effect's
+ * own generator.
+ */
+const MAX_EXACT_ID = Number.MAX_SAFE_INTEGER
+/** 2^53 + 1: a number reads it as 2^53. */
+const SAFE_INTEGER_PROBE = "9007199254740993"
+/** An id is (milliseconds since 2026-01-01) * 2048 + a sequence: 2^42 ms, 139 years, under 2^53. */
+const EXACT_ID_EPOCH_MS = Date.UTC(2026, 0, 1)
+const EXACT_IDS_PER_MS = 2048
+
+const ProbeRow = Schema.Struct({ n: Schema.Union([Schema.BigInt, Schema.Finite]) })
+const IdSpaceRow = Schema.Struct({ floor: Schema.Finite, stale: Schema.Finite })
+const TableCountRow = Schema.Struct({ n: Schema.Finite })
+
+/** Whether the client reads 2^53 + 1 back exactly under `SafeIntegers`. */
+const readsSafeIntegers = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql`SELECT ${sql.literal(SAFE_INTEGER_PROBE)} AS n`.pipe(
+    Effect.provideService(SqlClient.SafeIntegers, true),
+  )
+  const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(ProbeRow))(rows)
+  return decoded.some((row) => String(row.n) === SAFE_INTEGER_PROBE)
+})
+
+/**
+ * Every id value the cluster tables hold, from each column that holds one:
+ * a message's own id, its request, its acked reply and its last reply; a
+ * reply's own id and its request.
+ */
+const clusterIdValues = `
+  SELECT id AS v FROM cluster_messages
+  UNION ALL SELECT request_id FROM cluster_messages
+  UNION ALL SELECT reply_id FROM cluster_messages
+  UNION ALL SELECT last_reply_id FROM cluster_messages
+  UNION ALL SELECT id FROM cluster_replies
+  UNION ALL SELECT request_id FROM cluster_replies`
+
+/** The largest id a number holds exactly, and how many are past it. */
+const readIdSpace = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql.unsafe(`
+    SELECT COALESCE(MAX(CASE WHEN v <= ${MAX_EXACT_ID} THEN v END), 0) AS floor,
+           COUNT(CASE WHEN v > ${MAX_EXACT_ID} THEN 1 END) AS stale
+    FROM (${clusterIdValues})`)
+  return yield* Schema.decodeUnknownEffect(Schema.Array(IdSpaceRow))(rows).pipe(
+    Effect.map((decoded) => decoded[0] ?? { floor: 0, stale: 0 }),
+  )
+})
+
+/**
+ * Moves every id past 2^53 - 1 (a default snowflake an earlier build wrote)
+ * under it, then answers the largest id stored. The ids past the bound are
+ * numbered in their order from just above the largest exact one, and each
+ * column is rewritten through the one map, so a row keeps its place (the
+ * storage delivers by rowid, which is the id) and every reference names the
+ * same row as before. The SQL compares and copies the 64-bit values; none
+ * passes through a number.
+ */
+const moveIdsUnderExactBound = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const tables = yield* sql`
+    SELECT COUNT(*) AS n FROM sqlite_master
+    WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_replies')
+  `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(TableCountRow))))
+  if ((tables[0]?.n ?? 0) < 2) return 0
+  const before = yield* readIdSpace
+  if (before.stale === 0) return before.floor
+  const renumbered = (table: string) => (column: string) =>
+    `${column} = COALESCE((SELECT new FROM cluster_id_renumber WHERE old = ${table}.${column}), ${column})`
+  yield* Effect.gen(function* () {
+    yield* sql.unsafe(
+      "CREATE TABLE cluster_id_renumber (old INTEGER PRIMARY KEY, new INTEGER NOT NULL)",
+    )
+    yield* sql.unsafe(`
+      INSERT INTO cluster_id_renumber (old, new)
+      SELECT v, ${before.floor} + ROW_NUMBER() OVER (ORDER BY v)
+      FROM (SELECT DISTINCT v FROM (${clusterIdValues}) WHERE v > ${MAX_EXACT_ID})`)
+    yield* sql.unsafe(`
+      UPDATE cluster_messages
+      SET ${["id", "request_id", "reply_id", "last_reply_id"].map(renumbered("cluster_messages")).join(", ")}
+      WHERE id > ${MAX_EXACT_ID} OR request_id > ${MAX_EXACT_ID}
+        OR reply_id > ${MAX_EXACT_ID} OR last_reply_id > ${MAX_EXACT_ID}`)
+    yield* sql.unsafe(`
+      UPDATE cluster_replies
+      SET ${["id", "request_id"].map(renumbered("cluster_replies")).join(", ")}
+      WHERE id > ${MAX_EXACT_ID} OR request_id > ${MAX_EXACT_ID}`)
+    yield* sql.unsafe("DROP TABLE cluster_id_renumber")
+  }).pipe(sql.withTransaction)
+  const after = yield* readIdSpace
+  if (after.stale > 0)
+    return yield* Effect.die(`cluster ids past 2^53 - 1 remain after renumbering: ${after.stale}`)
+  return after.floor
+})
+
+/**
+ * Ids at or under 2^53 - 1, strictly increasing from `floor` (the largest
+ * stored): each is the clock's position or one past the last, whichever is
+ * larger, so a clock that steps back or a new activation never reuses or
+ * reorders one. One runner owns the storage, so the id holds no machine.
+ */
+const makeExactIdGenerator = (floor: number) =>
+  Effect.gen(function* () {
+    const clock = yield* Clock.Clock
+    let last = floor
+    return Snowflake.Generator.of({
+      nextUnsafe: () => {
+        const now = Math.floor(clock.currentTimeMillisUnsafe())
+        last = Math.max(last + 1, (now - EXACT_ID_EPOCH_MS) * EXACT_IDS_PER_MS)
+        return Snowflake.Snowflake(last)
+      },
+      setMachineId: () => Effect.void,
+    })
+  })
+
+/** The cluster's generator over the root's client: Effect's own when the client reads 64-bit integers. */
+const ClusterIdGenerator = Layer.effect(
+  Snowflake.Generator,
+  Effect.gen(function* () {
+    if (yield* readsSafeIntegers) return yield* Snowflake.makeGenerator
+    return yield* makeExactIdGenerator(yield* moveIdsUnderExactBound)
+  }).pipe(Effect.orDie),
+)
+
+/**
+ * A memo map that builds `ClusterIdGenerator` wherever a layer asks for
+ * Effect's `Snowflake.layerGenerator`. `Sharding.layer`, `Runners.layerNoop`,
+ * the SQL message storage and effect-encore's actor transport each provide
+ * that layer to themselves, so no service provided from outside reaches
+ * them; the memo map is the one point every build of it passes.
+ */
+const substituteClusterIdGenerator = (inner: Layer.MemoMap): Layer.MemoMap => {
+  const isDefaultGenerator = (layer: Layer.Any) => layer === Snowflake.layerGenerator
+  const substituted = (scope: Scope.Scope) =>
+    // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- the memo map is keyed by layer, untyped: this build stands in for `Snowflake.layerGenerator` and gives the same service
+    Layer.buildWithMemoMap(ClusterIdGenerator, memoMap, scope) as never
+  const memoMap: Layer.MemoMap = {
+    "~effect/Layer/MemoMap": "~effect/Layer/MemoMap",
+    get: (layer, scope) => {
+      if (isDefaultGenerator(layer)) return substituted(scope)
+      return inner.get(layer, scope)
+    },
+    getOrElseMemoize: (layer, scope, build) => {
+      if (isDefaultGenerator(layer)) return substituted(scope)
+      return inner.getOrElseMemoize(layer, scope, (_, entryScope) => build(memoMap, entryScope))
+    },
+  }
+  return memoMap
+}
+
+/**
+ * Builds `layer` with the cluster's ids in the client's exact range: every
+ * build of Effect's snowflake generator inside it, a nested `Layer.build`'s
+ * included, gives `ClusterIdGenerator`, one per root.
+ */
+export const withClusterIdSpace = <A, E, R>(layer: Layer.Layer<A, E, R>): Layer.Layer<A, E, R> =>
+  Layer.fromBuild((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, substituteClusterIdGenerator(memoMap), scope),
+  )
 
 // ── sqlite-storage ──────────────────────────────────────────────────────────
 

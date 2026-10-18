@@ -48,6 +48,7 @@ import {
   type StoredBranchResult,
   type StoredCreateSessionResult,
   type StoredSwitchBranchResult,
+  withClusterIdSpace,
 } from "../storage/storage.js"
 import type { StorageError } from "../domain/errors.js"
 import {
@@ -2321,7 +2322,9 @@ export const createDependencies = (config: DependenciesConfig) => {
     Layer.provideMerge(SessionRuntime.Client, tools),
   )
   const actor = Layer.provideMerge(AgentLoopLiveActor, sessions)
-  return Layer.provideMerge(interactionRecoveryLive, actor)
+  // Every cluster id fits what the client reads back: a client without
+  // 64-bit reads (a Durable Object's) gets ids under 2^53.
+  return Layer.provideMerge(interactionRecoveryLive, actor).pipe(withClusterIdSpace)
 }
 
 // ── websocket lifecycle tracing ─────────────────────────────────────────────

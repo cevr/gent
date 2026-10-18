@@ -3097,11 +3097,6 @@ export const STEERING_NAMES_OUTSIDE_THE_TREE: ReadonlyArray<SteeringNameOutsideT
     reason: "Effect's `ShardingConfig` option (`effect/cluster/ShardingConfig`)",
   },
   {
-    name: "getOrElseMemoize",
-    file: "ARCHITECTURE.md",
-    reason: "Effect's layer memo map method (`effect/Layer`), the call the layer count counts",
-  },
-  {
     name: "marginY",
     file: "apps/tui/AGENTS.md",
     reason: "OpenTUI's shorthand prop, which the TUI guide forbids by name",

@@ -24,6 +24,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Ref,
   Schema,
   Scope,
@@ -250,6 +251,78 @@ const keepAliveRows = (disk: DurableObjectDisk) => ({
   ),
 })
 
+const MAX_EXACT_ID = BigInt(Number.MAX_SAFE_INTEGER)
+const ID_COLUMNS = {
+  cluster_messages: ["id", "request_id", "reply_id", "last_reply_id"],
+  cluster_replies: ["id", "request_id"],
+} as const
+const IdTextRow = Schema.Struct({ v: Schema.String })
+
+/** Every id the cluster tables hold, read as exact text. */
+const storedClusterIds = (disk: DurableObjectDisk) =>
+  Object.entries(ID_COLUMNS).flatMap(([table, columns]) =>
+    columns.flatMap((column) =>
+      disk
+        .rowsOf(
+          IdTextRow,
+          `SELECT CAST(${column} AS TEXT) AS v FROM ${table} WHERE ${column} IS NOT NULL`,
+        )
+        .map((row) => BigInt(row.v)),
+    ),
+  )
+
+/** Each table's row ids, exact, in delivery (rowid) order. */
+const rowIdsOf = (disk: DurableObjectDisk) =>
+  Object.keys(ID_COLUMNS).flatMap((table) =>
+    disk
+      .rowsOf(IdTextRow, `SELECT CAST(id AS TEXT) AS v FROM ${table} ORDER BY rowid`)
+      .map((row) => BigInt(row.v)),
+  )
+
+/** Whether a number holds the id exactly, as the driver reads it. */
+const readsExactly = (id: bigint) => String(Number(id)) === String(id)
+
+const LinkRow = Schema.Struct({
+  table: Schema.String,
+  kind: Schema.NullOr(Schema.Finite),
+  tag: Schema.NullOr(Schema.String),
+  id: Schema.String,
+  request_id: Schema.String,
+  reply_id: Schema.NullOr(Schema.String),
+})
+
+/**
+ * The cluster rows in delivery order, each id replaced by its rank among the
+ * ids: two stores with the same links hold the same rows in the same order,
+ * linked the same way, whatever their id values.
+ */
+const linksOf = (disk: DurableObjectDisk) => {
+  const rows = disk.rowsOf(
+    LinkRow,
+    `SELECT * FROM (
+       SELECT 'message' AS "table", kind, tag, CAST(id AS TEXT) AS id, CAST(request_id AS TEXT) AS request_id, CAST(reply_id AS TEXT) AS reply_id FROM cluster_messages
+       UNION ALL
+       SELECT 'reply', kind, NULL, CAST(id AS TEXT), CAST(request_id AS TEXT), NULL FROM cluster_replies
+     ) ORDER BY "table", CAST(id AS INTEGER)`,
+  )
+  const replyOf = (row: typeof LinkRow.Type) => Option.fromNullishOr(row.reply_id)
+  const ids = new Set(
+    rows.flatMap((row) => [row.id, row.request_id, ...Option.toArray(replyOf(row))]),
+  )
+  const ranks = new Map(
+    Arr.sort([...ids], Order.mapInput(Order.BigInt, BigInt)).map((id, rank) => [id, rank]),
+  )
+  const rankOf = (id: string) => ranks.get(id) ?? -1
+  return rows.map((row) => ({
+    table: row.table,
+    kind: row.kind,
+    tag: row.tag,
+    id: rankOf(row.id),
+    request: rankOf(row.request_id),
+    reply: Option.getOrElse(Option.map(replyOf(row), rankOf), () => -1),
+  }))
+}
+
 /**
  * One activation of the object: a fresh storage handle, a root built on its
  * client in a scope of its own, and the eviction that kills the handle, then
@@ -380,6 +453,7 @@ describe("Durable-Object-shaped storage", () => {
         )
         const heldAtEviction = unprocessedTags(disk)
         const wakeAtEviction = yield* nextClusterWake(disk)
+        const rowsAtEviction = new Set(rowIdsOf(disk))
         disk.setPhase("eviction")
         const closeMs = yield* activation1.evict
 
@@ -395,8 +469,7 @@ describe("Durable-Object-shaped storage", () => {
         yield* waitFor(eventCount(disk, "TurnCompleted"), (n) => n >= 1, 15_000, "TurnCompleted")
         const resumeMs = yield* elapsedSince(resumeStart)
 
-        // The keep-alive replies are written, but their messages stay
-        // unprocessed: the reply names a request id read back as a double.
+        // The keep-alive replies are written, and each names its message.
         disk.setPhase("settle")
         yield* waitFor(
           Effect.sync(() => keepAliveRows(disk)),
@@ -409,8 +482,7 @@ describe("Durable-Object-shaped storage", () => {
         disk.setPhase("eviction-2")
         yield* activation2.evict
 
-        // Activation 3, an alarm with nothing to do: the stale keep-alives
-        // come back and wake the loop.
+        // Activation 3, an alarm with nothing to do: nothing is left to wake.
         const third = yield* LanguageModelLayers.sequence([])
         const activation3 = yield* activate(disk, "boot-3", (sql, scope) =>
           Layer.buildWithScope(root(sql, third.layer), scope),
@@ -467,24 +539,25 @@ describe("Durable-Object-shaped storage", () => {
           expect(written).not.toContain("cluster_locks")
           expect(written).not.toContain("cluster_runners")
         }
-        // What stays: a 64-bit request id read back as a double. The driver
-        // has no safe-integer read, so each reply names its request by the
-        // id's nearest double, and a keep-alive is marked processed only when
-        // that double prints as the id itself; every other one stays
-        // unprocessed, wakes the next activation's loop, and keeps the alarm
-        // set.
+        // The driver reads an integer as a number, so every cluster id stays
+        // under 2^53: each reply names its keep-alive, each keep-alive is
+        // released, and nothing keeps the alarm set or wakes the loop.
         expect(keepAlives.messages.length).toBe(2)
         expect(keepAlives.replies.map((row) => row.request_id).toSorted()).toEqual(
-          keepAlives.messages.map((row) => String(Number(row.id))).toSorted(),
+          keepAlives.messages.map((row) => row.id).toSorted(),
         )
-        const survivesDouble = (id: string) => String(Number(id)) === id
-        expect(keepAlives.messages.map((row) => row.processed === 1)).toEqual(
-          keepAlives.messages.map((row) => survivesDouble(row.id)),
-        )
-        const stale = keepAlives.messages.some((row) => !survivesDouble(row.id))
-        expect(Option.isSome(wakeAfterTurn)).toBe(stale)
-        expect(Option.isSome(wakeWhenIdle)).toBe(stale)
-        expect(wokenEntities > 0).toBe(stale)
+        expect(keepAlives.messages.map((row) => row.processed)).toEqual([1, 1])
+        expect(Option.isNone(wakeAfterTurn)).toBe(true)
+        expect(Option.isNone(wakeWhenIdle)).toBe(true)
+        expect(wokenEntities).toBe(0)
+        const ids = storedClusterIds(disk)
+        expect(ids.filter((id) => id > MAX_EXACT_ID || !readsExactly(id))).toEqual([])
+        // The next activation re-seeds above every stored id: each row it
+        // writes sorts after the rows the first one left.
+        const firstMax = Arr.reduce([...rowsAtEviction], 0n, Order.max(Order.BigInt))
+        const written = rowIdsOf(disk).filter((id) => !rowsAtEviction.has(id))
+        expect(written.length).toBeGreaterThan(0)
+        expect(written.filter((id) => id <= firstMax)).toEqual([])
       }).pipe(Effect.timeout("45 seconds")),
     60_000,
   )
@@ -533,20 +606,15 @@ describe("Durable-Object-shaped storage", () => {
           "the park mark",
         )
         disk.setPhase("parked")
-        // The turn's worker lets the parked turn go, and its keep-alive is
-        // released under the request id read back as a double. An id the
-        // double keeps is released; wait for it, or the sample races the
-        // release. An id it loses stays unprocessed for good.
-        const parkedKeepAlive = Option.getOrThrow(Arr.head(keepAliveRows(disk).messages))
-        const released = String(Number(parkedKeepAlive.id)) === parkedKeepAlive.id
-        if (released) {
-          yield* waitFor(
-            Effect.sync(() => unprocessedTags(disk)),
-            (tags) => !tags.includes(KEEP_ALIVE),
-            5_000,
-            "the worker's release",
-          )
-        }
+        // The turn's worker lets the parked turn go and releases its
+        // keep-alive; wait for it, or the sample races the release.
+        expect(keepAliveRows(disk).messages.length).toBe(1)
+        yield* waitFor(
+          Effect.sync(() => unprocessedTags(disk)),
+          (tags) => !tags.includes(KEEP_ALIVE),
+          5_000,
+          "the worker's release",
+        )
         const heldWhileParked = unprocessedTags(disk)
         const wakeWhileParked = yield* nextClusterWake(disk)
         const entitiesWhileParked = yield* Context.get(activation1.built.context, Sharding.Sharding)
@@ -623,21 +691,12 @@ describe("Durable-Object-shaped storage", () => {
 
         // A parked ask holds nothing: the worker is done with the turn. With
         // its keep-alive released, the loop holds no alarm while the human
-        // decides, and the answer wakes it from storage. A keep-alive whose
-        // id the double loses stays unprocessed, so the host keeps a
-        // heartbeat alarm and the alarm wakes the loop to wait again.
+        // decides, and the answer wakes it from storage.
         expect(entitiesWhileParked).toBe(1)
-        if (released) {
-          expect(heldWhileParked).toEqual([])
-          expect(Option.isNone(wakeWhileParked)).toBe(true)
-          expect(entitiesAfterAlarm).toBe(0)
-          expect(Option.isNone(wakeAfterAlarm)).toBe(true)
-        } else {
-          expect(heldWhileParked).toEqual([KEEP_ALIVE])
-          expect(Option.isSome(wakeWhileParked)).toBe(true)
-          expect(entitiesAfterAlarm).toBe(1)
-          expect(Option.isSome(wakeAfterAlarm)).toBe(true)
-        }
+        expect(heldWhileParked).toEqual([])
+        expect(Option.isNone(wakeWhileParked)).toBe(true)
+        expect(entitiesAfterAlarm).toBe(0)
+        expect(Option.isNone(wakeAfterAlarm)).toBe(true)
         expect(callsBeforeAnswer).toBe(0)
         expect(runsBeforeAnswer).toBe(0)
         expect(yield* eventCount(disk, "TurnCompleted")).toBe(1)
@@ -645,22 +704,154 @@ describe("Durable-Object-shaped storage", () => {
         expect(yield* first.controls.callCount).toBe(1)
         expect(yield* second.controls.callCount).toBe(1)
         expect(wallsOf(disk)).toEqual([])
-        // The answer reaches the loop, which finishes the turn. The RPC that
-        // sent it can return only when its 64-bit request id survives the
-        // double the reply is read through; a reply that names another request
-        // leaves the caller waiting and the message unprocessed. A surviving
-        // id is not enough: the reply's own id and the caller's read of the
-        // reply list pass through doubles too, so only the one direction is
-        // certain.
-        expect(respondRows.length).toBe(1)
-        for (const row of respondRows) {
-          if (String(Number(row.id)) !== row.id) {
-            expect(Exit.isSuccess(answered)).toBe(false)
-            expect(row.processed).toBe(0)
-          }
-        }
+        // The answer reaches the loop, which finishes the turn, and its reply
+        // names the persisted request: the RPC that sent it returns.
+        expect(respondRows.map((row) => row.processed)).toEqual([1])
+        expect(Exit.isSuccess(answered)).toBe(true)
+        expect(storedClusterIds(disk).filter((id) => !readsExactly(id))).toEqual([])
       }).pipe(Effect.timeout("30 seconds")),
     45_000,
+  )
+
+  it.scopedLive(
+    "a hosted root mints ids a number reads exactly, above every stored id, and the Bun root keeps Effect's",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-do-ids-")
+        const cwd = yield* makeTempDirectoryScoped("gent-do-ids-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-do-ids-home-")
+        const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
+        const runs = yield* Ref.make(0)
+        const model = yield* LanguageModelLayers.sequence([])
+        const root = (sql: Layer.Layer<SqlClient.SqlClient>) =>
+          hostedRoot({ sql, cwd, home, runs, providerLayer: model.layer })
+        const snowflakes = (context: Context.Context<Sharding.Sharding>) =>
+          Effect.forEach(
+            Arr.range(1, 50),
+            () => Context.get(context, Sharding.Sharding).getSnowflake,
+          )
+
+        // Activation 1 creates the tables; then an id the clock has not
+        // reached is stored, as a clock that later steps back leaves one.
+        const activation1 = yield* activate(disk, "boot-1", (sql, scope) =>
+          Layer.buildWithScope(root(sql), scope),
+        )
+        const first = yield* snowflakes(activation1.built)
+        yield* activation1.evict
+        const ahead = 2n ** 52n
+        disk
+          .activate("enforce")
+          .storage.sql.exec(
+            "INSERT INTO cluster_replies (id, kind, request_id, payload, acked) VALUES (?, 0, ?, '{}', 1)",
+            String(ahead),
+            String(ahead - 1n),
+          )
+
+        // Activation 2 seeds from the stored ids.
+        const activation2 = yield* activate(disk, "boot-2", (sql, scope) =>
+          Layer.buildWithScope(root(sql), scope),
+        )
+        const second = yield* snowflakes(activation2.built)
+        const minted = [...first, ...second]
+        expect(minted.filter((id) => !readsExactly(id) || id > MAX_EXACT_ID)).toEqual([])
+        expect(minted.slice(1).filter((id, index) => id <= (minted[index] ?? 0n))).toEqual([])
+        expect(second.filter((id) => id <= ahead)).toEqual([])
+        expect(wallsOf(disk)).toEqual([])
+
+        // A Bun SQLite root reads 64-bit integers, so it keeps Effect's
+        // generator: a timestamp shifted 22 bits, past 2^53.
+        const bunRoot = yield* Layer.build(
+          createE2ELayer({
+            agents: [testAgent],
+            extensions: [echoExtension(runs)],
+            providerLayer: model.layer,
+            cwd,
+            home,
+          }),
+        )
+        const bun = yield* snowflakes(bunRoot)
+        expect(bun.filter((id) => id <= MAX_EXACT_ID)).toEqual([])
+      }).pipe(Effect.timeout("30 seconds")),
+    45_000,
+  )
+
+  it.scopedLive(
+    "ids an older build left past 2^53 move under it in their order, and its turn resumes and releases",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-do-stale-")
+        const cwd = yield* makeTempDirectoryScoped("gent-do-stale-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-do-stale-home-")
+        const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
+        const runs = yield* Ref.make(0)
+        const root = (
+          sql: Layer.Layer<SqlClient.SqlClient>,
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+        ) => hostedRoot({ sql, cwd, home, runs, providerLayer })
+
+        // Activation 1 runs the tool and is evicted while step 2 waits, with
+        // the turn's request and its keep-alive unprocessed.
+        const first = yield* LanguageModelLayers.sequence([
+          toolCallStep("echo", { text: "hello" }),
+          { ...textStep("never emitted"), gated: true },
+        ])
+        const activation1 = yield* activate(disk, "boot-1", (sql, scope) =>
+          createRpcClient(root(sql, first.layer)).pipe(Effect.provideService(Scope.Scope, scope)),
+        )
+        const { client } = activation1.built
+        const { sessionId, branchId } = yield* client.session.create({ cwd })
+        yield* client.message.send({ sessionId, branchId, content: "echo hello" })
+        yield* first.controls.waitForCall(1)
+        yield* activation1.evict
+        expect(unprocessedTags(disk)).toContain(KEEP_ALIVE)
+
+        // An older build's ids: the same rows with every id past 2^53, as
+        // Effect's default snowflakes are, written exactly through the API.
+        disk.setPhase("older-build")
+        const shift = String(2n ** 60n)
+        const older = disk.activate("enforce").storage
+        older.sql.exec(
+          `UPDATE cluster_messages SET id = id + ${shift}, request_id = request_id + ${shift}, reply_id = reply_id + ${shift}, last_reply_id = last_reply_id + ${shift}`,
+        )
+        older.sql.exec(
+          `UPDATE cluster_replies SET id = id + ${shift}, request_id = request_id + ${shift}`,
+        )
+        const staleLinks = linksOf(disk)
+        expect(storedClusterIds(disk).filter((id) => id <= MAX_EXACT_ID)).toEqual([])
+
+        // Activation 2, the alarm: the root moves the ids under 2^53, and the
+        // turn resumes from storage.
+        const second = yield* LanguageModelLayers.sequence([textStep("done")])
+        const activation2 = yield* activate(disk, "boot-2", (sql, scope) =>
+          Layer.buildWithScope(root(sql, second.layer), scope),
+        )
+        disk.setPhase("resume")
+        yield* Context.get(activation2.built, Sharding.Sharding).pollStorage
+        yield* waitFor(eventCount(disk, "TurnCompleted"), (n) => n >= 1, 15_000, "TurnCompleted")
+        yield* waitFor(
+          Effect.sync(() => unprocessedTags(disk)),
+          (tags) => tags.length === 0,
+          5_000,
+          "every message processed",
+        )
+
+        // Each row keeps its place and every link names the same row; the
+        // rows the turn wrote since sort after them.
+        const moved = linksOf(disk)
+        const olderRows = ["message", "reply"].flatMap((table) =>
+          moved
+            .filter((row) => row.table === table)
+            .slice(0, staleLinks.filter((row) => row.table === table).length),
+        )
+        expect(olderRows).toEqual(staleLinks)
+        expect(storedClusterIds(disk).filter((id) => id > MAX_EXACT_ID)).toEqual([])
+        expect(Option.isNone(yield* nextClusterWake(disk))).toBe(true)
+        expect(yield* eventCount(disk, "TurnCompleted")).toBe(1)
+        expect(yield* Ref.get(runs)).toBe(1)
+        expect(yield* second.controls.callCount).toBe(1)
+        expect(wallsOf(disk)).toEqual([])
+      }).pipe(Effect.timeout("45 seconds")),
+    60_000,
   )
 
   it.scopedLive("a session tree and a branch list of over 100 pass the bound-parameter cap", () =>
