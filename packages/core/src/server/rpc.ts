@@ -65,14 +65,14 @@ import { WorkspaceRpcMiddleware } from "./workspace-rpc.js"
 
 export { InvalidStateError, NotFoundError } from "../domain/errors.js"
 
-export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocolError>()(
-  "ExtensionProtocolError",
-  {
-    extensionId: ExtensionId,
-    tag: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class ExtensionProtocolError extends Schema.TaggedError<
+  ExtensionProtocolError,
+  { readonly brand: unique symbol }
+>()("ExtensionProtocolError", {
+  extensionId: ExtensionId,
+  tag: Schema.String,
+  message: Schema.String,
+}) {}
 
 export const GentRpcError = Schema.Union([
   ConfigLoadError,
@@ -167,7 +167,10 @@ export const GetSessionSnapshotInput = Schema.Struct({
 })
 export type GetSessionSnapshotInput = typeof GetSessionSnapshotInput.Type
 
-export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnapshot")({
+export class SessionSnapshot extends Schema.Class<
+  SessionSnapshot,
+  { readonly brand: unique symbol }
+>("SessionSnapshot")({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.optional(Schema.String),
@@ -373,7 +376,10 @@ export const ExtensionRpcRequestInput = Schema.Struct({
 })
 export type ExtensionRpcRequestInput = typeof ExtensionRpcRequestInput.Type
 
-export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashCommandInfo")({
+export class SlashCommandInfo extends Schema.Class<
+  SlashCommandInfo,
+  { readonly brand: unique symbol }
+>("SlashCommandInfo")({
   /** Routing key (capability id). */
   name: Schema.String,
   /** Author-supplied display name for the slash menu. Falls back to
@@ -474,7 +480,10 @@ export const DriverInfo = Schema.Struct({
 /** Snapshot returned by `driver.list`: every registered driver and the
  *  agent catalogue, as the session's profile sees them. Each agent goes out
  *  with the tool lists an older client reads (`StoredAgentDefinition`). */
-export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
+export class DriverListResult extends Schema.Class<
+  DriverListResult,
+  { readonly brand: unique symbol }
+>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
   agents: Schema.Array(StoredAgentDefinition),
 }) {}
@@ -496,10 +505,10 @@ export type ClearDriverOverrideInput = typeof ClearDriverOverrideInput.Type
 
 // ── connection lifecycle rpcs ───────────────────────────────────────────────
 
-export class GentConnectionError extends Schema.TaggedError<GentConnectionError>()(
-  "@gent/core/GentConnectionError",
-  { message: Schema.String },
-) {}
+export class GentConnectionError extends Schema.TaggedError<
+  GentConnectionError,
+  { readonly brand: unique symbol }
+>()("@gent/core/GentConnectionError", { message: Schema.String }) {}
 
 export const ConnectionState = Schema.Union([
   Schema.TaggedStruct("Connecting", {}),

@@ -26,7 +26,7 @@ import {
   ModelId,
   ProviderId,
   SessionId,
-  type SessionSnapshot,
+  SessionSnapshot,
   type ReasoningEffort,
   type UpdateSessionSettingsInput,
 } from "@gent/core/protocol"
@@ -287,26 +287,27 @@ const snapshotOf = (
     lastInputTokens: number
     context?: typeof busyContext
   },
-): SessionSnapshot => ({
-  sessionId: session.sessionId,
-  branchId: session.branchId,
-  messages: [],
-  lastEventId: nullValue,
-  reasoningLevel: absent,
-  resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("primary"),
-  runtime: {
-    _tag: "Idle",
-    queue: emptyQueueSnapshot(),
-  },
-  metrics: {
-    turns: 1,
-    durationMs: 10,
-    costUsd: metrics.costUsd,
-    lastInputTokens: metrics.lastInputTokens,
-    context: metrics.context,
-  },
-})
+): SessionSnapshot =>
+  SessionSnapshot.make({
+    sessionId: session.sessionId,
+    branchId: session.branchId,
+    messages: [],
+    lastEventId: nullValue,
+    reasoningLevel: absent,
+    resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+    agent: AgentName.make("primary"),
+    runtime: {
+      _tag: "Idle",
+      queue: emptyQueueSnapshot(),
+    },
+    metrics: {
+      turns: 1,
+      durationMs: 10,
+      costUsd: metrics.costUsd,
+      lastInputTokens: metrics.lastInputTokens,
+      context: metrics.context,
+    },
+  })
 
 describe("ClientProvider session metrics", () => {
   it.scopedLive("switching sessions drops the previous session's context projection", () =>
@@ -698,17 +699,19 @@ describe("ClientProvider session lifecycle", () => {
         // No guess before the snapshot: a handoff inherits its parent's agent,
         // so assuming the default would flicker.
         expect(active.agent()).toEqual(Option.none())
-        active.applySessionSnapshot({
-          sessionId: SessionId.make("session-new"),
-          branchId: BranchId.make("branch-new"),
-          messages: [],
-          lastEventId: 1,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-          agent: AgentName.make("secondary"),
-          runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
-          metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-        })
+        active.applySessionSnapshot(
+          SessionSnapshot.make({
+            sessionId: SessionId.make("session-new"),
+            branchId: BranchId.make("branch-new"),
+            messages: [],
+            lastEventId: 1,
+            reasoningLevel: absent,
+            resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+            agent: AgentName.make("secondary"),
+            runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+            metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+          }),
+        )
         expect(active.agent()).toEqual(Option.some(AgentName.make("secondary")))
       }),
   )
@@ -927,22 +930,24 @@ describe("ClientProvider session lifecycle", () => {
       const { client } = yield* mountClient({
         initialSession: sessionFixture(sessionId, branchId, "Runtime"),
       })
-      client.applySessionSnapshot({
-        sessionId,
-        branchId,
-        messages: [],
-        lastEventId: 42,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId,
+          branchId,
+          messages: [],
+          lastEventId: 42,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("main"),
+          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       expect(client.isStreaming()).toBe(true)
       const runtime = {
         _tag: "Idle",
@@ -977,17 +982,19 @@ describe("ClientProvider session lifecycle", () => {
           clientRuntime,
           ClientContext.use(({ shell }) => Effect.sync(() => shell.notify(message))),
         )
-      client.applySessionSnapshot({
-        sessionId,
-        branchId,
-        messages: [],
-        lastEventId: 1,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("main"),
-        runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
-        metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId,
+          branchId,
+          messages: [],
+          lastEventId: 1,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("main"),
+          runtime: { _tag: "Running", queue: emptyQueueSnapshot(), startedAtMs: 0 },
+          metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+        }),
+      )
       yield* notify("Usage: /driver <agent> <driver-id|default>")
       // Esc cancels a streaming turn; a notice must not turn it into a quit.
       expect(client.isStreaming()).toBe(true)
@@ -1250,25 +1257,27 @@ describe("ClientProvider session lifecycle", () => {
       const { setup, client } = yield* mountClient({
         initialSession: sessionFixture("session-model", "branch-model", "M"),
       })
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-model"),
-        branchId: BranchId.make("branch-model"),
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: absent,
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Idle",
-          queue: emptyQueueSnapshot(),
-        },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-model"),
+          branchId: BranchId.make("branch-model"),
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: {
+            _tag: "Idle",
+            queue: emptyQueueSnapshot(),
+          },
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => Option.contains(client.model(), ModelId.make("anthropic/claude-haiku-4-5-20251001")),
@@ -1286,26 +1295,28 @@ describe("ClientProvider session lifecycle", () => {
       const { setup, client } = yield* mountClient({
         initialSession: sessionFixture("session-refresh", "branch-refresh", "Stale"),
       })
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-refresh"),
-        branchId: BranchId.make("branch-refresh"),
-        name: "Fresh",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "high",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Idle",
-          queue: emptyQueueSnapshot(),
-        },
-        metrics: {
-          turns: 0,
-          durationMs: 0,
-          costUsd: 0,
-          lastInputTokens: 0,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-refresh"),
+          branchId: BranchId.make("branch-refresh"),
+          name: "Fresh",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "high",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: {
+            _tag: "Idle",
+            queue: emptyQueueSnapshot(),
+          },
+          metrics: {
+            turns: 0,
+            durationMs: 0,
+            costUsd: 0,
+            lastInputTokens: 0,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => client.session().name === "Fresh" && client.session().reasoningLevel === "high",
@@ -1331,27 +1342,29 @@ describe("ClientProvider session lifecycle", () => {
         BranchId.make("branch-target"),
         "Target",
       )
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-source"),
-        branchId: BranchId.make("branch-source"),
-        name: "Foreign",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "high",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Running",
-          queue: emptyQueueSnapshot(),
-          startedAtMs: 0,
-        },
-        metrics: {
-          turns: 9,
-          durationMs: 0,
-          costUsd: 123,
-          lastInputTokens: 456,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-source"),
+          branchId: BranchId.make("branch-source"),
+          name: "Foreign",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "high",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: {
+            _tag: "Running",
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          },
+          metrics: {
+            turns: 9,
+            durationMs: 0,
+            costUsd: 123,
+            lastInputTokens: 456,
+          },
+        }),
+      )
       expect(client.session()).toEqual({
         sessionId: SessionId.make("session-target"),
         branchId: BranchId.make("branch-target"),
@@ -1378,27 +1391,29 @@ describe("ClientProvider session lifecycle", () => {
         BranchId.make("branch-new"),
         "New",
       )
-      client.applySessionSnapshot({
-        sessionId: SessionId.make("session-branch-race"),
-        branchId: BranchId.make("branch-old"),
-        name: "Old Snapshot",
-        messages: [],
-        lastEventId: nullValue,
-        reasoningLevel: "medium",
-        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        agent: AgentName.make("primary"),
-        runtime: {
-          _tag: "Running",
-          queue: emptyQueueSnapshot(),
-          startedAtMs: 0,
-        },
-        metrics: {
-          turns: 1,
-          durationMs: 0,
-          costUsd: 12,
-          lastInputTokens: 34,
-        },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          sessionId: SessionId.make("session-branch-race"),
+          branchId: BranchId.make("branch-old"),
+          name: "Old Snapshot",
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: "medium",
+          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+          agent: AgentName.make("primary"),
+          runtime: {
+            _tag: "Running",
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          },
+          metrics: {
+            turns: 1,
+            durationMs: 0,
+            costUsd: 12,
+            lastInputTokens: 34,
+          },
+        }),
+      )
       yield* waitForFrame(
         setup,
         () => client.session().branchId === BranchId.make("branch-new"),
@@ -1424,25 +1439,27 @@ describe("ClientProvider session lifecycle", () => {
         const { setup, client } = yield* mountClient({
           initialSession: sessionFixture("session-prev", "branch-prev", "P"),
         })
-        client.applySessionSnapshot({
-          sessionId: SessionId.make("session-prev"),
-          branchId: BranchId.make("branch-prev"),
-          messages: [],
-          lastEventId: nullValue,
-          reasoningLevel: absent,
-          resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-          agent: AgentName.make("primary"),
-          runtime: {
-            _tag: "Idle",
-            queue: emptyQueueSnapshot(),
-          },
-          metrics: {
-            turns: 1,
-            durationMs: 0,
-            costUsd: 0,
-            lastInputTokens: 0,
-          },
-        })
+        client.applySessionSnapshot(
+          SessionSnapshot.make({
+            sessionId: SessionId.make("session-prev"),
+            branchId: BranchId.make("branch-prev"),
+            messages: [],
+            lastEventId: nullValue,
+            reasoningLevel: absent,
+            resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+            agent: AgentName.make("primary"),
+            runtime: {
+              _tag: "Idle",
+              queue: emptyQueueSnapshot(),
+            },
+            metrics: {
+              turns: 1,
+              durationMs: 0,
+              costUsd: 0,
+              lastInputTokens: 0,
+            },
+          }),
+        )
         yield* waitForFrame(
           setup,
           () =>

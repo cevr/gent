@@ -27,7 +27,7 @@
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@effect/tsgo": "0.51.1",
+    "@effect/tsgo": "0.53.4",
     "@gent/core": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@oxlint/plugins": "^1.87.0",

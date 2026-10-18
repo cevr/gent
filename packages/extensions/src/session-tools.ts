@@ -33,7 +33,10 @@ import { registerThreads, ThreadStartTool, THREAD_LINES } from "./threads.js"
 
 // Read Session Error
 
-class ReadSessionError extends Schema.TaggedError<ReadSessionError>()("ReadSessionError", {
+class ReadSessionError extends Schema.TaggedError<
+  ReadSessionError,
+  { readonly brand: unique symbol }
+>()("ReadSessionError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -280,7 +283,10 @@ const RenameSessionTool = tool({
  * turn reads it at its next step; an idle branch wakes and answers it.
  */
 
-class SendSessionError extends Schema.TaggedError<SendSessionError>()("SendSessionError", {
+class SendSessionError extends Schema.TaggedError<
+  SendSessionError,
+  { readonly brand: unique symbol }
+>()("SendSessionError", {
   message: Schema.String,
 }) {}
 

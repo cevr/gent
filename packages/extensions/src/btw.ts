@@ -156,9 +156,12 @@ type AskInput = typeof AskInput.Type
  * it: which fork the branch opened last, and the reply streaming now.
  */
 
-class ForkError extends Schema.TaggedError<ForkError>()("ForkError", {
-  message: Schema.String,
-}) {}
+class ForkError extends Schema.TaggedError<ForkError, { readonly brand: unique symbol }>()(
+  "ForkError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 // ── Open forks ──
 

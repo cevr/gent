@@ -380,22 +380,22 @@ export const resolveReplayToolBinding = Effect.fn("ToolBinding.resolveReplay")(f
 
 // ── tool-binding-replay ─────────────────────────────────────────────────────
 
-export class ToolBindingReplayError extends Schema.TaggedError<ToolBindingReplayError>()(
-  "ToolBindingReplayError",
-  {
-    assistantMessageId: Schema.String,
-    toolCallId: Schema.String,
-    toolId: Schema.String,
-    reason: Schema.Literals([
-      "MissingBinding",
-      "ToolUnavailable",
-      "MissingSourceIdentity",
-      "SourceMismatch",
-      "SchemaMismatch",
-    ]),
-    message: Schema.String,
-  },
-) {}
+export class ToolBindingReplayError extends Schema.TaggedError<
+  ToolBindingReplayError,
+  { readonly brand: unique symbol }
+>()("ToolBindingReplayError", {
+  assistantMessageId: Schema.String,
+  toolCallId: Schema.String,
+  toolId: Schema.String,
+  reason: Schema.Literals([
+    "MissingBinding",
+    "ToolUnavailable",
+    "MissingSourceIdentity",
+    "SourceMismatch",
+    "SchemaMismatch",
+  ]),
+  message: Schema.String,
+}) {}
 
 type ToolBindingReplayReason = ToolBindingReplayError["reason"]
 
@@ -760,9 +760,10 @@ export interface ResolvedToolCapability {
 
 type ToolExecutionError = AiError.AiError | InteractionPendingError | Error
 
-class ToolExecutionFailure extends Schema.TaggedError<ToolExecutionFailure>(
-  "@gent/core/src/runtime/tools/ToolExecutionFailure",
-)("ToolExecutionFailure", {
+class ToolExecutionFailure extends Schema.TaggedError<
+  ToolExecutionFailure,
+  { readonly brand: unique symbol }
+>("@gent/core/src/runtime/tools/ToolExecutionFailure")("ToolExecutionFailure", {
   message: Schema.String,
 }) {}
 
@@ -1326,9 +1327,10 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 const TOOL_CONCURRENCY = 8
 
 /** InteractionPendingError with the results of the calls that did finish */
-export class ToolInteractionPending extends Schema.TaggedError<ToolInteractionPending>(
-  "@gent/core/src/runtime/tools/ToolInteractionPending",
-)("ToolInteractionPending", {
+export class ToolInteractionPending extends Schema.TaggedError<
+  ToolInteractionPending,
+  { readonly brand: unique symbol }
+>("@gent/core/src/runtime/tools/ToolInteractionPending")("ToolInteractionPending", {
   pending: InteractionPendingError,
   completedResults: Schema.Array(Prompt.ToolResultPart),
 }) {}
@@ -1569,7 +1571,10 @@ export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
 })
 export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 
-export class ToolCallRecoveryError extends Schema.TaggedError<ToolCallRecoveryError>()(
-  "@gent/core/src/runtime/tools/ToolCallRecoveryError",
-  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {}
+export class ToolCallRecoveryError extends Schema.TaggedError<
+  ToolCallRecoveryError,
+  { readonly brand: unique symbol }
+>()("@gent/core/src/runtime/tools/ToolCallRecoveryError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}

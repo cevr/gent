@@ -50,7 +50,8 @@ import {
   dateFromMillis,
   ModelId,
   SessionId,
-  type Session as DomainSession,
+  Session as DomainSession,
+  SessionSnapshot,
   type GentNamespacedClient,
   ConnectionState,
 } from "@gent/core/protocol"
@@ -710,13 +711,14 @@ export const renderScoped = (...args: Parameters<typeof renderWithProviders>) =>
   )
 
 /** A stored session to start a render on: `initialSession` takes it as the server lists it. */
-export const sessionFixture = (id: string, branch: string, name: string): DomainSession => ({
-  id: SessionId.make(id),
-  activeBranchId: BranchId.make(branch),
-  name,
-  createdAt: dateFromMillis(0),
-  updatedAt: dateFromMillis(0),
-})
+export const sessionFixture = (id: string, branch: string, name: string): DomainSession =>
+  DomainSession.make({
+    id: SessionId.make(id),
+    activeBranchId: BranchId.make(branch),
+    name,
+    createdAt: dateFromMillis(0),
+    updatedAt: dateFromMillis(0),
+  })
 
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
@@ -755,18 +757,20 @@ export const mountClient = (
  */
 export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName): void => {
   const session = client.session()
-  client.applySessionSnapshot({
-    sessionId: session.sessionId,
-    branchId: session.branchId,
-    name: session.name,
-    modelId: session.modelId,
-    reasoningLevel: session.reasoningLevel,
-    messages: [],
-    // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
-    lastEventId: null,
-    resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-    agent,
-    runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
-    metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-  })
+  client.applySessionSnapshot(
+    SessionSnapshot.make({
+      sessionId: session.sessionId,
+      branchId: session.branchId,
+      name: session.name,
+      modelId: session.modelId,
+      reasoningLevel: session.reasoningLevel,
+      messages: [],
+      // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+      lastEventId: null,
+      resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+      agent,
+      runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+      metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+    }),
+  )
 }

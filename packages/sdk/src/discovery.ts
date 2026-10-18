@@ -169,7 +169,10 @@ export const buildFingerprint: Effect.Effect<string, never, BuildFingerprintServ
  * server's identity endpoint before it attaches.
  */
 
-export class ServerLockEntry extends Schema.Class<ServerLockEntry>("ServerLockEntry")({
+export class ServerLockEntry extends Schema.Class<
+  ServerLockEntry,
+  { readonly brand: unique symbol }
+>("ServerLockEntry")({
   serverId: Schema.String,
   pid: Schema.Finite,
   hostname: Schema.String,

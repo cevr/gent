@@ -745,10 +745,10 @@ const writeCredentialsFile = (
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
 
-class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
-  "ClaudeKeychainNotFoundError",
-  {},
-) {}
+class ClaudeKeychainNotFoundError extends Schema.TaggedError<
+  ClaudeKeychainNotFoundError,
+  { readonly brand: unique symbol }
+>()("ClaudeKeychainNotFoundError", {}) {}
 
 const spawnSecurity = (
   args: readonly string[],
@@ -1501,7 +1501,10 @@ const settleQuarantined = (
  * does not clear it; only moving the file by hand does. Its message is the
  * whole failure, with no sign-in hint after it.
  */
-class LinkedRotationStuck extends Schema.TaggedError<LinkedRotationStuck>()("LinkedRotationStuck", {
+class LinkedRotationStuck extends Schema.TaggedError<
+  LinkedRotationStuck,
+  { readonly brand: unique symbol }
+>()("LinkedRotationStuck", {
   message: Schema.String,
 }) {}
 

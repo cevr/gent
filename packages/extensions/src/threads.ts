@@ -133,12 +133,18 @@ You are a worker thread: a long-lived session that another session started. Each
 
 // ── errors ──────────────────────────────────────────────────────────────────
 
-class ThreadError extends Schema.TaggedError<ThreadError>()("ThreadError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect()),
-}) {}
+class ThreadError extends Schema.TaggedError<ThreadError, { readonly brand: unique symbol }>()(
+  "ThreadError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
-class ThreadStorageError extends Schema.TaggedError<ThreadStorageError>()("ThreadStorageError", {
+class ThreadStorageError extends Schema.TaggedError<
+  ThreadStorageError,
+  { readonly brand: unique symbol }
+>()("ThreadStorageError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

@@ -6,7 +6,10 @@ import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 
 // WebSearch Error
 
-class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSearchError", {
+class WebSearchError extends Schema.TaggedError<
+  WebSearchError,
+  { readonly brand: unique symbol }
+>()("WebSearchError", {
   message: Schema.String,
   query: Schema.String,
   cause: Schema.optional(Schema.Unknown),

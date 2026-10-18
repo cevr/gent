@@ -266,10 +266,10 @@ const drawDiagram = (
 type DiagramLibrary = typeof BeautifulMermaid
 
 /** The diagram library did not load. */
-export class DiagramLibraryError extends Schema.TaggedError<DiagramLibraryError>()(
-  "DiagramLibraryError",
-  { cause: Schema.Defect() },
-) {}
+export class DiagramLibraryError extends Schema.TaggedError<
+  DiagramLibraryError,
+  { readonly brand: unique symbol }
+>()("DiagramLibraryError", { cause: Schema.Defect() }) {}
 
 /**
  * The diagram library as the answers see it: loaded, failed, or not yet.

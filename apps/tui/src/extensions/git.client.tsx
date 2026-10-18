@@ -324,9 +324,12 @@ export const checkoutLabels = (
 // ── reads ───────────────────────────────────────────────────────────────────
 
 /** A git read that did not answer; the last value stays and the reason shows. */
-class GitReadError extends Schema.TaggedError<GitReadError>()("GitReadError", {
-  message: Schema.String,
-}) {}
+class GitReadError extends Schema.TaggedError<GitReadError, { readonly brand: unique symbol }>()(
+  "GitReadError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 type GitServices = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 
@@ -591,12 +594,18 @@ const commandNotFound = (cause: unknown): boolean =>
   cause.reason.module === "ChildProcess"
 
 /** No `gh` on `PATH`: the pull request is never asked for again. */
-class GhMissing extends Schema.TaggedError<GhMissing>()("GhMissing", {}) {}
+class GhMissing extends Schema.TaggedError<GhMissing, { readonly brand: unique symbol }>()(
+  "GhMissing",
+  {},
+) {}
 
 /** A `gh` read that did not answer; the last value stays and the pane names the reason. */
-class GhReadError extends Schema.TaggedError<GhReadError>()("GhReadError", {
-  message: Schema.String,
-}) {}
+class GhReadError extends Schema.TaggedError<GhReadError, { readonly brand: unique symbol }>()(
+  "GhReadError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /** `gh` asks the network; a read that takes longer fails and the last value stays. */
 const GH_TIMEOUT = Duration.seconds(8)
@@ -760,14 +769,20 @@ type ReviewRun = Effect.Effect<
 >
 
 /** No program by this name on `PATH`. */
-class ProgramMissing extends Schema.TaggedError<ProgramMissing>()("ProgramMissing", {
+class ProgramMissing extends Schema.TaggedError<
+  ProgramMissing,
+  { readonly brand: unique symbol }
+>()("ProgramMissing", {
   program: Schema.String,
 }) {}
 
 /** A review that did not run to its end; the status row names the reason. */
-class ReviewFailed extends Schema.TaggedError<ReviewFailed>()("ReviewFailed", {
-  message: Schema.String,
-}) {}
+class ReviewFailed extends Schema.TaggedError<ReviewFailed, { readonly brand: unique symbol }>()(
+  "ReviewFailed",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /** A pager exits 141 (SIGPIPE) when the reader quits it before the end: not a failure. */
 const QUIT_EARLY = 141

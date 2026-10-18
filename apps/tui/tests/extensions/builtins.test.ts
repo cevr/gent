@@ -726,7 +726,10 @@ const contextLayer = (deps: Partial<Omit<ClientContextDeps, "shell" | "workspace
  * `shell.notify`, and a change that lands reports nothing.
  */
 
-class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejected", {
+class DriverRejected extends Schema.TaggedError<
+  DriverRejected,
+  { readonly brand: unique symbol }
+>()("DriverRejected", {
   driverId: Schema.String,
 }) {}
 

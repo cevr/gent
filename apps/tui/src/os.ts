@@ -20,7 +20,10 @@ import { useRequiredContext } from "./utils"
 
 // ── link opening ────────────────────────────────────────────────────────────
 
-export class LinkOpenerError extends Schema.TaggedError<LinkOpenerError>()("LinkOpenerError", {
+export class LinkOpenerError extends Schema.TaggedError<
+  LinkOpenerError,
+  { readonly brand: unique symbol }
+>()("LinkOpenerError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

@@ -138,7 +138,9 @@ const ProviderConfigEntry = Schema.Struct({
 })
 export type ProviderConfigEntry = typeof ProviderConfigEntry.Type
 
-export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
+export class UserConfig extends Schema.Class<UserConfig, { readonly brand: unique symbol }>(
+  "UserConfig",
+)({
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
   /**
@@ -650,13 +652,19 @@ export const configSnapshotFileSystem = (
   })
 }
 
-export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
+export class ConfigLoadError extends Schema.TaggedError<
+  ConfigLoadError,
+  { readonly brand: unique symbol }
+>()("ConfigLoadError", {
   path: Schema.String,
   message: Schema.String,
 }) {}
 
 /** The user config could not be written; the file on disk is unchanged. */
-export class ConfigWriteError extends Schema.TaggedError<ConfigWriteError>()("ConfigWriteError", {
+export class ConfigWriteError extends Schema.TaggedError<
+  ConfigWriteError,
+  { readonly brand: unique symbol }
+>()("ConfigWriteError", {
   path: Schema.String,
   message: Schema.String,
 }) {}

@@ -104,7 +104,10 @@ import type * as AiToolkit from "effect/ai/Toolkit"
 
 // ── auth authorization wire type ────────────────────────────────────────────
 
-export class AuthAuthorization extends Schema.Class<AuthAuthorization>("AuthAuthorization")({
+export class AuthAuthorization extends Schema.Class<
+  AuthAuthorization,
+  { readonly brand: unique symbol }
+>("AuthAuthorization")({
   authorizationId: Schema.String,
   url: Schema.String,
   method: AuthAuthorizationMethod,
@@ -217,19 +220,25 @@ export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
 // ── auth service ────────────────────────────────────────────────────────────
 
-export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Defect()),
-  /**
-   * The provider's lock stayed held by another holder for the whole wait:
-   * nothing ran under it, and a later attempt may pass. Only a lock's
-   * acquisition sets it.
-   */
-  lockBusy: Schema.optional(Schema.Boolean),
-}) {}
+export class AuthError extends Schema.TaggedError<AuthError, { readonly brand: unique symbol }>()(
+  "AuthError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+    /**
+     * The provider's lock stayed held by another holder for the whole wait:
+     * nothing ran under it, and a later attempt may pass. Only a lock's
+     * acquisition sets it.
+     */
+    lockBusy: Schema.optional(Schema.Boolean),
+  },
+) {}
 
 /** A stored entry that does not decode: a corrupt file, or one an older writer tore. */
-class AuthEntryInvalid extends Schema.TaggedError<AuthEntryInvalid>()("AuthEntryInvalid", {
+class AuthEntryInvalid extends Schema.TaggedError<
+  AuthEntryInvalid,
+  { readonly brand: unique symbol }
+>()("AuthEntryInvalid", {
   cause: Schema.Defect(),
 }) {}
 
@@ -3320,7 +3329,10 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
  * named one is not a classifier the profile's drivers list (`UnknownModel`),
  * or its driver failed to build it (`ProviderFailed`).
  */
-class DecisionModelError extends Schema.TaggedError<DecisionModelError>()("DecisionModelError", {
+class DecisionModelError extends Schema.TaggedError<
+  DecisionModelError,
+  { readonly brand: unique symbol }
+>()("DecisionModelError", {
   reason: Schema.Literals(["NoProvider", "UnknownModel", "ProviderFailed"]),
   message: Schema.String,
 }) {}

@@ -471,7 +471,10 @@ const UNREADABLE_ERROR_TEXT = "A thrown value that cannot be read"
 const UNREADABLE_CAUSE_LINE = "caused by (a value that cannot be read)"
 
 /** A value the cell threw, or a promise it returned rejected with; rendered once the built-ins are back. */
-class CellThrow extends Schema.TaggedError<CellThrow>()("CellThrow", { cause: Schema.Unknown }) {}
+class CellThrow extends Schema.TaggedError<CellThrow, { readonly brand: unique symbol }>()(
+  "CellThrow",
+  { cause: Schema.Unknown },
+) {}
 
 /** Taken when the worker loads: a cell may replace the globals later. */
 const errorPrototype: object = Error.prototype

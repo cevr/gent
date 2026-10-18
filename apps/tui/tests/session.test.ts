@@ -67,7 +67,8 @@ import {
   EventEnvelope,
   Message,
   projectMessage,
-  type SessionSnapshot,
+  QueueSnapshot,
+  SessionSnapshot,
   ToolCallId,
   ToolInteraction,
   OutputCut,
@@ -650,7 +651,10 @@ describe("session controller state", () => {
   })
 
   test("the turn is the runtime's: its start kept through an ask, cleared when idle", () => {
-    const queue = { steering: [], followUp: [queueEntry("FollowUp", "m1", "next")] }
+    const queue = QueueSnapshot.make({
+      steering: [],
+      followUp: [queueEntry("FollowUp", "m1", "next")],
+    })
     const running = applyRuntime(initialSessionControllerState(), {
       _tag: "Running",
       startedAtMs: 1_000,
@@ -665,7 +669,10 @@ describe("session controller state", () => {
       queue,
     })
     expect(waiting.turn).toEqual(Option.some({ startedAt: 1_000, waitingForAnswer: true }))
-    const idle = applyRuntime(waiting, { _tag: "Idle", queue: { steering: [], followUp: [] } })
+    const idle = applyRuntime(waiting, {
+      _tag: "Idle",
+      queue: QueueSnapshot.make({ steering: [], followUp: [] }),
+    })
     expect(idle.turn).toEqual(Option.none())
     expect(queuedDraftText(idle.queue)).toEqual(Option.none())
   })
@@ -1323,24 +1330,25 @@ const snapshotFor = (
   sessionId: SessionId,
   branchId: BranchId,
   lastEventId?: number,
-): SessionSnapshot => ({
-  sessionId,
-  branchId,
-  messages: [],
-  lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
-  resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-  agent: AgentName.make("primary"),
-  runtime: {
-    _tag: "Idle",
-    queue: emptyQueueSnapshot(),
-  },
-  metrics: {
-    turns: 0,
-    durationMs: 0,
-    costUsd: 0,
-    lastInputTokens: 0,
-  },
-})
+): SessionSnapshot =>
+  SessionSnapshot.make({
+    sessionId,
+    branchId,
+    messages: [],
+    lastEventId: Option.getOrNull(Option.fromNullishOr(lastEventId)),
+    resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+    agent: AgentName.make("primary"),
+    runtime: {
+      _tag: "Idle",
+      queue: emptyQueueSnapshot(),
+    },
+    metrics: {
+      turns: 0,
+      durationMs: 0,
+      costUsd: 0,
+      lastInputTokens: 0,
+    },
+  })
 
 const runtimeSnapshot = (): SessionRuntimeState => ({
   _tag: "Idle",

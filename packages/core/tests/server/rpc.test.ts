@@ -2141,9 +2141,12 @@ const invoked: Array<{
   cwd: string
 }> = []
 // Server-visible slash commands are slash-decorated requests.
-class RefusedError extends Schema.TaggedError<RefusedError>()("RefusedError", {
-  message: Schema.String,
-}) {}
+class RefusedError extends Schema.TaggedError<RefusedError, { readonly brand: unique symbol }>()(
+  "RefusedError",
+  {
+    message: Schema.String,
+  },
+) {}
 const TestCommandsExtension: GentExtension = {
   manifest: { id: ExtensionId.make("@test/commands") },
   setup: registerContributions({

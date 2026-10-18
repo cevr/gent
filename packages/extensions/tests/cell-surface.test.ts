@@ -2543,7 +2543,9 @@ const discoveryId = tool({
   execute: () => Effect.succeed(true),
 })
 
-class ClassResult extends Schema.Class<ClassResult>("ClassResult")({
+class ClassResult extends Schema.Class<ClassResult, { readonly brand: unique symbol }>(
+  "ClassResult",
+)({
   ok: Schema.Boolean,
   items: Schema.Array(Schema.String),
 }) {}

@@ -178,25 +178,28 @@ const decodeDeviceError = Schema.decodeUnknownOption(Schema.fromJsonString(Devic
  * `buildOpenAIModelDriver`'s `authorize`/`callback` preserves structure
  * in `cause`, not just a string.
  */
-export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
-  reason: Schema.Literals([
-    "token-exchange-failed",
-    "token-refresh-failed",
-    "token-endpoint-unavailable",
-    "callback-error",
-    "missing-code",
-    "state-mismatch",
-    "callback-timeout",
-    "pkce-failed",
-    "server-failed",
-    "device-code-failed",
-    "device-code-denied",
-    "device-code-timeout",
-  ]),
-  message: Schema.String,
-  /** The token endpoint answered with a refusal: a 4xx other than a rate limit. */
-  refused: Schema.optional(Schema.Literal(true)),
-}) {}
+export class OAuthError extends Schema.TaggedError<OAuthError, { readonly brand: unique symbol }>()(
+  "OAuthError",
+  {
+    reason: Schema.Literals([
+      "token-exchange-failed",
+      "token-refresh-failed",
+      "token-endpoint-unavailable",
+      "callback-error",
+      "missing-code",
+      "state-mismatch",
+      "callback-timeout",
+      "pkce-failed",
+      "server-failed",
+      "device-code-failed",
+      "device-code-denied",
+      "device-code-timeout",
+    ]),
+    message: Schema.String,
+    /** The token endpoint answered with a refusal: a 4xx other than a rate limit. */
+    refused: Schema.optional(Schema.Literal(true)),
+  },
+) {}
 
 /**
  * ChatGPT OAuth reaches the Codex backend for the GPT-5 and GPT-6 families
@@ -1532,9 +1535,10 @@ const SummaryRefusal = Schema.fromJsonString(
 const decodeSummaryRefusal = Schema.decodeUnknownOption(SummaryRefusal)
 
 /** Drives the one retry after a summary refusal; carries the refusal for when no retry is left. */
-class SummaryRefusedError extends Schema.TaggedError<SummaryRefusedError>(
-  "@gent/extensions/src/openai/SummaryRefusedError",
-)("SummaryRefusedError", {
+class SummaryRefusedError extends Schema.TaggedError<
+  SummaryRefusedError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/openai/SummaryRefusedError")("SummaryRefusedError", {
   response: HttpResponseField,
 }) {}
 
@@ -1628,9 +1632,10 @@ const decodeEncryptedContentRejection = Schema.decodeUnknownOption(EncryptedCont
 type RejectedReasoning = Ref.Ref<HashSet.HashSet<string>>
 
 /** Drives the one retry after a rejection; carries the response for when no retry is left. */
-class ReasoningRejectedError extends Schema.TaggedError<ReasoningRejectedError>(
-  "@gent/extensions/src/openai/ReasoningRejectedError",
-)("ReasoningRejectedError", {
+class ReasoningRejectedError extends Schema.TaggedError<
+  ReasoningRejectedError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/openai/ReasoningRejectedError")("ReasoningRejectedError", {
   response: HttpResponseField,
 }) {}
 

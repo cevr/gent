@@ -391,7 +391,10 @@ export const QuestionAnswerDetails = Schema.Struct({
 })
 export type QuestionAnswerDetails = typeof QuestionAnswerDetails.Type
 
-class QuestionsError extends Schema.TaggedError<QuestionsError>()("QuestionsError", {
+class QuestionsError extends Schema.TaggedError<
+  QuestionsError,
+  { readonly brand: unique symbol }
+>()("QuestionsError", {
   message: Schema.String,
 }) {}
 

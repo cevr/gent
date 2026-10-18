@@ -822,7 +822,10 @@ export const seedDebugSession = (cwd: string) =>
  * than in the entry point that renders the app.
  */
 
-export class CliStartupError extends Schema.TaggedError<CliStartupError>()("CliStartupError", {
+export class CliStartupError extends Schema.TaggedError<
+  CliStartupError,
+  { readonly brand: unique symbol }
+>()("CliStartupError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
@@ -1265,9 +1268,12 @@ export const markVersionInUse = Effect.gen(function* () {
   if (!pair.every(Boolean)) return yield* removed
 })
 
-class UpgradeError extends Schema.TaggedError<UpgradeError>()("UpgradeError", {
-  message: Schema.String,
-}) {}
+class UpgradeError extends Schema.TaggedError<UpgradeError, { readonly brand: unique symbol }>()(
+  "UpgradeError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 const UpgradeOutcome = Schema.TaggedUnion({
   /** The release's install.sh switched the install to `to`; `report` is what it said. */

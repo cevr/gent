@@ -29,13 +29,7 @@ import {
 } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import { SingleRunner } from "effect/cluster"
-import {
-  Branch,
-  dateFromMillis,
-  Message,
-  type QueueSnapshot,
-  Session,
-} from "../../src/domain/message"
+import { Branch, dateFromMillis, Message, QueueSnapshot, Session } from "../../src/domain/message"
 import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
 import {
   CurrentWorkspaceId,
@@ -368,8 +362,8 @@ describe("SessionRuntime", () => {
         expect(queueExit._tag).toBe("Failure")
         const firstQueue = yield* sessionRuntime.getQueuedMessages(queueTarget)
         const secondQueue = yield* sessionRuntime.getQueuedMessages(queueForeign)
-        expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
-        expect(secondQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+        expect(firstQueue).toEqual(QueueSnapshot.make({ followUp: [], steering: [] }))
+        expect(secondQueue).toEqual(QueueSnapshot.make({ followUp: [], steering: [] }))
 
         const target = yield* createSessionBranchWithIds({
           sessionId: SessionId.make("runtime-queue-direct"),
@@ -706,10 +700,12 @@ describe("SessionRuntime", () => {
           expect.objectContaining({ _tag: "FollowUp", content: "drain me" }),
         ])
         expect(retried).toEqual(drained)
-        expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
-          steering: [],
-          followUp: [],
-        } satisfies QueueSnapshot)
+        expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual(
+          QueueSnapshot.make({
+            steering: [],
+            followUp: [],
+          }),
+        )
         yield* controls.emitAll(0)
         yield* waitFor(
           currentState(sessionRuntime, { sessionId, branchId }),

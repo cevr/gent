@@ -322,7 +322,10 @@ export const screenWaitFor = (
 
 // ── Settle-then-capture ──
 
-class PtySettleError extends Schema.TaggedError<PtySettleError>()("@gent/e2e/PtySettleError", {
+class PtySettleError extends Schema.TaggedError<
+  PtySettleError,
+  { readonly brand: unique symbol }
+>()("@gent/e2e/PtySettleError", {
   message: Schema.String,
 }) {}
 

@@ -2,9 +2,12 @@ import { BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
 import { Config, Crypto, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 
-class BuildError extends Schema.TaggedError<BuildError>()("BuildError", {
-  message: Schema.String,
-}) {}
+class BuildError extends Schema.TaggedError<BuildError, { readonly brand: unique symbol }>()(
+  "BuildError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /** The version field of `apps/tui/package.json`: the gent version. */
 const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.NonEmptyString }))

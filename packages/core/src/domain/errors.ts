@@ -14,22 +14,28 @@ import { Schema } from "effect"
 
 // Entity not found at the server-mutation/query boundary. Distinct from
 // generic StorageError so clients can branch on the tag.
-export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFoundError", {
+export class NotFoundError extends Schema.TaggedError<
+  NotFoundError,
+  { readonly brand: unique symbol }
+>()("NotFoundError", {
   message: Schema.String,
 }) {}
 
 // A request the server cannot carry out as stated: a session snapshot read
 // whose events or runtime state cannot be read, or a session create that
 // names a parent branch or thread without its parent session.
-export class InvalidStateError extends Schema.TaggedError<InvalidStateError>()(
-  "InvalidStateError",
-  { message: Schema.String },
-) {}
+export class InvalidStateError extends Schema.TaggedError<
+  InvalidStateError,
+  { readonly brand: unique symbol }
+>()("InvalidStateError", { message: Schema.String }) {}
 
 // ── provider-error ──────────────────────────────────────────────────────────
 
 // A model call that failed. The turn and model resolution raise it.
-export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
+export class ProviderError extends Schema.TaggedError<
+  ProviderError,
+  { readonly brand: unique symbol }
+>()("ProviderError", {
   message: Schema.String,
   model: Schema.String,
   cause: Schema.optional(Schema.Defect()),
@@ -39,7 +45,10 @@ export class ProviderError extends Schema.TaggedError<ProviderError>()("Provider
 
 // Consumed by every persistence-touching service; domain interfaces such as
 // `SessionMutationsService` reference it in their failure channel.
-export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
+export class StorageError extends Schema.TaggedError<
+  StorageError,
+  { readonly brand: unique symbol }
+>()("StorageError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

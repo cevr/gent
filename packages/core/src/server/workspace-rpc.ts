@@ -39,12 +39,12 @@ export const workspaceHeadersForCwd = (cwd: string): WorkspaceHeaders => ({
   [WORKSPACE_ID_HEADER]: String(workspaceIdForCwd(cwd)),
 })
 
-class WorkspaceHeaderError extends Schema.TaggedError<WorkspaceHeaderError>()(
-  "WorkspaceHeaderError",
-  {
-    message: Schema.String,
-  },
-) {}
+class WorkspaceHeaderError extends Schema.TaggedError<
+  WorkspaceHeaderError,
+  { readonly brand: unique symbol }
+>()("WorkspaceHeaderError", {
+  message: Schema.String,
+}) {}
 
 const validateWorkspaceId = (
   workspaceId: string,

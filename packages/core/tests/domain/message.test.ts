@@ -26,6 +26,7 @@ import {
   SteerCommand,
   tailChars,
   toolCallReceipts,
+  ToolInteraction,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Predicate, Schema } from "effect"
@@ -1565,24 +1566,28 @@ describe("message part projection", () => {
       makeMessage("m-tool-2", "tool", [secondResult]),
     ])
 
-    expect(projected[0]?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc-1"),
-      toolName: "read",
-      status: "completed",
-      input: { path: "first.txt" },
-      summary: "first result",
-      output: "first result",
-      durationMs: absent,
-    })
-    expect(projected[2]?.toolInteractions[0]).toEqual({
-      id: ToolCallId.make("tc-1"),
-      toolName: "read",
-      status: "completed",
-      input: { path: "second.txt" },
-      summary: "second result",
-      output: "second result",
-      durationMs: absent,
-    })
+    expect(projected[0]?.toolInteractions[0]).toEqual(
+      ToolInteraction.make({
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "first.txt" },
+        summary: "first result",
+        output: "first result",
+        durationMs: absent,
+      }),
+    )
+    expect(projected[2]?.toolInteractions[0]).toEqual(
+      ToolInteraction.make({
+        id: ToolCallId.make("tc-1"),
+        toolName: "read",
+        status: "completed",
+        input: { path: "second.txt" },
+        summary: "second result",
+        output: "second result",
+        durationMs: absent,
+      }),
+    )
   })
 
   test("pairs same-message duplicate provider tool ids by part order", () => {
@@ -1620,7 +1625,7 @@ describe("message part projection", () => {
     ])
 
     expect(projected[0]?.toolInteractions).toEqual([
-      {
+      ToolInteraction.make({
         id: ToolCallId.make("tc-1"),
         toolName: "read",
         status: "completed",
@@ -1628,8 +1633,8 @@ describe("message part projection", () => {
         summary: "first result",
         output: "first result",
         durationMs: absent,
-      },
-      {
+      }),
+      ToolInteraction.make({
         id: ToolCallId.make("tc-1"),
         toolName: "read",
         status: "completed",
@@ -1637,7 +1642,7 @@ describe("message part projection", () => {
         summary: "second result",
         output: "second result",
         durationMs: absent,
-      },
+      }),
     ])
   })
 
@@ -1873,7 +1878,7 @@ describe("message part projection", () => {
       callThenResult("tc-failed", "File not found", true),
     )
     expect(projected?.toolInteractions).toEqual([
-      {
+      ToolInteraction.make({
         id: ToolCallId.make("tc-failed"),
         toolName: "read",
         status: "error",
@@ -1881,7 +1886,7 @@ describe("message part projection", () => {
         summary: "File not found",
         output: "File not found",
         durationMs: absent,
-      },
+      }),
     ])
   })
 

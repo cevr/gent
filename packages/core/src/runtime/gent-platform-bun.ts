@@ -324,7 +324,10 @@ export const BunHostModules: ReadonlyMap<string, RuntimeModuleSource> = new Map(
 const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
 
 /** Another connection holds the provider's lock file; try again shortly. */
-class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {}) {}
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy, { readonly brand: unique symbol }>()(
+  "AuthLockBusy",
+  {},
+) {}
 
 /** A writer polls a busy lock this often, this many times (about 30 seconds). */
 const AUTH_LOCK_POLL = Duration.millis(20)
@@ -368,12 +371,7 @@ const fileProviderLock =
       fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
         Effect.mapError(lockError),
         Effect.andThen(open),
-        Effect.flatMap((db) =>
-          take(db).pipe(
-            Effect.onError(() => close(db)),
-            Effect.as(db),
-          ),
-        ),
+        Effect.tap((db) => take(db).pipe(Effect.onError(() => close(db)))),
       ),
       close,
     )

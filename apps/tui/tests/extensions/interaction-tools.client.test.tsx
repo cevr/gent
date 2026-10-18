@@ -23,7 +23,10 @@ import {
 
 // ── background questions ────────────────────────────────────────────────────
 
-class RequestRefused extends Schema.TaggedError<RequestRefused>()("RequestRefused", {
+class RequestRefused extends Schema.TaggedError<
+  RequestRefused,
+  { readonly brand: unique symbol }
+>()("RequestRefused", {
   message: Schema.String,
 }) {}
 

@@ -2907,9 +2907,12 @@ export interface SlashSubmission {
 }
 
 /** A running `!cmd` was stopped: ctrl+c, or the session view went. Nothing is sent. */
-class ShellStopped extends Schema.TaggedError<ShellStopped>()("ShellStopped", {
-  command: Schema.String,
-}) {}
+class ShellStopped extends Schema.TaggedError<ShellStopped, { readonly brand: unique symbol }>()(
+  "ShellStopped",
+  {
+    command: Schema.String,
+  },
+) {}
 
 export interface SessionController {
   items: () => SessionItem[]

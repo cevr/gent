@@ -32,7 +32,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/process"
 import { fencedBlocks, isSteeringFile } from "./guards"
-import { fileSet } from "./check-guardrails"
+import { decodeJsonc, fileSet } from "./check-guardrails"
 
 // ── the blocks and their compile contexts ───────────────────────────────────
 
@@ -148,11 +148,70 @@ export const guideDiagnosticLine = (line: string, blocks: ReadonlyArray<GuideBlo
 
 // ── the check ───────────────────────────────────────────────────────────────
 
-class GuideCodeError extends Schema.TaggedError<GuideCodeError>()("GuideCodeError", {
+class GuideCodeError extends Schema.TaggedError<
+  GuideCodeError,
+  { readonly brand: unique symbol }
+>()("GuideCodeError", {
   message: Schema.String,
 }) {}
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json)
+
+const TsconfigPlugins = Schema.Struct({
+  extends: Schema.OptionFromOptionalKey(Schema.String),
+  compilerOptions: Schema.OptionFromOptionalKey(
+    Schema.Struct({ plugins: Schema.OptionFromOptionalKey(Schema.Array(JsonObject)) }),
+  ),
+})
+
+const LanguageServicePlugin = Schema.StructWithRest(
+  Schema.Struct({
+    name: Schema.Literal("@effect/language-service"),
+    diagnosticSeverity: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  }),
+  [JsonObject],
+)
+
+/**
+ * The plugins a context's tsconfig resolves to (its own, else its `extends`
+ * chain's), with `deterministicKeys` off in the Effect language service. A
+ * block's module path (`examples/extensions/b7.ts`) is generated, so the key it
+ * derives names nothing; the key a block shows ("tally-ext/Tally") is the one
+ * its reader writes.
+ */
+const guidePlugins: (
+  tsconfig: string,
+) => Effect.Effect<
+  ReadonlyArray<typeof JsonObject.Type>,
+  GuideCodeError,
+  FileSystem.FileSystem | Path.Path
+> = Effect.fn("Tooling.guidePlugins")(function* (tsconfig: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const text = yield* fs
+    .readFileString(tsconfig)
+    .pipe(Effect.mapError((error) => new GuideCodeError({ message: error.message })))
+  const { value } = yield* decodeJsonc(tsconfig, text, TsconfigPlugins).pipe(
+    Effect.mapError((message) => new GuideCodeError({ message })),
+  )
+  const plugins = Option.flatMap(value.compilerOptions, (options) => options.plugins)
+  if (Option.isSome(plugins))
+    return plugins.value.map((plugin) =>
+      Option.match(Schema.decodeUnknownOption(LanguageServicePlugin)(plugin), {
+        onNone: () => plugin,
+        onSome: (service) => ({
+          ...service,
+          diagnosticSeverity: { ...service.diagnosticSeverity, deterministicKeys: "off" },
+        }),
+      }),
+    )
+  return yield* Option.match(value.extends, {
+    onNone: () => Effect.succeed([]),
+    onSome: (parent) => guidePlugins(path.resolve(path.dirname(tsconfig), parent)),
+  })
+})
 
 const GuideLintReport = Schema.Struct({
   diagnostics: Schema.Array(
@@ -251,7 +310,11 @@ export const compileContext = Effect.fn("Tooling.compileContext")(function* (
   const tsconfig = {
     extends: path.join(repoRoot, context.tsconfig),
     // The root's `types: ["bun"]` resolves from the root; the rest from the context's modules.
-    compilerOptions: { noEmit: true, typeRoots: [path.join(repoRoot, "node_modules", "@types")] },
+    compilerOptions: {
+      noEmit: true,
+      typeRoots: [path.join(repoRoot, "node_modules", "@types")],
+      plugins: yield* guidePlugins(path.join(repoRoot, context.tsconfig)),
+    },
     include: names,
   }
   yield* fs.writeFileString(path.join(directory, "tsconfig.json"), yield* encodeJson(tsconfig))

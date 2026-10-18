@@ -1,10 +1,10 @@
 import { Effect, Option, Schema, type Scope } from "effect"
 
 /** A worker could not finish its search. Feature owners retain their own error contract. */
-export class RegexMatcherError extends Schema.TaggedError<RegexMatcherError>()(
-  "RegexMatcherError",
-  { message: Schema.String, pattern: Schema.String },
-) {}
+export class RegexMatcherError extends Schema.TaggedError<
+  RegexMatcherError,
+  { readonly brand: unique symbol }
+>()("RegexMatcherError", { message: Schema.String, pattern: Schema.String }) {}
 
 const MatcherReply = Schema.Struct({
   id: Schema.Int,

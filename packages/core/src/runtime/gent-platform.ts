@@ -73,7 +73,10 @@ export interface GentPlatformOsInfo {
 type GentPlatformSignal = string | 0
 
 /** `SignalError` is the typed failure for `GentPlatform.signal(pid, sig)`. */
-export class SignalError extends Schema.TaggedError<SignalError>()("SignalError", {
+export class SignalError extends Schema.TaggedError<
+  SignalError,
+  { readonly brand: unique symbol }
+>()("SignalError", {
   pid: Schema.Finite,
   signal: Schema.Union([Schema.String, Schema.Literal(0)]),
   reason: Schema.String,
@@ -118,7 +121,10 @@ interface TranscodedImage {
  * image has more pixels than the codec decodes (`too-large`), or the codec
  * failed otherwise (`failed`).
  */
-export class ImageCodecError extends Schema.TaggedError<ImageCodecError>()("ImageCodecError", {
+export class ImageCodecError extends Schema.TaggedError<
+  ImageCodecError,
+  { readonly brand: unique symbol }
+>()("ImageCodecError", {
   reason: Schema.Literals(["not-an-image", "undecodable", "too-large", "failed"]),
   message: Schema.String,
 }) {}
@@ -138,10 +144,10 @@ export interface ModuleBundle {
 }
 
 /** The build of an entry file failed: a syntax error, or a relative module that does not resolve. */
-export class ModuleBundleError extends Schema.TaggedError<ModuleBundleError>()(
-  "ModuleBundleError",
-  { entry: Schema.String, message: Schema.String },
-) {}
+export class ModuleBundleError extends Schema.TaggedError<
+  ModuleBundleError,
+  { readonly brand: unique symbol }
+>()("ModuleBundleError", { entry: Schema.String, message: Schema.String }) {}
 
 /**
  * The query a served module's specifier carries (`serveModule`): the file's
@@ -304,7 +310,10 @@ export const extensionPlatformServicesLive: Layer.Layer<
 
 // ── run-process ─────────────────────────────────────────────────────────────
 
-export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessError", {
+export class ProcessError extends Schema.TaggedError<
+  ProcessError,
+  { readonly brand: unique symbol }
+>()("ProcessError", {
   command: Schema.String,
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),

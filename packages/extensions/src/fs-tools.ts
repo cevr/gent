@@ -52,7 +52,10 @@ interface Listing {
   readonly unreadable: number
 }
 
-class FileListingError extends Schema.TaggedError<FileListingError>()("FileListingError", {
+class FileListingError extends Schema.TaggedError<
+  FileListingError,
+  { readonly brand: unique symbol }
+>()("FileListingError", {
   message: Schema.String,
   cwd: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -700,7 +703,10 @@ const encodeFileText = (file: Omit<FileText, "lossy">): Uint8Array => {
 
 type PathAccess = AgentPathEntry["access"]
 
-class PathScopeError extends Schema.TaggedError<PathScopeError>()("PathScopeError", {
+class PathScopeError extends Schema.TaggedError<
+  PathScopeError,
+  { readonly brand: unique symbol }
+>()("PathScopeError", {
   message: Schema.String,
   path: Schema.String,
   access: Schema.Literals(["read", "write"]),
@@ -749,11 +755,14 @@ const requirePathAccess = Effect.fn("FsTools.requirePathAccess")(function* (
 
 // Read Tool Error
 
-class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
-  message: Schema.String,
-  path: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
+class ReadError extends Schema.TaggedError<ReadError, { readonly brand: unique symbol }>()(
+  "ReadError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
 
 // Read Tool Params
 
@@ -1055,11 +1064,14 @@ export const ReadTool = tool({
 
 // Write Tool Error
 
-class WriteError extends Schema.TaggedError<WriteError>()("WriteError", {
-  message: Schema.String,
-  path: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
+class WriteError extends Schema.TaggedError<WriteError, { readonly brand: unique symbol }>()(
+  "WriteError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
 
 // Write Tool Params
 
@@ -1172,11 +1184,14 @@ export const WriteTool = tool({
 
 // Edit Tool Error
 
-class EditError extends Schema.TaggedError<EditError>()("EditError", {
-  message: Schema.String,
-  path: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
+class EditError extends Schema.TaggedError<EditError, { readonly brand: unique symbol }>()(
+  "EditError",
+  {
+    message: Schema.String,
+    path: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
 
 // Edit Tool Params
 
@@ -1580,11 +1595,14 @@ export const EditTool = tool({
 
 // Grep Tool Error
 
-class GrepError extends Schema.TaggedError<GrepError>()("GrepError", {
-  message: Schema.String,
-  pattern: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
+class GrepError extends Schema.TaggedError<GrepError, { readonly brand: unique symbol }>()(
+  "GrepError",
+  {
+    message: Schema.String,
+    pattern: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {}
 
 const grepMatcherError = (cause: RegexMatcherError) =>
   new GrepError({ message: cause.message, pattern: cause.pattern, cause })

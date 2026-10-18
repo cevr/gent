@@ -25,9 +25,12 @@ import { Clock, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import { Argument, Command } from "effect/cli"
 import { runProcess } from "@gent/core/extensions/api"
 
-class SmokeError extends Schema.TaggedError<SmokeError>()("SmokeError", {
-  message: Schema.String,
-}) {}
+class SmokeError extends Schema.TaggedError<SmokeError, { readonly brand: unique symbol }>()(
+  "SmokeError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.NonEmptyString }))
 

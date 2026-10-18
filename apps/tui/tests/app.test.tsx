@@ -32,6 +32,7 @@ import * as Prompt from "effect/ai/Prompt"
 import {
   AgentDefinition,
   AgentName,
+  Branch,
   BranchId,
   CredentialSlot,
   dateFromMillis,
@@ -189,11 +190,12 @@ const sessionA = {
   parentBranchId: absent,
 }
 
-const branchOf = (id: string, createdAtMs: number) => ({
-  id: BranchId.make(id),
-  sessionId: sessionA.id,
-  createdAt: dateFromMillis(createdAtMs),
-})
+const branchOf = (id: string, createdAtMs: number) =>
+  Branch.make({
+    id: BranchId.make(id),
+    sessionId: sessionA.id,
+    createdAt: dateFromMillis(createdAtMs),
+  })
 
 describe("startup and headless auth", () => {
   // The session view reads the agent from the snapshot it loads; startup
@@ -283,7 +285,7 @@ describe("startup and headless auth", () => {
         },
       })
       const state: HeadlessState = {
-        session: {
+        session: Session.make({
           id: SessionId.make("session-a"),
           activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
@@ -293,7 +295,7 @@ describe("startup and headless auth", () => {
           reasoningLevel: absent,
           parentSessionId: absent,
           parentBranchId: absent,
-        },
+        }),
         prompt: "hi",
       }
       // Named as `/auth` names them: the driver's name, else its id, and a
@@ -486,7 +488,10 @@ describe("startup state", () => {
 
 // ── app auth ────────────────────────────────────────────────────────────────
 
-class MessageTimeoutError extends Schema.TaggedError<MessageTimeoutError>()("MessageTimeoutError", {
+class MessageTimeoutError extends Schema.TaggedError<
+  MessageTimeoutError,
+  { readonly brand: unique symbol }
+>()("MessageTimeoutError", {
   message: Schema.String,
 }) {}
 
@@ -5083,8 +5088,8 @@ describe("App interjections and the boot branch picker", () => {
     const { setup } = yield* mountApp({
       app: {
         initialBranches: Option.some([
-          { ...branchOf("branch-a", 0), name: "main" },
-          { ...branchOf("branch-b", 1), name: "side" },
+          Branch.make({ ...branchOf("branch-a", 0), name: "main" }),
+          Branch.make({ ...branchOf("branch-b", 1), name: "side" }),
         ]),
       },
       initialSession: sessionNamed("session-a", "branch-a", "Session A"),
@@ -5396,18 +5401,18 @@ describe("App auth gate at startup", () => {
         const alphaSessionId = SessionId.make("session-alpha")
         const alphaBranchId = BranchId.make("branch-alpha")
         const betaBranchId = BranchId.make("branch-beta")
-        const main = {
+        const main = Branch.make({
           id: alphaBranchId,
           sessionId: alphaSessionId,
           name: "Main",
           createdAt: dateFromMillis(0),
-        }
-        const side = {
+        })
+        const side = Branch.make({
           id: betaBranchId,
           sessionId: alphaSessionId,
           name: "Side",
           createdAt: dateFromMillis(1),
-        }
+        })
         const initialPrompt = "deferred startup prompt"
         const { setup } = yield* mountApp({
           app: { initialBranches: Option.some([main, side]) },
@@ -5804,7 +5809,7 @@ describe("App startup prompt and renames", () => {
 
 // ── widgets render ──────────────────────────────────────────────────────────
 
-const testSession: Session = {
+const testSession: Session = Session.make({
   id: SessionId.make("session-test"),
   name: "Test Session",
   cwd: "/nonexistent/gent-test-session",
@@ -5814,8 +5819,8 @@ const testSession: Session = {
   parentBranchId: absent,
   createdAt: dateFromMillis(0),
   updatedAt: dateFromMillis(0),
-}
-const nextSession: Session = {
+})
+const nextSession: Session = Session.make({
   id: SessionId.make("session-next"),
   name: "Next Session",
   cwd: "/nonexistent/gent-test-next-session",
@@ -5825,7 +5830,7 @@ const nextSession: Session = {
   parentBranchId: absent,
   createdAt: dateFromMillis(0),
   updatedAt: dateFromMillis(0),
-}
+})
 
 const scheduledFailureHealth = (id: string, error: string): ExtensionHealthSnapshot => ({
   _tag: "Degraded",

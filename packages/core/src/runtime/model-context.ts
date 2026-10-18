@@ -1300,24 +1300,24 @@ const capabilityFailureMessage = ModelContextCapabilityFailure.match({
     `${failure.modelId} is a classifier model: it runs no turn; a cell asks it with models.decide`,
 })
 
-export class ModelContextCapabilityError extends Schema.TaggedError<ModelContextCapabilityError>()(
-  "ModelContextCapabilityError",
-  {
-    failure: ModelContextCapabilityFailure,
-  },
-) {
+export class ModelContextCapabilityError extends Schema.TaggedError<
+  ModelContextCapabilityError,
+  { readonly brand: unique symbol }
+>()("ModelContextCapabilityError", {
+  failure: ModelContextCapabilityFailure,
+}) {
   override get message(): string {
     return capabilityFailureMessage(this.failure)
   }
 }
 
-export class ModelContextProjectionError extends Schema.TaggedError<ModelContextProjectionError>()(
-  "ModelContextProjectionError",
-  {
-    modelId: Schema.String,
-    failure: ModelContextError,
-  },
-) {
+export class ModelContextProjectionError extends Schema.TaggedError<
+  ModelContextProjectionError,
+  { readonly brand: unique symbol }
+>()("ModelContextProjectionError", {
+  modelId: Schema.String,
+  failure: ModelContextError,
+}) {
   override get message(): string {
     return `${this.failure._tag} projecting the context for ${this.modelId}`
   }
@@ -1916,21 +1916,24 @@ const measuredUnits = (
  * credential cannot serve moves the summary to the next credential of the
  * order, as a step's request moves.
  */
-export class ModelCompactionError extends Schema.TaggedError<ModelCompactionError>()(
-  "ModelCompactionError",
-  {
-    modelId: ModelId,
-    reason: Schema.NonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class ModelCompactionError extends Schema.TaggedError<
+  ModelCompactionError,
+  { readonly brand: unique symbol }
+>()("ModelCompactionError", {
+  modelId: ModelId,
+  reason: Schema.NonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /**
  * The turn stopped while its window was compacted. It is not a refusal: the
  * projection raises it outside every compactor, so no later compactor of the
  * chain runs, no history is dropped, and the turn asks no model again.
  */
-class CompactionStopped extends Schema.TaggedError<CompactionStopped>()("CompactionStopped", {}) {}
+class CompactionStopped extends Schema.TaggedError<
+  CompactionStopped,
+  { readonly brand: unique symbol }
+>()("CompactionStopped", {}) {}
 
 /** What the handoff marker carries: the notice the model reads, and the receipt of producing it. */
 export const CompactionSummary = Schema.Struct({

@@ -217,13 +217,13 @@ export const admitChildSessionDepth = Effect.fn("SessionDepth.admitChildSessionD
 
 const SESSION_TERMINATION_CONCURRENCY = 16
 
-export class SessionRuntimeError extends Schema.TaggedError<SessionRuntimeError>()(
-  "SessionRuntimeError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class SessionRuntimeError extends Schema.TaggedError<
+  SessionRuntimeError,
+  { readonly brand: unique symbol }
+>()("SessionRuntimeError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 interface SessionRuntimeTarget {
   readonly sessionId: SessionId

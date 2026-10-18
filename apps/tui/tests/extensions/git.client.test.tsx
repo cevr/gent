@@ -21,6 +21,7 @@ import {
   EventEnvelope,
   GentRpcError,
   type GentNamespacedClient,
+  Session,
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
@@ -399,13 +400,13 @@ const renderRow = (cwd: string, width: number) =>
     cwd,
     width,
     height: 20,
-    initialSession: {
+    initialSession: Session.make({
       id: sessionId,
       activeBranchId: branchId,
       name: "Git",
       createdAt: dateFromMillis(0),
       updatedAt: dateFromMillis(0),
-    },
+    }),
   })
 
 const statusLine = (frame: string) => frame.split("\n").find((line) => line.includes("ready")) ?? ""
@@ -758,13 +759,13 @@ const renderApp = (
       cwd,
       width,
       height: 30,
-      initialSession: {
+      initialSession: Session.make({
         id: sessionId,
         activeBranchId: branchId,
         name: "Git",
         createdAt: dateFromMillis(0),
         updatedAt: dateFromMillis(0),
-      },
+      }),
     })
   })
 

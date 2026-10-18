@@ -1,7 +1,14 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Deferred, Effect, Exit, Fiber, Option, Schema, Scope } from "effect"
 import { createRoot, createSignal } from "solid-js"
-import { AgentName, BranchId, GentRpcError, ModelId, SessionId } from "@gent/core/protocol"
+import {
+  AgentName,
+  BranchId,
+  GentRpcError,
+  ModelId,
+  SessionId,
+  SessionSnapshot,
+} from "@gent/core/protocol"
 import { emptyQueueSnapshot } from "@gent/core/test-utils"
 import { type ClientContextValue, useClient } from "../../src/client"
 import { ref } from "@gent/core/extensions/api"
@@ -205,19 +212,21 @@ describe("sessionQuery", () => {
       const identity = client.sessionIdentity
       const renameTo = (name: string) => {
         const session = client.session()
-        client.applySessionSnapshot({
-          sessionId: session.sessionId,
-          branchId: session.branchId,
-          name,
-          messages: [],
-          // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
-          lastEventId: null,
-          reasoningLevel: session.reasoningLevel,
-          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
-          agent: AgentName.make("primary"),
-          runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
-          metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
-        })
+        client.applySessionSnapshot(
+          SessionSnapshot.make({
+            sessionId: session.sessionId,
+            branchId: session.branchId,
+            name,
+            messages: [],
+            // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
+            lastEventId: null,
+            reasoningLevel: session.reasoningLevel,
+            resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+            agent: AgentName.make("primary"),
+            runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+            metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+          }),
+        )
       }
       const query = yield* provideClientServices(
         sessionQuery({

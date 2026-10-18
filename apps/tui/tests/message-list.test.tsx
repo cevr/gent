@@ -40,6 +40,7 @@ import {
   MODEL_CHANGE_MESSAGE_TYPE,
   OutputCut,
   RuntimeUserMessageType,
+  Session,
   SessionId,
   ToolCallId,
   AgentEvent,
@@ -6627,14 +6628,14 @@ describe("tool group rows", () => {
   })
   /** A session in view rooted at `sessionCwd`, while the TUI launched in `cwd`. */
   const sessionAt = (sessionCwd: string) => ({
-    initialSession: {
+    initialSession: Session.make({
       id: SessionId.make("session-elsewhere"),
       activeBranchId: BranchId.make("branch-elsewhere"),
       name: "Elsewhere",
       cwd: sessionCwd,
       createdAt: dateFromMillis(0),
       updatedAt: dateFromMillis(0),
-    },
+    }),
   })
   // The session in view runs where the TUI launched unless a test says otherwise.
   const groupRows = (items: SessionItem[], width: number, sessionCwd = cwd) =>

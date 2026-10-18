@@ -144,9 +144,12 @@ const openPaneOn = (
   })
 
 /** A change the server refuses, in its own words. */
-class PaneRefusal extends Schema.TaggedError<PaneRefusal>()("PaneRefusal", {
-  message: Schema.String,
-}) {}
+class PaneRefusal extends Schema.TaggedError<PaneRefusal, { readonly brand: unique symbol }>()(
+  "PaneRefusal",
+  {
+    message: Schema.String,
+  },
+) {}
 
 /**
  * A server that answers as the real one: a change reads and writes one

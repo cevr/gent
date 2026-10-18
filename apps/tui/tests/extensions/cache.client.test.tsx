@@ -18,6 +18,7 @@ import {
   Model,
   ModelId,
   ProviderId,
+  Session,
   SessionId,
   ToolCallId,
 } from "@gent/core/protocol"
@@ -1370,13 +1371,13 @@ const renderResumed = (opts: {
       builtins: [opts.extension],
       width: opts.width ?? 100,
       height: 30,
-      initialSession: {
+      initialSession: Session.make({
         id: sessionId,
         activeBranchId: branchId,
         name: "Cache",
         createdAt: dateFromMillis(0),
         updatedAt: dateFromMillis(0),
-      },
+      }),
     })
     return { rendered, feedOpened: () => opened }
   })

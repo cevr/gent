@@ -99,7 +99,7 @@ export type ImagePartOptions = PromptOptions
 
 // Model - individual model from a provider (built-in or custom)
 
-export class Model extends Schema.Class<Model>("Model")({
+export class Model extends Schema.Class<Model, { readonly brand: unique symbol }>("Model")({
   id: ModelId,
   name: Schema.String,
   provider: ProviderId,
@@ -559,9 +559,10 @@ const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> =>
  * (`StoredRunOverrides`, `StoredAgentDefinition`). A `thread.start` call
  * writes the new keys only.
  */
-export class AgentDefinition extends Schema.Class<AgentDefinition>("AgentDefinition")(
-  agentDefinitionFields,
-) {
+export class AgentDefinition extends Schema.Class<
+  AgentDefinition,
+  { readonly brand: unique symbol }
+>("AgentDefinition")(agentDefinitionFields) {
   /**
    * Builds an agent and refuses a key the schema does not name. The schema
    * would drop such a key, so an extension written before `tools`
@@ -1181,14 +1182,14 @@ export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
  * or, for a child, one its parent run does not reach. The whole run is
  * refused: a dropped entry would change what the run means.
  */
-export class RunPathRefusedError extends Schema.TaggedError<RunPathRefusedError>()(
-  "RunPathRefusedError",
-  {
-    message: Schema.String,
-    path: Schema.String,
-    access: AgentPathAccess,
-  },
-) {}
+export class RunPathRefusedError extends Schema.TaggedError<
+  RunPathRefusedError,
+  { readonly brand: unique symbol }
+>()("RunPathRefusedError", {
+  message: Schema.String,
+  path: Schema.String,
+  access: AgentPathAccess,
+}) {}
 
 /**
  * The bound of a spawned session's parent run cannot be resolved: the
@@ -1196,7 +1197,10 @@ export class RunPathRefusedError extends Schema.TaggedError<RunPathRefusedError>
  * config does not load. A child is bounded by its parent run, so it fails
  * closed: its create is refused, and its turns and file calls do not run.
  */
-export class ParentBoundError extends Schema.TaggedError<ParentBoundError>()("ParentBoundError", {
+export class ParentBoundError extends Schema.TaggedError<
+  ParentBoundError,
+  { readonly brand: unique symbol }
+>()("ParentBoundError", {
   message: Schema.String,
   parentSessionId: SessionId,
   agent: Schema.optional(AgentName),
@@ -1207,14 +1211,14 @@ export class ParentBoundError extends Schema.TaggedError<ParentBoundError>()("Pa
  * read, or its agent is gone from its roster. Its run's bound is unknown,
  * so it fails closed: a file call is refused, never read as unbounded.
  */
-export class SessionAgentError extends Schema.TaggedError<SessionAgentError>()(
-  "SessionAgentError",
-  {
-    message: Schema.String,
-    sessionId: SessionId,
-    agent: Schema.optional(AgentName),
-  },
-) {}
+export class SessionAgentError extends Schema.TaggedError<
+  SessionAgentError,
+  { readonly brand: unique symbol }
+>()("SessionAgentError", {
+  message: Schema.String,
+  sessionId: SessionId,
+  agent: Schema.optional(AgentName),
+}) {}
 
 /**
  * A turn has no model: the session names none, its agent names none, and
@@ -1222,7 +1226,10 @@ export class SessionAgentError extends Schema.TaggedError<SessionAgentError>()(
  * writes). Gent ships no default model, so a send is refused rather than
  * run on a vendor's model.
  */
-export class NoModelError extends Schema.TaggedError<NoModelError>()("NoModelError", {
+export class NoModelError extends Schema.TaggedError<
+  NoModelError,
+  { readonly brand: unique symbol }
+>()("NoModelError", {
   message: Schema.String,
   agent: AgentName,
 }) {}
@@ -1235,12 +1242,12 @@ export const noModelError = (agent: AgentName) =>
   })
 
 /** A parent at the nesting cap asked for one more child. */
-export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimitError>()(
-  "SessionDepthLimitError",
-  {
-    message: Schema.String,
-    parentSessionId: SessionId,
-    depth: Schema.Int,
-    max: Schema.Int,
-  },
-) {}
+export class SessionDepthLimitError extends Schema.TaggedError<
+  SessionDepthLimitError,
+  { readonly brand: unique symbol }
+>()("SessionDepthLimitError", {
+  message: Schema.String,
+  parentSessionId: SessionId,
+  depth: Schema.Int,
+  max: Schema.Int,
+}) {}

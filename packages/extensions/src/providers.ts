@@ -106,9 +106,10 @@ export const freshEnoughAt = (expiresAt: number, now: number): boolean =>
  * retryable and the loop tries again. A `ProviderAuthError` is permanent:
  * the user must sign in again.
  */
-export class CredentialRefreshUnavailable extends Schema.TaggedError<CredentialRefreshUnavailable>(
-  "@gent/extensions/src/providers/CredentialRefreshUnavailable",
-)("CredentialRefreshUnavailable", {
+export class CredentialRefreshUnavailable extends Schema.TaggedError<
+  CredentialRefreshUnavailable,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/providers/CredentialRefreshUnavailable")("CredentialRefreshUnavailable", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}
@@ -820,9 +821,10 @@ export const takesLowVerbosity = (modelName: string): boolean => {
 const OAUTH_TOKEN_TIMEOUT = "15 seconds"
 
 /** A token POST that never produced a response: transport failure or timeout. */
-class OAuthTokenPostError extends Schema.TaggedError<OAuthTokenPostError>(
-  "@gent/extensions/src/providers/OAuthTokenPostError",
-)("OAuthTokenPostError", {
+class OAuthTokenPostError extends Schema.TaggedError<
+  OAuthTokenPostError,
+  { readonly brand: unique symbol }
+>("@gent/extensions/src/providers/OAuthTokenPostError")("OAuthTokenPostError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

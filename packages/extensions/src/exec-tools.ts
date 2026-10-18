@@ -53,16 +53,19 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process"
 
 // ── background bash storage ─────────────────────────────────────────────────
 
-export class BackgroundBashStorageError extends Schema.TaggedError<BackgroundBashStorageError>()(
-  "BackgroundBashStorageError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class BackgroundBashStorageError extends Schema.TaggedError<
+  BackgroundBashStorageError,
+  { readonly brand: unique symbol }
+>()("BackgroundBashStorageError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 /** A background job asked for outside the tool call that would own it. */
-class BackgroundBashError extends Schema.TaggedError<BackgroundBashError>()("BackgroundBashError", {
+class BackgroundBashError extends Schema.TaggedError<
+  BackgroundBashError,
+  { readonly brand: unique symbol }
+>()("BackgroundBashError", {
   message: Schema.String,
 }) {}
 
@@ -565,12 +568,15 @@ export class BackgroundBashStorage extends Context.Service<
 
 // Bash Tool Error
 
-class BashError extends Schema.TaggedError<BashError>()("BashError", {
-  message: Schema.String,
-  command: Schema.String,
-  exitCode: Schema.optional(Schema.Finite),
-  stderr: Schema.optional(Schema.String),
-}) {}
+class BashError extends Schema.TaggedError<BashError, { readonly brand: unique symbol }>()(
+  "BashError",
+  {
+    message: Schema.String,
+    command: Schema.String,
+    exitCode: Schema.optional(Schema.Finite),
+    stderr: Schema.optional(Schema.String),
+  },
+) {}
 
 // Bash Tool Params
 

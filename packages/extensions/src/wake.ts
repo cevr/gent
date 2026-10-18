@@ -182,9 +182,12 @@ const MINIMUM_MONITOR_EVERY_SECONDS = 0.1
 const MINIMUM_REPEAT_EVERY_SECONDS = 0.1
 const MONITOR_OUTPUT_TAIL_CHARS = 2_000
 
-class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
-  message: Schema.String,
-}) {}
+class WakeError extends Schema.TaggedError<WakeError, { readonly brand: unique symbol }>()(
+  "WakeError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 // ── Timers: one branch-scoped resource ──
 

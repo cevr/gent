@@ -98,10 +98,10 @@ const ToolReadTokenResource = defineResource({
   layer: Layer.succeed(ToolReadToken, ToolReadToken.of({ read: Effect.succeed("read-ok") })),
 })
 
-class ToolRunnerTestError extends Schema.TaggedError<ToolRunnerTestError>()(
-  "@gent/core/tests/runtime/tools.test/ToolRunnerTestError",
-  { message: Schema.String },
-) {}
+class ToolRunnerTestError extends Schema.TaggedError<
+  ToolRunnerTestError,
+  { readonly brand: unique symbol }
+>()("@gent/core/tests/runtime/tools.test/ToolRunnerTestError", { message: Schema.String }) {}
 
 const ErrorResult = Schema.Struct({ error: Schema.String })
 const errorFromResult = (result: Prompt.ToolResultPart): string =>

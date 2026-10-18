@@ -217,7 +217,7 @@ const readInstalledJsonc = <S extends Schema.Top & { readonly DecodingServices: 
     (text) => decodeJsonc(path, text, schema),
   )
 
-const decodeJsonc = Effect.fn("Tooling.decodeJsonc")(function* <
+export const decodeJsonc = Effect.fn("Tooling.decodeJsonc")(function* <
   S extends Schema.Top & { readonly DecodingServices: never },
 >(path: string, text: string, schema: S) {
   const parsed = yield* Effect.try({

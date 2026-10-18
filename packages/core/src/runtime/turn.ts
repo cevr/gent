@@ -1066,15 +1066,15 @@ type ToolTerminalEvent = Extract<
   { readonly _tag: "ToolCallSucceeded" | "ToolCallFailed" }
 >
 
-export class ToolResultReplayError extends Schema.TaggedError<ToolResultReplayError>()(
-  "ToolResultReplayError",
-  {
-    assistantMessageId: MessageId,
-    toolCallId: ToolCallId,
-    toolName: Schema.String,
-    message: Schema.String,
-  },
-) {}
+export class ToolResultReplayError extends Schema.TaggedError<
+  ToolResultReplayError,
+  { readonly brand: unique symbol }
+>()("ToolResultReplayError", {
+  assistantMessageId: MessageId,
+  toolCallId: ToolCallId,
+  toolName: Schema.String,
+  message: Schema.String,
+}) {}
 
 const isToolTerminalEvent: (event: AgentEvent) => event is ToolTerminalEvent = Predicate.or(
   Predicate.and(Predicate.isTagged("ToolCallSucceeded"), Schema.is(ToolCallSucceeded)),

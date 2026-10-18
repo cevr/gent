@@ -139,6 +139,7 @@ import {
   type Message,
   type MessageMetadata,
   messagePartsDisplayText,
+  QueueSnapshot,
 } from "../../src/domain/message"
 import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
 import { omitUndefined } from "../../src/domain/guards"
@@ -4802,9 +4803,12 @@ describe("extension capability registries", () => {
 
   test("a bound handler's own tagged error reaches the caller as CapabilityError under its ids", () =>
     Effect.gen(function* () {
-      class DiskFull extends Schema.TaggedError<DiskFull>()("DiskFull", {
-        message: Schema.String,
-      }) {}
+      class DiskFull extends Schema.TaggedError<DiskFull, { readonly brand: unique symbol }>()(
+        "DiskFull",
+        {
+          message: Schema.String,
+        },
+      ) {}
       const { Save } = defineRequests(extensionId, {
         Save: request({
           id: "save",
@@ -7149,7 +7153,9 @@ describe("a queue sent on a condition", () => {
       // The send returned after its admission was decided: nothing was admitted.
       const messages = yield* harness.client.message.list(ids)
       expect(userIds(messages)).toHaveLength(2)
-      expect(yield* harness.client.queue.get(ids)).toEqual({ steering: [], followUp: [] })
+      expect(yield* harness.client.queue.get(ids)).toEqual(
+        QueueSnapshot.make({ steering: [], followUp: [] }),
+      )
       expect((yield* harness.client.session.getSnapshot(ids)).runtime._tag).toBe("Idle")
       yield* controls.assertDone
     }).pipe(Effect.timeout("10 seconds")),
@@ -7265,7 +7271,9 @@ describe("a queue sent on a condition", () => {
             messagePartsDisplayText(message.parts) === "continue where it stopped",
         )
         expect(lines).toHaveLength(1)
-        expect(yield* client.queue.get(ids)).toEqual({ steering: [], followUp: [] })
+        expect(yield* client.queue.get(ids)).toEqual(
+          QueueSnapshot.make({ steering: [], followUp: [] }),
+        )
         yield* controls.assertDone
       }).pipe(Effect.provide(BunPlatformLive), Effect.timeout("15 seconds")),
     20_000,

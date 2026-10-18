@@ -438,7 +438,10 @@ const hostGetters: ReadonlyArray<unknown> = Object.getOwnPropertyNames(globalThi
 const PROTOTYPE_DEPTH_LIMIT = 32
 
 /** A read that would run cell code: a Proxy on the path, or a getter the cell wrote. */
-class UnreadableValue extends Schema.TaggedError<UnreadableValue>()("UnreadableValue", {}) {}
+class UnreadableValue extends Schema.TaggedError<
+  UnreadableValue,
+  { readonly brand: unique symbol }
+>()("UnreadableValue", {}) {}
 /** A read the reader made, or `UnreadableValue` where making it would run cell code. */
 type ValueRead<A> = Result.Result<A, UnreadableValue>
 const unreadable: ValueRead<never> = Result.fail(new UnreadableValue())

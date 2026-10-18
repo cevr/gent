@@ -54,20 +54,20 @@ const DoRule = Schema.Literals([
 type DoRule = typeof DoRule.Type
 
 /** What workerd's authorizer or binder throws for a statement it refuses. */
-class DurableObjectSqlRefused extends Schema.TaggedError<DurableObjectSqlRefused>()(
-  "DurableObjectSqlRefused",
-  { rule: DoRule, detail: Schema.String },
-) {
+class DurableObjectSqlRefused extends Schema.TaggedError<
+  DurableObjectSqlRefused,
+  { readonly brand: unique symbol }
+>()("DurableObjectSqlRefused", { rule: DoRule, detail: Schema.String }) {
   override get message() {
     return `not authorized: Durable Object SQL refuses ${this.rule} (${this.detail})`
   }
 }
 
 /** What a storage call on an evicted activation meets. */
-class DurableObjectReset extends Schema.TaggedError<DurableObjectReset>()(
-  "DurableObjectReset",
-  {},
-) {
+class DurableObjectReset extends Schema.TaggedError<
+  DurableObjectReset,
+  { readonly brand: unique symbol }
+>()("DurableObjectReset", {}) {
   override get message() {
     return "Durable Object reset: this activation's storage handle is gone"
   }

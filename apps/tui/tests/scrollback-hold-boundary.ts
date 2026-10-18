@@ -11,7 +11,10 @@ import { Deferred, Effect, Schema, type Scope } from "effect"
 import { type CliRenderer, getTreeSitterClient, type ScrollbackSurface } from "@opentui/core"
 
 /** The error a failed highlight rejects with. */
-class HighlightFailed extends Schema.TaggedError<HighlightFailed>()("HighlightFailed", {}) {}
+class HighlightFailed extends Schema.TaggedError<
+  HighlightFailed,
+  { readonly brand: unique symbol }
+>()("HighlightFailed", {}) {}
 
 /**
  * For the scope, every highlight of the shared tree-sitter client never
@@ -86,7 +89,10 @@ export const makeSettleHold: Effect.Effect<SettleHold> = Effect.gen(function* ()
 })
 
 /** The error a timed-out `settle` rejects with, as OpenTUI's own timeout does. */
-class SettleTimeout extends Schema.TaggedError<SettleTimeout>()("SettleTimeout", {}) {}
+class SettleTimeout extends Schema.TaggedError<SettleTimeout, { readonly brand: unique symbol }>()(
+  "SettleTimeout",
+  {},
+) {}
 
 interface SettleTimeouts {
   /** How many `settle` calls the renderer's surfaces made so far. */
@@ -119,7 +125,10 @@ export const makeSettleTimeouts = (failures: number): SettleTimeouts => {
 }
 
 /** The error a refused write throws, as OpenTUI's own geometry check does. */
-class CommitRefused extends Schema.TaggedError<CommitRefused>()("CommitRefused", {}) {}
+class CommitRefused extends Schema.TaggedError<CommitRefused, { readonly brand: unique symbol }>()(
+  "CommitRefused",
+  {},
+) {}
 
 /**
  * Replaces the renderer's scrollback factory with one whose surfaces refuse

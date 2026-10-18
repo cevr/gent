@@ -4,8 +4,8 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "ef
 import type { GentRuntime } from "@gent/sdk"
 import {
   AgentName,
-  type AuthAuthorization,
-  type AuthMethod,
+  AuthAuthorization,
+  AuthMethod,
   type AuthProviderInfo,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
@@ -66,8 +66,8 @@ const withCredentials = {
   ],
 } satisfies AuthProviderInfo
 
-const apiMethod = { type: "api", label: "API Key" } satisfies AuthMethod
-const oauthMethod = { type: "oauth", label: "OAuth" } satisfies AuthMethod
+const apiMethod = AuthMethod.make({ type: "api", label: "API Key" })
+const oauthMethod = AuthMethod.make({ type: "oauth", label: "OAuth" })
 const accountPrompt = { key: "accountId", label: "Account ID", placeholder: "e.g. 0123abcd" }
 const gatewayPrompt = { key: "gatewayId", label: "Gateway ID" }
 
@@ -75,16 +75,16 @@ const methods = {
   anthropic: [apiMethod, oauthMethod],
 } satisfies Record<string, ReadonlyArray<AuthMethod>>
 
-const codeAuthorization = {
+const codeAuthorization = AuthAuthorization.make({
   url: "https://example.com/auth",
   method: "code",
   authorizationId: "auth-1",
-} satisfies AuthAuthorization
+})
 
-const autoAuthorization = {
+const autoAuthorization = AuthAuthorization.make({
   ...codeAuthorization,
   method: "auto",
-} satisfies AuthAuthorization
+})
 
 const loaded = (providers: ReadonlyArray<AuthProviderInfo> = [provider]) =>
   transitionAuth(AuthState.initial(), {
@@ -346,11 +346,11 @@ describe("auth-state", () => {
 
   test("an oauth method's inputs ask each prompt, and a needed one does not go on blank", () => {
     const directory = { key: "directory", label: "Directory" }
-    const method = {
+    const method = AuthMethod.make({
       type: "oauth",
       label: "Directory import",
       prompts: [directory, gatewayPrompt],
-    } satisfies AuthMethod
+    })
     const inputs = transitionAuth(loaded(), {
       _tag: "OpenInputs",
       provider: "anthropic",
@@ -416,7 +416,7 @@ describe("auth-state", () => {
 const absent = undefined
 // eslint-disable-next-line effect/noNullish -- JSON on the wire carries null here; the test hands it on as is.
 const nullValue = null
-const apiMethodRoute = { label: "API key", type: "api" } satisfies { label: string; type: "api" }
+const apiMethodRoute = AuthMethod.make({ label: "API key", type: "api" })
 const oauthMethodRoute = { label: "Browser OAuth", type: "oauth" } satisfies {
   label: string
   type: "oauth"
@@ -2087,12 +2087,14 @@ describe("Auth route", () => {
 
   it.scopedLive("a waiting device flow keeps the code and url over the optional paste line", () =>
     Effect.gen(function* () {
-      const setup = yield* mountOAuth({
-        authorizationId: "auth-device",
-        url: "https://auth.openai.com/codex/device",
-        method: "auto",
-        instructions: "Open the URL and enter this code:\nWXYZ-1234",
-      })
+      const setup = yield* mountOAuth(
+        AuthAuthorization.make({
+          authorizationId: "auth-device",
+          url: "https://auth.openai.com/codex/device",
+          method: "auto",
+          instructions: "Open the URL and enter this code:\nWXYZ-1234",
+        }),
+      )
       for (const height of shortHeights) {
         setup.resize(80, height)
         yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
@@ -2108,12 +2110,14 @@ describe("Auth route", () => {
   it.scopedLive("a long waiting url keeps its rows before the title and the paste line", () =>
     Effect.gen(function* () {
       const url = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&state=${"s".repeat(60)}-END`
-      const setup = yield* mountOAuth({
-        authorizationId: "auth-long",
-        url,
-        method: "auto",
-        instructions: "Complete authorization in your browser.",
-      })
+      const setup = yield* mountOAuth(
+        AuthAuthorization.make({
+          authorizationId: "auth-long",
+          url,
+          method: "auto",
+          instructions: "Complete authorization in your browser.",
+        }),
+      )
       for (const height of shortHeights) {
         setup.resize(80, height)
         yield* waitForFrame(setup, () => setup.renderer.terminalHeight === height, `${height} rows`)
@@ -2186,15 +2190,15 @@ describe("Auth provider names", () => {
 
 describe("Auth credentials", () => {
   const sessionId = SessionId.make("session-credentials")
-  const directoryImport = {
+  const directoryImport = AuthMethod.make({
     type: "oauth",
     label: "Directory import",
     credentialTarget: "named",
     prompts: [{ key: "directory", label: "Directory" }],
-  } satisfies AuthMethod
+  })
   const anthropicMethods = [
     apiMethodRoute,
-    { type: "oauth", label: "Claude Code", credentialTarget: "default" },
+    AuthMethod.make({ type: "oauth", label: "Claude Code", credentialTarget: "default" }),
     directoryImport,
   ] satisfies ReadonlyArray<AuthMethod>
   type Info = AuthProviderInfo

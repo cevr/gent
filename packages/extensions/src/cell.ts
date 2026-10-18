@@ -858,7 +858,10 @@ class CurrentCellToolOperation extends Context.Service<
 
 // ── process ─────────────────────────────────────────────────────────────────
 
-class CellProcessError extends Schema.TaggedError<CellProcessError>()("CellProcessError", {
+class CellProcessError extends Schema.TaggedError<
+  CellProcessError,
+  { readonly brand: unique symbol }
+>()("CellProcessError", {
   phase: Schema.Literals(["launch", "io", "exit"]),
   message: Schema.String,
   diagnostics: Schema.String,
@@ -1237,7 +1240,10 @@ export class CellOperationHost extends Context.Service<
   }
 >()("@gent/extensions/src/cell/CellOperationHost") {}
 
-class CellKernelError extends Schema.TaggedError<CellKernelError>()("CellKernelError", {
+class CellKernelError extends Schema.TaggedError<
+  CellKernelError,
+  { readonly brand: unique symbol }
+>()("CellKernelError", {
   reason: Schema.Literals([
     "timeout",
     "cancelled",
@@ -2555,16 +2561,16 @@ export const cellWorkerLaunch = Effect.gen(function* () {
   return CellWorker.cases.Script.make({ runtimePath: execPath, scriptPath })
 })
 
-class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
-  "CellExecutionIncomplete",
-  {
-    sessionId: SessionId,
-    branchId: BranchId,
-    assistantMessageId: MessageId,
-    toolCallId: ToolCallId,
-    message: Schema.String,
-  },
-) {}
+class CellExecutionIncomplete extends Schema.TaggedError<
+  CellExecutionIncomplete,
+  { readonly brand: unique symbol }
+>()("CellExecutionIncomplete", {
+  sessionId: SessionId,
+  branchId: BranchId,
+  assistantMessageId: MessageId,
+  toolCallId: ToolCallId,
+  message: Schema.String,
+}) {}
 
 const CellFailure = Schema.Union([CellEvaluationError, CellKernelError, CellProcessError])
 type Kernel = Effect.Success<ReturnType<typeof openCellKernel>>

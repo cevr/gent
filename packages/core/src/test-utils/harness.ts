@@ -2327,7 +2327,7 @@ export const seedAuthKeys = (directory: string) =>
     yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
   }).pipe(Effect.scoped)
 
-class WaitForError extends Schema.TaggedError<WaitForError>()(
+class WaitForError extends Schema.TaggedError<WaitForError, { readonly brand: unique symbol }>()(
   "@gent/core/src/test-utils/harness/WaitForError",
   { message: Schema.String },
 ) {}

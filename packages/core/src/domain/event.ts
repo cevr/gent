@@ -462,14 +462,19 @@ const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 
 // ── event envelope and store ────────────────────────────────────────────────
 
-export class EventEnvelope extends Schema.Class<EventEnvelope>("EventEnvelope")({
+export class EventEnvelope extends Schema.Class<EventEnvelope, { readonly brand: unique symbol }>(
+  "EventEnvelope",
+)({
   id: EventId,
   event: AgentEvent,
   createdAt: Schema.Finite,
   traceId: Schema.optional(Schema.String),
 }) {}
 
-export class EventStoreError extends Schema.TaggedError<EventStoreError>()("EventStoreError", {
+export class EventStoreError extends Schema.TaggedError<
+  EventStoreError,
+  { readonly brand: unique symbol }
+>()("EventStoreError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

@@ -102,18 +102,18 @@ import {
  * corrupt record (no `activeBranchId`), a missing session or prompt. A typed
  * failure, so the CLI prints its one line instead of a stack trace.
  */
-export class AppBootstrapError extends Schema.TaggedError<AppBootstrapError>()(
-  "AppBootstrapError",
-  {
-    sessionId: Schema.optional(SessionId),
-    reason: Schema.Literals([
-      "created-session-unreadable",
-      "headless-missing-prompt",
-      "missing-branch",
-      "session-not-found",
-    ]),
-  },
-) {
+export class AppBootstrapError extends Schema.TaggedError<
+  AppBootstrapError,
+  { readonly brand: unique symbol }
+>()("AppBootstrapError", {
+  sessionId: Schema.optional(SessionId),
+  reason: Schema.Literals([
+    "created-session-unreadable",
+    "headless-missing-prompt",
+    "missing-branch",
+    "session-not-found",
+  ]),
+}) {
   override get message(): string {
     const sessionLabel = Option.getOrElse(Option.fromNullishOr(this.sessionId), () => "unknown")
     switch (this.reason) {

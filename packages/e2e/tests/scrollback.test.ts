@@ -52,10 +52,10 @@ const TALL_SESSION = 8
 
 const messageText = (index: number) => `scrollback probe ${index}`
 
-class TranscriptReadinessError extends Schema.TaggedError<TranscriptReadinessError>()(
-  "TranscriptReadinessError",
-  { message: Schema.String },
-) {}
+class TranscriptReadinessError extends Schema.TaggedError<
+  TranscriptReadinessError,
+  { readonly brand: unique symbol }
+>()("TranscriptReadinessError", { message: Schema.String }) {}
 
 /**
  * Submit `count` messages and let each turn finish.

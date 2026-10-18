@@ -10,12 +10,12 @@ export const inRuntime = <A, E, R, ER>(
 ): Effect.Effect<A, E | ER> =>
   runtime.contextEffect.pipe(Effect.flatMap((context) => Effect.provideContext(effect, context)))
 
-export class RenderWaitTimeoutError extends Schema.TaggedError<RenderWaitTimeoutError>()(
-  "RenderWaitTimeoutError",
-  {
-    message: Schema.String,
-  },
-) {}
+export class RenderWaitTimeoutError extends Schema.TaggedError<
+  RenderWaitTimeoutError,
+  { readonly brand: unique symbol }
+>()("RenderWaitTimeoutError", {
+  message: Schema.String,
+}) {}
 
 /**
  * Repeat `observe` until it holds or `timeoutMs` passes.
