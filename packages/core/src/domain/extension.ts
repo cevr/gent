@@ -1867,6 +1867,13 @@ export interface BranchWakeKey {
  * clock's sleep fires on time. The records are in the current workspace.
  */
 interface BranchWakesService {
+  /**
+   * This server start's number, taken from storage when the service builds.
+   * Every loop reaches the records through this service, so every arm in
+   * this process names this start, and a start-only record it arms waits
+   * for the next start.
+   */
+  readonly boot: number
   /** One upsert: a repeat bumps the version, clears the attempts, and keeps an earlier time when it names none. */
   readonly arm: (
     wake: BranchWakeKey & { readonly at: Option.Option<number> },

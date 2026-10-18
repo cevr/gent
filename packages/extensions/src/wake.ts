@@ -465,6 +465,7 @@ type WakeWorkServices =
   | WakeAlarms
   | FileSystem.FileSystem
   | Path.Path
+  | Crypto.Crypto
   | ChildProcessSpawner.ChildProcessSpawner
 
 type WakeWorkError = ExtensionServiceError | PlatformError.PlatformError | WakeError

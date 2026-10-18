@@ -113,6 +113,17 @@ const BackgroundBashJobRow = Schema.Struct({
 })
 type BackgroundBashJobRow = typeof BackgroundBashJobRow.Type
 
+/** A running job's recorded process; a token is none for a job from before it. */
+const decodeStaleProcessRows = Schema.decodeUnknownEffect(
+  Schema.Array(
+    Schema.Struct({
+      pid: Schema.Int,
+      process_start_id: Schema.String,
+      process_token: Schema.OptionFromNullOr(Schema.String),
+    }),
+  ),
+)
+
 interface BackgroundBashStorageService {
   readonly claimStart: (
     input: BackgroundBashStartInput,
@@ -193,13 +204,15 @@ interface BackgroundBashBranch {
 }
 
 /**
- * The process a command started: the group leader's pid and its start time
- * (`processStartIdentity`). A later server stops what a lost run left with
- * `stopStaleProcess`.
+ * The process a command started: the group leader's pid, its start time
+ * (`processStartIdentity`), and the token every process of the command
+ * inherits in `GENT_COMMAND_TOKEN` (none in a record from before it). A
+ * later server stops what a lost run left with `stopStaleProcess`.
  */
 export interface CommandProcess {
   readonly pid: number
   readonly startIdentity: string
+  readonly token: Option.Option<string>
 }
 
 /** The message of a job a restart found running and stopped, or found gone. */
@@ -306,6 +319,9 @@ export class BackgroundBashStorage extends Context.Service<
         // that could not be read), so a restart cannot check it.
         yield* addBackgroundBashColumn(columns, "pid", "INTEGER")
         yield* addBackgroundBashColumn(columns, "process_start_id", "TEXT")
+        // NULL: a job from before the token, whose group a restart stops only
+        // while its leader runs.
+        yield* addBackgroundBashColumn(columns, "process_token", "TEXT")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -428,7 +444,8 @@ export class BackgroundBashStorage extends Context.Service<
               yield* sql`
                 UPDATE background_bash_jobs
                 SET pid = ${process.pid},
-                    process_start_id = ${process.startIdentity}
+                    process_start_id = ${process.startIdentity},
+                    process_token = ${Option.getOrNull(process.token)}
                 WHERE session_id = ${key.sessionId}
                   AND branch_id = ${key.branchId}
                   AND tool_call_id = ${key.toolCallId}
@@ -439,15 +456,20 @@ export class BackgroundBashStorage extends Context.Service<
           ),
 
           staleProcesses: Effect.gen(function* () {
-            const rows = yield* sql<{ readonly pid: number; readonly process_start_id: string }>`
-              SELECT pid, process_start_id
+            const rows = yield* sql`
+              SELECT pid, process_start_id, process_token
               FROM background_bash_jobs
               WHERE status = 'running'
                 AND (owner_generation IS NULL OR owner_generation != ${generation})
                 AND pid IS NOT NULL
                 AND process_start_id IS NOT NULL
             `
-            return rows.map((row) => ({ pid: row.pid, startIdentity: row.process_start_id }))
+            const decoded = yield* decodeStaleProcessRows(rows)
+            return decoded.map((row): CommandProcess => ({
+              pid: row.pid,
+              startIdentity: row.process_start_id,
+              token: row.process_token,
+            }))
           }).pipe(Effect.mapError(mapError("Failed to read stale background bash processes"))),
 
           interruptedJobs: Effect.fn("BackgroundBashStorage.interruptedJobs")(
@@ -1007,29 +1029,110 @@ const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") => {
   )
 }
 
+/** The variable every process of a command inherits: the token its record names. */
+const COMMAND_TOKEN_VARIABLE = "GENT_COMMAND_TOKEN"
+
+/** The pids in process group `pgid` now, from one `ps` listing; none when the group is gone. */
+const processGroupMembers = (pgid: number) =>
+  runProcess("ps", ["-A", "-o", "pid=,pgid="], {
+    env: { LC_ALL: "C" },
+    extendEnv: true,
+    timeout: PROCESS_CHECK_TIMEOUT,
+  }).pipe(
+    Effect.map((result) =>
+      result.stdout
+        .split("\n")
+        .values()
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([, group]) => group === String(pgid))
+        .map(([pid]) => Number(pid))
+        .filter((pid) => Number.isSafeInteger(pid) && pid > 1)
+        .toArray(),
+    ),
+  )
+
+/**
+ * Whether process `pid` started with `GENT_COMMAND_TOKEN=<token>`: read from
+ * `/proc/<pid>/environ` on Linux, else from `ps -E` (macOS). macOS hides the
+ * environment of its own signed programs (`/bin/sleep`, `/bin/bash`), so
+ * such a process proves nothing there.
+ */
+const carriesCommandToken = (pid: number, token: string) => {
+  const entry = `${COMMAND_TOKEN_VARIABLE}=${token}`
+  const fromProc = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const environ = yield* fs.readFileString(`/proc/${pid}/environ`)
+    return environ.split("\0").includes(entry)
+  })
+  const fromPs = runProcess("ps", ["-wwE", "-o", "command=", "-p", String(pid)], {
+    env: { LC_ALL: "C" },
+    extendEnv: true,
+    timeout: PROCESS_CHECK_TIMEOUT,
+  }).pipe(
+    Effect.map((result) => result.exitCode === 0 && result.stdout.split(/\s+/).includes(entry)),
+  )
+  return fromProc.pipe(
+    Effect.catch(() => fromPs),
+    Effect.orElseSucceed(() => false),
+  )
+}
+
+/**
+ * Whether a group no leader holds is the job's: a member that inherited the
+ * job's token. The pid of a group that ended can lead an unrelated group,
+ * whose children outlive their leader too; without a token there is no proof.
+ */
+const ownsLeaderlessGroup = (job: CommandProcess, members: ReadonlyArray<number>) =>
+  Option.match(job.token, {
+    onNone: () => Effect.succeed(false),
+    onSome: (token) =>
+      Effect.gen(function* () {
+        for (const pid of members) {
+          if (yield* carriesCommandToken(pid, token)) return true
+        }
+        return false
+      }),
+  })
+
 /**
  * Stop the process group an earlier server left running (a background job,
  * or any command whose process was recorded): SIGTERM, then SIGKILL after
  * `SIGKILL_DELAY_MS`. True only when the group is shown gone; a refused
- * signal leaves a process that may still run.
+ * signal, or a group not shown to be the job's, leaves a process that may
+ * still run.
  *
  * The system does not reuse a pid while a process group with that id lives
  * (POSIX "Process ID Reuse"; Linux keeps the pid allocated while a task holds
  * it as its group id, macOS skips a pid that names a live group). So when
  * another process holds the pid, the job's group is gone. When no process
- * holds it, a group with that id still holds the job's descendants that
- * outlived the leader, and they stop as the leader's group does.
+ * holds it, a group with that id may hold the job's descendants that outlived
+ * the leader, or, once the job's group ended, the descendants of an unrelated
+ * leader that took the pid and exited. Only a member that carries the job's
+ * token shows the group is the job's; the job's own leader shows it by its
+ * start time.
  */
 export const stopStaleProcess = (job: CommandProcess) =>
   Effect.gen(function* () {
     const identity = yield* processStartIdentity(job.pid)
     if (Option.isSome(identity) && identity.value !== job.startIdentity) return true
+    if (Option.isNone(identity)) {
+      const members = yield* processGroupMembers(job.pid)
+      if (members.length === 0) return true
+      if (!(yield* ownsLeaderlessGroup(job, members))) {
+        yield* Effect.logWarning("exec-tools.stale-process.unproven").pipe(
+          Effect.annotateLogs({ pid: job.pid, members: members.length }),
+        )
+        return false
+      }
+    }
     const termed = yield* signalProcessGroup(job.pid, "TERM")
     if (termed !== "taken") return termed === "gone"
     const deadline = (yield* Clock.currentTimeMillis) + SIGKILL_DELAY_MS
     while ((yield* Clock.currentTimeMillis) < deadline) {
+      // A group that took the signal and now refuses one holds only processes
+      // that exited and that their parent has not reaped yet: wait on.
       const probe = yield* signalProcessGroup(job.pid, "0")
-      if (probe !== "taken") return probe === "gone"
+      if (probe === "gone") return true
       yield* Effect.sleep(Duration.millis(100))
     }
     yield* signalProcessGroup(job.pid, "KILL")
@@ -1051,12 +1154,12 @@ export const stopStaleProcess = (job: CommandProcess) =>
  */
 const recordingStart =
   <E>(recorded: (process: CommandProcess) => Effect.Effect<void, E>, failure: string) =>
-  (pid: number) =>
+  (pid: number, token: string) =>
     processStartIdentity(pid).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
-          onSome: (startIdentity) => recorded({ pid, startIdentity }),
+          onSome: (startIdentity) => recorded({ pid, startIdentity, token: Option.some(token) }),
         }),
       ),
       Effect.catchCause((cause) =>
@@ -1068,8 +1171,9 @@ const recordingStart =
  * Spawn `bash -c <command>`: the one spawn every shell command shares. Each
  * stream's text goes to its sink as it arrives, one piece at a time, in
  * arrival order across the two; nothing else is kept. `started` runs beside
- * the streams with the pid of `bash`, which leads its own process group. The
- * scope owns the spawn finalizer: closing it ends the process group via
+ * the streams with the pid of `bash`, which leads its own process group, and
+ * the random token the command's processes inherit in `GENT_COMMAND_TOKEN`.
+ * The scope owns the spawn finalizer: closing it ends the process group via
  * SIGTERM, with SIGKILL after `SIGKILL_DELAY_MS`.
  */
 const spawnBashCommand = (
@@ -1078,11 +1182,15 @@ const spawnBashCommand = (
   sinks: OutputSinks,
   started: (
     pid: number,
+    token: string,
   ) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner> = () => Effect.void,
 ) =>
   Effect.gen(function* () {
+    const token = yield* (yield* Crypto.Crypto).randomUUIDv4()
     const handle = yield* ChildProcess.make("bash", ["-c", command], {
       cwd: Option.getOrUndefined(cwd),
+      env: { GENT_COMMAND_TOKEN: token },
+      extendEnv: true,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -1117,7 +1225,7 @@ const spawnBashCommand = (
           Effect.andThen(Effect.suspend(() => deliver(sinks.stdout, stdout.decode()))),
           Effect.andThen(Effect.suspend(() => deliver(sinks.stderr, stderr.decode()))),
         ),
-        started(handle.pid),
+        started(handle.pid, token),
       ],
       { concurrency: "unbounded" },
     )
@@ -1218,7 +1326,10 @@ const streamBackgroundCommand = (
   command: string,
   cwd: Option.Option<string>,
   file: string,
-  started: (pid: number) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>,
+  started: (
+    pid: number,
+    token: string,
+  ) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>,
 ) =>
   Effect.gen(function* () {
     const sink = yield* makeOutputFile(file, 0)
@@ -1598,7 +1709,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
             }
 
             const fullContext = yield* Effect.context<
-              ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+              | ChildProcessSpawner.ChildProcessSpawner
+              | FileSystem.FileSystem
+              | Path.Path
+              | Crypto.Crypto
             >()
             // forkIn inherits the parent fiber's full context, and provideContext
             // would only merge on top — request-scoped tags carried by the caller
@@ -1609,6 +1723,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               ChildProcessSpawner.ChildProcessSpawner,
               FileSystem.FileSystem,
               Path.Path,
+              Crypto.Crypto,
               References.CurrentLoggers,
               References.MinimumLogLevel,
             )(fullContext)
@@ -1626,7 +1741,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               Effect.updateContext(
                 (
                   _: Context.Context<
-                    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+                    | ChildProcessSpawner.ChildProcessSpawner
+                    | FileSystem.FileSystem
+                    | Path.Path
+                    | Crypto.Crypto
                   >,
                 ) => jobContext,
               ),

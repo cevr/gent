@@ -1435,19 +1435,18 @@ const BRANCH_WAKE_RETRY_MAX_MS = 600_000
 interface BranchWakeStorageService {
   /**
    * One upsert in the current workspace. A new record is a new incarnation
-   * at version 1, armed in the current server start; a repeat keeps both,
-   * bumps the version and clears the attempts, and with no `at` keeps the
-   * time already set.
+   * at version 1 that names `boot`, the server start that arms it; a repeat
+   * keeps all three, bumps the version and clears the attempts, and with no
+   * `at` keeps the time already set.
    */
   readonly arm: (
-    wake: BranchWakeKey & { readonly at: Option.Option<number> },
+    wake: BranchWakeKey & { readonly at: Option.Option<number>; readonly boot: number },
   ) => Effect.Effect<void, StorageError>
   /** Removes a record of the current workspace; false when there was none. */
   readonly cancel: (key: BranchWakeKey) => Effect.Effect<boolean, StorageError>
   /**
-   * Begin a server start: the start's number, one past the last, stored
-   * before the server takes a client. Each record names the start that
-   * inserted it.
+   * Begin a server start: the start's number, one past the last. The server
+   * takes it once, as it builds `BranchWakes`, before any loop can open.
    */
   readonly beginBoot: Effect.Effect<number, StorageError>
   /**
@@ -1530,7 +1529,7 @@ export class BranchWakeStorage extends Context.Service<
             const at = toSqlNull(Option.getOrUndefined(wake.at))
             yield* sql`INSERT INTO branch_wakes (workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts, armed_boot, created_at)
               VALUES (${workspaceId}, ${wake.sessionId}, ${wake.branchId}, ${wake.extensionId}, ${wake.sourceId}, ${at}, 1, 0,
-                COALESCE((SELECT boot FROM branch_wake_boots WHERE id = 1), 0), ${createdAt})
+                ${wake.boot}, ${createdAt})
               ON CONFLICT (session_id, branch_id, extension_id, source_id) DO UPDATE SET
                 at = COALESCE(excluded.at, branch_wakes.at),
                 version = branch_wakes.version + 1,

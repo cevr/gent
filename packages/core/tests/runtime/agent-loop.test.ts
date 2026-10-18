@@ -72,6 +72,7 @@ import {
   fixtureModelCatalogSource,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  recordInteractionDecision,
   recordingEventStore,
   testAgent,
   testSqliteStorage,
@@ -129,10 +130,12 @@ import type { GentNamespacedClient } from "../../src/server/rpc"
 import {
   AgentLoopQueueStorage,
   BranchStorage,
+  BranchWakeStorage,
   EventStorage,
   MessageStorage,
   SessionOperationStorage,
   SessionStorage,
+  SqliteStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import {
@@ -208,12 +211,15 @@ import { SingleRunner } from "effect/cluster"
 import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { SqlClient } from "effect/sql"
+import { BunPlatformLive, BunSqlite } from "../../src/runtime/gent-platform-bun"
+import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
 import {
   type AnyResourceContribution,
   type ExtensionContributions,
   hook,
+  LoadedArtifactIdentity,
 } from "../../src/domain/extension"
 
 // ── op primary keys ─────────────────────────────────────────────────────────
@@ -8260,6 +8266,94 @@ const storedBranchEvents = (ids: { readonly sessionId: SessionId; readonly branc
     }),
   )
 
+const REPLAY_ARMER_ID = ExtensionId.make("@test/replay-armer")
+
+interface ReplayArmerProbe {
+  /** While it holds, a loop that opens arms the start-only record `replayed`. */
+  readonly armOnOpen: Ref.Ref<boolean>
+  /** Completes once a loop that opened armed the record. */
+  readonly armed: Deferred.Deferred<void>
+  readonly fired: Ref.Ref<ReadonlyArray<WakeDueInput>>
+}
+
+/**
+ * A fixture extension for a start that opens a loop with no client: the
+ * `approve` tool parks its turn on an approval, and a decision stored while
+ * no server runs makes the next start's interaction recovery open the loop
+ * again. Its `loopOpen` hook arms `replayed` while `armOnOpen` holds, and its
+ * `wakeDue` hook records each fire and answers `Done`.
+ */
+const replayArmerExtension = (probe: ReplayArmerProbe) =>
+  defineExtension({
+    id: REPLAY_ARMER_ID,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "approve",
+          description: "Ask for an approval",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Boolean,
+          execute: ({ text }) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              return (yield* ctx.Interaction.approve({ text })).approved
+            }),
+        }),
+      )
+      yield* host.on("loopOpen", () =>
+        Effect.gen(function* () {
+          if (!(yield* Ref.get(probe.armOnOpen))) return
+          const ctx = yield* ExtensionContext
+          yield* ctx.Session.wakeAt({ sourceId: "replayed" })
+          yield* Deferred.succeed(probe.armed, void 0)
+        }),
+      )
+      yield* host.on("wakeDue", (input) =>
+        Ref.update(probe.fired, (all) => [...all, input]).pipe(
+          Effect.as(WakeNext.cases.Done.make({})),
+        ),
+      )
+    }),
+  })
+
+/** A second connection to the database file, as a storage read beside the server. */
+const fileSql = (storagePath: string) =>
+  BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer), Layer.orDie)
+
+/**
+ * The record store the root's services above the launch profile read, with
+ * `beginBoot` held until `open` completes. A server whose wake clock takes
+ * the start's number takes it only after the recovered loop armed; a server
+ * that takes it below the actor never calls this one.
+ */
+const heldBootStorage = (storagePath: string, open: Deferred.Deferred<void>) =>
+  Layer.effect(
+    BranchWakeStorage,
+    Effect.gen(function* () {
+      const records = yield* BranchWakeStorage
+      return BranchWakeStorage.of({
+        ...records,
+        beginBoot: Deferred.await(open).pipe(Effect.andThen(records.beginBoot)),
+      })
+    }),
+  ).pipe(Layer.provide(BranchWakeStorage.Live), Layer.provide(fileSql(storagePath)))
+
+/** Each record's source and the start that armed it, and the start's number now. */
+const bootRows = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const records = yield* sql<{
+    readonly source_id: string
+    readonly armed_boot: number
+  }>`SELECT source_id, armed_boot FROM branch_wakes ORDER BY source_id`
+  const boots = yield* sql<{ readonly boot: number }>`SELECT boot FROM branch_wake_boots`
+  return {
+    records: records.map((row) => ({ sourceId: row.source_id, armedBoot: row.armed_boot })),
+    boot: boots[0]?.boot,
+  }
+})
+
 describe("durable wakes", () => {
   it.scopedLive(
     "a due wake reaches a new generation of a branch that passivated, through the RPC path",
@@ -8375,7 +8469,126 @@ describe("durable wakes", () => {
   )
 
   it.scopedLive(
-    "a start pass whose read fails reads again until it succeeds, and then fires its records",
+    "a record a loop arms as a start recovers it names that start, though the wake clock starts later",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-wake-replay-")
+        const cwd = yield* makeTempDirectoryScoped("gent-wake-replay-cwd-")
+        const home = yield* makeTempDirectoryScoped("gent-wake-replay-home-")
+        const storagePath = `${dir}/gent.db`
+        const probe: ReplayArmerProbe = {
+          armOnOpen: yield* Ref.make(false),
+          armed: yield* Deferred.make<void>(),
+          fired: yield* Ref.make<ReadonlyArray<WakeDueInput>>([]),
+        }
+        const rootOf = (
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+          extraLayers: ReadonlyArray<Layer.Layer<never>> = [],
+        ) =>
+          createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              // An artifact identity: the parked call's binding is stored, so a
+              // later start may run it again.
+              extensionInputs: [
+                ...e2ePreset.extensionInputs,
+                {
+                  ...replayArmerExtension(probe),
+                  artifactIdentity: LoadedArtifactIdentity.make("@test/replay-armer@1"),
+                },
+              ],
+              approvalLayer: ApprovalService.Live,
+              extraLayers,
+              storagePath,
+              cwd,
+              home,
+            }),
+          )
+
+        // Root 1 parks a turn on an approval, then stops.
+        const parked = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer } = yield* LanguageModelLayers.sequence([
+              toolCallStep("approve", { text: "go?" }),
+            ])
+            const { client } = yield* rootOf(layer)
+            const ids = yield* client.session.create({})
+            const presented = yield* client.session.events(ids).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ ...ids, content: "ask" })
+            const event = Array.from(yield* Fiber.join(presented))[0]?.event
+            if (event?._tag !== "InteractionPresented") {
+              return yield* Effect.die(new Error("the approval was not presented"))
+            }
+            yield* waitFor(
+              client.session.getSnapshot(ids),
+              (snapshot) => snapshot.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "the turn waits for the approval",
+            )
+            return { ids, requestId: event.requestId }
+          }),
+        )
+        yield* recordInteractionDecision(parked.ids, parked.requestId, { approved: true }).pipe(
+          Effect.provide(
+            SqliteStorage.WithSql(fileSql(storagePath)).pipe(Layer.provide(BunPlatformLive)),
+          ),
+          Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
+        )
+
+        // Root 2's interaction recovery opens the loop with no client, and
+        // its hook arms a start-only record while the wake clock is held.
+        yield* Ref.set(probe.armOnOpen, true)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer } = yield* LanguageModelLayers.sequence([textStep("approved")])
+            const { client } = yield* rootOf(layer, [heldBootStorage(storagePath, probe.armed)])
+            yield* Deferred.await(probe.armed)
+            yield* Ref.set(probe.armOnOpen, false)
+            yield* waitFor(
+              client.session.getSnapshot(parked.ids),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" && hasAssistantText(snapshot.messages, "approved"),
+              5_000,
+              "the recovered turn answered",
+            )
+            // The record names this start, so this start's pass left it.
+            expect(yield* bootRows.pipe(Effect.provide(fileSql(storagePath)))).toEqual({
+              records: [{ sourceId: "replayed", armedBoot: 2 }],
+              boot: 2,
+            })
+          }),
+        )
+        expect(yield* Ref.get(probe.fired)).toEqual([])
+
+        // Root 3's start pass fires it, and `Done` removes it.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer } = yield* LanguageModelLayers.sequence([])
+            yield* rootOf(layer)
+            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "root 3 fired")
+            expect(yield* Ref.get(probe.fired)).toEqual([
+              { sourceId: "replayed", at: Option.none(), cause: "start" },
+            ])
+            yield* waitFor(
+              bootRows.pipe(Effect.provide(fileSql(storagePath))),
+              (rows) => rows.records.length === 0,
+              5_000,
+              "Done removed it",
+            )
+          }),
+        )
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
+  it.scopedLive(
+    "a start pass whose read fails reads again after 0.5 s, twice as long each time up to 30 s, then fires its records",
     () =>
       Effect.gen(function* () {
         const dir = yield* makeTempDirectoryScoped("gent-wake-retry-")
@@ -8405,21 +8618,39 @@ describe("durable wakes", () => {
           }),
         )
 
-        // Root 2's start pass fails and fires nothing. The repair lands
-        // after that failure; a read again then fires the record.
-        const failures: Array<string> = []
-        const capture = Logger.make(({ message }) => {
-          const text = String(message)
-          if (text.includes("branch-wake.startup.failed")) failures.push(text)
+        // Root 2's start pass fails, and reads again after each delay of the
+        // backoff. Each step moves the virtual clock to 1 ms before the next
+        // read, sees no read, then moves it to the read; so each failure's
+        // log time is its read's deadline.
+        const failedAt: Array<number> = []
+        const capture = Logger.make(({ message, date }) => {
+          if (String(message).includes("branch-wake.startup.failed")) failedAt.push(date.getTime())
         })
+        const failedReads = Effect.sync(() => failedAt.length)
+        const onWall = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          effect.pipe(Effect.provideService(Clock.Clock, wallClock))
+        const readAfter = (delay: number) =>
+          Effect.gen(function* () {
+            const before = failedAt.length
+            yield* TestClock.adjust(Duration.millis(delay - 1))
+            // oxlint-disable-next-line effect/noFixedWaitInTests -- a read released early runs on real I/O, which only the wall clock paces
+            yield* onWall(Effect.sleep("20 millis"))
+            expect(failedAt.length).toBe(before)
+            yield* TestClock.adjust(Duration.millis(1))
+            yield* onWall(
+              waitFor(failedReads, (count) => count > before, 5_000, `read ${before + 1}`),
+            )
+          })
+        const delays = [500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { read } = yield* rootOf
-            yield* waitFor(
-              Effect.sync(() => failures.length),
-              (count) => count >= 1,
-              5_000,
-              "the start pass failed",
+            yield* onWall(
+              waitFor(failedReads, (count) => count >= 1, 5_000, "the start pass failed"),
+            )
+            yield* Effect.forEach(delays, readAfter, { discard: true })
+            expect(failedAt.slice(1).map((at, index) => at - (failedAt[index] ?? at))).toEqual(
+              delays,
             )
             expect(yield* Ref.get(probe.fired)).toEqual([])
             yield* read(
@@ -8428,20 +8659,27 @@ describe("durable wakes", () => {
                 yield* sql`DELETE FROM branch_wakes WHERE source_id = 'spoiled'`
               }),
             )
-            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "retry fired")
+            // The next read is 30 s after the last, and it fires the record.
+            yield* TestClock.adjust(WAKE_CLOCK_MAX_SLEEP)
+            yield* onWall(
+              waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "retry fired"),
+            )
             expect((yield* Ref.get(probe.fired))[0]?.input).toEqual({
               sourceId: "boot",
               at: Option.none(),
               cause: "start",
             })
-            yield* waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "Done removed it")
+            expect(failedAt).toHaveLength(delays.length + 1)
+            yield* onWall(
+              waitFor(read(wakeRows), (rows) => rows.length === 0, 5_000, "Done removed it"),
+            )
           }).pipe(
             Effect.provide(Logger.layer([capture])),
             // The test preload turns logs off; this test reads one.
             Effect.provideService(References.MinimumLogLevel, "Warn"),
           ),
         )
-      }).pipe(Effect.timeout("20 seconds")),
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("20 seconds")),
     25_000,
   )
 

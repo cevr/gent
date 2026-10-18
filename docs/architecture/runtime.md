@@ -49,9 +49,12 @@ Shape:
   has an `incarnation` (the AUTOINCREMENT key, never used again after a
   delete), so a record cancelled and armed again is a new record, though its
   `version` starts at 1 again. A record with no `at` fires only at the next
-  server start: it names the start that armed it (`armed_boot`), and each
-  server start stores its number in `branch_wake_boots` (`beginBoot`) as
-  the server builds, before any client or loop can arm a record. The verbs are uniform facade
+  server start: it names the start that armed it (`armed_boot`). Each
+  server start takes its number from `branch_wake_boots` (`beginBoot`) as
+  `BranchWakesLive` builds, below the actor: every arm goes through that
+  service, so no loop (a replayed message, a recovered interaction, a client)
+  arms a record before the number exists, and every record this process arms
+  names it (`BranchWakes.boot`). The verbs are uniform facade
   verbs: the record names the calling extension, and a fire runs that
   extension's one `wakeDue` hook (`host.on("wakeDue", ...)`; package
   validation refuses a second). The wake clock (`branchWakeClockLive`, a

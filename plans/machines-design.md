@@ -1708,3 +1708,49 @@ differs from Part B, the code holds, as follows.
   object that takes no key. C1 calls `machine.list` while the run asks.
 - **Not in this commit.** The hard-kill cases C2b and C3b (e2e, a spawned
   process) are not written yet.
+
+## Review fixes after commit 4
+
+The Codex review of commits 2 and 3 found two faults and a weak test.
+
+- **F23. The start number exists before any loop opens.** F21 stored the
+  number in the wake clock's build, above the actor. The actor's
+  registration lets the cluster replay stored messages, and interaction
+  recovery builds beside the clock: a loop either opens can arm a
+  start-only record before the clock stores the number. The record then
+  names the earlier start and fires at this one. `BranchWakesLive` now
+  takes the number as it builds, below the actor, and every arm goes
+  through it (`BranchWakes.boot`); the clock reads the same number.
+  `BranchWakeStorage.arm` takes the start it names, so storage never reads
+  the number at arm time. The root test holds the clock's start until a
+  recovered interaction's loop armed a record; with the old order the
+  record fired at that start (measured).
+- **F24. A leaderless group needs proof that it is the job's.** G4's
+  `stopStaleProcess` signalled any group whose leader pid no process held.
+  Once the job's group ended, an unrelated leader can take the pid, start
+  children and exit; recovery then killed those children. Every command's
+  processes now inherit a random `GENT_COMMAND_TOKEN`, recorded with the
+  pid and start identity (`CommandProcess.token`, the machines'
+  `process.token`, and background bash's `process_token` column). A
+  leaderless group is stopped only when one member started with the token
+  (`/proc/<pid>/environ` on Linux, `ps -E` on macOS); otherwise the stop
+  answers false, and the ask or the notice says the command may still run.
+  macOS hides the environment of its signed programs, so there a group of
+  only `/bin/bash` and `/bin/sleep` is left alone (measured): the crash
+  test's surviving descendant is the test runtime.
+- **The probe after SIGTERM waits on a refusal.** macOS answers EPERM to
+  signal 0 for a group of exited processes their parent has not reaped. The
+  old loop read that as "may still run" and returned false (measured: two
+  runs in six of the recorded-process test once the spawn passed an
+  environment); it now probes again until the SIGKILL.
+- **The startup retry test reads the deadlines.** It runs on `TestClock`:
+  each step moves the clock to 1 ms before the next read and sees none, then
+  to the read, so each failure's log time is its deadline. The deltas are
+  0.5, 1, 2, 4, 8, 16, 30 and 30 s.
+- **A leader gone before `ps` reads it leaves no record.** The spawn's
+  `started` hook reads the leader's start identity; a leader that exits at
+  once (`cmd &` and nothing after it) records nothing, so a later server
+  cannot stop the child it left. The leaderless-group tests hold their
+  leader on a file until the record lands (measured: three runs in four hung
+  without it). The gap is G4's, unchanged here; closing it needs the record
+  to come from the spawn, not from a later `ps`.

@@ -4074,22 +4074,29 @@ const WAKE_STARTUP_RETRY_BASE = Duration.millis(500)
 /** How many fires run at once, at the startup pass and after it. */
 const WAKE_FIRE_CONCURRENCY = 8
 
-export const BranchWakesLive: Layer.Layer<BranchWakes, never, BranchWakeStorage> = Layer.effect(
-  BranchWakes,
-  Effect.gen(function* () {
-    const storage = yield* BranchWakeStorage
-    // One slot: writes made while the clock is busy open the latch once.
-    const latch = yield* Queue.sliding<void>(1)
-    const open = Queue.offer(latch, void 0).pipe(Effect.asVoid)
-    return BranchWakes.of({
-      arm: Effect.fn("BranchWakes.arm")((wake) => storage.arm(wake).pipe(Effect.tap(() => open))),
-      cancel: Effect.fn("BranchWakes.cancel")((key) =>
-        storage.cancel(key).pipe(Effect.tap(() => open)),
-      ),
-      changed: Queue.take(latch),
-    })
-  }),
-)
+export const BranchWakesLive: Layer.Layer<BranchWakes, StorageError, BranchWakeStorage> =
+  Layer.effect(
+    BranchWakes,
+    Effect.gen(function* () {
+      const storage = yield* BranchWakeStorage
+      // The start's number is taken here, below the actor: no loop opens, by a
+      // replayed message, a recovered interaction or a client, before it.
+      const boot = yield* storage.beginBoot
+      // One slot: writes made while the clock is busy open the latch once.
+      const latch = yield* Queue.sliding<void>(1)
+      const open = Queue.offer(latch, void 0).pipe(Effect.asVoid)
+      return BranchWakes.of({
+        boot,
+        arm: Effect.fn("BranchWakes.arm")((wake) =>
+          storage.arm({ ...wake, boot }).pipe(Effect.tap(() => open)),
+        ),
+        cancel: Effect.fn("BranchWakes.cancel")((key) =>
+          storage.cancel(key).pipe(Effect.tap(() => open)),
+        ),
+        changed: Queue.take(latch),
+      })
+    }),
+  )
 
 const wakeKeyOf = (wake: BranchWake): BranchWakeKey => ({
   sessionId: wake.sessionId,
@@ -4204,12 +4211,12 @@ export const branchWakeClockLive = Layer.effectDiscard(
         { discard: true },
       )
 
-    // This start's number is stored as the server builds, before any client
-    // or loop can arm a record: a start-only record this process inserts
-    // names it, and waits for the next start. So the pass's set is fixed
-    // now, whenever its read succeeds, and a failed read is read again with
-    // the same bounds until it succeeds.
-    const boot = yield* storage.beginBoot
+    // This start's number, which `BranchWakes` took before any loop could
+    // arm a record: a start-only record this process inserts names it, and
+    // waits for the next start. So the pass's set is fixed now, whenever its
+    // read succeeds, and a failed read is read again with the same bounds
+    // until it succeeds.
+    const boot = wakes.boot
     const startedAt = yield* Clock.currentTimeMillis
     const startup = Effect.suspend(() => storage.listAtStart(boot, startedAt)).pipe(
       Effect.tapError((error) =>

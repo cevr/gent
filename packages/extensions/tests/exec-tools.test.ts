@@ -1762,6 +1762,124 @@ describe("a command's recorded process", () => {
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
   )
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a command's processes inherit the token its record names",
+    () =>
+      Effect.gen(function* () {
+        const recorded = yield* Deferred.make<CommandProcess>()
+        const output = yield* runBashCommand(
+          'echo "$GENT_COMMAND_TOKEN"',
+          Option.none(),
+          Option.none(),
+          (process) => Deferred.succeed(recorded, process),
+        )
+        const process = yield* Deferred.await(recorded)
+        expect(Option.isSome(process.token)).toBe(true)
+        expect(Option.some(output.stdout.trim())).toEqual(process.token)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  /** The command line of each process in group `pid`. */
+  const groupCommands = (pid: number) =>
+    Effect.map(
+      runProcess("ps", ["-A", "-o", "pgid=,command="], { env: { LC_ALL: "C" }, extendEnv: true }),
+      (result) =>
+        result.stdout
+          .split("\n")
+          .values()
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith(`${pid} `))
+          .map((line) => line.slice(String(pid).length + 1))
+          .toArray(),
+    )
+  /**
+   * A command whose leader exits and leaves one child in its group: the test
+   * runtime, which macOS does not hide the environment of. With a `gate`, the
+   * leader waits until that file exists: a leader gone before `ps` reads its
+   * start time leaves no record.
+   */
+  const leaderlessCommand = (execPath: string, gate: Option.Option<string>) =>
+    `${execPath} -e "setTimeout(() => {}, 60000)" > /dev/null 2>&1 &` +
+    Option.match(gate, {
+      onNone: () => "",
+      onSome: (file) => ` while [ ! -e '${file}' ]; do sleep 0.05; done`,
+    })
+  /** Waits until the leader `pid` is gone and its group holds the runtime child. */
+  const leftChild = (platform: GentPlatform["Service"], pid: number) =>
+    Effect.gen(function* () {
+      yield* waitFor(
+        platform.signal(pid, 0).pipe(Effect.exit),
+        Exit.isFailure,
+        5_000,
+        "the leader exited",
+      )
+      yield* waitFor(
+        groupCommands(pid),
+        (commands) => commands.some((command) => command.includes("setTimeout")),
+        5_000,
+        "the child runs the runtime",
+      )
+    })
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a later server's stop ends a group whose leader exited, by the token its child inherited",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
+        const gate = `${yield* makeTempDirectoryScoped("gent-bg-leaderless-")}/recorded`
+        const recorded = yield* Deferred.make<CommandProcess>()
+        yield* runBashCommand(
+          leaderlessCommand(yield* platform.execPath, Option.some(gate)),
+          Option.none(),
+          Option.none(),
+          (process) => Deferred.succeed(recorded, process),
+        ).pipe(Effect.exit, Effect.forkScoped)
+        const process = yield* Deferred.await(recorded)
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-process.pid, "SIGKILL")))
+        yield* fs.writeFileString(gate, "")
+        yield* leftChild(platform, process.pid)
+        expect(yield* stopStaleProcess(process)).toBe(true)
+        expect(yield* groupMembers(process.pid)).toEqual([])
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a later server's stop leaves alone the children an unrelated leader left in the job's reused pid",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        // The job's group ended; an unrelated leader took its pid, started a
+        // child, and exited. The child carries no token of the job.
+        const other = yield* ChildProcess.make(
+          "bash",
+          ["-c", leaderlessCommand(yield* platform.execPath, Option.none())],
+          {
+            forceKillAfter: "2 seconds",
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "ignore",
+          },
+        )
+        const otherPid = Number(other.pid)
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-otherPid, "SIGKILL")))
+        yield* other.exitCode
+        yield* leftChild(platform, other.pid)
+        const job: CommandProcess = {
+          pid: other.pid,
+          startIdentity: "Thu Jan  1 00:00:00 1970",
+          token: Option.some("the-job-s-own-token"),
+        }
+        expect(yield* stopStaleProcess(job)).toBe(false)
+        // A record from before the token proves nothing either.
+        expect(yield* stopStaleProcess({ ...job, token: Option.none() })).toBe(false)
+        expect((yield* groupMembers(other.pid)).length).toBeGreaterThan(0)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
 })
 
 describe("foreground command output", () => {
@@ -2430,14 +2548,16 @@ describe("a background job the server stopped", () => {
   const crashCases = [
     {
       name: "a quiet job that outlived a crashed server stops when the next server starts",
-      command: (directory: string) =>
+      command: (directory: string, _execPath: string) =>
         `echo $$ > ${directory}/job.pid; sleep 30; touch ${directory}/late`,
       leaderExits: false,
     },
     {
       name: "a descendant that outlived its exited leader and a crashed server stops when the next server starts",
-      command: (directory: string) =>
-        `echo $$ > ${directory}/job.pid; (sleep 30; touch ${directory}/late) & while ! test -f ${directory}/go; do sleep 0.05; done`,
+      // The descendant runs the test runtime: macOS hides the environment of
+      // its own signed programs, so only such a process shows the job's token.
+      command: (directory: string, execPath: string) =>
+        `echo $$ > ${directory}/job.pid; (${execPath} -e "setTimeout(() => {}, 30000)"; touch ${directory}/late) & while ! test -f ${directory}/go; do sleep 0.05; done`,
       leaderExits: true,
     },
   ]
@@ -2452,7 +2572,7 @@ describe("a background job the server stopped", () => {
           const directory = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-bg-crash-"))
           const storagePath = `${directory}/gent.db`
           const pidFile = `${directory}/job.pid`
-          const command = crashCase.command(directory)
+          const command = crashCase.command(directory, yield* platform.execPath)
           const hostEntry = yield* path.fromFileUrl(
             new URL("./helpers/background-bash-host.ts", import.meta.url),
           )

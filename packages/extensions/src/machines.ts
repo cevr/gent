@@ -191,7 +191,11 @@ type AskReason = typeof AskReason.Type
 /** The verdict a round on a state with `on` must `thread.reply`; anything else is no verdict. */
 const VerdictReply = Schema.Struct({ next: Verdict })
 
-const ProcessRecord = Schema.Struct({ pid: Schema.Int, startIdentity: Schema.String })
+const ProcessRecord = Schema.Struct({
+  pid: Schema.Int,
+  startIdentity: Schema.String,
+  token: Schema.OptionFromOptionalKey(Schema.String),
+})
 
 const RunStatus = Schema.Literals(["running", "asking", "final", "failed", "stopped"])
 type RunStatus = typeof RunStatus.Type
@@ -1874,7 +1878,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   const store = yield* MachineStore
   // The command outlives this call, in the branch scope: it keeps the services it runs against.
   const services = yield* Effect.context<
-    MachineStore | FileSystem.FileSystem | Path.Path | ChildProcessSpawner
+    MachineStore | FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner
   >()
   const command = render(state.run, templateScope(run, action.visit))
   const timeout = Duration.seconds(state.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS)

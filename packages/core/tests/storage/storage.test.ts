@@ -2899,14 +2899,14 @@ describe("Branch wakes", () => {
     Effect.gen(function* () {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* wakes.arm({ ...key, at: Option.some(1_000) })
+      yield* wakes.arm({ ...key, at: Option.some(1_000), boot: 1 })
       const first = yield* stampOf(key.sourceId)
       yield* wakes.retry(key, first, 0)
       expect(yield* readRows).toEqual([{ at: Option.some(5_000), version: 1, attempts: 1 }])
-      yield* wakes.arm({ ...key, at: Option.some(2_000) })
+      yield* wakes.arm({ ...key, at: Option.some(2_000), boot: 1 })
       expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 2, attempts: 0 }])
       // A repeat with no time keeps the time already set.
-      yield* wakes.arm({ ...key, at: Option.none() })
+      yield* wakes.arm({ ...key, at: Option.none(), boot: 1 })
       expect(yield* readRows).toEqual([{ at: Option.some(2_000), version: 3, attempts: 0 }])
       // Every arm of one record keeps its incarnation.
       expect((yield* stampOf(key.sourceId)).incarnation).toBe(first.incarnation)
@@ -2917,10 +2917,10 @@ describe("Branch wakes", () => {
     Effect.gen(function* () {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* wakes.arm({ ...key, at: Option.some(1_000) })
+      yield* wakes.arm({ ...key, at: Option.some(1_000), boot: 1 })
       // The fire read version 1; a newer arm lands while it runs.
       const fired = yield* stampOf(key.sourceId)
-      yield* wakes.arm({ ...key, at: Option.some(9_000) })
+      yield* wakes.arm({ ...key, at: Option.some(9_000), boot: 1 })
       yield* wakes.settle(key, fired)
       yield* wakes.reschedule(key, fired, Option.some(3_000))
       yield* wakes.retry(key, fired, 0)
@@ -2938,7 +2938,7 @@ describe("Branch wakes", () => {
     Effect.gen(function* () {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
-      yield* wakes.arm({ ...key, at: Option.some(0) })
+      yield* wakes.arm({ ...key, at: Option.some(0), boot: 1 })
       const stamp = yield* stampOf(key.sourceId)
       const delays: Array<Option.Option<number>> = []
       for (let attempt = 0; attempt < 9; attempt++) {
@@ -2960,12 +2960,12 @@ describe("Branch wakes", () => {
       Effect.gen(function* () {
         const wakes = yield* BranchWakeStorage
         yield* ensureStorageParents({ sessionId, branchId })
-        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        yield* wakes.arm({ ...key, at: Option.some(1_000), boot: 1 })
         // A fire read version 1; the record is cancelled and armed again
         // while it runs, at version 1 once more.
         const fired = yield* stampOf(key.sourceId)
         yield* wakes.cancel(key)
-        yield* wakes.arm({ ...key, at: Option.some(9_000) })
+        yield* wakes.arm({ ...key, at: Option.some(9_000), boot: 1 })
         const replacement = yield* stampOf(key.sourceId)
         expect(replacement.version).toBe(fired.version)
         expect(replacement.incarnation).not.toBe(fired.incarnation)
@@ -2981,15 +2981,21 @@ describe("Branch wakes", () => {
       const wakes = yield* BranchWakeStorage
       yield* ensureStorageParents({ sessionId, branchId })
       const started = yield* Clock.currentTimeMillis
-      expect(yield* wakes.beginBoot).toBe(1)
-      yield* wakes.arm({ ...key, sourceId: "past", at: Option.some(started - 500) })
-      yield* wakes.arm({ ...key, sourceId: "start-only", at: Option.none() })
-      yield* wakes.arm({ ...key, sourceId: "later", at: Option.some(started + 60_000) })
+      const earlier = yield* wakes.beginBoot
+      expect(earlier).toBe(1)
+      yield* wakes.arm({ ...key, sourceId: "past", at: Option.some(started - 500), boot: earlier })
+      yield* wakes.arm({ ...key, sourceId: "start-only", at: Option.none(), boot: earlier })
+      yield* wakes.arm({
+        ...key,
+        sourceId: "later",
+        at: Option.some(started + 60_000),
+        boot: earlier,
+      })
       const boot = yield* wakes.beginBoot
       expect(boot).toBe(2)
       // Armed in this start, in the same millisecond or after the clock went
       // back: it waits for the next start all the same.
-      yield* wakes.arm({ ...key, sourceId: "this-start", at: Option.none() })
+      yield* wakes.arm({ ...key, sourceId: "this-start", at: Option.none(), boot })
       const now = yield* Clock.currentTimeMillis
       const sources = (rows: ReadonlyArray<{ readonly sourceId: string }>) =>
         rows.map((row) => row.sourceId)
@@ -3012,11 +3018,11 @@ describe("Branch wakes", () => {
         const wakes = yield* BranchWakeStorage
         const sessions = yield* SessionStorage
         yield* ensureStorageParents({ sessionId, branchId })
-        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        yield* wakes.arm({ ...key, at: Option.some(1_000), boot: 1 })
         expect(yield* wakes.cancel(key)).toBe(true)
         expect(yield* wakes.cancel(key)).toBe(false)
         // Another workspace's cancel does not reach this workspace's record.
-        yield* wakes.arm({ ...key, at: Option.some(1_000) })
+        yield* wakes.arm({ ...key, at: Option.some(1_000), boot: 1 })
         const elsewhere = yield* wakes
           .cancel(key)
           .pipe(Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("e".repeat(64))))
