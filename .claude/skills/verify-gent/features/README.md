@@ -40,3 +40,4 @@ Name user paths, screen text, keys, commands and observable results. Keep source
 - [Shell mode](shell-mode.md): `!` commands, their output and exit, sent to the model.
 - [Asks](asks.md): a background question, its footer row and the `/answer` form.
 - [Sessions](sessions.md): the Sessions pane by `/sessions`, the palette and the `left` key, its filter, switching sessions.
+- [Lanes band](lanes.md): free lanes and active machine runs under the status row, at rest, with a run, narrow, and `gent ctl lanes`.

@@ -6706,6 +6706,29 @@ const HANDOFF_STEPS: ReadonlyArray<ScenarioStep> = [
   { reasoning: "Summarize.", ops: [] },
 ]
 
+/** The machine `debug machine` defines: one 45-second command, then its end. */
+const SCENARIO_MACHINE = {
+  name: "soak",
+  threads: {},
+  start: "check",
+  states: {
+    check: { kind: "run", run: "sleep 45", on: { pass: "done", fail: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+const MACHINE_STEPS: ReadonlyArray<ScenarioStep> = [
+  {
+    reasoning: "A slow check runs apart from this turn; a machine runs it.",
+    ops: [{ tool: "machine.define", input: { definition: SCENARIO_MACHINE } }],
+  },
+  {
+    reasoning: "Start it; it needs no turn of mine.",
+    ops: [{ tool: "machine.start", input: { machine: SCENARIO_MACHINE.name } }],
+  },
+  { reasoning: "Summarize.", ops: [] },
+]
+
 // Reasoning as a model's summaries arrive: a bold heading, then prose.
 const THINK_STEPS: ReadonlyArray<ScenarioStep> = [
   {
@@ -6741,6 +6764,11 @@ const DEBUG_SCENARIOS: ReadonlyArray<Scenario> = [
     phrase: "debug handoff",
     steps: HANDOFF_STEPS,
     answer: "Handed off.",
+  },
+  {
+    phrase: "debug machine",
+    steps: MACHINE_STEPS,
+    answer: "Started the soak machine; its run shows under the status line for 45 s.",
   },
   {
     phrase: "debug think",

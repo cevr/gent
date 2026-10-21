@@ -2771,9 +2771,20 @@ const MachineStatusTool = tool({
   execute: runStatus,
 })
 
+/** The runs the caller's thread started, newest first, as `machine.list` and `MachinesRpc.Runs` read them. */
+const ownedRuns = Effect.fn("Machines.ownedRuns")(function* () {
+  const store = yield* MachineStore
+  const runs = yield* store.ownedBy(yield* callerThread())
+  return runs.map(runView)
+})
+
+/** One run as `machine.list` and `MachinesRpc.Runs` show it, with no steps. */
+export type MachineRunView = typeof RunView.Type
+
 /**
- * What a client outside any turn reads of a run (`gent ctl request`):
- * the same view as `machine.status`, asked as a session of the owner's thread.
+ * What a client outside any turn reads of runs (`gent ctl request`, the
+ * TUI's band): the views `machine.status` and `machine.list` give, asked as
+ * a session of the owner's thread.
  */
 export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
   Status: request({
@@ -2785,6 +2796,15 @@ export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
     resources: [MachineStoreResource],
     execute: runStatus,
   }),
+  Runs: request({
+    id: "run-list",
+    description: "List the runs your thread started, newest first",
+    answersDuringTurn: true,
+    input: Schema.Struct({}),
+    output: Schema.Array(RunView),
+    resources: [MachineStoreResource],
+    execute: () => ownedRuns(),
+  }),
 })
 
 const MachineListTool = tool({
@@ -2795,11 +2815,7 @@ const MachineListTool = tool({
   promptSnippet: "List your machine runs",
   params: Tool.EmptyParams,
   output: Schema.Array(RunView),
-  execute: Effect.fn("MachineListTool.execute")(function* () {
-    const store = yield* MachineStore
-    const runs = yield* store.ownedBy(yield* callerThread())
-    return runs.map(runView)
-  }),
+  execute: () => ownedRuns(),
 })
 
 const MachineStopTool = tool({
@@ -2868,7 +2884,7 @@ export const MachinesExtension = defineExtension({
       MachineListTool,
       MachineStopTool,
     )
-    yield* host.register("request", MachinesRpc.Status)
+    yield* host.register("request", MachinesRpc.Status, MachinesRpc.Runs)
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))
     yield* host.on("sessionDeleted", ({ sessionId }) =>

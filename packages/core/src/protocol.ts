@@ -5,6 +5,9 @@ export {
   AuthPrompt,
   authMethodAppliesTo,
   type CredentialReceipt,
+  LaneReport,
+  type LaneWindow,
+  ProviderLanes,
   sameCredential,
 } from "./domain/driver.js"
 export { AuthAuthorization, AuthProviderInfo } from "./runtime/provider.js"

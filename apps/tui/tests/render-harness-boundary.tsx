@@ -268,6 +268,9 @@ export const createMockClient = (
     driver: {
       list: () => noRpcError({ drivers: [], overrides: {}, agents: [testAgent] }),
     },
+    accounts: {
+      lanes: () => noRpcError({ providers: [] }),
+    },
     auth: {
       listProviders: () => noRpcError([]),
       setKey: () => noRpcError(absent),

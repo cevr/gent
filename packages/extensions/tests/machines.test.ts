@@ -546,6 +546,22 @@ describe("a machine run", () => {
       const stranger = yield* client.session.create({ cwd: home.cwd })
       const refused = yield* readStatus(stranger).pipe(Effect.as("answered"), Effect.flip)
       expect(String(refused)).toContain("belongs to another thread")
+      // The band lists the runs of the thread in view, and none of another's.
+      const runsRef = ref(MachinesRpc.Runs)
+      const listRuns = (session: SessionKey) =>
+        client.extension
+          .request({
+            ...session,
+            extensionId: runsRef.extensionId,
+            capabilityId: runsRef.capabilityId,
+            input: {},
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(runsRef.output)))
+      const listed = yield* listRuns(owner)
+      expect(listed.map((view) => [view.run, view.status, String(view.state)])).toEqual([
+        [run, "asking", "decide"],
+      ])
+      expect(yield* listRuns(stranger)).toEqual([])
       yield* call(client, owner, [
         ["machine.answer", "answer-drop", { run, askId: ask.askId, choice: "drop" }],
       ])

@@ -511,9 +511,22 @@ const Launched = Schema.Struct({
  * server. Only a server that answers is handed off, the supervisor detached
  * from this call.
  */
-const launch = Effect.fn("Verify.launch")(function* (dir: string, port: number, seconds: number) {
+const launch = Effect.fn("Verify.launch")(function* (
+  dir: string,
+  port: number,
+  seconds: number,
+  data: Option.Option<string>,
+) {
   const paths = yield* scratchDir(dir)
   yield* seed(paths)
+  // A fixture of server state, read as the server starts: a copy, so the run never writes the original.
+  if (Option.isSome(data)) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    yield* fs
+      .copyFile(data.value, path.join(paths.data, path.basename(data.value)))
+      .pipe(Effect.mapError(failed("data")))
+  }
   const platform = yield* GentPlatform
   const started = yield* Clock.currentTimeMillis
   const here = yield* Effect.flatMap(Path.Path, (path) =>
@@ -1007,8 +1020,15 @@ const launchCommand = Command.make(
       Flag.withDescription("Seconds to wait for the server to answer"),
       Flag.withDefault(90),
     ),
+    data: Flag.String("data").pipe(
+      Flag.withDescription(
+        "A file copied into the run's data directory before its server starts, such as an account ledger (credential-usage.json)",
+      ),
+      Flag.optional,
+    ),
   },
-  ({ dir, port, timeout }) => Effect.scoped(command(Launched, launch(dir, port, timeout))),
+  ({ dir, port, timeout, data }) =>
+    Effect.scoped(command(Launched, launch(dir, port, timeout, data))),
 ).pipe(Command.withDescription("Seed a scratch run, start its server, print it once it answers"))
 
 const serveCommand = Command.make("serve", { dir: dirFlag, port: portFlag }, ({ dir, port }) =>

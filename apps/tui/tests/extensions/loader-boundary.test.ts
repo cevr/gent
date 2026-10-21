@@ -1534,6 +1534,7 @@ describe("loadTuiExtensions", () => {
           onSessionEvent: () => () => {},
           modelCatalog: () => Option.none(),
           selectedModel: () => Option.some("test/model"),
+          connection: () => Option.some(1),
         },
       })
       return Effect.gen(function* () {

@@ -16,8 +16,11 @@ import { textWidth } from "./bun-adapter"
 import {
   GentConnectionError,
   GentRpcError,
+  type LaneReport,
+  type LaneWindow,
   lineCount,
   type Model,
+  type ProviderLanes,
   type Session,
   splitLines,
   type GentClientRpcError,
@@ -414,6 +417,159 @@ export const formatClock = (at: number, now: number, zone: DateTime.TimeZone): s
     return time
   }
   return `${parts.year}-${twoDigits(parts.month)}-${twoDigits(parts.day)} ${time}`
+}
+
+// ── account lanes ───────────────────────────────────────────────────────────
+
+/**
+ * A provider's tightest window: the one whose runs run out first, else its
+ * first window. The band names its rate, since that window sizes the lanes.
+ */
+const bindingWindow = (lanes: ProviderLanes): Option.Option<LaneWindow> => {
+  const windows = lanes.accounts
+    .filter((account) => lanes.scope.includes(account.slot))
+    .flatMap((account) => account.windows)
+  const sized = windows.filter((window) => Predicate.isNotUndefined(window.sustainable))
+  const tightest = sized.reduce<Option.Option<LaneWindow>>(
+    (best, window) =>
+      Option.match(best, {
+        onNone: () => Option.some(window),
+        onSome: (held) => {
+          if ((window.sustainable ?? 0) < (held.sustainable ?? 0)) return Option.some(window)
+          return best
+        },
+      }),
+    Option.none(),
+  )
+  return Option.orElse(tightest, () => Option.fromUndefinedOr(windows[0]))
+}
+
+/**
+ * When a spent scope carries a run again: per account, the last reset of
+ * the windows short of a run; the soonest account. None when no window is
+ * short of a run: running runs hold every lane, or a refusal holds the
+ * account, and the report names no time for either.
+ */
+const lanesRetryAt = (lanes: ProviderLanes, now: number): Option.Option<number> => {
+  const ready = lanes.accounts
+    .filter((account) => lanes.scope.includes(account.slot))
+    .map((account) =>
+      account.windows
+        .filter((window) => (window.sustainable ?? 1) < 1 && window.resetAt > now)
+        .map((window) => window.resetAt),
+    )
+    .filter((resets) => resets.length > 0)
+    .map((resets) => Math.max(...resets))
+  if (ready.length === 0) return Option.none()
+  return Option.some(Math.min(...ready))
+}
+
+const percent = (fraction: number): string => `${Math.round(fraction * 100)}%`
+
+/**
+ * The words of one window's rate: `5h 120k/% ±8% · out 12%`, the fuel one
+ * percentage point of it holds, the rate's uncertainty and the share of its
+ * move spent outside gent. `5h no rate` until a rate is fitted.
+ */
+const windowWords = (window: LaneWindow): ReadonlyArray<string> => {
+  if (Predicate.isUndefined(window.fuelPerPct)) return [`${window.window} no rate`]
+  const rate = `${window.window} ${formatTokens(Math.round(window.fuelPerPct))}/%`
+  const band = Option.match(Option.fromUndefinedOr(window.band), {
+    onNone: () => rate,
+    onSome: (value) => `${rate} ±${percent(value)}`,
+  })
+  return [`${band} · out ${percent(window.outsideShare)}`, band, rate]
+}
+
+/**
+ * One provider's band row, longest form that fits `width` first: the free
+ * lanes over the capacity, the binding window's rate and the outside share.
+ * A narrow row drops the share, then the band, then the window, then the
+ * provider; the free count stays at every width. With no free lane the row
+ * names the clock a window resets at, when one does; with no capacity it
+ * says `unknown`. Clock times read in `zone`.
+ */
+const providerLaneRow = (
+  lanes: ProviderLanes,
+  now: number,
+  width: number,
+  zone: DateTime.TimeZone,
+): string => {
+  const fit = (candidates: ReadonlyArray<string>): string =>
+    candidates.find((candidate) => textWidth(candidate) <= width) ??
+    truncate(candidates.at(-1) ?? "", width)
+  const capacity = lanes.capacity
+  if (Predicate.isUndefined(capacity)) {
+    return fit([`lanes ${lanes.provider} unknown`, "lanes unknown"])
+  }
+  const free = Math.max(0, capacity - lanes.load)
+  if (free === 0) {
+    return Option.match(lanesRetryAt(lanes, now), {
+      onNone: () => {
+        // Runs hold the lanes, or a refusal holds the account with no window spent.
+        const why = Option.match(
+          Option.liftPredicate(lanes.load, (load) => load > 0),
+          {
+            onNone: () => "held",
+            onSome: (load) => `${load} running`,
+          },
+        )
+        return fit([
+          `lanes ${lanes.provider} 0/${capacity} free · ${why}`,
+          `lanes ${lanes.provider} 0/${capacity} free`,
+          `lanes 0/${capacity} free`,
+          "0 free",
+        ])
+      },
+      onSome: (at) => {
+        const retry = `retry ${formatClock(at, now, zone)}`
+        return fit([
+          `lanes ${lanes.provider} 0 free · ${retry}`,
+          `lanes 0 free · ${retry}`,
+          `0 free · ${retry}`,
+          "0 free",
+        ])
+      },
+    })
+  }
+  const head = `lanes ${lanes.provider} ${free}/${capacity} free`
+  const rates = Option.match(bindingWindow(lanes), {
+    onNone: (): ReadonlyArray<string> => [],
+    onSome: windowWords,
+  })
+  return fit([
+    ...rates.map((words) => `${head} · ${words}`),
+    head,
+    `lanes ${free}/${capacity} free`,
+    `${free}/${capacity} free`,
+  ])
+}
+
+/** One lanes row: its words, and whether a run can start (`free`), cannot (`none`), or nobody knows. */
+interface LaneRow {
+  readonly text: string
+  readonly state: "free" | "none" | "unknown"
+}
+
+/**
+ * The lanes rows of the band and of `gent ctl lanes --line`: one row per
+ * provider gent read a quota window of, `lanes unknown` when it read none.
+ */
+export const laneRows = (
+  report: LaneReport,
+  now: number,
+  width: number,
+  zone: DateTime.TimeZone,
+): ReadonlyArray<LaneRow> => {
+  if (report.providers.length === 0) {
+    return [{ text: truncate("lanes unknown", width), state: "unknown" }]
+  }
+  return report.providers.map((lanes): LaneRow => {
+    const text = providerLaneRow(lanes, now, width, zone)
+    if (Predicate.isUndefined(lanes.capacity)) return { text, state: "unknown" }
+    if (lanes.capacity - lanes.load <= 0) return { text, state: "none" }
+    return { text, state: "free" }
+  })
 }
 
 // ── error formatting ────────────────────────────────────────────────────────

@@ -3491,6 +3491,22 @@ describe("Scripted debug model tool scenario", () => {
       }).pipe(Effect.timeout("4 seconds")),
   )
 
+  it.live("debug machine defines a one-command machine, starts it, then answers", () =>
+    Effect.gen(function* () {
+      const tools = ["machine__define", "machine__start"]
+      const steps = yield* Effect.forEach([0, 1, 2], (done) => step(done, tools, "debug machine"))
+      expect(steps.map((parts) => callsOf(parts).map((call) => call.name))).toEqual([
+        ["machine__define"],
+        ["machine__start"],
+        [],
+      ])
+      expect(callsOf(steps[0] ?? [])[0]?.params).toEqual({
+        definition: expect.objectContaining({ name: "soak", start: "check" }),
+      })
+      expect(callsOf(steps[1] ?? [])[0]?.params).toEqual({ machine: "soak" })
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.live("debug handoff asks for a handoff, then answers", () =>
     Effect.gen(function* () {
       const steps = yield* Effect.forEach([0, 1], (done) =>

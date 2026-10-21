@@ -389,6 +389,7 @@ export function ExtensionUIProvider(props: {
       onSessionEvent: (cb) => client.onSessionEvent(cb),
       modelCatalog: client.modelCatalog,
       selectedModel: client.model,
+      connection: client.connectedGeneration,
     },
     workspace: {
       cwd: workspace.cwd,

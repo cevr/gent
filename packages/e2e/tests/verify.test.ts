@@ -7,6 +7,7 @@ import { BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host-bun"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
+  Clock,
   Effect,
   Exit,
   FileSystem,
@@ -112,13 +113,51 @@ describe("verify helpers", () => {
         // A scratch run stops by its receipt even when launch or an assertion below fails.
         yield* Effect.addFinalizer(() => verify(["stop", "--dir", dir], parent).pipe(Effect.ignore))
 
-        const launch = yield* verify(["launch", "--dir", dir], parent)
+        // `--data` seeds an account ledger the server reads as it starts: one
+        // window 40% used, two 2-point segments of 240k fuel, so 120k a point.
+        const now = yield* Clock.currentTimeMillis
+        const segment = (endedAt: number) => ({
+          provider: "anthropic",
+          slot: "default",
+          window: "5h",
+          endedAt,
+          fuel: 240_000,
+          deltaPct: 2,
+          tokens: { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 0 },
+        })
+        const ledger = `${parent}/credential-usage.json`
+        yield* fs.writeFileString(
+          ledger,
+          encodeJson({
+            buckets: [],
+            readings: [
+              {
+                provider: "anthropic",
+                slot: "default",
+                window: "5h",
+                utilization: 0.4,
+                resetAt: now + 2 * 3_600_000,
+                readAt: now - 60_000,
+                rejected: false,
+              },
+            ],
+            segments: [segment(now - 600_000), segment(now - 120_000)],
+          }),
+        )
+        const launch = yield* verify(["launch", "--dir", dir, "--data", ledger], parent)
         expect(launch.code).toBe(0)
         const launched = yield* decodeLine(Launched)(launch.stdout.trim())
 
         const doctor = yield* verify(["doctor", "--dir", dir], parent)
         expect(doctor.code).toBe(0)
         yield* decodeLine(Healthy)(doctor.stdout.trim())
+
+        // The server read the copy: its lanes are the ledger's, through the run's wrapper.
+        const lanes = yield* run(launched.gent, ["ctl", "lanes", "--line"], launched.work)
+        expect({ code: lanes.code, stdout: lanes.stdout }).toEqual({
+          code: 0,
+          stdout: "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\n",
+        })
 
         // The run's wrapper reaches its own server, with the run's environment.
         const turn = yield* run(

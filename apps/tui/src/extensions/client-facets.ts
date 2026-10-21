@@ -18,6 +18,7 @@ import {
   type BranchId,
   type EventEnvelope,
   type ImagePartProjection,
+  type LaneReport,
   type Message,
   type Model,
   type Session,
@@ -195,6 +196,17 @@ export interface ClientTransport {
    */
   readonly selectedModel: () => Option.Option<string>
   /**
+   * The generation of the open connection, None while it is down. Reactive:
+   * a reconnect changes it, so a view of the server's own state reads again.
+   */
+  readonly connection: () => Option.Option<number>
+  /**
+   * The server's account lanes (`accounts.lanes`): each provider gent read a
+   * quota window of, its free lanes and its fuel rates. The accounts are the
+   * server's, so no session names the read.
+   */
+  readonly accountLanes: Effect.Effect<LaneReport, ClientTransportRequestError>
+  /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
    * session the shell is on.
@@ -235,7 +247,12 @@ export interface ClientTransport {
  */
 export type ClientShellTransport = Pick<
   ClientTransport,
-  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "modelCatalog" | "selectedModel"
+  | "currentSession"
+  | "onExtensionStateChanged"
+  | "onSessionEvent"
+  | "modelCatalog"
+  | "selectedModel"
+  | "connection"
 > & {
   readonly client: GentNamespacedClient
 }
@@ -252,6 +269,11 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   onSessionEvent: payload.onSessionEvent,
   modelCatalog: payload.modelCatalog,
   selectedModel: payload.selectedModel,
+  connection: payload.connection,
+  // Built when it runs: building the facet reaches no server.
+  accountLanes: Effect.suspend(() =>
+    shellRead(payload, "accounts.lanes", (client) => client.accounts.lanes()),
+  ),
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(

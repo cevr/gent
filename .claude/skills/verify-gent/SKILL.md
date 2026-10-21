@@ -23,9 +23,10 @@ It prints one `Launched` line: `dir`, `work`, `gent`, `url`, `build`, `superviso
 - `$RUN/work`: the workspace. A drive runs there unless its script names a `cwd`.
 - `$RUN/bin/gent`: runs this checkout's `apps/tui/src/main.tsx` with the run's environment and nothing of the caller's.
 - `$RUN/pids.json`: the receipt `stop` reads, written as each process starts. `$RUN/run.json`: the record, written once the server answers.
+- With `--data <file>`: a copy of the file in `$RUN/data`, there before the server starts. It seeds server state the scripted model cannot make, such as the account ledger `credential-usage.json` ([lanes](features/lanes.md)).
 - `$RUN/server.log`, `$RUN/serve.log`: the server and supervisor output. `$RUN/verify.log`: the whole cause of a helper defect.
 
-The server is `gent server start --mock`: the scripted model. A message that holds a debug phrase plays a scenario (`DEBUG_SCENARIOS` in `packages/core/src/runtime/provider.ts`): `debug tools` (six tool steps, the last fails), `debug ask` (a background question, then a 20 s bash step), `debug think` (a reasoning heading, one bash step, the answer `Both chrome paths draw once.`), `debug threads`, `debug delegate`, `debug handoff`, `debug usage limit`. Any other message gets `gent debug response. Latest user message: …`.
+The server is `gent server start --mock`: the scripted model. A message that holds a debug phrase plays a scenario (`DEBUG_SCENARIOS` in `packages/core/src/runtime/provider.ts`): `debug tools` (six tool steps, the last fails), `debug ask` (a background question, then a 20 s bash step), `debug think` (a reasoning heading, one bash step, the answer `Both chrome paths draw once.`), `debug threads`, `debug delegate`, `debug handoff`, `debug machine` (starts the `soak` machine: one 45 s command), `debug usage limit`. Any other message gets `gent debug response. Latest user message: …`.
 
 Ready means usable: the record exists and the lock's server answers with the recorded PID. A turn needs no warm-up.
 
@@ -66,7 +67,7 @@ bun run --silent verify:drive --dir "$RUN" --script <script.json> --out "$EVIDEN
 
 Feature recipes, with a shipped script each: [features/README.md](features/README.md).
 
-`gent ctl` (full surface in `apps/tui/docs/cli.md`): `send`, `events`, `wait`, `snapshot`, `status`, `request`. Outside a drive, run it as `$RUN/bin/gent ctl … --cwd $RUN/work`. Exit codes: 0 ok, 1 failed, 2 usage (a flag the parser refuses too), 3 no server, 4 not found, 124 wait timed out. Every failure is one JSON line on stderr. `status --run <id>` prints a machine run's view (`View`), the machines extension's projection of its `run-status` request. A `request` reply is `{"_tag":"Value","value":…}`, or `{"_tag":"Void"}` for a request with no output (`/goal`). `send --new --request-id <id>` is safe to retry: the same id makes one session and one message.
+`gent ctl` (full surface in `apps/tui/docs/cli.md`): `send`, `events`, `wait`, `snapshot`, `status`, `request`, `lanes` (no session; `--line` prints the band's row). Outside a drive, run it as `$RUN/bin/gent ctl … --cwd $RUN/work`. Exit codes: 0 ok, 1 failed, 2 usage (a flag the parser refuses too), 3 no server, 4 not found, 124 wait timed out. Every failure is one JSON line on stderr. `status --run <id>` prints a machine run's view (`View`), the machines extension's projection of its `run-status` request. A `request` reply is `{"_tag":"Value","value":…}`, or `{"_tag":"Void"}` for a request with no output (`/goal`). `send --new --request-id <id>` is safe to retry: the same id makes one session and one message.
 
 ## Evidence
 
@@ -96,7 +97,7 @@ It reads the receipt `$RUN/pids.json`, so a run whose launch died before its ser
 
 | Command                                                                                         | Prints                         |
 | ----------------------------------------------------------------------------------------------- | ------------------------------ |
-| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90]`                          | `Launched`                     |
+| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90] [--data <file>]`          | `Launched`                     |
 | `bun run --silent verify:doctor --dir <run>`                                                    | `Healthy`, else `DoctorFailed` |
 | `bun run --silent verify:drive --dir <run> --script <file> --out <dir> [--print] [--no-record]` | `Driven`, else `DriveFailed`   |
 | `bun run --silent verify:stop --dir <run> [--remove]`                                           | `Stopped`, else `StopFailed`   |

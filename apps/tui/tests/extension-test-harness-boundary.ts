@@ -44,6 +44,8 @@ interface ClientExtensionHarnessOptions {
   readonly modelCatalog?: () => Option.Option<ReadonlyArray<Model>>
   /** The model the session in view runs next; `test/model` by default. */
   readonly selectedModel?: () => Option.Option<string>
+  /** The open connection's generation; generation 1 by default. */
+  readonly connection?: () => Option.Option<number>
   /**
    * Workspace the extension sees. Defaults to a shared `/nonexistent` pair,
    * which is fine for a setup that only reads `cwd`; a test whose extension
@@ -157,6 +159,7 @@ export const makeClientTestTransport = (
     },
     modelCatalog: opts.modelCatalog ?? (() => Option.some([])),
     selectedModel: opts.selectedModel ?? (() => Option.some("test/model")),
+    connection: opts.connection ?? (() => Option.some(1)),
   }
 }
 
@@ -182,6 +185,7 @@ export const makeUnreachableTransport = (): ClientShellTransport => ({
   onSessionEvent: () => () => {},
   modelCatalog: () => Option.none(),
   selectedModel: () => Option.some("test/model"),
+  connection: () => Option.some(1),
 })
 
 export const makeClientExtensionRuntime = (

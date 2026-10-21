@@ -25,6 +25,7 @@ import {
 import { Gent } from "@gent/sdk"
 import {
   Cause,
+  Clock,
   ConfigProvider,
   Effect,
   Exit,
@@ -119,9 +120,25 @@ const errorOf = (run: CtlRun) =>
     return yield* Schema.decodeEffect(Schema.fromJsonString(ErrorLine))(run.stderr)
   })
 
-/** A sqlite server on the scripted model, owning the scratch home's data directory. */
-const serveScratchHome = Effect.gen(function* () {
+/**
+ * A sqlite server on the scripted model, owning the scratch home's data
+ * directory. `ledger` is the account ledger (`credential-usage.json`) the
+ * server reads as it starts.
+ */
+const serveScratchHomeWith = Effect.fn("serveScratchHome")(function* (
+  ledger: Option.Option<Schema.Json> = Option.none(),
+) {
   const home = yield* makeTempDirectoryScoped("gent-ctl-")
+  if (Option.isSome(ledger)) {
+    yield* Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+      yield* fs.writeFileString(
+        `${home}/.gent/credential-usage.json`,
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(ledger.value),
+      )
+    }).pipe(Effect.provide(BunServices.layer))
+  }
   const catalogOrigin = yield* serveModelCatalogFixture
   const server = yield* Gent.server({
     cwd: home,
@@ -137,6 +154,8 @@ const serveScratchHome = Effect.gen(function* () {
   )
   return { home, server }
 })
+
+const serveScratchHome = serveScratchHomeWith()
 
 /** A call in `home`'s workspace, and the one result it printed as `tag`. */
 const ctlIn = (home: string) => ({
@@ -410,6 +429,76 @@ describe("gent ctl against a running server", () => {
           const missing = yield* gent.run(["snapshot", "--session", "no-such-session"])
           expect(missing.code).toBe(CTL_EXIT.notFound)
           expect((yield* errorOf(missing))._tag).toBe("CtlNotFound")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "lanes needs no session: one Lanes value, or with --line the band's row, and exit 0",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A server that read no quota window: no provider, and the row says so.
+          const bare = yield* serveScratchHome
+          const empty = yield* resultAs("Lanes")(yield* runCtl(bare.home, ["lanes"]))
+          expect(empty.providers).toEqual([])
+          expect(empty.server).toBe(bare.server.url)
+          const unknown = yield* runCtl(bare.home, ["lanes", "--line"])
+          expect(unknown).toEqual({ code: CTL_EXIT.ok, stdout: "lanes unknown\n", stderr: "" })
+
+          // A ledger with a reading and two fitted segments: the server sizes the lanes.
+          const now = yield* Clock.currentTimeMillis
+          const reading = {
+            provider: "anthropic",
+            slot: "default",
+            window: "5h",
+            utilization: 0.4,
+            resetAt: now + 2 * 3_600_000,
+            readAt: now - 60_000,
+            rejected: false,
+          }
+          const segment = (endedAt: number) => ({
+            provider: "anthropic",
+            slot: "default",
+            window: "5h",
+            endedAt,
+            fuel: 240_000,
+            deltaPct: 2,
+            tokens: { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 0 },
+          })
+          const seeded = yield* serveScratchHomeWith(
+            Option.some({
+              buckets: [],
+              readings: [reading],
+              segments: [segment(now - 600_000), segment(now - 120_000)],
+            }),
+          )
+          const printed = yield* runCtl(seeded.home, ["lanes"])
+          // One JSON value, its providers one record per line.
+          expect(printed.stdout.split("\n").filter((row) => row.length > 0)).toHaveLength(3)
+          const lanes = yield* resultAs("Lanes")(printed)
+          const [anthropic] = lanes.providers
+          expect({
+            provider: anthropic?.provider,
+            capacity: anthropic?.capacity,
+            load: anthropic?.load,
+            fuelPerPct: anthropic?.accounts[0]?.windows[0]?.fuelPerPct,
+            samples: anthropic?.accounts[0]?.windows[0]?.samples,
+          }).toEqual({
+            provider: "anthropic",
+            capacity: 1,
+            load: 0,
+            fuelPerPct: 120_000,
+            samples: 2,
+          })
+          // 60% left at 120k a point over 2 h, at 3.4 M an hour: one run, ±0.5/4 points.
+          const line = yield* runCtl(seeded.home, ["lanes", "--line"])
+          expect(line).toEqual({
+            code: CTL_EXIT.ok,
+            stdout: "lanes anthropic 1/1 free · 5h 120k/% ±13% · out 0%\n",
+            stderr: "",
+          })
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

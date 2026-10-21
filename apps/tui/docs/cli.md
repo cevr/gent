@@ -79,6 +79,8 @@ gent ctl snapshot -s <session-id>
 gent ctl status
 gent ctl status --run run-0123456789abcdef   # a machine run, as the machines extension shows it
 gent ctl request --extension @gent/machines --id run-status --input '{"run":"run-0123456789abcdef"}'
+gent ctl lanes                              # the server's account lanes, no session
+gent ctl lanes --line                       # lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%
 ```
 
 Without `--session`, a call names the newest conversation in `--cwd` (default:
@@ -97,6 +99,16 @@ output's encoded JSON, or `{"_tag":"Void"}` for a request whose output is
 into a `status` flag (`ctlProjection` in the client contribution): `status
 --run <id>` is the machines extension's `run-status` request, printed as
 `View` with the encoded reply in `view`.
+
+`lanes` names no session: the accounts are the server's. It prints `Lanes`,
+the `accounts.lanes` report, with one record per provider gent read a quota
+window of. `--line` prints the TUI band's lanes rows as text instead, one per
+provider: `lanes <provider> <free>/<capacity> free · <window> <fuel per
+percent>/% ±<band> · out <outside share>` for the window that carries the
+fewest runs, `lanes <provider> 0 free · retry 13:47` when a window is spent
+until a reset, `lanes <provider> 0/<capacity> free · <n> running` when runs
+hold every lane (`· held` when a refusal holds the account), and `lanes unknown` with no reading or no rate. No free lane
+is data, not a failure: the call exits 0.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 

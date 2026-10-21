@@ -277,6 +277,15 @@
     is invalid. At most four rounds and commands run at once in one server
     (`MAX_ACTIVE_MACHINE_STEPS`); the runs that held one when the server
     stopped take the first permits as tickets.
+  - A client reads runs as a session of the owner's thread:
+    `MachinesRpc.Status` (`run-status`, `gent ctl status --run`) and
+    `MachinesRpc.Runs` (`run-list`). The TUI's lanes band
+    (`machines.client.tsx`, under the status line) shows the server's free
+    lanes (`accounts.lanes`, the rows `gent ctl lanes --line` prints), then
+    each active run as `<machine> <state> r<visits> <age>`, with
+    `· wait <clock>` while its round waits for its account. It hides with no
+    reading and no active run, and reads again on `TurnCompleted`, on a
+    reconnect and every 30 s.
 
 ## Agent runs
 

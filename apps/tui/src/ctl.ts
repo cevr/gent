@@ -6,10 +6,11 @@
  * `~/.gent`), the way `gent doctor` does, or the one `--connect` names. It
  * never starts a server. Each command prints one JSON value on stdout; an
  * array of records prints one record per line, so a reader takes the lines it
- * needs. A failure prints one tagged JSON error on stderr and exits with the
- * code the error names (`CTL_EXIT`): a call's own error, a flag the parser
- * refuses (`CtlUsage`), and a defect (`CtlFailed`, its whole cause in the
- * client log of the data directory) alike. `runCtlCli` is that boundary.
+ * needs. `lanes --line` is the one text form: the band's lanes rows, for a
+ * status line. A failure prints one tagged JSON error on stderr and exits
+ * with the code the error names (`CTL_EXIT`): a call's own error, a flag the
+ * parser refuses (`CtlUsage`), and a defect (`CtlFailed`, its whole cause in
+ * the client log of the data directory) alike. `runCtlCli` is that boundary.
  *
  * An extension adds a view to a command through its client module's `ctl`
  * projections (`CtlProjection`): `status --run <run>` is the machines
@@ -28,6 +29,7 @@ import {
   MessageId,
   ModelId,
   type ProjectedMessage,
+  ProviderLanes,
   RequestReply,
   SessionId,
   SessionSnapshot,
@@ -39,6 +41,7 @@ import {
   Cause,
   Clock,
   Console,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -57,7 +60,7 @@ import { Argument, CliError, Command, Flag } from "effect/cli"
 import { builtinClientModules } from "./extensions/builtins"
 import type { CtlProjection } from "./extensions/client-facets"
 import { connectFlag, readHome } from "./ops"
-import { isConversation, randomId } from "./utils"
+import { isConversation, laneRows, randomId } from "./utils"
 
 // ── exit codes and errors ───────────────────────────────────────────────────
 
@@ -167,6 +170,13 @@ const printResult = <A, I>(schema: Schema.Codec<A, I>, value: A) =>
     const stdio = yield* Stdio.Stdio
     yield* Stream.make(`${renderJson(json)}\n`).pipe(Stream.run(stdio.stdout()))
   }).pipe(Effect.mapError((error) => new CtlFailed({ message: `output encode: ${error.message}` })))
+
+/** Write `lines` as text on stdout, one per line: a row a status line shows as it is. */
+const printLines = (lines: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio.Stdio
+    yield* Stream.make(lines.map((line) => `${line}\n`).join("")).pipe(Stream.run(stdio.stdout()))
+  }).pipe(Effect.mapError((error) => new CtlFailed({ message: `output: ${String(error)}` })))
 
 /** Print a ctl error as one JSON line on stderr, then fail with it for its exit code. */
 const reportCtlError = (error: CtlError) =>
@@ -438,6 +448,11 @@ export const CtlResult = Schema.TaggedUnion({
     requestId: Schema.String,
     view: Schema.Json,
   },
+  /**
+   * `lanes`: the server's account lanes, one record per provider gent read a
+   * quota window of. No session names them.
+   */
+  Lanes: { server: Schema.String, providers: Schema.Array(ProviderLanes) },
 })
 export type CtlResult = typeof CtlResult.Type
 
@@ -1021,7 +1036,7 @@ const cwdOf = (flags: Pick<SessionFlags, "cwd">) => Option.getOrElse(flags.cwd, 
 
 /** One ctl call: connect, run `body`, print its result. `runCtlCli` reports its failure. */
 const ctlCall = <R>(
-  flags: SessionFlags,
+  flags: Pick<SessionFlags, "connect" | "cwd">,
   body: (connection: CtlConnection, cwd: string) => Effect.Effect<CtlResult, CtlError, R>,
 ): Effect.Effect<
   void,
@@ -1342,19 +1357,70 @@ const request = Command.make(
   ]),
 )
 
+/**
+ * The lanes rows at no width limit, as the band draws them on a wide
+ * terminal, in the local zone.
+ */
+const LINE_WIDTH = Number.MAX_SAFE_INTEGER
+
+const lanes = Command.make(
+  "lanes",
+  {
+    connect: connectFlag,
+    line: Flag.Boolean("line").pipe(
+      Flag.withDescription("Print the band's lanes rows as text, one per provider"),
+      Flag.withDefault(false),
+    ),
+  },
+  (input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const flags = { connect: input.connect, cwd: Option.none<string>() }
+        if (!input.line) {
+          return yield* ctlCall(flags, (connection) =>
+            connection.client.accounts.lanes().pipe(
+              Effect.mapError(rpcFailure),
+              Effect.map((report) =>
+                CtlResult.cases.Lanes.make({
+                  server: connection.server,
+                  providers: report.providers,
+                }),
+              ),
+            ),
+          )
+        }
+        const connection = yield* connectCtl({ connect: input.connect, cwd: cwdOf(flags) })
+        const report = yield* connection.client.accounts.lanes().pipe(Effect.mapError(rpcFailure))
+        const now = yield* Clock.currentTimeMillis
+        const rows = laneRows(report, now, LINE_WIDTH, DateTime.zoneMakeLocal())
+        yield* printLines(rows.map((row) => row.text))
+      }),
+    ),
+).pipe(
+  Command.withDescription(
+    "Print the server's account lanes: free runs per provider, fuel per percent and outside spend",
+  ),
+  Command.withExamples([
+    {
+      command: "gent ctl lanes --line",
+      description: "lanes anthropic 3/5 free · 5h 120k/% ±8% · out 12%",
+    },
+  ]),
+)
+
 /** `gent ctl`: the control CLI over a running server. */
 export const ctl = Command.make("ctl", {}, () =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio
-    yield* Stream.make("Usage: gent ctl <send|events|wait|snapshot|status|request> --help\n").pipe(
-      Stream.run(stdio.stderr()),
-    )
+    yield* Stream.make(
+      "Usage: gent ctl <send|events|wait|snapshot|status|request|lanes> --help\n",
+    ).pipe(Stream.run(stdio.stderr()))
   }),
 ).pipe(
   Command.withDescription(
     "Drive a running gent server: one JSON value per call; exit 3 no server, 4 not found, 124 wait timed out",
   ),
-  Command.withSubcommands([send, events, wait, snapshot, status, request]),
+  Command.withSubcommands([send, events, wait, snapshot, status, request, lanes]),
 )
 
 // ── the process boundary ────────────────────────────────────────────────────

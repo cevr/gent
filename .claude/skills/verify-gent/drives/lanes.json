@@ -1,0 +1,33 @@
+{
+  "command": ["gent"],
+  "cols": 120,
+  "rows": 40,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["waitFor", "lanes anthropic 1/1 free", 10000],
+    ["cap", "71-lanes-at-rest"],
+    ["sh", "gent ctl lanes --line > \"$EVIDENCE/ctl-lanes-line.txt\""],
+    ["sh", "gent ctl lanes > \"$EVIDENCE/ctl-lanes.json\""],
+    ["send", "debug machine"],
+    ["keys", "enter"],
+    ["waitFor", "soak check r1", 20000],
+    ["settle"],
+    ["cap", "72-band-with-run"],
+    [
+      "sh",
+      "gent ctl request --extension @gent/machines --id run-list > \"$EVIDENCE/ctl-run-list.json\""
+    ],
+    ["resize", 60, 20],
+    ["settle"],
+    ["cap", "73-band-narrow"],
+    ["resize", 44, 20],
+    ["settle"],
+    ["cap", "73b-band-narrower"],
+    ["resize", 120, 40],
+    ["settle"],
+    ["cap", "74-band-wide-again"],
+    ["waitFor", "^(?![\\s\\S]*soak check r1)[\\s\\S]*$", 80000],
+    ["cap", "75-run-ended"]
+  ]
+}

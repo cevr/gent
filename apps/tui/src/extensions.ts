@@ -110,6 +110,7 @@ export {
   formatUsageStats,
   modelIdName,
   isReferenceablePath,
+  laneRows,
   type PathPlace,
   plural,
   repliesInView,
