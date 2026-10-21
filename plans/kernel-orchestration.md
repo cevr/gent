@@ -173,6 +173,20 @@ One sketch (Codex, `8fb974f0d`, session scratchpad `stage4-sketch-codex.md`); th
   - Accept: requirement 6's measures (mean context per worker call under 130k; the re-read share and the gate failures per unit do not rise).
 - **Order:** (1) permits, (2) bash permits and the machines map, (2b) the window per role (a sketch first, because the tuned-window row is a new seam), (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding.
 
+#### Step 2b after both sketches (2026-10-21)
+
+The Codex sketch (session scratchpad `window-pace-sketch-codex.md`, part A) and the Claude sketch (`window-role-sketch-claude.md`) agree on the role key (agent name plus `child`) and on a lower-only cap. These hold:
+
+- **Owner:** the tuner lives in `packages/extensions/src/compaction.ts`, the compaction concern, not a new `context-mileage.ts`. A server-scope Resource owns its tables: tuned windows (one row per role) and tune runs. A failed load runs every role at its model window.
+- **Core seam:** one service, `ModelContextWindowPolicy.window(role) => Option<number>`, beside `ModelContextCompactor`, merged later-wins so a user extension can replace it. `modelWindow` takes the smaller of the model window and the policy. The output reserve and `maxTokens` stay computed from the model window: the reserve is a quarter of the window below 128k (`model-context.ts:1060-1081`), so a 120k cap must not cut `maxTokens`.
+- **Timing:** a spawned session (a worker) compacts between steps at its tuned window. A root keeps the model window as its hard budget and takes a soft handoff only at a turn start, anchored at the user message. No durable compaction intent and no new context-limit failure: the hard path already hands off.
+- **Samples, not a cross-workspace read.** `listSessions` filters by workspace (`extension-host.ts:4675-4679`) and each rift is its own workspace, so a tuner that reads sessions sees too few agents per role. The Claude sketch asked the owner for a server-wide `Session.archive` verb. Rejected by default on the authority rule: it would give every user extension every workspace's sessions. Instead the extension records its own samples as turns run: `turnAfter` reads its own session's step usage and appends per-step context sizes to the server-scope table, and `toolCall` counts `read` and `context.read` calls on paths read before a compaction. The server-scope table spans every place, so the 20-agent threshold is reachable. Reads through bash `cat` are not seen; the tune report carries a read-coverage value.
+- **Replay:** one pure `planWindow` shared by `projectContextWindow` and the tuner, over the recorded samples; no replay wrapper with a fake store.
+- **Schedule:** the tune reruns when the last is over 24 h old (as `compact.ts` does), single-flight in memory, started from `turnAfter` and forked into the resource scope; a primary key on the cutoff makes a repeat a no-op. A staleness check on use is not a schedule, so it needs no wake.
+- **Placement unchanged:** lanes already price measured burn per lane-hour, so a lower window shows as lower burn. The earlier "lanes estimate fuel from the role's window" bullet is superseded.
+- **Prompt:** the `compact.ts` keep-verbatim text (plan, log and state file paths, the current step) goes into `SUMMARY_SYSTEM_PROMPT`; the earlier handoff marker is pinned into the summary source so the paths carry forward. User instructions are kept already (`userMessageLines`).
+- **Tests:** the Claude sketch names 12, each with what it must fail without.
+
 #### Steps 3-5 after both sketches (2026-10-21)
 
 The Claude sketch (session scratchpad `stage4-sketch-claude.md`) and the Codex sketch agree on the record states, the three workspace kinds (snapshot, rift, path; a rift never falls back to a git worktree; a path is attached, never removed) and a lane held in scope through preparation (a lane reservation lasts 2 minutes, setup hooks up to 10). Where they differ, these hold:
