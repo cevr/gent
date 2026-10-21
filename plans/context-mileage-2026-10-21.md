@@ -93,8 +93,45 @@ finished unit. The baseline is the table above.
    fresh agent with a handoff, not a compaction. Accept: compactions per
    worker under 1.
 
+## Budget learnings (dotfiles budget.ts, 2026-10-21)
+
+Relayed from the budget session. These are about quota pace, not context, but
+they set what one W costs, so they live here.
+
+| #   | Learning                                                                                                                                                                                                                                                                                     | Value                                                                                                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| B1  | Rolling weekly pace (f1ed65b). The old pace spread only the quota in hand over each account's week. pace = max(floor, rolling); rolling = quota in hand plus the share of each new week that opens in the next 7 days, spread over the day hours. The weekly and 5h ceilings still cap it.   | With 6 of 7 accounts spent: 0.8%/h before, 3.6%/h after (pool can sustain about 4.2%/h); agent cap 2 to 4 (measured live) |
+| B2  | 5h room (9e58e61). An account whose spent week resets within 5h counts again from its reset, with a fresh 5h window.                                                                                                                                                                         |                                                                                                                           |
+| B3  | Held agents per project (95b6aa7). `projectAgents` in `~/.config/orchestrate/budget.json`: a listed project runs up to N agents whatever the pace, and no more. Other projects leave room for held slots that are not in use.                                                                | 1 each for the blade, hymn / selah, gent and performance, on both hosts                                                   |
+| B4  | Cost of W. About 0.1% of one account week per 1M W over 7 days: 6,504M W used about 7 account weeks, so one account week is about 930M W. Short windows read 0.15 to 0.85%/MW, because the quota shows in whole percent. W ignores the model. Raw tokens are about 7x W, mostly cache reads. | 930M W per account week (measured over 7 days)                                                                            |
+
+Gent today (`packages/core/src/runtime/provider.ts:4703`, read 2026-10-21):
+an account's `sustainable` is its quota in hand over the time to its reset. A
+rejected window counts 0 until `resetAt` passes, so a pool of spent accounts
+that reset this week paces like the old budget.ts (B1). A reset counts only
+once it has passed (B2).
+
+8. **Pace against rolling resets.** A window's sustainable rate adds the
+   share of each new week that opens inside the horizon, not only the quota
+   in hand. A spent week that resets within 5h counts from its reset, with a
+   fresh 5h window. The weekly and 5h ceilings still cap it. Accept: on the
+   B1 readings (6 of 7 accounts spent, resets spread over the week), gent's
+   free lanes match budget.ts's pace within one lane.
+9. **Held slots per project.** A project (a repository root) can hold N
+   lanes whatever the pace, and no more. Other work leaves room for held
+   lanes that are not in use. The setting reads beside the account order.
+   Accept: with gent held at 1 and the pool at free 0, a gent thread is
+   admitted and a second is refused with `LaneUnavailable`.
+10. **Cost per model.** Fuel per percent is fitted for each model, not only
+    for each window, so an Opus unit and a Haiku unit cost what each burns.
+    Whole-percent readings over short windows are too coarse to fit alone
+    (B4): the fit spans at least a day. Accept: the fitted cost of one account
+    week is within 10% of B4's 930M W for the model mix B4 measured.
+
 ## Order
 
 The cost order is 2 (31% base), 3 (12%), 4 (about 9%), 6 (about 12%), 5 (6%),
 and then 1 and 7. 1 is the measure for the rest, so it lands first and stays
-small.
+small. 8 to 10 are placement work: they go with stage 4 of
+[kernel-orchestration.md](kernel-orchestration.md), 8 first, because it
+frees the most lanes.
