@@ -171,7 +171,23 @@ One sketch (Codex, `8fb974f0d`, session scratchpad `stage4-sketch-codex.md`); th
   - Lanes and placement estimate a unit's fuel from its role's window, so admission sees the lower burn.
   - Starting values (dotfiles `budget.ts --tune`, c8a469f, measured): orchestrate-worker 140k, general-purpose and root 200k.
   - Accept: requirement 6's measures (mean context per worker call under 130k; the re-read share and the gate failures per unit do not rise).
-- **Order:** (1) permits, (2) bash permits and the machines map, (2b) the window per role (a sketch first, because the tuned-window row is a new seam), (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding. The Claude sketch covers 3-5 before they start.
+- **Order:** (1) permits, (2) bash permits and the machines map, (2b) the window per role (a sketch first, because the tuned-window row is a new seam), (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding.
+
+#### Steps 3-5 after both sketches (2026-10-21)
+
+The Claude sketch (session scratchpad `stage4-sketch-claude.md`) and the Codex sketch agree on the record states, the three workspace kinds (snapshot, rift, path; a rift never falls back to a git worktree; a path is attached, never removed) and a lane held in scope through preparation (a lane reservation lasts 2 minutes, setup hooks up to 10). Where they differ, these hold:
+
+- **Owner:** a new `@gent/integration` extension, one file (`packages/extensions/src/integration.ts`). One record per repo and ref, with a generation number; each write checks it first.
+- **Push:** `integration.push` runs inside the `integration:<repo>:<ref>` permit, fast-forward only, writes the record before and after the push, and returns when the push is accepted. Green or red arrives later as a wake message.
+- **Green** is success on every required check for the recorded SHA, read from branch protection, not every run for the SHA (measured: `cevr/gent` requires only `test`; `deploy-site.yml` runs only on some paths). When protection cannot be read, green is every check run reported for the SHA succeeding, with at least one run seen (owner choice taken by default: no protection must not mean never green).
+- **Polling uses the core's durable wake clock** (`Session.wakeAt`, `wakeDue`), not a server resource poller: a server resource lives only while a profile holds it (`docs/architecture/extension-host.md:166`, measured), and `Bun.cron` stops with the process. Codex's poller is rejected on that.
+- **Machines get an `integrate` state kind** with green and red exits and an `integration` waiting reason. Codex's `run` state calling a `gent ctl request` that waits for green is rejected: it holds a command open for the whole CI run, and a crash becomes an interrupted ask. A plain thread calls the same tool.
+- **Crash and outside pushes:** after a crash mid-push the record reconciles from the remote ref and never pushes again by itself. A push by someone else makes that head the gate's subject. Missing or unauthenticated `gh` refuses the claim before any write; a `gh` error while awaiting CI keeps the gate blocked and backs off.
+- **Manual clear:** `integration.clear` with a required reason, recorded on the record (owner choice taken by default: a CI that never reports must not block main forever).
+- **Starts in preparation stay in memory**, as lanes do. After a kill, a retry with the same key takes up the half-made workspace record. Codex's durable start record is rejected: it would need its own expiry.
+- **Start order:** resolve the place, admit the thread count (starts in preparation included), hold the lane, copy and run hooks, create the session in the copy, bind, claim the round, send. Every refusal comes before the copy.
+- **Rift on APFS too:** the owner's rule uses Rift wherever Rift supports the file system, and the library supports APFS (owner choice taken from the global rule).
+- **Upstream Rift contract:** `removeLeaf({ at, expect, hooks })` takes the registry lock, refuses a copy with descendants or another id, and treats a second removal as done.
 
 ### P5. Accounts
 
