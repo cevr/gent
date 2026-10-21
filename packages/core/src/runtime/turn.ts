@@ -118,7 +118,7 @@ import {
   type ModelRouterContribution,
   ProviderAuthError,
   type ProviderHints,
-  ProviderStopReason,
+  ProviderReport,
   type RunEffort,
   sameCredential,
 } from "../domain/driver.js"
@@ -3088,17 +3088,26 @@ const readModelAttempts = (params: {
 /**
  * A handoff summary's price counts toward the load of the account it ran on,
  * as a step's does (`noteSpend`); its prompt names no cache key, so it warms
- * no cache there. Only a sign-in with a pool records usage.
+ * no cache there. Only a sign-in with a pool records usage. Its price and
+ * tokens are fuel on that account's quota windows either way (`noteFuel`).
  */
 const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
   sessionId: SessionId,
   summaryOn: Option.Option<CredentialReceipt>,
   costUsd: Option.Option<number>,
+  usage: Option.Option<Usage>,
 ) {
-  if (Option.isNone(summaryOn) || Option.isNone(costUsd)) return
+  if (Option.isNone(summaryOn)) return
+  const placement = yield* CredentialPlacement
+  yield* placement.noteFuel({
+    provider: summaryOn.value.provider,
+    slot: summaryOn.value.slot,
+    costUsd,
+    usage,
+  })
+  if (Option.isNone(costUsd)) return
   const extensionRegistry = yield* ExtensionRegistry
   if (!(yield* spreadsRuns(summaryOn.value.provider, extensionRegistry))) return
-  const placement = yield* CredentialPlacement
   yield* placement.noteSpend({
     provider: summaryOn.value.provider,
     slot: summaryOn.value.slot,
@@ -3668,7 +3677,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   })
   const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
   if (Option.isSome(summary))
-    yield* noteSummarySpend(params.sessionId, yield* credential, compactionCostUsd)
+    yield* noteSummarySpend(
+      params.sessionId,
+      yield* credential,
+      compactionCostUsd,
+      Option.flatMap(summary, (value) => Option.fromUndefinedOr(value.usage)),
+    )
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
   const projection = yield* projectCurrentWindow({
@@ -3801,15 +3815,27 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     }),
   )
   const rawStream = wireStream.pipe(Stream.map(fromWireToolPart))
-  // The raw stop reason the driver reports for this attempt's stream
-  // (`ProviderStopReason`); a retried attempt starts with none.
+  // What the driver reports for this attempt's stream (`ProviderReport`):
+  // the raw stop reason, a retried attempt starting with none; and the quota
+  // windows a response named, noted on the account the request went out on.
   const stopReason = yield* Ref.make(Option.none<string>())
   const reportedStream = Stream.unwrap(
     Ref.set(stopReason, Option.none()).pipe(Effect.as(rawStream)),
   ).pipe(
     Stream.provideService(
-      ProviderStopReason,
-      ProviderStopReason.of({ report: (reason) => Ref.set(stopReason, Option.some(reason)) }),
+      ProviderReport,
+      ProviderReport.of({
+        stopReason: (reason) => Ref.set(stopReason, Option.some(reason)),
+        quota: (readings) =>
+          Effect.flatMap(credential, (sent) =>
+            Effect.forEach(
+              Option.toArray(sent),
+              (receipt) =>
+                placement.noteQuota({ provider: receipt.provider, slot: receipt.slot, readings }),
+              { discard: true },
+            ),
+          ),
+      }),
     ),
   )
   /**
@@ -5166,15 +5192,23 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // counts toward that account's usage. Any end releases the warming
       // guard a fresh child holds. The cache there lives as long as that
       // account lists it, also when a refusal moved the step to it: `listed`,
-      // the model as the step's credential lists it. Only a sign-in with a
-      // pool records usage: one with none ranks nothing, so a server where
-      // nothing spreads writes no ledger.
+      // the model as the step's credential lists it. Its price and tokens
+      // are fuel on that account's quota windows, pool or not. Only a
+      // sign-in with a pool records usage: one with none ranks nothing, so a
+      // server where nothing spreads writes no ledger.
       const notePlacedStep = Effect.fn("AgentLoop.notePlacedStep")(function* (
         costUsd: Option.Option<number>,
+        usage: Option.Option<Usage>,
         listed: Option.Option<Model>,
       ) {
         const credential = yield* source.credential
         if (Option.isNone(credential)) return
+        yield* placement.noteFuel({
+          provider: credential.value.provider,
+          slot: credential.value.slot,
+          costUsd,
+          usage,
+        })
         if (!(yield* spreadsRuns(credential.value.provider, yield* ExtensionRegistry))) return
         yield* placement.noteStep({
           provider: credential.value.provider,
@@ -5240,7 +5274,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }),
           }),
         )
-        yield* notePlacedStep(streamEndedCost, listed)
+        yield* notePlacedStep(streamEndedCost, usage, listed)
         const { inputTokens, outputTokens } = Option.getOrElse(usage, () => ({
           inputTokens: 0,
           outputTokens: 0,
@@ -5332,6 +5366,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           const credential = yield* source.credential
           if (Option.isNone(credential)) return
           yield* notePlacedStep(
+            Option.none(),
             Option.none(),
             yield* listedModel(params.resolved.modelDriver.contextModelId, credential),
           )

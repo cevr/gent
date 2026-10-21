@@ -76,6 +76,7 @@ import {
   ProviderAuthInfo,
   type ProviderHints,
   type ProviderResolution,
+  type QuotaReading,
   type RetryPolicy,
   type StoredOAuthCredentials,
   type VirtualModel,
@@ -3249,6 +3250,23 @@ export const spreadsRuns = Effect.fn("CredentialOrder.spreads")(
   Effect.orElseSucceed(() => false),
 )
 
+/**
+ * The accounts `provider`'s unpinned runs go out on, the lanes they share:
+ * its pool (`authSpread`), else the first credential of its order. None
+ * when its order cannot be read.
+ */
+export const laneScope = Effect.fn("CredentialOrder.laneScope")(
+  function* (provider: string, registry: ExtensionRegistryService) {
+    const order = yield* credentialOrder(
+      registry.getResolved().modelDrivers,
+      yield* registry.providerConfig,
+      provider,
+    )
+    return Option.some(Option.getOrElse(order.pool, () => Arr.of(Arr.headNonEmpty(order.slots))))
+  },
+  Effect.orElseSucceed(() => Option.none<Arr.NonEmptyReadonlyArray<CredentialSlot>>()),
+)
+
 const resolveModelDefect = (
   // oxlint-disable-next-line effect/noUnknownParameters -- Provider factories can defect with any thrown value.
   defect: unknown,
@@ -3438,6 +3456,10 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
 // sessions whose cache lives on each account now. It makes no model call
 // and polls nothing. The provider's own refusal is the limit signal: a
 // refused account is held until its reset.
+//
+// The same state reads each account's quota windows from the responses
+// (`ProviderReport.quota`) and sizes the lanes they leave: how many runs the
+// accounts can carry until each window resets (`lanes`).
 
 /** The preferred account stays until another scores lower by more than this many sessions. */
 const PLACEMENT_HYSTERESIS_SESSIONS = 1
@@ -3449,6 +3471,37 @@ const PLACEMENT_REFUSAL_HOLD_MS = 5 * 60_000
 const PLACEMENT_BUCKET_MS = 3_600_000
 /** The usage ledger's file in gent's data directory: numbers and labels, never a credential. */
 const PLACEMENT_LEDGER_FILE = "credential-usage.json"
+/**
+ * Fuel is a step's list price in units of one reference input token: the
+ * input price of Claude Opus 4.5 and later, $5 per million. Every class and
+ * model keeps its price ratio (lanes r3's prior weights: input 1, cache read
+ * 0.1, a 5-minute cache write 1.25, output 5, for that model).
+ */
+const FUEL_REFERENCE_USD_PER_MILLION = 5
+/**
+ * The fuel one run burns in an hour on the provider, before gent has
+ * measured its own: the bridge reading of 2026-10-20 (lanes.md, r3), about
+ * 3.4 M per agent-hour.
+ */
+const FUEL_PER_LANE_HOUR_PRIOR = 3_400_000
+/** A quota window moves in 1% steps; a step this size closes a segment. */
+const QUOTA_STEP = 0.01
+/** A reading this long after the last one of its window drops the fuel between them. */
+const QUOTA_GAP_MS = 15 * 60_000
+/** A reset time that moves more than this starts a new reset epoch. */
+const QUOTA_RESET_TOLERANCE_MS = 60_000
+/** The shortest time to a reset a window is sized over, so a window about to reset is not read as huge. */
+const QUOTA_MIN_HORIZON_MS = 15 * 60_000
+/** Segments kept per account window. */
+const QUOTA_SEGMENTS_KEPT = 500
+/** A segment's weight halves for each this many active hours after it. */
+const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
+/**
+ * Percentage points a segment's move may pass what its fuel explains before
+ * it reads as spend outside gent (Claude Code, claude.ai): three widths of
+ * the 1% step the provider reports in.
+ */
+const QUOTA_OUTSIDE_POINTS = 3
 
 /** What placement reads of one pool account. */
 interface PlacementSlot {
@@ -3593,9 +3646,56 @@ interface CredentialPlacementService {
   }) => Effect.Effect<boolean>
   /** The session's turn ended: a warming guard it holds is released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
+  /**
+   * A response on `slot` named its quota windows: each is the window's
+   * latest reading, and a move of 1% closes a segment of the fuel spent on
+   * the account since the window's last reading. A rejected window holds the
+   * account until its reset.
+   */
+  readonly noteQuota: (quota: PlacementQuota) => Effect.Effect<void>
+  /** A request was priced on `slot`: its fuel counts toward the account's open segments. */
+  readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
+  /**
+   * The lanes of every provider gent read a quota window of: each account's
+   * windows, fuel per percent and sustainable runs, and the provider's
+   * capacity over the accounts `scopeOf` names (its unpinned runs' accounts).
+   */
+  readonly lanes: (scopeOf: LaneScopeOf) => Effect.Effect<LaneReport>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
+
+/** The quota windows one response named, on the account its request went out on. */
+interface PlacementQuota {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  readonly readings: ReadonlyArray<QuotaReading>
+}
+
+/** A step's or a summary's token counts, as its usage reports them; input counts cached tokens too. */
+interface FuelUsage {
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly cacheReadTokens?: number
+  readonly cacheWriteTokens?: number
+}
+
+/** A priced request on an account: its list price, and the tokens it spent. */
+interface PlacementFuel {
+  readonly provider: string
+  readonly slot: CredentialSlot
+  /** None when unpriced: the open segments it falls in drop. */
+  readonly costUsd: Option.Option<number>
+  readonly usage: Option.Option<FuelUsage>
+}
+
+/**
+ * The accounts a provider's unpinned run spends from: its pool, else the
+ * first of its order. None when the sign-in's order cannot be read.
+ */
+type LaneScopeOf = (
+  provider: string,
+) => Effect.Effect<Option.Option<Arr.NonEmptyReadonlyArray<CredentialSlot>>>
 
 /**
  * Whether a refusal holds its account for the refused model alone: a
@@ -3625,17 +3725,208 @@ const UsageBucket = Schema.Struct({
 })
 type UsageBucket = typeof UsageBucket.Type
 
-const PlacementLedger = Schema.fromJsonString(Schema.Struct({ buckets: Schema.Array(UsageBucket) }))
+/** The tokens a segment spent, by class: input counts only the uncached ones. */
+const FuelTokens = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+})
+type FuelTokens = typeof FuelTokens.Type
+
+/** The latest reading of one account's quota window. */
+const WindowReading = Schema.Struct({
+  provider: Schema.String,
+  slot: CredentialSlot,
+  window: Schema.String,
+  utilization: Schema.Finite,
+  /** Epoch ms. */
+  resetAt: Schema.Finite,
+  /** When gent read it, epoch ms. */
+  readAt: Schema.Finite,
+  rejected: Schema.Boolean,
+})
+type WindowReading = typeof WindowReading.Type
+
+/**
+ * The fuel gent spent on one account between two readings of one window in
+ * one reset epoch, and how far the window moved in that time (percentage
+ * points). A reset, a gap over 15 minutes or an unpriced request drops the
+ * fuel instead.
+ */
+const FuelSegment = Schema.Struct({
+  provider: Schema.String,
+  slot: CredentialSlot,
+  window: Schema.String,
+  /** Epoch ms of the reading that closed it. */
+  endedAt: Schema.Finite,
+  fuel: Schema.Finite,
+  deltaPct: Schema.Finite,
+  tokens: FuelTokens,
+})
+type FuelSegment = typeof FuelSegment.Type
+
+/**
+ * The ledger file. `segments` and `readings` are optional: a file an older
+ * gent wrote has neither, and an older gent drops both when it reads them.
+ */
+const PlacementLedger = Schema.fromJsonString(
+  Schema.Struct({
+    buckets: Schema.Array(UsageBucket),
+    segments: Schema.optionalKey(Schema.Array(FuelSegment)),
+    readings: Schema.optionalKey(Schema.Array(WindowReading)),
+  }),
+)
+type PlacementLedgerValue = typeof PlacementLedger.Type
+
+// ── lanes ──
+
+/** One quota window of one account, as `accounts.lanes` reports it. */
+const LaneWindow = Schema.Struct({
+  window: Schema.String,
+  /** The fraction used at the last reading; 0 once its reset passed. */
+  utilization: Schema.Finite,
+  resetAt: Schema.Finite,
+  readAt: Schema.Finite,
+  rejected: Schema.Boolean,
+  /** Fuel per percentage point of this window, its own, else the provider's over every account. */
+  fuelPerPct: Schema.optionalKey(Schema.Finite),
+  /** The rate's relative uncertainty from the 1% steps: 1 / the points its segments moved. */
+  band: Schema.optionalKey(Schema.Finite),
+  /** The segments the rate reads. */
+  samples: Schema.Int,
+  /** The share of the window's move no fuel of gent's explains: spend outside gent. */
+  outsideShare: Schema.Finite,
+  /** The runs the window can carry until its reset; none without a rate. */
+  sustainable: Schema.optionalKey(Schema.Finite),
+})
+
+/** One account of a provider. */
+const LaneAccount = Schema.Struct({
+  slot: CredentialSlot,
+  windows: Schema.Array(LaneWindow),
+  /** Held by a refusal or a rejected window: it carries no run now. */
+  held: Schema.Boolean,
+  /** The fewest runs any of its windows can carry; none when a window has no rate or nothing was read. */
+  sustainable: Schema.optionalKey(Schema.Finite),
+})
+
+/** One provider's lanes. */
+const ProviderLanes = Schema.Struct({
+  provider: Schema.String,
+  /** The accounts an unpinned run spends from: the pool, else the order's first. */
+  scope: Schema.Array(CredentialSlot),
+  accounts: Schema.Array(LaneAccount),
+  /**
+   * Whole runs the scope's accounts can carry: the sum of each account's
+   * fewest over its windows. None until every account of the scope has a
+   * reading and a rate.
+   */
+  capacity: Schema.optionalKey(Schema.Int),
+  /** The fuel one run burns in an hour. */
+  fuelPerHour: Schema.Finite,
+})
+
+/** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */
+export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes) })
+export type LaneReport = typeof LaneReport.Type
+type LaneAccount = typeof LaneAccount.Type
+type LaneWindow = typeof LaneWindow.Type
+
+/** A window's length from its name (`5h`, `7d`); none for a name with no unit. */
+const windowLengthMs = (window: string): Option.Option<number> => {
+  const match = /^(\d+)([hd])$/.exec(window)
+  if (Predicate.isNull(match)) return Option.none()
+  const count = Number(match[1])
+  if (match[2] === "h") return Option.some(count * 3_600_000)
+  return Option.some(count * 24 * 3_600_000)
+}
+
+/** A request's fuel: none when its price or usage is unknown, or a priced request lists no price. */
+const fuelOf = (
+  costUsd: Option.Option<number>,
+  usage: Option.Option<FuelUsage>,
+): Option.Option<{ readonly fuel: number; readonly tokens: FuelTokens }> =>
+  Option.flatMap(Option.all([costUsd, usage]), ([cost, counts]) => {
+    const cacheRead = counts.cacheReadTokens ?? 0
+    const cacheWrite = counts.cacheWriteTokens ?? 0
+    const tokens: FuelTokens = {
+      input: Math.max(0, counts.inputTokens - cacheRead - cacheWrite),
+      output: counts.outputTokens,
+      cacheRead,
+      cacheWrite,
+    }
+    const spent = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite
+    // A credential whose catalog lists no price (a subscription view) says
+    // nothing of the fuel its tokens burn: unknown, never zero.
+    if (!Number.isFinite(cost) || cost < 0 || (cost === 0 && spent > 0)) return Option.none()
+    return Option.some({ fuel: (cost * 1_000_000) / FUEL_REFERENCE_USD_PER_MILLION, tokens })
+  })
+
+/** A window's fuel per percentage point, read from its segments. */
+interface WindowFit {
+  readonly fuelPerPct: Option.Option<number>
+  readonly band: Option.Option<number>
+  /** The segments the rate reads: those spend outside gent did not move. */
+  readonly kept: ReadonlyArray<FuelSegment>
+  readonly outsideShare: number
+}
+
+/**
+ * `Σ fuel / Σ points` over the segments, each weighted by half for every
+ * 24 active hours (hours with a segment) after it; none with no points.
+ */
+const weightedRate = (segments: ReadonlyArray<FuelSegment>): Option.Option<number> => {
+  const hourOf = (segment: FuelSegment) => Math.floor(segment.endedAt / 3_600_000)
+  const hours = [...new Set(segments.map(hourOf))].sort((left, right) => right - left)
+  let fuel = 0
+  let points = 0
+  for (const segment of segments) {
+    const after = hours.findIndex((hour) => hour <= hourOf(segment))
+    const weight = 0.5 ** (Math.max(0, after) / QUOTA_HALF_LIFE_ACTIVE_HOURS)
+    fuel += weight * segment.fuel
+    points += weight * segment.deltaPct
+  }
+  return Option.liftPredicate(fuel / points, (rate) => points > 0 && Number.isFinite(rate))
+}
+
+/**
+ * Fits one window: a segment whose move passes what its fuel explains at the
+ * plain rate by more than three 1% steps, or that spent no fuel, is spend
+ * outside gent; the rate reads the rest. The band is `1 / Σ points` of the
+ * kept segments, the 1% step over the move they span.
+ */
+const fitWindow = (segments: ReadonlyArray<FuelSegment>): WindowFit => {
+  const totalPoints = segments.reduce((sum, segment) => sum + segment.deltaPct, 0)
+  const plainFuel = segments.reduce((sum, segment) => sum + segment.fuel, 0)
+  const plain = plainFuel / totalPoints
+  const outside = (segment: FuelSegment) =>
+    segment.fuel <= 0 ||
+    !(plain > 0) ||
+    segment.deltaPct - segment.fuel / plain > QUOTA_OUTSIDE_POINTS
+  const kept = segments.filter((segment) => !outside(segment))
+  const keptPoints = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
+  let outsideShare = 0
+  if (totalPoints > 0) outsideShare = (totalPoints - keptPoints) / totalPoints
+  return {
+    fuelPerPct: weightedRate(kept),
+    band: Option.liftPredicate(1 / keptPoints, () => keptPoints > 0),
+    kept,
+    outsideShare,
+  }
+}
 
 /** Keys of the placement state's maps: fields joined by NUL, which no label or id holds. */
 const placementKey = (...parts: ReadonlyArray<string | number>) => parts.join("\u0000")
 
-/** Where the usage buckets persist: read once at start, replaced whole. Neither fails. */
+/** Where the ledger persists: read once at start, replaced whole. Neither fails. */
 interface PlacementLedgerStore {
-  readonly load: Effect.Effect<ReadonlyArray<UsageBucket>>
-  /** True when the buckets were written; a failed write is logged, never raised. */
-  readonly save: (buckets: ReadonlyArray<UsageBucket>) => Effect.Effect<boolean>
+  readonly load: Effect.Effect<PlacementLedgerValue>
+  /** True when the ledger was written; a failed write is logged, never raised. */
+  readonly save: (ledger: PlacementLedgerValue) => Effect.Effect<boolean>
 }
+
+const EMPTY_LEDGER: PlacementLedgerValue = { buckets: [] }
 
 /**
  * The ledger as the file `file`: numbers, labels and session ids, never a
@@ -3649,19 +3940,18 @@ const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function
   const platform = yield* GentPlatform
   const load = Effect.fn("CredentialPlacement.ledgerLoad")(
     function* () {
-      const read = yield* Schema.decodeEffect(PlacementLedger)(yield* fs.readFileString(file))
-      return read.buckets
+      return yield* Schema.decodeEffect(PlacementLedger)(yield* fs.readFileString(file))
     },
     Effect.catch((cause) =>
       Effect.logDebug("credential-placement.ledger-unread").pipe(
         Effect.annotateLogs({ error: String(cause) }),
-        Effect.as<ReadonlyArray<UsageBucket>>([]),
+        Effect.as(EMPTY_LEDGER),
       ),
     ),
   )
   const save = Effect.fn("CredentialPlacement.ledgerSave")(
-    function* (buckets: ReadonlyArray<UsageBucket>) {
-      const text = yield* Schema.encodeEffect(PlacementLedger)({ buckets })
+    function* (ledger: PlacementLedgerValue) {
+      const text = yield* Schema.encodeEffect(PlacementLedger)(ledger)
       yield* fs.makeDirectory(pathService.dirname(file), { recursive: true })
       yield* writeFileAtomic(file, text, { mode: 0o600 })
       return true
@@ -3711,6 +4001,23 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const held = new Map<string, number>()
   /** provider, starter, slot → the fresh children warming it. */
   const warming = new Map<string, Set<SessionId>>()
+  /** provider, slot, window → the window's latest reading. */
+  const readings = new Map<string, WindowReading>()
+  /**
+   * provider, slot, window → the segment open on the window: the
+   * utilization it opened at, and the fuel spent on the account since then,
+   * none once an unpriced request fell in it.
+   */
+  const openSegments = new Map<
+    string,
+    {
+      readonly from: number
+      readonly fuel: Option.Option<number>
+      readonly tokens: FuelTokens
+    }
+  >()
+  /** provider, slot, window → its closed segments, oldest first. */
+  const segments = new Map<string, ReadonlyArray<FuelSegment>>()
   /** Whether `slot` of `provider` is held for `model`'s runs: for all, or for that model. */
   const isHeld = (provider: string, slot: CredentialSlot, model: ModelId) =>
     held.has(placementKey(provider, slot)) || held.has(placementKey(provider, slot, model))
@@ -3738,6 +4045,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const [key, entry] of live)
       if (Option.exists(entry.until, (until) => until <= now)) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
+    const kept = now - PLACEMENT_WINDOW_MS
+    for (const [key, reading] of readings) if (reading.readAt < kept) readings.delete(key)
+    for (const [key, list] of segments) {
+      const recent = list.filter((segment) => segment.endedAt >= kept)
+      if (recent.length === 0) segments.delete(key)
+      else segments.set(key, recent.slice(-QUOTA_SEGMENTS_KEPT))
+    }
   }
   const lifetimeEnd = (now: number, ttlMs: Option.Option<number>) =>
     Option.map(ttlMs, (lifetime) => now + lifetime)
@@ -3776,9 +4090,19 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     version += 1
   }
   if (Option.isSome(ledger)) {
-    const first = windowStart(yield* Clock.currentTimeMillis)
+    const now = yield* Clock.currentTimeMillis
+    const first = windowStart(now)
+    const stored = yield* ledger.value.load
+    for (const reading of stored.readings ?? []) {
+      readings.set(placementKey(reading.provider, reading.slot, reading.window), reading)
+    }
+    for (const segment of stored.segments ?? []) {
+      const key = placementKey(segment.provider, segment.slot, segment.window)
+      segments.set(key, [...(segments.get(key) ?? []), segment])
+    }
+    trim(now)
     // Oldest hour first: a session two buckets name counts in the latest.
-    const loaded = [...(yield* ledger.value.load)].sort((left, right) => left.hour - right.hour)
+    const loaded = [...stored.buckets].sort((left, right) => left.hour - right.hour)
     for (const bucket of loaded) {
       if (bucket.hour < first) continue
       const key = placementKey(bucket.provider, bucket.slot, bucket.hour)
@@ -3806,16 +4130,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         Option.liftPredicate(
           {
             version,
-            buckets: [...buckets.values()].map((bucket): UsageBucket => ({
-              ...bucket,
-              sessions: [...bucket.sessions],
-            })),
+            ledger: {
+              buckets: [...buckets.values()].map((bucket): UsageBucket => ({
+                ...bucket,
+                sessions: [...bucket.sessions],
+              })),
+              // Absent rather than empty, so a server that reads no quota
+              // writes the file a stage-0 gent wrote.
+              ...omitUndefined({
+                segments: Option.getOrUndefined(
+                  Option.liftPredicate([...segments.values()].flat(), Arr.isReadonlyArrayNonEmpty),
+                ),
+                readings: Option.getOrUndefined(
+                  Option.liftPredicate([...readings.values()], Arr.isReadonlyArrayNonEmpty),
+                ),
+              }),
+            },
           },
           () => version !== written,
         ),
       )
       if (Option.isNone(kept)) return
-      if (!(yield* store.save(kept.value.buckets))) return
+      if (!(yield* store.save(kept.value.ledger))) return
       yield* locked(() => {
         written = kept.value.version
       })
@@ -3831,6 +4167,69 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       )
         count += 1
     return count
+  }
+  /**
+   * One reading of an account window, under the lock. A move of at least 1%
+   * from where the open segment opened closes it with the fuel spent since
+   * then; a reset (its time moved, or the window fell), a gap over 15
+   * minutes or a refusal drops that fuel instead; a smaller move keeps
+   * adding to it.
+   */
+  const read = (quota: PlacementQuota, reading: QuotaReading, now: number) => {
+    const key = placementKey(quota.provider, quota.slot, reading.window)
+    const last = Option.fromUndefinedOr(readings.get(key))
+    readings.set(key, {
+      provider: quota.provider,
+      slot: quota.slot,
+      window: reading.window,
+      utilization: reading.utilization,
+      resetAt: reading.resetAt,
+      readAt: now,
+      rejected: reading.rejected,
+    })
+    version += 1
+    // A rejected window holds the account until it resets, as a refusal does.
+    if (reading.rejected && reading.resetAt > now) {
+      const account = placementKey(quota.provider, quota.slot)
+      held.set(account, Math.max(held.get(account) ?? 0, reading.resetAt))
+    }
+    const fresh = {
+      from: reading.utilization,
+      fuel: Option.some(0),
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }
+    const open = Option.fromUndefinedOr(openSegments.get(key))
+    const continues = Option.exists(
+      last,
+      (previous) =>
+        !reading.rejected &&
+        !previous.rejected &&
+        Math.abs(reading.resetAt - previous.resetAt) <= QUOTA_RESET_TOLERANCE_MS &&
+        reading.utilization >= previous.utilization &&
+        now - previous.readAt <= QUOTA_GAP_MS,
+    )
+    if (!continues || Option.isNone(open) || Option.isNone(last)) {
+      openSegments.set(key, fresh)
+      return
+    }
+    const moved = reading.utilization - open.value.from
+    // A move under 1%: the segment stays open from where it opened, and the
+    // gap counts from now.
+    if (moved < QUOTA_STEP - 1e-9) return
+    openSegments.set(key, fresh)
+    if (Option.isNone(open.value.fuel)) return
+    segments.set(key, [
+      ...(segments.get(key) ?? []),
+      {
+        provider: quota.provider,
+        slot: quota.slot,
+        window: reading.window,
+        endedAt: now,
+        fuel: open.value.fuel.value,
+        deltaPct: moved * 100,
+        tokens: open.value.tokens,
+      },
+    ])
   }
   const spendAt = Effect.fn("CredentialPlacement.spendAt")(function* (
     spend: PlacementSpend,
@@ -3851,6 +4250,113 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (Option.isSome(spend.costUsd)) record(spend, spend.costUsd.value, hour)
     })
   })
+  /**
+   * The lanes of one provider over `scope`, under the lock. An account
+   * window carries `(1 − u) × 100 × fuelPerPct / (fuelPerHour × hours to
+   * its reset)` runs (a window whose reset passed is full again, over its
+   * length); an account carries the fewest of its windows, and the provider
+   * the sum over its scope, floored. A window with no rate of its own reads
+   * the provider's over every account.
+   */
+  const providerLanes = (
+    provider: string,
+    scope: ReadonlyArray<CredentialSlot>,
+    now: number,
+  ): typeof ProviderLanes.Type => {
+    const fuelPerHour = FUEL_PER_LANE_HOUR_PRIOR
+    const own = new Map<string, WindowFit>()
+    const pooled = new Map<string, Array<FuelSegment>>()
+    for (const [key, list] of segments) {
+      const first = list[0]
+      if (Predicate.isUndefined(first) || first.provider !== provider) continue
+      const fit = fitWindow(list)
+      own.set(key, fit)
+      pooled.set(first.window, [...(pooled.get(first.window) ?? []), ...fit.kept])
+    }
+    const poolRate = new Map(
+      [...pooled].map(([window, kept]) => [window, weightedRate(kept)] as const),
+    )
+    const slots = new Set<CredentialSlot>(scope)
+    for (const reading of readings.values())
+      if (reading.provider === provider) slots.add(reading.slot)
+    const accounts = [...slots].map((slot): LaneAccount => {
+      const accountHeld = held.has(placementKey(provider, slot))
+      const windows = readings
+        .values()
+        .filter((reading) => reading.provider === provider && reading.slot === slot)
+        .map((reading): LaneWindow => {
+          const key = placementKey(provider, slot, reading.window)
+          const fit = Option.fromUndefinedOr(own.get(key))
+          const ownRate = Option.flatMap(fit, (found) => found.fuelPerPct)
+          const fuelPerPct = Option.orElse(ownRate, () =>
+            Option.flatten(Option.fromUndefinedOr(poolRate.get(reading.window))),
+          )
+          // A window whose reset passed is full again, for its whole length.
+          const reset = reading.resetAt <= now
+          let horizon = Option.some(Math.max(reading.resetAt - now, QUOTA_MIN_HORIZON_MS))
+          let utilization = reading.utilization
+          if (reset) {
+            horizon = windowLengthMs(reading.window)
+            utilization = 0
+          }
+          // A rejected window carries no run until it resets, rate or not.
+          const sustainable = Option.flatMap(horizon, (ms) => {
+            if (reading.rejected && !reset) return Option.some(0)
+            const remaining = Math.max(0, 1 - utilization) * 100
+            return Option.map(
+              fuelPerPct,
+              (rate) => (remaining * rate * 3_600_000) / (fuelPerHour * ms),
+            )
+          })
+          return {
+            window: reading.window,
+            utilization,
+            resetAt: reading.resetAt,
+            readAt: reading.readAt,
+            rejected: reading.rejected && !reset,
+            samples: Option.match(fit, { onNone: () => 0, onSome: (found) => found.kept.length }),
+            outsideShare: Option.match(fit, {
+              onNone: () => 0,
+              onSome: (found) => found.outsideShare,
+            }),
+            ...omitUndefined({
+              fuelPerPct: Option.getOrUndefined(fuelPerPct),
+              band: Option.getOrUndefined(Option.flatMap(fit, (found) => found.band)),
+              sustainable: Option.getOrUndefined(sustainable),
+            }),
+          }
+        })
+        .toArray()
+      const each = windows.map((window) => Option.fromUndefinedOr(window.sustainable))
+      const fewest = Option.map(
+        Option.filter(Option.all(each), () => windows.length > 0),
+        (values) => Math.min(...values),
+      )
+      // A held account carries no run, whatever its windows read.
+      let sustainable = fewest
+      if (accountHeld) sustainable = Option.some(0)
+      return {
+        slot,
+        windows,
+        held: accountHeld,
+        ...omitUndefined({ sustainable: Option.getOrUndefined(sustainable) }),
+      }
+    })
+    const scoped = accounts.filter((account) => scope.includes(account.slot))
+    const capacity = Option.map(
+      Option.all(scoped.map((account) => Option.fromUndefinedOr(account.sustainable))),
+      (values) => Math.floor(values.reduce((sum, value) => sum + value, 0) + 1e-9),
+    )
+    return {
+      provider,
+      scope: [...scope],
+      accounts,
+      fuelPerHour,
+      ...omitUndefined({
+        capacity: Option.getOrUndefined(Option.filter(capacity, () => scoped.length > 0)),
+      }),
+    }
+  }
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
       const now = yield* Clock.currentTimeMillis
@@ -3934,6 +4440,57 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {
       yield* locked(() => unguard(sessionId))
+    }),
+    noteQuota: Effect.fn("CredentialPlacement.noteQuota")(function* (quota: PlacementQuota) {
+      const now = yield* Clock.currentTimeMillis
+      yield* locked(() => {
+        trim(now)
+        for (const reading of quota.readings) read(quota, reading, now)
+      })
+    }),
+    noteFuel: Effect.fn("CredentialPlacement.noteFuel")(function* (spend: PlacementFuel) {
+      const priced = fuelOf(spend.costUsd, spend.usage)
+      yield* locked(() => {
+        for (const [key, open] of openSegments) {
+          if (!key.startsWith(placementKey(spend.provider, spend.slot, ""))) continue
+          openSegments.set(
+            key,
+            Option.match(priced, {
+              // An unpriced request drops the segment it falls in.
+              onNone: () => ({ ...open, fuel: Option.none() }),
+              onSome: (cost) => ({
+                ...open,
+                fuel: Option.map(open.fuel, (fuel) => fuel + cost.fuel),
+                tokens: {
+                  input: open.tokens.input + cost.tokens.input,
+                  output: open.tokens.output + cost.tokens.output,
+                  cacheRead: open.tokens.cacheRead + cost.tokens.cacheRead,
+                  cacheWrite: open.tokens.cacheWrite + cost.tokens.cacheWrite,
+                },
+              }),
+            }),
+          )
+        }
+      })
+    }),
+    lanes: Effect.fn("CredentialPlacement.lanes")(function* (scopeOf: LaneScopeOf) {
+      const now = yield* Clock.currentTimeMillis
+      const providers = yield* locked(() => {
+        trim(now)
+        return [...new Set([...readings.values()].map((reading) => reading.provider))].sort()
+      })
+      const scopes = yield* Effect.forEach(providers, (provider) =>
+        Effect.map(scopeOf(provider), (scope) => [provider, scope] as const),
+      )
+      return yield* locked((): LaneReport => ({
+        providers: scopes.map(([provider, scope]) =>
+          providerLanes(
+            provider,
+            Option.getOrElse(scope, () => []),
+            now,
+          ),
+        ),
+      }))
     }),
     flush: write,
   } satisfies CredentialPlacementService

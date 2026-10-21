@@ -47,7 +47,9 @@ import {
   acceptedEfforts,
   clampEffort,
   ReasoningEffort,
+  type QuotaReading,
   rateLimitResponse,
+  reportProviderQuota,
   reportProviderStopReason,
   retryAfterAt,
   type RunEffort,
@@ -2981,10 +2983,80 @@ const buildOauthHeaders = (
 export const buildKeychainTransformClient = (
   creds: CredentialCache<ClaudeCredentials>,
   env: AnthropicKeychainEnv,
-): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  authorizedClient(creds, (req, fresh) => {
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) => {
+  const signed = authorizedClient(creds, (req, fresh) => {
     const modelId = requestModelId(req)
     return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
+  })
+  // Each answer the request ends with, a refusal included, names the plan's
+  // quota windows (`unifiedQuota`).
+  return (client) =>
+    HttpClient.tap(signed(client), (response) =>
+      reportProviderQuota(unifiedQuota(response.headers)),
+    )
+}
+
+// ── quota windows ──
+
+/**
+ * A Claude plan's quota headers, as Claude Code 2.1.306 reads them (its
+ * bundled reader, read 2026-10-21): per window `utilization` (the fraction
+ * of the window used, usually 0 to 1, above 1 past the limit) and `reset`
+ * (epoch seconds); for the account, `status` (`allowed`, `allowed_warning`
+ * or `rejected`), the window that limits it (`representative-claim`) and
+ * that window's reset. No window carries a status of its own. An API key
+ * gets none of them, and an answer with no `status` (the limiter did not
+ * run) says nothing. Of the windows, gent reads the 5-hour and the 7-day.
+ */
+const UnifiedNumber = Schema.OptionFromOptionalKey(Schema.FiniteFromString)
+const AnthropicUnifiedHeaders = Schema.Struct({
+  "anthropic-ratelimit-unified-status": Schema.String,
+  "anthropic-ratelimit-unified-representative-claim": Schema.OptionFromOptionalKey(Schema.String),
+  "anthropic-ratelimit-unified-reset": UnifiedNumber,
+  "anthropic-ratelimit-unified-5h-utilization": UnifiedNumber,
+  "anthropic-ratelimit-unified-5h-reset": UnifiedNumber,
+  "anthropic-ratelimit-unified-7d-utilization": UnifiedNumber,
+  "anthropic-ratelimit-unified-7d-reset": UnifiedNumber,
+})
+
+/** The windows gent reads, with the claim that names each as the account's limit. */
+const UNIFIED_WINDOWS = [
+  { window: "5h", claim: "five_hour" },
+  { window: "7d", claim: "seven_day" },
+] as const
+
+/**
+ * The quota windows an answer's headers name. A window the account is
+ * refused on (`status: rejected`, its claim) is rejected until its reset,
+ * and full when the answer gives no utilization for it; a window with no
+ * reset says nothing. Headers that do not decode report none.
+ */
+const unifiedQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
+  Option.match(Schema.decodeUnknownOption(AnthropicUnifiedHeaders)(headers), {
+    onNone: () => [],
+    onSome: (unified) => {
+      const refused = unified["anthropic-ratelimit-unified-status"] === "rejected"
+      const claim = unified["anthropic-ratelimit-unified-representative-claim"]
+      return UNIFIED_WINDOWS.flatMap(({ window, claim: name }) => {
+        const rejected = refused && Option.contains(claim, name)
+        const utilization = Option.orElse(
+          unified[`anthropic-ratelimit-unified-${window}-utilization`],
+          () => Option.some(1).pipe(Option.filter(() => rejected)),
+        )
+        const resetSeconds = Option.orElse(
+          unified[`anthropic-ratelimit-unified-${window}-reset`],
+          () => unified["anthropic-ratelimit-unified-reset"].pipe(Option.filter(() => rejected)),
+        )
+        return Option.toArray(
+          Option.map(Option.all({ utilization, resetSeconds }), (found) => ({
+            window,
+            utilization: found.utilization,
+            resetAt: found.resetSeconds * 1000,
+            rejected,
+          })),
+        )
+      })
+    },
   })
 
 // ── rate-limit reset ──

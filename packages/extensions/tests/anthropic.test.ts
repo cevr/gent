@@ -51,7 +51,7 @@ import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcessSpawner } from "effect/process"
 import {
-  captureProviderStopReason,
+  captureProviderReport,
   storedCredentialModel,
   storeRotationLock,
   createRpcClient,
@@ -1559,7 +1559,7 @@ describe("Anthropic stop reason", () => {
       const model = yield* driver.resolveModel("claude-sonnet-4-5", makeApiAuthInfo("test-key"))
       const state = makeFakeFetchState()
       const finishes: Array<string> = []
-      const reported = yield* captureProviderStopReason(
+      const reported = yield* captureProviderReport(
         LanguageModel.streamText({ prompt: "hi" }).pipe(
           Stream.runForEach((part) =>
             Effect.sync(() => {
@@ -1577,7 +1577,134 @@ describe("Anthropic stop reason", () => {
       )
       // Effect AI's map lacks the reason, so the finish part alone cannot tell.
       expect(finishes).toEqual(["unknown"])
-      expect(reported).toEqual(Option.some("model_context_window_exceeded"))
+      expect(reported.stopReason).toEqual(Option.some("model_context_window_exceeded"))
+    }),
+  )
+})
+
+/**
+ * A Claude plan's quota headers, named as Claude Code 2.1.306 reads them;
+ * the values are made up. Resets are epoch seconds.
+ */
+const FIVE_HOUR_RESET_S = 1_800_000_000
+const SEVEN_DAY_RESET_S = 1_800_400_000
+const unifiedHeaders = (status: string, claim: string) => ({
+  "anthropic-ratelimit-unified-status": status,
+  "anthropic-ratelimit-unified-representative-claim": claim,
+  "anthropic-ratelimit-unified-reset": String(FIVE_HOUR_RESET_S),
+  "anthropic-ratelimit-unified-5h-utilization": "0.42",
+  "anthropic-ratelimit-unified-5h-reset": String(FIVE_HOUR_RESET_S),
+  "anthropic-ratelimit-unified-5h-surpassed-threshold": "0.4",
+  "anthropic-ratelimit-unified-7d-utilization": "0.1",
+  "anthropic-ratelimit-unified-7d-reset": String(SEVEN_DAY_RESET_S),
+  "anthropic-ratelimit-unified-overage-status": "rejected",
+})
+
+describe("Anthropic quota windows", () => {
+  const streamed = LanguageModel.streamText({ prompt: "hi" }).pipe(Stream.runDrain)
+  const generated = LanguageModel.generateText({ prompt: "hi" })
+  /** What the driver reports for one `request` signed with `authInfo`, answered by `answer`. */
+  const reportFor = (
+    authInfo: ProviderAuthInfo,
+    answer: Parameters<typeof fakeFetchLayer>[1],
+    request: typeof streamed | typeof generated,
+  ) =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+        makeDurableCell(
+          { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
+          yield* Clock.currentTimeMillis,
+        ),
+      )
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const model = yield* driver.resolveModel("claude-sonnet-4-5", authInfo)
+      return yield* captureProviderReport(
+        Effect.asVoid(request).pipe(
+          Effect.ignore,
+          Effect.provide(Layer.provideMerge(model, fakeFetchLayer(makeFakeFetchState(), answer))),
+          Effect.scoped,
+        ),
+      )
+    })
+  /** An answer of `reply`'s, with `headers` added. */
+  const answer = (
+    reply: {
+      readonly status: number
+      readonly headers?: Record<string, string>
+      readonly body: string
+    },
+    headers: Record<string, string>,
+  ) => {
+    const answered = { ...reply, headers: { ...reply.headers, ...headers } }
+    return () => answered
+  }
+
+  it.live("a plan's answer reports its 5-hour and 7-day windows, streamed or not", () =>
+    Effect.gen(function* () {
+      const expected = [
+        { window: "5h", utilization: 0.42, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
+        { window: "7d", utilization: 0.1, resetAt: SEVEN_DAY_RESET_S * 1000, rejected: false },
+      ]
+      const headers = unifiedHeaders("allowed_warning", "five_hour")
+      const plain = yield* reportFor(
+        makeOAuthInfo(),
+        answer(
+          { ...anthropicHappyResponse(), headers: { "content-type": "application/json" } },
+          headers,
+        ),
+        generated,
+      )
+      expect(plain.quota).toEqual(expected)
+      const stream = yield* reportFor(
+        makeOAuthInfo(),
+        answer(streamReplyEnding("end_turn"), headers),
+        streamed,
+      )
+      expect(stream.quota).toEqual(expected)
+      expect(stream.stopReason).toEqual(Option.some("end_turn"))
+    }),
+  )
+
+  it.live(
+    "a refused request holds the window its claim names, full when no utilization is given",
+    () =>
+      Effect.gen(function* () {
+        const { "anthropic-ratelimit-unified-7d-utilization": _dropped, ...headers } =
+          unifiedHeaders("rejected", "seven_day")
+        const refusal = {
+          status: 429,
+          headers: { "content-type": "application/json", ...headers },
+          body: encodeExternalJson({
+            type: "error",
+            error: { type: "rate_limit_error", message: "limit reached" },
+          }),
+        }
+        const reported = yield* reportFor(makeOAuthInfo(), () => refusal, streamed)
+        expect(reported.quota).toEqual([
+          { window: "5h", utilization: 0.42, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
+          { window: "7d", utilization: 1, resetAt: SEVEN_DAY_RESET_S * 1000, rejected: true },
+        ])
+      }),
+  )
+
+  it.live("an answer the limiter did not run on, or an API key's, reports no window", () =>
+    Effect.gen(function* () {
+      const { "anthropic-ratelimit-unified-status": _status, ...unlimited } = unifiedHeaders(
+        "allowed",
+        "five_hour",
+      )
+      const noStatus = yield* reportFor(
+        makeOAuthInfo(),
+        answer(streamReplyEnding("end_turn"), unlimited),
+        streamed,
+      )
+      expect(noStatus.quota).toEqual([])
+      const apiKey = yield* reportFor(
+        makeApiAuthInfo("test-key"),
+        answer(streamReplyEnding("end_turn"), unifiedHeaders("allowed", "five_hour")),
+        streamed,
+      )
+      expect(apiKey.quota).toEqual([])
     }),
   )
 })

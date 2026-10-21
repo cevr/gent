@@ -606,31 +606,64 @@ export const isContextOverflow = (cause: unknown): boolean => {
   return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(text))
 }
 
-// ── Provider stop reason ──
+// ── Provider report ──
 
 /**
- * The provider's own word for why a step's stream stopped. Effect AI maps
- * that word to a `FinishReason` and keeps no copy of it, and a word its map
- * lacks becomes `"unknown"`: Anthropic's `model_context_window_exceeded`
- * does (`@effect/ai-anthropic` `internal/utilities.ts`). The loop provides
- * this service to each step's model stream. A driver that reads the wire
- * reports the word here, and the loop reads it when the step settles.
+ * One quota window as the provider reported it on a response. `window` is the
+ * provider's own name for it (Anthropic's `5h`, `7d`), `utilization` the
+ * fraction used (above 1 when usage ran past the window's cap), `resetAt` when
+ * it is full again (epoch ms), and `rejected` that the provider refuses
+ * requests on this window until then.
  */
-export class ProviderStopReason extends Context.Service<
-  ProviderStopReason,
-  { readonly report: (reason: string) => Effect.Effect<void> }
->()("@gent/core/src/domain/driver/ProviderStopReason") {}
+export const QuotaReading = Schema.Struct({
+  window: Schema.String,
+  utilization: Schema.Finite,
+  resetAt: Schema.Finite,
+  rejected: Schema.Boolean,
+})
+export type QuotaReading = typeof QuotaReading.Type
 
-/** A driver reports the stream's raw stop reason; nothing listens outside a loop step. */
-export const reportProviderStopReason = (reason: string): Effect.Effect<void> =>
-  Effect.serviceOption(ProviderStopReason).pipe(
+/**
+ * What a driver that reads the wire reports about one step's request. The
+ * loop provides this service to each step's model stream and reads it when
+ * the step settles. `stopReason` is the provider's own word for why the
+ * stream stopped: Effect AI maps that word to a `FinishReason` and keeps no
+ * copy of it, and a word its map lacks becomes `"unknown"`, as Anthropic's
+ * `model_context_window_exceeded` does (`@effect/ai-anthropic`
+ * `internal/utilities.ts`). `quota` is the account's quota windows as the
+ * response's headers name them: the loop records them against the credential
+ * the request went out on.
+ */
+export class ProviderReport extends Context.Service<
+  ProviderReport,
+  {
+    readonly stopReason: (reason: string) => Effect.Effect<void>
+    readonly quota: (readings: ReadonlyArray<QuotaReading>) => Effect.Effect<void>
+  }
+>()("@gent/core/src/domain/driver/ProviderReport") {}
+
+/** Nothing listens outside a loop step. */
+const reportToLoop = (
+  report: (listener: ProviderReport["Service"]) => Effect.Effect<void>,
+): Effect.Effect<void> =>
+  Effect.serviceOption(ProviderReport).pipe(
     Effect.flatMap(
       Option.match({
         onNone: () => Effect.void,
-        onSome: (listener) => listener.report(reason),
+        onSome: report,
       }),
     ),
   )
+
+/** A driver reports the stream's raw stop reason. */
+export const reportProviderStopReason = (reason: string): Effect.Effect<void> =>
+  reportToLoop((listener) => listener.stopReason(reason))
+
+/** A driver reports the quota windows a response named; none named reports nothing. */
+export const reportProviderQuota = (readings: ReadonlyArray<QuotaReading>): Effect.Effect<void> => {
+  if (readings.length === 0) return Effect.void
+  return reportToLoop((listener) => listener.quota(readings))
+}
 
 /**
  * Stop reasons that say the context window filled while the model wrote:

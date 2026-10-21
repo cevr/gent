@@ -143,6 +143,7 @@ import {
   completeProviderAuth,
   CredentialPlacement,
   DecisionModelResolver,
+  laneScope,
   listAuthMethods,
   listAuthProviders,
   listCatalogProviders,
@@ -1477,6 +1478,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const catalogSource = yield* ModelCatalogSource
     const platform = yield* GentPlatform
     const profileCache = yield* SessionProfileCache
+    const placement = yield* CredentialPlacement
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
@@ -1866,6 +1868,14 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.clear": ({ agentName }: ClearDriverOverrideInput) =>
         configService.clearDriverOverride(agentName),
+
+      // The accounts are the server's: each provider's lanes run over the
+      // pool its unpinned runs share, as the launch profile's config names it.
+      "accounts.lanes": () =>
+        Effect.gen(function* () {
+          const profile = yield* profileForCwd(Option.none())
+          return yield* placement.lanes((provider) => laneScope(provider, profile.registryService))
+        }).pipe(Effect.scoped),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {

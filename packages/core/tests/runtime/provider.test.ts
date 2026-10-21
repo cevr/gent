@@ -49,6 +49,7 @@ import {
   ModelResolver,
   authorizeProvider,
   completeProviderAuth,
+  CredentialPlacement,
   DecisionModelResolver,
   removeSignIn,
   renameSignIn,
@@ -98,7 +99,7 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import type { ProviderConfig } from "../../src/runtime/config"
+import { type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   defineExtension,
   ExtensionHost,
@@ -110,6 +111,7 @@ import {
   fixtureModelCatalog,
   fixtureModelCatalogSource,
   LanguageModelLayers,
+  makeTempDirectoryScoped,
   MODEL_CATALOG_FIXTURE,
   modelCatalogFixture,
   type ModelCatalogFixtureRequest,
@@ -5172,10 +5174,10 @@ describe("credential placement", () => {
           Option.Option.Value<Parameters<typeof makeCredentialPlacement>[0]>["save"]
         >[0]
         const long = SessionId.make("long")
-        const file = yield* Ref.make<Saved>([])
+        const file = yield* Ref.make<Saved>({ buckets: [] })
         const store = {
           load: Ref.get(file),
-          save: (buckets: Saved) => Ref.set(file, buckets).pipe(Effect.as(true)),
+          save: (ledger: Saved) => Ref.set(file, ledger).pipe(Effect.as(true)),
         }
         // A server's life: it reads the ledger, takes one step of "long", and writes it back.
         const serve = (slot: CredentialSlot) =>
@@ -5190,8 +5192,8 @@ describe("credential placement", () => {
             })
             yield* placement.flush
           })
-        const sessionsOn = Effect.map(Ref.get(file), (buckets) =>
-          buckets
+        const sessionsOn = Effect.map(Ref.get(file), (ledger) =>
+          ledger.buckets
             .filter((bucket) => bucket.sessions.length > 0)
             .map((bucket) => ({ slot: bucket.slot, sessions: [...bucket.sessions] })),
         )
@@ -5207,7 +5209,7 @@ describe("credential placement", () => {
         // An hour on, restarted again on a: counted in that hour alone.
         yield* TestClock.adjust("1 hour")
         yield* serve(a)
-        const buckets = yield* Ref.get(file)
+        const { buckets } = yield* Ref.get(file)
         expect(yield* sessionsOn).toEqual([{ slot: a, sessions: [long] }])
         expect(buckets.map((bucket) => bucket.costUsd).reduce((sum, cost) => sum + cost, 0)).toBe(4)
       }).pipe(
@@ -5432,5 +5434,275 @@ describe("credential placement", () => {
           conflict: ["spread-alias", "spread-owner"],
         })
       }).pipe(Effect.timeout("5 seconds")),
+  )
+})
+
+describe("account lanes", () => {
+  const a = CredentialSlot.make("a")
+  const b = CredentialSlot.make("b")
+  const c = CredentialSlot.make("c")
+  const HOUR = 3_600_000
+  /** $1 of list price is 200,000 fuel: one fuel is one input token at $5 per million. */
+  const usage = Option.some({ inputTokens: 1_000, outputTokens: 100 })
+  const placementLayer = Layer.mergeAll(BunServices.layer, GentPlatform.Test())
+  type Scope = readonly [CredentialSlot, ...Array<CredentialSlot>]
+  const scopeOf = (scope: Scope) => (_provider: string) => Effect.succeedSome(scope)
+
+  /** One placement and the readings and fuel a test feeds it, on the provider `plan`. */
+  const accounts = Effect.gen(function* () {
+    const placement = yield* makeCredentialPlacement(Option.none())
+    const read = (
+      slot: CredentialSlot,
+      readings: ReadonlyArray<{
+        readonly window: string
+        readonly utilization: number
+        readonly resetAt: number
+        readonly rejected?: boolean
+      }>,
+    ) =>
+      placement.noteQuota({
+        provider: "plan",
+        slot,
+        readings: readings.map((reading) => ({ rejected: false, ...reading })),
+      })
+    const spend = (slot: CredentialSlot, costUsd: Option.Option<number>, spent = usage) =>
+      placement.noteFuel({ provider: "plan", slot, costUsd, usage: spent })
+    const lanes = (scope: Scope) =>
+      Effect.map(placement.lanes(scopeOf(scope)), (report) => {
+        const found = report.providers.find((lanes) => lanes.provider === "plan")
+        if (Predicate.isUndefined(found)) return Option.none()
+        return Option.some(found)
+      }).pipe(Effect.flatMap(Effect.fromOption), Effect.orDie)
+    const windowOf = (scope: Scope, slot: CredentialSlot, window: string) =>
+      Effect.flatMap(lanes(scope), (report) =>
+        Effect.fromOption(
+          Option.fromUndefinedOr(
+            report.accounts
+              .find((account) => account.slot === slot)
+              ?.windows.find((found) => found.window === window),
+          ),
+        ).pipe(Effect.orDie),
+      )
+    return { placement, read, spend, lanes, windowOf }
+  })
+
+  it.effect(
+    "each window's fuel per percent is the fuel spent between readings over the points they moved",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, lanes, windowOf } = yield* accounts
+        yield* TestClock.adjust("1 hour")
+        const start = yield* Clock.currentTimeMillis
+        // The window resets 2 hours after the last reading.
+        const resetAt = start + 2 * HOUR + 2 * 60_000
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt }])
+        yield* spend(a, Option.some(1))
+        yield* TestClock.adjust("1 minute")
+        yield* read(a, [{ window: "5h", utilization: 0.11, resetAt }])
+        // A reading that moved less than 1% keeps the segment open.
+        yield* spend(a, Option.some(1))
+        yield* read(a, [{ window: "5h", utilization: 0.112, resetAt }])
+        yield* spend(a, Option.some(1))
+        yield* TestClock.adjust("1 minute")
+        yield* read(a, [{ window: "5h", utilization: 0.13, resetAt }])
+        const window = yield* windowOf([a], a, "5h")
+        // 600,000 fuel over 3 points.
+        expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
+        expect(window.samples).toBe(2)
+        expect(window.band).toBeCloseTo(1 / 3, 6)
+        expect(window.outsideShare).toBe(0)
+        // 87 points left at 200,000 fuel each, over 2 hours at 3.4 M fuel an hour.
+        expect(window.sustainable).toBeCloseTo((87 * 200_000) / (2 * 3_400_000), 6)
+        const report = yield* lanes([a])
+        expect(report.capacity).toBe(2)
+        expect(report.scope).toEqual([a])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a reset, a fall, a gap over 15 minutes or an unpriced request drops the fuel since the last reading",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, windowOf } = yield* accounts
+        yield* TestClock.adjust("1 hour")
+        const start = yield* Clock.currentTimeMillis
+        const resetAt = start + 5 * HOUR
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt }])
+        // The reset moved: a new window.
+        yield* spend(a, Option.some(1))
+        yield* read(a, [{ window: "5h", utilization: 0.12, resetAt: resetAt + HOUR }])
+        // The window fell.
+        yield* spend(a, Option.some(1))
+        yield* read(a, [{ window: "5h", utilization: 0.05, resetAt: resetAt + HOUR }])
+        // 16 minutes with no reading.
+        yield* spend(a, Option.some(1))
+        yield* TestClock.adjust("16 minutes")
+        yield* read(a, [{ window: "5h", utilization: 0.07, resetAt: resetAt + HOUR }])
+        // A request with no price, and one a subscription view lists at $0.
+        yield* spend(a, Option.none())
+        yield* read(a, [{ window: "5h", utilization: 0.09, resetAt: resetAt + HOUR }])
+        yield* spend(a, Option.some(0))
+        yield* read(a, [{ window: "5h", utilization: 0.11, resetAt: resetAt + HOUR }])
+        const dropped = yield* windowOf([a], a, "5h")
+        expect(dropped.samples).toBe(0)
+        expect(dropped.fuelPerPct).toBeUndefined()
+        expect(dropped.sustainable).toBeUndefined()
+        // One priced move counts.
+        yield* spend(a, Option.some(2))
+        yield* read(a, [{ window: "5h", utilization: 0.13, resetAt: resetAt + HOUR }])
+        const counted = yield* windowOf([a], a, "5h")
+        expect(counted.samples).toBe(1)
+        expect(counted.fuelPerPct).toBeCloseTo(200_000, 3)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a move gent's fuel does not explain is spend outside gent, left out of the rate", () =>
+    Effect.gen(function* () {
+      const { read, spend, windowOf } = yield* accounts
+      yield* TestClock.adjust("1 hour")
+      const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
+      const step = (from: number, to: number, costUsd: number) =>
+        Effect.gen(function* () {
+          yield* read(a, [{ window: "5h", utilization: from, resetAt }])
+          yield* spend(a, Option.some(costUsd))
+          yield* read(a, [{ window: "5h", utilization: to, resetAt }])
+        })
+      yield* step(0.1, 0.11, 1)
+      yield* step(0.11, 0.12, 1)
+      // Claude Code spent 9 points of its own while gent spent $1.
+      yield* step(0.12, 0.22, 1)
+      const window = yield* windowOf([a], a, "5h")
+      expect(window.samples).toBe(2)
+      expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
+      expect(window.outsideShare).toBeCloseTo(10 / 12, 6)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "capacity sums each account's fewest window over the scope, and waits for every account of it",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, lanes } = yield* accounts
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        // Both windows learn 200,000 fuel per point on c, outside the scope.
+        yield* read(c, [
+          { window: "5h", utilization: 0, resetAt: now + HOUR },
+          { window: "7d", utilization: 0, resetAt: now + 2 * HOUR },
+        ])
+        yield* spend(c, Option.some(1))
+        yield* read(c, [
+          { window: "5h", utilization: 0.01, resetAt: now + HOUR },
+          { window: "7d", utilization: 0.01, resetAt: now + 2 * HOUR },
+        ])
+        // a has 5-hour room only, b weekly room only: neither carries a run.
+        yield* read(a, [
+          { window: "5h", utilization: 0, resetAt: now + HOUR },
+          { window: "7d", utilization: 0.99, resetAt: now + 24 * HOUR },
+        ])
+        expect((yield* lanes([a, b])).capacity).toBeUndefined()
+        yield* read(b, [
+          { window: "5h", utilization: 0.99, resetAt: now + HOUR },
+          { window: "7d", utilization: 0, resetAt: now + 24 * HOUR },
+        ])
+        const pooled = yield* lanes([a, b])
+        // a: 1 point of the week over 24 hours, 0.0025; b: 1 point of 5 hours over 1, 0.059.
+        expect(pooled.accounts.find((account) => account.slot === a)?.sustainable).toBeCloseTo(
+          200_000 / (24 * 3_400_000),
+          6,
+        )
+        expect(pooled.accounts.find((account) => account.slot === b)?.sustainable).toBeCloseTo(
+          200_000 / 3_400_000,
+          6,
+        )
+        expect(pooled.capacity).toBe(0)
+        // c: 99 points of each, over 1 and 2 hours: min(5.82, 2.91). In the scope, it adds 2.
+        expect((yield* lanes([a, b, c])).capacity).toBe(2)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a rejected window holds its account until it resets, then the window is full again",
+    () =>
+      Effect.gen(function* () {
+        const { read, lanes, windowOf } = yield* accounts
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + HOUR, rejected: true }])
+        const refused = yield* lanes([a])
+        expect(refused.accounts[0]?.held).toBe(true)
+        expect(refused.accounts[0]?.sustainable).toBe(0)
+        expect(refused.capacity).toBe(0)
+        yield* TestClock.adjust("61 minutes")
+        const window = yield* windowOf([a], a, "5h")
+        expect(window.rejected).toBe(false)
+        expect(window.utilization).toBe(0)
+        expect((yield* lanes([a])).accounts[0]?.held).toBe(false)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "readings and segments survive a restart in the ledger, which an older binary still reads",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-lanes-ledger-")
+        const fs = yield* FileSystem.FileSystem
+        const file = `${home}/.gent/credential-usage.json`
+        const server = CredentialPlacement.Live.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              RuntimeEnvironment.Live({ cwd: home, home }),
+              BunServices.layer,
+              GentPlatform.Test(),
+            ),
+          ),
+        )
+        // A ledger an older gent wrote: buckets alone.
+        yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+        yield* fs.writeFileString(file, '{"buckets":[]}')
+        yield* TestClock.adjust("1 hour")
+        const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+            const quota = (utilization: number) =>
+              placement.noteQuota({
+                provider: "plan",
+                slot: a,
+                readings: [{ window: "5h", utilization, resetAt, rejected: false }],
+              })
+            yield* quota(0.1)
+            yield* placement.noteFuel({ provider: "plan", slot: a, costUsd: Option.some(1), usage })
+            yield* quota(0.11)
+          }),
+        )
+        const restarted = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
+            return yield* placement.lanes(scopeOf([a]))
+          }),
+        )
+        const window = restarted.providers[0]?.accounts[0]?.windows[0]
+        expect(window?.utilization).toBe(0.11)
+        expect(window?.fuelPerPct).toBeCloseTo(200_000, 3)
+        // The schema an older binary decodes the ledger with.
+        const OlderLedger = Schema.fromJsonString(
+          Schema.Struct({
+            buckets: Schema.Array(
+              Schema.Struct({
+                provider: Schema.String,
+                slot: Schema.String,
+                hour: Schema.Finite,
+                costUsd: Schema.Finite,
+                sessions: Schema.Array(Schema.String),
+              }),
+            ),
+          }),
+        )
+        const text = yield* fs.readFileString(file)
+        expect(text).toContain('"segments"')
+        expect(text).not.toContain("sk-")
+        expect(Exit.isSuccess(Schema.decodeExit(OlderLedger)(text))).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })

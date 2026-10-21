@@ -2413,7 +2413,7 @@ describe("credential order", () => {
   /** A usage bucket as the placement's ledger writes it. */
   type SavedBucket = Parameters<
     Option.Option.Value<Parameters<typeof makeCredentialPlacement>[0]>["save"]
-  >[0][number]
+  >[0]["buckets"][number]
 
   /** What a request with one credential streams, by how many it sent before. */
   type Reply = (call: number) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
@@ -5854,9 +5854,9 @@ describe("credential order", () => {
       const saved = yield* Ref.make<ReadonlyArray<ReadonlyArray<SavedBucket>>>([])
       const placement = yield* makeCredentialPlacement(
         Option.some({
-          load: Effect.succeed([]),
-          save: (buckets: ReadonlyArray<SavedBucket>) =>
-            Ref.update(saved, (all) => [...all, buckets]).pipe(Effect.as(true)),
+          load: Effect.succeed({ buckets: [] }),
+          save: (ledger: { readonly buckets: ReadonlyArray<SavedBucket> }) =>
+            Ref.update(saved, (all) => [...all, ledger.buckets]).pipe(Effect.as(true)),
         }),
       )
       return { placement, saved }

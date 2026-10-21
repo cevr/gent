@@ -4490,6 +4490,7 @@ describe("session profile lookup", () => {
       "steer.command": "the session is inside the command",
       "extension.listStatus": "its scope names the session or the launch",
       "driver.clear": "it writes the user config, which no session owns",
+      "accounts.lanes": "it reads the server's accounts, which no session owns",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",
     }
@@ -4756,5 +4757,63 @@ describe("namespaced client", () => {
       )
       expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
     }),
+  )
+})
+
+describe("AccountsRpcs", () => {
+  it.live(
+    "accounts.lanes reports the windows each step's response named on its account, and the fuel spent between them",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const work = CredentialSlot.make("work")
+          const resetAt = 1_800_000_000_000
+          const quota = (utilization: number) => [
+            { window: "5h", utilization, resetAt, rejected: false },
+          ]
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            { ...textStep("ok"), quota: quota(0.25) },
+            { ...textStep("ok"), quota: quota(0.27) },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            // $5 per million tokens: a step of 10 input and 1 output token is 11 fuel.
+            modelPricing: { input: 5, output: 5 },
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          })
+          expect(yield* client.accounts.lanes()).toEqual({ providers: [] })
+          const turn = (content: string, earlierTurns: number) =>
+            Effect.gen(function* () {
+              const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+                Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+                Stream.drop(earlierTurns),
+                Stream.runHead,
+                Effect.forkScoped,
+              )
+              yield* client.message.send({ sessionId, branchId, content })
+              yield* Fiber.join(turnCompleted)
+            })
+          yield* turn("first", 0)
+          yield* turn("second", 1)
+          const { providers } = yield* client.accounts.lanes()
+          expect(
+            providers.map((lanes) => ({ provider: lanes.provider, scope: lanes.scope })),
+          ).toEqual([{ provider: "anthropic", scope: [work] }])
+          const windows = providers[0]?.accounts.flatMap((account) =>
+            account.windows.map((window) => ({ slot: account.slot, ...window })),
+          )
+          expect(
+            windows?.map(({ slot, window, utilization }) => ({ slot, window, utilization })),
+          ).toEqual([{ slot: work, window: "5h", utilization: 0.27 }])
+          // The first step's 11 fuel moved the window 2 points.
+          expect(windows?.[0]?.fuelPerPct).toBeCloseTo(5.5, 6)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
   )
 })

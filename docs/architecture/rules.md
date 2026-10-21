@@ -233,7 +233,7 @@ commit.
     (Anthropic's `model_context_window_exceeded`) is cut and a refusal both:
     its text stays, a continuation asks for the rest, and that step hands the
     window off first. Effect AI maps that stop reason to `"unknown"` and keeps
-    no copy, so the driver reports the raw word through `ProviderStopReason`,
+    no copy, so the driver reports the raw word through `ProviderReport`,
     which the loop provides to each step's stream. An `"unknown"` finish alone
     is a finished answer.
     A turn whose first call would resend a large window after the provider's

@@ -40,6 +40,7 @@ import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
   AuthProviderInfo,
+  LaneReport,
   ListAuthProvidersPayload,
 } from "../runtime/provider.js"
 import {
@@ -687,6 +688,16 @@ class AuthRpcs extends RpcGroup.make(
   }),
 ).prefix("auth.") {}
 
+// ── accounts rpcs ───────────────────────────────────────────────────────────
+
+/** The server's accounts: no session names them, every session spends from them. */
+class AccountsRpcs extends RpcGroup.make(
+  Rpc.make("lanes", {
+    success: LaneReport,
+    error: GentRpcError,
+  }),
+).prefix("accounts.") {}
+
 // ── extension, driver and model rpcs ────────────────────────────────────────
 
 class ExtensionRpcs extends RpcGroup.make(
@@ -728,7 +739,7 @@ class ExtensionRpcs extends RpcGroup.make(
 // ── rpc group ───────────────────────────────────────────────────────────────
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, AccountsRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ── rpc client types ────────────────────────────────────────────────────────

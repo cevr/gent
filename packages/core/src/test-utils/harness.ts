@@ -179,7 +179,9 @@ import {
   type StoredOAuthCredentials,
   type ModelDriverContribution,
   type ProviderAuthInfo,
-  ProviderStopReason,
+  ProviderReport,
+  type QuotaReading,
+  reportProviderQuota,
   reportProviderStopReason,
 } from "../domain/driver.js"
 
@@ -2271,21 +2273,30 @@ export const storeRotationLock = (
   })
 
 /**
- * Run `effect` as a loop step does, listening for the raw stop reason a
- * driver reports (`ProviderStopReason`); returns the last one reported.
+ * Run `effect` as a loop step does, listening for what a driver reports
+ * (`ProviderReport`): the last raw stop reason, and every quota reading in
+ * the order reported.
  */
-export const captureProviderStopReason = <A, E, R>(
+export const captureProviderReport = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<Option.Option<string>, E, Exclude<R, ProviderStopReason>> =>
+): Effect.Effect<
+  { readonly stopReason: Option.Option<string>; readonly quota: ReadonlyArray<QuotaReading> },
+  E,
+  Exclude<R, ProviderReport>
+> =>
   Effect.gen(function* () {
-    const reported = yield* Ref.make(Option.none<string>())
+    const stopReason = yield* Ref.make(Option.none<string>())
+    const quota = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
     yield* effect.pipe(
       Effect.provideService(
-        ProviderStopReason,
-        ProviderStopReason.of({ report: (reason) => Ref.set(reported, Option.some(reason)) }),
+        ProviderReport,
+        ProviderReport.of({
+          stopReason: (reason) => Ref.set(stopReason, Option.some(reason)),
+          quota: (readings) => Ref.update(quota, (seen) => [...seen, ...readings]),
+        }),
       ),
     )
-    return yield* Ref.get(reported)
+    return { stopReason: yield* Ref.get(stopReason), quota: yield* Ref.get(quota) }
   })
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -2562,11 +2573,17 @@ export interface SequenceStep extends ScriptedStep {
   readonly gated?: boolean
   /**
    * The provider's raw stop reason, which the step reports through
-   * `ProviderStopReason` as a driver that reads the wire does. The finish
+   * `ProviderReport` as a driver that reads the wire does. The finish
    * part still carries Effect AI's mapped reason (`"unknown"` for a reason
    * its map lacks).
    */
   readonly stopReason?: string
+  /**
+   * The quota windows the step's response names, reported through
+   * `ProviderReport` before its parts, as a driver reads them from the
+   * response's headers.
+   */
+  readonly quota?: ReadonlyArray<QuotaReading>
 }
 
 interface SequenceLanguageModelControls {
@@ -2708,6 +2725,7 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
           if (!Predicate.isUndefined(started)) yield* Deferred.succeed(started, void 0)
           yield* checked.pipe(Effect.mapError((message) => aiError("Sequence.streamText", message)))
 
+          if (Predicate.isNotUndefined(step.quota)) yield* reportProviderQuota(step.quota)
           if (Predicate.isNotUndefined(step.stopReason)) {
             yield* reportProviderStopReason(step.stopReason)
           }

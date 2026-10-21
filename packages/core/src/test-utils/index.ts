@@ -35,7 +35,7 @@ export {
   testToolContext,
   type TestToolContext,
   testTurnExtension,
-  captureProviderStopReason,
+  captureProviderReport,
   createWorkerEnv,
   freePort,
   GENT_START_BOUND_MS,
