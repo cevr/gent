@@ -111,7 +111,7 @@ rejected window counts 0 until `resetAt` passes, so a pool of spent accounts
 that reset this week paces like the old budget.ts (B1). A reset counts only
 once it has passed (B2).
 
-8. **Pace against rolling resets. Implemented, not merged (2026-10-21).** A window's sustainable rate adds the
+8. **Pace against rolling resets. Merged at 82f8453d1 (2026-10-21).** A window's sustainable rate adds the
    share of each new week that opens inside the horizon, not only the quota
    in hand. A spent week that resets within 5h counts from its reset, with a
    fresh 5h window. The weekly and 5h ceilings still cap it. Accept: on the
