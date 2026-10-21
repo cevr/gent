@@ -5,7 +5,7 @@
 ```text
 apps/
 ├── tui/       # OpenTUI client over the shared transport contract
-└── site/      # gent.cvr.im: landing page and install.sh, an Alchemy stack: one Cloudflare Worker
+└── site/      # gent.cvr.im: landing page and install.sh, an Alchemy stack: one Cloudflare Worker (`bun run plan` / `deploy` there)
 
 packages/
 ├── core/          # entries: extensions/api, extensions/branch-tools, protocol, host, host-bun, test-utils
@@ -15,8 +15,10 @@ packages/
 │   ├── extensions/# api.ts public extension surface
 │   ├── server/    # transport contract, handlers, commands, queries, startup wiring
 │   └── test-utils/# test layers, recorders, fixtures
-├── extensions/    # shipped extension set
-└── sdk/           # direct + RPC transports over one client contract
+├── extensions/    # shipped extension set (providers, tools, MCP, cell, threads)
+├── sdk/           # direct + RPC transports over one client contract
+├── tooling/       # gent lint rules and guards
+└── e2e/           # PTY and server-process lifecycle tests, drive scripts for live checks
 ```
 
 `@gent/core/protocol` contains shared client schemas, message projections, and the RPC contract. The SDK uses this entry point for client data. It does not expose server storage or runtime service tags. Core implementation files keep relative imports; they do not import through the public protocol entry point.
@@ -174,3 +176,19 @@ Log destinations:
 - Spans go to an OTLP endpoint when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`GentTracerLive`), and the OpenTelemetry SDK loads only then; no trace file is written
 
 Request-ID correlation: TUI generates a request id with `randomId` (`apps/tui/src/utils.ts`, Effect `Random`) at `sendMessage`/`createSession`, passes via `requestId` field in transport contract. Server threads into log annotations and RPC wide event boundaries.
+
+## Key files
+
+| File                                      | Purpose                                                               |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| `packages/core/src/storage/storage.ts`    | SQLite layer composition for focused storage tags                     |
+| `packages/core/src/storage/schema.ts`     | SQLite schema, migration, and initialization logic                    |
+| `packages/core/src/test-utils/harness.ts` | recorders, harnesses, the in-process layers, `LanguageModelLayers`    |
+| `packages/core/src/server/server.ts`      | startup wiring + dependency graph                                     |
+| `packages/core/src/server/rpc.ts`         | shared client contract                                                |
+| `packages/core/src/domain/agent-loop.ts`  | loop state, entity id, and the actor protocol                         |
+| `packages/core/src/runtime/agent-loop.ts` | mailbox, worker, behavior, and the actor                              |
+| `packages/core/src/runtime/turn.ts`       | per-branch turn engine used by the actor                              |
+| `packages/core/src/runtime/provider.ts`   | models.dev catalog snapshot, API class match, generic providers, auth |
+| `packages/core/src/domain/driver.ts`      | `ApiClassContribution`, `ModelDriverContribution`, catalog overrides  |
+| `apps/tui/tsconfig.json`                  | `jsxImportSource: "@opentui/solid"` required                          |

@@ -16,53 +16,19 @@ bun run install:global  # Build, then install the gent and gent-cell pair throug
 bun run clean      # Remove turbo caches (.turbo)
 ```
 
-## CLI Usage
-
-```bash
-# TUI mode (default)
-bun run --cwd apps/tui dev
-
-# Continue last session for cwd
-bun run --cwd apps/tui dev resume
-
-# Start with prompt (creates session, goes straight to session view)
-bun run --cwd apps/tui dev -p "your prompt"
-
-# Continue specific session
-bun run --cwd apps/tui dev -s <session-id>
-
-# Headless mode - streams to stdout, exits after response
-bun run --cwd apps/tui dev -H "your prompt here"
-
-# Headless mode that approves every ask.
-# Without the flag, headless declines each ask: no user is present.
-bun run --cwd apps/tui dev -H --approve-all "your prompt here"
-
-# List sessions
-bun run --cwd apps/tui dev sessions
-```
-
 ## Gotchas
 
-- **bun:sqlite** - Can't use vitest (runs in Node). Use `bun test` directly.
 - **Schema.Class JSON roundtrip** - `JSON.parse` returns plain objects. Use `Schema.decodeUnknownSync` to reconstruct instances.
 - **Effect diagnostics** - Effect compiler suggestions are not TypeScript errors. Still fix them.
 - **Steering code fences** - TypeScript examples compile and lint as extension or TUI source. Add `lint=test` to a test-code fence; mark incomplete examples with `<!-- illustrative: reason -->` above the fence.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
 - **No `any` casts** - oxlint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
-- **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, workspace headers, server root, the scripted model); it loads on a hosted root without Bun. Use `@gent/core/host-bun` for the Bun host: `BunPlatformLive`, `BunSqlite`, `BunHostModules`, `bindBunModules`. Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer; a `host` name needs a product caller, so a name only tests read belongs in `test-utils`. A test outside core arranges host state through `test-utils` operations (`captureTurnTools`, `runtimeHostContext`, `plantToolCallBinding`, `plantInFlightTurn`, `recordInteractionDecision`, `storedEvents`, `staticToolBinding`), never through core's own Tags, and never imports `packages/core/src/` by relative path. Core implementation tests import their owning `packages/core/src/` modules by relative path; a core test that authors a fixture extension takes the authoring names (`defineExtension`, `tool`, `ExtensionHost`, …) from `@gent/core/extensions/api`, as an extension does. Files inside `packages/core/src/` also use relative imports.
-- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Interaction`, `FileLock`, `Models`, `State`) and extension-owned service Tags for private state. A `tool` or `request` declares where its other services come from: `resources: [MyResource]` names each `defineResource` value whose services it yields (its extension must register each). An extension that owns tables migrates them in a process Resource of its own; the root takes no feature input. A body whose type requires an undeclared service does not compile, and a declaration the extension does not satisfy fails the extension load. The bound is on the required services (`R`), not on the runtime context: `Effect.serviceOption` still reads what the root holds. Files, paths, processes, HTTP, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `HttpClient`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/core/src/runtime/gent-platform.ts`, exported from `@gent/core/extensions/api` and `@gent/core/host`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService`, `EventStore` or `DecisionModelResolver` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including every verb of the `Session` facet (`ExtensionSessionService` in `packages/core/src/domain/extension.ts`), such as `send` with its `delivery` mode `turn`/`queue`/`steer`. Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `packages/tooling/src/gent-rules.ts` enforces the import side).
+- **Package boundary imports** - Extensions author against `@gent/core/extensions/api`, clients read `@gent/core/protocol`, hosts compose `@gent/core/host` and `@gent/core/host-bun`, tests use `@gent/core/test-utils`. The full entry rules are in `docs/architecture/extension-host.md` (Entry rules and extension authority).
+- **Extension authority** - A leaf yields `ExtensionContext` for host facades and names its `resources`; files, processes and HTTP come from the Effect platform services. A shipped extension is never more privileged than a user extension. Read `docs/architecture/extension-host.md` (Entry rules and extension authority) before an extension change.
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Import `WideEvent`, `WideEventBoundary`, and `withWideEvent` from `effect-wide-event` directly.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
-- **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
-- **A failed extension fails the test** - Test roots stop with `Extensions failed to load: <id> (<scope>, <phase>): <reason>`. Fix the extension; set `allowFailedExtensions: true` only in a test about the failure report.
-- **Integration tests: in-process first** - Prefer `createRpcClient(baseLocalLayer())` or `createRpcHarness(...)` from `@gent/core/test-utils`; `Gent.test` from `@gent/sdk` is for SDK and app tests. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
-- **Model catalog in tests** - Tests never reach models.dev, and the test preload refuses every request or connection to a host other than this machine. An in-process root takes `modelCatalogFixture` (a counting HTTP client that answers 304 to a current ETag) or `fixtureModelCatalog` (the parsed catalog, for a driver test with no server); a spawned gent sets `GENT_MODEL_CATALOG_URL` to the origin `serveModelCatalogFixture` returns, and an SDK `Gent.server` whose turns read the catalog gets that origin through a `ConfigProvider` layer. All come from `@gent/core/test-utils`.
-- **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
-- **`LanguageModelLayers.debug({ delayMs })`** - The scripted model with a delay between chunks. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
-- **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
 - **Process-shaped names** - Active source/test/module names should describe product behavior, not migration history. Avoid names like `batch12`, `wave14`, or `planify-migration` outside `plans/` and dated audit receipts.
 
 ## Architecture
@@ -87,24 +53,6 @@ Use `effect` skill. Key patterns:
 - **File naming**: kebab-case everywhere (`agent-loop.ts`, `message-list.tsx`)
 - **One file per concern.** A concern lives in one large file with section banners (`session.ts`, `agent-loop.ts`, `tools.ts`). A new file needs a reason: a process entry, a package entry, a module two concerns share, or a lint-scoped boundary.
 
-## Package Structure
-
-```
-packages/core/src/       # Everything non-UI
-  domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
-  storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
-  runtime/               # SessionRuntime, AgentLoop internals, profiles, context-estimation, retry
-  extensions/            # Public extension API surface and branch-tool entry points
-  server/                # transport contract, commands, queries, handlers, startup wiring
-  test-utils/            # Mock layers, sequence recording, step builders, in-process layer
-packages/extensions/     # Shipped extensions (providers, tools, MCP, cell, threads)
-packages/sdk/            # Client wrappers
-packages/tooling/        # gent lint rules and guards
-packages/e2e/            # PTY and server-process lifecycle tests, drive scripts for live checks
-apps/tui/                # @opentui/solid TUI
-apps/site/               # gent.cvr.im (landing page, install.sh): `bun run plan` / `deploy` there, an Alchemy stack: one Cloudflare Worker
-```
-
 ## Testing
 
 ```bash
@@ -117,106 +65,7 @@ The pre-commit hook runs the guards, and oxlint and oxfmt on the staged files, i
 
 Every TUI change also needs `bun run test:e2e` and a live Herdr check before acceptance. Read [the UI comparison method](docs/architecture/ui.md); exercise each changed ability at normal and narrow sizes, including resize, and compare with installed reference TUIs such as Codex, Pi and fx. Follow `NORTH_STAR.md` Owner rules for isolated debug runs and reference credentials. Record rendered captures and mark reference screens checked through source/tests when login or a model is required.
 
-Test files mirror `packages/core/src/` structure: `tests/domain/`, `tests/runtime/`, `tests/storage/`, etc. One file per feature area, no fix-shaped files or god tests.
-
-### Test philosophy
-
-- **Default is integration**: use `createRpcHarness` for extension RPC acceptance, `baseLocalLayer` for runtime integration, or `testSqliteStorage()` from the test utilities for focused storage behavior. Drop to raw `createE2ELayer` only for advanced host/profile wiring.
-- **Pure unit tests only for pure functions**: reducers, formatters, schema transforms, context-estimation math.
-- **Mock at system boundaries**: only the LLM via `LanguageModelLayers.sequence(...)`, `LanguageModelLayers.signal(...)`, or `LanguageModelLayers.debug()`. Use real services inside the boundary.
-- **`Provider.Test()` / provider wrapper statics and `EventStore.Test()` are deleted** — use `LanguageModelLayers.sequence([...])` or `LanguageModelLayers.debug()` for model mocking, `EventStore.Memory` for in-memory event stores. `LanguageModelLayers` lives in `packages/core/src/test-utils/harness.ts`. The stream-part helpers (`textDeltaPart`, `toolCallPart`, `reasoningDeltaPart`, `finishPart`), the step builders (`textStep`, `toolCallStep`, `multiToolCallStep`) and the scripted model behind `LanguageModelLayers.debug()` and `Gent.provider.mock()` (`ScriptedLanguageModel`) live in `packages/core/src/runtime/provider.ts`. The scripted model plays a multi-step tool turn (real tools in the session cwd) for a message that holds `debug tools`. Tests outside core import them from `@gent/core/test-utils`.
-- **Behavioral naming**: describe outcomes, not method calls. "missing auth key returns undefined", not "get returns undefined for missing key".
-- **No `Effect.sleep` for state transitions** — use `Deferred`, `controls.waitForCall`, or `waitFor` polling helpers.
-- **`Effect.timeout` inside Effect, shorter than bun timeout** — so scope finalizers run on timeout.
-
-### Three-tier test taxonomy
-
-| Tier           | Layer               | Exercises                       | Use for                           |
-| -------------- | ------------------- | ------------------------------- | --------------------------------- |
-| Pure reducer   | local reducer tests | State transitions, projections  | Pure state behavior               |
-| Runtime        | `baseLocalLayer()`  | Real services and storage       | Supervisor, protocol, persistence |
-| RPC acceptance | `createRpcHarness`  | Full RPC → runtime → reply path | Lifecycle, scope, schema, wiring  |
-
-New extension tests should include at least one RPC acceptance test via `createRpcHarness` to catch scope lifetime bugs. Direct service tests are for behavior — they bypass the per-request scope boundary that production uses.
-
-### Test layers
-
-```typescript lint=test
-import { Effect, Fiber, Schema, Stream } from "effect"
-import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
-import {
-  baseLocalLayer,
-  createRpcHarness,
-  LanguageModelLayers,
-  testAgent,
-  testTurnExtension,
-  textStep,
-  toolCallStep,
-} from "@gent/core/test-utils"
-
-// Full in-process stack (real services, event store, and storage)
-export const layer = baseLocalLayer({ agents: [testAgent] })
-
-// The tool the scripted model calls: a step may call only a registered tool
-const echoExtension = defineExtension({
-  id: "echo",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register(
-      "tool",
-      tool({
-        id: "echo",
-        description: "Echo the text back",
-        params: Schema.Struct({ text: Schema.String }),
-        output: Schema.String,
-        execute: ({ text }) => Effect.succeed(text),
-      }),
-    )
-  }),
-})
-
-export const acceptance = Effect.gen(function* () {
-  // Sequence provider for deterministic LLM responses
-  const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-    toolCallStep("echo", { text: "hello" }),
-    textStep("Done."),
-  ])
-  // RPC acceptance harness (real per-request scopes)
-  const { client, sessionId, branchId } = yield* createRpcHarness({
-    agents: [testAgent],
-    extensionInputs: [testTurnExtension, echoExtension],
-    providerLayer,
-  })
-  // `send` returns at admission: subscribe first, then wait for the turn to end
-  const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
-    Stream.filter(({ event }) => event._tag === "TurnCompleted"),
-    Stream.take(1),
-    Stream.runDrain,
-    Effect.forkScoped,
-  )
-  yield* client.message.send({ sessionId, branchId, content: "hi" })
-  yield* Fiber.join(turnCompleted)
-  yield* controls.assertDone
-}).pipe(Effect.scoped, Effect.timeout("8 seconds"))
-```
-
-Core tests record the event sequence for assertions with `recordingEventStore(ref)` (the in-memory store that also keeps each appended event in a `Ref`), imported by relative path from `packages/core/src/test-utils/harness.ts`.
-
-## Key Files
-
-| File                                      | Purpose                                                               |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| `packages/core/src/storage/storage.ts`    | SQLite layer composition for focused storage tags                     |
-| `packages/core/src/storage/schema.ts`     | SQLite schema, migration, and initialization logic                    |
-| `packages/core/src/test-utils/harness.ts` | recorders, harnesses, the in-process layers, `LanguageModelLayers`    |
-| `packages/core/src/server/server.ts`      | startup wiring + dependency graph                                     |
-| `packages/core/src/server/rpc.ts`         | shared client contract                                                |
-| `packages/core/src/domain/agent-loop.ts`  | loop state, entity id, and the actor protocol                         |
-| `packages/core/src/runtime/agent-loop.ts` | mailbox, worker, behavior, and the actor                              |
-| `packages/core/src/runtime/turn.ts`       | per-branch turn engine used by the actor                              |
-| `packages/core/src/runtime/provider.ts`   | models.dev catalog snapshot, API class match, generic providers, auth |
-| `packages/core/src/domain/driver.ts`      | `ApiClassContribution`, `ModelDriverContribution`, catalog overrides  |
-| `apps/tui/tsconfig.json`                  | `jsxImportSource: "@opentui/solid"` required                          |
+Test philosophy, the test tiers, the test layers example and the test gotchas (bun:sqlite, timeouts, failed extensions, the model catalog, the scripted models, test control flow) are in `docs/architecture/testing.md`; read it before you write or restructure a test.
 
 ## Documentation
 
@@ -227,16 +76,10 @@ Core tests record the event sequence for assertions with `recordingEventStore(re
 | `PRIOR_ART.md`             | Prior-art repos and settled comparisons                              |
 | `docs/architecture/`       | Area files, the efficiency and ui sweep methods, the capture preload |
 | `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                              |
+| `apps/tui/docs/cli.md`     | CLI usage (`bun run --cwd apps/tui dev …`), flags, headless runs     |
+| `docs/loop.md`             | The architecture loop's baselines, pathspecs and workspace steps     |
 | `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database       |
 
 ## Architecture loop
 
-The owner's `loop` skill runs on `NORTH_STAR.md` and `PRIOR_ART.md`; what it needs from gent beyond them:
-
-- **Baseline** (lines and files per package): `git ls-files ':(glob)packages/*/src/**/*.ts' ':(glob)packages/*/src/**/*.tsx' ':(glob)apps/*/src/**/*.ts' ':(glob)apps/*/src/**/*.tsx' | xargs wc -l | awk '$2 != "total" { split($2, p, "/"); n[p[2]] += $1; f[p[2]]++ } END { for (k in n) print n[k], f[k], k }' | sort -rn`. `:(glob)` keeps `*` in one path segment, so the lint fixtures under `packages/tooling/fixtures/` do not count.
-- **Audit pathspec** (the code outside `src` that the coverage audit lists too: tests, integration helpers, examples, the gamut driver): `git ls-files ':(glob)packages/*/tests/**/*.ts' ':(glob)packages/*/tests/**/*.tsx' ':(glob)apps/*/tests/**/*.ts' ':(glob)apps/*/tests/**/*.tsx' ':(glob)apps/*/integration/**/*.ts' ':(glob)apps/*/integration/**/*.tsx' ':(glob)examples/**/*.ts' ':(glob)testbeds/*/*.ts' ':(glob)testbeds/*/tests/**/*.ts'`.
-- **Source roots** for caller-count greps: `packages/`, `apps/`, `examples/`, `testbeds/`. Workspace packages for the review sweep: `packages/*`, `apps/*`, `examples/`, `testbeds/`.
-- **Workspaces**: the warm source is `/workspaces/gent` (btrfs), a clone whose `origin` is the main checkout. Before each pass: `git -C /workspaces/gent pull --ff-only`, then `bun install --frozen-lockfile` when the lockfile changed, then `bun run build`. A rift created with `--copy-all` keeps the build; a git worktree runs `bun install` and `bun run build` first. The merge fetches the batch into the main checkout with `git fetch <rift path> HEAD:refs/heads/p<N>-<batch>`.
-- **Guards**: the lint rules live in `packages/tooling/src/gent-rules.ts` and the text and AST guards in `packages/tooling/src/guards.ts`; a directory or file kind none of them scans is a guard gap.
-- **Apply work**: sync tests use `test(...)` and effect tests `it.live`; after adding tests, check the pass count rose. Commit through the hook with output to a log (`git commit -qm "..." > <log> 2>&1; echo EXIT $?`), then read the gate and commit logs with `grep -nE " error |\(fail\)"`. Reports use ASD-STE100 style. Never restore a file with `git checkout` or `git stash`: snapshot it with `/bin/cp`. No edits under `plans/` but the ledger, by the orchestrator.
-- **Counsel questions** also ask whether a permit or an atomic update was lost in a move, and whether a consumer that needs the session record now reads only the identity.
+The owner's `loop` skill reads `docs/loop.md` for what it needs from gent beyond `NORTH_STAR.md` and `PRIOR_ART.md`: the baseline and audit commands, the source roots, the workspace steps, the guards, the apply rules and the counsel questions.

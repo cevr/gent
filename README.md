@@ -62,7 +62,7 @@ Only the goal tool's completion action marks it achieved.
 
 ## Where to Read Next
 
-- [AGENTS.md](./AGENTS.md) — commands, CLI usage, gotchas, code style, and test conventions.
+- [AGENTS.md](./AGENTS.md) — commands, gotchas and code style, with pointers to the test conventions and the CLI usage.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — the noun model and invariants, with one pointer per area file under `docs/architecture/`.
 - [docs/extensions.md](./docs/extensions.md) — the extension authoring guide.
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send a change.

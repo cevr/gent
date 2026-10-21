@@ -1,5 +1,33 @@
 # CLI flags and headless runs
 
+## CLI Usage
+
+```bash
+# TUI mode (default)
+bun run --cwd apps/tui dev
+
+# Continue last session for cwd
+bun run --cwd apps/tui dev resume
+
+# Start with prompt (creates session, goes straight to session view)
+bun run --cwd apps/tui dev -p "your prompt"
+
+# Continue specific session
+bun run --cwd apps/tui dev -s <session-id>
+
+# Headless mode - streams to stdout, exits after response
+bun run --cwd apps/tui dev -H "your prompt here"
+
+# Headless mode that approves every ask.
+# Without the flag, headless declines each ask: no user is present.
+bun run --cwd apps/tui dev -H --approve-all "your prompt here"
+
+# List sessions
+bun run --cwd apps/tui dev sessions
+```
+
+## CLI Flags
+
 | Flag             | Purpose                                         |
 | ---------------- | ----------------------------------------------- |
 | `-p, --prompt`   | Initial message (goes straight to session view) |
