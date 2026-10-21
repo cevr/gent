@@ -108,7 +108,7 @@ A delegate child is a thread: one round on the `delegate` agent, ending with a w
 ### P2. Rounds as values
 
 - **Structured reply**: `thread.send`'s optional `reply` describes the value the round must return. The thread answers with the tool `thread.reply({ value })`. The tool is offered to every agent at all times, not only during a round that asks: a tool list that changed per round would change the request's tools and break the thread's cached prompt, so the tool stays and refuses a call when no open round on the caller's branch asked for a value. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
-- **Usage**: every round records its usage and cost, so a program can budget by them. Usage keeps the token classes apart (input, output, cache read, cache write) and the cache-read share, since the owner's target is "99.9% cache reads" (2026-10-20). A round's usage is also its fuel (P5b), so lanes and gent count one unit.
+- **Usage**: every round records its usage and cost, so a program can budget by them. Usage keeps the token classes apart (input, output, cache read, cache write) and the cache-read share, since the owner's target is "99.9% cache reads" (2026-10-20). A round's usage is also its fuel (P5b), counted as lanes counts it.
 
 ### P3. Machines: `@gent/machines`, `packages/extensions/src/machines.ts`
 
@@ -160,14 +160,14 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 - **A run spec pins one credential slot** (`RunSpec.credentialSlot`, not a stored run override): the turn, its handoff summary and its no-agent child walk only that slot, and a refused pin fails the turn. `thread.start` takes an `account`.
 - **A named Anthropic credential links a Claude Code config directory**: its keychain service `Claude Code-credentials-<first 8 hex of sha256(config dir)>` on macOS (`-3ef2928b` for `$HOME/.claude2` on this laptop), its `.credentials.json` elsewhere. Each refresh is written back with compare-and-swap, and gent's credential store holds the rotation until it lands.
 
-### P5b. Lanes: one pool for gent and Claude Code
+### P5b. Lanes in gent: the pool decides before a thread starts
 
-lanes ([lanes.md](lanes.md), a separate repo, `cevr/lanes`) is one Effect proxy on the workbox that pools the Claude accounts for every host and serves the free lane count over HTTP, MCP and CLI. gent consumes it; it does not rebuild it.
+gent needs no proxy: it is its own harness, and its providers already spread turns across accounts (stage 0). lanes ([lanes.md](lanes.md), a separate repo, `cevr/lanes`) is the proxy for Claude Code, which gent cannot control (owner, 2026-10-21). gent takes lanes' ideas into its own account spread:
 
-- **Admission before start.** A proxy can refuse a request only after the agent has started, and that is how agents died in the vperf2 runs. So `thread.start` and a machine's `thread` state acquire a lane first (`POST /lanes/v1/leases`), and get `LaneUnavailable{ retryAt, free, reason }` at free 0. The thread fails at admission with that error; a machine waits until `retryAt`. The lease is released when the thread's round ends or the thread stops. In Claude Code the same check is a `PreToolUse` hook on `Agent` (dotfiles `claude/hooks/guard-agent.ts` reads `budget.ts` today; lanes P4 replaces it).
-- **Fuel, not agent counts.** A lane is sized by fuel (lanes amendment r3): tokens weighted by class and model, with a learned fuel-per-percent rate per quota window. One bridge reading (2026-10-20, measured): about 3.4 M fuel per agent-hour, cache reads half of it, and seven accounts give about 250 agent-hours a week. So every saving in a worker's context (P1) and in cache misses (P2) is a lane gained.
-- **gent's own drivers.** When lanes runs, gent's Anthropic driver sends through it (`ANTHROPIC_BASE_URL`, its key in a header), so gent's own turns count in the same pool. Stage 0's account spread then picks an account only when lanes is down (lanes hooks fail open, lanes.md §4).
-- **One unit for usage.** P2's per-round usage is reported in lanes' token classes, so a machine's budget and the pool's lanes read the same numbers.
+- **Admission before start.** A proxy can refuse a request only after the agent has started, and that is how agents died in the vperf2 runs. So `thread.start` and a machine's `thread` state ask the account spread for a lane first, and get `LaneUnavailable{ retryAt, free, reason }` at free 0. The thread fails at admission with that error; a machine waits until `retryAt`. The lane is released when the thread's round ends or the thread stops. In Claude Code the same check is a `PreToolUse` hook on `Agent` (dotfiles `claude/hooks/guard-agent.ts`, on `budget.ts` today; lanes P4 later).
+- **Fuel, not agent counts.** A lane is sized by fuel (lanes amendment r3): tokens weighted by class and model, with a learned fuel-per-percent rate for each quota window, from each response's usage and the utilization headers the drivers already read. `lanes = floor(min over windows of sustainable)`. One bridge reading (2026-10-20, measured): about 3.4 M fuel per agent-hour, cache reads half of it; seven accounts give about 250 agent-hours a week. So every saving in a worker's context (P1) and in cache misses (P2) is a lane gained.
+- **Logins stay fresh.** gent's credential store (P5) refreshes each account ahead of expiry with one call in flight and writes the token back before use (lanes §3.2), so an idle account never needs a new login.
+- **Shared accounts.** gent and Claude Code (through lanes) spend from the same accounts. Each sees the other only as utilization that moves with no fuel of its own: lanes' outside spend. Both read the headers, so the free count stays right, and the fuel fit drops outside segments.
 
 ### P6. A thread binds its workspace at start
 
@@ -218,7 +218,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a command interrupted by a crash moves the run to `ask`;
    - a stale or conflicting answer is refused.
 4. **P4 permits and P6 workspace binding.** P4 also holds a `main-red` permit: integrate takes it while the pushed commit's CI runs, and a red result keeps it until a fix is green.
-   4b. **P5b lanes admission**, once lanes P3 (leases) and P5 (MCP) ship. Done when a thread start at free 0 fails at admission with `LaneUnavailable`, a machine waits until `retryAt` and then runs the step, a lease is released at round end, gent's own turns appear in `lanes status`, and the TUI band shows free lanes.
+   4b. **P5b lanes in the account spread.** Done when a thread start at free 0 fails at admission with `LaneUnavailable`, a machine waits until `retryAt` and then runs the step, a lane is released at round end, the account spread reports fuel per percent for each window, and the TUI band shows free lanes.
 5. **The library.** An `/orchestrate` outcome prompt in `@gent/workflows`, and the `orchestrate` skill's machine (plan, implement, review, verify, decide) as a machine definition. One real unit runs end to end in gent, with no Claude Code or Codex background agent.
 
 ## Risks
@@ -227,4 +227,4 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
 - R2. Expressiveness: a data machine cannot express every branch. The escape is an `ask` to the orchestrator, which costs a model turn. Watch how often real runs take it.
 - R3. Liveness after a restart depends on the core activation seam (P3). Until it lands, a run resumes when its owner's loop next opens.
 - R4. Bulk work through threads. bible-tools ran about 600 full-harness page-reader agents for work that needed no tools. A thread is the wrong primitive for that: a cell's model call, or a batch job, does it at a fraction of the context. Watch for machines whose `thread` states call no tools.
-- R5. lanes is one process on one host. When it is down, admission fails open (P5b), so a burst can overrun the pool until it is back.
+- R5. Two pools on one set of accounts. gent's account spread and lanes each see the other as outside spend, so a burst from both at once can overrun an account until the headers catch up. Watch for 429s that neither pool predicted.

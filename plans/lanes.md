@@ -1,6 +1,6 @@
 # lanes r2: one Effect proxy with lanes (2026-10-20)
 
-Moved here from the workbox's `/tmp/lanes/design-r2.md` (2026-10-21), written by the vperf2 Root's planner. The owner accepted every recommendation in §8 ("accept all", 2026-10-20 21:04Z). r1 (`/tmp/lanes/design.md`, lanes as an admission service beside teamclaude) is superseded. How gent consumes lanes: [kernel-orchestration.md](kernel-orchestration.md) P5b.
+Moved here from the workbox's `/tmp/lanes/design-r2.md` (2026-10-21), written by the vperf2 Root's planner. The owner accepted every recommendation in §8 ("accept all", 2026-10-20 21:04Z). r1 (`/tmp/lanes/design.md`, lanes as an admission service beside teamclaude) is superseded. lanes exists because Claude Code cannot be changed; gent takes its ideas natively ([kernel-orchestration.md](kernel-orchestration.md) P5b).
 
 Labels: **measured**, **inferred**, **guess**. A1..A7 follow teamclaude list order. No email, token or key here.
 
