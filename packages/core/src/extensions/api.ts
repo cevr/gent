@@ -263,3 +263,5 @@ export const defineExtension = <R = ExtensionHost>(
 }
 
 const DEFINE_EXTENSION_KEYS = new Set(["id", "setup"])
+
+export { PermitName, PermitSpec, PermitStatus, PermitLimitMismatch } from "../runtime/permits.js"

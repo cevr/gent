@@ -1,3 +1,4 @@
+import type { Permits } from "../runtime/permits.js"
 import {
   Context,
   Effect,
@@ -1489,6 +1490,7 @@ export interface ExtensionHostContext {
   /** The leaf adds the wake verbs from `Wakes`. */
   readonly Session: Omit<ExtensionSessionService, keyof ExtensionWakesApi>
   readonly Interaction: ExtensionInteractionService
+  readonly Permits: Permits["Service"]
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
   readonly Accounts: ExtensionAccountsService
@@ -1509,6 +1511,7 @@ export interface ExtensionContextService {
   readonly home: string
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
+  readonly Permits: Permits["Service"]
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
   readonly Accounts: ExtensionAccountsService
@@ -1550,6 +1553,7 @@ export const extensionServicesFromHostContext = (
       Session: { ...ctx.Session, send, ...ctx.Wakes(extensionIdOption) },
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
+      Permits: ctx.Permits,
       Models: ctx.Models,
       Accounts: ctx.Accounts,
       Extensions: ctx.Extensions,

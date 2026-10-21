@@ -264,3 +264,39 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   retained. Run results and child completions read usage from that receipt
   and the answer from the branch's last assistant message; nothing scans the
   event log. These are reported stream totals, not model-attempt accounting.
+
+## Named permits
+
+`runtime/permits.ts` owns `Permits.Live`, one in-memory counting limiter per
+server, wired beside `FileLockService` in `createDependencies`. The SDK/server
+and `createE2ELayer` share that root. The focused tool harness creates the same
+implementation in its host context. This is a required `Context.Service`, with
+no default binding.
+
+`with(name, limit, effect)` validates `PermitSpec`: a case-sensitive name of
+1–256 characters and a positive integer limit. The first participant fixes the
+limit while any holder or waiter exists. A conflicting caller fails with
+`PermitLimitMismatch` before running its body. The last release evicts the name;
+a later generation can choose another limit. Recursive acquisition of the same
+name is unsupported and can deadlock.
+
+Each name has an explicit FIFO queue. Admission, removal, slot reservation and
+waiter notification use transactional state. A release reserves the next slot
+before waking its waiter, so new callers cannot barge. A finalizer installed
+before the interruptible wait removes either the queued waiter or its granted
+slot. It runs once on success, failure or interruption. `with` creates an inner
+scope: the body's resources close before the permit releases.
+
+The machines command owner uses `ExtensionContext.Permits.with`, while its
+separate four-step cap and boot-debt reservations stay extension-owned.
+Extensions use `ExtensionContext.Permits.with/list`. Core registers no model
+tool. The `permits.list` RPC returns `PermitStatus[]`: name, limit, holders
+(`id`, `acquiredAt`, epoch milliseconds) and ordered waiters (`id`, `queuedAt`).
+Ids identify individual acquisitions within this server. Inspection provides no
+release operation. Table state and order do not survive restart. A fresh table
+proves nothing about an external process left by SIGKILL.
+
+Receipts: `tests/runtime/permits.test.ts` covers FIFO, cancellation, grant-time
+interruption, scope closure, mismatch, idle eviction and root binding;
+`tests/server/permits.test.ts` covers two user-extension profiles sharing one
+limit through real RPC requests, with zero model calls.

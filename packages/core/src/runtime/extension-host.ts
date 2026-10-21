@@ -1,3 +1,4 @@
+import { Permits } from "./permits.js"
 import { chainCompactors, ModelContextCompactor } from "./model-context.js"
 import {
   Cause,
@@ -4234,6 +4235,11 @@ export const makeExtensionHostContextProvider = (
           ),
       })
 
+    const permits = yield* facet(Permits, "Permits")
+    const permitsFacade: Permits["Service"] = {
+      with: (name, limit, effect) => permits((service) => service.with(name, limit, effect)),
+      list: permits((service) => service.list),
+    }
     const fileLock = yield* facet(FileLockService, "FileLockService")
     const FileLock: ExtensionFileLockServiceApi = {
       withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
@@ -4396,6 +4402,7 @@ export const makeExtensionHostContextProvider = (
       home: environment.home,
       host,
       FileLock,
+      Permits: permitsFacade,
       Models: input.models,
       Accounts: input.accounts(runInfo.sessionId),
       Extensions: extensionsFacet(runInfo.sessionCwd ?? environment.cwd),

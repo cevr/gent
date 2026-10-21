@@ -16,6 +16,9 @@ import {
   type RequestInput,
   type ToolInput,
   WakeNext,
+  PermitName,
+  PermitStatus,
+  PermitLimitMismatch,
 } from "@gent/core/extensions/api"
 import { ExtensionId } from "../../src/domain/ids"
 import {
@@ -1575,4 +1578,20 @@ describe("Effect-purity locks (compile-time)", () => {
 
     expect(String(ext.manifest.id)).toBe("purity-positive")
   })
+})
+
+test("permit inspection and mismatch schemas are available to external authors", () => {
+  expect(Schema.is(PermitName)("gate")).toBe(true)
+  expect(
+    Schema.is(PermitStatus)({
+      name: "gate",
+      limit: 1,
+      holders: [{ id: 1, acquiredAt: 123 }],
+      waiters: [{ id: 2, queuedAt: 456 }],
+    }),
+  ).toBe(true)
+  const error = new PermitLimitMismatch({ permitName: "gate", limit: 1, requestedLimit: 2 })
+  expect(
+    Schema.decodeSync(PermitLimitMismatch)(Schema.encodeSync(PermitLimitMismatch)(error)),
+  ).toBeInstanceOf(PermitLimitMismatch)
 })

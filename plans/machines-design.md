@@ -521,7 +521,7 @@ did before (F1).
   schema, storage, templates, driver, ask and answer, tools, registration.
 - `MachineStoreResource`, server scope. It holds the two tables (migrated under
   `machine_migrations`, as threads use `thread_migrations` at
-  `packages/extensions/src/threads.ts:550-628`) and the pre-P4 permits. One server
+  `packages/extensions/src/threads.ts:550-628`) and the step permits. One server
   shares it, as `ThreadsResource` does (`threads.ts:2661-2668`).
 - `MachineDriversResource`, branch scope. It holds a `FiberMap` of drivers,
   keyed by run, and a lifecycle semaphore, as `WakeAlarms` does
@@ -1064,17 +1064,23 @@ is the `machine-run:<run>` record firing at start, or the host's `loopOpen`.
 because a completed round lives in `machine_steps` and `context_json`, and every
 dispatch reuses the key it recorded before the send.
 
-### B9. `permit` before P4
+### B9. Named command permits
 
-- P4 (stage 4) adds `ExtensionContext.Permits.with(name, limit, effect)`.
-- Until then, `MachineStoreResource` holds a server-wide map from permit name to
-  `Semaphore`, made with the first limit asked (default 1).
-- This keeps two machine gates in one server from running at once. It does
-  not count `bash` calls or other servers. `machine.status` names the permit a
-  waiting command holds or waits for.
-- Stage 4 replaces only the body of `permit(...)` with `ctx.Permits.with`. The
-  definition and the stored rows do not change. P4 also brings first-in,
-  first-out waiters, which the stage-3 map does not promise.
+- A command with `permit: { name, limit? }` uses
+  `ExtensionContext.Permits.with`; the default limit is 1. The command owner
+  captures this facade, not the whole leaf context. No named limiter lives
+  in `MachineStoreResource`.
+- Every participating holder in this server shares the same FIFO queue and
+  limit, including direct facade callers. A live limit mismatch becomes a
+  typed `MachineFault` and a recorded failed run before any process starts;
+  it does not take the command's exit-code edge or become a defect.
+- The permit surrounds the command's scoped process owner, including cleanup.
+  Names, definitions and stored row shapes do not change. Bash's public
+  permit parameter remains a separate stage-4 change.
+- This is separate from the four-step bound and crash-debt tickets below.
+  `tests/machines.test.ts` checks sharing and mismatch through real RPC and
+  machine services over a controlled OS spawn boundary. A gated command
+  handle keeps the permit until its scope closes.
 
 ### B9b. The step permit: a bound on machine model work
 

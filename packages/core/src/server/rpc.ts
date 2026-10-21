@@ -1,3 +1,4 @@
+import { PermitStatus } from "../runtime/permits.js"
 import { type Effect, Option, Predicate, Schema, Stream } from "effect"
 import { Headers } from "effect/http"
 import {
@@ -701,6 +702,7 @@ class AccountsRpcs extends RpcGroup.make(
 // ── extension, driver and model rpcs ────────────────────────────────────────
 
 class ExtensionRpcs extends RpcGroup.make(
+  Rpc.make("permits.list", { success: Schema.Array(PermitStatus) }),
   Rpc.make("extension.request", {
     payload: ExtensionRpcRequestInput.fields,
     success: RequestReply,

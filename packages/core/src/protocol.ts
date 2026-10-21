@@ -112,3 +112,5 @@ export {
   SessionSnapshot,
   type UpdateSessionSettingsInput,
 } from "./server/rpc.js"
+
+export { PermitStatus } from "./runtime/permits.js"

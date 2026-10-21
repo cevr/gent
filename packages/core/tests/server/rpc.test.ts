@@ -4526,6 +4526,7 @@ describe("session profile lookup", () => {
       "steer.command": "the session is inside the command",
       "extension.listStatus": "its scope names the session or the launch",
       "driver.clear": "it writes the user config, which no session owns",
+      "permits.list": "it reads server-wide permits, which no session owns",
       "accounts.lanes": "it reads the server's accounts, which no session owns",
       // Owner question: a required `sessionId` here is a wire change that is not additive.
       "message.list": "it reads a branch by its id; owner question",

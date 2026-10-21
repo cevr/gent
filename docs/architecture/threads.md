@@ -278,7 +278,13 @@
     ask never answered and no longer current is stale, a choice not offered
     is invalid. At most four rounds and commands run at once in one server
     (`MAX_ACTIVE_MACHINE_STEPS`); the runs that held one when the server
-    stopped take the first permits as tickets. A stop first arms a separate
+    stopped take the first permits as tickets. Named command limits use
+    `ExtensionContext.Permits.with`, shared with every participating caller
+    in this server. The command captures only the permit facade and holds
+    it through its process scope's cleanup. An omitted limit means 1; a
+    conflicting live limit becomes a typed `MachineFault` and a recorded
+    failed run before spawn. This does not change the step cap or its debt
+    reservations. A stop first arms a separate
     start-only `machine-stop:<run>` record, then commits and kicks the host.
     This record survives a crash before the kick, even while the run's main
     record names a future quota reset. Settlement removes both records. A

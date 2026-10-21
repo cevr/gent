@@ -1,3 +1,4 @@
+import { Permits } from "../runtime/permits.js"
 import {
   Cause,
   Clock,
@@ -303,6 +304,7 @@ export const testExtensionHostContext = (
   Session: { ...defaultSession(), ...overrides.Session },
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
   FileLock: overrides.FileLock ?? testExtensionFileLock(),
+  Permits: overrides.Permits ?? Permits.makeUnsafe(),
   Models: overrides.Models ?? testExtensionModels(),
   Accounts: overrides.Accounts ?? testExtensionAccounts(),
   Extensions: overrides.Extensions ?? testExtensionExtensions(),
@@ -426,6 +428,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     Session: resolvedSession,
     Interaction: resolvedInteraction,
     FileLock: resolvedFileLock,
+    Permits: overrides?.Permits ?? Permits.makeUnsafe(),
     Models: overrides?.Models ?? testExtensionModels(),
     Accounts: overrides?.Accounts ?? testExtensionAccounts(),
     Extensions: overrides?.Extensions ?? testExtensionExtensions(),
@@ -453,11 +456,19 @@ export const runToolWithCtx = <Input, Output, Error>(
 ): Effect.Effect<Output, Error, never> =>
   Effect.flatMap(Effect.context<never>(), (caller) =>
     Effect.scoped(
-      Effect.flatMap(Layer.build(toolTestPlatform), (platform) =>
-        provideExtensionServices(ctx, getToolMetadata(tool).effect(input)).pipe(
-          // The caller's services sit over the harness platform.
-          Effect.provideContext(Context.merge(platform, caller)),
+      Effect.flatMap(
+        Layer.build(
+          Layer.mergeAll(
+            toolTestPlatform,
+            Layer.succeed(FileLockService, ctx.FileLock),
+            Layer.succeed(Permits, ctx.Permits),
+          ),
         ),
+        (platform) =>
+          provideExtensionServices(ctx, getToolMetadata(tool).effect(input)).pipe(
+            // The caller's services sit over the harness platform.
+            Effect.provideContext(Context.merge(platform, caller)),
+          ),
       ),
     ),
   )

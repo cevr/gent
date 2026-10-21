@@ -155,7 +155,7 @@ const ThreadState = Schema.Struct({
 })
 type ThreadState = typeof ThreadState.Type
 
-/** P4's bash `permit: { name, limit }`; until P4, one server's machines share it. */
+/** A server-global named permit; an omitted limit means one. */
 const Permit = Schema.Struct({ name: Slug, limit: Schema.optionalKey(PositiveInt) })
 
 const RunState = Schema.Struct({
@@ -862,13 +862,6 @@ interface MachineStoreService {
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   readonly removeHostSession: (sessionId: SessionId) => Effect.Effect<void, MachineStorageError>
   readonly permits: StepPermits
-  /**
-   * Runs `effect` under the named command permit, made with the first limit
-   * asked (default 1). Until P4, it bounds one server's machines only.
-   */
-  readonly withPermit: (
-    permit: Option.Option<typeof Permit.Type>,
-  ) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
 const makeStepPermits = Effect.fn("MachineStore.stepPermits")(function* (
@@ -937,7 +930,7 @@ const RUN_COLUMNS = `run, machine, definition_json, host_session_id, host_branch
   state, status, pending_json, seq, notified_at, error, created_at, updated_at`
 
 /**
- * The run tables, the step permits and the command permits. Building it runs
+ * The run tables and the step permits. Building it runs
  * the migrations it lacks and reads the crash debt. It is a server resource:
  * one server's machines share the permits.
  */
@@ -968,17 +961,6 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         debtRows,
       ).pipe(Effect.mapError(storageError("A machine run id does not decode")))
       const permits = yield* makeStepPermits(debt.map((row) => row.run))
-
-      const commandPermits = new Map<string, Semaphore.Semaphore>()
-      const permitLock = yield* Semaphore.make(1)
-      const commandPermit = (permit: typeof Permit.Type) =>
-        Effect.gen(function* () {
-          const found = commandPermits.get(permit.name)
-          if (Predicate.isNotUndefined(found)) return found
-          const made = yield* Semaphore.make(permit.limit ?? 1)
-          commandPermits.set(permit.name, made)
-          return made
-        }).pipe(permitLock.withPermits(1))
 
       const insertSteps = (run: RunId, from: number, steps: ReadonlyArray<MachineStep>) =>
         Effect.gen(function* () {
@@ -1119,14 +1101,6 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
           Effect.mapError(storageError("Failed to remove a session's machine runs")),
         ),
         permits,
-        withPermit: (permit) => (effect) =>
-          Option.match(permit, {
-            onNone: () => effect,
-            onSome: (named) =>
-              Effect.flatMap(commandPermit(named), (semaphore) =>
-                effect.pipe(semaphore.withPermits(1)),
-              ),
-          }),
       })
     }),
   )
@@ -2084,7 +2058,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   action: CommandAction,
 ) {
   const drivers = yield* MachineDrivers
-  const store = yield* MachineStore
+  const permits = (yield* ExtensionContext).Permits
   // The command outlives this call, in the branch scope: it keeps the services it runs against.
   const services = yield* Effect.context<
     MachineStore | FileSystem.FileSystem | Path.Path | Crypto.Crypto | ChildProcessSpawner
@@ -2139,7 +2113,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         ],
       }
     })
-  const work = runBashCommand(
+  const commandResult = runBashCommand(
     command,
     Option.some(run.cwd),
     Option.none(),
@@ -2147,7 +2121,6 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
   ).pipe(
     Effect.scoped,
     Effect.timeoutOption(timeout),
-    store.withPermit(Option.fromUndefinedOr(state.permit)),
     Effect.map(
       Option.match({
         onNone: () => ({ exitCode: Option.none<number>(), timedOut: true, output: "" }),
@@ -2162,7 +2135,19 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
     Effect.catch((error) =>
       Effect.succeed({ exitCode: Option.none<number>(), timedOut: false, output: String(error) }),
     ),
+  )
+  const permitted = Option.match(Option.fromUndefinedOr(state.permit), {
+    onNone: () => commandResult,
+    onSome: (named) =>
+      permits
+        .with(named.name, named.limit ?? 1, commandResult)
+        .pipe(Effect.mapError((error) => new MachineFault({ message: error.message }))),
+  })
+  const work = permitted.pipe(
     Effect.flatMap(ended),
+    // Permit acquisition failed before spawning: fail the run as a typed
+    // machine fault, rather than taking an exit-code edge or logging a defect.
+    Effect.catchTag("MachineFault", (fault) => failRun(run.run, fault.message)),
     // The end is committed, or the scope ended the group: no later server
     // needs the receipt. A crash before this keeps it for recovery.
     Effect.ensuring(removeCommandReceipt(action.launch)),

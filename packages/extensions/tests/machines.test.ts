@@ -14,11 +14,13 @@ import {
   PubSub,
   Queue,
   Ref,
+  Sink,
   References,
   Schema,
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
+import { ChildProcessSpawner } from "effect/process"
 import { AiError } from "effect/ai"
 import { TestClock } from "effect/testing"
 import { BunServices } from "@effect/platform-bun"
@@ -29,6 +31,7 @@ import {
   CredentialSlot,
   defineExtension,
   defineRequests,
+  defineResource,
   ExtensionContext,
   type ExtensionContextService,
   ExtensionHost,
@@ -2252,5 +2255,218 @@ describe("the machine boot budget", () => {
         )
         expect(most).toBe(4)
       }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
+  )
+})
+
+// ── named command permits ───────────────────────────────────────────────────
+
+/** Controlled OS boundary. Real machines, permits, storage and RPC stay inside it. */
+const commandBoundary = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const exited = yield* Deferred.make<boolean>()
+  const entered = yield* Deferred.make<boolean>()
+  const events: string[] = []
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      if (
+        command._tag !== "StandardCommand" ||
+        command.command !== "bash" ||
+        command.args[2] !== "gent-command"
+      ) {
+        return yield* Effect.die("Expected a recorded machine command")
+      }
+      const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
+      yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
+      events.push("machine:start")
+      yield* Deferred.succeed(entered, true)
+      yield* Effect.addFinalizer(() =>
+        Deferred.succeed(exited, true).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              events.push("machine:end")
+            }),
+          ),
+        ),
+      )
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+        isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+        kill: () => Deferred.succeed(exited, true).pipe(Effect.asVoid),
+        stdin: Sink.drain,
+        stdout: Stream.empty,
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      })
+    }),
+  )
+  return {
+    events,
+    entered,
+    exited,
+    layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+  }
+})
+
+/** Read the real facade through a user request, then call it directly beside machines. */
+const commandPermitHarness = (processes: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>) =>
+  Effect.gen(function* () {
+    const home = yield* restartableHome
+    const exposed = yield* Deferred.make<ExtensionContextService["Permits"]>()
+    const extensionId = ExtensionId.make("machine-permit-probe")
+    const probe = defineExtension({
+      id: extensionId,
+      setup: Effect.gen(function* () {
+        const host = yield* ExtensionHost
+        yield* host.register(
+          "resource",
+          defineResource({
+            id: "machine-permit-process-boundary",
+            scope: "process",
+            layer: processes,
+          }),
+        )
+        yield* host.register(
+          "request",
+          request({
+            id: "connect",
+            input: Schema.Struct({}),
+            output: Schema.Void,
+            execute: () =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(exposed, (yield* ExtensionContext).Permits)
+              }),
+          }),
+        )
+      }),
+    })
+    const models = yield* makeModels(twoAsksWorker)
+    const { client } = yield* createRpcClient(
+      createE2ELayer({
+        ...e2ePreset,
+        providerLayer: machineModels(models),
+        cwd: home.cwd,
+        home: home.home,
+        storagePath: `${home.home}/gent.db`,
+        extensionInputs: [...e2ePreset.extensionInputs, probe],
+      }),
+    )
+    const owner = ownerOf(yield* client.session.create({}))
+    yield* client.extension.request({ ...owner, extensionId, capabilityId: "connect", input: {} })
+    return { home, client, owner, permits: yield* Deferred.await(exposed) }
+  })
+
+const NAMED_COMMAND = {
+  ...ONE_COMMAND,
+  states: {
+    ...ONE_COMMAND.states,
+    check: { ...ONE_COMMAND.states.check, permit: { name: "machine-gate" } },
+  },
+}
+
+describe("machine command named permits", () => {
+  it.live("a machine command and direct holders share one limit for their full lifetimes", () =>
+    Effect.gen(function* () {
+      const boundary = yield* commandBoundary
+      const { home, client, owner, permits } = yield* commandPermitHarness(boundary.layer)
+      const release = yield* Deferred.make<boolean>()
+      const direct = Effect.acquireUseRelease(
+        Effect.sync(() => {
+          boundary.events.push("direct:start")
+        }),
+        () => Deferred.await(release),
+        () =>
+          Effect.sync(() => {
+            boundary.events.push("direct:end")
+          }),
+      )
+      const first = yield* permits.with("machine-gate", 1, direct).pipe(Effect.forkScoped)
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.holders.length === 1)
+      const run = yield* startRun(client, owner, NAMED_COMMAND, "one-command")
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.waiters.length === 1)
+      expect(yield* Deferred.isDone(boundary.entered)).toBe(false)
+      yield* Deferred.succeed(release, true)
+      yield* Fiber.join(first)
+      yield* Deferred.await(boundary.entered)
+      const second = yield* permits
+        .with(
+          "machine-gate",
+          1,
+          Effect.sync(() => {
+            boundary.events.push("direct:start", "direct:end")
+          }),
+        )
+        .pipe(Effect.forkScoped)
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.waiters.length === 1)
+      expect(boundary.events).toEqual(["direct:start", "direct:end", "machine:start"])
+      yield* Deferred.succeed(boundary.exited, true)
+      yield* Fiber.join(second)
+      yield* waitForEnd(client, owner)
+      expect(boundary.events).toEqual([
+        "direct:start",
+        "direct:end",
+        "machine:start",
+        "machine:end",
+        "direct:start",
+        "direct:end",
+      ])
+      let active = 0
+      let maximum = 0
+      for (const line of boundary.events) {
+        if (line.endsWith(":start")) active += 1
+        else active -= 1
+        maximum = Math.max(maximum, active)
+      }
+      expect(maximum).toBe(1)
+      expect(active).toBe(0)
+      expect(yield* client.permits.list()).toEqual([])
+      expect(Option.map(yield* home.sql(runRow(run)), (row) => row.status)).toEqual(
+        Option.some("final"),
+      )
+    }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
+  it.live("a mismatched command permit becomes a typed machine fault before spawning", () =>
+    Effect.gen(function* () {
+      const boundary = yield* commandBoundary
+      const { client, owner, permits } = yield* commandPermitHarness(boundary.layer)
+      const held = yield* permits.with("machine-gate", 1, Effect.never).pipe(Effect.forkScoped)
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.holders.length === 1)
+      const run = yield* startRun(
+        client,
+        owner,
+        {
+          ...NAMED_COMMAND,
+          states: {
+            ...NAMED_COMMAND.states,
+            check: {
+              ...NAMED_COMMAND.states.check,
+              permit: { name: "machine-gate", limit: 2 },
+            },
+          },
+        },
+        "one-command",
+      )
+      yield* waitForEnd(client, owner)
+      const statusRef = ref(MachinesRpc.Status)
+      const status = yield* decodeRequestReply(MachineRunStatus)(
+        yield* client.extension.request({
+          ...owner,
+          extensionId: statusRef.extensionId,
+          capabilityId: statusRef.capabilityId,
+          input: { run },
+        }),
+      )
+      expect(status.status).toBe("failed")
+      expect(status.error).toBe('Permit "machine-gate" has limit 1, requested 2')
+      expect(status.steps.map(({ step }) => step._tag)).toContain("Failed")
+      expect(status.steps.map(({ step }) => step._tag)).not.toContain("CommandEnded")
+      expect(boundary.events).toEqual([])
+      expect((yield* client.permits.list())[0]?.holders).toHaveLength(1)
+      yield* Fiber.interrupt(held)
+    }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("20 seconds")),
   )
 })

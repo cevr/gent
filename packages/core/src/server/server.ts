@@ -1,3 +1,4 @@
+import { Permits } from "../runtime/permits.js"
 import {
   type Context,
   DateTime,
@@ -1482,6 +1483,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const catalogSource = yield* ModelCatalogSource
     const platform = yield* GentPlatform
     const profileCache = yield* SessionProfileCache
+    const permits = yield* Permits
     const placement = yield* CredentialPlacement
     const modelRegistry = yield* ModelRegistry
     const sessionStorage = yield* SessionStorage
@@ -1693,6 +1695,7 @@ const RpcHandlers = GentRpcs.toLayer(
           result: (result) => ({ sessionId: result.sessionId }),
         }),
 
+      "permits.list": () => permits.list,
       "session.list": () => sessionStorage.listSessions,
 
       "session.thread": ({ sessionId }: SessionIdPayload) =>
@@ -2341,6 +2344,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       // One usage table per server: accounts are not per workspace.
       CredentialPlacement.Live,
       FileLockService.layer,
+      Permits.Live,
       // The wake records and the latch every facade's `wakeAt` opens.
       BranchWakesLive,
       // Which loops a wake fire is opening now: those keep recovery deferred.
