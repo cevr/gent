@@ -231,7 +231,7 @@ Core tests record the event sequence for assertions with `recordingEventStore(re
 
 ## Architecture loop
 
-The owner's `architecture-loop` skill runs on `NORTH_STAR.md` and `PRIOR_ART.md`; what it needs from gent beyond them:
+The owner's `loop` skill runs on `NORTH_STAR.md` and `PRIOR_ART.md`; what it needs from gent beyond them:
 
 - **Baseline** (lines and files per package): `git ls-files ':(glob)packages/*/src/**/*.ts' ':(glob)packages/*/src/**/*.tsx' ':(glob)apps/*/src/**/*.ts' ':(glob)apps/*/src/**/*.tsx' | xargs wc -l | awk '$2 != "total" { split($2, p, "/"); n[p[2]] += $1; f[p[2]]++ } END { for (k in n) print n[k], f[k], k }' | sort -rn`. `:(glob)` keeps `*` in one path segment, so the lint fixtures under `packages/tooling/fixtures/` do not count.
 - **Audit pathspec** (the code outside `src` that the coverage audit lists too: tests, integration helpers, examples, the gamut driver): `git ls-files ':(glob)packages/*/tests/**/*.ts' ':(glob)packages/*/tests/**/*.tsx' ':(glob)apps/*/tests/**/*.ts' ':(glob)apps/*/tests/**/*.tsx' ':(glob)apps/*/integration/**/*.ts' ':(glob)apps/*/integration/**/*.tsx' ':(glob)examples/**/*.ts' ':(glob)testbeds/*/*.ts' ':(glob)testbeds/*/tests/**/*.ts'`.

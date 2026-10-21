@@ -39,7 +39,7 @@ Propose nothing against these.
 - An unknown slash command is refused in the composer, not sent to the model.
 - Push: `main` to `origin` once a pass's batches are merged, the gate on main is green and the ledger row is committed; no rift branches, no force (owner, 2026-09-24).
 
-Project safety, beside `~/.claude/skills/architecture-loop/safety.md`:
+Project safety, beside `~/.claude/skills/loop/safety.md`:
 
 - A live gent run uses `--debug` only, with `GENT_DATA_DIR` under the scratch directory the prompt names. Never `bun run install:global`. Every run calls no paid model, except as the next three rules allow.
 - The efficiency capture, for the efficiency sweep only: a run under the in-repo capture preload [`docs/architecture/fetch-capture.ts`](docs/architecture/fetch-capture.ts) (never a copy outside the repo) with fake provider keys and no `--debug`, with `HOME`, `GENT_AUTH_DIRECTORY` and `GENT_DATA_DIR` under the scratch directory (the preload refuses to start otherwise). The preload answers every provider request itself, so no request leaves the box but the model catalog read (`GET https://models.dev/api.json`), which it forwards.
@@ -59,7 +59,7 @@ Project safety, beside `~/.claude/skills/architecture-loop/safety.md`:
 
 The orchestrator runs it alone (Owner rules). The gamut testbed, [`testbeds/gamut/README.md`](testbeds/gamut/README.md), drives the real TUI on real models with an isolated database.
 
-- Prompt: a file whose first line sends the agent inside the gamut to read `~/.claude/skills/architecture-loop/safety.md` and this file's Owner rules in full before any action, and whose task drives every ability the batches changed (each apply report names them).
+- Prompt: a file whose first line sends the agent inside the gamut to read `~/.claude/skills/loop/safety.md` and this file's Owner rules in full before any action, and whose task drives every ability the batches changed (each apply report names them).
 - Drive: `bun run gamut up <preset> --prompt <file>`, then `bun run gamut wait` and `bun run gamut read`. Keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`) go through `herdr pane send-text`; `bun run gamut restart` checks resume. Use `herdr pane`, never `herdr agent`.
 - State: `bun run gamut status` prints the stored user messages, the session tree, the model per session, tool calls, extension pulses and the work dir's `bun test`: the pane shows what rendered, `status` shows what happened.
 - Stop: `bun run gamut down`.
