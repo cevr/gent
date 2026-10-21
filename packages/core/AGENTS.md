@@ -17,7 +17,7 @@
 - Server-facing orchestration flows through typed `SessionRuntime` methods: `sendUserMessage`, `steer`, `respondInteraction`, `requestExtension`, `drainQueuedMessages`, `getQueuedMessages`, `getState`, `watchState`, and `terminateSession`.
 - Do not reintroduce a generic runtime command union or public dispatch bridge.
 - Profile tests use `SessionProfileCache.Live`. Resource layers build in resolved extension order, not input order.
-- Tool adapters use the tool-binding resolution section of `runtime/tools.ts` for replay identity checks. Keep result persistence and approval behavior in the adapter. A local identity cannot replace a missing durable binding row. See `../../ARCHITECTURE.md`.
+- Tool adapters use the tool-binding resolution section of `runtime/tools.ts` for replay identity checks. Keep result persistence and approval behavior in the adapter. A local identity cannot replace a missing durable binding row. See `docs/architecture/interactions.md` (Exact replay, One binding policy).
 
 ## Extension Boundary
 

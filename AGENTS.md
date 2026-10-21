@@ -67,7 +67,7 @@ bun run --cwd apps/tui dev sessions
 
 ## Architecture
 
-Read `ARCHITECTURE.md` before implementing. Update when diverging.
+Read `ARCHITECTURE.md` before implementing, then the area files it points to for your change. Update them when diverging.
 
 ## Effect Patterns
 
@@ -220,14 +220,14 @@ Core tests record the event sequence for assertions with `recordingEventStore(re
 
 ## Documentation
 
-| Path                       | Focus                                                          |
-| -------------------------- | -------------------------------------------------------------- |
-| `ARCHITECTURE.md`          | Package structure, concepts                                    |
-| `NORTH_STAR.md`            | North stars, owner rules, project sweeps, live check, rejected |
-| `PRIOR_ART.md`             | Prior-art repos and settled comparisons                        |
-| `docs/architecture/`       | The efficiency and ui sweep methods, the capture preload       |
-| `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                        |
-| `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database |
+| Path                       | Focus                                                                |
+| -------------------------- | -------------------------------------------------------------------- |
+| `ARCHITECTURE.md`          | Index: noun model, rules, one pointer per area file                  |
+| `NORTH_STAR.md`            | North stars, owner rules, project sweeps, live check, rejected       |
+| `PRIOR_ART.md`             | Prior-art repos and settled comparisons                              |
+| `docs/architecture/`       | Area files, the efficiency and ui sweep methods, the capture preload |
+| `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                              |
+| `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database       |
 
 ## Architecture loop
 

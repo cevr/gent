@@ -723,7 +723,7 @@ It judges a call in this order, and the first answer wins:
    allowed. A subject no rule matches leaves the call to the next step. A
    rule without `match` takes every call of its tools: `{ "tool":
    "mcp.computer-use.*", "effect": "ask" }` asks before each call of the
-   `computer-use` MCP server's tools (the MCP section of `ARCHITECTURE.md`
+   `computer-use` MCP server's tools (`docs/architecture/mcp.md`
    shows that server's `plugin` entry).
 2. A `readonly` tool runs.
 3. With a `policy`, a classifier (`ExtensionContext.Models.decide`) reads the

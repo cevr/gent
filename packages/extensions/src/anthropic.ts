@@ -1181,8 +1181,8 @@ const rotateAndWriteBack = (base: RefreshBase) =>
 // whose file does not decode is moved aside, never deleted, and blocks only
 // the login beside it (`QuarantinedRotation`); a lock another holder keeps
 // past the wait fails the refresh as one that may pass. `readLinked` and
-// `refreshLinked` are the whole state machine; ARCHITECTURE.md (Credential
-// slots) states it, with the windows that stay and the bounds.
+// `refreshLinked` are the whole state machine; docs/architecture/credentials.md
+// (Credential slots) states it, with the windows that stay and the bounds.
 
 type LinkedIORequirements = AnthropicCredentialIORequirements | Crypto.Crypto
 
@@ -1728,7 +1728,7 @@ const readLinked = (
  * whole step, which has no single bound: its I/O deadlines sum to about 31 s
  * from synced, 33 s from pending, and 40 s when a held rotation lands (or the
  * source moved past it) and the login it serves is expired, so the source is
- * spent again; ARCHITECTURE.md (Credential slots) lists them.
+ * spent again; docs/architecture/credentials.md (Credential slots) lists them.
  */
 const refreshLinked = (
   source: LinkedSource,

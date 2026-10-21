@@ -12,9 +12,9 @@ bun run gate  # typecheck + lint + fmt + build + test
 ## Conventions
 
 [AGENTS.md](./AGENTS.md) owns the commands, code style, Effect patterns, and
-test conventions. [ARCHITECTURE.md](./ARCHITECTURE.md) owns the design; read it
-before a significant change and update it in the same commit when the change
-diverges from it.
+test conventions. [ARCHITECTURE.md](./ARCHITECTURE.md) indexes the design; read it
+and the area files it points to before a significant change, and update them
+in the same commit when the change diverges from them.
 
 ## Pull Requests
 

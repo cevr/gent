@@ -3088,12 +3088,12 @@ interface SteeringNameOutsideTheTree {
 export const STEERING_NAMES_OUTSIDE_THE_TREE: ReadonlyArray<SteeringNameOutsideTheTree> = [
   {
     name: "SqlMessageStorage",
-    file: "ARCHITECTURE.md",
+    file: "docs/architecture/server.md",
     reason: "Effect's cluster message storage (`effect/cluster/SqlMessageStorage`)",
   },
   {
     name: "entityMaxIdleTime",
-    file: "ARCHITECTURE.md",
+    file: "docs/architecture/runtime.md",
     reason: "Effect's `ShardingConfig` option (`effect/cluster/ShardingConfig`)",
   },
   {
