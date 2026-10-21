@@ -52,7 +52,7 @@ Each line names an area file under `docs/architecture/`, what it covers, and
 when to read it.
 
 - `rules.md` — the rules above in full, with receipts and known gaps; read when a change touches an invariant or you review one.
-- `server.md` — package map, system shape, transport boundary, app services and storage, platform seams, shared server discovery, distribution, observability; read when you change startup wiring, storage, the RPC contract, release or logs.
+- `server.md` — package map, system shape, transport boundary, app services and storage, platform seams, shared server discovery, distribution, observability, key files; read when you change startup wiring, storage, the RPC contract, release or logs.
 - `profiles.md` — the runtime profile: extension loading, profile cache and leases, shared Resource builds, last good versions, reload, prompt sections and notices; read when you change extension activation, config reads or the request prefix.
 - `runtime.md` — the session runtime and agent loop: residency, steering, follow-up admission, orphan reconciliation, retry, cancellation, `TurnCompleted`; read when you change the loop, a turn's lifecycle or its receipts.
 - `context.md` — model context: compaction, project instructions, the system prompt, tool-result spill, classifier models, virtual models, the effort router; read when you change what a request carries or how a model is chosen.
@@ -61,13 +61,13 @@ when to read it.
 - `interactions.md` — the cold interaction pattern, approvals, owned asks, the `toolCall` gate, the interaction tools; read when you change asks, approvals or their replay.
 - `cell.md` — the Bun cell: tool policy, kernel, worker, namespace, catalog, host calls and their storage; read when you change the cell or how tools reach the model.
 - `mcp.md` — the MCP extension: server entries, plugins, OAuth, the catalog, clients, tool names; read when you change MCP.
-- `extension-host.md` — extension shape, dependency direction, the boundary contract, the API inventory, server extension buckets, hooks, Resource scopes, events, extension state; read when you change the extension API or author an extension.
+- `extension-host.md` — extension shape, dependency direction, the boundary contract, the API inventory, server extension buckets, hooks, Resource scopes, events, extension state, the entry rules and extension authority; read when you change the extension API or author an extension.
 - `models.md` — the models.dev catalog, API classes, generic providers, drivers; read when you change model discovery or a provider driver.
 - `credentials.md` — credential slots and placement: labels, logins, rotation, `authSpread`; read when you change auth.
 - `shipped-extensions.md` — `/btw`, wake alarms and monitors, bash and background jobs, goals, the regex worker, fs-tools, workflow results, bundled skills; read when you change one of them.
 - `checkpoints.md` — turn checkpoints: capture, store, refs, reads, revert, retention; read when you change `@gent/checkpoints` or `/revert`.
 - `tui.md` — the TUI as a client over the contract: its production shape, boundaries and rules; read with `apps/tui/AGENTS.md`, which points to the TUI topic files, when you change the TUI.
-- `testing.md` — test boundaries, banned primitives, commands, test structure, important files; read when you add or restructure tests.
+- `testing.md` — test boundaries, philosophy and gotchas, the three tiers, the test layers example, commands, test structure, important files; read when you add or restructure tests.
 - `history.md` — owner directions, measurements and pass evidence moved out of the live files; read only when you need why a rule was decided.
 
 ## Non-Goals
