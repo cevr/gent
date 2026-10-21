@@ -1,3 +1,4 @@
+import { decodeRequestReply } from "@gent/core/protocol"
 import { FetchHttpClient } from "effect/http"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
@@ -317,7 +318,7 @@ describe("SkillsExtension via RPC", () => {
           capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
           input: {},
         })
-        const listed = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(raw)
+        const listed = yield* decodeRequestReply(Schema.Array(SkillEntry))(raw)
         const skill = Option.getOrThrow(
           Option.fromUndefinedOr(listed.find((entry) => entry.name === "principles")),
         )
@@ -379,7 +380,7 @@ describe("SkillsExtension via RPC", () => {
             input: {},
             branchId,
           })
-          const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
+          const reply = yield* decodeRequestReply(Schema.Array(SkillEntry))(rawReply)
 
           // The working directory's skill first, then the home's.
           expect(plantedSkills(reply).map((s) => [s.name, s.level])).toEqual([
@@ -424,7 +425,7 @@ describe("SkillsExtension via RPC", () => {
                 orElse: () => Effect.die(new Error("skills-list waited for the turn")),
               }),
             )
-          const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
+          const reply = yield* decodeRequestReply(Schema.Array(SkillEntry))(rawReply)
           expect(plantedSkills(reply).map((s) => s.name)).toEqual(["react", "effect-v4"])
           yield* controls.emitAll(0)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),

@@ -35,6 +35,7 @@ import {
 } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { ExtensionScope, ExtensionStatusPhase } from "../domain/extension.js"
+import { RequestReply } from "../domain/capability.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
@@ -691,7 +692,7 @@ class AuthRpcs extends RpcGroup.make(
 class ExtensionRpcs extends RpcGroup.make(
   Rpc.make("extension.request", {
     payload: ExtensionRpcRequestInput.fields,
-    success: Schema.Unknown,
+    success: RequestReply,
     error: GentRpcError,
   }),
   Rpc.make("extension.listStatus", {

@@ -22,7 +22,7 @@ A live check can run as a script on the same fixture, without herdr. `bun run ve
 ```bash
 mkdir -p /tmp/scratch/home/.gent
 printf '{"model":"<provider>/<model>"}\n' > /tmp/scratch/home/.gent/config.json
-bun packages/e2e/src/drive.ts <script.json>
+bun packages/e2e/src/drive.ts <script.json> [--no-record] [--print]
 ```
 
 ```json
@@ -47,6 +47,10 @@ bun packages/e2e/src/drive.ts <script.json>
 ```
 
 - `command` runs on the pty; `cwd` and `out` resolve against the script's directory. `ground` (`dark` by default, or `light`) is what the emulator reports to a colour query: Tomorrow Night's ground, or Tomorrow's white one for a light-mode check. `env` values are used as written (give absolute paths) and laid over `PATH`, `COLORTERM` and `LANG` only (zigpty adds `TERM`), shared by the pty program and `sh` steps, so no key from the caller's environment reaches either unless the script names it.
-- Steps: `send` text, `keys` a name from `keys` in `src/pty-fixture.ts` (other text goes as is), `wait` ms, `waitFor` a regex on the screen (default 15 s; a miss is logged, the script goes on), `settle` until quiet for that many ms (default 500; no quiet within 15 s fails the script), `resize` cols rows, `cap` / `capAll` the screen without / with scrollback, `cells` the cursor row's first 16 cells, `raw` the bytes so far, `sh` a shell command in `cwd`.
-- Each capture prints and lands in `out/<name>.txt` (`raw`: `<name>.raw`). The screen is a live emulator that follows each resize and answers the program's terminal queries, so a capture after a resize reads as a terminal window would.
-- At the end the program gets ctrl+c, then SIGKILL after a second; the script prints `exit=<code>`.
+- Steps: `send` text, `keys` a name from `keys` in `src/pty-fixture.ts` (other text goes as is), `wait` ms, `waitFor` a regex on the screen (default 15 s; a miss is recorded, the script goes on), `settle` until quiet for that many ms (default 500; no quiet within 15 s fails the script), `resize` cols rows, `cap` / `capAll` the screen without / with scrollback, `cells` the cursor row's first 16 cells, `raw` the bytes so far, `sh` a shell command in `cwd` with an optional limit in ms (default 30 s). An `sh` step runs in a process group of its own; the group stops with the step, so a command it left in the background stops too. A non-zero exit or a step past its limit fails the step.
+- The decoder refuses a `waitFor` pattern that is not a valid regex, and a capture name that is not a plain file name (letters, digits, `_`, `.` and `-`, first a letter, digit or `_`).
+- Each capture lands in `out/<name>.txt` (`raw`: `<name>.raw`); `--print` also prints the screen. The screen is a live emulator that follows each resize and answers the program's terminal queries, so a capture after a resize reads as a terminal window would.
+- Each step prints one line on stderr: `ok   <step> <ms>ms [file]`, `miss <step> <ms>ms`, or `fail <step> <ms>ms <reason>`.
+- The run records the terminal to `out/drive.cast` (asciicast v2; `--no-record` skips it). The recording is saved when the run fails or is interrupted too.
+- At the end the program gets ctrl+c, then SIGKILL to its process group after a second. The last stdout line is `end=<Exited|Stopped|Survived> recording=<file|none>`.
+- `exit` names the code the program must exit with by itself before the steps end. Without `exit`, the program may exit 0 or still run when the steps end. A missed or failed step, or an end the script does not expect, fails the run with exit 1.

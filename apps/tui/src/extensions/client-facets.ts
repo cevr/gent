@@ -25,6 +25,7 @@ import {
   SessionId,
   type GentClientRpcError,
   type GentNamespacedClient,
+  decodeRequestReply,
   messagePartsText,
 } from "@gent/core/protocol"
 import type { CapabilityRef } from "@gent/core/extensions/api"
@@ -327,7 +328,7 @@ const requestExtensionAt = <Input, Output>(
           })
         }),
       )
-    return yield* Schema.decodeUnknownEffect(ref.output)(reply).pipe(
+    return yield* decodeRequestReply(ref.output)(reply).pipe(
       Effect.mapError(
         (cause) =>
           new ClientTransportReplyDecodeError({
@@ -1194,6 +1195,34 @@ type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> =
   Services
 >
 
+// ── ctl projections ─────────────────────────────────────────────────────────
+
+/**
+ * A `gent ctl` view an extension owns: `gent ctl <command> --<flag> <value>`
+ * sends `request` on the session the call names, with `input(value)` as its
+ * JSON input, and prints the reply once the request's output schema decodes
+ * it. The flag and the request are the extension's: the ctl host knows
+ * neither. It is data on the module, read without running `setup`, since a
+ * shell call has no TUI to run it in.
+ */
+export interface CtlProjection {
+  /** The ctl command the flag joins. */
+  readonly command: "status"
+  readonly flag: string
+  readonly description: string
+  readonly request: CapabilityRef<unknown, unknown>
+  readonly input: (value: string) => Schema.Json
+}
+
+/** A `CtlProjection` over a typed request. */
+export const ctlProjection = <Input, Output>(spec: {
+  readonly command: CtlProjection["command"]
+  readonly flag: string
+  readonly description: string
+  readonly request: CapabilityRef<Input, Output>
+  readonly input: (value: string) => Schema.Json
+}): CtlProjection => spec
+
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
  * `R` defaults to `ClientDeps` (FileSystem | Path | ChildProcessSpawner). An
@@ -1203,6 +1232,8 @@ type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> =
 export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientDeps> {
   readonly id: string
   readonly setup: ExtensionClientSetup<R>
+  /** The `gent ctl` views the extension owns; none by default. */
+  readonly ctl?: ReadonlyArray<CtlProjection>
 }
 
 export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServices>
@@ -1216,7 +1247,10 @@ export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServic
  */
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
   id: string,
-  spec: { readonly setup: ExtensionClientSetup<R> },
+  spec: {
+    readonly setup: ExtensionClientSetup<R>
+    readonly ctl?: ReadonlyArray<CtlProjection>
+  },
 ): ExtensionClientModule<R> {
-  return { id, setup: spec.setup }
+  return { id, ...spec }
 }

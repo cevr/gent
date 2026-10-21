@@ -21,7 +21,7 @@ import {
   toolCallStep,
   waitFor,
 } from "@gent/core/test-utils"
-import { BranchId, messagePartsText, type SessionId } from "@gent/core/protocol"
+import { BranchId, messagePartsText, type SessionId, decodeRequestReply } from "@gent/core/protocol"
 import {
   CheckpointList,
   CheckpointsRpc,
@@ -169,12 +169,10 @@ const checkpointSession = (cwd: string, home: string, steps: Steps) =>
           input,
         })
       const list = call(ref(CheckpointsRpc.List), {}).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(CheckpointList)),
+        Effect.flatMap(decodeRequestReply(CheckpointList)),
       )
       const patch = (n: number) =>
-        call(ref(CheckpointsRpc.Patch), { n }).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(TurnPatch)),
-        )
+        call(ref(CheckpointsRpc.Patch), { n }).pipe(Effect.flatMap(decodeRequestReply(TurnPatch)))
       /** Send `content`, wait for the reply `answer`, then for the turn's end checkpoint. */
       const turn = (content: string, answer: string) =>
         Effect.gen(function* () {
@@ -204,7 +202,7 @@ const checkpointSession = (cwd: string, home: string, steps: Steps) =>
             action,
             overwrite,
           }),
-        ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(RevertOutcome)))
+        ).pipe(Effect.flatMap(decodeRequestReply(RevertOutcome)))
       return { list, patch, turn, revert }
     }
     const { list, patch, turn, revert } = at({ sessionId, branchId })

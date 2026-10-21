@@ -161,7 +161,11 @@ import {
 } from "./extension-host.js"
 import type { ConfigService } from "./config.js"
 import { RuntimeEnvironment } from "./config.js"
-import type { CapabilityError, CapabilityNotFoundError } from "../domain/capability.js"
+import type {
+  CapabilityError,
+  CapabilityNotFoundError,
+  RequestReply,
+} from "../domain/capability.js"
 import type { StorageError } from "../domain/errors.js"
 import {
   type CredentialPlacement,
@@ -3107,7 +3111,7 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   const operationSeen = yield* Ref.make(false)
 
   type ExtensionRequestEffect = Effect.Effect<
-    unknown,
+    RequestReply,
     CapabilityError | CapabilityNotFoundError,
     CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
   >

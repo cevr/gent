@@ -114,7 +114,7 @@ import {
   request,
   tool,
 } from "@gent/core/extensions/api"
-import { CapabilityError } from "../../src/domain/capability"
+import { CapabilityError, decodeRequestReply, RequestReply } from "../../src/domain/capability"
 import {
   buildScopeResources,
   ExtensionRegistry,
@@ -134,7 +134,7 @@ import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 const decodeSuccess = (key: string, value: Readonly<Record<string, string>>) => {
   const rpc = Option.getOrThrow(Option.fromUndefinedOr(GentRpcs.requests.get(key)))
-  return Schema.decodeSync(rpc.successSchema)(value)
+  return Schema.decodeUnknownSync(rpc.successSchema)(value)
 }
 
 describe("RPC contract schemas", () => {
@@ -146,8 +146,8 @@ describe("RPC contract schemas", () => {
         name: "Session",
       }),
     ).toEqual({
-      sessionId: "session-1",
-      branchId: "branch-1",
+      sessionId: SessionId.make("session-1"),
+      branchId: BranchId.make("branch-1"),
       name: "Session",
     })
 
@@ -156,15 +156,15 @@ describe("RPC contract schemas", () => {
         modelId: "anthropic/claude-sonnet-5",
         reasoningLevel: "medium",
       }),
-    ).toEqual({ modelId: "anthropic/claude-sonnet-5", reasoningLevel: "medium" })
+    ).toEqual({ modelId: ModelId.make("anthropic/claude-sonnet-5"), reasoningLevel: "medium" })
   })
 
   test("decode inlined branch success payloads", () => {
     expect(decodeSuccess("branch.create", { branchId: "branch-1" })).toEqual({
-      branchId: "branch-1",
+      branchId: BranchId.make("branch-1"),
     })
     expect(decodeSuccess("branch.fork", { branchId: "branch-2" })).toEqual({
-      branchId: "branch-2",
+      branchId: BranchId.make("branch-2"),
     })
   })
 
@@ -2261,7 +2261,7 @@ describe("extension requests and slash commands", () => {
             input: { value: "hi" },
             branchId,
           })
-          expect(echoed).toEqual({ value: "hi" })
+          expect(echoed).toEqual(RequestReply.cases.Value.make({ value: { value: "hi" } }))
 
           const missingCapabilityId = "missing-greet"
           const failed = yield* client.extension
@@ -2705,7 +2705,7 @@ describe("extension requests and slash commands", () => {
             capabilityId: "shadowed",
             input: { value: "project" },
           })
-          expect(answer).toEqual({ value: "project" })
+          expect(answer).toEqual(RequestReply.cases.Value.make({ value: { value: "project" } }))
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
@@ -3183,7 +3183,7 @@ describe("extension branch forks", () => {
               capabilityId: "fork-at",
               input: { atMessageId: firstAnswer?.id ?? "", requestId },
             })
-            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(BranchId)))
+            .pipe(Effect.flatMap(decodeRequestReply(BranchId)))
         const forked = yield* fork("fork-1")
         expect(forked).not.toBe(branchId)
         // A repeat of the request answers the branch the first call made.
@@ -3260,7 +3260,7 @@ describe("session threads", () => {
             capabilityId: "spawn-child",
             input: "side work",
           })
-          const child = yield* Schema.decodeUnknownEffect(SessionId)(childId)
+          const child = yield* decodeRequestReply(SessionId)(childId)
           const parentThread = yield* client.session.thread({ sessionId })
           expect(parentThread.map((session) => session.id)).toEqual([sessionId])
           const childThread = yield* client.session.thread({ sessionId: child })
@@ -3470,7 +3470,7 @@ describe("extension resources", () => {
             input: "token",
             branchId,
           })
-          expect(result).toBe(`live:${profileCwd}`)
+          expect(yield* decodeRequestReply(Schema.String)(result)).toBe(`live:${profileCwd}`)
         }).pipe(Effect.timeout("4 seconds")),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
@@ -3532,7 +3532,7 @@ describe("extension resources", () => {
               input: "token",
               branchId,
             })
-            expect(result).toBe(`branch:${profileCwd}`)
+            expect(yield* decodeRequestReply(Schema.String)(result)).toBe(`branch:${profileCwd}`)
           }).pipe(Effect.timeout("4 seconds")),
         )
       }).pipe(Effect.provide(BunPlatformLive)),
@@ -3723,7 +3723,7 @@ export default defineExtension({
               input: "token",
               branchId,
             })
-            expect(token).toBe("working branch resource")
+            expect(yield* decodeRequestReply(Schema.String)(token)).toBe("working branch resource")
             // The dependent extension is suspended for this loop: its tool
             // is not offered, while the working one's is.
             expect(offered).toContain("working_probe")

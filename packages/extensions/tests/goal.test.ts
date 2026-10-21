@@ -25,7 +25,13 @@ import {
   runToolWithCtx,
   testToolContext,
 } from "@gent/core/test-utils"
-import { BranchId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
+import {
+  BranchId,
+  SessionId,
+  SteerCommand,
+  ToolCallId,
+  decodeRequestReply,
+} from "@gent/core/protocol"
 import { RequestId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import {
@@ -65,9 +71,8 @@ const goalOn = ({ client, sessionId, branchId }: GoalHarness) =>
       input: {},
     })
     .pipe(
-      Effect.map((snapshot) =>
-        Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
-      ),
+      Effect.flatMap(decodeRequestReply(GoalSnapshot)),
+      Effect.map((snapshot) => Option.fromUndefinedOr(snapshot.goal)),
     )
 
 const goalCommandOn = ({ client, sessionId, branchId }: GoalHarness, input: string) =>
@@ -291,7 +296,7 @@ describe("goals", () => {
                 orElse: () => Effect.die(new Error("goal.get waited for the turn")),
               }),
             )
-          expect(yield* Schema.decodeUnknownEffect(GoalSnapshot)(snapshot)).toEqual({})
+          expect(yield* decodeRequestReply(GoalSnapshot)(snapshot)).toEqual({})
           yield* controls.emitAll(0)
           yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),

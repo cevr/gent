@@ -101,6 +101,7 @@ import {
   isToolCapability,
   type PromptSection,
   type RequestCapability,
+  RequestReply,
   ToolCallVerdict,
   type ToolCapability,
 } from "../domain/capability.js"
@@ -822,7 +823,7 @@ interface CompiledRpcRegistry {
     // oxlint-disable-next-line effect/noUnknownParameters -- The selected capability schema validates this erased transport payload.
     input: unknown,
   ) => Effect.Effect<
-    unknown,
+    RequestReply,
     CapabilityError | CapabilityNotFoundError,
     CurrentExtensionHostContext | FileSystem.FileSystem | Path.Path
   >
@@ -958,11 +959,12 @@ const runExtensionCapability = (
       },
     )
 
-    // The reply crosses the wire as the JSON of its encoded form, which every
-    // client decodes with the request's output schema. An `Option` field or a
-    // date does not survive as a decoded value, and an optional key set to
-    // `undefined` has no JSON value: the RPC encoder refuses the whole reply.
-    // A void reply has no JSON text and crosses as nothing.
+    // The reply crosses the actor and the wire as a `RequestReply`: the JSON
+    // of the output's encoded form, which every client decodes with the
+    // request's output schema. An `Option` field or a date does not survive
+    // as a decoded value, and an optional key set to `undefined` has no JSON
+    // value. A void output encodes to nothing, which no JSON holds: it
+    // crosses as `Void`.
     const outputInvalid = new CapabilityErrorClass({
       extensionId,
       capabilityId,
@@ -970,12 +972,12 @@ const runExtensionCapability = (
     })
     const encodedOutput = Schema.encodeOption(capability.output)(output)
     if (Option.isNone(encodedOutput)) return yield* outputInvalid
-    if (Predicate.isUndefined(encodedOutput.value)) return encodedOutput.value
+    if (Predicate.isUndefined(encodedOutput.value)) return RequestReply.cases.Void.make({})
     const replyJson = Schema.encodeOption(Schema.fromJsonString(capability.output))(output).pipe(
       Option.flatMap(decodeReplyJson),
     )
     if (Option.isNone(replyJson)) return yield* outputInvalid
-    return replyJson.value
+    return RequestReply.cases.Value.make({ value: replyJson.value })
   })
 
 const decodeReplyJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))

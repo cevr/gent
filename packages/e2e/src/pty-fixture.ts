@@ -12,16 +12,20 @@ import {
   Clock,
   Console,
   Context,
+  Data,
   type Duration,
   Effect,
   FileSystem,
   Layer,
   Option,
   Path,
+  Predicate,
+  Result,
   Schema,
   type Scope,
 } from "effect"
 import { constVoid } from "effect/Function"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { spawn, type IPty } from "zigpty"
 import { exitWithin, tuiDirectory } from "./server-process-fixture"
 
@@ -116,9 +120,19 @@ const ignoreSyncDefect = (evaluate: () => void): Effect.Effect<void> =>
   Effect.sync(evaluate).pipe(Effect.ignoreCause)
 
 /**
+ * SIGKILL to the pty's process group: zigpty starts the child as a session
+ * leader, so the group is everything it started and did not move out.
+ */
+const killGroup = (pid: number) =>
+  ignoreSyncDefect(() => process.kill(-pid, "SIGKILL")).pipe(
+    Effect.andThen(ignoreSyncDefect(() => process.kill(pid, "SIGKILL"))),
+  )
+
+/**
  * Start `command` in a pty that belongs to the caller's scope. Closing the
- * scope sends ctrl+c, waits for the exit, and kills a child that outlives the
- * wait. `onText` sees each chunk the child writes.
+ * scope sends ctrl+c, waits for the exit, kills a child that outlives the
+ * wait, and then kills what is left of its process group. `onText` sees
+ * each chunk the child writes.
  *
  * zigpty makes the pty the child's controlling terminal, so a resize reaches
  * it as SIGWINCH and ctrl+c in cooked mode as SIGINT. `Bun.Terminal` (Bun
@@ -165,9 +179,11 @@ const openPty = (
       Effect.gen(function* () {
         yield* ignoreSyncDefect(() => pty.write(keys["ctrl+c"]))
         if (Option.isNone(yield* exitWithin(pty.exited, "1 second"))) {
-          yield* ignoreSyncDefect(() => process.kill(pty.pid, "SIGKILL"))
+          yield* killGroup(pty.pid)
           yield* exitWithin(pty.exited, "2 seconds")
         }
+        // A descendant the child left in its group goes with it.
+        yield* ignoreSyncDefect(() => process.kill(-pty.pid, "SIGKILL"))
         yield* ignoreSyncDefect(() => pty.close())
       }),
   )
@@ -605,13 +621,17 @@ const answerColorQueries = (
 const openLivePty = (
   spec: PtyCommand,
   ground: LiveGround,
+  onText: (text: string) => void = constVoid,
 ): Effect.Effect<LivePtyContext, never, Scope.Scope> =>
   Effect.gen(function* () {
     const screen = yield* Effect.acquireRelease(
       Effect.sync(() => newEmulator(spec.size)),
       (emulator) => ignoreSyncDefect(() => emulator.dispose()),
     )
-    const context = yield* openPty(spec, (text) => screen.write(text))
+    const context = yield* openPty(spec, (text) => {
+      screen.write(text)
+      onText(text)
+    })
     yield* Effect.acquireRelease(
       Effect.sync(() => screen.onData((reply) => context.pty.write(reply))),
       (subscription) => ignoreSyncDefect(() => subscription.dispose()),
@@ -669,23 +689,40 @@ const cursorCells = (session: LivePtyContext): string => {
 
 // ── Drive scripts ──
 
+/** A regular expression's source, refused when the script is decoded if it does not compile. */
+const PatternSource = Schema.String.check(
+  Schema.makeFilter(
+    (source: string) =>
+      Result.isSuccess(Result.try(() => new RegExp(source))) ||
+      `not a regular expression: ${source}`,
+  ),
+)
+
+/** A capture's file name: one path segment, so every capture lands in `out`. */
+const CaptureName = Schema.String.check(
+  Schema.isPattern(/^\w[\w.-]*$/, {
+    message: "a capture name is one file name: letters, digits, `_`, `.` and `-`",
+  }),
+)
+
 /**
  * One step of a drive script. `send` writes text, `keys` writes a named key
  * from `keys` (or the text itself), `wait` sleeps, `waitFor` polls the screen
- * for a regex (default 15 s, logs a miss and goes on), `settle` waits for a
- * quiet window, `resize` resizes, `cap` / `capAll` save the screen (with
- * scrollback), `cells` saves the cursor row's cells, `raw` saves the raw
- * output, and `sh` runs a shell command.
+ * for a regex (default 15 s; a timeout is a miss and the drive goes on),
+ * `settle` waits for a quiet window, `resize` resizes, `cap` / `capAll` save
+ * the screen (with scrollback), `cells` saves the cursor row's cells, `raw`
+ * saves the raw output, and `sh` runs a shell command (30 s unless the step
+ * names its ms).
  */
 const DriveStep = Schema.Union([
   Schema.Tuple([Schema.Literal("send"), Schema.String]),
   Schema.Tuple([Schema.Literal("keys"), Schema.String]),
   Schema.Tuple([Schema.Literal("wait"), Schema.Finite]),
-  Schema.Tuple([Schema.Literal("waitFor"), Schema.String, Schema.optionalKey(Schema.Finite)]),
+  Schema.Tuple([Schema.Literal("waitFor"), PatternSource, Schema.optionalKey(Schema.Finite)]),
   Schema.Tuple([Schema.Literal("settle"), Schema.optionalKey(Schema.Finite)]),
   Schema.Tuple([Schema.Literal("resize"), Schema.Int, Schema.Int]),
-  Schema.Tuple([Schema.Literals(["cap", "capAll", "cells", "raw"]), Schema.String]),
-  Schema.Tuple([Schema.Literal("sh"), Schema.String]),
+  Schema.Tuple([Schema.Literals(["cap", "capAll", "cells", "raw"]), CaptureName]),
+  Schema.Tuple([Schema.Literal("sh"), Schema.String, Schema.optionalKey(Schema.Finite)]),
 ])
 type DriveStep = typeof DriveStep.Type
 
@@ -693,8 +730,10 @@ type DriveStep = typeof DriveStep.Type
  * A live check as data: the program to run, the pty size, where captures go,
  * and the steps. `env` is laid over a minimal terminal environment (`PATH`,
  * `COLORTERM`, `LANG`; zigpty adds `TERM`), shared by the pty and `sh` steps,
- * never over the caller's, so no credential reaches either unless the script names it. `cwd` and `out` resolve
- * against the script's directory.
+ * never over the caller's, so no credential reaches either unless the script
+ * names it. `cwd` and `out` resolve against the script's directory. `exit` is
+ * the code the program must end with when it exits by itself; a program the
+ * cleanup stops at the end has no code to check.
  */
 export const DriveScript = Schema.Struct({
   command: Schema.NonEmptyArray(Schema.String),
@@ -705,142 +744,432 @@ export const DriveScript = Schema.Struct({
   /** The ground the terminal reports to a colour query; dark when the script names none. */
   ground: Schema.optionalKey(LiveGround),
   out: Schema.String,
+  exit: Schema.optionalKey(Schema.Int),
   steps: Schema.Array(DriveStep),
 })
 type DriveScript = typeof DriveScript.Type
 
-const WAIT_FOR_DEFAULT_MS = 15_000
+/**
+ * What one step came to: `Ok`; `Miss`, a `waitFor` whose pattern never
+ * showed; `Fail`, an `sh` step that exited non-zero or outlived its limit.
+ * `at` is the step's index, `ms` the time since the program started, and
+ * `file` what a capture step saved.
+ */
+export const StepOutcome = Schema.TaggedUnion({
+  Ok: {
+    at: Schema.Int,
+    step: Schema.String,
+    ms: Schema.Finite,
+    file: Schema.optionalKey(Schema.String),
+  },
+  Miss: { at: Schema.Int, step: Schema.String, ms: Schema.Finite },
+  Fail: { at: Schema.Int, step: Schema.String, ms: Schema.Finite, reason: Schema.String },
+})
+export type StepOutcome = typeof StepOutcome.Type
 
 /**
- * Run `script` on a live pty, print each capture and save it under
- * `script.out`. Returns the exit code, `None` when the program outlived the
- * cleanup (ctrl+c, then SIGKILL).
+ * How the program ended: `Exited` by itself before the steps ran out, with
+ * its code; `Stopped` by the cleanup once they had (ctrl+c, then SIGKILL to
+ * its process group); `Survived`, alive after the SIGKILL.
  */
-export const runDriveScript = (
-  script: DriveScript & { readonly cwd: string },
-): Effect.Effect<Option.Option<number>, PtySettleError, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    yield* fs.makeDirectory(script.out, { recursive: true }).pipe(Effect.orDie)
-    const started = yield* Clock.currentTimeMillis
-    const elapsed = Clock.currentTimeMillis.pipe(Effect.map((now) => now - started))
-    const env = {
-      // oxlint-disable-next-line effect/noGlobals -- drive processes use only the caller's PATH and declared env
-      PATH: Bun.env["PATH"] ?? "/usr/bin:/bin",
-      COLORTERM: "truecolor",
-      LANG: "C.UTF-8",
-      ...script.env,
-    }
+export const DriveEnd = Schema.TaggedUnion({
+  Exited: { code: Schema.Int },
+  Stopped: { code: Schema.Int },
+  Survived: {},
+})
+export type DriveEnd = typeof DriveEnd.Type
 
-    // The scope ends with the cleanup, which has waited for the exit already;
-    // the code is read after it.
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const session = yield* openLivePty(
-          {
-            command: script.command[0],
-            args: script.command.slice(1),
-            cwd: script.cwd,
-            env,
-            size: { cols: script.cols, rows: script.rows },
-          },
-          script.ground ?? "dark",
-        )
-        const save = (name: string, extension: string, text: string) =>
-          fs.writeFileString(path.join(script.out, `${name}.${extension}`), text).pipe(Effect.orDie)
-        const capture = (name: string, scope: "viewport" | "all") =>
-          Effect.gen(function* () {
-            yield* drained(session.screen)
-            const { screen } = session
-            const buffer = screen.buffer.active
-            const header =
-              `# ${name} ${screen.cols}x${screen.rows} buffer=${buffer.type} ` +
-              `cursor=${buffer.cursorX},${buffer.cursorY} t=${yield* elapsed}ms`
-            const numbered = screenRows(session, scope).map(
-              (row, index) => `${String(index + 1).padStart(3, "0")}|${row}`,
-            )
-            const text = `${header}\n${numbered.join("\n")}\n`
-            yield* Console.log(text)
-            yield* save(name, "txt", text)
-          })
-        const visibleScreen = drained(session.screen).pipe(
-          Effect.map(() => screenRows(session, "viewport").join("\n")),
-        )
+/** A drive's outcome: each step's, how the program ended, and the recording it left. */
+export interface DriveOutcome {
+  readonly steps: ReadonlyArray<StepOutcome>
+  readonly end: DriveEnd
+  /** The asciicast v2 recording of the whole drive, `None` with `record: false`. */
+  readonly recording: Option.Option<string>
+}
 
-        const runStep = (step: DriveStep): Effect.Effect<void, PtySettleError> => {
-          switch (step[0]) {
-            case "send":
-              return Effect.sync(() => session.pty.write(step[1]))
-            case "keys": {
-              const name = step[1]
-              const bytes = Arr.findFirst(Object.entries(keys), ([key]) => key === name)
-              return Effect.sync(() =>
-                session.pty.write(
-                  Option.match(bytes, { onNone: () => name, onSome: ([, value]) => value }),
-                ),
-              )
-            }
-            case "wait":
-              return Effect.sleep(`${step[1]} millis`)
-            case "waitFor": {
-              const pattern = new RegExp(step[1])
-              return waitFor(
-                visibleScreen,
-                (text) => pattern.test(text),
-                step[2] ?? WAIT_FOR_DEFAULT_MS,
-                step[1],
-              ).pipe(
-                Effect.as("hit"),
-                Effect.orElseSucceed(() => "TIMEOUT"),
-                Effect.flatMap((result) =>
-                  Effect.flatMap(elapsed, (ms) =>
-                    Console.log(`waitFor ${step[1]}: ${result} ${ms}ms`),
-                  ),
-                ),
-              )
-            }
-            case "settle":
-              return settlePty(session, { quietMs: step[1] ?? 500 })
-            case "resize":
-              return Effect.sync(() => session.resize({ cols: step[1], rows: step[2] }))
-            case "cap":
-              return capture(step[1], "viewport")
-            case "capAll":
-              return capture(step[1], "all")
-            case "cells":
-              return drained(session.screen).pipe(
-                Effect.map(() => `# ${step[1]} ${cursorCells(session)}`),
-                Effect.tap((text) => Console.log(text)),
-                Effect.flatMap((text) => save(step[1], "txt", `${text}\n`)),
-              )
-            case "raw":
-              return Effect.suspend(() => save(step[1], "raw", session[RAW]()))
-            case "sh":
-              return Effect.acquireUseRelease(
-                Effect.sync(() =>
-                  // oxlint-disable-next-line effect/noGlobals -- a drive script's setup command runs as a plain shell process
-                  Bun.spawn(["/bin/sh", "-c", step[1]], {
-                    cwd: script.cwd,
-                    env,
-                    stdio: ["ignore", "ignore", "inherit"],
-                  }),
-                ),
-                (shell) =>
-                  exitWithin(shell.exited, "30 seconds").pipe(
-                    Effect.flatMap((code) =>
-                      Console.log(
-                        `sh: ${step[1]} -> exit ${Option.getOrElse(code, () => "timeout")}`,
-                      ),
-                    ),
-                  ),
-                (shell) => ignoreSyncDefect(() => shell.kill("SIGKILL")),
-              )
-          }
-        }
+/** What a drive's caller asks of it beyond the script: a recording, and screens on stderr. */
+export interface DriveOptions {
+  /** Record the drive as `<out>/drive.cast` (asciicast v2); on by default. */
+  readonly record?: boolean
+  /** Print each capture's screen on stderr after its step line; off by default. */
+  readonly print?: boolean
+}
 
-        for (const step of script.steps) yield* runStep(step)
-        return session
-      }),
-    ).pipe(Effect.flatMap((ended) => exitWithin(ended.pty.exited, "100 millis")))
+/**
+ * What makes a drive fail, one line each: a missed or failed step, a program
+ * that exited by itself with another code than `script.exit` (0 when the
+ * script names none), or one that survived the cleanup. Empty: it passed.
+ */
+export const driveProblems = (
+  script: DriveScript,
+  outcome: DriveOutcome,
+): ReadonlyArray<string> => {
+  const steps = outcome.steps.flatMap((step) =>
+    StepOutcome.match(step, {
+      Ok: () => [],
+      Miss: (miss) => [`miss ${miss.step}`],
+      Fail: (fail) => [`fail ${fail.step}: ${fail.reason}`],
+    }),
+  )
+  const expected = script.exit ?? 0
+  const end = DriveEnd.match(outcome.end, {
+    Exited: ({ code }) =>
+      Option.toArray(
+        Option.liftPredicate(
+          `the program exited ${code}, the script expects ${expected}`,
+          () => code !== expected,
+        ),
+      ),
+    Stopped: ({ code }) =>
+      Option.toArray(
+        Option.liftPredicate(
+          `the program still ran when the steps ended (stopped with ${code}); the script expects it to exit ${expected}`,
+          () => Predicate.isNotUndefined(script.exit),
+        ),
+      ),
+    Survived: () => ["the program survived the cleanup's SIGKILL"],
   })
+  return [...steps, ...end]
+}
+
+/** What a step came to, before it has its index, label and time. */
+type StepDone = Data.TaggedEnum<{
+  Ok: { readonly file: Option.Option<string>; readonly screen: Option.Option<string> }
+  Miss: {}
+  Fail: { readonly reason: string }
+}>
+const StepDone = Data.taggedEnum<StepDone>()
+const stepOk = StepDone.Ok({ file: Option.none(), screen: Option.none() })
+
+const WAIT_FOR_DEFAULT_MS = 15_000
+const SH_LIMIT_MS = 30_000
+const RECORDING = "drive.cast"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+
+/** A step as its outcome line names it: the verb, then its argument as JSON text. */
+const stepLabel = (step: DriveStep): string => {
+  const [verb, ...rest] = step
+  return [
+    verb,
+    ...rest.map((each) =>
+      Option.match(Option.liftPredicate(each, Predicate.isString), {
+        onNone: () => String(each),
+        onSome: (text) => encodeJson(text),
+      }),
+    ),
+  ].join(" ")
+}
+
+/** One outcome as the compact line a drive prints on stderr. */
+const outcomeLine = (outcome: StepOutcome): string =>
+  StepOutcome.match(outcome, {
+    Ok: (ok) =>
+      [`ok   ${ok.step} ${ok.ms}ms`, ...Option.toArray(Option.fromUndefinedOr(ok.file))].join(" "),
+    Miss: (miss) => `miss ${miss.step} ${miss.ms}ms`,
+    Fail: (fail) => `fail ${fail.step} ${fail.ms}ms ${fail.reason}`,
+  })
+
+/**
+ * The asciicast v2 text of a drive: the header with the starting size, then
+ * one `[seconds, "o", text]` per chunk the program wrote and one
+ * `[seconds, "r", "<cols>x<rows>"]` per resize.
+ */
+const castText = (
+  size: PtySize,
+  startedMs: number,
+  events: ReadonlyArray<readonly [number, "o" | "r", string]>,
+): string => {
+  const header = encodeJson({
+    version: 2,
+    width: size.cols,
+    height: size.rows,
+    timestamp: Math.floor(startedMs / 1000),
+    env: { TERM: "xterm-256color" },
+  })
+  return [header, ...events.map((event) => encodeJson([...event]))]
+    .map((line) => `${line}\n`)
+    .join("")
+}
+
+const CastHeader = Schema.Struct({
+  version: Schema.Literal(2),
+  width: Schema.Int,
+  height: Schema.Int,
+})
+const CastEvent = Schema.Tuple([Schema.Finite, Schema.String, Schema.String])
+const decodeCastHeader = Schema.decodeUnknownEffect(Schema.fromJsonString(CastHeader))
+const decodeCastEvent = Schema.decodeUnknownEffect(Schema.fromJsonString(CastEvent))
+
+class RecordingInvalid extends Schema.TaggedError<
+  RecordingInvalid,
+  { readonly brand: unique symbol }
+>()("@gent/e2e/RecordingInvalid", { file: Schema.String, message: Schema.String }) {}
+
+/** A recording a player can play: its size, its length in seconds, and its event count. */
+export interface RecordingCheck {
+  readonly width: number
+  readonly height: number
+  readonly seconds: number
+  readonly events: number
+}
+
+/**
+ * Read an asciicast v2 file as a player does: a version 2 header, then
+ * events in time order. Fails `RecordingInvalid` on anything else, on no
+ * output, or on a length of zero.
+ */
+export const checkRecording = Effect.fn("Drive.checkRecording")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem
+  const invalid = (message: string) => new RecordingInvalid({ file, message })
+  const text = yield* fs
+    .readFileString(file)
+    .pipe(Effect.mapError((error) => invalid(error.message)))
+  const [first = "", ...lines] = text.trimEnd().split("\n")
+  const header = yield* decodeCastHeader(first).pipe(
+    Effect.mapError((error) => invalid(`header: ${error.message}`)),
+  )
+  const events = yield* Effect.forEach(lines, (line, at) =>
+    decodeCastEvent(line).pipe(
+      Effect.mapError((error) => invalid(`event ${at + 1}: ${error.message}`)),
+    ),
+  )
+  const times = events.map(([seconds]) => seconds)
+  if (times.some((seconds, at) => at > 0 && seconds < (times[at - 1] ?? 0))) {
+    return yield* invalid("events out of time order")
+  }
+  if (!events.some(([, kind]) => kind === "o")) return yield* invalid("no output event")
+  const seconds = times.at(-1) ?? 0
+  if (seconds <= 0) return yield* invalid("a length of zero")
+  return {
+    width: header.width,
+    height: header.height,
+    seconds,
+    events: events.length,
+  } satisfies RecordingCheck
+})
+
+/**
+ * Run `script` on a live pty and return each step's outcome, how the
+ * program ended and its recording. Captures go to files under `script.out`
+ * by name; each step prints one line on stderr (`ok|miss|fail <step> <ms>`,
+ * and a capture's file), and a capture's screen too with `print`. A miss or
+ * a failed step does not stop the drive: the outcome holds it, and
+ * `driveProblems` reads it. An `sh` step runs in a process group of its
+ * own, stopped with the step, so a command it left in the background ends
+ * with it.
+ */
+export const runDriveScript = Effect.fn("Drive.run")(function* (
+  script: DriveScript & { readonly cwd: string },
+  options: DriveOptions = {},
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const clock = yield* Clock.Clock
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  yield* fs.makeDirectory(script.out, { recursive: true }).pipe(Effect.orDie)
+  const startedMs = clock.currentTimeMillisUnsafe()
+  const elapsedMs = () => clock.currentTimeMillisUnsafe() - startedMs
+  const env = {
+    // oxlint-disable-next-line effect/noGlobals -- drive processes use only the caller's PATH and declared env
+    PATH: Bun.env["PATH"] ?? "/usr/bin:/bin",
+    COLORTERM: "truecolor",
+    LANG: "C.UTF-8",
+    ...script.env,
+  }
+  const size = { cols: script.cols, rows: script.rows }
+  const record = options.record ?? true
+  const cast: Array<readonly [number, "o" | "r", string]> = []
+  const castEvent = (kind: "o" | "r", text: string) => {
+    if (record) cast.push([elapsedMs() / 1000, kind, text])
+  }
+  const castFile = path.join(script.out, RECORDING)
+  const recording = Option.liftPredicate(castFile, () => record)
+  // The recording is written when the drive ends, an interrupted one included.
+  const saveRecording = Effect.suspend(() =>
+    Option.match(recording, {
+      onNone: () => Effect.void,
+      onSome: (file) => fs.writeFileString(file, castText(size, startedMs, cast)),
+    }),
+  ).pipe(Effect.ignore)
+  const outcomes: Array<StepOutcome> = []
+
+  const end = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* openLivePty(
+        { command: script.command[0], args: script.command.slice(1), cwd: script.cwd, env, size },
+        script.ground ?? "dark",
+        (text) => castEvent("o", text),
+      )
+      const save = (name: string, extension: string, text: string) => {
+        const file = path.join(script.out, `${name}.${extension}`)
+        return fs.writeFileString(file, text).pipe(Effect.orDie, Effect.as(file))
+      }
+      const printed = (text: string) =>
+        Effect.suspend(() => {
+          if (options.print === true) return Console.error(text)
+          return Effect.void
+        })
+      const capture = (name: string, scope: "viewport" | "all") =>
+        Effect.gen(function* () {
+          yield* drained(session.screen)
+          const { screen } = session
+          const buffer = screen.buffer.active
+          const header =
+            `# ${name} ${screen.cols}x${screen.rows} buffer=${buffer.type} ` +
+            `cursor=${buffer.cursorX},${buffer.cursorY} t=${elapsedMs()}ms`
+          const numbered = screenRows(session, scope).map(
+            (row, index) => `${String(index + 1).padStart(3, "0")}|${row}`,
+          )
+          const text = `${header}\n${numbered.join("\n")}\n`
+          const file = yield* save(name, "txt", text)
+          return { file, text }
+        })
+      const visibleScreen = drained(session.screen).pipe(
+        Effect.map(() => screenRows(session, "viewport").join("\n")),
+      )
+      const shell = (command: string, limitMs: number) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* spawner.spawn(
+              ChildProcess.make("/bin/sh", ["-c", command], {
+                cwd: script.cwd,
+                env,
+                extendEnv: false,
+                stdin: "ignore",
+                stdout: "ignore",
+                stderr: "inherit",
+                // Its own process group: the scope's end stops the group, whatever the shell left.
+                detached: true,
+                forceKillAfter: "2 seconds",
+              }),
+            )
+            return yield* handle.exitCode.pipe(
+              Effect.map((code) => Option.some(Number(code))),
+              Effect.timeoutOption(`${limitMs} millis`),
+              Effect.map(Option.flatten),
+            )
+          }),
+        ).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => Option.some(`outlived ${limitMs}ms; its process group was stopped`),
+              onSome: (code) => Option.liftPredicate(`exit ${code}`, () => code !== 0),
+            }),
+          ),
+          Effect.catch((error) => Effect.succeedSome(error.message)),
+        )
+
+      const saved = (file: string, screen: Option.Option<string>) =>
+        StepDone.Ok({ file: Option.some(file), screen })
+      const ok = stepOk
+      const runStep = (step: DriveStep): Effect.Effect<StepDone, PtySettleError> => {
+        switch (step[0]) {
+          case "send":
+            return Effect.sync(() => session.pty.write(step[1])).pipe(Effect.as(ok))
+          case "keys": {
+            const name = step[1]
+            const bytes = Arr.findFirst(Object.entries(keys), ([key]) => key === name)
+            return Effect.sync(() =>
+              session.pty.write(
+                Option.match(bytes, { onNone: () => name, onSome: ([, value]) => value }),
+              ),
+            ).pipe(Effect.as(ok))
+          }
+          case "wait":
+            return Effect.sleep(`${step[1]} millis`).pipe(Effect.as(ok))
+          case "waitFor": {
+            const pattern = new RegExp(step[1])
+            return waitFor(
+              visibleScreen,
+              (text) => pattern.test(text),
+              step[2] ?? WAIT_FOR_DEFAULT_MS,
+              step[1],
+            ).pipe(
+              Effect.as(ok),
+              Effect.orElseSucceed(() => StepDone.Miss()),
+            )
+          }
+          case "settle":
+            return settlePty(session, { quietMs: step[1] ?? 500 }).pipe(Effect.as(ok))
+          case "resize":
+            return Effect.sync(() => {
+              session.resize({ cols: step[1], rows: step[2] })
+              castEvent("r", `${step[1]}x${step[2]}`)
+            }).pipe(Effect.as(ok))
+          case "cap":
+            return capture(step[1], "viewport").pipe(
+              Effect.map(({ file, text }) => saved(file, Option.some(text))),
+            )
+          case "capAll":
+            return capture(step[1], "all").pipe(
+              Effect.map(({ file, text }) => saved(file, Option.some(text))),
+            )
+          case "cells":
+            return drained(session.screen).pipe(
+              Effect.map(() => `# ${step[1]} ${cursorCells(session)}`),
+              Effect.flatMap((text) =>
+                Effect.map(save(step[1], "txt", `${text}\n`), (file) =>
+                  saved(file, Option.some(text)),
+                ),
+              ),
+            )
+          case "raw":
+            return Effect.suspend(() => save(step[1], "raw", session[RAW]())).pipe(
+              Effect.map((file) => saved(file, Option.none())),
+            )
+          case "sh":
+            return shell(step[1], step[2] ?? SH_LIMIT_MS).pipe(
+              Effect.map(
+                Option.match({
+                  onNone: () => ok,
+                  onSome: (reason) => StepDone.Fail({ reason }),
+                }),
+              ),
+            )
+        }
+      }
+
+      for (const [at, step] of script.steps.entries()) {
+        const done = yield* runStep(step)
+        const label = stepLabel(step)
+        const ms = elapsedMs()
+        const outcome = StepDone.$match(done, {
+          Ok: ({ file }) =>
+            StepOutcome.cases.Ok.make({
+              at,
+              step: label,
+              ms,
+              ...Option.match(file, { onNone: () => ({}), onSome: (each) => ({ file: each }) }),
+            }),
+          Miss: () => StepOutcome.cases.Miss.make({ at, step: label, ms }),
+          Fail: ({ reason }) => StepOutcome.cases.Fail.make({ at, step: label, ms, reason }),
+        })
+        outcomes.push(outcome)
+        yield* Console.error(outcomeLine(outcome))
+        if (StepDone.$is("Ok")(done))
+          yield* Option.match(done.screen, { onNone: () => Effect.void, onSome: printed })
+      }
+      // A program that exited during the steps ended by itself; the cleanup stops one still running.
+      const early = yield* exitWithin(session.pty.exited, "50 millis")
+      return { session, early }
+    }),
+  ).pipe(
+    Effect.flatMap(({ session, early }): Effect.Effect<DriveEnd> =>
+      Option.match(early, {
+        onSome: (code) => Effect.succeed(DriveEnd.cases.Exited.make({ code })),
+        onNone: () =>
+          exitWithin(session.pty.exited, "100 millis").pipe(
+            Effect.map(
+              Option.match({
+                onNone: () => DriveEnd.cases.Survived.make({}),
+                onSome: (code) => DriveEnd.cases.Stopped.make({ code }),
+              }),
+            ),
+          ),
+      }),
+    ),
+    Effect.ensuring(saveRecording),
+  )
+  return { steps: outcomes, end, recording } satisfies DriveOutcome
+})

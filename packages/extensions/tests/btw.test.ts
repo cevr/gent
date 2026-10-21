@@ -36,7 +36,7 @@ import {
   ToolCallId,
 } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
-import { AgentEvent } from "@gent/core/protocol"
+import { AgentEvent, decodeRequestReply } from "@gent/core/protocol"
 import {
   BTW_EXTENSION_ID,
   BTW_MERGE_TYPE,
@@ -83,7 +83,7 @@ const btw = (
 ) => {
   const progress = harness.client.extension
     .request({ ...target, extensionId: BTW_EXTENSION_ID, capabilityId: "btw.progress", input: {} })
-    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ForkProgress)))
+    .pipe(Effect.flatMap(decodeRequestReply(ForkProgress)))
   return {
     fork: (question: string) =>
       harness.client.extension
@@ -93,18 +93,20 @@ const btw = (
           capabilityId: "btw.fork",
           input: { question },
         })
-        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ForkHandle))),
+        .pipe(Effect.flatMap(decodeRequestReply(ForkHandle))),
     ask: (question: string) =>
-      harness.client.extension.request({
-        ...target,
-        extensionId: BTW_EXTENSION_ID,
-        capabilityId: "btw.ask",
-        input: { question },
-      }),
+      harness.client.extension
+        .request({
+          ...target,
+          extensionId: BTW_EXTENSION_ID,
+          capabilityId: "btw.ask",
+          input: { question },
+        })
+        .pipe(Effect.flatMap(decodeRequestReply(Schema.Struct({ asked: Schema.Boolean })))),
     progress,
     merge: harness.client.extension
       .request({ ...target, extensionId: BTW_EXTENSION_ID, capabilityId: "btw.merge", input: {} })
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(MergeOutcome))),
+      .pipe(Effect.flatMap(decodeRequestReply(MergeOutcome))),
     /** The fork's view once its reply is durable. */
     replied: (turns: number) =>
       waitFor(

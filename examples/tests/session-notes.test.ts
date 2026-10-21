@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Schema, Stream } from "effect"
+import { decodeRequestReply } from "@gent/core/protocol"
 import {
   createRpcHarness,
   LanguageModelLayers,
@@ -44,14 +45,18 @@ describe("session notes reference extension", () => {
         expect(notes?.displayName).toBe("Session Notes")
         expect(notes?.capabilityId).toBe("session-notes-summary")
 
+        // A reply crosses the wire as a `RequestReply`; the request's output schema reads it.
+        const readSummary = decodeRequestReply(Schema.String)
         const summary = () =>
-          client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: notes!.extensionId,
-            capabilityId: notes!.capabilityId,
-            input: {},
-          })
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: notes!.extensionId,
+              capabilityId: notes!.capabilityId,
+              input: {},
+            })
+            .pipe(Effect.flatMap(readSummary))
         expect(yield* summary()).toBe("No session notes yet.")
 
         const turnCompleted = (count: number) =>
@@ -69,13 +74,15 @@ describe("session notes reference extension", () => {
 
         // Notes belong to the session that wrote them; another session in the same process has none.
         const other = yield* client.session.create({})
-        const otherSummary = yield* client.extension.request({
-          sessionId: other.sessionId,
-          branchId: other.branchId,
-          extensionId: notes!.extensionId,
-          capabilityId: notes!.capabilityId,
-          input: {},
-        })
+        const otherSummary = yield* client.extension
+          .request({
+            sessionId: other.sessionId,
+            branchId: other.branchId,
+            extensionId: notes!.extensionId,
+            capabilityId: notes!.capabilityId,
+            input: {},
+          })
+          .pipe(Effect.flatMap(readSummary))
         expect(otherSummary).toBe("No session notes yet.")
         // Deleting another session (its sessionDeleted hook runs) leaves this session's notes.
         yield* client.session.delete({ sessionId: other.sessionId })

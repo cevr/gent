@@ -6,7 +6,15 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
 import { BuiltinExtensions } from "@gent/extensions"
-import { AgentEvent, BranchId, EventEnvelope, MessageId, SessionId } from "@gent/core/protocol"
+import {
+  AgentEvent,
+  BranchId,
+  decodeRequestReply,
+  EventEnvelope,
+  MessageId,
+  RequestReply,
+  SessionId,
+} from "@gent/core/protocol"
 import {
   BunGentPlatformLive,
   EventId,
@@ -29,8 +37,7 @@ import {
   Sink,
   Stdio,
 } from "effect"
-import { Command } from "effect/cli"
-import { CTL_EXIT, compactEvents, ctl, CtlResult } from "../src/ctl"
+import { CTL_EXIT, compactEvents, CtlResult, runCtlCli } from "../src/ctl"
 
 // ── harness ─────────────────────────────────────────────────────────────────
 
@@ -40,19 +47,33 @@ interface CtlRun {
   readonly stderr: string
 }
 
-/** Run `gent ctl <args>` with `HOME` set to `home`; collect its exit code and streams. */
-const runCtl = (home: string, args: ReadonlyArray<string>) =>
+/**
+ * Run `gent ctl <args>` through its process boundary with `HOME` set to
+ * `home`; collect its exit code and streams. `brokenStdout` makes a write to
+ * stdout die, as a closed pipe can.
+ */
+const runCtl = (
+  home: string,
+  args: ReadonlyArray<string>,
+  options: { readonly brokenStdout?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const out = yield* Ref.make("")
     const err = yield* Ref.make("")
     const capture = (into: Ref.Ref<string>) =>
       Sink.forEach((chunk: string | Uint8Array) => Ref.update(into, (text) => text + String(chunk)))
-    const exit = yield* Command.runWith(ctl, { version: "test" })(args).pipe(
+    const exit = yield* runCtlCli(args, "test").pipe(
       Effect.provide(
         Layer.mergeAll(
           BunServices.layer,
           BunGentPlatformLive,
-          Stdio.layerTest({ stdout: () => capture(out), stderr: () => capture(err) }),
+          Stdio.layerTest({
+            stdout: () => {
+              if (options.brokenStdout === true) return Sink.die("stdout closed")
+              return capture(out)
+            },
+            stderr: () => capture(err),
+          }),
           ConfigProvider.layer(ConfigProvider.fromEnv({ env: { HOME: home } })),
         ),
       ),
@@ -60,7 +81,7 @@ const runCtl = (home: string, args: ReadonlyArray<string>) =>
     )
     const code = Exit.match(exit, {
       onSuccess: () => CTL_EXIT.ok,
-      // A defect has no exit code of its own: the runtime exits 1.
+      // The boundary turns a defect into `CtlFailed`; one that slips past exits 1 as the runtime does.
       onFailure: (cause) =>
         Option.match(Cause.findErrorOption(cause), {
           onNone: () => CTL_EXIT.failed,
@@ -87,6 +108,9 @@ const resultAs =
 
 const ErrorLine = Schema.Struct({ _tag: Schema.String, message: Schema.optionalKey(Schema.String) })
 
+/** The message of the one error line, which every refusal below carries. */
+const messageOf = (run: CtlRun) => Effect.map(errorOf(run), (error) => error.message ?? "")
+
 /** The one tagged JSON error line a failed call printed on stderr. */
 const errorOf = (run: CtlRun) =>
   Effect.gen(function* () {
@@ -99,7 +123,7 @@ const errorOf = (run: CtlRun) =>
 const serveScratchHome = Effect.gen(function* () {
   const home = yield* makeTempDirectoryScoped("gent-ctl-")
   const catalogOrigin = yield* serveModelCatalogFixture
-  yield* Gent.server({
+  const server = yield* Gent.server({
     cwd: home,
     state: Gent.state.sqlite({ home }),
     provider: Gent.provider.mock(),
@@ -111,7 +135,7 @@ const serveScratchHome = Effect.gen(function* () {
       ),
     ),
   )
-  return home
+  return { home, server }
 })
 
 /** A call in `home`'s workspace, and the one result it printed as `tag`. */
@@ -129,7 +153,7 @@ describe("gent ctl against a running server", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const home = yield* serveScratchHome
+          const { home } = yield* serveScratchHome
           const gent = ctlIn(home)
 
           const ended = yield* gent.as("TurnEnded", [
@@ -191,6 +215,12 @@ describe("gent ctl against a running server", () => {
           const status = yield* gent.as("Status", ["status"])
           expect(status.runtime).toBe("Idle")
           expect(status.server).toContain("/rpc")
+
+          // A defect crosses the boundary as one CtlFailed line, never a stack trace.
+          const broken = yield* runCtl(home, ["status", "--cwd", home], { brokenStdout: true })
+          expect(broken.code).toBe(CTL_EXIT.failed)
+          expect((yield* errorOf(broken))._tag).toBe("CtlFailed")
+          expect(yield* messageOf(broken)).toContain("stdout closed")
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
@@ -201,7 +231,7 @@ describe("gent ctl against a running server", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const home = yield* serveScratchHome
+          const { home } = yield* serveScratchHome
           const gent = ctlIn(home)
           const started = yield* gent.as("TurnEnded", [
             "send",
@@ -227,11 +257,44 @@ describe("gent ctl against a running server", () => {
   )
 
   it.live(
+    "send --new retried under one request id starts one session with one message",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { home, server } = yield* serveScratchHome
+          const gent = ctlIn(home)
+          const sendNew = gent.as("Sent", [
+            "send",
+            "--new",
+            "--model",
+            TEST_MODEL_ID,
+            "--request-id",
+            "new-1",
+            "start here",
+          ])
+          const one = yield* sendNew
+          const two = yield* sendNew
+          expect(two.sessionId).toBe(one.sessionId)
+          expect(two.messageId).toBe(one.messageId)
+          const { client } = yield* Gent.client(server, { cwd: home })
+          const sessions = yield* client.session.list()
+          expect(sessions.map((session) => session.id)).toEqual([one.sessionId])
+          yield* gent.as("TurnEnded", ["wait", "--message", one.messageId])
+          const snapshot = yield* gent.as("Snapshot", ["snapshot"])
+          expect(
+            snapshot.messages.filter((message) => message.role === "user").map((m) => m.text),
+          ).toEqual(["start here"])
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
     "request sends an extension request on the session and prints its reply",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const home = yield* serveScratchHome
+          const { home } = yield* serveScratchHome
           const gent = ctlIn(home)
           yield* gent.as("TurnEnded", ["send", "--new", "--model", TEST_MODEL_ID, "--wait", "hi"])
           const reply = yield* gent.as("Reply", [
@@ -241,7 +304,8 @@ describe("gent ctl against a running server", () => {
             "--id",
             "skills-list",
           ])
-          expect(Array.isArray(reply.reply)).toBe(true)
+          const skills = yield* decodeRequestReply(Schema.Array(Schema.Unknown))(reply.reply)
+          expect(Array.isArray(skills)).toBe(true)
           // A reply whose rows leave optional fields unset still crosses the
           // wire: the sessions pane reads this listing.
           const listing = yield* gent.as("Reply", [
@@ -255,20 +319,47 @@ describe("gent ctl against a running server", () => {
           ])
           const rows = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ rows: Schema.Array(Schema.Struct({ sessionId: Schema.String })) }),
-          )(listing.reply)
+          )(yield* decodeRequestReply(Schema.Unknown)(listing.reply))
           expect(rows.rows.length).toBeGreaterThan(0)
-          // The server checks the input against the request's schema.
-          const refused = yield* gent.run([
+          // A void reply crosses the wire as `Void`: `/goal status` presents and returns nothing.
+          const goal = yield* gent.as("Reply", [
             "request",
             "--extension",
-            "@gent/machines",
+            "@gent/goal",
             "--id",
-            "run-status",
+            "goal-command",
             "--input",
-            '{"run":"not-a-run"}',
+            '"status"',
           ])
+          expect(goal.reply).toEqual(RequestReply.cases.Void.make({}))
+          // The server checks the input against the request's schema: a run id
+          // that is not one is refused before the handler runs ...
+          const statusRequest = (input: string) =>
+            gent.run([
+              "request",
+              "--extension",
+              "@gent/machines",
+              "--id",
+              "run-status",
+              "--input",
+              input,
+            ])
+          const refused = yield* statusRequest('{"run":"not-a-run"}')
           expect(refused.code).toBe(CTL_EXIT.failed)
           expect((yield* errorOf(refused))._tag).toBe("CtlFailed")
+          expect(yield* messageOf(refused)).toContain("input decode failed")
+          // ... and a well-formed one reaches the handler, which finds no such run.
+          const absentRun = "run-0123456789abcdef"
+          const control = yield* statusRequest(`{"run":"${absentRun}"}`)
+          expect(control.code).toBe(CTL_EXIT.failed)
+          expect(yield* messageOf(control)).toContain(`No run ${absentRun}`)
+          expect(yield* messageOf(control)).not.toContain("input decode failed")
+          // `status --run` is the machines extension's view of the same request.
+          const view = yield* gent.run(["status", "--run", absentRun])
+          expect(view.code).toBe(CTL_EXIT.failed)
+          expect(yield* messageOf(view)).toContain(`No run ${absentRun}`)
+          const badView = yield* gent.run(["status", "--run", "not-a-run"])
+          expect(yield* messageOf(badView)).toContain("input decode failed")
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
@@ -279,7 +370,7 @@ describe("gent ctl against a running server", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const home = yield* serveScratchHome
+          const { home } = yield* serveScratchHome
           const gent = ctlIn(home)
           const ended = yield* gent.as("TurnEnded", [
             "send",
@@ -322,6 +413,27 @@ describe("gent ctl against a running server", () => {
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.live("a flag or argument the parser refuses is one CtlUsage line and exit 2", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("gent-ctl-parse-")
+        const unknownFlag = yield* runCtl(home, ["status", "--bogus"])
+        expect(unknownFlag.code).toBe(CTL_EXIT.usage)
+        expect((yield* errorOf(unknownFlag))._tag).toBe("CtlUsage")
+        expect(yield* messageOf(unknownFlag)).toContain("bogus")
+        const missingText = yield* runCtl(home, ["send", "--cwd", home])
+        expect(missingText.code).toBe(CTL_EXIT.usage)
+        expect((yield* errorOf(missingText))._tag).toBe("CtlUsage")
+        const notAnInt = yield* runCtl(home, ["events", "--limit", "many"])
+        expect(notAnInt.code).toBe(CTL_EXIT.usage)
+        expect((yield* errorOf(notAnInt))._tag).toBe("CtlUsage")
+        // A help request is no failure.
+        const help = yield* runCtl(home, ["status", "--help"])
+        expect({ code: help.code, stderr: help.stderr }).toEqual({ code: CTL_EXIT.ok, stderr: "" })
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    ),
   )
 
   it.live("with no server for the data directory a call exits 3 and starts none", () =>

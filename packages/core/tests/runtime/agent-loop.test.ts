@@ -127,7 +127,11 @@ import {
   type WakeDueInput,
   WakeNext,
 } from "@gent/core/extensions/api"
-import type { RequestCapability } from "../../src/domain/capability"
+import {
+  decodeRequestReply,
+  type RequestCapability,
+  RequestReply,
+} from "../../src/domain/capability"
 import type { GentNamespacedClient } from "../../src/server/rpc"
 import {
   AgentLoopQueueStorage,
@@ -3310,13 +3314,15 @@ describe("branch resources follow the profile", () => {
           Stream.runCollect,
           Effect.map((all) => Array.from(all)),
         )
-        const readProbe = client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: ExtensionId.make(hot.id),
-          capabilityId: hot.requestId,
-          input: "read",
-        })
+        const readProbe = client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make(hot.id),
+            capabilityId: hot.requestId,
+            input: "read",
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(Schema.String)))
 
         const firstTurn = yield* completions(1)
         yield* client.message.send({ sessionId, branchId, content: "turn one" })
@@ -3704,13 +3710,15 @@ describe("branch resources over process services", () => {
         yield* client.session
           .watchRuntime({ sessionId, branchId })
           .pipe(Stream.runDrain, Effect.forkScoped)
-        const readCaptured = client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: ExtensionId.make("@test/captures-shared"),
-          capabilityId: "read-captured",
-          input: "read",
-        })
+        const readCaptured = client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/captures-shared"),
+            capabilityId: "read-captured",
+            input: "read",
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(Schema.String)))
         const expected = `builtin@${sessionId}/${branchId}:${cwd}`
         expect(yield* readCaptured).toBe(expected)
         yield* fs.writeFileString(overrideFile, sharedOverrideSource("override-two", log))
@@ -3918,13 +3926,15 @@ export default defineExtension({
         .watchRuntime({ sessionId, branchId })
         .pipe(Stream.runDrain, Effect.forkScoped)
       const call = (capabilityId: string) =>
-        client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: ExtensionId.make("@test/lifecycle"),
-          capabilityId,
-          input: "read",
-        })
+        client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/lifecycle"),
+            capabilityId,
+            input: "read",
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(Schema.String)))
       const read = call("read-lifecycle")
       const hold = call("hold-lifecycle")
       const letGo = fs.writeFileString(`${log}.go`, "")
@@ -4043,13 +4053,15 @@ export default defineExtension({
         yield* client.session
           .watchRuntime({ sessionId, branchId })
           .pipe(Stream.runDrain, Effect.forkScoped)
-        const ping = client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: ExtensionId.make("@test/pinger"),
-          capabilityId: "ping",
-          input: "ping",
-        })
+        const ping = client.extension
+          .request({
+            sessionId,
+            branchId,
+            extensionId: ExtensionId.make("@test/pinger"),
+            capabilityId: "ping",
+            input: "ping",
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(Schema.String)))
         const opens = fs
           .readFileString(log)
           .pipe(Effect.map((text) => text.split("\n").filter((line) => line === "open").length))
@@ -5153,7 +5165,9 @@ describe("agent-loop actor commands", () => {
         yield* Fiber.join(submitFiber)
         const result = yield* Fiber.join(requestFiber)
         expect(executed).toBe(true)
-        expect(result).toEqual("blocked until turn completes")
+        expect(result).toEqual(
+          RequestReply.cases.Value.make({ value: "blocked until turn completes" }),
+        )
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
@@ -5199,7 +5213,7 @@ describe("agent-loop actor commands", () => {
           capabilityId: "read-probe",
           input: "mid-turn",
         }).pipe(Effect.timeout("2 seconds"))
-        expect(result).toEqual("read mid-turn")
+        expect(result).toEqual(RequestReply.cases.Value.make({ value: "read mid-turn" }))
         yield* Deferred.succeed(streamReleased, void 0)
         yield* Fiber.join(submitFiber)
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
@@ -8613,12 +8627,14 @@ describe("durable wakes", () => {
           { sourceId: "same", at: Option.some(now + 7_200_000), version: 2, attempts: 0 },
         ])
         const cancel = (sourceId: string) =>
-          client.extension.request({
-            ...ids,
-            extensionId: WAKER_ID,
-            capabilityId: "cancel",
-            input: { sourceId },
-          })
+          client.extension
+            .request({
+              ...ids,
+              extensionId: WAKER_ID,
+              capabilityId: "cancel",
+              input: { sourceId },
+            })
+            .pipe(Effect.flatMap(decodeRequestReply(Schema.Boolean)))
         expect(yield* cancel("same")).toBe(true)
         expect(yield* cancel("same")).toBe(false)
         expect(yield* read(wakeRows)).toEqual([])
@@ -8713,12 +8729,14 @@ describe("durable wakes", () => {
         yield* armWake(client, ids, { sourceId: "rearmed", at: yield* Clock.currentTimeMillis })
         yield* Deferred.await(firstEntered)
 
-        const cancelled = yield* client.extension.request({
-          ...ids,
-          extensionId: WAKER_ID,
-          capabilityId: "cancel",
-          input: { sourceId: "rearmed" },
-        })
+        const cancelled = yield* client.extension
+          .request({
+            ...ids,
+            extensionId: WAKER_ID,
+            capabilityId: "cancel",
+            input: { sourceId: "rearmed" },
+          })
+          .pipe(Effect.flatMap(decodeRequestReply(Schema.Boolean)))
         expect(cancelled).toBe(true)
         const later = (yield* Clock.currentTimeMillis) + 50
         yield* armWake(client, ids, { sourceId: "rearmed", at: later })

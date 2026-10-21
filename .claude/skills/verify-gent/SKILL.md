@@ -16,13 +16,14 @@ RUN="$TMPDIR/verify/<name>"            # a new directory, outside every checkout
 bun run --silent verify:launch --dir "$RUN"
 ```
 
-It prints one `Launched` line: `dir`, `work`, `gent`, `url`, `build`, `supervisorPid`, `serverPid`, `ms` (about 1.3 s on the laptop, measured). It refuses a directory that is not empty or that is inside the checkout. What it seeds:
+It prints one `Launched` line: `dir`, `work`, `gent`, `url`, `build`, `supervisorPid`, `serverPid`, `ms` (about 1.3 s on the laptop, measured). Paths are the real paths (`/private/tmp/…`, not `/tmp/…`). It refuses a directory that is not empty or that is inside the checkout under any name, a symlink included. Until the server answers, launch owns the supervisor: ctrl+c, a kill or a failure of launch stops the supervisor and its server. What it seeds:
 
 - `$RUN/home`: `HOME`, with `.gent/config.json` naming `anthropic/claude-sonnet-5`.
-- `$RUN/data`: `GENT_DATA_DIR`. `$RUN/auth`: fake provider keys (`GENT_AUTH_DIRECTORY`). `$RUN/gh`: an empty `gh` config.
+- `$RUN/data`: `GENT_DATA_DIR`. `$RUN/auth`: fake provider keys (`GENT_AUTH_DIRECTORY`). `$RUN/gh`: an empty `gh` config. `$RUN/cache`: the source transform cache (`XDG_CACHE_HOME`).
 - `$RUN/work`: the workspace. A drive runs there unless its script names a `cwd`.
 - `$RUN/bin/gent`: runs this checkout's `apps/tui/src/main.tsx` with the run's environment and nothing of the caller's.
-- `$RUN/run.json`: the record. `$RUN/server.log`, `$RUN/serve.log`: the server and supervisor output.
+- `$RUN/pids.json`: the receipt `stop` reads, written as each process starts. `$RUN/run.json`: the record, written once the server answers.
+- `$RUN/server.log`, `$RUN/serve.log`: the server and supervisor output. `$RUN/verify.log`: the whole cause of a helper defect.
 
 The server is `gent server start --mock`: the scripted model. A message that holds a debug phrase plays a scenario (`DEBUG_SCENARIOS` in `packages/core/src/runtime/provider.ts`): `debug tools` (six tool steps, the last fails), `debug ask` (a background question, then a 20 s bash step), `debug think` (a reasoning heading, one bash step, the answer `Both chrome paths draw once.`), `debug threads`, `debug delegate`, `debug handoff`, `debug usage limit`. Any other message gets `gent debug response. Latest user message: …`.
 
@@ -41,7 +42,7 @@ Read-only. It prints `Healthy` with every check and `timingsMeaningful`, or fail
 - `server`: the data directory's lock names the recorded server PID, and its identity route answers.
 - `build`: the server's build is `src-<short HEAD>` of this checkout; uncommitted files are counted in the detail.
 - `client`: a client lists sessions within 10 s.
-- `scratch`: `HOME`, `GENT_DATA_DIR` and `GENT_AUTH_DIRECTORY` are under `$RUN`.
+- `scratch`: `HOME`, `GENT_DATA_DIR`, `GENT_AUTH_DIRECTORY` and `XDG_CACHE_HOME` resolve under `$RUN`.
 - `log`: the logs under `$RUN/data/logs` hold no `Error` or `Fatal` line.
 - `load`: the load average against the core count. Above it, `timingsMeaningful` is false: claim no timing.
 
@@ -52,26 +53,29 @@ Run it before the first drive, and again after any surprising result.
 A drive is a JSON script for `verify:drive`, which runs it on the run's TUI:
 
 ```sh
-bun run --silent verify:drive --dir "$RUN" --script <script.json> --out "$EVIDENCE/<feature>"
+bun run --silent verify:drive --dir "$RUN" --script <script.json> --out "$EVIDENCE/<feature>" 2> "$EVIDENCE/<feature>.log"
 ```
 
-- `command` is the argv. `["gent", …]` runs the run's wrapper: `["gent"]` opens a new session, `["gent", "resume"]` the last one, `["gent", "-p", "<prompt>"]` sends a first prompt.
-- Steps: `["send", text]`, `["keys", name]` (`enter`, `esc`, `tab`, `up`, `down`, `backspace`, `ctrl+c`, `ctrl+p` …, the `keys` table in `packages/e2e/src/pty-fixture.ts`), `["waitFor", regex, ms]`, `["settle", ms]` (the screen is quiet that long), `["wait", ms]`, `["resize", cols, rows]`, `["cap", name]`, `["capAll", name]` (with scrollback), `["sh", command]`.
-- `sh` runs in the workspace with `gent` on `PATH` as the run's wrapper and `$EVIDENCE` set to `--out`. `gent ctl` there finds the run's server through its data directory.
-- It prints `Driven` (`exit`, `captures`, `hits`). A `waitFor` that never matched or an `sh` step that failed makes it fail with `DriveMissed` (`misses`, `shells`), after the script ran to its end.
+- `command` is the argv, and its program is `gent`: the run's wrapper. `["gent"]` opens a new session, `["gent", "resume"]` the last one, `["gent", "-p", "<prompt>"]` sends a first prompt. Another program is refused.
+- Steps: `["send", text]`, `["keys", name]` (`enter`, `esc`, `tab`, `up`, `down`, `left`, `backspace`, `ctrl+c`, `ctrl+p` …, the `keys` table in `packages/e2e/src/pty-fixture.ts`), `["waitFor", regex, ms]`, `["settle", ms]` (the screen is quiet that long), `["wait", ms]`, `["resize", cols, rows]`, `["cap", name]`, `["capAll", name]` (with scrollback), `["sh", command, ms]` (30 s unless the step names its ms).
+- The script is checked before anything runs. A `waitFor` regex that does not compile, a capture name that is not one file name (`../x`, `a/b`), a `cwd` outside `$RUN` (symlinks resolved), or an `env` that sets a variable of the run (`HOME`, `GENT_DATA_DIR`, `GENT_AUTH_DIRECTORY`, `XDG_CACHE_HOME`, `PATH`, `EVIDENCE` …) fails it with `VerifyFailed` (`step: "script"`). An `--out` inside the checkout under any name is refused (`step: "out"`).
+- `sh` runs in the workspace with `gent` on `PATH` as the run's wrapper and `$EVIDENCE` set to `--out`. `gent ctl` there finds the run's server through its data directory. Each `sh` step runs in a process group of its own; the step's end stops the group, so a command it left in the background does not outlive it.
+- Each step prints one line on stderr: `ok|miss|fail <step> <ms>ms`, then the file a capture saved, or why the step failed. `--print` adds each capture's screen after its line. Stdout holds only the result.
+- It prints `Driven` (`steps`, `end`, `captures`, `recording`). It fails with `DriveFailed` (`problems`, one line each; `steps`; `end`) after the script ran to its end when a `waitFor` never matched, an `sh` step exited non-zero or outlived its limit, or the program exited by itself with another code than the script's `exit` (0 when it names none). A program still running when the steps end is stopped by the drive (`end: Stopped`) and passes, unless the script names an `exit`.
 - Reach a state by keys and slash commands. `gent ctl send` is a second client, a user path of its own; never a setter that skips the TUI.
 
 Feature recipes, with a shipped script each: [features/README.md](features/README.md).
 
-`gent ctl` (full surface in `apps/tui/docs/cli.md`): `send`, `events`, `wait`, `snapshot`, `status`, `request`. Outside a drive, run it as `$RUN/bin/gent ctl … --cwd $RUN/work`. Exit codes: 0 ok, 1 failed, 2 usage, 3 no server, 4 not found, 124 wait timed out.
+`gent ctl` (full surface in `apps/tui/docs/cli.md`): `send`, `events`, `wait`, `snapshot`, `status`, `request`. Outside a drive, run it as `$RUN/bin/gent ctl … --cwd $RUN/work`. Exit codes: 0 ok, 1 failed, 2 usage (a flag the parser refuses too), 3 no server, 4 not found, 124 wait timed out. Every failure is one JSON line on stderr. `status --run <id>` prints a machine run's view (`View`), the machines extension's projection of its `run-status` request. A `request` reply is `{"_tag":"Value","value":…}`, or `{"_tag":"Void"}` for a request with no output (`/goal`). `send --new --request-id <id>` is safe to retry: the same id makes one session and one message.
 
 ## Evidence
 
 The caller names the evidence directory, outside every checkout (`verify:drive` refuses one inside). One subdirectory per feature. What it holds:
 
 - each `cap` as `<name>.txt`: a header (`# <name> <cols>x<rows> buffer=… cursor=… t=<ms>`), then numbered rows;
+- `drive.cast`: the whole drive as an asciicast v2 recording, on by default (`--no-record` turns it off). Before it prints `Driven`, the drive reads it back as a player does: a version 2 header at the script's `cols`x`rows`, events in time order, a length above zero. `Driven.recording` names the file, its `seconds` and `events`. Any asciicast v2 player plays it (`asciinema play`, not installed on the laptop);
 - the files the script's `sh` steps write: `gent ctl` JSON (`events`, `snapshot`, `status`, a `request` reply) and workspace files;
-- the drive's own output: the `Driven` or `DriveMissed` line, and each step's hit or miss on stderr (keep it: `2> "$EVIDENCE/<feature>.log"`).
+- the drive's own output: the `Driven` or `DriveFailed` line, and the step lines on stderr (keep them: `2> "$EVIDENCE/<feature>.log"`).
 
 Proof rules:
 
@@ -86,18 +90,18 @@ Proof rules:
 bun run --silent verify:stop --dir "$RUN" --remove
 ```
 
-It sends SIGTERM to the recorded supervisor (only when that PID still runs `verify.ts serve`), waits up to 10 s, then SIGKILLs a recorded PID that still runs the run's command. It prints `Stopped` with `alive` (empty when nothing is left) and `removed`. Never kill by name: the owner's gent and other runs match. Evidence stays where `--out` put it.
+It reads the receipt `$RUN/pids.json`, so a run whose launch died before its server answered stops too. It sends SIGTERM to the recorded supervisor (only when that PID still runs `verify.ts serve`), waits up to 10 s, then SIGKILLs a recorded PID that still runs the run's command. It prints `Stopped` (`supervisorPid`, `serverPid`, `removed`) only when `ps` shows no recorded PID left. When `ps` cannot run, or a PID survives the SIGKILL, it fails with `StopFailed` (`alive`) and keeps the receipt and the directory: run it again. Never kill by name: the owner's gent and other runs match. Evidence stays where `--out` put it.
 
 ## Helpers
 
-| Command                                                                 | Prints                         |
-| ----------------------------------------------------------------------- | ------------------------------ |
-| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90]`  | `Launched`                     |
-| `bun run --silent verify:doctor --dir <run>`                            | `Healthy`, else `DoctorFailed` |
-| `bun run --silent verify:drive --dir <run> --script <file> --out <dir>` | `Driven`, else `DriveMissed`   |
-| `bun run --silent verify:stop --dir <run> [--remove]`                   | `Stopped`                      |
+| Command                                                                                         | Prints                         |
+| ----------------------------------------------------------------------------------------------- | ------------------------------ |
+| `bun run --silent verify:launch --dir <run> [--port 0] [--timeout 90]`                          | `Launched`                     |
+| `bun run --silent verify:doctor --dir <run>`                                                    | `Healthy`, else `DoctorFailed` |
+| `bun run --silent verify:drive --dir <run> --script <file> --out <dir> [--print] [--no-record]` | `Driven`, else `DriveFailed`   |
+| `bun run --silent verify:stop --dir <run> [--remove]`                                           | `Stopped`, else `StopFailed`   |
 
-All four are `packages/e2e/src/verify.ts`, tested by `packages/e2e/tests/verify.test.ts` (in `bun run test:e2e`). A helper failure is one `VerifyFailed` line (`step`, `message`) on stderr and exit 1. `bun packages/e2e/src/drive.ts <script>` runs a script with no run around it, when a check needs no server.
+All four are `packages/e2e/src/verify.ts`, tested by `packages/e2e/tests/verify.test.ts` (in `bun run test:e2e`). A helper failure is one tagged JSON line on stderr and exit 1: `VerifyFailed` (`step`, `message`), `DoctorFailed`, `DriveFailed` or `StopFailed`. A flag the parser refuses is `VerifyUsage` and exit 2. A defect is `VerifyFailed` with `step: "defect"`; its whole cause is in `$RUN/verify.log`. `bun packages/e2e/src/drive.ts <script> [--no-record] [--print]` runs a script with no run around it, when a check needs no server.
 
 ## Hosts
 

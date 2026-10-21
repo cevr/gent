@@ -13,7 +13,7 @@ import {
   Stream,
 } from "effect"
 import { BranchId, ExtensionContext, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
-import { AgentEvent } from "@gent/core/protocol"
+import { AgentEvent, decodeRequestReply } from "@gent/core/protocol"
 import {
   activityOf,
   AgentActivity,
@@ -739,13 +739,15 @@ const requestRows = (
   at: { readonly sessionId: SessionId; readonly branchId: BranchId } = harness,
 ) =>
   Effect.gen(function* () {
-    const raw = yield* harness.client.extension.request({
+    const wire = yield* harness.client.extension.request({
       sessionId: at.sessionId,
       branchId: at.branchId,
       extensionId: ref(AgentsViewRpc.ListAgents).extensionId,
       capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
       input,
     })
+    // The reply's JSON, which a test also reads with its own narrower schemas.
+    const raw = yield* decodeRequestReply(Schema.Unknown)(wire)
     const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
     return { raw, reply }
   })
@@ -1285,7 +1287,7 @@ describe("AgentsViewExtension via RPC", () => {
             capabilityId: ref(AgentsViewRpc.ListAgents).capabilityId,
             input: {},
           })
-          const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
+          const reply = yield* decodeRequestReply(ReplySchema)(raw)
 
           const parentRow = reply.rows.find((row) => row.sessionId === parent.sessionId)
           const childRow = reply.rows.find((row) => row.sessionId === child.sessionId)

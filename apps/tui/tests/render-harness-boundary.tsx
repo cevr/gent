@@ -11,6 +11,8 @@ import {
   Layer,
   Option,
   Path,
+  Predicate,
+  Schema,
   Scope,
   Stream,
 } from "effect"
@@ -57,6 +59,7 @@ import {
   ConnectionState,
   SessionRuntimeStateSchema,
   ExtensionHealthSnapshot,
+  RequestReply,
 } from "@gent/core/protocol"
 import { emptyQueueSnapshot, EventId, testAgent } from "@gent/core/test-utils"
 
@@ -164,6 +167,28 @@ export const snapshotNaming = (agent: AgentName) => ({
       metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
     }),
 })
+
+/**
+ * A mocked request's answer as the server puts it on the wire: a test names
+ * the reply's encoded form (nothing for a void request), and the client's
+ * typed adapter decodes the `RequestReply` with the request's output schema.
+ */
+const onTheWire =
+  (method: MockMethod): MockMethod =>
+  (...args) => {
+    const reply = method(...args)
+    // A mocked method answers `unknown`; a reply is an Effect that needs nothing.
+    const isReply = <T,>(value: T): value is T & Effect.Effect<unknown> => Effect.isEffect(value)
+    if (!isReply(reply)) return reply
+    return Effect.flatMap(reply, (value) => {
+      if (Schema.is(RequestReply)(value)) return Effect.succeed(value)
+      if (Predicate.isUndefined(value)) return Effect.succeed(RequestReply.cases.Void.make({}))
+      return Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
+        Effect.map((json) => RequestReply.cases.Value.make({ value: json })),
+        Effect.orDie,
+      )
+    })
+  }
 
 /** How a mock client answers: `holdingReplies` makes one that holds every reply. */
 interface ReplyHold {
@@ -297,10 +322,18 @@ export const createMockClient = (
         () => ({}),
       )
       const extra = Option.fromNullishOr(overrides?.[ns])
-      const methods: Partial<MockNamespace> = Option.match(extra, {
+      const given: Partial<MockNamespace> = Option.match(extra, {
         onNone: () => base,
         onSome: (value) => ({ ...base, ...value }),
       })
+      const request = Option.fromUndefinedOr(given["request"])
+      const methods: Partial<MockNamespace> = Option.match(
+        Option.filter(request, () => ns === "extension"),
+        {
+          onNone: () => given,
+          onSome: (handler) => ({ ...given, request: onTheWire(handler) }),
+        },
+      )
       return Option.match(Option.fromUndefinedOr(replies), {
         onNone: () => methods,
         onSome: ({ hold }) =>

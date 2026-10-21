@@ -17,7 +17,13 @@ import {
   questionAnswerText,
   QuestionRow,
 } from "../src/interaction-tools.js"
-import { BranchId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
+import {
+  BranchId,
+  SessionId,
+  SteerCommand,
+  ToolCallId,
+  decodeRequestReply,
+} from "@gent/core/protocol"
 import {
   createRpcHarness,
   runToolWithCtx,
@@ -769,7 +775,7 @@ const questionsHarness = (
       target,
       home,
       open: request("questions.open", {}).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(OpenQuestions)),
+        Effect.flatMap(decodeRequestReply(OpenQuestions)),
         Effect.map((value) => value.questions),
       ),
       answer: (input: QuestionsInput) => request("questions.answer", input),

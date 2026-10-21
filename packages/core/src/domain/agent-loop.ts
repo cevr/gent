@@ -25,6 +25,7 @@ import { ModelAttempts, ModelId, ProviderId, ReasoningEffort } from "./agent.js"
 import { CredentialReceipt } from "./driver.js"
 import { WakeCause, WakeNext } from "./extension.js"
 import { omitUndefined } from "./guards.js"
+import { RequestReply } from "./capability.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import * as Prompt from "effect/ai/Prompt"
 import { Actor } from "effect-encore"
@@ -789,7 +790,7 @@ export const AgentLoop = Actor.fromEntity(
     },
     RequestExtension: {
       payload: RequestExtensionFields,
-      success: Schema.Unknown,
+      success: RequestReply,
       error: AgentLoopError,
       id: branchTarget,
     },

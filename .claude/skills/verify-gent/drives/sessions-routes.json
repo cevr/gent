@@ -1,0 +1,38 @@
+{
+  "command": ["gent"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["keys", "left"],
+    ["waitFor", "Sessions · \\d+", 20000],
+    ["wait", 300],
+    ["cap", "76-left-key"],
+    ["keys", "esc"],
+    ["settle", 300],
+    ["cap", "77-left-closed"],
+    ["keys", "ctrl+p"],
+    ["waitFor", "Commands \\d+ \\[All\\]", 5000],
+    ["send", "sessions"],
+    ["waitFor", "Sessions .*\\[left\\]", 5000],
+    ["cap", "78-palette-row"],
+    ["keys", "enter"],
+    ["waitFor", "Sessions · \\d+", 20000],
+    ["wait", 300],
+    ["cap", "79-palette-sessions"],
+    ["keys", "esc"],
+    ["settle", 300],
+    ["resize", 60, 20],
+    ["keys", "left"],
+    ["waitFor", "Sessions · \\d+", 20000],
+    ["wait", 300],
+    ["cap", "80-left-narrow"],
+    ["keys", "esc"],
+    ["settle", 300],
+    [
+      "sh",
+      "gent ctl request --extension @gent/agents-view --id list-agents --input '{\"query\":\"\"}' > \"$EVIDENCE/ctl-list-agents.json\""
+    ]
+  ]
+}

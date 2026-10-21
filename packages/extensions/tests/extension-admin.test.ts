@@ -3,7 +3,7 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Schema, Str
 import { BunServices } from "@effect/platform-bun"
 import { ExtensionId, ExtensionStatus, resolveDataDir } from "@gent/core/extensions/api"
 import { BunPlatformLive } from "@gent/core/host-bun"
-import { ExtensionStatusScope, messagePartsText } from "@gent/core/protocol"
+import { ExtensionStatusScope, messagePartsText, decodeRequestReply } from "@gent/core/protocol"
 import {
   ApprovalService,
   ConfigService,
@@ -572,7 +572,7 @@ describe("extension admin pane requests", () => {
         capabilityId,
         input,
       })
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PaneOutput)))
+      .pipe(Effect.flatMap(decodeRequestReply(PaneOutput)))
   const disabledIn = (configPath: string) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

@@ -77,6 +77,7 @@ gent ctl wait --message <messageId>         # the turn a send opened, even one a
 gent ctl wait --until InteractionPresented --timeout 20
 gent ctl snapshot -s <session-id>
 gent ctl status
+gent ctl status --run run-0123456789abcdef   # a machine run, as the machines extension shows it
 gent ctl request --extension @gent/machines --id run-status --input '{"run":"run-0123456789abcdef"}'
 ```
 
@@ -87,17 +88,23 @@ record per line, so `events --limit 3` prints five lines. `events` prints one
 compact record per event, and a run of `StreamChunk` events folds into one
 record; `--full` prints the stored envelopes. Each record's `id` is a cursor
 for `--since` and `--after`. `send --request-id <id>` makes a retry safe: the
-server admits one message per id. `request` sends one extension request, as a
-client extension does, and prints its encoded reply.
+server admits one message per id, and with `--new` creates one session per id,
+so a repeated `send --new --request-id <id>` names the same session and
+message. `request` sends one extension request, as a client extension does,
+and prints its reply as it crosses the wire: `{"_tag":"Value","value":…}`, the
+output's encoded JSON, or `{"_tag":"Void"}` for a request whose output is
+`Schema.Void` (`/goal`). A client extension may project one of its requests
+into a `status` flag (`ctlProjection` in the client contribution): `status
+--run <id>` is the machines extension's `run-status` request, printed as
+`View` with the encoded reply in `view`.
 
 A failure prints one tagged JSON line on stderr and exits with its code:
 
-| Exit | Error             | Meaning                                                                           |
-| ---- | ----------------- | --------------------------------------------------------------------------------- |
-| 0    |                   | Success                                                                           |
-| 1    | `CtlFailed`       | An RPC or request failure, or a lost connection                                   |
-| 1    | (parser text)     | A flag or argument the parser refuses                                             |
-| 2    | `CtlUsage`        | Flags that parse but do not fit together                                          |
-| 3    | `CtlNoServer`     | No live server for the data directory                                             |
-| 4    | `CtlNotFound`     | The session or branch does not exist                                              |
-| 124  | `CtlWaitTimedOut` | `wait` saw no match in `--timeout` seconds; `cursor` is the last event id it read |
+| Exit | Error             | Meaning                                                                                               |
+| ---- | ----------------- | ----------------------------------------------------------------------------------------------------- |
+| 0    |                   | Success                                                                                               |
+| 1    | `CtlFailed`       | An RPC or request failure, a lost connection, or a defect (`defect: …`; the client log has the cause) |
+| 2    | `CtlUsage`        | A flag or argument the parser refuses, or flags that parse but do not fit together                    |
+| 3    | `CtlNoServer`     | No live server for the data directory                                                                 |
+| 4    | `CtlNotFound`     | The session or branch does not exist                                                                  |
+| 124  | `CtlWaitTimedOut` | `wait` saw no match in `--timeout` seconds; `cursor` is the last event id it read                     |

@@ -60,6 +60,7 @@ import builtinCheckpoints from "./checkpoints.client"
 import builtinExtensionAdmin from "./extension-admin.client"
 import builtinGit from "./git.client"
 import builtinInteractions from "./interaction-tools.client"
+import builtinMachines from "./machines.client"
 import builtinSessionTools from "./session-tools.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
@@ -839,6 +840,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinWake,
   builtinHerdr,
   builtinInteractions,
+  builtinMachines,
   builtinSessionTools,
   builtinSkills,
   builtinThreadView,

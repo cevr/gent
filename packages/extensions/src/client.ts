@@ -72,3 +72,4 @@ export {
   threadRoundEndAnswer,
   threadRoundText,
 } from "./threads.js"
+export { MachinesRpc } from "./machines.js"

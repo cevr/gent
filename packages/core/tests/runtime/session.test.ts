@@ -38,6 +38,7 @@ import {
   SteerCommand,
 } from "../../src/domain/message"
 import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
+import { decodeRequestReply } from "../../src/domain/capability"
 import {
   CurrentWorkspaceId,
   ActorCommandId,
@@ -1442,7 +1443,7 @@ describe("branch-scoped resources", () => {
         capabilityId: readId,
         input: "read",
       })
-      expect(first).toBe("instance:1")
+      expect(yield* decodeRequestReply(Schema.String)(first)).toBe("instance:1")
       expect(events).toContain("acquire:1")
       expect(events).not.toContain("release:1")
 
@@ -1453,7 +1454,7 @@ describe("branch-scoped resources", () => {
         capabilityId: readId,
         input: "read",
       })
-      expect(second).toBe("instance:1")
+      expect(yield* decodeRequestReply(Schema.String)(second)).toBe("instance:1")
       expect(nextInstance).toBe(1)
 
       const otherBranch = yield* client.branch.create({ sessionId })
@@ -1464,7 +1465,7 @@ describe("branch-scoped resources", () => {
         capabilityId: readId,
         input: "read",
       })
-      expect(other).toBe("instance:2")
+      expect(yield* decodeRequestReply(Schema.String)(other)).toBe("instance:2")
       expect(nextInstance).toBe(2)
       expect(events).not.toContain("release:1")
       expect(events).not.toContain("release:2")

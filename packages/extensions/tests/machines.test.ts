@@ -1,3 +1,4 @@
+import { decodeRequestReply } from "@gent/core/protocol"
 import { describe, expect, it } from "effect-bun-test"
 import {
   Deferred,
@@ -504,7 +505,7 @@ describe("a machine run", () => {
           capabilityId: statusRef.capabilityId,
           input: { run },
         })
-      const asking = yield* Schema.decodeUnknownEffect(MachineRunStatus)(yield* readStatus(owner))
+      const asking = yield* decodeRequestReply(MachineRunStatus)(yield* readStatus(owner))
       expect(asking.status).toBe("asking")
       expect(String(asking.state)).toBe("decide")
       expect(asking.steps.length).toBeGreaterThan(0)

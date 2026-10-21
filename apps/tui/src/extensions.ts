@@ -56,6 +56,7 @@ export {
   type StatusLabelItem,
   stoppableContribution,
   widgetContribution,
+  ctlProjection,
 } from "./extensions/client-facets.js"
 
 // ── rendering kit ──

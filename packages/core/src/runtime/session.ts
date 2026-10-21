@@ -21,6 +21,7 @@ import {
 import { omitUndefined } from "../domain/guards.js"
 import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/agent.js"
 import { NotFoundError } from "../domain/errors.js"
+import type { RequestReply } from "../domain/capability.js"
 import {
   ActorCommandId,
   type BranchId,
@@ -251,7 +252,7 @@ export interface SessionRuntimeService {
   ) => Effect.Effect<void, SessionRuntimeError>
   readonly requestExtension: (
     input: ExtensionRequestPayload,
-  ) => Effect.Effect<unknown, SessionRuntimeError>
+  ) => Effect.Effect<RequestReply, SessionRuntimeError>
   readonly drainQueuedMessages: (
     input: DrainQueuedMessagesPayload,
   ) => Effect.Effect<QueueSnapshot, SessionRuntimeError>

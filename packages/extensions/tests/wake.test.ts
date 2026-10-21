@@ -81,6 +81,7 @@ import {
   ToolCallId,
   SteerCommand,
   type GentNamespacedClient,
+  decodeRequestReply,
 } from "@gent/core/protocol"
 import {
   RequestId,
@@ -90,6 +91,7 @@ import {
   ExtensionHost,
   ExtensionId,
   ExtensionServiceError,
+  ref,
   request,
   type ExtensionContextService,
   type TurnAfterInput,
@@ -117,7 +119,7 @@ const pendingOf = (
       capabilityId: WakeRpc.Pending.id,
       input: {},
     })
-    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
+    .pipe(Effect.flatMap(decodeRequestReply(WakePending)))
 
 const replyStream = (text: string) =>
   Stream.fromIterable([textDeltaPart(text), finishPart({ finishReason: "stop" })])
@@ -2694,7 +2696,7 @@ describe("wake across a disable", () => {
             input: {},
           })
           .pipe(
-            Effect.flatMap(Schema.decodeUnknownEffect(TimersOutput)),
+            Effect.flatMap(decodeRequestReply(TimersOutput)),
             Effect.map((output) => output.timers),
           )
         yield* client.message.send({ sessionId, branchId, content: "watch it later" })
@@ -3113,7 +3115,10 @@ describe("auto-resume", () => {
             capabilityId: WakeRpc.Dismiss.id,
             input: { wakeId: resume?.wakeId },
           })
-          expect(dismissed).toEqual({ dismissed: [resume?.wakeId] })
+          const { dismissed: dismissedIds } = yield* decodeRequestReply(
+            ref(WakeRpc.Dismiss).output,
+          )(dismissed)
+          expect(dismissedIds).toEqual([String(resume?.wakeId)])
           expect((yield* pendingOf(client, ids)).entries).toEqual([])
           yield* TestClock.adjust("2 minutes")
           const snapshot = yield* client.session.getSnapshot(ids)

@@ -228,6 +228,29 @@ export interface CapabilityRef<Input = unknown, Output = unknown> {
 }
 
 /**
+ * A request's reply as the actor and the RPC carry it. `Value` holds the JSON
+ * of the output's encoded form; `Void` stands for an output that encodes to
+ * nothing (a `Schema.Void` request), which has no JSON value of its own. A
+ * client decodes it with the request's output schema (`decodeRequestReply`).
+ */
+export const RequestReply = Schema.TaggedUnion({
+  Value: { value: Schema.Json },
+  Void: {},
+})
+export type RequestReply = typeof RequestReply.Type
+
+/** The reply as `output` decodes it: the encoded value, or nothing for `Void`. */
+export const decodeRequestReply =
+  <Output>(output: Schema.Decoder<Output, never>) =>
+  (reply: RequestReply): Effect.Effect<Output, Schema.SchemaError> =>
+    Schema.decodeUnknownEffect(output)(
+      RequestReply.match(reply, {
+        Value: ({ value }) => Option.some<unknown>(value),
+        Void: () => Option.none<unknown>(),
+      }).pipe(Option.getOrUndefined),
+    )
+
+/**
  * The services every root gives a tool body and a request handler: its
  * `ExtensionContext`, the extension platform, and the core services the
  * branch-tools entry exports. Any other service a leaf yields comes from a

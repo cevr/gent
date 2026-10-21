@@ -49,7 +49,7 @@ import {
   runProcess,
   tool,
 } from "@gent/core/extensions/api"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
+import { BranchId, SessionId, ToolCallId, decodeRequestReply } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolEventFor } from "./helpers/tool-event.js"
@@ -1950,7 +1950,7 @@ describe("the file listing request", () => {
           capabilityId: ref(FilesRpc.List).capabilityId,
           input: {},
         })
-        expect(yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(raw)).toEqual([
+        expect(yield* decodeRequestReply(Schema.Array(Schema.String))(raw)).toEqual([
           ".gitignore",
           "a.md",
           "src/b.ts",

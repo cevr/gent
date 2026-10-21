@@ -13,6 +13,7 @@ import {
   Predicate,
   Record,
   Runtime,
+  Stdio,
 } from "effect"
 import {
   clearClientLog,
@@ -65,7 +66,7 @@ import {
   storage,
   upgrade,
 } from "./ops"
-import { ctl } from "./ctl"
+import { ctl, runCtlCli } from "./ctl"
 
 // Clear client log on startup
 clearClientLog()
@@ -487,7 +488,14 @@ const command = main.pipe(
 
 // CLI. The version is the one apps/tui/package.json names: the release sets it
 // there once, and the compiled build bundles the file.
-const cli = Command.run(command, { version })
+// `gent ctl` answers in JSON only, its parse failures and defects included:
+// its own boundary runs it, and `gent --help` still lists it.
+const cli = Stdio.Stdio.use(({ args }) =>
+  Effect.flatMap(args, (argv) => {
+    if (argv[0] === "ctl") return runCtlCli(argv.slice(1), version)
+    return Command.runWith(command, { version })(argv)
+  }),
+)
 const TraceLoggerLayer = Layer.unwrap(
   clientTraceLogger.pipe(Effect.map((logger) => Logger.layer([logger]))),
 )

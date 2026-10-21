@@ -179,6 +179,8 @@ import {
   GentToolMetadataTag,
   getToolMetadata,
   isToolCapability,
+  decodeRequestReply,
+  RequestReply,
 } from "../../src/domain/capability"
 import { e2ePreset, testAgent } from "../helpers/test-preset"
 import {
@@ -4644,6 +4646,9 @@ const runRpc = (
   hostCtx = ctx,
 ) => registry.run(extensionId, capabilityId, input).pipe(provideCurrentHostCtx(hostCtx))
 
+/** The reply a request answering `value` puts on the wire. */
+const wireValue = (value: Schema.Json) => RequestReply.cases.Value.make({ value })
+
 describe("extension capability registries", () => {
   const test = it.live.layer(BunServices.layer)
 
@@ -4652,7 +4657,7 @@ describe("extension capability registries", () => {
       const cap = echoRequest()
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const result = yield* runRpc(resolved.rpcRegistry, cap.id, { value: "hi" })
-      expect(result).toEqual({ value: "hi" })
+      expect(result).toEqual(wireValue({ value: "hi" }))
     }))
 
   test("request handlers receive ExtensionContext authority without intent ceremony", () =>
@@ -4691,10 +4696,7 @@ describe("extension capability registries", () => {
           Interaction: { present: () => Effect.void },
         }),
       )
-      expect(result).toEqual({
-        followUpQueued: true,
-        interactionPresented: true,
-      })
+      expect(result).toEqual(wireValue({ followUpQueued: true, interactionPresented: true }))
     }))
 
   test("a project request shadows the builtin request of the same id", () =>
@@ -4741,7 +4743,7 @@ describe("extension capability registries", () => {
             extWith("project", [project]),
           ])
           const result = yield* runRpc(resolved.rpcRegistry, project.id, input)
-          expect(result).toEqual(expected)
+          expect(yield* decodeRequestReply(Schema.Unknown)(result)).toEqual(expected)
         }),
       { discard: true },
     ))
@@ -4765,7 +4767,7 @@ describe("extension capability registries", () => {
         },
       ])
       const result = yield* runRpc(resolved.rpcRegistry, builtin.id, { value: "hi" })
-      expect(result).toEqual({ value: "project-request" })
+      expect(result).toEqual(wireValue({ value: "project-request" }))
     }))
 
   test("request dispatch rejects higher-scope tool shadowing lower request", () =>
@@ -4813,8 +4815,22 @@ describe("extension capability registries", () => {
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const wire = yield* runRpc(resolved.rpcRegistry, cap.id, {})
-      expect(wire).toEqual({ token: "t-1" })
-      expect(yield* Schema.decodeUnknownEffect(Reply)(wire)).toEqual({ token: Option.some("t-1") })
+      expect(wire).toEqual(wireValue({ token: "t-1" }))
+      expect(yield* decodeRequestReply(Reply)(wire)).toEqual({ token: Option.some("t-1") })
+    }))
+
+  test("a void reply is Void, which a client decodes back to nothing", () =>
+    Effect.gen(function* () {
+      const cap = request({
+        id: "void",
+        input: Schema.Struct({}),
+        output: Schema.Void,
+        execute: () => Effect.void,
+      })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const wire = yield* runRpc(resolved.rpcRegistry, cap.id, {})
+      expect(wire).toEqual(RequestReply.cases.Void.make({}))
+      expect(yield* decodeRequestReply(Schema.Void)(wire)).toBeUndefined()
     }))
 
   test("an optional key set to undefined leaves the reply, which stays a JSON value", () =>
@@ -4829,8 +4845,7 @@ describe("extension capability registries", () => {
       })
       const resolved = resolveExtensions([extWith("builtin", [cap])])
       const wire = yield* runRpc(resolved.rpcRegistry, cap.id, {})
-      expect(wire).toStrictEqual({ live: true })
-      expect(Schema.is(Schema.Json)(wire)).toBe(true)
+      expect(wire).toStrictEqual(wireValue({ live: true }))
     }))
 
   test("output validation failure is wrapped in CapabilityError", () =>
@@ -6946,7 +6961,7 @@ describe("addressed session verbs via RPC", () => {
         capabilityId: capability.id,
         input,
       })
-      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(capability.output)))
+      .pipe(Effect.flatMap(decodeRequestReply(capability.output)))
 
   it.scopedLive(
     "a request creates, prompts, reads, queues on, steers into, stops, and deletes a child",
@@ -7550,7 +7565,7 @@ describe("models facet via RPC", () => {
                 ...omitUndefined({ text }),
               },
             })
-            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Ask.output)))
+            .pipe(Effect.flatMap(decodeRequestReply(Ask.output)))
 
         const before = yield* ask(Option.none())
         expect(before.available).toBe(false)
@@ -8251,13 +8266,15 @@ describe("extensions facet via RPC", () => {
           providerLayer,
         })
         const reload = (id: string) =>
-          client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: ExtensionId.make("@test/reloadable"),
-            capabilityId: "reload",
-            input: id,
-          })
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: ExtensionId.make("@test/reloadable"),
+              capabilityId: "reload",
+              input: id,
+            })
+            .pipe(Effect.flatMap(decodeRequestReply(Schema.String)))
 
         // The first request resolves the session's profile.
         yield* reload("@test/nope")

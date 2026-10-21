@@ -20,28 +20,44 @@ export const exitWithin = (
 
 // ── a command run to its end ────────────────────────────────────────────────
 
-/** What a command printed on stdout, and its exit code. */
+/** What a command printed on stdout and stderr, and its exit code. */
 export interface CommandRun {
   readonly code: number
   readonly stdout: string
+  readonly stderr: string
 }
 
 /**
- * Run `command` in `cwd` to its end, as a shell would: its stdout and exit
+ * Run `command` in `cwd` to its end, as a shell would: its output and exit
  * code. The verify helpers and the gent wrapper they write are run this way.
+ * `env` is laid over the caller's environment.
  */
-export const runCommand = (command: string, args: ReadonlyArray<string>, cwd: string) =>
+export const runCommand = (
+  command: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+  env: Record<string, string> = {},
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const handle = yield* spawner.spawn(
-        ChildProcess.make(command, [...args], { cwd, forceKillAfter: "5 seconds" }),
+        ChildProcess.make(command, [...args], {
+          cwd,
+          env,
+          extendEnv: true,
+          forceKillAfter: "5 seconds",
+        }),
       )
-      const [stdout, code] = yield* Effect.all(
-        [handle.stdout.pipe(Stream.decodeText, Stream.mkString), handle.exitCode],
-        { concurrency: 2 },
+      const [stdout, stderr, code] = yield* Effect.all(
+        [
+          handle.stdout.pipe(Stream.decodeText, Stream.mkString),
+          handle.stderr.pipe(Stream.decodeText, Stream.mkString),
+          handle.exitCode,
+        ],
+        { concurrency: 3 },
       )
-      return { code: Number(code), stdout } satisfies CommandRun
+      return { code: Number(code), stdout, stderr } satisfies CommandRun
     }),
   )
 

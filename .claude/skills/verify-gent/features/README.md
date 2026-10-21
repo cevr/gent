@@ -11,10 +11,11 @@ The maintained source for verifying what a gent TUI user can do. Read this index
 
 ## Proof and skip reporting
 
-- Each step that changes the screen has a `cap` after it, in `$EVIDENCE/<feature>/<nn>-<name>.txt`.
+- Each step that changes the screen has a `cap` after it, in `$EVIDENCE/<feature>/<nn>-<name>.txt`. The whole drive is `$EVIDENCE/<feature>/drive.cast`.
+- Each entry point a feature file lists has a journey of its own: a script under `drives/` that enters by that route.
 - A write is proved by a second view: a `gent ctl` read in an `sh` step, `gent resume`, or a file in `$RUN/work`.
 - Each journey runs at 100x30 and once at 60x20, and a resize between them where the feature draws a pane.
-- A `DriveMissed` is a finding: name the pattern, the capture before it and the doctor's load line. Rerun it on a fresh run of the base commit before calling it new.
+- A `DriveFailed` is a finding: name its `problems`, the capture before the first one and the doctor's load line. Rerun it on a fresh run of the base commit before calling it new.
 - An unreachable entry point is reported with the command tried and the unmet precondition. It never counts as verified through another path.
 
 ## Entry contract
@@ -35,7 +36,7 @@ Name user paths, screen text, keys, commands and observable results. Keep source
 
 - [A turn](turn.md): send, watch it run, interrupt, a second client, resize, every way to start or resume.
 - [Commands](commands.md): the `/` popup and the `ctrl+p` palette, filters, categories, `/new`.
-- [Model and effort](model-and-effort.md): `/model` and `/effort`, as pickers and with arguments.
+- [Model and effort](model-and-effort.md): `/model`, `/effort` and `/think`, as pickers and with arguments, and the palette's `Set Model` and `Set Effort`.
 - [Shell mode](shell-mode.md): `!` commands, their output and exit, sent to the model.
 - [Asks](asks.md): a background question, its footer row and the `/answer` form.
-- [Sessions](sessions.md): the Sessions pane, its filter, switching sessions.
+- [Sessions](sessions.md): the Sessions pane by `/sessions`, the palette and the `left` key, its filter, switching sessions.

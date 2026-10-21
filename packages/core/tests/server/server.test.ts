@@ -50,6 +50,7 @@ import {
   fixedSessionProfiles,
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  registerContributions,
   testAgent,
   testSqliteStorage,
   waitFor,
@@ -81,7 +82,6 @@ import {
   SessionProfileCache,
   type SessionProfile,
 } from "../../src/runtime/extension-host"
-import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   SessionRuntimeError,
   SessionRuntime,
@@ -90,6 +90,8 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import {
   ExtensionStatus,
+  type GentExtension,
+  type LoadedExtension,
   SessionMutations,
   type SessionMutationsService,
 } from "../../src/domain/extension"
@@ -114,6 +116,7 @@ import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
 import { WORKSPACE_ID_HEADER, workspaceIdForCwd } from "../../src/server/workspace-rpc"
+import { decodeRequestReply, request, RequestReply } from "../../src/domain/capability"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -201,7 +204,7 @@ const sessionRuntimeLayer = (
       sendUserMessage: () => Effect.void,
       steer: () => Effect.void,
       respondInteraction: () => Effect.void,
-      requestExtension: () => Effect.void,
+      requestExtension: () => Effect.succeed(RequestReply.cases.Void.make({})),
       drainQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getQueuedMessages: () => Effect.succeed(emptyQueueSnapshot()),
       getState: () =>
@@ -3707,4 +3710,95 @@ describe("server root composition", () => {
       ),
     )
   }
+})
+
+// ── request replies on the wire ─────────────────────────────────────────────
+
+class ReplyRefused extends Schema.TaggedError<ReplyRefused, { readonly brand: unique symbol }>()(
+  "ReplyRefused",
+  { message: Schema.String },
+) {}
+
+/** A transformed output: the decoded value holds an Option, the wire a string or null. */
+const TokenReply = Schema.Struct({ token: Schema.OptionFromNullOr(Schema.String) })
+
+const ReplyRequests = {
+  void: request({
+    id: "void",
+    input: Schema.Struct({}),
+    output: Schema.Void,
+    execute: () => Effect.void,
+  }),
+  null: request({
+    id: "null",
+    input: Schema.Struct({}),
+    output: Schema.Null,
+    // oxlint-disable-next-line effect/noNullish -- the request answers JSON null on purpose.
+    execute: () => Effect.succeed(null),
+  }),
+  token: request({
+    id: "token",
+    input: Schema.Struct({}),
+    output: TokenReply,
+    execute: () => Effect.succeed({ token: Option.some("t-1") }),
+  }),
+  refuse: request({
+    id: "refuse",
+    input: Schema.Struct({}),
+    output: Schema.Void,
+    execute: () => Effect.fail(new ReplyRefused({ message: "nothing to do here" })),
+  }),
+}
+
+const ReplyExtension: GentExtension = {
+  manifest: { id: ExtensionId.make("@test/replies") },
+  setup: registerContributions({ requests: Object.values(ReplyRequests) }),
+}
+
+describe("request replies on the wire", () => {
+  it.live("void, null, a transformed value and a refusal cross both transports", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = yield* Layer.build(
+          createE2ELayer({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, ReplyExtension],
+            providerLayer: LanguageModelLayers.debug(),
+          }),
+        )
+        const handlers = yield* Layer.build(
+          Layer.provide(RpcHandlersLive, Layer.succeedContext(root)),
+        )
+        const clients = yield* serveBothTransports(handlers)
+        const inWorkspace = RpcClient.withHeaders({ [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId })
+        const served = yield* clients["in-process"]["session.create"]({}).pipe(inWorkspace)
+        for (const transport of ["in-process", "WebSocket"] as const) {
+          const extensionRequest = clients[transport]["extension.request"]
+          const ask = (capabilityId: keyof typeof ReplyRequests) =>
+            extensionRequest({
+              sessionId: served.sessionId,
+              branchId: served.branchId,
+              extensionId: ExtensionId.make("@test/replies"),
+              capabilityId,
+              input: {},
+            }).pipe(inWorkspace)
+          const voided = yield* ask("void")
+          expect(voided).toEqual(RequestReply.cases.Void.make({}))
+          expect(yield* decodeRequestReply(Schema.Void)(voided)).toBeUndefined()
+          const nulled = yield* ask("null")
+          // oxlint-disable-next-line effect/noNullish -- JSON null is the reply under test.
+          expect(nulled).toEqual(RequestReply.cases.Value.make({ value: null }))
+          expect(yield* decodeRequestReply(Schema.Null)(nulled)).toBeNull()
+          const token = yield* ask("token")
+          expect(token).toEqual(RequestReply.cases.Value.make({ value: { token: "t-1" } }))
+          expect(yield* decodeRequestReply(TokenReply)(token)).toEqual({
+            token: Option.some("t-1"),
+          })
+          const refused = yield* ask("refuse").pipe(Effect.flip)
+          expect(refused._tag).toBe("ExtensionProtocolError")
+          expect(refused.message).toContain("nothing to do here")
+        }
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
 })

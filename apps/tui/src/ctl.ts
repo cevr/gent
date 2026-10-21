@@ -7,11 +7,18 @@
  * never starts a server. Each command prints one JSON value on stdout; an
  * array of records prints one record per line, so a reader takes the lines it
  * needs. A failure prints one tagged JSON error on stderr and exits with the
- * code the error names (`CTL_EXIT`).
+ * code the error names (`CTL_EXIT`): a call's own error, a flag the parser
+ * refuses (`CtlUsage`), and a defect (`CtlFailed`, its whole cause in the
+ * client log of the data directory) alike. `runCtlCli` is that boundary.
+ *
+ * An extension adds a view to a command through its client module's `ctl`
+ * projections (`CtlProjection`): `status --run <run>` is the machines
+ * extension's. This file names no extension.
  */
 import {
   AgentEvent,
   BranchId,
+  decodeRequestReply,
   type EventEnvelope,
   EventEnvelope as EventEnvelopeSchema,
   ExtensionId,
@@ -21,6 +28,7 @@ import {
   MessageId,
   ModelId,
   type ProjectedMessage,
+  RequestReply,
   SessionId,
   SessionSnapshot,
   userMessageIdForRequest,
@@ -28,9 +36,12 @@ import {
 import type { GentPlatform } from "@gent/core/host"
 import { Gent, serverLock, dataPaths } from "@gent/sdk"
 import {
+  Cause,
   Clock,
+  Console,
   Duration,
   Effect,
+  Exit,
   Filter,
   type FileSystem,
   Option,
@@ -42,16 +53,15 @@ import {
   Stdio,
   Stream,
 } from "effect"
-import { Argument, Command, Flag } from "effect/cli"
+import { Argument, CliError, Command, Flag } from "effect/cli"
+import { builtinClientModules } from "./extensions/builtins"
+import type { CtlProjection } from "./extensions/client-facets"
 import { connectFlag, readHome } from "./ops"
 import { isConversation, randomId } from "./utils"
 
 // ── exit codes and errors ───────────────────────────────────────────────────
 
-/**
- * The process exit code of each outcome. A flag the parser refuses exits 1
- * with the parser's own message, before any of these.
- */
+/** The process exit code of each outcome. */
 export const CTL_EXIT = {
   ok: 0,
   failed: 1,
@@ -70,7 +80,7 @@ class CtlFailed extends Schema.TaggedError<CtlFailed, { readonly brand: unique s
   override readonly [Runtime.errorReported] = false
 }
 
-/** Flags that parse but do not fit together. */
+/** Flags the parser refuses, or flags that parse but do not fit together. */
 class CtlUsage extends Schema.TaggedError<CtlUsage, { readonly brand: unique symbol }>()(
   "CtlUsage",
   { message: Schema.String },
@@ -408,13 +418,25 @@ export const CtlResult = Schema.TaggedUnion({
     runningMs: Schema.optionalKey(Schema.Finite),
     server: Schema.String,
   },
-  /** `request`: an extension request's reply, as the extension encodes it. */
-  /** `reply` is absent when the request answers nothing. */
+  /**
+   * `request`: an extension request's reply as it crosses the wire: `Value`
+   * holds the JSON the extension encodes, `Void` stands for no answer.
+   */
   Reply: {
     ...Target,
     extensionId: Schema.String,
     requestId: Schema.String,
-    reply: Schema.optionalKey(Schema.Json),
+    reply: RequestReply,
+  },
+  /**
+   * `status --<flag>`: an extension's view, the JSON its request answers once
+   * the request's output schema decodes it.
+   */
+  View: {
+    ...Target,
+    extensionId: Schema.String,
+    requestId: Schema.String,
+    view: Schema.Json,
   },
 })
 export type CtlResult = typeof CtlResult.Type
@@ -783,8 +805,9 @@ const waitFor = Effect.fn("Ctl.wait")(function* (
 
 /**
  * `send`: admit `content` on the target branch, or on a new session in `cwd`
- * with `fresh`. The request id makes a retry safe: the server runs one send
- * per id. The message id is the one its turn's `TurnCompleted` names.
+ * with `fresh`. The request id makes a retry safe: the server creates one
+ * session per id (its durable `session.create` receipt) and admits one
+ * message per id. The message id is the one its turn's `TurnCompleted` names.
  */
 const sendMessage = Effect.fn("Ctl.send")(function* (
   client: GentNamespacedClient,
@@ -796,11 +819,16 @@ const sendMessage = Effect.fn("Ctl.send")(function* (
   },
 ) {
   const created = Option.isSome(options.fresh)
+  const requestId = yield* Option.match(options.requestId, {
+    onNone: () => randomId,
+    onSome: Effect.succeed,
+  })
   const target: CtlTarget = yield* Option.match(options.fresh, {
     onSome: (fresh) =>
       client.session
         .create({
           cwd: fresh.cwd,
+          requestId,
           ...Option.match(fresh.model, {
             onNone: () => ({}),
             onSome: (model) => ({ modelId: ModelId.make(model) }),
@@ -814,10 +842,6 @@ const sendMessage = Effect.fn("Ctl.send")(function* (
       Effect.fromOption(options.target).pipe(
         Effect.mapError(() => new CtlUsage({ message: "send needs a session or --new" })),
       ),
-  })
-  const requestId = yield* Option.match(options.requestId, {
-    onNone: () => randomId,
-    onSome: Effect.succeed,
   })
   yield* client.message
     .send({ ...target, content: options.content, requestId })
@@ -917,27 +941,53 @@ const sendRequest = Effect.fn("Ctl.request")(function* (
       capabilityId: options.requestId,
       input,
     })
-    .pipe(
-      Effect.mapError((error) => {
-        if (error._tag === "ExtensionProtocolError")
-          return new CtlFailed({ message: `${error._tag}: ${error.message}` })
-        return rpcFailure(error)
-      }),
-    )
-  const answered = {
+    .pipe(Effect.mapError(extensionFailure))
+  return CtlResult.cases.Reply.make({
     ...target,
     extensionId: options.extensionId,
     requestId: options.requestId,
+    reply,
+  })
+})
+
+const extensionFailure = (error: GentClientRpcError): CtlError => {
+  if (error._tag === "ExtensionProtocolError")
+    return new CtlFailed({ message: `${error._tag}: ${error.message}` })
+  return rpcFailure(error)
+}
+
+/** Every `gent ctl` view the builtin client extensions own. */
+const ctlProjections: ReadonlyArray<CtlProjection> = builtinClientModules.flatMap((module) =>
+  Option.getOrElse(Option.fromUndefinedOr(module.ctl), () => []),
+)
+
+/**
+ * A projection's view: its request on the target session, the reply decoded
+ * by the request's output schema, and its JSON printed.
+ */
+const readView = Effect.fn("Ctl.view")(function* (
+  client: GentNamespacedClient,
+  target: CtlTarget,
+  projection: CtlProjection,
+  value: string,
+) {
+  const { extensionId, capabilityId, output } = projection.request
+  const reply = yield* client.extension
+    .request({ ...target, extensionId, capabilityId, input: projection.input(value) })
+    .pipe(Effect.mapError(extensionFailure))
+  yield* decodeRequestReply(output)(reply).pipe(
+    Effect.mapError(
+      (error) => new CtlFailed({ message: `${extensionId} ${capabilityId}: ${error.message}` }),
+    ),
+  )
+  if (reply._tag === "Void") {
+    return yield* new CtlFailed({ message: `${extensionId} ${capabilityId} answered nothing` })
   }
-  return yield* Option.match(Option.fromUndefinedOr(reply), {
-    onNone: () => Effect.succeed(CtlResult.cases.Reply.make(answered)),
-    onSome: (value) =>
-      Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
-        Effect.map((json) => CtlResult.cases.Reply.make({ ...answered, reply: json })),
-        Effect.mapError(
-          (error) => new CtlFailed({ message: `reply is not JSON: ${error.message}` }),
-        ),
-      ),
+  return CtlResult.cases.View.make({
+    ...target,
+    extensionId,
+    requestId: capabilityId,
+    view: reply.value,
   })
 })
 
@@ -969,11 +1019,8 @@ interface SessionFlags {
 
 const cwdOf = (flags: Pick<SessionFlags, "cwd">) => Option.getOrElse(flags.cwd, () => process.cwd())
 
-/**
- * Run one ctl call: connect, run `body`, print its result. Every failure is
- * printed as a tagged JSON line on stderr and keeps its exit code.
- */
-const runCtl = <R>(
+/** One ctl call: connect, run `body`, print its result. `runCtlCli` reports its failure. */
+const ctlCall = <R>(
   flags: SessionFlags,
   body: (connection: CtlConnection, cwd: string) => Effect.Effect<CtlResult, CtlError, R>,
 ): Effect.Effect<
@@ -986,7 +1033,7 @@ const runCtl = <R>(
     const connection = yield* connectCtl({ connect: flags.connect, cwd })
     const result = yield* body(connection, cwd)
     yield* printResult(CtlResult, result)
-  }).pipe(Effect.catch(reportCtlError))
+  })
 
 const targeted = (connection: CtlConnection, flags: SessionFlags, cwd: string) =>
   resolveTarget(connection.client, { session: flags.session, branch: flags.branch, cwd })
@@ -1021,7 +1068,7 @@ const send = Command.make(
   },
   (input) =>
     Effect.scoped(
-      runCtl(input, (connection, cwd) =>
+      ctlCall(input, (connection, cwd) =>
         Effect.gen(function* () {
           if (Option.isSome(input.model) && !input.fresh) {
             return yield* new CtlUsage({ message: "--model applies to --new" })
@@ -1093,7 +1140,7 @@ const events = Command.make(
   },
   (input) =>
     Effect.scoped(
-      runCtl(input, (connection, cwd) =>
+      ctlCall(input, (connection, cwd) =>
         Effect.gen(function* () {
           const tags = Option.match(input.tags, {
             onNone: () => [],
@@ -1157,7 +1204,7 @@ const wait = Command.make(
   },
   (input) =>
     Effect.scoped(
-      runCtl(input, (connection, cwd) =>
+      ctlCall(input, (connection, cwd) =>
         Effect.gen(function* () {
           const until = yield* Schema.decodeEffect(WaitUntil)(input.until).pipe(
             Effect.mapError(
@@ -1206,7 +1253,7 @@ const snapshot = Command.make(
   },
   (input) =>
     Effect.scoped(
-      runCtl(input, (connection, cwd) =>
+      ctlCall(input, (connection, cwd) =>
         Effect.flatMap(targeted(connection, input, cwd), (target) =>
           readSnapshot(connection.client, target, { limit: input.limit, full: input.full }),
         ),
@@ -1214,13 +1261,48 @@ const snapshot = Command.make(
     ),
 ).pipe(Command.withDescription("Print a session's state and its last messages"))
 
-const status = Command.make("status", sessionFlags, (input) =>
-  Effect.scoped(
-    runCtl(input, (connection, cwd) =>
-      Effect.flatMap(targeted(connection, input, cwd), (target) => readStatus(connection, target)),
+const statusViews = ctlProjections.filter((projection) => projection.command === "status")
+
+const status = Command.make(
+  "status",
+  {
+    ...sessionFlags,
+    views: statusViews.map((projection) =>
+      Flag.String(projection.flag).pipe(
+        Flag.withDescription(projection.description),
+        Flag.optional,
+      ),
     ),
+  },
+  (input) =>
+    Effect.scoped(
+      ctlCall(input, (connection, cwd) =>
+        Effect.gen(function* () {
+          const asked = statusViews.flatMap((projection, at) =>
+            Option.toArray(
+              Option.map(Option.flatten(Option.fromUndefinedOr(input.views[at])), (value) => ({
+                projection,
+                value,
+              })),
+            ),
+          )
+          if (asked.length > 1) {
+            return yield* new CtlUsage({
+              message: `one view per call: ${asked.map(({ projection }) => `--${projection.flag}`).join(", ")}`,
+            })
+          }
+          const target = yield* targeted(connection, input, cwd)
+          const [view] = asked
+          if (Predicate.isUndefined(view)) return yield* readStatus(connection, target)
+          return yield* readView(connection.client, target, view.projection, view.value)
+        }),
+      ),
+    ),
+).pipe(
+  Command.withDescription(
+    "Print a branch's runtime state and the server's url, or an extension's view (such as --run)",
   ),
-).pipe(Command.withDescription("Print a branch's runtime state and the server's url"))
+)
 
 const request = Command.make(
   "request",
@@ -1239,7 +1321,7 @@ const request = Command.make(
   },
   (input) =>
     Effect.scoped(
-      runCtl(input, (connection, cwd) =>
+      ctlCall(input, (connection, cwd) =>
         Effect.flatMap(targeted(connection, input, cwd), (target) =>
           sendRequest(connection.client, target, {
             extensionId: input.extensionId,
@@ -1274,3 +1356,70 @@ export const ctl = Command.make("ctl", {}, () =>
   ),
   Command.withSubcommands([send, events, wait, snapshot, status, request]),
 )
+
+// ── the process boundary ────────────────────────────────────────────────────
+
+/** The text of a cause's first defect: what a reader sees; the whole cause goes to the log. */
+const defectText = (cause: Cause.Cause<unknown>): string => {
+  const [first = "unknown defect"] = Cause.pretty(cause).split("\n")
+  return first
+}
+
+/**
+ * The parser's refusal as one usage error: the messages of a `ShowHelp`, or
+ * the error's own. A `ShowHelp` with no messages is a help request, not a
+ * failure.
+ */
+const usageOf = (error: CliError.CliError): Option.Option<CtlUsage> => {
+  if (error._tag !== "ShowHelp") return Option.some(new CtlUsage({ message: error.message }))
+  if (error.errors.length === 0) return Option.none()
+  return Option.some(new CtlUsage({ message: error.errors.map((each) => each.message).join("; ") }))
+}
+
+/**
+ * `gent ctl <args>`, the boundary every call crosses: a result prints on
+ * stdout and the parser's help prints as it is; any failure prints one
+ * tagged JSON line on stderr and fails with the error that names its exit
+ * code. A call's own error keeps its tag; a flag the parser refuses is
+ * `CtlUsage` (exit 2); a defect is `CtlFailed` (exit 1), its whole cause
+ * logged to the client log. An interrupt stays an interrupt.
+ */
+export const runCtlCli = Effect.fn("Ctl.cli")(function* (
+  args: ReadonlyArray<string>,
+  version: string,
+) {
+  const console = yield* Console.Console
+  // The parser writes help through `Console.log`; it prints only when the call succeeds.
+  const help: Array<string> = []
+  const exit = yield* Command.runWith(ctl, { version, renderErrors: false })(args).pipe(
+    Effect.provideService(Console.Console, {
+      ...console,
+      log: (...line: ReadonlyArray<unknown>) => {
+        help.push(line.map(String).join(" "))
+      },
+    }),
+    Effect.exit,
+  )
+  const printHelp = Effect.sync(() => {
+    for (const line of help) console.log(line)
+  })
+  if (Exit.isSuccess(exit)) return yield* printHelp
+  if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
+  const failure = Cause.findErrorOption(exit.cause)
+  if (Option.isNone(failure)) {
+    yield* Effect.logError("ctl.defect").pipe(
+      Effect.annotateLogs({ args: args.join(" "), cause: Cause.pretty(exit.cause) }),
+    )
+    return yield* reportCtlError(
+      new CtlFailed({ message: `defect: ${defectText(exit.cause)}; the client log has the cause` }),
+    )
+  }
+  const error = failure.value
+  if (Schema.is(CtlError)(error)) return yield* reportCtlError(error)
+  if (!CliError.isCliError(error)) {
+    return yield* reportCtlError(new CtlFailed({ message: `${error._tag}: ${error.message}` }))
+  }
+  const usage = usageOf(error)
+  if (Option.isNone(usage)) return yield* printHelp
+  return yield* reportCtlError(usage.value)
+})
