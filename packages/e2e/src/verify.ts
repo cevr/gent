@@ -276,6 +276,36 @@ const scratchDir = (dir: string) =>
     return layout(absolute)
   })
 
+/** Data fixtures stay in the run, its sibling evidence directory, or repository test fixtures. */
+const dataSource = Effect.fn("Verify.dataSource")(function* (paths: Layout, source: string) {
+  const path = yield* Path.Path
+  const platform = yield* GentPlatform
+  const ownerData = yield* canonical(path.join(yield* platform.homeDirectory, ".gent"))
+  const real = yield* canonical(source)
+  if (within(path, ownerData, real)) {
+    return yield* new VerifyFailed({
+      step: "data",
+      message: "The real home's .gent is never a data fixture",
+    })
+  }
+  const root = yield* checkoutRoot
+  const evidence = yield* canonical(path.join(path.dirname(paths.dir), "evidence"))
+  const parts = path.relative(root, real).split(path.sep)
+  const fixture =
+    within(path, root, real) &&
+    ((parts[0] === "tests" && parts[1] === "fixtures") ||
+      ((parts[0] === "packages" || parts[0] === "apps") &&
+        parts[2] === "tests" &&
+        parts[3] === "fixtures"))
+  if (!within(path, paths.dir, real) && !within(path, evidence, real) && !fixture) {
+    return yield* new VerifyFailed({
+      step: "data",
+      message: `${real} is outside the run, ${evidence}, and repository test fixtures`,
+    })
+  }
+  return real
+})
+
 /** A command's output lines, or the failure that stopped it. */
 const outputOf = (command: string, args: ReadonlyArray<string>, cwd: string) =>
   Effect.gen(function* () {
@@ -518,13 +548,17 @@ const launch = Effect.fn("Verify.launch")(function* (
   data: Option.Option<string>,
 ) {
   const paths = yield* scratchDir(dir)
+  const source = yield* Option.match(data, {
+    onNone: () => Effect.succeedNone,
+    onSome: (file) => dataSource(paths, file).pipe(Effect.asSome),
+  })
   yield* seed(paths)
   // A fixture of server state, read as the server starts: a copy, so the run never writes the original.
-  if (Option.isSome(data)) {
+  if (Option.isSome(source)) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     yield* fs
-      .copyFile(data.value, path.join(paths.data, path.basename(data.value)))
+      .copyFile(source.value, path.join(paths.data, path.basename(source.value)))
       .pipe(Effect.mapError(failed("data")))
   }
   const platform = yield* GentPlatform
@@ -1022,7 +1056,7 @@ const launchCommand = Command.make(
     ),
     data: Flag.String("data").pipe(
       Flag.withDescription(
-        "A file copied into the run's data directory before its server starts, such as an account ledger (credential-usage.json)",
+        "A fixture from the run, its sibling evidence directory, or repository tests/fixtures, copied into the run data directory",
       ),
       Flag.optional,
     ),

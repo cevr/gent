@@ -225,8 +225,9 @@ const PendingAction = Schema.TaggedUnion({
   /**
    * `key` is the Threads idempotency key; `thread` and `round` are set once
    * admitted. `notBefore` (epoch ms): the round waits for the account until
-   * then, holding nothing. `fresh`: the round runs on a new thread, as a
-   * usage limit's rerun does.
+   * then, holding nothing. The marker stays after its deadline until a
+   * permit is acquired and the dispatch commits. `fresh`: the round runs on
+   * a new thread, as a usage limit's rerun does.
    */
   Round: {
     state: StateName,
@@ -666,6 +667,8 @@ const isActive = (run: Run) => !isTerminal(run.status) || Option.isNone(run.noti
 /** The core wake record of a run: on its host branch, with no time while the run is active. */
 const runSource = (run: RunId) => `machine-run:${run}`
 const RUN_SOURCE_PREFIX = "machine-run:"
+const STOP_SOURCE_PREFIX = "machine-stop:"
+const stopSource = (run: RunId) => `${STOP_SOURCE_PREFIX}${run}`
 
 const RunRow = Schema.Struct({
   run: RunId,
@@ -954,12 +957,11 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
 
       // The runs that held a step when the last server stopped, oldest first.
       // A round that waits for its account held none.
-      const bootAt = yield* Clock.currentTimeMillis
       const debtRows = yield* sql`
         SELECT run FROM machine_runs
         WHERE status = 'running'
           AND json_extract(pending_json, '$._tag') IN ('Round', 'Command')
-          AND COALESCE(json_extract(pending_json, '$.notBefore'), 0) <= ${bootAt}
+          AND json_extract(pending_json, '$.notBefore') IS NULL
         ORDER BY created_at ASC, run ASC
       `.pipe(Effect.mapError(storageError("Failed to read the machine step debt")))
       const debt = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ run: RunId })))(
@@ -1604,15 +1606,29 @@ const advancePending = (run: Run, signals: Signals) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>
           Option.match(waitsUntil(Option.some(pending), now), {
             onSome: (until) => waitOut(run, until, signals),
-            onNone: () =>
-              Effect.flatMap(MachineStore, (store) => store.permits.acquire(run.run)).pipe(
-                Effect.andThen(awaitRound(run, pending, signals)),
-              ),
+            onNone: () => resumeRound(run, pending, signals),
           }),
         ),
       Command: (pending) => awaitCommand(run, pending, signals),
     }),
   )
+
+/** A wait becomes crash debt only after its driver takes a permit and records that transfer. */
+const resumeRound = Effect.fn("Machines.resumeRound")(function* (
+  run: Run,
+  pending: RoundAction,
+  signals: Signals,
+) {
+  const store = yield* MachineStore
+  yield* store.permits.acquire(run.run)
+  const { notBefore, ...ready } = pending
+  if (Predicate.isUndefined(notBefore)) return yield* awaitRound(run, pending, signals)
+  const action = PendingAction.cases.Round.make(ready)
+  const committed = yield* commitMove(run, { ...run, pending: Option.some(action) }, [
+    MachineStep.cases.Dispatched.make({ action }),
+  ])
+  if (Option.isSome(committed)) yield* awaitRound(committed.value, action, signals)
+})
 
 /** Waits for the command this process runs, or recovers one no fiber here runs. */
 const awaitCommand = Effect.fn("Machines.awaitCommand")(function* (
@@ -1643,6 +1659,10 @@ const waitOut = Effect.fn("Machines.waitOut")(function* (
 ) {
   const ctx = yield* ExtensionContext
   yield* ctx.Session.wakeAt({ ...run.host, sourceId: runSource(run.run), at: until })
+  const store = yield* MachineStore
+  const current = yield* store.read(run.run)
+  // A stop or a newer wait can commit while this stale arm replaces its kick.
+  if (Option.isNone(current) || current.value.seq !== run.seq) return
   const now = yield* Clock.currentTimeMillis
   yield* awaitSignal(signals, { ends: false, within: Duration.millis(until - now) })
 })
@@ -1678,6 +1698,7 @@ const waitForAccount = (
 const withdrawWake = Effect.fn("Machines.withdrawWake")(function* (run: Run) {
   const ctx = yield* ExtensionContext
   yield* ctx.Session.cancelWake({ ...run.host, sourceId: runSource(run.run) })
+  yield* ctx.Session.cancelWake({ ...run.host, sourceId: stopSource(run.run) })
 })
 
 /** Enters the run's current state, as one more visit. */
@@ -2555,10 +2576,17 @@ const stopRun = Effect.fn("Machines.stop")(function* (runId: RunId) {
   const store = yield* MachineStore
   while (true) {
     const run = yield* ownedRun(runId)
-    if (run.status === "stopped") return { run: run.run, status: "stopped" as const }
+    if (run.status === "stopped") {
+      if (Option.isNone(run.notifiedAt)) yield* kick(run)
+      return { run: run.run, status: "stopped" as const }
+    }
     if (isTerminal(run.status)) {
       return yield* new MachineError({ message: `Run ${runId} already ended: ${run.status}` })
     }
+    const ctx = yield* ExtensionContext
+    // Publish a start-only trigger before the stop. A future wait may still
+    // replace the immediate kick, and a crash may prevent that kick entirely.
+    yield* ctx.Session.wakeAt({ ...run.host, sourceId: stopSource(run.run) })
     const committed = yield* store.commit(run, { ...run, status: "stopped" }, [
       MachineStep.cases.Stopped.make({}),
     ])
@@ -2818,7 +2846,7 @@ const MachineListTool = tool({
   execute: () => ownedRuns(),
 })
 
-const MachineStopTool = tool({
+export const MachineStopTool = tool({
   id: "machine.stop",
   resources: [MachineStoreResource],
   description:
@@ -2840,8 +2868,11 @@ const MachineStopTool = tool({
  */
 const runDue = Effect.fn("Machines.due")(function* (input: WakeDueInput) {
   const store = yield* MachineStore
-  if (!input.sourceId.startsWith(RUN_SOURCE_PREFIX)) return WakeNext.cases.Done.make({})
-  const runId = Schema.decodeOption(RunId)(input.sourceId.slice(RUN_SOURCE_PREFIX.length))
+  const prefix = [RUN_SOURCE_PREFIX, STOP_SOURCE_PREFIX].find((prefix) =>
+    input.sourceId.startsWith(prefix),
+  )
+  if (Predicate.isUndefined(prefix)) return WakeNext.cases.Done.make({})
+  const runId = Schema.decodeOption(RunId)(input.sourceId.slice(prefix.length))
   if (Option.isNone(runId)) return WakeNext.cases.Done.make({})
   const found = yield* store.read(runId.value)
   if (Option.isNone(found) || !isActive(found.value)) return WakeNext.cases.Done.make({})

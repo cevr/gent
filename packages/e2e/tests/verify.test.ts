@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
+import { GentPlatform } from "@gent/core/host"
 import { BunPlatformLive } from "@gent/core/host-bun"
 import { makeTempDirectoryScoped } from "@gent/core/test-utils"
 import {
@@ -125,7 +126,8 @@ describe("verify helpers", () => {
           deltaPct: 2,
           tokens: { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 0 },
         })
-        const ledger = `${parent}/credential-usage.json`
+        yield* fs.makeDirectory(`${parent}/evidence`)
+        const ledger = `${parent}/evidence/credential-usage.json`
         yield* fs.writeFileString(
           ledger,
           encodeJson({
@@ -339,6 +341,71 @@ describe("verify helpers", () => {
         yield* goneWithin(pids.serverPid)
       }).pipe(Effect.timeout("60 seconds"), Effect.provide(BunServices.layer)),
     70_000,
+  )
+
+  it.scopedLive("launch refuses data outside its fixture roots, including symlink escapes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const parent = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-verify-"))
+      const outside = `${parent}/private.json`
+      yield* fs.writeFileString(outside, "private fixture")
+      yield* fs.makeDirectory(`${parent}/evidence`)
+      yield* fs.symlink(outside, `${parent}/evidence/alias.json`)
+      yield* fs.symlink(parent, `${parent}/evidence/escape`)
+      // Only harmless fixtures are opened, including for the real-home deny rule below.
+      for (const [index, source] of [
+        outside,
+        `${parent}/evidence/alias.json`,
+        `${parent}/evidence/escape/private.json`,
+      ].entries()) {
+        const dir = `${parent}/run-${index}`
+        yield* Effect.addFinalizer(() => verify(["stop", "--dir", dir], parent).pipe(Effect.ignore))
+        const result = yield* verify(["launch", "--dir", dir, "--data", source], parent)
+        expect(result.code).toBe(1)
+        expect(failureOf(yield* errorOf(result))).toEqual(["VerifyFailed", "data"])
+        expect(yield* fs.exists(`${dir}/data/private.json`)).toBe(false)
+        expect(yield* fs.exists(`${dir}/pids.json`)).toBe(false)
+      }
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("launch refuses the real home's .gent even inside an allowed evidence root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const platform = yield* GentPlatform
+      const parent = yield* fs.realPath(yield* makeTempDirectoryScoped("gent-verify-"))
+      const home = `${parent}/evidence`
+      yield* fs.makeDirectory(`${home}/.gent`, { recursive: true })
+      yield* fs.writeFileString(`${home}/.gent/private.json`, "harmless stand-in")
+      yield* fs.symlink(`${home}/.gent/private.json`, `${home}/alias.json`)
+      for (const source of [`${home}/.gent/private.json`, `${home}/alias.json`]) {
+        const err = yield* Ref.make("")
+        const exit = yield* runVerifyCli([
+          "launch",
+          "--dir",
+          `${parent}/run`,
+          "--data",
+          source,
+        ]).pipe(
+          Effect.provideService(GentPlatform, { ...platform, homeDirectory: Effect.succeed(home) }),
+          Effect.provide(
+            Stdio.layerTest({
+              stdout: () => Sink.die("a refused launch prints no result"),
+              stderr: () =>
+                Sink.forEach((chunk: string | Uint8Array) =>
+                  Ref.update(err, (text) => text + String(chunk)),
+                ),
+            }),
+          ),
+          Effect.exit,
+        )
+        expect(Exit.isFailure(exit)).toBe(true)
+        const error = yield* decodeLine(ErrorLine)((yield* Ref.get(err)).trim())
+        expect(failureOf(error)).toEqual(["VerifyFailed", "data"])
+        expect(error.message).toContain("real home's .gent")
+        expect(yield* fs.exists(`${parent}/run/pids.json`)).toBe(false)
+      }
+    }).pipe(Effect.timeout("30 seconds"), Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive("a scratch directory inside the checkout is refused, under any name", () =>

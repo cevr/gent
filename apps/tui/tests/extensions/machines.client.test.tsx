@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Array as Arr, DateTime, Effect, Option, Queue, Schema } from "effect"
+import { Array as Arr, Clock, DateTime, Effect, Option, Queue, Ref, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { createSignal } from "solid-js"
 import {
   AgentEvent,
@@ -20,7 +21,7 @@ import machinesExtension, {
 import { laneRows } from "../../src/utils"
 import { textWidth } from "../../src/bun-adapter"
 import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
-import { renderFrame, renderScoped } from "../render-harness-boundary"
+import { createMockClient, renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -323,10 +324,12 @@ describe("the lanes band", () => {
 describe("the lanes band reads", () => {
   // A completed turn and a reconnect read the lanes and the runs again;
   // another event reads nothing.
-  it.scopedLive("reads again on TurnCompleted and on a reconnect, not on other events", () =>
+  it.scopedLive("displays fresh lanes on load, TurnCompleted, reconnect and the 30 s poll", () =>
     Effect.gen(function* () {
       const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("s-branch") }
       const reads = yield* Queue.unbounded<string>()
+      const report = yield* Ref.make(measured)
+      const clock = yield* TestClock.make()
       const [connection, setConnection] = createSignal(Option.some(1))
       const subscribers = new Set<(envelope: EventEnvelope) => void>()
       const options = {
@@ -340,24 +343,56 @@ describe("the lanes band reads", () => {
         const envelope = EventEnvelope.make({ id: EventId.make(1), event, createdAt: 0 })
         for (const cb of subscribers) cb(envelope)
       }
-      yield* provideClientServices(
-        Effect.gen(function* () {
-          yield* machinesExtension.setup
-          expect(yield* Queue.take(reads)).toBe("run-list")
-          deliver(
-            AgentEvent.cases.StreamSynchronized.make({ ...session, lastEventId: EventId.make(1) }),
-          )
-          deliver(AgentEvent.cases.TurnCompleted.make({ ...session, durationMs: 10 }))
-          expect(yield* Queue.take(reads)).toBe("run-list")
-          // One read for the turn; the other event read nothing.
-          expect(yield* Queue.size(reads)).toBe(0)
-          setConnection(Option.none())
-          setConnection(Option.some(2))
-          expect(yield* Queue.take(reads)).toBe("run-list")
-          expect(yield* Queue.size(reads)).toBe(0)
-        }).pipe(Effect.orDie),
-        { ...options, transport: makeClientTestTransport(options) },
+      const base = makeClientTestTransport(options)
+      const transport = {
+        ...base,
+        client: createMockClient({
+          extension: base.client.extension,
+          accounts: { lanes: () => Ref.get(report) },
+        }),
+      }
+      const contributions = yield* provideClientServices(
+        machinesExtension.setup.pipe(Effect.provideService(Clock.Clock, clock)),
+        { ...options, transport },
       )
+      const band = Option.getOrThrow(
+        Option.fromUndefinedOr(
+          contributions.widgets?.find((widget) => widget.id === "machines.band"),
+        ),
+      )
+      const setup = yield* renderScoped(() => <band.component />, { width: 120, height: 6 })
+      const shows = (text: string) =>
+        waitForFrame(setup, () => renderFrame(setup).includes(text), text)
+      expect(yield* Queue.take(reads)).toBe("run-list")
+      yield* shows("≡ lanes anthropic 3/5 free")
+      deliver(
+        AgentEvent.cases.StreamSynchronized.make({ ...session, lastEventId: EventId.make(1) }),
+      )
+      yield* Ref.set(report, {
+        ...measured,
+        providers: measured.providers.map((provider) => ({ ...provider, load: 3 })),
+      })
+      deliver(AgentEvent.cases.TurnCompleted.make({ ...session, durationMs: 10 }))
+      expect(yield* Queue.take(reads)).toBe("run-list")
+      yield* shows("≡ lanes anthropic 2/5 free")
+      // One read for the turn; the other event read nothing.
+      expect(yield* Queue.size(reads)).toBe(0)
+      yield* Ref.set(report, {
+        ...measured,
+        providers: measured.providers.map((provider) => ({ ...provider, load: 4 })),
+      })
+      setConnection(Option.none())
+      setConnection(Option.some(2))
+      expect(yield* Queue.take(reads)).toBe("run-list")
+      yield* shows("≡ lanes anthropic 1/5 free")
+      expect(yield* Queue.size(reads)).toBe(0)
+      yield* Ref.set(report, unrated)
+      yield* clock.adjust("29 seconds")
+      expect(yield* Queue.size(reads)).toBe(0)
+      expect(renderFrame(setup)).toContain("≡ lanes anthropic 1/5 free")
+      yield* clock.adjust("1 second")
+      expect(yield* Queue.take(reads)).toBe("run-list")
+      yield* shows("≡ lanes anthropic unknown")
     }).pipe(Effect.timeout("4 seconds")),
   )
 })

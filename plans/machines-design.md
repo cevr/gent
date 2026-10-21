@@ -844,8 +844,12 @@ CREATE TABLE machine_steps (
   `Session.wakeAt({ sessionId: host, branchId: host, sourceId: "machine-run:<run>", at: now })`.
   The kick comes after the commit, so the fire it causes reads the committed
   row. A crash between the two leaves the `AtStart` row, and the next boot
-  finds the committed answer. So the step always runs on the host, and the
-  tools never reach another branch's fibers.
+  finds the committed answer. A waiting run's record may instead name a
+  future reset, so a stop first publishes a separate start-only
+  `machine-stop:<run>` record. Settlement removes both records. The waiting
+  driver also rereads the run after arming its timer, before sleeping: a
+  stale arm that overwrites a stop's kick does not delay settlement. So the
+  step always runs on the host, and the tools never reach another branch's fibers.
 - A `loopOpen` handler repairs the host. For every active run on this branch,
   it upserts `machine-run:<run>` (no time) and arms the driver. This covers a
   branch generation that was rebuilt, and an extension that was disabled and
@@ -1081,7 +1085,10 @@ dispatch reuses the key it recorded before the send.
 - **Debt from a crash.** A server Resource's build reads `SqlClient`
   (`extension.ts:158`). At build, the resource reads the runs whose pending
   action is a `Round` or a `Command`, oldest first, and takes one permit per
-  run, up to the limit, as a ticket keyed by the run. That run's driver takes
+  run, up to the limit, as a ticket keyed by the run. A `Round.notBefore`
+  marker excludes an undispatched account wait even after its deadline.
+  Resuming it takes a permit and commits a dispatch without the marker
+  before sending, so a later crash counts it as debt. That run's driver takes
   its ticket over instead of a new permit. A ticket that no driver claims in
   ten minutes is given back.
 - So the rounds that a crash left open, which threads' reconcile resumes

@@ -5,6 +5,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Fiber,
   FileSystem,
   Layer,
   Logger,
@@ -29,6 +30,7 @@ import {
   defineExtension,
   defineRequests,
   ExtensionContext,
+  type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
   omitUndefined,
@@ -37,6 +39,7 @@ import {
   reportProviderQuota,
   request,
   tool,
+  WakeNext,
 } from "@gent/core/extensions/api"
 import {
   ConfigService,
@@ -57,6 +60,8 @@ import {
   MACHINE_END_TYPE,
   MachineAnswerTool,
   MachineRunStatus,
+  MachineStopTool,
+  MachinesExtension,
   MachinesRpc,
   MachineStore,
   roundEndSignal,
@@ -1508,7 +1513,231 @@ const roundRetries = Effect.gen(function* () {
   return decodeRoundRetries(rows)
 })
 
+/** Wrap the runtime facade at the registered hooks; the real driver captures it on activation. */
+const machinesWithContext = (change: (ctx: ExtensionContextService) => ExtensionContextService) =>
+  defineExtension({
+    id: MachinesExtension.manifest.id,
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* MachinesExtension.setup.pipe(
+        Effect.provideService(ExtensionHost, {
+          ...host,
+          on: (kind, handler) => {
+            // The test delivers no clock fire while it orders the arm and stop.
+            if (kind === "wakeDue")
+              return host.on("wakeDue", () => Effect.succeed(WakeNext.cases.AtStart.make({})))
+            return host.on(kind, (input) =>
+              handler(input).pipe(Effect.updateService(ExtensionContext, change)),
+            )
+          },
+        }),
+      )
+    }),
+  })
+
+/** Stop through the public tool with a durable wake writer whose delivery the test controls. */
+const stopWithWakes = (
+  home: Effect.Success<typeof restartableHome>,
+  owner: SessionKey,
+  run: string,
+  beforeKick: Effect.Effect<void> = Effect.void,
+) => {
+  const stub = testToolContext().Session
+  // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer
+  const absentSession: Session | undefined = undefined
+  const ctx = testToolContext({
+    ...owner,
+    cwd: home.cwd,
+    home: home.home,
+    Session: { ...stub, getSession: () => Effect.succeed(absentSession) },
+    Wakes: () => ({
+      wakeAt: (input) =>
+        Effect.gen(function* () {
+          if (Predicate.isNotUndefined(input.at)) yield* beforeKick
+          yield* home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              yield* sql`INSERT INTO branch_wakes (workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts, armed_boot, created_at)
+            VALUES (${workspaceIdForCwd(home.cwd)}, ${owner.sessionId}, ${owner.branchId}, '@gent/machines', ${input.sourceId}, ${Option.getOrNull(Option.fromUndefinedOr(input.at))}, 1, 0, 0, 0)
+            ON CONFLICT (session_id, branch_id, extension_id, source_id) DO UPDATE SET at = COALESCE(excluded.at, branch_wakes.at), version = branch_wakes.version + 1`
+            }),
+          )
+        }).pipe(Effect.orDie),
+      cancelWake: () => Effect.succeed(true),
+    }),
+  })
+  return runToolWithCtx(MachineStopTool, { run }, ctx).pipe(
+    Effect.provide(
+      MachineStore.Live.pipe(
+        Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
+        Layer.provide(BunServices.layer),
+      ),
+    ),
+  )
+}
+
 describe("a machine waits out its account", () => {
+  for (const ordering of ["before", "after"] as const) {
+    it.live(
+      `a stop committed ${ordering} the wait arm settles without advancing to the quota reset`,
+      () =>
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const reset = (yield* Clock.currentTimeMillis) + HOUR
+          const [owner] = yield* makeHosts(home, 1)
+          if (Predicate.isUndefined(owner)) return yield* Effect.die("missing host")
+          const run = runIdAt(1)
+          yield* plantRuns(home, BUDGET_JSON, [
+            { run, host: owner, debt: true, waitsUntil: reset, createdAt: 100, wakeAt: 100 },
+          ])
+          const reached = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const intercepted = yield* Ref.make(false)
+          const wrapped = machinesWithContext((ctx) => ({
+            ...ctx,
+            Session: {
+              ...ctx.Session,
+              wakeAt: (input) =>
+                Effect.gen(function* () {
+                  const pause = input.at === reset && !(yield* Ref.getAndSet(intercepted, true))
+                  if (pause && ordering === "before") {
+                    yield* Deferred.succeed(reached, void 0)
+                    yield* Deferred.await(release)
+                  }
+                  yield* ctx.Session.wakeAt(input)
+                  if (pause && ordering === "after") {
+                    yield* Deferred.succeed(reached, void 0)
+                    yield* Deferred.await(release)
+                  }
+                }),
+            },
+          }))
+          const models = yield* makeModels((round) => Effect.succeed(billed(round.state)))
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              extensionInputs: e2ePreset.extensionInputs.map((extension) => {
+                if (extension.manifest.id === wrapped.manifest.id) return wrapped
+                return extension
+              }),
+              providerLayer: machineModels(models),
+              storagePath: `${home.home}/gent.db`,
+              cwd: home.cwd,
+              home: home.home,
+            }),
+          )
+          yield* client.session.getSnapshot(owner)
+          yield* Deferred.await(reached)
+          // The kick is stored, but not delivered. The virtual clock stays fixed.
+          yield* stopWithWakes(home, owner, run)
+          expect(yield* home.sql(runRecords(run))).toEqual([
+            Option.some(yield* Clock.currentTimeMillis),
+          ])
+          yield* Deferred.succeed(release, void 0)
+          yield* eventually(
+            home.sql(runRow(run)),
+            isSettled,
+            "the stop settled before the quota reset",
+          )
+          expect(yield* Ref.get(models.calls)).toEqual([])
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
+      20_000,
+    )
+  }
+
+  it.live(
+    "retrying an unsettled stop kicks its host again without another stop commit",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const [owner] = yield* makeHosts(home, 1)
+        if (Predicate.isUndefined(owner)) return yield* Effect.die("missing host")
+        const run = runIdAt(1)
+        const reset = (yield* Clock.currentTimeMillis) + HOUR
+        yield* plantRuns(home, BUDGET_JSON, [
+          { run, host: owner, debt: true, waitsUntil: reset, createdAt: 100, wakeAt: 100 },
+        ])
+        yield* stopWithWakes(home, owner, run, Effect.interrupt).pipe(Effect.exit)
+        const kicks = yield* Ref.make(0)
+        yield* stopWithWakes(
+          home,
+          owner,
+          run,
+          Ref.update(kicks, (count) => count + 1),
+        )
+        expect(yield* Ref.get(kicks)).toBe(1)
+        expect(
+          (yield* home.sql(stepsOf(run))).filter((step) => step._tag === "Stopped"),
+        ).toHaveLength(1)
+        expect(yield* home.sql(runRecords(run))).toEqual([
+          Option.some(yield* Clock.currentTimeMillis),
+        ])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.live(
+    "a stop cut after its commit and before its kick settles at the next boot",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const reset = (yield* Clock.currentTimeMillis) + HOUR
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+            const models = yield* makeModels(
+              (round) => Effect.succeed(billed(round.state)),
+              quotaOwner(readings),
+            )
+            const { client } = yield* createRpcClient(
+              home.layerFor(machineModels(models), oneAccount),
+            )
+            const owner = ownerOf(yield* client.session.create({}))
+            yield* Ref.set(readings, rejectedUntil(reset))
+            const run = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
+            yield* eventually(
+              home.sql(runRecords(run)),
+              (records) => Option.contains(records[0] ?? Option.none(), reset),
+              "the future wait was armed",
+            )
+            return { owner, run }
+          }),
+        )
+        const reached = yield* Deferred.make<void>()
+        const stop = yield* stopWithWakes(
+          home,
+          first.owner,
+          first.run,
+          Deferred.succeed(reached, void 0).pipe(Effect.andThen(Effect.never)),
+        ).pipe(Effect.forkScoped)
+        yield* Deferred.await(reached)
+        yield* Fiber.interrupt(stop)
+        expect(Option.map(yield* home.sql(runRow(first.run)), (row) => row.status)).toEqual(
+          Option.some("stopped"),
+        )
+        expect(yield* home.sql(runRecords(first.run))).toEqual([Option.some(reset)])
+        const models = yield* makeModels((round) => Effect.succeed(billed(round.state)))
+        yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
+        yield* eventually(
+          home.sql(runRow(first.run)),
+          isSettled,
+          "the stop settled at boot with no client call",
+        )
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        yield* eventually(
+          home.sql(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient
+              return yield* sql`SELECT source_id FROM branch_wakes WHERE source_id IN (${`machine-run:${first.run}`}, ${`machine-stop:${first.run}`})`
+            }),
+          ),
+          (records) => records.length === 0,
+          "both records were withdrawn",
+        )
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
+    20_000,
+  )
+
   it.live(
     "a round with no lane waits for the reset, a second refusal moves its time, and no visit is spent",
     () =>
@@ -1899,6 +2128,96 @@ describe("the machine boot budget", () => {
       })
       expect(most).toBe(4)
     }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
+  )
+
+  it.live(
+    "expired waits leave crash tickets to genuine interrupted rounds and resume as permit holders",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const hosts = yield* makeHosts(home, 4)
+        const interrupted = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const entered = yield* Queue.unbounded<void>()
+            const models = yield* makeModels(() =>
+              Effect.succeed(hangAfter(Queue.offer(entered, void 0).pipe(Effect.asVoid))),
+            )
+            const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+            return yield* Effect.forEach([1, 2, 3, 4], (index) =>
+              Effect.gen(function* () {
+                const owner = ownerOf(yield* client.session.create({}))
+                const run = yield* startRun(client, owner, BUDGET, "budget", {
+                  tag: `interrupted-${index}`,
+                })
+                yield* Queue.take(entered)
+                return run
+              }),
+            )
+          }),
+        )
+        expect(yield* home.sql(roundEnds)).toHaveLength(4)
+        expect(
+          (yield* home.sql(roundEnds)).every((round) => Predicate.isNull(round.ended_at)),
+        ).toBe(true)
+        const expired = hosts.map((host, index): PlantedRun => ({
+          run: runIdAt(index + 1),
+          host,
+          debt: true,
+          waitsUntil: wallClock.currentTimeMillisUnsafe() - 1,
+          createdAt: 100 + index,
+          wakeAt: 100 + index,
+        }))
+        yield* plantRuns(home, BUDGET_JSON, expired)
+        const gate = yield* Deferred.make<boolean>()
+        const open = yield* Ref.make(0)
+        const most = yield* Ref.make(0)
+        const order = yield* Ref.make<ReadonlyArray<string>>([])
+        const waits = yield* Queue.unbounded<string>()
+        const capture = Logger.make(({ message, fiber }) => {
+          if (String(message).includes("machines.step.waiting"))
+            Queue.offerUnsafe(waits, String(fiber.getRef(References.CurrentLogAnnotations)["run"]))
+        })
+        const worker = gatedWorker(gate, open, most, order)
+        const resumedMarkers = yield* Ref.make<ReadonlyArray<Option.Option<number>>>([])
+        const models = yield* makeModels((round) =>
+          Effect.gen(function* () {
+            if (round.mode.startsWith("run-")) {
+              // A resumed wait must durably become a permit holder before admission.
+              const marker = yield* home.sql(pendingWait(round.mode)).pipe(Effect.orDie)
+              yield* Ref.update(resumedMarkers, (all) => [...all, marker])
+            }
+            return yield* worker(round)
+          }),
+        )
+        yield* createRpcClient(home.layerFor(machineModels(models))).pipe(
+          Effect.provide(Logger.layer([capture])),
+          Effect.provideService(References.MinimumLogLevel, "Debug"),
+        )
+        const blocked = yield* Effect.forEach([1, 2, 3, 4], () => Queue.take(waits))
+        expect(blocked.toSorted()).toEqual(expired.map((run) => run.run))
+        yield* waitFor(Ref.get(open), (count) => count >= 4, 8_000, "interrupted workers resumed")
+        expect(yield* Ref.get(open)).toBe(4)
+        expect((yield* Ref.get(order)).toSorted()).toEqual([
+          "interrupted-1",
+          "interrupted-2",
+          "interrupted-3",
+          "interrupted-4",
+        ])
+        yield* Deferred.succeed(gate, true)
+        yield* waitFor(
+          home.sql(allAsking([...interrupted, ...expired.map((run) => run.run)])),
+          Boolean,
+          20_000,
+          "all runs reached their ask",
+        )
+        expect(yield* Ref.get(most)).toBe(4)
+        expect(yield* Ref.get(resumedMarkers)).toEqual([
+          Option.none(),
+          Option.none(),
+          Option.none(),
+          Option.none(),
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 
   it.live(

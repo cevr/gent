@@ -18,11 +18,11 @@ Under the status row, a band shows how many runs the accounts can carry now and 
 
 ## Driving it with verify:drive
 
-- **Preconditions:** `band-measured` needs a run launched with a ledger: write `credential-usage.json` with current times (the recipe below), then `verify:launch --dir "$RUN" --data <dir>/credential-usage.json`. `band-hidden` and `band-unknown` use the baseline run. The scripted model reports no quota window, so a measured row needs the ledger.
+- **Preconditions:** `band-measured` needs a run launched with a ledger: write `credential-usage.json` with current times (the recipe below), then `verify:launch --dir "$RUN" --data "$(dirname "$RUN")/evidence/credential-usage.json"`. `--data` takes a file only from the run, its sibling `evidence/` directory or the repository's test fixtures. `band-hidden` and `band-unknown` use the baseline run. The scripted model reports no quota window, so a measured row needs the ledger.
 - **States:** default (measured, hidden), loading (the run's command runs), empty (no reading: hidden, then `lanes unknown`). Focus, open and error are `n/a`.
 - **Regression:** `apps/tui/tests/extensions/machines.client.test.tsx`, `apps/tui/tests/ctl.test.ts` (`lanes needs no session`), `packages/extensions/tests/machines.test.ts` (`through the RPC harness`), `packages/e2e/tests/verify.test.ts`.
 
-Ledger recipe, run in an empty directory outside the checkout:
+Ledger recipe, run in the run's sibling `evidence/` directory (`mkdir -p "$(dirname "$RUN")/evidence"` first):
 
 ```sh
 bun -e '
