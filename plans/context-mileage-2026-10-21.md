@@ -62,10 +62,33 @@ finished unit. The baseline is the table above.
    TTL. Other calls write with the 5 m TTL. The Anthropic extension
    (`packages/extensions/src/anthropic.ts`, the `ttl` marker) takes the choice
    from the turn. Accept: misses under 2% of W (F8).
-6. **Compaction window per role.** A worker compacts at 200k, and a root keeps
-   the user's window. Choose the worker value by replaying real transcripts
-   through gent's projection, not by the model above. Accept: mean context per
-   worker call under 130k (F2), with no rise in the gate failures per unit.
+6. **Compaction window per role, tuned from the burn.** Each role compacts
+   at its own window. The window comes from a daily replay of the week's
+   transcripts at 100k to 350k, with each transcript's own compactions undone.
+   A compaction costs its summary call, the cache restart, and the files read
+   again after it. Re-reads are about 20k tokens per compaction (measured), and
+   without them the replay picks too small a window. The user's window is the
+   ceiling: the tuner only lowers it, needs 20 agents of a role, and takes the
+   largest window within 1% of the cheapest. A root compacts between turns,
+   never in the middle of a step. Every compaction is told to keep the paths of
+   the plan, log and state files, the current step, and the user's
+   instructions, so the agent reads them again rather than losing them.
+   Reference: dotfiles `budget.ts --tune` and the status mod's `compact.ts`
+   (c8a469f), with these results at a 200k ceiling (measured, 2026-10-21):
+
+   | Host    | Role               | Agents | Window | Saving vs 200k | Re-read per compaction |
+   | ------- | ------------------ | ------ | ------ | -------------- | ---------------------- |
+   | Mac     | orchestrate-worker | 50     | 140k   | 9.0%           | 23k                    |
+   | Mac     | general-purpose    | 1128   | 200k   | 0%             | 21k                    |
+   | Mac     | root               | 27     | 200k   | 0%             | 18k                    |
+   | workbox | orchestrate-worker |        | 140k   | 7.2%           |                        |
+   | workbox | general-purpose    |        | 200k   | 0%             |                        |
+
+   Gent runs the same replay through its projection, and the burn cycle
+   (the placement and permit work) reads the tuned window per role. Accept:
+   mean context per worker call under 130k (F2), the re-read share after a
+   compaction does not rise, and the gate failures per unit do not rise.
+
 7. **Short agents over long ones.** A unit that outgrows one window goes to a
    fresh agent with a handoff, not a compaction. Accept: compactions per
    worker under 1.
