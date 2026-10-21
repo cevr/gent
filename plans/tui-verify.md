@@ -20,6 +20,15 @@ The retro measured 362 times that agents drove gent through herdr panes by hand,
 - Then `/create-verification-skill` writes `.claude/skills/verify-gent` on top of `gent ctl` and `testbeds/gamut`, with a feature map of the TUI abilities.
 - Done when the skill is proved end to end once, with its proof path in the report.
 
+- **Stack** (owner, 2026-10-21; `create-verification-skill` step 2, dotfiles `d163cc6`). Each helper (`gent ctl`, `verify:launch`, `verify:doctor` and the rest) is an Effect v4 program on Bun, written to the `effect` skill:
+  - `effect/cli` for commands and flags;
+  - the platform `ChildProcessSpawner` and `FileSystem`;
+  - `Schema` for each JSON value it prints or reads;
+  - `Effect.timeout` and `Schedule` for readiness waits;
+  - scoped resources, so a launched app stops when the drive ends;
+  - the repo's own services and test layers (the RPC client, `pty-fixture.ts`, the scratch-home guards), no new ones.
+  - A success prints one JSON result. A failure prints a tagged error and exits non-zero.
+
 The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1, as the skill shows what it still needs.
 
 ## Design
