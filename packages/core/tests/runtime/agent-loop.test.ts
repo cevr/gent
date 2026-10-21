@@ -8797,16 +8797,16 @@ describe("durable wakes", () => {
           // oxlint-disable-next-line effect/noFixedWaitInTests -- the clock reads the table over real I/O before it sleeps, and no signal says it slept
           yield* Effect.sleep("50 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
           skew.ms += 7_200_000
-          const jumpedAt = test.currentTimeMillisUnsafe()
+          // One longest sleep of virtual time, then none: the fire must come
+          // from that sleep alone. Stepping and timing the poll instead counted
+          // the fire's real I/O as clock time, a step late under load.
+          yield* test.adjust(WAKE_CLOCK_MAX_SLEEP)
           yield* advanceUntil(
             firedSources,
             (sources) => sources.includes("forward"),
-            "the forward jump fired the record",
+            "the forward jump fired the record within the longest sleep",
             "1 second",
-            (duration) => test.adjust(duration),
-          )
-          expect(test.currentTimeMillisUnsafe() - jumpedAt).toBeLessThanOrEqual(
-            Duration.toMillis(WAKE_CLOCK_MAX_SLEEP) + 1_000,
+            () => Effect.void,
           )
 
           // Backward: due in an hour, then the wall time jumps back a day.
