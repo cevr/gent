@@ -1810,23 +1810,84 @@ The old durable shape needs no shim: the main database has no
 - **The hard-kill cases are four e2e tests** in
   `packages/e2e/tests/machines-hard-kill.test.ts`, over the host entry
   `packages/e2e/src/machine-host.ts`. Each test kills a real host with
-  SIGKILL and starts a second host over the same files, which makes no
-  client call.
-- **C2b.** The cut round runs once more under its key (`review:2:2`), and
-  no completed round runs again. The run reaches its ask within 8 s.
-- **Two paths activate a host after a kill.** The wake clock's start pass
-  fires the run's record at once. The cluster also redelivers the driver's
-  keep-alive, but only after its 10 s storage-read retry (measured: 11.2 s
-  with the start pass removed, against 1 s with it). The 8 s bound tells
-  the two apart. An owner turn with no run behind it waits the same 10 s
-  before it resumes (measured).
+  SIGKILL and starts a second host over the same files. The second host of
+  the round and command cases makes no client call. The second host of the
+  answer case makes one: it sends the recorded answer again.
+- **Counts live outside the database, one appended record per event.** Each
+  record is one write with `O_APPEND`, so no record overwrites another.
+  `calls.log` names each worker round's first model call by its state and
+  visit, its round id and its message id, read from `thread_rounds` by the
+  round's text. `wakes.log` names each `wakeDue` fire of the machines
+  extension (its cause, its source id and the hook's answer); the host wraps
+  that extension's `ExtensionHost.on`. The commands write `ran.log`,
+  `after.log` and the pid files. `MH_HANG` holds a key's first call in its
+  process with an in-process set, apart from the counter.
+- **C2b.** The cut round runs once more as the same round, with the same
+  message, and no completed round runs again; the run's `RoundEnded` steps
+  name the four rounds `calls.log` names. The start pass is proved by its
+  record, not by time: `wakes.log` is empty after the first host, and holds
+  `start machine-run:<run> AtStart` once after the second. The run's ask has
+  a 30 s bound.
+- **Two paths activate a host after a kill, both at boot.** The wake clock's
+  start pass fires the run's record. The cluster redelivers the driver's
+  keep-alive. Before this fix, that redelivery waited for the next storage
+  poll (10 s). `Sharding` reads stored messages from the moment it builds;
+  a read puts back a message whose entity type is not registered yet
+  (`node_modules/effect/src/cluster/Sharding.ts:783-787`, then
+  `resetAddress` at `:944-951`); `registerEntity` (`:1804`, its registration
+  at `:1851-1859`) starts no read; and in a boot with no send, nothing opens
+  the read latch again before the poll fiber (`:995-999`,
+  `entityMessagePollInterval`, 10 s by default). Gent registers the actor at
+  `packages/core/src/server/server.ts:2334`, above `SingleRunner` at
+  `:2293`. `AgentLoopLiveActor` now asks for one read
+  (`Sharding.pollStorage`) once it is registered
+  (`readStoredMessagesOnRegistration`, `agent-loop.ts`). Measured on the
+  core test that cuts a turn and starts a new root with no call: 10.26 s
+  without the read, 0.24 s with it; with the poll set to one hour, the turn
+  resumes only with the read. The storage-error retry at `Sharding.ts:985`
+  is a separate path and is not involved.
+- **The read keeps the registration's outputs.** `Actor.toLayer` passes its
+  input context through as outputs (effect-encore `layerPassthrough`), and
+  later layers read the `ConfigProvider` from them. Composed with
+  `Layer.provide`, the read hid those outputs, and four env-credential tests
+  in core and extensions failed (measured in the gate); `Layer.provideMerge`
+  keeps them.
+- **C3b.** The command's leader shell waits on a descendant `sleep` in its
+  group; each names its pid in a file. Both run after the first host's kill,
+  and neither runs after recovery: `ps -o stat=` shows no process, or a
+  zombie (`Z`), which runs nothing.
 - **C3b's third case changed with R4.** A command whose process record
   never committed (a trigger refuses the `Recorded` step) is stopped from
   its launcher's receipt: the ask has no `mayStillRun`, and the group is
   gone. `mayStillRun: true` now needs a receipt that cannot be read.
+- **A host drops each hold its environment does not name**, before its root
+  builds, so a recovery never meets an earlier host's trigger.
 - **A cut answer is not reachable.** Core stores a tool call's result when
   the call ends, not when its step settles, so a kill after `machine.answer`
   committed keeps its result (measured: the result was stored while its
   sibling `bash` call still ran). The test instead sends the recorded answer
-  again after the restart, as a client whose reply was lost would: it is
-  admitted and applies nothing.
+  again after the restart, as a client whose reply was lost would. The
+  answer leads to a command that appends to `after.log`. A trigger
+  (`MH_HOLD_COMMAND`) keeps the first host from dispatching it, so the kill
+  cannot cut it (measured: without the hold, two runs of three cut the
+  command and one ran it before the kill). The second host runs it once;
+  the test then writes `repeat.go`, and the host sends the answer again. It
+  is admitted, `after.log` still holds one line, and the run's steps are
+  unchanged.
+- **Cleanup comes first.** Each test registers a finalizer before the first
+  host spawns; it ends every process the pid files name, its group and
+  itself. `hardKill` fails when the host outlives SIGKILL by 5 s.
+
+### Mutation probes
+
+Each protection was disabled, the test run, and the change restored from a
+scratchpad copy.
+
+| Probe                   | Disabled                                                                  | Result                                                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Start pass           | `branchWakeClockLive` fires nothing at the start pass                     | The round test fails: `wakes.log` is empty. The run still asks through the keep-alive, so a time bound proves nothing.                                                    |
+| 2. Round identity       | Recovery stops the open cut round and sends a replacement under a new key | The round test fails at `expect(again).toEqual(cut)`; the keys match. The commit-5 test passes against the same change.                                                   |
+| 3. Group stop           | `signalProcessGroup` signals the leader pid, not the group                | Both command tests fail: the descendant still runs. The commit-5 tests pass against the same change.                                                                      |
+| 4. Cleanup              | The reap finalizer, with a setup failure after the command spawn          | With the reap, no fixture process is left. Without it, the leader and its `sleep 120` are left. `hardKill` with SIGCONT for SIGKILL fails with "outlived SIGKILL by 5 s". |
+| 5. Answer applies once  | The prior-answer branch moves a final run back to `after`                 | The answer test fails: `after.log` holds two lines after the repeat.                                                                                                      |
+| 6. Read on registration | `readStoredMessagesOnRegistration` reads nothing                          | The startup recovery test in `packages/core/tests/runtime/agent-loop.test.ts` times out at 10 s with the poll set to one hour.                                            |

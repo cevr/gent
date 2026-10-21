@@ -8,35 +8,52 @@
  *   from a new owner session. Absent, the process starts nothing, and with
  *   no `MH_REPEAT_ANSWER` it makes no client call: a run's own record must
  *   activate its host.
- * - `MH_HANG` (`<state>:<visit>`): that round's first model call never ends.
+ * - `MH_HANG` (`<state>:<visit>`): that round's first model call in this
+ *   process never ends.
  * - `MH_HOLD_RECORD`: the command's process record never commits, as when
  *   the server dies between the spawn and that commit.
+ * - `MH_HOLD_COMMAND`: no command is dispatched, so none starts; the driver
+ *   retries after its backoff.
  * - `MH_ANSWER` (a choice): once the run asks, the owner answers it in one
  *   step beside a `bash` call that sleeps, so the owner's turn is still open
  *   when the test kills the process.
- * - `MH_REPEAT_ANSWER`: the owner sends the run's recorded answer again
- *   (call id `again`), as a client whose reply a crash lost would.
+ * - `MH_REPEAT_ANSWER`: once `<MH_CWD>/repeat.go` exists, the owner sends the
+ *   run's recorded answer again (call id `again`), as a client whose reply a
+ *   crash lost would.
  *
- * Every worker round's first model call appends `<state>:<visit>:<attempt>`
- * to `<MH_CWD>/calls.log`, and every command appends to `<MH_CWD>/ran.log`:
- * counts outside the database under test. Each event the test waits on is
- * one stdout line that starts with `MH `.
+ * A hold is a trigger in the database file; a host drops each hold its
+ * environment does not name.
+ *
+ * Counts outside the database under test, each one appended record per
+ * event (`O_APPEND`), in `<MH_CWD>`:
+ * - `calls.log`: every worker round's first model call, as
+ *   `<state>:<visit> <round> <message>`, the round and its message read from
+ *   `thread_rounds` by the round's text.
+ * - `wakes.log`: every `wakeDue` fire of the machines extension, as
+ *   `<cause> <sourceId> <answer>`.
+ * - `ran.log`, `after.log`, and the pid files: what the commands write.
+ *
+ * Each event the test waits on is one stdout line that starts with `MH `.
  */
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import {
   Config,
   Console,
+  type Context,
   Effect,
   FileSystem,
+  HashSet,
   Layer,
   Option,
   Predicate,
+  Ref,
   Schema,
   Stream,
 } from "effect"
 import type * as Prompt from "effect/ai/Prompt"
 import { SqlClient } from "effect/sql"
 import { BuiltinExtensions } from "@gent/extensions"
+import { ExtensionHost, type ExtensionHostService } from "@gent/core/extensions/api"
 import { BunSqlite } from "@gent/core/host-bun"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
@@ -80,7 +97,10 @@ const TRACK = {
   },
 }
 
-/** One command that names its group, records its run, then outlives the server. */
+/**
+ * One command that outlives the server: its leader shell waits on a
+ * descendant `sleep` in its group, and each names its pid in a file.
+ */
 const VERIFY = {
   name: "verify",
   threads: {},
@@ -88,20 +108,21 @@ const VERIFY = {
   states: {
     verify: {
       kind: "run",
-      run: "echo $$ > job.pid; echo ran >> ran.log; sleep 60",
+      run: "sleep 120 & echo $! > child.pid; echo $$ > job.pid; echo ran >> ran.log; wait",
       on: { pass: "done", fail: "done" },
     },
     done: { kind: "final" },
   },
 }
 
-/** One ask, then the end. */
+/** One ask, then a command the answer leads to, then the end. */
 const GATE = {
   name: "gate",
   threads: {},
   start: "gate",
   states: {
-    gate: { kind: "ask", ask: "Go?", on: { go: "done", drop: "done" } },
+    gate: { kind: "ask", ask: "Go?", on: { go: "after", drop: "done" } },
+    after: { kind: "run", run: "echo after >> after.log", on: { pass: "done", fail: "done" } },
     done: { kind: "final", say: "gate finished" },
   },
 }
@@ -163,14 +184,28 @@ const ownerStep = (prompt: Prompt.Prompt) => {
 /** A line the test waits on. */
 const event = (line: string) => Console.log(`MH ${line}`)
 
-/** Appends this round's line to `calls.log` and answers its attempt, from 1. */
-const countCall = (fs: FileSystem.FileSystem, callsLog: string, key: string) =>
+/** Appends one record to `file`: one write with `O_APPEND`, so no record overwrites another. */
+const appendRecord = (fs: FileSystem.FileSystem, file: string, record: string) =>
+  fs.writeFileString(file, `${record}\n`, { flag: "a" }).pipe(Effect.orDie)
+
+type Database = Context.Context<SqlClient.SqlClient>
+
+const RoundRow = Schema.Struct({ round: Schema.String, message_id: Schema.String })
+const decodeRoundRows = Schema.decodeUnknownSync(Schema.Array(RoundRow))
+
+/** The round whose message is `text`, and its message's id: the round this call runs. */
+const roundOf = (database: Database, text: string) =>
   Effect.gen(function* () {
-    const before = yield* fs.readFileString(callsLog).pipe(Effect.orElseSucceed(() => ""))
-    const attempt = before.split("\n").filter((line) => line.startsWith(`${key}:`)).length + 1
-    yield* fs.writeFileString(callsLog, `${before}${key}:${attempt}\n`)
-    return attempt
-  }).pipe(Effect.orDie)
+    const sql = yield* SqlClient.SqlClient
+    const rows = decodeRoundRows(
+      yield* sql`SELECT round, message_id FROM thread_rounds WHERE content = ${text}`,
+    )
+    const [row] = rows
+    if (rows.length !== 1 || Predicate.isUndefined(row)) {
+      return yield* Effect.die(new Error(`${rows.length} rounds hold this call's message`))
+    }
+    return row
+  }).pipe(Effect.provideContext(database), Effect.orDie)
 
 /** The track's worker: review 1 asks for changes, a later review accepts. */
 const workerStep = (prompt: Prompt.Prompt, state: string, visit: number) => {
@@ -184,23 +219,69 @@ const workerStep = (prompt: Prompt.Prompt, state: string, visit: number) => {
 const routedModels = (options: {
   readonly fs: FileSystem.FileSystem
   readonly callsLog: string
+  readonly database: Database
   readonly hang: Option.Option<string>
+  /** The keys whose first call this process already made. */
+  readonly made: Ref.Ref<HashSet.HashSet<string>>
 }) =>
   LanguageModelLayers.testStream((request) =>
     Effect.gen(function* () {
       const prompt = request.prompt
       if (!systemTextOf(prompt).includes("You are a worker thread")) return ownerStep(prompt)
-      const header = /^STATE (\S+) (\d+)$/m.exec(lastUserText(prompt))
+      const text = lastUserText(prompt)
+      const header = /^STATE (\S+) (\d+)$/m.exec(text)
       const state = header?.[1] ?? "unknown"
       const visit = Number(header?.[2] ?? "0")
       const key = `${state}:${visit}`
       if (acted(prompt)) return workerStep(prompt, state, visit)
-      const attempt = yield* countCall(options.fs, options.callsLog, key)
+      const round = yield* roundOf(options.database, text)
+      yield* appendRecord(options.fs, options.callsLog, `${key} ${round.round} ${round.message_id}`)
       yield* event(`round ${key}`)
-      if (Option.contains(options.hang, key) && attempt === 1) return Stream.never
+      const hangs = Option.contains(options.hang, key)
+      const first = !HashSet.has(yield* Ref.getAndUpdate(options.made, HashSet.add(key)), key)
+      if (hangs && first) return Stream.never
       return workerStep(prompt, state, visit)
     }),
   )
+
+// ── the wake log ────────────────────────────────────────────────────────────
+
+const WakeFire = Schema.Struct({ sourceId: Schema.String, cause: Schema.String })
+const WakeAnswer = Schema.Struct({ _tag: Schema.String })
+
+/**
+ * The extension, with each `wakeDue` fire and its answer appended to `log`:
+ * the record of what the wake clock fired, outside the database under test.
+ */
+const withWakeLog = <E extends (typeof BuiltinExtensions)[number]>(
+  extension: E,
+  log: string,
+): E => ({
+  ...extension,
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    const fs = yield* FileSystem.FileSystem
+    const logged: ExtensionHostService = {
+      ...host,
+      on: (kind, handler) =>
+        host.on(kind, (input) =>
+          handler(input).pipe(
+            Effect.tap((output) => {
+              if (kind !== "wakeDue") return Effect.void
+              const fire = Schema.decodeUnknownOption(WakeFire)(input)
+              const answer = Schema.decodeUnknownOption(WakeAnswer)(output)
+              if (Option.isNone(fire) || Option.isNone(answer)) {
+                return Effect.die(new Error("a wakeDue fire the log cannot read"))
+              }
+              const line = `${fire.value.cause} ${fire.value.sourceId} ${answer.value._tag}`
+              return appendRecord(fs, log, line)
+            }),
+          ),
+        ),
+    }
+    yield* extension.setup.pipe(Effect.provideService(ExtensionHost, logged))
+  }),
+})
 
 // ── the owner's calls ───────────────────────────────────────────────────────
 
@@ -269,47 +350,83 @@ const answeredRun = Effect.gen(function* () {
 
 // ── the host ────────────────────────────────────────────────────────────────
 
+interface Hold {
+  readonly env: string
+  readonly trigger: string
+  readonly when: string
+}
+
+/** The holds a host can name, each a trigger on the steps it refuses. */
+const HOLDS: ReadonlyArray<Hold> = [
+  {
+    env: "MH_HOLD_RECORD",
+    trigger: "crash_test_holds_the_record",
+    when: `json_extract(NEW.step_json, '$._tag') = 'Recorded'`,
+  },
+  {
+    env: "MH_HOLD_COMMAND",
+    trigger: "crash_test_holds_the_command",
+    when: `json_extract(NEW.step_json, '$._tag') = 'Dispatched'
+      AND json_extract(NEW.step_json, '$.action._tag') = 'Command'`,
+  },
+]
+
 const program = Effect.gen(function* () {
   const home = yield* Config.String("MH_HOME")
   const cwd = yield* Config.String("MH_CWD")
   const start = yield* Config.option(Config.schema(MachineToStart, "MH_START"))
   const hang = yield* Config.option(Config.String("MH_HANG"))
-  const holdRecord = Option.isSome(yield* Config.option(Config.String("MH_HOLD_RECORD")))
   const answer = yield* Config.option(Config.String("MH_ANSWER"))
   const repeatAnswer = Option.isSome(yield* Config.option(Config.String("MH_REPEAT_ANSWER")))
   const storagePath = `${home}/gent.db`
   const fs = yield* FileSystem.FileSystem
+  // The host's own reads and the holds, on a second connection to the root's file.
+  const database = yield* Layer.build(
+    BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer)),
+  )
+  const sql = <A, E>(statement: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    Effect.provideContext(statement, database)
+  const named = (hold: Hold) =>
+    Config.option(Config.String(hold.env)).pipe(Effect.map(Option.isSome))
+  // A hold an earlier host named goes before this root builds, or its recovery meets it.
+  for (const hold of HOLDS) {
+    if (yield* named(hold)) continue
+    yield* sql(
+      Effect.flatMap(SqlClient.SqlClient, (db) =>
+        db.unsafe(`DROP TRIGGER IF EXISTS ${hold.trigger}`),
+      ),
+    )
+  }
   const { client } = yield* createRpcClient(
     createE2ELayer({
       agents: [],
       extensionInputs: BuiltinExtensions.filter(
         (extension) => extension.manifest.id !== "@gent/cell",
-      ),
+      ).map((extension) => {
+        if (extension.manifest.id !== "@gent/machines") return extension
+        return withWakeLog(extension, `${cwd}/wakes.log`)
+      }),
       providerLayer: routedModels({
         fs,
         callsLog: `${cwd}/calls.log`,
+        database,
         hang,
+        made: yield* Ref.make(HashSet.empty<string>()),
       }),
       storagePath,
       cwd,
       home,
     }),
   )
-  // The host's own reads and the hold, on a second connection to the file the root migrated.
-  const database = yield* Layer.build(
-    BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer)),
-  )
-  const sql = <A, E>(statement: Effect.Effect<A, E, SqlClient.SqlClient>) =>
-    Effect.provideContext(statement, database)
-  if (holdRecord) {
+  // A named hold goes in once the root made its table.
+  for (const hold of HOLDS) {
+    if (!(yield* named(hold))) continue
     yield* sql(
-      Effect.gen(function* () {
-        const db = yield* SqlClient.SqlClient
-        yield* db.unsafe(`CREATE TRIGGER IF NOT EXISTS crash_test_holds_the_record
-            BEFORE INSERT ON machine_steps
-            WHEN json_extract(NEW.step_json, '$._tag') = 'Recorded'
-            BEGIN SELECT RAISE(ABORT, 'the crash test holds the process record'); END`)
-      }),
+      Effect.flatMap(SqlClient.SqlClient, (db) =>
+        db.unsafe(`CREATE TRIGGER IF NOT EXISTS ${hold.trigger}
+            BEFORE INSERT ON machine_steps WHEN ${hold.when}
+            BEGIN SELECT RAISE(ABORT, 'the crash test holds this step'); END`),
+      ),
     )
   }
   yield* event("ready")
@@ -341,6 +458,7 @@ const program = Effect.gen(function* () {
   }
   if (repeatAnswer) {
     const run = (yield* waitFor(sql(answeredRun), Option.isSome, 30_000, "an answer")).value
+    yield* waitFor(fs.exists(`${cwd}/repeat.go`), (go) => go, 45_000, "the test let the repeat go")
     yield* client.message.send({
       sessionId: run.host_session_id,
       branchId: run.host_branch_id,

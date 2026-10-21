@@ -4020,22 +4020,45 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   })
 })
 
+/**
+ * One read of the cluster's stored messages, once the actor is registered.
+ * `Sharding` reads stored messages from the moment it builds, below the
+ * session services the actor needs, so that read can find a message (a cut
+ * turn's request, a keep-alive) for an entity type that is not registered
+ * yet. It puts the message back for a later read, and a registration does
+ * not start one: without this read the message waits for the next storage
+ * poll (`entityMessagePollInterval`, 10 s by default).
+ */
+const readStoredMessagesOnRegistration = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sharding = yield* Sharding.Sharding
+    yield* sharding.pollStorage
+  }),
+)
+
 export const AgentLoopLiveActor =
-  // The replay store is built at the server actor-layer scope. Agent-loop
-  // behaviors can be rebuilt for one entity, but their live tool identities
-  // must remain available until the owning server scope closes.
-  Layer.unwrap(
-    Actor.provideLayerBuildContext(agentLoopActorHandlers).pipe(
-      Effect.map((build) =>
-        Actor.toLayer(AgentLoop, build, {
-          // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
-          // `concurrency: "unbounded"` keeps short ops (RespondInteraction,
-          // Steer) from waiting on unrelated mailbox handlers.
-          concurrency: "unbounded",
-        }),
+  // The registration builds first, then the read; the registration's
+  // outputs (the actor client, and the context it passes through) stay
+  // outputs. The replay store is built at the server actor-layer scope.
+  // Agent-loop behaviors can be rebuilt for one entity, but their live tool
+  // identities must remain available until the owning server scope closes.
+  readStoredMessagesOnRegistration.pipe(
+    Layer.provideMerge(
+      Layer.unwrap(
+        Actor.provideLayerBuildContext(agentLoopActorHandlers).pipe(
+          Effect.map((build) =>
+            Actor.toLayer(AgentLoop, build, {
+              // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
+              // `concurrency: "unbounded"` keeps short ops (RespondInteraction,
+              // Steer) from waiting on unrelated mailbox handlers.
+              concurrency: "unbounded",
+            }),
+          ),
+        ),
       ),
     ),
-  ).pipe(Layer.provide(ProcessLocalToolReplay.Live))
+    Layer.provide(ProcessLocalToolReplay.Live),
+  )
 
 export const AgentLoopTestActor = Layer.unwrap(
   Actor.provideLayerBuildContext(agentLoopActorHandlers).pipe(

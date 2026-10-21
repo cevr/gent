@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Clock,
+  ConfigProvider,
   Context,
   DateTime,
   Deferred,
@@ -4430,6 +4431,42 @@ describe("agent-loop recovery race", () => {
 })
 
 describe("startup recovery", () => {
+  it.scopedLive(
+    "a turn cut when its root closed resumes as the next root starts, with no call and no storage poll",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-registered-read-")
+        const dbPath = `${tempDir}/gent.db`
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({ ...e2ePreset, providerLayer, storagePath: dbPath })
+
+        // Root 1: the turn's stream starts, and the root closes under it.
+        // The turn's request and its keep-alive stay in the cluster's storage.
+        const first = yield* LanguageModelLayers.signal("never sent.")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(first.layer))
+            const { sessionId, branchId } = yield* client.session.create({})
+            yield* client.message.send({ sessionId, branchId, content: "resume me" })
+            yield* first.controls.waitForStreamStart
+          }),
+        )
+
+        // Root 2 gets no client call, and its cluster polls storage once an
+        // hour: only the read that follows the actor's registration finds
+        // the cut turn.
+        const second = yield* LanguageModelLayers.signal("resumed.")
+        const hourlyPoll = ConfigProvider.layerAdd(
+          ConfigProvider.fromUnknown({ entityMessagePollInterval: "1 hour" }),
+          { asPrimary: true },
+        )
+        yield* createRpcClient(layerFor(second.layer).pipe(Layer.provide(hourlyPoll)))
+        yield* second.controls.waitForStreamStart.pipe(Effect.timeout("10 seconds"))
+        yield* second.controls.emitAll
+      }).pipe(Effect.timeout("20 seconds")),
+    25_000,
+  )
+
   it.live(
     "startup resumes an incomplete user turn even after the queue token was cleared",
     () =>

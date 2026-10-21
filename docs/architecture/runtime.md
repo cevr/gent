@@ -37,7 +37,11 @@ Shape:
   (a hard kill, a Durable Object eviction) leaves it unanswered, and the next
   process's cluster delivers it again at boot: that builds the entity with no
   operation, and the build resumes the turn the hold kept (deferred
-  recovery, below).
+  recovery, below). The cluster reads stored messages from the moment
+  `Sharding` builds, below the actor, and puts back one for an entity type
+  not registered yet; a registration starts no read. So `AgentLoopLiveActor`
+  asks for one read (`Sharding.pollStorage`) once it is registered, and the
+  redelivery comes at boot, not at the next storage poll (10 s).
 - Durable wakes (the `durable wakes` section of `agent-loop.ts`): an
   extension arms a wake record on a branch with
   `ExtensionContext.Session.wakeAt({ sourceId, at? })` and removes it with
