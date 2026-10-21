@@ -155,6 +155,16 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 - Core: `ExtensionContext.Permits.with(name, limit, effect)`, a once-per-server service beside `FileLockService`, with permits released when the scope closes and waiters ordered first in, first out. `permits.list` shows the holders.
 - `bash` takes an optional `permit: { name, limit }`, held for the run, background runs included.
 
+#### Stage 4 design (2026-10-21)
+
+One sketch (Codex, `8fb974f0d`, session scratchpad `stage4-sketch-codex.md`); the Claude sketch waits for the Claude pool, which was held for weekly pace. Decisions:
+
+- **Permits** are a core service beside `FileLockService` (`runtime/permits.ts`), reached through `ExtensionContext.Permits.with/list` and a core `permits.list` RPC. Holders, waiters and order live in memory: a restart starts empty, so a permit bounds work inside one server, not across a SIGKILL (the bash receipt recovery still reports an orphan). FIFO is an explicit queue, since Effect's `Semaphore` lets a new caller barge past a waiter (`Semaphore.ts:248-275`). A second limit for a live name fails `PermitLimitMismatch`. The machines extension's private semaphore map moves onto it.
+- **bash `permit`:** a foreground run holds it until its process group is gone (a timeout does not release it while cleanup runs); a background run holds it in its supervisor's job fiber, past its turn.
+- **`main-red` is not a permit.** It outlives processes and is released by a CI result, so it is a durable integration record per repository and ref (`clear → integrating → awaiting-ci → red → awaiting-ci → clear`), owned by an extension, read with `gh` on a schedule, cleared only by success for the recorded SHA on every required workflow. A short `integration:<repo>:<ref>` permit serializes changes to the record.
+- **P6 binding** reuses `Threads.start`'s cwd seam: prepare the copy, create the session with the final cwd, bind, then send. A refused start leaves no Rift; the lane is held through preparation. **Rift removal waits on the Rift backend:** gent never removes a Rift today because no backend call checks an expected copy id and no descendants under Rift's own lock (`workspaces.ts:362-374`; rift-snapshot `RemoveOptions`). That contract is an upstream change in the owned `rift` library first.
+- **Order:** (1) permits, (2) bash permits and the machines map, (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding. The Claude sketch covers 3-5 before they start.
+
 ### P5. Accounts
 
 - **A run spec pins one credential slot** (`RunSpec.credentialSlot`, not a stored run override): the turn, its handoff summary and its no-agent child walk only that slot, and a refused pin fails the turn. `thread.start` takes an `account`.
