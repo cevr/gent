@@ -191,9 +191,11 @@ gent needs no proxy: it is its own harness, and its providers already spread tur
   - structured round replies;
   - a thread key that survives handoffs.
 
-## Status (2026-10-17)
+## Status (2026-10-21)
 
-- **Merged:** stage 0 (account spread, `a690a2f85`, 2026-10-17: one review round, fix `ba6392700`), stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`).
+- **Merged:** stage 0 (account spread, `a690a2f85`, 2026-10-17: one review round, fix `ba6392700`), stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`), stage 3 (machines, `637ab3cad`..`722f913fb`, 2026-10-21).
+- **Stage 3 receipts:** the facts, probes and Codex rounds are in [machines-design.md](machines-design.md) ("Commit 5 facts"). Durable branch wakes (`@gent/wake`), deferred recovery, typed thread refusals and a recorded command process are in core and extensions; four e2e tests SIGKILL a host and count executions in files outside SQLite. The restart test found a gent startup defect: the agent-loop actor registered after the cluster's first storage read, so a cut turn with no client call waited for the 10 s poll. The actor layer now polls once after registration (`722f913fb`). Effect's `registerEntity` does not reopen the storage-read latch; that is an upstream gap, not yet filed.
+- **Open from stage 3:** the headless `--model` does not reach a worker thread (a worker started from `gent -H` needs `model` in `thread.start`).
 - **Stage 0 review fixes:** a pool keeps in step with its order on rename and removal; a pool must be inside its order, or that sign-in fails; a rate limit or unsupported model holds the account for that model only; handoff summaries count toward load; `CredentialPlacement` is a required service in every root; the ledger stores session ids, so a restart counts a session once; nothing is written unless a sign-in spreads. Skipped: marking a session live at dispatch (a burst must see each earlier placement).
 - **baton is gone** (not installed). The `orchestrate` skill now routes Claude Code and Codex background agents, and its machine has moved past this plan's `track` example: a `plan` state with a planner, a `stuck` verdict, a failure cap of 3 that sends the unit to `decide` for a rewrite, and a dead worker (usage limit, no hand-back, empty review) that gives no verdict. Stage 3's schema and stage 5's target follow the skill, not baton.
 - **Orchestrate skill rules since 2026-10-21** (dotfiles `a1ab5bb`), which stage 5's machine takes over: the plan names what the owner opens after round 1; bulk model work with no tools runs as a Batch API script, not as agents; a sketch unit (one sketch per model family) comes before a new seam; integrate is green only when the pushed commit's CI is green, and nothing else merges while main is red (gent's own CI was red from 2026-09-25 to 2026-10-18 while merges went on); a spike's verdict goes into `NORTH_STAR.md`, `PRIOR_ART.md` Settled or an ADR.
@@ -212,7 +214,7 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - the gate is green.
      1b. **P1b, the delegate fold.** Done when every ported delegate test passes on threads, `git grep -E 'delegate\.(start|list|cancel)'` finds only plans, research and stored-transcript fixtures, and the gate is green.
 2. **P5 accounts: pin + linked directories + thread account.** Done when a linked `personal` slot resolves from its directory's keychain service, a thread with `account: "personal"` runs on it, and nothing changes for the default slot. The keychain read is tested with a fake `security` spawner.
-3. **P3 machines.** A design-mode counsel review of the core activation seam and the schema comes first. Done when:
+3. **P3 machines.** Done 2026-10-21 at `722f913fb`. A design-mode counsel review of the core activation seam and the schema comes first. Done when:
    - a track machine runs implement, review with changes, implement, review accepted, verify and decide on fake models, with no owner turn between rounds;
    - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
    - a command interrupted by a crash moves the run to `ask`;
