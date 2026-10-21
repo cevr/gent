@@ -2526,11 +2526,18 @@ const roundView = (round: RoundRow): RoundView => ({
 
 /** One round, read by the thread that sent it. */
 const readRound = Effect.fn("Threads.round")(function* (roundId: string) {
+  const found = yield* findRound(roundId)
+  if (Option.isNone(found)) return yield* new ThreadError({ message: `No round ${roundId}` })
+  return found.value
+})
+
+/** The round with this id, none when no send admitted it. */
+const findRound = Effect.fn("Threads.findRound")(function* (roundId: string) {
   const rounds = yield* ThreadRounds
   const round = yield* rounds.round(roundId)
-  if (Option.isNone(round)) return yield* new ThreadError({ message: `No round ${roundId}` })
+  if (Option.isNone(round)) return Option.none<RoundView>()
   yield* ownThread(round.value.thread)
-  return roundView(round.value)
+  return Option.some(roundView(round.value))
 })
 
 const StopResult = Schema.Struct({
@@ -2673,6 +2680,14 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     start: (input: ThreadStartInput) => startThread(input).pipe(withRounds),
     send: (input: ThreadSendInput) => sendToThread(input).pipe(withRounds),
     round: (round: string) => readRound(round).pipe(withRounds),
+    /** The round with this id, none when no send admitted it. */
+    findRound: (round: string) => findRound(round).pipe(withRounds),
+    /**
+     * The round a send under `key` admits, known before the send: a sender
+     * records it first, so a crash or a stop after the admission finds the
+     * round by its id.
+     */
+    sendRound: (key: string) => roundIdOf("thread.send", key),
     /**
      * A thread's latest round, open or ended, or with `ended` its latest
      * ended one; none for a thread that took no round. By the thread's key

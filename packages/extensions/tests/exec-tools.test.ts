@@ -27,8 +27,11 @@ import {
   BackgroundBashSupervisorLive,
   BashParams,
   BashTool,
+  commandLaunch,
   type CommandProcess,
+  readCommandReceipt,
   runBashCommand,
+  stopLostCommand,
   stopStaleProcess,
 } from "../src/exec-tools.js"
 import {
@@ -277,9 +280,11 @@ describe("background shell through a cell", () => {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-output-" })
-        // A data directory that is a file: no job file can go under it.
-        const dataDir = path.join(home, "not-a-directory")
-        yield* fs.writeFileString(dataDir, "")
+        // The output directory is a file: no job file can go under it. The
+        // receipt still can, so the job runs.
+        const dataDir = path.join(home, "data")
+        yield* fs.makeDirectory(dataDir)
+        yield* fs.writeFileString(path.join(dataDir, "background-bash"), "")
         const text = yield* hugeBackgroundNotice(home, [
           Layer.succeed(
             ConfigProvider.ConfigProvider,
@@ -444,8 +449,18 @@ const liveSession = (
   )
 type Notice = { sourceId: string; content: string }
 /** `ctx` in a fresh working directory that the test's scope removes. */
+/**
+ * The context in a temp cwd. A context on the stub's home gets a temp home
+ * too: a background job writes its receipt under the data directory before
+ * it runs.
+ */
 const inTempCwd = (ctx: TestToolContext) =>
-  Effect.map(makeTempDirectoryScoped("gent-exec-cwd-"), (cwd) => ({ ...ctx, cwd }))
+  Effect.gen(function* () {
+    const cwd = yield* makeTempDirectoryScoped("gent-exec-cwd-")
+    let home = ctx.home
+    if (home === stubCtx.home) home = yield* makeTempDirectoryScoped("gent-exec-home-")
+    return { ...ctx, cwd, home }
+  })
 
 describe("Bash command semantics", () => {
   const cases = [
@@ -825,7 +840,10 @@ describe("BashTool execution", () => {
         const directory = yield* makeTempDirectoryScoped("gent-bg-scope-close-")
         const pidFile = `${directory}/job.pid`
         const sent = yield* Deferred.make<Notice>()
-        const ctx = { ...liveSession((notice) => Deferred.succeed(sent, notice)), cwd: directory }
+        const ctx = {
+          ...liveSession((notice) => Deferred.succeed(sent, notice), { home: directory }),
+          cwd: directory,
+        }
         const scope = yield* Scope.make()
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
         const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
@@ -1731,18 +1749,31 @@ describe("a command's recorded process", () => {
     Effect.map(runProcess("pgrep", ["-g", String(pid)]), (result) =>
       result.stdout.split("\n").filter((line) => line.trim() !== ""),
     )
+  /** A recording whose receipt goes under a fresh data dir and whose process lands in `recorded`. */
+  const recordingInto = (recorded: Deferred.Deferred<CommandProcess>) =>
+    Effect.gen(function* () {
+      const launch = yield* commandLaunch(yield* makeTempDirectoryScoped("gent-command-receipt-"))
+      return {
+        launch,
+        recording: Option.some({
+          launch,
+          recorded: (process: CommandProcess) => Effect.asVoid(Deferred.succeed(recorded, process)),
+        }),
+      }
+    })
 
   it.scopedLive.layer(BunServices.layer)(
     "a run reports the process group it leads with that process's start time, and a later server's stop ends the group and its children",
     () =>
       Effect.gen(function* () {
         const recorded = yield* Deferred.make<CommandProcess>()
+        const { recording } = yield* recordingInto(recorded)
         // `bash` leads its group; the background sleep is a child in it.
         const run = yield* runBashCommand(
           "sleep 60 & wait",
           Option.none(),
           Option.none(),
-          (process) => Deferred.succeed(recorded, process),
+          recording,
         ).pipe(Effect.exit, Effect.forkScoped)
         const process = yield* Deferred.await(recorded)
         expect(yield* psColumn("pgid", process.pid)).toBe(String(process.pid))
@@ -1768,15 +1799,16 @@ describe("a command's recorded process", () => {
     () =>
       Effect.gen(function* () {
         const recorded = yield* Deferred.make<CommandProcess>()
+        const { launch, recording } = yield* recordingInto(recorded)
         const output = yield* runBashCommand(
           'echo "$GENT_COMMAND_TOKEN"',
           Option.none(),
           Option.none(),
-          (process) => Deferred.succeed(recorded, process),
+          recording,
         )
         const process = yield* Deferred.await(recorded)
-        expect(Option.isSome(process.token)).toBe(true)
-        expect(Option.some(output.stdout.trim())).toEqual(process.token)
+        expect(process.token).toEqual(Option.some(launch.token))
+        expect(output.stdout.trim()).toBe(launch.token)
       }).pipe(Effect.timeout("10 seconds")),
     15_000,
   )
@@ -1795,17 +1827,11 @@ describe("a command's recorded process", () => {
           .toArray(),
     )
   /**
-   * A command whose leader exits and leaves one child in its group: the test
-   * runtime, which macOS does not hide the environment of. With a `gate`, the
-   * leader waits until that file exists: a leader gone before `ps` reads its
-   * start time leaves no record.
+   * A command whose leader exits at once and leaves one child in its group:
+   * the test runtime, which macOS does not hide the environment of.
    */
-  const leaderlessCommand = (execPath: string, gate: Option.Option<string>) =>
-    `${execPath} -e "setTimeout(() => {}, 60000)" > /dev/null 2>&1 &` +
-    Option.match(gate, {
-      onNone: () => "",
-      onSome: (file) => ` while [ ! -e '${file}' ]; do sleep 0.05; done`,
-    })
+  const leaderlessCommand = (execPath: string) =>
+    `${execPath} -e "setTimeout(() => {}, 60000)" > /dev/null 2>&1 &`
   /** Waits until the leader `pid` is gone and its group holds the runtime child. */
   const leftChild = (platform: GentPlatform["Service"], pid: number) =>
     Effect.gen(function* () {
@@ -1827,24 +1853,141 @@ describe("a command's recorded process", () => {
     "a later server's stop ends a group whose leader exited, by the token its child inherited",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
         const platform = yield* GentPlatform
-        const gate = `${yield* makeTempDirectoryScoped("gent-bg-leaderless-")}/recorded`
         const recorded = yield* Deferred.make<CommandProcess>()
+        const { recording } = yield* recordingInto(recorded)
+        // The leader exits at once: the spawn still records it, from the receipt.
         yield* runBashCommand(
-          leaderlessCommand(yield* platform.execPath, Option.some(gate)),
+          leaderlessCommand(yield* platform.execPath),
           Option.none(),
           Option.none(),
-          (process) => Deferred.succeed(recorded, process),
+          recording,
         ).pipe(Effect.exit, Effect.forkScoped)
         const process = yield* Deferred.await(recorded)
         yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-process.pid, "SIGKILL")))
-        yield* fs.writeFileString(gate, "")
         yield* leftChild(platform, process.pid)
         expect(yield* stopStaleProcess(process)).toBe(true)
         expect(yield* groupMembers(process.pid)).toEqual([])
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a later server stops a group whose leader exited at once from its receipt alone, when the server died before it kept the process",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const fs = yield* FileSystem.FileSystem
+        const seen = yield* Deferred.make<CommandProcess>()
+        const { launch, recording } = yield* recordingInto(seen)
+        yield* runBashCommand(
+          leaderlessCommand(yield* platform.execPath),
+          Option.none(),
+          Option.none(),
+          recording,
+        ).pipe(Effect.exit, Effect.forkScoped)
+        // The test learns the pid only to clean up; the lost server kept nothing.
+        const process = yield* Deferred.await(seen)
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-process.pid, "SIGKILL")))
+        yield* leftChild(platform, process.pid)
+        expect(yield* readCommandReceipt(launch)).toEqual(Option.some(process))
+        expect(yield* stopLostCommand(Option.none(), Option.some(launch))).toBe(true)
+        expect(yield* groupMembers(process.pid)).toEqual([])
+        // The group is shown gone: its receipt goes with it.
+        expect(yield* fs.exists(launch.receipt)).toBe(false)
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a restart stops a stale job's group from its receipt when the server died before it kept the process",
+    () =>
+      Effect.gen(function* () {
+        const platform = yield* GentPlatform
+        const directory = yield* makeTempDirectoryScoped("gent-bg-receipt-only-")
+        const seen = yield* Deferred.make<CommandProcess>()
+        const { launch, recording } = yield* recordingInto(seen)
+        yield* runBashCommand(
+          leaderlessCommand(yield* platform.execPath),
+          Option.none(),
+          Option.none(),
+          recording,
+        ).pipe(Effect.exit, Effect.forkScoped)
+        // The test learns the pid to check the group and clean up; the row keeps none.
+        const process = yield* Deferred.await(seen)
+        yield* Effect.addFinalizer(() => Effect.ignore(platform.signal(-process.pid, "SIGKILL")))
+        yield* leftChild(platform, process.pid)
+        const storageLayer = fileStorage(`${directory}/gent.db`)
+        // The lost server stored the launch with its claim, and died before
+        // it copied the receipt's process into the row.
+        yield* Effect.gen(function* () {
+          yield* BackgroundBashStorage
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            INSERT INTO background_bash_jobs
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, process_token, process_receipt)
+            VALUES ('s', 'b', 'receipt-only', 'node &', 'running', 0, 'earlier-process', ${launch.token}, ${launch.receipt})
+          `
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
+
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+          })
+        }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
+
+        expect(unread).toMatchObject([
+          { toolCallId: ToolCallId.make("receipt-only"), mayStillRun: false },
+        ])
+        expect(yield* groupMembers(process.pid)).toEqual([])
+      }).pipe(Effect.timeout("20 seconds")),
+    30_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a launch whose launcher never wrote its receipt ran nothing, and a later server finds nothing to stop",
+    () =>
+      Effect.gen(function* () {
+        const launch = yield* commandLaunch(yield* makeTempDirectoryScoped("gent-command-receipt-"))
+        expect(yield* stopLostCommand(Option.none(), Option.some(launch))).toBe(true)
+        // A record from before receipts proves nothing.
+        expect(yield* stopLostCommand(Option.none(), Option.none())).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
+
+  it.scopedLive.layer(BunPlatformLive)(
+    "a later server's stop that cannot list the processes leaves the group as it may still run",
+    () =>
+      Effect.gen(function* () {
+        const real = yield* ChildProcessSpawner.ChildProcessSpawner
+        // Every process listing fails, as a `ps` that exits non-zero with no output.
+        const failingListing = ChildProcessSpawner.make((command) => {
+          if (command._tag === "StandardCommand" && command.command === "ps") {
+            return real.spawn(ChildProcess.make("false", [], command.options))
+          }
+          return real.spawn(command)
+        })
+        const exited = yield* ChildProcess.make("true", [], {
+          forceKillAfter: "2 seconds",
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        })
+        yield* exited.exitCode
+        const job: CommandProcess = {
+          pid: Number(exited.pid),
+          startIdentity: "Thu Jan  1 00:00:00 1970",
+          token: Option.some("the-job-s-own-token"),
+        }
+        const stopped = yield* stopStaleProcess(job).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingListing),
+        )
+        expect(stopped).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 
   it.scopedLive.layer(BunPlatformLive)(
@@ -1856,7 +1999,7 @@ describe("a command's recorded process", () => {
         // child, and exited. The child carries no token of the job.
         const other = yield* ChildProcess.make(
           "bash",
-          ["-c", leaderlessCommand(yield* platform.execPath, Option.none())],
+          ["-c", leaderlessCommand(yield* platform.execPath)],
           {
             forceKillAfter: "2 seconds",
             stdin: "ignore",
@@ -2601,9 +2744,9 @@ describe("a background job the server stopped", () => {
           // The host names the job's process in the row before it crashes.
           yield* waitFor(
             Effect.gen(function* () {
-              return yield* (yield* BackgroundBashStorage).staleProcesses
+              return yield* (yield* BackgroundBashStorage).staleJobs
             }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer)))),
-            (processes) => processes.some((job) => job.pid === pid),
+            (jobs) => jobs.some((job) => Option.exists(job.process, (found) => found.pid === pid)),
             10_000,
             "the job's recorded process",
           )

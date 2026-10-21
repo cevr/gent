@@ -61,6 +61,7 @@ import {
   ExtensionHost,
   ExtensionId,
   omitUndefined,
+  resolveDataDir,
   SessionId,
   sessionThread,
   tool,
@@ -68,7 +69,13 @@ import {
   WakeNext,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import { type CommandProcess, runBashCommand, stopStaleProcess } from "./exec-tools.js"
+import {
+  type CommandProcess,
+  commandLaunch,
+  removeCommandReceipt,
+  runBashCommand,
+  stopLostCommand,
+} from "./exec-tools.js"
 import {
   currentThreadPlace,
   StartParams,
@@ -197,6 +204,9 @@ const ProcessRecord = Schema.Struct({
   token: Schema.OptionFromOptionalKey(Schema.String),
 })
 
+/** Where a command's launcher writes its process, and its token (`CommandLaunch`). */
+const LaunchRecord = Schema.Struct({ token: Schema.String, receipt: Schema.String })
+
 const RunStatus = Schema.Literals(["running", "asking", "final", "failed", "stopped"])
 type RunStatus = typeof RunStatus.Type
 
@@ -214,11 +224,16 @@ const PendingAction = Schema.TaggedUnion({
     thread: Schema.optionalKey(SessionId),
     round: Schema.optionalKey(Schema.String),
   },
-  /** `process` is set once the spawn reported its pid. */
+  /**
+   * `launch` is stored before the spawn, so a later server finds the
+   * command's process group from its receipt; `process` is set once the
+   * spawn copied the receipt.
+   */
   Command: {
     state: StateName,
     visit: PositiveInt,
     startedAt: Schema.Finite,
+    launch: LaunchRecord,
     process: Schema.optionalKey(ProcessRecord),
   },
   Ask: {
@@ -282,7 +297,8 @@ const MachineStep = Schema.TaggedUnion({
   Failed: { error: Schema.String },
   Stopped: {},
   /** A stopped run's open round or command was stopped. */
-  Settled: {},
+  /** A process the stopped run started may still run: its group was not shown gone. */
+  Settled: { mayStillRun: Schema.optionalKey(Schema.Boolean) },
   Notified: {},
 })
 type MachineStep = typeof MachineStep.Type
@@ -902,7 +918,7 @@ const RUN_COLUMNS = `run, machine, definition_json, host_session_id, host_branch
  * the migrations it lacks and reads the crash debt. It is a server resource:
  * one server's machines share the permits.
  */
-class MachineStore extends Context.Service<MachineStore, MachineStoreService>()(
+export class MachineStore extends Context.Service<MachineStore, MachineStoreService>()(
   "@gent/extensions/src/machines/MachineStore",
 ) {
   static Live: Layer.Layer<MachineStore, MachineStorageError, SqlClient.SqlClient> = Layer.effect(
@@ -1188,7 +1204,9 @@ class MachineDrivers extends Context.Service<MachineDrivers, MachineDriversServi
         runCommand: Effect.fn("MachineDrivers.runCommand")(function* (run, work) {
           yield* FiberMap.run(commands, run, work, { onlyIfMissing: true })
         }),
-        command: (run) => FiberMap.get(commands, run),
+        command: Effect.fn("MachineDrivers.command")(function* (run) {
+          return yield* FiberMap.get(commands, run)
+        }),
       })
     }),
   )
@@ -1236,9 +1254,25 @@ const WORKER_AGENT = AgentName.make("worker")
 
 interface Signals {
   readonly pokes: Queue.Queue<Poke>
-  /** Every round end this server records, subscribed before the driver's first read. */
-  readonly ends: Option.Option<PubSub.Subscription<unknown>>
+  /** That a round end came since the last take: one slot, filled from the subscription. */
+  readonly ends: Option.Option<Queue.Dequeue<void>>
 }
+
+/**
+ * Drains `subscription` as each end comes, into one slot: a waiter learns
+ * that an end came, and the driver then reads its row, so no backlog is
+ * kept while the run asks, runs a command or waits for a permit.
+ */
+export const roundEndSignal = (subscription: PubSub.Subscription<unknown>) =>
+  Effect.gen(function* () {
+    const slot = yield* Queue.sliding<void>(1)
+    yield* PubSub.take(subscription).pipe(
+      Effect.andThen(Queue.offer(slot, void 0)),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+    return slot
+  })
 
 /** Waits for a poke, and with `ends` for any round end too, at most `within`. */
 const awaitSignal = (
@@ -1247,7 +1281,7 @@ const awaitSignal = (
 ) => {
   const waits: Array<Effect.Effect<void>> = [Effect.asVoid(Queue.take(signals.pokes))]
   if (options.ends && Option.isSome(signals.ends)) {
-    waits.push(Effect.asVoid(PubSub.take(signals.ends.value)))
+    waits.push(Queue.take(signals.ends.value))
   }
   if (Predicate.isNotUndefined(options.within)) waits.push(Effect.sleep(options.within))
   return Effect.raceAll(waits)
@@ -1384,9 +1418,10 @@ const drive = (run: RunId, pokes: Queue.Queue<Poke>) =>
     const store = yield* MachineStore
     const drivers = yield* MachineDrivers
     const threads = yield* Effect.serviceOption(Threads)
-    const ends: Option.Option<PubSub.Subscription<unknown>> = yield* Option.match(threads, {
+    const ends: Option.Option<Queue.Dequeue<void>> = yield* Option.match(threads, {
       onNone: () => Effect.succeedNone,
-      onSome: (service) => Effect.asSome(service.subscribeRoundEnds),
+      onSome: (service) =>
+        Effect.asSome(Effect.flatMap(service.subscribeRoundEnds, roundEndSignal)),
     })
     const signals: Signals = { pokes, ends }
     // The hold on the host's loop, open while the run is running.
@@ -1592,10 +1627,12 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
     }
     case "run": {
       yield* store.permits.acquire(run.run)
+      const ctx = yield* ExtensionContext
       const action = PendingAction.cases.Command.make({
         state: name,
         visit,
         startedAt: yield* Clock.currentTimeMillis,
+        launch: yield* commandLaunch(yield* resolveDataDir(ctx.home)),
       })
       const committed = yield* commitMove(run, { ...run, visits, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
@@ -1636,15 +1673,61 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
 
 /**
  * Sends the pending round: the same key, the same round, so a repeat after a
- * crash admits nothing new. A busy thread or the running cap waits for a
- * round end and sends again. The round's thread and id, and a role's thread,
- * are committed once the send admitted it.
+ * crash admits nothing new. The round's thread and its id (which the key
+ * fixes before the send) are committed first, with a role's thread: a stop
+ * or a crash after the admission then finds the round it must stop. A
+ * commit that another writer beat sends nothing: the next read decides. A
+ * busy thread or the running cap waits for a round end and sends again.
  */
 const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   run: Run,
   state: ThreadState,
   action: RoundAction,
   signals: Signals,
+) {
+  const threads = yield* threadsOf
+  const target = yield* Option.match(roundTarget(action), {
+    onSome: Effect.succeedSome,
+    onNone: () => recordRoundTarget(run, state, action),
+  })
+  if (Option.isNone(target)) return
+  const scope = templateScope(run, action.visit)
+  const send: ThreadSendInput = {
+    key: action.key,
+    thread: target.value.thread,
+    message: render(state.say, scope),
+    notify: "none",
+    ...omitUndefined({
+      reply: Option.getOrUndefined(Option.map(Option.fromUndefinedOr(state.on), replySpecOf)),
+    }),
+  }
+  const admitted = yield* threads.send(send).pipe(
+    Effect.as(true),
+    Effect.catchIf(isWaitRefusal, () => Effect.succeed(false)),
+    Effect.mapError(threadFault),
+  )
+  // Refused (the thread is busy, or the cap is full): any round end may free
+  // it. The driver then reads the row again, so a stop or an answer that came
+  // meanwhile decides before the next send.
+  if (!admitted) yield* awaitSignal(signals, { ends: true, within: REFUSED_SEND_WAIT })
+})
+
+/** The thread and round a pending round already names. */
+const roundTarget = (action: RoundAction) =>
+  Option.all({
+    thread: Option.fromUndefinedOr(action.thread),
+    round: Option.fromUndefinedOr(action.round),
+  })
+
+/**
+ * Starts the round's thread (a fresh one is the round's own, a role's is the
+ * run's, kept across visits) and commits it with the round's id; none when
+ * another writer moved the row first.
+ */
+const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
+  run: Run,
+  state: ThreadState,
+  action: RoundAction,
 ) {
   const threads = yield* threadsOf
   const definition = yield* definitionOf(run)
@@ -1666,57 +1749,36 @@ const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
     Option.fromUndefinedOr(run.roles[state.thread]),
     () => !fresh,
   ).pipe(Option.flatten)
-  const thread = yield* Option.match(known, {
-    onSome: Effect.succeed,
-    onNone: () => {
-      // A fresh thread is the round's own; a role's thread is the run's, kept across visits.
-      let start = {
-        key: `machine:${run.run}:role:${state.thread}`,
-        name: `${run.machine}-${state.thread}`,
-      }
-      if (fresh) {
-        start = {
-          key: `${action.key}:thread`,
-          name: `${run.machine}-${action.state}-${action.visit}`,
+  const thread = yield* Option.match(
+    Option.orElse(Option.fromUndefinedOr(action.thread), () => known),
+    {
+      onSome: Effect.succeed,
+      onNone: () => {
+        let start = {
+          key: `machine:${run.run}:role:${state.thread}`,
+          name: `${run.machine}-${state.thread}`,
         }
-      }
-      return threads.start({ ...spec, ...start }).pipe(
-        Effect.mapError(threadFault),
-        Effect.map((started) => started.thread),
-      )
+        if (fresh) {
+          start = {
+            key: `${action.key}:thread`,
+            name: `${run.machine}-${action.state}-${action.visit}`,
+          }
+        }
+        return threads.start({ ...spec, ...start }).pipe(
+          Effect.mapError(threadFault),
+          Effect.map((started) => started.thread),
+        )
+      },
     },
-  })
-  const scope = templateScope(run, action.visit)
-  const send: ThreadSendInput = {
-    key: action.key,
-    thread,
-    message: render(state.say, scope),
-    notify: "none",
-    ...omitUndefined({
-      reply: Option.getOrUndefined(Option.map(Option.fromUndefinedOr(state.on), replySpecOf)),
-    }),
-  }
-  const round = yield* threads.send(send).pipe(
-    Effect.map((sent) => Option.some(sent.round)),
-    Effect.catchIf(isWaitRefusal, () => Effect.succeedNone),
-    Effect.mapError(threadFault),
   )
-  // Refused (the thread is busy, or the cap is full): any round end may free
-  // it. The driver then reads the row again, so a stop or an answer that came
-  // meanwhile decides before the next send.
-  if (Option.isNone(round)) {
-    return yield* awaitSignal(signals, { ends: true, within: REFUSED_SEND_WAIT })
-  }
-  const recorded = PendingAction.cases.Round.make({
-    ...action,
-    thread,
-    round: round.value,
-  })
+  const round = yield* threads.sendRound(action.key)
+  const recorded = PendingAction.cases.Round.make({ ...action, thread, round })
   let roles = run.roles
   if (!fresh) roles = { ...run.roles, [state.thread]: thread }
-  yield* commitMove(run, { ...run, roles, pending: Option.some(recorded) }, [
+  const committed = yield* commitMove(run, { ...run, roles, pending: Option.some(recorded) }, [
     MachineStep.cases.Recorded.make({ action: recorded }),
   ])
+  return Option.map(committed, () => ({ thread, round }))
 })
 
 /**
@@ -1736,8 +1798,16 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     return yield* dispatchRound(run, state, action, signals)
   }
   const roundId = action.round
-  const view = yield* threads.round(roundId).pipe(Effect.mapError(threadFault))
+  const found = yield* threads.findRound(roundId).pipe(Effect.mapError(threadFault))
+  if (Option.isNone(found)) {
+    // Recorded, but no send admitted it (a crash, or a refused send): send it again.
+    return yield* dispatchRound(run, state, action, signals)
+  }
+  const view = found.value
   if (view.status === "open") {
+    // Open, stopped from outside or not: the worker's turn still runs (a
+    // stopped turn may hold out in an uninterruptible tool). Its end, which
+    // Threads publishes whether the round was stopped or not, decides.
     yield* awaitSignal(signals, { ends: true })
     return
   }
@@ -1930,7 +2000,12 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
         ],
       }
     })
-  const work = runBashCommand(command, Option.some(run.cwd), Option.none(), record).pipe(
+  const work = runBashCommand(
+    command,
+    Option.some(run.cwd),
+    Option.none(),
+    Option.some({ launch: action.launch, recorded: record }),
+  ).pipe(
     Effect.scoped,
     Effect.timeoutOption(timeout),
     store.withPermit(Option.fromUndefinedOr(state.permit)),
@@ -1949,6 +2024,9 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
       Effect.succeed({ exitCode: Option.none<number>(), timedOut: false, output: String(error) }),
     ),
     Effect.flatMap(ended),
+    // The end is committed, or the scope ended the group: no later server
+    // needs the receipt. A crash before this keeps it for recovery.
+    Effect.ensuring(removeCommandReceipt(action.launch)),
     Effect.andThen(drivers.poke(run.run)),
     Effect.catchCause((cause) => {
       if (Cause.hasInterruptsOnly(cause)) return Effect.void
@@ -1963,6 +2041,14 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
 })
 
 /**
+ * Stops what a pending command no fiber here runs left: its group, found from
+ * the process the spawn copied, else from the launcher's receipt. True when
+ * nothing of it runs (`stopLostCommand`).
+ */
+const stopLostAction = (action: CommandAction) =>
+  stopLostCommand(Option.fromUndefinedOr(action.process), Option.some(action.launch))
+
+/**
  * A pending command no fiber of this process runs: a stop or a crash cut it
  * short, so it is never run again. Its recorded process group is stopped; a
  * group that is not shown gone may still run, and the ask offers no retry.
@@ -1972,10 +2058,7 @@ const recoverCommand = Effect.fn("Machines.recoverCommand")(function* (
   action: CommandAction,
 ) {
   const state = yield* runStateOf(run, action.state)
-  const gone = yield* Option.match(Option.fromUndefinedOr(action.process), {
-    onNone: () => Effect.succeed(false),
-    onSome: stopStaleProcess,
-  })
+  const gone = yield* stopLostAction(action)
   const asking = askingRun(run, {
     state,
     name: action.state,
@@ -1988,43 +2071,80 @@ const recoverCommand = Effect.fn("Machines.recoverCommand")(function* (
 })
 
 /**
- * Stops what a stopped run left open: its round's thread, or its command
- * (the fiber here, else the recorded process group). Settled, the run wakes
- * nobody.
+ * Stops what a stopped run left open (`stopPending`), then settles it: the
+ * `Settled` step says when a process of it may still run. Settled, the run
+ * wakes nobody.
  */
 const settleStop = Effect.fn("Machines.settleStop")(function* (run: Run) {
-  const drivers = yield* MachineDrivers
-  yield* Option.match(run.pending, {
-    onNone: () => Effect.void,
-    onSome: (action) =>
-      Effect.gen(function* () {
-        if (action._tag === "Round" && Predicate.isNotUndefined(action.thread)) {
-          const threads = yield* threadsOf
-          yield* threads.stop(action.thread, Option.some(`machine-stop:${run.run}`))
-        }
-        if (action._tag === "Command") {
-          const fiber = yield* drivers.command(run.run)
-          if (Option.isSome(fiber)) yield* Fiber.interrupt(fiber.value)
-          else if (Predicate.isNotUndefined(action.process)) {
-            yield* stopStaleProcess(action.process)
-          }
-        }
-      }).pipe(
-        Effect.catchCauseIf(
-          (cause) => !Cause.hasInterruptsOnly(cause),
-          (cause) =>
-            Effect.logWarning("machines.stop.settle.failed").pipe(
-              Effect.annotateLogs({ run: run.run, cause: Cause.pretty(cause) }),
-            ),
-        ),
-      ),
+  const mayStillRun = yield* Option.match(run.pending, {
+    onNone: () => Effect.succeed(false),
+    onSome: (action) => stopPending(run, action),
   })
+  if (mayStillRun) {
+    yield* Effect.logWarning("machines.stop.unproven").pipe(Effect.annotateLogs({ run: run.run }))
+  }
   yield* commitMove(
     run,
     { ...run, pending: Option.none(), notifiedAt: Option.some(yield* Clock.currentTimeMillis) },
-    [MachineStep.cases.Settled.make({})],
+    [
+      MachineStep.cases.Settled.make(
+        omitUndefined({
+          mayStillRun: Option.getOrUndefined(Option.liftPredicate(mayStillRun, Boolean)),
+        }),
+      ),
+    ],
   )
 })
+
+/**
+ * Stops what a pending action left open; true when a process of it may
+ * still run. A round is found by its id, which the key fixes, so a round a
+ * send admitted is stopped even when its receipt was never committed, and a
+ * thread that never got the round (a refused send) is left alone. A command
+ * is ended through its fiber here, else through its recorded process group;
+ * a group not shown gone, or one with no record, may still run. A round
+ * whose thread Threads refuses (`ThreadError`) may still run too. Any other
+ * failure fails the step, and the driver tries it again after its backoff.
+ */
+const stopPending = (run: Run, action: PendingAction) =>
+  Match.value(action).pipe(
+    Match.tagsExhaustive({
+      Ask: () => Effect.succeed(false),
+      Round: (round) =>
+        Effect.gen(function* () {
+          const threads = yield* threadsOf
+          const roundId = yield* Option.match(Option.fromUndefinedOr(round.round), {
+            onSome: Effect.succeed,
+            onNone: () => threads.sendRound(round.key),
+          })
+          const found = yield* threads.findRound(roundId)
+          if (Option.isSome(found) && found.value.status === "open") {
+            yield* threads.stop(found.value.thread, Option.some(`machine-stop:${run.run}`))
+          }
+          return false
+        }).pipe(
+          // Threads refused (the round's thread is not this session's now): no
+          // stop reaches the worker, and no later try would.
+          Effect.catchTag("ThreadError", (error) =>
+            Effect.logWarning("machines.stop.round.refused").pipe(
+              Effect.annotateLogs({ run: run.run, error: error.message }),
+              Effect.as(true),
+            ),
+          ),
+        ),
+      Command: (command) =>
+        Effect.gen(function* () {
+          const drivers = yield* MachineDrivers
+          const fiber = yield* drivers.command(run.run)
+          if (Option.isSome(fiber)) {
+            // The fiber's scope ends the process group as it closes.
+            yield* Fiber.interrupt(fiber.value)
+            return false
+          }
+          return !(yield* stopLostAction(command))
+        }),
+    }),
+  )
 
 /**
  * Where the next owner message lands: the place saved for it, else the
@@ -2213,7 +2333,8 @@ const moveFor = (state: MachineState, action: AskAction, choice: Verdict) => {
   return { stop: true, to: action.state }
 }
 
-const AnswerParams = Schema.Struct({
+/** `machine.answer`'s input; exported, with the tool, for a test that runs two answers at once. */
+export const AnswerParams = Schema.Struct({
   run: RunId.annotate({ description: "The run, from machine.start or machine.list." }),
   askId: AskId.annotate({ description: "The ask's id, from the ask message." }),
   choice: Verdict.annotate({ description: "One of the choices the ask offers." }),
@@ -2468,7 +2589,7 @@ const MachineStartTool = tool({
   }),
 })
 
-const MachineAnswerTool = tool({
+export const MachineAnswerTool = tool({
   id: "machine.answer",
   resources: [MachineStoreResource],
   description:

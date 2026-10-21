@@ -3,9 +3,12 @@ import {
   Deferred,
   Effect,
   FileSystem,
+  Layer,
   Logger,
   Option,
   Predicate,
+  PubSub,
+  Queue,
   Ref,
   References,
   Schema,
@@ -13,16 +16,28 @@ import {
 } from "effect"
 import { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
+import { BunSqlite } from "@gent/core/host-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
-import { omitUndefined } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, omitUndefined, tool } from "@gent/core/extensions/api"
 import {
+  createE2ELayer,
   createRpcClient,
   createRpcHarness,
   LanguageModelLayers,
+  runToolWithCtx,
+  testToolContext,
   waitFor,
 } from "@gent/core/test-utils"
-import { MACHINE_ASK_TYPE, MACHINE_END_TYPE } from "../src/machines.js"
+import type { Session } from "@gent/core/protocol"
+import {
+  AnswerParams,
+  MACHINE_ASK_TYPE,
+  MACHINE_END_TYPE,
+  MachineAnswerTool,
+  MachineStore,
+  roundEndSignal,
+} from "../src/machines.js"
 import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
 import {
   acted,
@@ -257,6 +272,7 @@ const runRow = (run: string) =>
 
 const StepView = Schema.Struct({
   _tag: Schema.String,
+  mayStillRun: Schema.optionalKey(Schema.Boolean),
   from: Schema.optionalKey(Schema.String),
   to: Schema.optionalKey(Schema.String),
   askId: Schema.optionalKey(Schema.String),
@@ -287,6 +303,21 @@ const roundNotifies = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const rows = yield* sql`SELECT notify FROM thread_rounds ORDER BY started_at`
   return decodeNotifies(rows).map((row) => row.notify)
+})
+
+const decodeRoundEnds = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({
+      ended_at: Schema.NullOr(Schema.Finite),
+      stopped_at: Schema.NullOr(Schema.Finite),
+    }),
+  ),
+)
+/** Every thread round's end and stop times, oldest first. */
+const roundEnds = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql`SELECT ended_at, stopped_at FROM thread_rounds ORDER BY started_at`
+  return decodeRoundEnds(rows)
 })
 
 const decodeRecords = Schema.decodeUnknownSync(
@@ -471,6 +502,32 @@ describe("a machine run", () => {
   )
 })
 
+// ── round ends while a driver waits ─────────────────────────────────────────
+
+describe("a driver's round-end signal", () => {
+  it.live("round ends that come while nothing takes them leave one signal and no backlog", () =>
+    Effect.gen(function* () {
+      const ends = yield* PubSub.unbounded<unknown>()
+      const subscription = yield* PubSub.subscribe(ends)
+      const signal = yield* roundEndSignal(subscription)
+      yield* Effect.forEach(
+        Array.from({ length: 1_000 }, (_, index) => index),
+        (index) => PubSub.publish(ends, index),
+      )
+      const backlog = yield* waitFor(
+        PubSub.remaining(subscription),
+        (left) => left === 0,
+        5_000,
+        "the signal drained the subscription",
+      )
+      expect(backlog).toBe(0)
+      // One take sees that ends came; nothing more waits behind it.
+      yield* Queue.take(signal)
+      expect(yield* Queue.size(signal)).toBe(0)
+    }).pipe(Effect.scoped, Effect.timeout("10 seconds")),
+  )
+})
+
 // ── C2: a clean restart mid-round ───────────────────────────────────────────
 
 /** The track, with the round at `hangOn` hanging once `entered` holds. */
@@ -629,6 +686,65 @@ describe("a machine command across a clean stop", () => {
   )
 })
 
+describe("a stopped machine command with no process to stop", () => {
+  it.live(
+    "a stop that cannot show the command's processes gone settles saying they may still run",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels(trackWorker)
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+            const owner = ownerOf(yield* client.session.create({}))
+            const run = yield* startRun(client, owner, VERIFY_ONLY, "verify-only")
+            yield* waitFor(
+              home.sql(runRow(run)),
+              (row) =>
+                Option.exists(row, (found) => (found.pending_json ?? "").includes('"process"')),
+              8_000,
+              "the command recorded its process",
+            )
+            return { owner, run }
+          }),
+        )
+        // As a stop that landed while no server ran the command: no record of its
+        // process survived, and its receipt holds none.
+        const receipt = yield* home.sql(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql`UPDATE machine_runs
+            SET status = 'stopped', pending_json = json_remove(pending_json, '$.process')
+            WHERE run = ${first.run}`
+            const rows = yield* sql<{ readonly receipt: string }>`
+              SELECT json_extract(pending_json, '$.launch.receipt') AS receipt
+              FROM machine_runs WHERE run = ${first.run}`
+            return rows[0]?.receipt ?? ""
+          }),
+        )
+        expect(receipt).not.toBe("")
+        yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.writeFileString(receipt, "not a process\n"),
+        ).pipe(Effect.provide(BunServices.layer))
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* createRpcClient(home.layerFor(machineModels(models)))
+            yield* waitFor(
+              home.sql(runRow(first.run)),
+              (row) => Option.exists(row, (found) => Predicate.isNotNull(found.notified_at)),
+              15_000,
+              "the stop settled",
+            )
+          }),
+        )
+        const settled = (yield* home.sql(stepsOf(first.run))).filter(
+          (step) => step._tag === "Settled",
+        )
+        expect(settled.map((step) => [step._tag, step.mayStillRun])).toEqual([["Settled", true]])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+})
+
 // ── C4: answers ─────────────────────────────────────────────────────────────
 
 const twoAsksWorker = (round: RoundCall): Effect.Effect<WorkerStream> =>
@@ -673,6 +789,77 @@ describe("machine answers", () => {
         "the stop settled",
       )
       expect(Option.map(row, (found) => found.status)).toEqual(Option.some("stopped"))
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("two answers that read the same row commit one answer, and the later one admits it", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(twoAsksWorker)
+      const first = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+          const owner = ownerOf(yield* client.session.create({}))
+          const run = yield* startRun(client, owner, TWO_ASKS, "two-asks")
+          const ask = yield* askDetails(client, owner, 1)
+          return { owner, run, askId: ask.askId }
+        }),
+      )
+      // Over the same file, with no server: the first two reads of the ask's
+      // answer wait for each other, so both answers read one sequence and no
+      // answer before either commits.
+      const reads = yield* Ref.make(0)
+      const bothRead = yield* Deferred.make<void>()
+      const barrier = Layer.effect(
+        MachineStore,
+        Effect.map(MachineStore, (live) =>
+          MachineStore.of({
+            ...live,
+            answered: (run, askId) =>
+              live.answered(run, askId).pipe(
+                Effect.tap(() =>
+                  Effect.gen(function* () {
+                    const count = yield* Ref.updateAndGet(reads, (seen) => seen + 1)
+                    if (count === 2) yield* Deferred.succeed(bothRead, void 0)
+                    if (count <= 2) yield* Deferred.await(bothRead)
+                  }),
+                ),
+              ),
+          }),
+        ),
+      ).pipe(
+        Layer.provide(MachineStore.Live),
+        Layer.provide(BunSqlite.file(`${home.home}/gent.db`)),
+        Layer.provide(BunServices.layer),
+      )
+      // No server reads the kick: each answer is admitted, and nothing runs after it.
+      const stub = testToolContext().Session
+      // ExtensionSessionService.getSession answers undefined for an absent session.
+      // oxlint-disable-next-line effect/noNullish -- the facade's absent-session answer.
+      const absentSession: Session | undefined = undefined
+      const ctx = testToolContext({
+        sessionId: first.owner.sessionId,
+        branchId: first.owner.branchId,
+        cwd: home.cwd,
+        home: home.home,
+        Session: { ...stub, getSession: () => Effect.succeed(absentSession) },
+        Wakes: () => ({ wakeAt: () => Effect.void, cancelWake: () => Effect.succeed(true) }),
+      })
+      const input = yield* Schema.decodeEffect(AnswerParams)({
+        run: first.run,
+        askId: first.askId,
+        choice: "go",
+      })
+      const answerGo = runToolWithCtx(MachineAnswerTool, input, ctx)
+      const results = yield* Effect.all([answerGo, answerGo], { concurrency: 2 }).pipe(
+        Effect.provide(barrier),
+      )
+      expect(results.map((result) => result.status)).toEqual(["admitted", "admitted"])
+      // The later commit lost the compare, read again, and found the answer.
+      expect(yield* Ref.get(reads)).toBeGreaterThanOrEqual(3)
+      const steps = yield* home.sql(stepsOf(first.run))
+      expect(steps.filter((step) => step._tag === "Answered")).toHaveLength(1)
+      expect(moves(steps).filter((move) => move === "gate→work")).toHaveLength(1)
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 
@@ -745,6 +932,161 @@ describe("machine failures the owner decides", () => {
       const ask = yield* askDetails(client, owner, 1)
       expect(ask).toMatchObject({ run, state: "judge", reason: "interrupted" })
       expect(yield* Ref.get(models.calls)).toEqual(["judge:1"])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "a worker stopped from outside whose turn holds out in a tool asks interrupted once the turn ends",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const entered = yield* Deferred.make<boolean>()
+        const release = yield* Deferred.make<boolean>()
+        // Released before the root closes, so a failed check cannot hang its close.
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, true))
+        const hold = defineExtension({
+          id: "machines-hold-probe",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "tool",
+              tool({
+                id: "probe.hold",
+                description: "Hold until released.",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: () =>
+                  Effect.uninterruptible(
+                    Deferred.succeed(entered, true).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.as("released"),
+                    ),
+                  ),
+              }),
+            )
+          }),
+        })
+        const models = yield* makeModels((round) => {
+          if (acted(round.prompt)) return Effect.succeed(billed("held"))
+          return Effect.succeed(toolCalls([{ tool: "probe.hold", id: "hold-1", input: {} }]))
+        })
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, hold],
+            providerLayer: machineModels(models),
+            storagePath: `${home.home}/gent.db`,
+            cwd: home.cwd,
+            home: home.home,
+          }),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRun(client, owner, JUDGE, "judge", { mode: "hold" })
+        yield* Deferred.await(entered)
+        const row = yield* waitFor(
+          home.sql(runRow(run)),
+          (found) =>
+            Option.exists(found, (current) => (current.pending_json ?? "").includes('"round"')),
+          8_000,
+          "the round's id was committed",
+        )
+        const pending = decodePendingThread(
+          Option.getOrElse(
+            Option.flatMap(row, (found) => Option.fromNullishOr(found.pending_json)),
+            () => "{}",
+          ),
+        )
+        // The stop waits 10 s for the held turn, then returns with the round open.
+        const [stopped] = yield* call(
+          client,
+          owner,
+          [["thread.stop", "stop-held", { thread: pending.thread }]],
+          20_000,
+        )
+        expect(stopped?.failed).toBe(false)
+        expect(Option.map(yield* home.sql(runRow(run)), (found) => found.status)).toEqual(
+          Option.some("running"),
+        )
+        yield* Deferred.succeed(release, true)
+        const ask = yield* askDetails(client, owner, 1)
+        expect(ask).toMatchObject({ run, state: "judge", reason: "interrupted" })
+      }).pipe(Effect.scoped, Effect.timeout("50 seconds")),
+    60_000,
+  )
+
+  it.live("a stop that lands between a round's admission and its receipt stops the worker", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels(() => Effect.succeed(hangAfter(Effect.void)))
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      // The write that admits the round also commits a stop of the running run,
+      // as a machine.stop that lands before the machine records the receipt.
+      yield* home.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql.unsafe(`CREATE TRIGGER stop_at_admission AFTER INSERT ON thread_rounds
+            BEGIN
+              INSERT INTO machine_steps (run, seq, at, state, step_json)
+                SELECT run, seq + 1, 0, state, '{"_tag":"Stopped"}'
+                FROM machine_runs WHERE status = 'running';
+              UPDATE machine_runs SET status = 'stopped', seq = seq + 1 WHERE status = 'running';
+            END`)
+        }),
+      )
+      const run = yield* startRun(client, owner, JUDGE, "judge", { mode: "hang" })
+      yield* waitFor(
+        home.sql(runRow(run)),
+        (found) => Option.exists(found, (current) => Predicate.isNotNull(current.notified_at)),
+        15_000,
+        "the stop settled",
+      )
+      // The worker's round ended, stopped: nothing of the run still works.
+      const rounds = yield* waitFor(
+        home.sql(roundEnds),
+        (found) =>
+          found.length === 1 && found.every((round) => Predicate.isNotNull(round.ended_at)),
+        15_000,
+        "the worker's round ended",
+      )
+      expect(rounds.map((round) => Predicate.isNotNull(round.stopped_at))).toEqual([true])
+      const settled = (yield* home.sql(stepsOf(run))).filter((step) => step._tag === "Settled")
+      // No process of it may still run: the step says nothing of one.
+      expect(settled.map((step) => [step._tag, Object.hasOwn(step, "mayStillRun")])).toEqual([
+        ["Settled", false],
+      ])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a stop whose round Threads refuses settles saying the worker may still run", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const entered = yield* Deferred.make<boolean>()
+      const models = yield* makeModels(() =>
+        Effect.succeed(hangAfter(Effect.asVoid(Deferred.succeed(entered, true)))),
+      )
+      const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, JUDGE, "judge", { mode: "hang" })
+      yield* Deferred.await(entered)
+      // The round names a thread this session never started: Threads refuses
+      // to read or stop it, so no stop reaches the worker.
+      yield* home.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE thread_rounds SET thread = 'not-a-thread'`
+        }),
+      )
+      const [stopped] = yield* call(client, owner, [["machine.stop", "stop-refused", { run }]])
+      expect(stopped?.failed).toBe(false)
+      yield* waitFor(
+        home.sql(runRow(run)),
+        (found) => Option.exists(found, (current) => Predicate.isNotNull(current.notified_at)),
+        8_000,
+        "the stop settled",
+      )
+      const settled = (yield* home.sql(stepsOf(run))).filter((step) => step._tag === "Settled")
+      expect(settled.map((step) => [step._tag, step.mayStillRun])).toEqual([["Settled", true]])
     }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
   )
 

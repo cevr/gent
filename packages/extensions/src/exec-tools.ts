@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   ByteSize,
   Cause,
   Clock,
@@ -15,6 +16,7 @@ import {
   Predicate,
   Ref,
   References,
+  Schedule,
   Schema,
   Scope,
   Semaphore,
@@ -24,7 +26,7 @@ import { SqlClient } from "effect/sql"
 import { Hex } from "effect/encoding"
 import { countOf } from "./fs-tools.js"
 import {
-  type BranchId,
+  BranchId,
   defineExtension,
   defineResource,
   ExtensionContext,
@@ -38,7 +40,7 @@ import {
   lineCount,
   maximumModelToolResultChars,
   resolveDataDir,
-  type SessionId,
+  SessionId,
   tailChars,
   tool,
   ToolCallId,
@@ -84,6 +86,8 @@ interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
   readonly command: string
   readonly cwd: Option.Option<string>
   readonly outputFile?: string
+  /** Where the job's launcher writes its process, stored with the claim before the spawn. */
+  readonly launch?: CommandLaunch
 }
 
 const BackgroundBashTerminalState = Schema.Struct({
@@ -113,16 +117,31 @@ const BackgroundBashJobRow = Schema.Struct({
 })
 type BackgroundBashJobRow = typeof BackgroundBashJobRow.Type
 
-/** A running job's recorded process; a token is none for a job from before it. */
-const decodeStaleProcessRows = Schema.decodeUnknownEffect(
+/**
+ * A running job of an earlier server: its recorded process, and its launch.
+ * A token is none for a job from before it, a receipt for a job from before
+ * receipts.
+ */
+const decodeStaleJobRows = Schema.decodeUnknownEffect(
   Schema.Array(
     Schema.Struct({
-      pid: Schema.Int,
-      process_start_id: Schema.String,
-      process_token: Schema.OptionFromNullOr(Schema.String),
+      session_id: Schema.String,
+      branch_id: Schema.String,
+      tool_call_id: Schema.String,
+      pid: Schema.NullOr(Schema.Int),
+      process_start_id: Schema.NullOr(Schema.String),
+      process_token: Schema.NullOr(Schema.String),
+      process_receipt: Schema.NullOr(Schema.String),
     }),
   ),
 )
+
+/** A job an earlier server left running: its key, the process it recorded, and its launch. */
+interface StaleJob {
+  readonly key: BackgroundBashJobKeyFields
+  readonly process: Option.Option<CommandProcess>
+  readonly launch: Option.Option<CommandLaunch>
+}
 
 interface BackgroundBashStorageService {
   readonly claimStart: (
@@ -153,16 +172,15 @@ interface BackgroundBashStorageService {
     key: BackgroundBashJobKeyFields,
     process: CommandProcess,
   ) => Effect.Effect<void, BackgroundBashStorageError>
-  /** The jobs an earlier server process left running that recorded their process. */
-  readonly staleProcesses: Effect.Effect<ReadonlyArray<CommandProcess>, BackgroundBashStorageError>
+  /** The jobs an earlier server process left running. */
+  readonly staleJobs: Effect.Effect<ReadonlyArray<StaleJob>, BackgroundBashStorageError>
   /**
    * Marks the running jobs an earlier server process started as interrupted.
-   * Run after `staleProcesses` were stopped: a job that recorded its process
-   * is not running, unless its pid is in `unstopped`; one that did not record
-   * its process, or could not be stopped, may still run.
+   * Run after `staleJobs` were stopped: a job in `stopped` is shown not to
+   * run; any other may still run.
    */
   readonly reconcileInterrupted: (
-    unstopped: ReadonlyArray<number>,
+    stopped: ReadonlyArray<BackgroundBashJobKeyFields>,
   ) => Effect.Effect<void, BackgroundBashStorageError>
   /** The branch's jobs that did not finish and no answered turn has read, oldest first. */
   readonly interruptedJobs: (branch: BackgroundBashBranch) => Effect.Effect<
@@ -322,6 +340,9 @@ export class BackgroundBashStorage extends Context.Service<
         // NULL: a job from before the token, whose group a restart stops only
         // while its leader runs.
         yield* addBackgroundBashColumn(columns, "process_token", "TEXT")
+        // NULL: a job from before receipts (`CommandLaunch`), which a restart
+        // finds only through the process its server copied into the row.
+        yield* addBackgroundBashColumn(columns, "process_receipt", "TEXT")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -388,7 +409,9 @@ export class BackgroundBashStorage extends Context.Service<
                     status,
                     started_at,
                     owner_generation,
-                    output_file
+                    output_file,
+                    process_token,
+                    process_receipt
                   )
                   VALUES (
                     ${input.sessionId},
@@ -399,7 +422,9 @@ export class BackgroundBashStorage extends Context.Service<
                     'running',
                     ${startedAt},
                     ${generation},
-                    ${Option.getOrNull(Option.fromUndefinedOr(input.outputFile))}
+                    ${Option.getOrNull(Option.fromUndefinedOr(input.outputFile))},
+                    ${Option.getOrNull(Option.fromUndefinedOr(input.launch?.token))},
+                    ${Option.getOrNull(Option.fromUndefinedOr(input.launch?.receipt))}
                   )
                 `
                 return BackgroundBashClaim.cases.Started.make({})
@@ -455,22 +480,33 @@ export class BackgroundBashStorage extends Context.Service<
             Effect.mapError(mapError("Failed to record background bash job process")),
           ),
 
-          staleProcesses: Effect.gen(function* () {
+          staleJobs: Effect.gen(function* () {
             const rows = yield* sql`
-              SELECT pid, process_start_id, process_token
+              SELECT session_id, branch_id, tool_call_id, pid, process_start_id, process_token, process_receipt
               FROM background_bash_jobs
               WHERE status = 'running'
                 AND (owner_generation IS NULL OR owner_generation != ${generation})
-                AND pid IS NOT NULL
-                AND process_start_id IS NOT NULL
             `
-            const decoded = yield* decodeStaleProcessRows(rows)
-            return decoded.map((row): CommandProcess => ({
-              pid: row.pid,
-              startIdentity: row.process_start_id,
-              token: row.process_token,
-            }))
-          }).pipe(Effect.mapError(mapError("Failed to read stale background bash processes"))),
+            const decoded = yield* decodeStaleJobRows(rows)
+            return decoded.map((row): StaleJob => {
+              const token = Option.fromNullishOr(row.process_token)
+              return {
+                key: {
+                  sessionId: SessionId.make(row.session_id),
+                  branchId: BranchId.make(row.branch_id),
+                  toolCallId: ToolCallId.make(row.tool_call_id),
+                },
+                process: Option.all({
+                  pid: Option.fromNullishOr(row.pid),
+                  startIdentity: Option.fromNullishOr(row.process_start_id),
+                }).pipe(Option.map((found) => ({ ...found, token }))),
+                launch: Option.all({
+                  token,
+                  receipt: Option.fromNullishOr(row.process_receipt),
+                }),
+              }
+            })
+          }).pipe(Effect.mapError(mapError("Failed to read stale background bash jobs"))),
 
           interruptedJobs: Effect.fn("BackgroundBashStorage.interruptedJobs")(
             function* (branch) {
@@ -562,23 +598,31 @@ export class BackgroundBashStorage extends Context.Service<
           ),
 
           reconcileInterrupted: Effect.fn("BackgroundBashStorage.reconcileInterrupted")(
-            function* (unstopped: ReadonlyArray<number>) {
+            function* (stopped: ReadonlyArray<BackgroundBashJobKeyFields>) {
               const completedAt = (yield* DateTime.nowAsDate).getTime()
-              let stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL`
-              if (unstopped.length > 0) {
-                stopped = sql`pid IS NOT NULL AND process_start_id IS NOT NULL AND pid NOT IN ${sqlInList(sql, unstopped)}`
-              }
-              yield* sql`
-                UPDATE background_bash_jobs
-                SET status = 'interrupted',
-                    completed_at = ${completedAt},
-                    message = CASE
-                      WHEN ${stopped} THEN ${RESTART_STOPPED_MESSAGE}
-                      ELSE ${RESTART_UNCHECKED_MESSAGE}
-                    END
-                WHERE status = 'running'
-                  AND (owner_generation IS NULL OR owner_generation != ${generation})
-              `
+              yield* Effect.gen(function* () {
+                for (const key of stopped) {
+                  yield* sql`
+                    UPDATE background_bash_jobs
+                    SET status = 'interrupted',
+                        completed_at = ${completedAt},
+                        message = ${RESTART_STOPPED_MESSAGE}
+                    WHERE session_id = ${key.sessionId}
+                      AND branch_id = ${key.branchId}
+                      AND tool_call_id = ${key.toolCallId}
+                      AND status = 'running'
+                      AND (owner_generation IS NULL OR owner_generation != ${generation})
+                  `
+                }
+                yield* sql`
+                  UPDATE background_bash_jobs
+                  SET status = 'interrupted',
+                      completed_at = ${completedAt},
+                      message = ${RESTART_UNCHECKED_MESSAGE}
+                  WHERE status = 'running'
+                    AND (owner_generation IS NULL OR owner_generation != ${generation})
+                `
+              }).pipe(sql.withTransaction)
             },
             Effect.mapError(mapError("Failed to reconcile interrupted background bash jobs")),
           ),
@@ -1032,7 +1076,10 @@ const signalProcessGroup = (pid: number, signal: "TERM" | "KILL" | "0") => {
 /** The variable every process of a command inherits: the token its record names. */
 const COMMAND_TOKEN_VARIABLE = "GENT_COMMAND_TOKEN"
 
-/** The pids in process group `pgid` now, from one `ps` listing; none when the group is gone. */
+/**
+ * The pids in process group `pgid` now, from one `ps` listing: empty when
+ * the group is gone, none when `ps` failed, so nothing is known.
+ */
 const processGroupMembers = (pgid: number) =>
   runProcess("ps", ["-A", "-o", "pid=,pgid="], {
     env: { LC_ALL: "C" },
@@ -1040,14 +1087,19 @@ const processGroupMembers = (pgid: number) =>
     timeout: PROCESS_CHECK_TIMEOUT,
   }).pipe(
     Effect.map((result) =>
-      result.stdout
-        .split("\n")
-        .values()
-        .map((line) => line.trim().split(/\s+/))
-        .filter(([, group]) => group === String(pgid))
-        .map(([pid]) => Number(pid))
-        .filter((pid) => Number.isSafeInteger(pid) && pid > 1)
-        .toArray(),
+      Option.some(result.stdout).pipe(
+        Option.filter(() => result.exitCode === 0),
+        Option.map((listing) =>
+          listing
+            .split("\n")
+            .values()
+            .map((line) => line.trim().split(/\s+/))
+            .filter(([, group]) => group === String(pgid))
+            .map(([pid]) => Number(pid))
+            .filter((pid) => Number.isSafeInteger(pid) && pid > 1)
+            .toArray(),
+        ),
+      ),
     ),
   )
 
@@ -1116,7 +1168,14 @@ export const stopStaleProcess = (job: CommandProcess) =>
     const identity = yield* processStartIdentity(job.pid)
     if (Option.isSome(identity) && identity.value !== job.startIdentity) return true
     if (Option.isNone(identity)) {
-      const members = yield* processGroupMembers(job.pid)
+      const listed = yield* processGroupMembers(job.pid)
+      if (Option.isNone(listed)) {
+        yield* Effect.logWarning("exec-tools.stale-process.unlisted").pipe(
+          Effect.annotateLogs({ pid: job.pid }),
+        )
+        return false
+      }
+      const members = listed.value
       if (members.length === 0) return true
       if (!(yield* ownsLeaderlessGroup(job, members))) {
         yield* Effect.logWarning("exec-tools.stale-process.unproven").pipe(
@@ -1146,48 +1205,210 @@ export const stopStaleProcess = (job: CommandProcess) =>
     ),
   )
 
+// ── command receipts ──
+//
+// A command a later server may have to stop is launched through a receipt.
+// The caller stores where the receipt goes, and the token, before the spawn
+// (`commandLaunch`). The launcher, a `bash` that leads the command's process
+// group, writes its own pid and start time there, then checks that the
+// server that spawned it is still its parent, and only then `exec`s the
+// command in the same process. So a later server finds the group from the
+// receipt even when the leader exited at once (`cmd &`) and the server died
+// before it copied the receipt into its own record. A receipt that is not
+// there means the command never ran and never will: a launcher that writes
+// it after the server died sees another parent and exits.
+
 /**
- * A spawn's `started` hook that reads the process's start identity and hands
- * both to `recorded`. A process gone before `ps` reads it records nothing. A
- * failed read or record is logged, and the command runs on: a later server
- * then has no process of it to stop.
+ * Where a recorded command's launcher writes its process, and the token
+ * every process of the command inherits in `GENT_COMMAND_TOKEN`. The caller
+ * stores both before the spawn.
  */
-const recordingStart =
-  <E>(recorded: (process: CommandProcess) => Effect.Effect<void, E>, failure: string) =>
-  (pid: number, token: string) =>
-    processStartIdentity(pid).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.void,
-          onSome: (startIdentity) => recorded({ pid, startIdentity, token: Option.some(token) }),
-        }),
+interface CommandLaunch {
+  readonly token: string
+  readonly receipt: string
+}
+
+/** A recorded command: its launch, and what to do with its process once the receipt is read. */
+interface CommandRecording<E> {
+  readonly launch: CommandLaunch
+  readonly recorded: (process: CommandProcess) => Effect.Effect<void, E>
+}
+
+/** A new launch, with its receipt under `<data dir>/command-processes/`. */
+export const commandLaunch = Effect.fn("ExecTools.commandLaunch")(function* (dataDir: string) {
+  const token = yield* (yield* Crypto.Crypto).randomUUIDv4()
+  const path = yield* Path.Path
+  const launch: CommandLaunch = {
+    token,
+    receipt: path.resolve(dataDir, "command-processes", token),
+  }
+  return launch
+})
+
+/** The receipt of a launch that could not be read, or that holds no process. */
+class CommandReceiptError extends Schema.TaggedError<
+  CommandReceiptError,
+  { readonly brand: unique symbol }
+>()("CommandReceiptError", {
+  receipt: Schema.String,
+  message: Schema.String,
+}) {}
+
+/**
+ * The process a launch's receipt names: none when there is no receipt. The
+ * launcher moves a whole receipt into place, so one that is there holds
+ * the pid and the start time.
+ */
+export const readCommandReceipt = Effect.fn("ExecTools.readCommandReceipt")(function* (
+  launch: CommandLaunch,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const failed = (message: string) => new CommandReceiptError({ receipt: launch.receipt, message })
+  const written = yield* fs
+    .exists(launch.receipt)
+    .pipe(Effect.mapError((error) => failed(error.message)))
+  if (!written) return Option.none<CommandProcess>()
+  const text = yield* fs
+    .readFileString(launch.receipt)
+    .pipe(Effect.mapError((error) => failed(error.message)))
+  const [pidLine = "", startLine = ""] = text.split("\n")
+  const pid = Number(pidLine.trim())
+  const startIdentity = startLine.trim()
+  if (!Number.isSafeInteger(pid) || pid <= 1 || startIdentity === "") {
+    return yield* failed("the receipt holds no process")
+  }
+  const process: CommandProcess = { pid, startIdentity, token: Option.some(launch.token) }
+  return Option.some(process)
+})
+
+/** Removes a launch's receipt: its command ended, or its group is shown gone. */
+export const removeCommandReceipt = (launch: CommandLaunch) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.remove(launch.receipt, { force: true })
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("exec-tools.command-receipt.remove.failed").pipe(
+        Effect.annotateLogs({ receipt: launch.receipt, cause: Cause.pretty(cause) }),
       ),
-      Effect.catchCause((cause) =>
-        Effect.logWarning(failure).pipe(Effect.annotateLogs({ cause: Cause.pretty(cause) })),
+    ),
+  )
+
+/**
+ * Stops what a recorded command an earlier server lost left running; true
+ * only when nothing of it runs. The process is the one the server copied
+ * into its record, else the one the launcher's receipt names. A launch with
+ * no receipt never ran its command and never will. A command with neither
+ * a record nor a launch (from before receipts), or a receipt that cannot be
+ * read, may still run. A group shown gone takes its receipt with it.
+ */
+export const stopLostCommand = (
+  recorded: Option.Option<CommandProcess>,
+  launch: Option.Option<CommandLaunch>,
+) =>
+  Effect.gen(function* () {
+    let process = recorded
+    if (Option.isNone(process)) {
+      if (Option.isNone(launch)) return false
+      const read = yield* readCommandReceipt(launch.value).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("exec-tools.command-receipt.unread").pipe(
+            Effect.annotateLogs({ receipt: error.receipt, error: error.message }),
+          ),
+        ),
+        Effect.option,
+      )
+      if (Option.isNone(read)) return false
+      if (Option.isNone(read.value)) return true
+      process = read.value
+    }
+    const gone = yield* stopStaleProcess(process.value)
+    if (gone && Option.isSome(launch)) yield* removeCommandReceipt(launch.value)
+    return gone
+  })
+
+/**
+ * The launcher of a recorded command, as `bash -c` runs it with the receipt
+ * as `$1` and the command as `$2`: it writes its pid and start time (as
+ * `processStartIdentity` reads them) to `$1`, whole, then runs the command
+ * in its own process only while the server that spawned it is its parent.
+ * A receipt it cannot write runs nothing: exit 125.
+ */
+const COMMAND_LAUNCHER = [
+  `{ printf '%s\\n' "$$" && LC_ALL=C TZ=UTC0 ps -o lstart= -p "$$"; } > "$1.part" && mv -f "$1.part" "$1" || { echo "gent: could not record the command's process in $1" >&2; exit 125; }`,
+  `read -r parent < <(ps -o ppid= -p "$$")`,
+  `[ "$parent" = "$PPID" ] || exit 125`,
+  `exec bash -c "$2"`,
+].join("\n")
+
+/** How often a recorded spawn reads its receipt until the launcher wrote it. */
+const RECEIPT_POLL = Duration.millis(10)
+/** How many reads it makes: about `PROCESS_CHECK_TIMEOUT`. */
+const RECEIPT_POLLS = 500
+
+/**
+ * The spawn's copy of the receipt: read until the launcher wrote it (for
+ * at most `RECEIPT_POLLS` reads), or once more after the command ended,
+ * since the launcher writes it before the command runs. A missing receipt (the launcher could not write it, and ran
+ * nothing) or a failed copy is logged; the command's result tells the rest.
+ */
+const copyReceipt = <E, X>(recording: CommandRecording<E>, exited: Effect.Effect<unknown, X>) => {
+  const read = readCommandReceipt(recording.launch)
+  const written = read.pipe(
+    Effect.flatMap(Effect.fromOption),
+    Effect.retry({ schedule: Schedule.spaced(RECEIPT_POLL), times: RECEIPT_POLLS }),
+  )
+  const afterExit = exited.pipe(Effect.ignore, Effect.andThen(read))
+  // The first read that succeeds: a poll that gives up still leaves the read after the exit.
+  return Effect.race(Effect.asSome(written), afterExit).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.logWarning("exec-tools.command-receipt.missing").pipe(
+            Effect.annotateLogs({ receipt: recording.launch.receipt }),
+          ),
+        onSome: recording.recorded,
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("exec-tools.command-process.record.failed").pipe(
+        Effect.annotateLogs({ cause: Cause.pretty(cause) }),
       ),
-    )
+    ),
+  )
+}
 
 /**
  * Spawn `bash -c <command>`: the one spawn every shell command shares. Each
  * stream's text goes to its sink as it arrives, one piece at a time, in
- * arrival order across the two; nothing else is kept. `started` runs beside
- * the streams with the pid of `bash`, which leads its own process group, and
- * the random token the command's processes inherit in `GENT_COMMAND_TOKEN`.
- * The scope owns the spawn finalizer: closing it ends the process group via
- * SIGTERM, with SIGKILL after `SIGKILL_DELAY_MS`.
+ * arrival order across the two; nothing else is kept. `bash` leads its own
+ * process group, and every process of the command inherits a token in
+ * `GENT_COMMAND_TOKEN`. Given a recording, the command runs through the
+ * launcher (`COMMAND_LAUNCHER`) with the launch's token, and the receipt's
+ * process goes to `recorded` while the command runs. The scope owns the
+ * spawn finalizer: closing it ends the process group via SIGTERM, with
+ * SIGKILL after `SIGKILL_DELAY_MS`.
  */
-const spawnBashCommand = (
+const spawnBashCommand = <E>(
   command: string,
   cwd: Option.Option<string>,
   sinks: OutputSinks,
-  started: (
-    pid: number,
-    token: string,
-  ) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner> = () => Effect.void,
+  recording: Option.Option<CommandRecording<E>>,
 ) =>
   Effect.gen(function* () {
-    const token = yield* (yield* Crypto.Crypto).randomUUIDv4()
-    const handle = yield* ChildProcess.make("bash", ["-c", command], {
+    let token = ""
+    let args = ["-c", command]
+    if (Option.isSome(recording)) {
+      const { launch } = recording.value
+      token = launch.token
+      args = ["-c", COMMAND_LAUNCHER, "gent-command", launch.receipt, command]
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      yield* fs.makeDirectory(path.dirname(launch.receipt), { recursive: true })
+    } else {
+      token = yield* (yield* Crypto.Crypto).randomUUIDv4()
+    }
+    const handle = yield* ChildProcess.make("bash", args, {
       cwd: Option.getOrUndefined(cwd),
       env: { GENT_COMMAND_TOKEN: token },
       extendEnv: true,
@@ -1225,7 +1446,10 @@ const spawnBashCommand = (
           Effect.andThen(Effect.suspend(() => deliver(sinks.stdout, stdout.decode()))),
           Effect.andThen(Effect.suspend(() => deliver(sinks.stderr, stderr.decode()))),
         ),
-        started(handle.pid, token),
+        Option.match(recording, {
+          onNone: () => Effect.void,
+          onSome: (value) => copyReceipt(value, handle.exitCode),
+        }),
       ],
       { concurrency: "unbounded" },
     )
@@ -1258,15 +1482,16 @@ interface CommandOutput {
  * as its ends around a marker that counts the middle. Given a `spill` file,
  * output past that also goes to the file, whole, and a run that ends
  * without a result removes it. The scope owns the process and the file.
- * Given `recorded`, the run hands it the process it started, before the
- * command ends, so a caller can store what a later server must stop
- * (`stopStaleProcess`) when this one is lost.
+ * Given a recording, the command runs through its launch's receipt, and the
+ * run hands `recorded` the process it started, before the command ends, so
+ * a caller can store what a later server must stop (`stopLostCommand`) when
+ * this one is lost.
  */
 export const runBashCommand = <E = never>(
   command: string,
   cwd: Option.Option<string>,
   spill: Option.Option<string>,
-  recorded?: (process: CommandProcess) => Effect.Effect<void, E>,
+  recording: Option.Option<CommandRecording<E>> = Option.none(),
 ) =>
   Effect.gen(function* () {
     let stdout = noOutput
@@ -1277,10 +1502,6 @@ export const runBashCommand = <E = never>(
     })
     const toFile = (text: string) =>
       Option.match(file, { onNone: () => Effect.void, onSome: (output) => output.write(text) })
-    const started = Option.match(Option.fromUndefinedOr(recorded), {
-      onNone: () => () => Effect.void,
-      onSome: (record) => recordingStart(record, "exec-tools.command-process.record.failed"),
-    })
     const exitCode = yield* spawnBashCommand(
       command,
       cwd,
@@ -1296,7 +1517,7 @@ export const runBashCommand = <E = never>(
             return toFile(text)
           }),
       },
-      started,
+      recording,
     ).pipe(
       // Only a result names the file: a run that ends without one (a
       // timeout, an interrupt, a spawn failure) removes it.
@@ -1319,17 +1540,14 @@ export const runBashCommand = <E = never>(
 
 /**
  * Spawn a background job. Its stdout and stderr go to `file` from the start,
- * in arrival order; memory keeps the ends. `started` gets the job's pid. The
- * scope owns the process and the open file.
+ * in arrival order; memory keeps the ends. It runs through its recording's
+ * receipt. The scope owns the process and the open file.
  */
 const streamBackgroundCommand = (
   command: string,
   cwd: Option.Option<string>,
   file: string,
-  started: (
-    pid: number,
-    token: string,
-  ) => Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner>,
+  recording: CommandRecording<never>,
 ) =>
   Effect.gen(function* () {
     const sink = yield* makeOutputFile(file, 0)
@@ -1344,7 +1562,7 @@ const streamBackgroundCommand = (
       command,
       cwd,
       { stdout: record, stderr: record },
-      started,
+      Option.some(recording),
     )
     const job: JobOutput = { ...output, file: sink.written() }
     return { exitCode, output: job }
@@ -1586,20 +1804,30 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
     const runBackgroundJob = Effect.fn("BackgroundBashSupervisor.runBackgroundJob")(function* (
       job: BackgroundBashJob,
       target: BackgroundBashTarget,
+      launch: CommandLaunch,
     ) {
       const file = target.outputFile
-      // A server that ends without its finalizers leaves the process behind;
-      // the row names it so the next server can stop it. A failed record
-      // leaves the job running, and a restart reports it as unchecked.
-      const recordProcess = recordingStart(
-        (process) => storage.recordProcess(backgroundJobKeyFields(target), process),
-        "exec-tools.job-process.record.failed",
-      )
+      // A server that ends without its finalizers leaves the process behind:
+      // the row names the receipt the launcher writes, and the process once
+      // this server copied it, so the next server can stop it.
+      const recording: CommandRecording<never> = {
+        launch,
+        recorded: (process) =>
+          storage
+            .recordProcess(backgroundJobKeyFields(target), process)
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("exec-tools.job-process.record.failed").pipe(
+                  Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+                ),
+              ),
+            ),
+      }
       const { exitCode, output } = yield* streamBackgroundCommand(
         job.command,
         job.cwd,
         file,
-        recordProcess,
+        recording,
       ).pipe(
         Effect.scoped,
         Effect.catchTag("PlatformError", (e) =>
@@ -1693,11 +1921,18 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         // fork is interruptible independently of this transfer mask.
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
+            const launch = yield* commandLaunch(dataDir).pipe(
+              Effect.catchTag(
+                "PlatformError",
+                (e) => new BackgroundBashError({ message: e.message }),
+              ),
+            )
             const claim = yield* storage.claimStart({
               ...keyFields,
               command: job.command,
               cwd: job.cwd,
               outputFile: file,
+              launch,
             })
             if (claim._tag === "AlreadyRunning")
               return rowOutputFile(path, dataDir, keyFields, claim.outputFile)
@@ -1727,7 +1962,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               References.CurrentLoggers,
               References.MinimumLogLevel,
             )(fullContext)
-            yield* runBackgroundJob(job, target).pipe(
+            yield* runBackgroundJob(job, target, launch).pipe(
               // The server stopped or the resource closed: the row must not stay
               // running under this process, where no reconcile would reach it.
               // The branch's next turn reads it as a notice.
@@ -1738,6 +1973,9 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                 return queueFailure(job, target, `Internal error: ${Cause.pretty(cause)}`)
               }),
               Effect.ensuring(rememberCompleted(key, file)),
+              // The job settled under this process, its group ended with its
+              // scope: no later server needs the receipt.
+              Effect.ensuring(removeCommandReceipt(launch)),
               Effect.updateContext(
                 (
                   _: Context.Context<
@@ -1764,16 +2002,32 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
 
 // A job still marked running that an earlier server process started has lost
 // its server. A crash skips the finalizers, so its process may still run:
-// stop each recorded process group that still holds the job (its leader
-// is the recorded process, or exited and left descendants in the group),
-// then mark the jobs interrupted before the supervisor takes new
-// work. A job this process runs stays running when another profile builds.
+// stop each process group that still holds the job (its leader is the
+// recorded process, or exited and left descendants in the group), found
+// from the row, else from the launcher's receipt, which the row then keeps;
+// then mark the jobs interrupted before the supervisor takes new work. A job
+// this process runs stays running when another profile builds.
 const ReconcileInterruptedJobs = Layer.effectDiscard(
   Effect.gen(function* () {
     const storage = yield* BackgroundBashStorage
-    const stale = yield* storage.staleProcesses
-    const stopped = yield* Effect.forEach(stale, stopStaleProcess, { concurrency: 8 })
-    yield* storage.reconcileInterrupted(stale.filter((_, i) => !stopped[i]).map((job) => job.pid))
+    const stale = yield* storage.staleJobs
+    const stopped = yield* Effect.forEach(
+      stale,
+      (job) =>
+        Effect.gen(function* () {
+          let process = job.process
+          if (Option.isNone(process) && Option.isSome(job.launch)) {
+            process = yield* readCommandReceipt(job.launch.value).pipe(
+              Effect.orElseSucceed(() => Option.none<CommandProcess>()),
+            )
+            if (Option.isSome(process)) yield* storage.recordProcess(job.key, process.value)
+          }
+          const gone = yield* stopLostCommand(process, job.launch)
+          return Option.liftPredicate(job.key, () => gone)
+        }),
+      { concurrency: 8 },
+    )
+    yield* storage.reconcileInterrupted(Arr.getSomes(stopped))
   }),
 )
 

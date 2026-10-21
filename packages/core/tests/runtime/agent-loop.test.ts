@@ -50,6 +50,8 @@ import {
   makeLoopInbox,
   type TurnWork,
   wantsWakeOnRecovery,
+  BranchWakesLive,
+  branchWakeClockLive,
   WAKE_CLOCK_MAX_SLEEP,
   WakeFireOpenings,
 } from "../../src/runtime/agent-loop"
@@ -72,7 +74,6 @@ import {
   fixtureModelCatalogSource,
   LanguageModelLayers,
   makeTempDirectoryScoped,
-  recordInteractionDecision,
   recordingEventStore,
   testAgent,
   testSqliteStorage,
@@ -130,12 +131,10 @@ import type { GentNamespacedClient } from "../../src/server/rpc"
 import {
   AgentLoopQueueStorage,
   BranchStorage,
-  BranchWakeStorage,
   EventStorage,
   MessageStorage,
   SessionOperationStorage,
   SessionStorage,
-  SqliteStorage,
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import {
@@ -211,15 +210,13 @@ import { SingleRunner } from "effect/cluster"
 import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { SqlClient } from "effect/sql"
-import { BunPlatformLive, BunSqlite } from "../../src/runtime/gent-platform-bun"
-import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
 import {
   type AnyResourceContribution,
+  BranchWakes,
   type ExtensionContributions,
   hook,
-  LoadedArtifactIdentity,
 } from "../../src/domain/extension"
 
 // ── op primary keys ─────────────────────────────────────────────────────────
@@ -8266,94 +8263,6 @@ const storedBranchEvents = (ids: { readonly sessionId: SessionId; readonly branc
     }),
   )
 
-const REPLAY_ARMER_ID = ExtensionId.make("@test/replay-armer")
-
-interface ReplayArmerProbe {
-  /** While it holds, a loop that opens arms the start-only record `replayed`. */
-  readonly armOnOpen: Ref.Ref<boolean>
-  /** Completes once a loop that opened armed the record. */
-  readonly armed: Deferred.Deferred<void>
-  readonly fired: Ref.Ref<ReadonlyArray<WakeDueInput>>
-}
-
-/**
- * A fixture extension for a start that opens a loop with no client: the
- * `approve` tool parks its turn on an approval, and a decision stored while
- * no server runs makes the next start's interaction recovery open the loop
- * again. Its `loopOpen` hook arms `replayed` while `armOnOpen` holds, and its
- * `wakeDue` hook records each fire and answers `Done`.
- */
-const replayArmerExtension = (probe: ReplayArmerProbe) =>
-  defineExtension({
-    id: REPLAY_ARMER_ID,
-    setup: Effect.gen(function* () {
-      const host = yield* ExtensionHost
-      yield* host.register(
-        "tool",
-        tool({
-          id: "approve",
-          description: "Ask for an approval",
-          params: Schema.Struct({ text: Schema.String }),
-          output: Schema.Boolean,
-          execute: ({ text }) =>
-            Effect.gen(function* () {
-              const ctx = yield* ExtensionContext
-              return (yield* ctx.Interaction.approve({ text })).approved
-            }),
-        }),
-      )
-      yield* host.on("loopOpen", () =>
-        Effect.gen(function* () {
-          if (!(yield* Ref.get(probe.armOnOpen))) return
-          const ctx = yield* ExtensionContext
-          yield* ctx.Session.wakeAt({ sourceId: "replayed" })
-          yield* Deferred.succeed(probe.armed, void 0)
-        }),
-      )
-      yield* host.on("wakeDue", (input) =>
-        Ref.update(probe.fired, (all) => [...all, input]).pipe(
-          Effect.as(WakeNext.cases.Done.make({})),
-        ),
-      )
-    }),
-  })
-
-/** A second connection to the database file, as a storage read beside the server. */
-const fileSql = (storagePath: string) =>
-  BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer), Layer.orDie)
-
-/**
- * The record store the root's services above the launch profile read, with
- * `beginBoot` held until `open` completes. A server whose wake clock takes
- * the start's number takes it only after the recovered loop armed; a server
- * that takes it below the actor never calls this one.
- */
-const heldBootStorage = (storagePath: string, open: Deferred.Deferred<void>) =>
-  Layer.effect(
-    BranchWakeStorage,
-    Effect.gen(function* () {
-      const records = yield* BranchWakeStorage
-      return BranchWakeStorage.of({
-        ...records,
-        beginBoot: Deferred.await(open).pipe(Effect.andThen(records.beginBoot)),
-      })
-    }),
-  ).pipe(Layer.provide(BranchWakeStorage.Live), Layer.provide(fileSql(storagePath)))
-
-/** Each record's source and the start that armed it, and the start's number now. */
-const bootRows = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const records = yield* sql<{
-    readonly source_id: string
-    readonly armed_boot: number
-  }>`SELECT source_id, armed_boot FROM branch_wakes ORDER BY source_id`
-  const boots = yield* sql<{ readonly boot: number }>`SELECT boot FROM branch_wake_boots`
-  return {
-    records: records.map((row) => ({ sourceId: row.source_id, armedBoot: row.armed_boot })),
-    boot: boots[0]?.boot,
-  }
-})
-
 describe("durable wakes", () => {
   it.scopedLive(
     "a due wake reaches a new generation of a branch that passivated, through the RPC path",
@@ -8469,122 +8378,91 @@ describe("durable wakes", () => {
   )
 
   it.scopedLive(
-    "a record a loop arms as a start recovers it names that start, though the wake clock starts later",
+    "a start-only record armed before the wake clock builds names that start, and only the next start fires it",
     () =>
       Effect.gen(function* () {
-        const dir = yield* makeTempDirectoryScoped("gent-wake-replay-")
-        const cwd = yield* makeTempDirectoryScoped("gent-wake-replay-cwd-")
-        const home = yield* makeTempDirectoryScoped("gent-wake-replay-home-")
-        const storagePath = `${dir}/gent.db`
-        const probe: ReplayArmerProbe = {
-          armOnOpen: yield* Ref.make(false),
-          armed: yield* Deferred.make<void>(),
-          fired: yield* Ref.make<ReadonlyArray<WakeDueInput>>([]),
-        }
-        const rootOf = (
-          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-          extraLayers: ReadonlyArray<Layer.Layer<never>> = [],
-        ) =>
-          createRpcClient(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              // An artifact identity: the parked call's binding is stored, so a
-              // later start may run it again.
-              extensionInputs: [
-                ...e2ePreset.extensionInputs,
-                {
-                  ...replayArmerExtension(probe),
-                  artifactIdentity: LoadedArtifactIdentity.make("@test/replay-armer@1"),
-                },
-              ],
-              approvalLayer: ApprovalService.Live,
-              extraLayers,
-              storagePath,
-              cwd,
-              home,
-            }),
-          )
-
-        // Root 1 parks a turn on an approval, then stops.
-        const parked = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const { layer } = yield* LanguageModelLayers.sequence([
-              toolCallStep("approve", { text: "go?" }),
-            ])
-            const { client } = yield* rootOf(layer)
-            const ids = yield* client.session.create({})
-            const presented = yield* client.session.events(ids).pipe(
-              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
-              Stream.take(1),
-              Stream.runCollect,
-              Effect.forkScoped,
-            )
-            yield* client.message.send({ ...ids, content: "ask" })
-            const event = Array.from(yield* Fiber.join(presented))[0]?.event
-            if (event?._tag !== "InteractionPresented") {
-              return yield* Effect.die(new Error("the approval was not presented"))
-            }
-            yield* waitFor(
-              client.session.getSnapshot(ids),
-              (snapshot) => snapshot.runtime._tag === "WaitingForInteraction",
-              5_000,
-              "the turn waits for the approval",
-            )
-            return { ids, requestId: event.requestId }
-          }),
-        )
-        yield* recordInteractionDecision(parked.ids, parked.requestId, { approved: true }).pipe(
-          Effect.provide(
-            SqliteStorage.WithSql(fileSql(storagePath)).pipe(Layer.provide(BunPlatformLive)),
+        // One storage instance for every start, as one database file is.
+        const storage = yield* Layer.build(testSqliteStorage)
+        const sessionId = SessionId.make("wake-replay-session")
+        const branchId = BranchId.make("wake-replay-branch")
+        yield* ensureStorageParents({ sessionId, branchId }).pipe(Effect.provide(storage))
+        const fired = yield* Ref.make<ReadonlyArray<string>>([])
+        // Each fire is recorded and fails: the record stays, with one more attempt.
+        const loops = Layer.succeed(AgentLoopActor.Context, (entityId: string) =>
+          Ref.update(fired, (all) => [...all, entityId]).pipe(
+            Effect.andThen(Effect.die(new Error("no loop in this test"))),
           ),
-          Effect.provideService(CurrentWorkspaceId, workspaceIdForCwd(cwd)),
         )
+        const rows = Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const records = yield* sql<{
+            readonly source_id: string
+            readonly armed_boot: number
+            readonly attempts: number
+          }>`SELECT source_id, armed_boot, attempts FROM branch_wakes ORDER BY source_id`
+          const boots = yield* sql<{ readonly boot: number }>`SELECT boot FROM branch_wake_boots`
+          return {
+            records: records.map((row) => ({
+              sourceId: row.source_id,
+              armedBoot: row.armed_boot,
+              attempts: row.attempts,
+            })),
+            boot: boots[0]?.boot,
+          }
+        }).pipe(Effect.provide(storage))
+        /**
+         * One server start: `BranchWakes` takes the start's number, `beforeClock`
+         * runs (what a loop recovered or replayed at startup does), and only then
+         * does the wake clock build. That order is the barrier.
+         */
+        const start = <A, E>(beforeClock: (wakes: BranchWakes["Service"]) => Effect.Effect<A, E>) =>
+          Effect.gen(function* () {
+            const owned = yield* Layer.build(BranchWakesLive).pipe(Effect.provide(storage))
+            const wakes = Context.get(owned, BranchWakes)
+            const value = yield* beforeClock(wakes)
+            yield* Layer.build(
+              branchWakeClockLive.pipe(Layer.provide([WakeFireOpenings.Live, loops])),
+            ).pipe(Effect.provide(Context.merge(storage, owned)))
+            return { boot: wakes.boot, value }
+          })
+        const key = {
+          sessionId,
+          branchId,
+          extensionId: ExtensionId.make("@test/replay-armer"),
+          sourceId: "replayed",
+        }
 
-        // Root 2's interaction recovery opens the loop with no client, and
-        // its hook arms a start-only record while the wake clock is held.
-        yield* Ref.set(probe.armOnOpen, true)
+        // Start 1: a loop arms the record before the clock builds.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { layer } = yield* LanguageModelLayers.sequence([textStep("approved")])
-            const { client } = yield* rootOf(layer, [heldBootStorage(storagePath, probe.armed)])
-            yield* Deferred.await(probe.armed)
-            yield* Ref.set(probe.armOnOpen, false)
-            yield* waitFor(
-              client.session.getSnapshot(parked.ids),
-              (snapshot) =>
-                snapshot.runtime._tag === "Idle" && hasAssistantText(snapshot.messages, "approved"),
-              5_000,
-              "the recovered turn answered",
-            )
-            // The record names this start, so this start's pass left it.
-            expect(yield* bootRows.pipe(Effect.provide(fileSql(storagePath)))).toEqual({
-              records: [{ sourceId: "replayed", armedBoot: 2 }],
-              boot: 2,
+            const { boot } = yield* start((wakes) => wakes.arm({ ...key, at: Option.none() }))
+            // The record names this start, and the start's number is the one
+            // the clock reads: its pass leaves the record for the next start.
+            expect(yield* rows).toEqual({
+              records: [{ sourceId: "replayed", armedBoot: boot, attempts: 0 }],
+              boot,
             })
           }),
         )
-        expect(yield* Ref.get(probe.fired)).toEqual([])
+        expect(yield* Ref.get(fired)).toEqual([])
 
-        // Root 3's start pass fires it, and `Done` removes it.
+        // Start 2: its pass fires the record once.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { layer } = yield* LanguageModelLayers.sequence([])
-            yield* rootOf(layer)
-            yield* waitFor(Ref.get(probe.fired), (all) => all.length === 1, 5_000, "root 3 fired")
-            expect(yield* Ref.get(probe.fired)).toEqual([
-              { sourceId: "replayed", at: Option.none(), cause: "start" },
-            ])
+            yield* start(() => Effect.void)
             yield* waitFor(
-              bootRows.pipe(Effect.provide(fileSql(storagePath))),
-              (rows) => rows.records.length === 0,
+              rows,
+              (now) => now.records[0]?.attempts === 1,
               5_000,
-              "Done removed it",
+              "start 2 fired the record",
             )
+            expect(yield* Ref.get(fired)).toEqual([
+              entityIdOf(DefaultWorkspaceId, sessionId, branchId),
+            ])
           }),
         )
-      }).pipe(Effect.timeout("20 seconds")),
-    25_000,
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 
   it.scopedLive(

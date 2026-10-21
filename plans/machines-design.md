@@ -1754,3 +1754,53 @@ The Codex review of commits 2 and 3 found two faults and a weak test.
   leader on a file until the record lands (measured: three runs in four hung
   without it). The gap is G4's, unchanged here; closing it needs the record
   to come from the spawn, not from a later `ps`.
+
+## Review fixes after the machines review
+
+The Codex review of `0945a6f9c` and `264e6263b` named two blockers and seven
+should-fix items. Each fix has a test that fails with the fix disabled.
+
+- **R1. A stop cannot lose an admitted round.** `dispatchRound` sent first
+  and committed the round's id after; a `machine.stop` between the two won
+  the compare, and settlement found no thread to stop. The round's id is a
+  digest of its key (`Threads.sendRound(key)`), so `recordRoundTarget` now
+  commits the thread and the round's id before the send. The stop keeps the
+  pending action. `stopPending` finds the round by its id (by the key when
+  an older row has no id), and stops its thread only when the round is
+  open; a round no send admitted is sent again by `awaitRound`
+  (`Threads.findRound` answers none).
+- **R2. A stopped round that stays open needs no stop event.** Rejected as
+  stated. `deliverRoundEnd` publishes every recorded end, stopped or not, so
+  the end of a turn that held out in an uninterruptible tool wakes the
+  driver, which then asks `interrupted`. Acting on the stop mark would act
+  while the worker still runs, which the review itself rules out. The C6
+  test with an uninterruptible tool passes, and fails when the publish of a
+  stopped round's end is removed.
+- **R3. A settled stop says when a process may still run.** `Settled` takes
+  `mayStillRun` when the command's group was not shown gone, when no record
+  or receipt names it, or when Threads refuses the round's thread
+  (`ThreadError`). Divergence: the run still settles, since no later try can
+  learn more; the step and a warning keep the doubt. Other failures fail the
+  step, and the driver retries after its backoff.
+- **R4. The spawn writes the record.** This closes the "leader gone before
+  `ps`" gap above. The caller stores a receipt path and a token before the
+  spawn (`commandLaunch`; the machine's `Command.launch`, background bash's
+  `process_token` and `process_receipt`). A `bash` launcher writes its own
+  pid and start time to the receipt, checks that its parent is still the
+  server, and only then `exec`s the command. Recovery reads the receipt
+  when the row holds no process. A launch with no receipt ran nothing.
+- **R5. A failed `ps` is not an empty group.** `processGroupMembers` answers
+  none when `ps` exits non-zero; `stopStaleProcess` then answers false
+  (may still run, no retry offered).
+- **R6. Drivers drain round ends.** `roundEndSignal` drains the unbounded
+  subscription into a sliding queue of one slot.
+- **R7. C4 has an overlap proof.** Two `machine.answer` calls read the
+  same ask through a barrier before either commits; one commits and the
+  other re-reads and admits. Without the `seq` compare both commit.
+- **R8. The boot-order test builds the real layers.** It builds
+  `BranchWakesLive`, arms a record, then builds `branchWakeClockLive` on one
+  shared storage. It does not replace a core tag through `extraLayers`.
+- **R9.** `MachineDrivers.command` is an `Effect.fn`.
+
+The old durable shape needs no shim: the main database has no
+`machine_runs` table (measured), so no row lacks `Command.launch`.
