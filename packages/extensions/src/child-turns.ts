@@ -31,6 +31,8 @@ interface TurnEnd {
   readonly receipt: TurnCompleted
   /** The last `ErrorOccurred` after the previous receipt that is not a notice. */
   readonly error: Option.Option<string>
+  /** When the usage limit that error names resets (its `retryAt`), in epoch milliseconds. */
+  readonly retryAt: Option.Option<number>
 }
 
 /**
@@ -46,16 +48,28 @@ export const turnEnd = (target: TurnTarget) =>
     const folded = yield* ctx.Session.events(target).pipe(
       Stream.takeUntil(isSynchronized),
       Stream.runFold(
-        () => ({ error: Option.none<string>(), end: Option.none<TurnEnd>() }),
+        () => ({
+          error: Option.none<string>(),
+          retryAt: Option.none<number>(),
+          end: Option.none<TurnEnd>(),
+        }),
         (state, event) => {
           if (event._tag === "ErrorOccurred") {
             if (event.notice === true) return state
-            return { ...state, error: Option.some(event.error) }
+            return {
+              ...state,
+              error: Option.some(event.error),
+              retryAt: Option.fromUndefinedOr(event.retryAt),
+            }
           }
           if (event._tag !== "TurnCompleted") return state
           // Each receipt closes its turn: an error before it is not the next turn's.
-          if (event.messageId !== target.messageId) return { ...state, error: Option.none() }
-          return { error: Option.none(), end: Option.some({ receipt: event, error: state.error }) }
+          const cleared = { error: Option.none<string>(), retryAt: Option.none<number>() }
+          if (event.messageId !== target.messageId) return { ...state, ...cleared }
+          return {
+            ...cleared,
+            end: Option.some({ receipt: event, error: state.error, retryAt: state.retryAt }),
+          }
         },
       ),
     )

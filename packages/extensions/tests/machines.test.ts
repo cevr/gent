@@ -1,7 +1,9 @@
 import { decodeRequestReply } from "@gent/core/protocol"
 import { describe, expect, it } from "effect-bun-test"
 import {
+  Clock,
   Deferred,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -16,18 +18,36 @@ import {
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
+import { AiError } from "effect/ai"
+import { TestClock } from "effect/testing"
 import { BunServices } from "@effect/platform-bun"
 import { BunSqlite } from "@gent/core/host-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
-import { defineExtension, ExtensionHost, omitUndefined, ref, tool } from "@gent/core/extensions/api"
 import {
+  CredentialSlot,
+  defineExtension,
+  defineRequests,
+  ExtensionContext,
+  ExtensionHost,
+  ExtensionId,
+  omitUndefined,
+  type QuotaReading,
+  ref,
+  reportProviderQuota,
+  request,
+  tool,
+} from "@gent/core/extensions/api"
+import {
+  ConfigService,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
   LanguageModelLayers,
   runToolWithCtx,
+  TEST_MODEL_ID,
   testToolContext,
+  UserConfig,
   waitFor,
 } from "@gent/core/test-utils"
 import type { Session } from "@gent/core/protocol"
@@ -51,6 +71,7 @@ import {
   isWorkerRequest,
   lastUserText,
   restartableHome,
+  sendCalls,
   type SessionKey,
   type SnapshotMessage,
   starterStep,
@@ -93,7 +114,17 @@ const replyWith = (round: RoundCall, value: Schema.Json) => {
 /** A round whose model call never ends, once `entered` holds. */
 const hangAfter = (entered: Effect.Effect<void>) => Stream.unwrap(Effect.as(entered, Stream.never))
 
-type WorkerStream = ReturnType<typeof billed>
+/** A worker step that fails at a usage limit resetting in 60 s: past the retry cap, so the turn ends on it. */
+const usageLimited = () =>
+  Stream.fail(
+    AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(60) }),
+    }),
+  )
+
+type WorkerStream = ReturnType<typeof billed> | ReturnType<typeof usageLimited>
 
 interface MachineModels {
   /** Each worker round's first model call appends `<state>:<visit>`, outside any database. */
@@ -276,6 +307,9 @@ const runRow = (run: string) =>
 const StepView = Schema.Struct({
   _tag: Schema.String,
   mayStillRun: Schema.optionalKey(Schema.Boolean),
+  until: Schema.optionalKey(Schema.Finite),
+  reason: Schema.optionalKey(Schema.String),
+  dead: Schema.optionalKey(Schema.Boolean),
   from: Schema.optionalKey(Schema.String),
   to: Schema.optionalKey(Schema.String),
   askId: Schema.optionalKey(Schema.String),
@@ -1228,6 +1262,422 @@ describe("machine failures the owner decides", () => {
   )
 })
 
+// ── waits for the account ───────────────────────────────────────────────────
+
+const HOUR = 3_600_000
+
+const work = CredentialSlot.make("work")
+
+/** One account, `work`, that every turn of the test's sessions spends from. */
+const oneAccount = {
+  configServiceLayer: ConfigService.Test(
+    new UserConfig({ model: TEST_MODEL_ID, providers: { anthropic: { authOrder: [work] } } }),
+  ),
+}
+
+/** A 5-hour window that refuses every run until `resetAt`. */
+const rejectedUntil = (resetAt: number): ReadonlyArray<QuotaReading> => [
+  { window: "5h", utilization: 1, resetAt, rejected: true },
+]
+
+/** The owner's next model call reports the readings set, on the account it spends from. */
+const quotaOwner = (readings: Ref.Ref<ReadonlyArray<QuotaReading>>) => () =>
+  Effect.flatMap(Ref.getAndSet(readings, []), reportProviderQuota)
+
+/** The sessions whose loops are open now: a waiting run's host is not among them. */
+const LoopsProbe = defineRequests(ExtensionId.make("machines-loops-probe"), {
+  Loops: request({
+    id: "loops",
+    description: "The sessions whose loops are open now.",
+    answersDuringTurn: true,
+    input: Schema.Struct({}),
+    output: Schema.Array(Schema.String),
+    execute: () =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        const loops = yield* ctx.Session.listActiveLoops
+        return loops.map((loop) => String(loop.sessionId))
+      }),
+  }),
+})
+
+const loopsProbe = defineExtension({
+  id: "machines-loops-probe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("request", LoopsProbe.Loops)
+  }),
+})
+
+/** The open loops, read from `observer`'s session so the read opens no other loop. */
+const openLoops = (client: Client, observer: SessionKey) =>
+  Effect.gen(function* () {
+    const probe = ref(LoopsProbe.Loops)
+    const reply = yield* client.extension.request({
+      ...observer,
+      extensionId: probe.extensionId,
+      capabilityId: probe.capabilityId,
+      input: {},
+    })
+    return yield* decodeRequestReply(Schema.Array(Schema.String))(reply)
+  })
+
+/** One round that moves on unconditionally, with a cap of one visit. */
+const ONE_VISIT = {
+  name: "one-visit",
+  threads: { worker: {} },
+  start: "work",
+  states: {
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}",
+      next: "done",
+      maxVisits: 1,
+    },
+    done: { kind: "final" },
+  },
+}
+
+/** One judged round, with a cap of one visit. */
+const ONE_JUDGE = {
+  name: "one-judge",
+  threads: { judge: {} },
+  start: "judge",
+  states: {
+    judge: {
+      kind: "thread",
+      thread: "judge",
+      say: "STATE judge {{visit}}",
+      on: { pass: "done", fail: "done" },
+      maxVisits: 1,
+    },
+    done: { kind: "final" },
+  },
+}
+
+/** One command that passes. */
+const ONE_COMMAND = {
+  name: "one-command",
+  threads: {},
+  start: "check",
+  states: {
+    check: { kind: "run", run: "true", on: { pass: "done", fail: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+/** The real clock, beside the `TestClock` the runs wait on. */
+const wallClock = Clock.Clock.defaultValue()
+
+/** Polls on the wall clock, for work the virtual clock already released. Exhaustion fails loudly. */
+const eventually = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  label: string,
+) =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 10_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      const value = yield* read
+      if (done(value)) return value
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real database I/O, which only the wall clock paces
+      yield* Effect.sleep("5 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    return yield* Effect.die(`still waiting: ${label}`)
+  })
+
+/**
+ * Moves the virtual clock in steps until `done` holds. A timer fiber reads
+ * the clock and then sleeps, so one large step can land between the two and
+ * leave the sleep a whole delay past the new time; small steps reach it.
+ */
+const advanceUntil = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  label: string,
+) =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + 10_000
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      const value = yield* read
+      if (done(value)) return value
+      yield* TestClock.adjust("5 seconds")
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real database I/O, which only the wall clock paces
+      yield* Effect.sleep("10 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    return yield* Effect.die(`still waiting: ${label}`)
+  })
+
+/** Lets work the virtual clock released settle, so a check that nothing ran means it. */
+// oxlint-disable-next-line effect/noFixedWaitInTests -- an absence has no event to wait on; the pause is for real database I/O
+const settle = Effect.sleep("300 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+
+/** `call` on a virtual clock: the starter's turn is polled on the wall clock. */
+const callOn = (
+  client: Client,
+  place: SessionKey,
+  calls: ReadonlyArray<readonly [tool: string, id: string, input: Schema.Json]>,
+) =>
+  Effect.gen(function* () {
+    const sent = yield* sendCalls(client, place, calls)
+    return sent.results(yield* eventually(client.session.getSnapshot(place), sent.ran, sent.label))
+  })
+
+const startRunOn = (
+  client: Client,
+  owner: SessionKey,
+  definition: Schema.Json,
+  machine: string,
+  /** Names this start's tool calls: a session holds each call id once. */
+  tag = machine,
+) =>
+  Effect.gen(function* () {
+    const [defined] = yield* callOn(client, owner, [
+      ["machine.define", `define-${tag}`, { definition }],
+    ])
+    expect(defined?.failed).toBe(false)
+    const [started] = yield* callOn(client, owner, [["machine.start", `start-${tag}`, { machine }]])
+    expect(started?.failed).toBe(false)
+    return decodeStartedRun(started?.result).run
+  })
+
+const decodePendingWait = Schema.decodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ key: Schema.String, notBefore: Schema.optionalKey(Schema.Finite) }),
+  ),
+)
+
+/** The time the run's pending round waits until, if it waits. */
+const pendingWait = (run: string) =>
+  Effect.map(runRow(run), (row) =>
+    Option.flatMap(
+      Option.flatMap(row, (found) => Option.fromNullishOr(found.pending_json)),
+      (json) => Option.fromUndefinedOr(decodePendingWait(json).notBefore),
+    ),
+  )
+
+const decodeVisits = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({ counts: Schema.fromJsonString(Schema.Record(Schema.String, Schema.Int)) }),
+  ),
+)
+
+/** How often the run entered each state. */
+const visitCounts = (run: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const rows = yield* sql`SELECT json_extract(visits_json, '$.counts') AS counts
+      FROM machine_runs WHERE run = ${run}`
+    return decodeVisits(rows)[0]?.counts ?? {}
+  })
+
+const waitsOf = (steps: ReadonlyArray<typeof StepView.Type>) =>
+  steps.flatMap((step) => {
+    if (step._tag !== "Waiting") return []
+    return [{ reason: step.reason, until: step.until }]
+  })
+
+/** The run's end was told to its owner. */
+const isSettled = (row: Option.Option<typeof RunRowView.Type>) =>
+  Option.exists(row, (found) => Predicate.isNotNull(found.notified_at))
+
+const decodeRoundRetries = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ thread: Schema.String, retry_at: Schema.NullOr(Schema.Finite) })),
+)
+/** Each thread round's thread and its usage limit's reset, oldest first. */
+const roundRetries = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql`SELECT thread, retry_at FROM thread_rounds ORDER BY started_at, rowid`
+  return decodeRoundRetries(rows)
+})
+
+describe("a machine waits out its account", () => {
+  it.live(
+    "a round with no lane waits for the reset, a second refusal moves its time, and no visit is spent",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+        const models = yield* makeModels(
+          (round) => Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+          quotaOwner(readings),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), { ...oneAccount, extensionInputs: [loopsProbe] }),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const observer = ownerOf(yield* client.session.create({}))
+        const now = yield* Clock.currentTimeMillis
+        const firstReset = now + HOUR
+        yield* Ref.set(readings, rejectedUntil(firstReset))
+        const run = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
+        // The refusal is a wait: the pending round names the reset, and so does the run's record.
+        yield* eventually(
+          home.sql(pendingWait(run)),
+          (until) => Option.contains(until, firstReset),
+          "the round waits for the reset",
+        )
+        yield* eventually(
+          home.sql(runRecords(run)),
+          (records) =>
+            records.length === 1 && Option.contains(records[0] ?? Option.none(), firstReset),
+          "the run's record fires at the reset",
+        )
+        // A minute short of the reset, nothing ran, and the run held its host open for nothing.
+        yield* TestClock.adjust(HOUR - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        expect(yield* openLoops(client, observer)).not.toContain(String(owner.sessionId))
+        // A new reading moves the reset an hour on.
+        const secondReset = now + 2 * HOUR
+        yield* Ref.set(readings, rejectedUntil(secondReset))
+        yield* callOn(client, owner, [["machine.list", "list-waiting", {}]])
+        // At the first reset the same round is refused again: its time moves, and it enters nothing.
+        yield* advanceUntil(
+          home.sql(stepsOf(run)),
+          (steps) => waitsOf(steps).length === 2,
+          "the second refusal",
+        )
+        expect(yield* home.sql(pendingWait(run))).toEqual(Option.some(secondReset))
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        yield* TestClock.adjust(secondReset - (yield* Clock.currentTimeMillis) - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        // At the second reset the round runs once, and a cap of one visit still moves on.
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(waitsOf(steps)).toEqual([
+          { reason: "lane", until: firstReset },
+          { reason: "lane", until: secondReset },
+        ])
+        expect(moves(steps)).toEqual(["work→done"])
+        expect(yield* home.sql(visitCounts(run))).toEqual({ work: 1, done: 1 })
+        expect(yield* Ref.get(models.calls)).toEqual(["work:1"])
+        expect(Option.map(yield* home.sql(runRow(run)), (row) => row.status)).toEqual(
+          Option.some("final"),
+        )
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "a worker that dies at a usage limit waits for its reset, then runs fresh with its retry and visit unspent",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const rounds = yield* Ref.make(0)
+        const models = yield* makeModels((round) =>
+          Effect.gen(function* () {
+            if (acted(round.prompt)) return billed("replied")
+            const count = yield* Ref.updateAndGet(rounds, (value) => value + 1)
+            // The first worker dies at the limit, the rerun gives no verdict, its retry passes.
+            if (count === 1) return usageLimited()
+            if (count === 2) return billed("no verdict")
+            return replyWith(round, { next: "pass" })
+          }),
+        )
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
+        const steps = yield* eventually(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          "the round waits for the limit's reset",
+        )
+        const until = waitsOf(steps)[0]?.until ?? 0
+        expect(waitsOf(steps)).toEqual([{ reason: "quota", until }])
+        // The limit resets 60 s after the worker's call; the round kept it.
+        expect((yield* home.sql(roundRetries)).map((row) => row.retry_at)).toEqual([until])
+        yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 10_000)
+        yield* settle
+        expect(yield* Ref.get(rounds)).toBe(1)
+        yield* advanceUntil(Ref.get(rounds), (count) => count >= 2, "the rerun ran")
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        const ended = yield* home.sql(stepsOf(run))
+        expect(moves(ended)).toEqual(["judge→done"])
+        expect(ended.filter((step) => step._tag === "RoundEnded").map((step) => step.dead)).toEqual(
+          [true, true, false],
+        )
+        expect(yield* home.sql(visitCounts(run))).toEqual({ judge: 1, done: 1 })
+        // Three workers: the one the limit stopped, its rerun, and the rerun's retry.
+        const threads = (yield* home.sql(roundRetries)).map((row) => row.thread)
+        expect(new Set(threads).size).toBe(3)
+        expect(yield* Ref.get(models.calls)).toEqual(["judge:1", "judge:1", "judge:1"])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live(
+    "rounds that wait for the account hold no step permit: a command runs beside four of them",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+        const worker = (round: RoundCall) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`))
+        const reset = (yield* Clock.currentTimeMillis) + HOUR
+        // As many waiting rounds as the server runs steps at once: a command still runs beside them.
+        const tags = ["wait-1", "wait-2", "wait-3", "wait-4"]
+        const models = yield* makeModels(worker, quotaOwner(readings))
+        const { client } = yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
+        const owner = ownerOf(yield* client.session.create({}))
+        yield* Ref.set(readings, rejectedUntil(reset))
+        const runs = yield* Effect.forEach(tags, (tag) =>
+          startRunOn(client, owner, ONE_VISIT, "one-visit", tag),
+        )
+        yield* Effect.forEach(runs, (run) =>
+          eventually(
+            home.sql(pendingWait(run)),
+            (until) => Option.contains(until, reset),
+            `${run} waits for the reset`,
+          ),
+        )
+        const command = yield* startRunOn(client, owner, ONE_COMMAND, "one-command")
+        yield* eventually(home.sql(runRow(command)), isSettled, "the command ran beside them")
+        expect(yield* Ref.get(models.calls)).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live("a run that waits for its account across a restart keeps its time", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+      const worker = (round: RoundCall) =>
+        Effect.succeed(billed(`${round.state} ${round.visit} done`))
+      const now = yield* Clock.currentTimeMillis
+      const reset = now + HOUR
+      const run = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const models = yield* makeModels(worker, quotaOwner(readings))
+          const { client } = yield* createRpcClient(
+            home.layerFor(machineModels(models), oneAccount),
+          )
+          const owner = ownerOf(yield* client.session.create({}))
+          yield* Ref.set(readings, rejectedUntil(reset))
+          const started = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
+          yield* eventually(
+            home.sql(runRecords(started)),
+            (records) => Option.contains(records[0] ?? Option.none(), reset),
+            "the run's record fires at the reset",
+          )
+          return started
+        }),
+      )
+      // The next server opens no session: the record alone brings the run back at its time.
+      const models = yield* makeModels(worker)
+      yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
+      yield* TestClock.adjust(HOUR - 60_000)
+      yield* settle
+      expect(yield* Ref.get(models.calls)).toEqual([])
+      expect(yield* home.sql(pendingWait(run))).toEqual(Option.some(reset))
+      yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
+      yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+      expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["work→done"])
+      expect(yield* Ref.get(models.calls)).toEqual(["work:1"])
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+})
+
 // ── C7: the boot budget ─────────────────────────────────────────────────────
 
 /** A worker gated by `gate` that counts its open model calls, and keeps the most at once. */
@@ -1261,6 +1711,8 @@ interface PlantedRun {
   readonly host: SessionKey
   /** A `Round` left open by the last server, with no round sent. */
   readonly debt: boolean
+  /** The debt round waits for its account until then, and its record fires then. */
+  readonly waitsUntil?: number
   readonly createdAt: number
   readonly wakeAt: number
 }
@@ -1282,14 +1734,15 @@ const plantRuns = (
         let visits = encodeJson({ counts: {}, grants: {} })
         if (planted.debt) {
           pending = Option.some(
-            encodeJson(
-              PlantedRound.make({
+            encodeJson({
+              ...PlantedRound.make({
                 state: "work",
                 visit: 1,
                 key: `machine:${planted.run}:2`,
                 attempt: 1,
               }),
-            ),
+              ...omitUndefined({ notBefore: planted.waitsUntil }),
+            }),
           )
           visits = encodeJson({ counts: { work: 1 }, grants: {} })
         }
@@ -1308,7 +1761,7 @@ const plantRuns = (
             armed_boot, created_at
           ) VALUES (
             ${workspace}, ${planted.host.sessionId}, ${planted.host.branchId}, '@gent/machines',
-            ${`machine-run:${planted.run}`}, NULL, 1, 0, 0, ${planted.wakeAt}
+            ${`machine-run:${planted.run}`}, ${Option.getOrNull(Option.fromUndefinedOr(planted.waitsUntil))}, 1, 0, 0, ${planted.wakeAt}
           )`
       }
     }),
@@ -1348,6 +1801,8 @@ const bootGated = (
   runs: ReadonlyArray<PlantedRun>,
   waiting: number,
   check: (order: ReadonlyArray<string>) => void,
+  /** The runs that reach their ask; every run by default. */
+  asking: ReadonlyArray<PlantedRun> = runs,
 ) =>
   Effect.gen(function* () {
     yield* plantRuns(home, BUDGET_JSON, runs)
@@ -1375,7 +1830,7 @@ const bootGated = (
         check(yield* Ref.get(order))
         yield* Deferred.succeed(gate, true)
         yield* waitFor(
-          home.sql(allAsking(runs.map((planted) => planted.run))),
+          home.sql(allAsking(asking.map((planted) => planted.run))),
           Boolean,
           40_000,
           "every run reached its ask",
@@ -1428,5 +1883,39 @@ describe("the machine boot budget", () => {
       })
       expect(most).toBe(4)
     }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
+  )
+
+  it.live(
+    "runs whose round waits for its account take no ticket, so new runs open beside them",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const hosts = yield* makeHosts(home, 8)
+        const until = (yield* Clock.currentTimeMillis) + HOUR
+        // Four runs, the oldest of all, wait an hour for their account; four new runs come after.
+        const runs = hosts.map((host, index): PlantedRun => {
+          const run = runIdAt(index + 1)
+          if (index < 4) {
+            return {
+              run,
+              host,
+              debt: true,
+              waitsUntil: until,
+              createdAt: 100 + index,
+              wakeAt: 1_000,
+            }
+          }
+          return { run, host, debt: false, createdAt: 5_000 + index, wakeAt: 1_000 + index }
+        })
+        const fresh = runs.slice(4)
+        const most = yield* bootGated(
+          home,
+          runs,
+          0,
+          (order) => expect(order.toSorted()).toEqual(fresh.map((planted) => planted.run)),
+          fresh,
+        )
+        expect(most).toBe(4)
+      }).pipe(Effect.scoped, Effect.timeout("90 seconds")),
   )
 })

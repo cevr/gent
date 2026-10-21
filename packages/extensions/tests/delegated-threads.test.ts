@@ -1,6 +1,8 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Clock,
   Deferred,
+  Duration,
   Effect,
   Fiber,
   FileSystem,
@@ -182,6 +184,22 @@ const roundsOf = (sql: Sql) =>
         client<RoundRecord>`SELECT round, thread, starter_session_id, number, session_id, branch_id, notify, interrupted, stream_failed, unanswered, stopped_at IS NOT NULL AS stopped, ended_at IS NOT NULL AS ended, delivered_at IS NOT NULL AS delivered, stop_notice_at IS NOT NULL AS stop_noticed FROM thread_rounds ORDER BY started_at, round`,
     ),
   ).pipe(Effect.orDie)
+
+const decodeRetries = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ retry_at: Schema.NullOr(Schema.Finite) })),
+)
+
+/** Each round's usage-limit reset, oldest first; null when its turn named none. */
+const retriesOf = (sql: Sql) =>
+  sql(
+    Effect.flatMap(
+      SqlClient.SqlClient,
+      (client) => client`SELECT retry_at FROM thread_rounds ORDER BY started_at, round`,
+    ),
+  ).pipe(
+    Effect.orDie,
+    Effect.map((rows) => decodeRetries(rows).map((row) => row.retry_at)),
+  )
 
 /** Runs raw statements (a trigger, a rename) on the database, as an outside writer would. */
 const execute = (sql: Sql, statement: string) =>
@@ -2176,6 +2194,58 @@ const deliveredOnNextTurn = (harness: Harness) =>
   )
 
 describe("a failed round-end delivery", () => {
+  it.live(
+    "a round whose turn died at a usage limit keeps the reset, read from its history when its hook could not record it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<void>()
+          // A limit that resets in 60 s is past the retry cap: the turn ends on it.
+          const harness = yield* harnessWithHome(
+            startThenEndWith(() =>
+              Deferred.await(gate).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    AiError.make({
+                      module: "ChildProvider",
+                      method: "streamText",
+                      reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(60) }),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          )
+          yield* sendPrompt(harness, "delegate this task")
+          yield* idleAfter(harness, "started, ending my turn")
+          const thread = yield* childOf(harness)
+          // The thread's own hook cannot record the end: only its history keeps the reset.
+          yield* execute(
+            harness.sql,
+            "CREATE TRIGGER refuse_end BEFORE UPDATE OF ended_at ON thread_rounds BEGIN SELECT RAISE(ABORT, 'end refused'); END",
+          )
+          const before = yield* Clock.currentTimeMillis
+          yield* Deferred.succeed(gate, void 0)
+          yield* waitFor(
+            harness.client.session.getSnapshot(thread),
+            (current) => current.runtime._tag === "Idle" && current.metrics.turns > 0,
+            5_000,
+            "the thread's turn failed and its hook could not record it",
+          )
+          const [open] = yield* roundsOf(harness.sql)
+          expect(open).toMatchObject({ ended: 0 })
+          yield* execute(harness.sql, "DROP TRIGGER refuse_end")
+          yield* deliveredOnNextTurn(harness)
+          const [row] = yield* roundsOf(harness.sql)
+          expect(row).toMatchObject({ ended: 1, stream_failed: 1 })
+          const [retry] = yield* retriesOf(harness.sql)
+          expect(retry).toBeGreaterThanOrEqual(before + 60_000)
+          expect(retry).toBeLessThanOrEqual((yield* Clock.currentTimeMillis) + 60_000)
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
   it.live(
     "a round end whose delivery failed is delivered on the starter's next turn",
     () =>

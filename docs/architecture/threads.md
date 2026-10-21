@@ -259,7 +259,16 @@
     goes out with `notify: "none"`; its `thread.reply` value, decoded, names
     the next state. A dead worker or no verdict runs the round once more on
     a new thread, then asks `no-verdict`; a round stopped from outside asks
-    `interrupted`. The owner is woken only by an ask (`machine-ask`), a final
+    `interrupted`. A round the account refuses (`LaneUnavailable`, at start
+    or send) or whose worker died at a usage limit (the round's `retryAt`,
+    stored in `thread_rounds.retry_at` and read from the turn's
+    `ErrorOccurred` when a reconcile records the end) waits: the run commits
+    a `Waiting` step (`lane` or `quota`) and `Round.notBefore`, its driver
+    drops its step permit and its hold, re-arms the run's record at that time
+    on each activation, and sleeps. At the time it sends the same round; a
+    quota death reruns on a new thread under a new key. Neither spends a
+    visit or the dead-worker retry, and a second refusal moves the time. A
+    server start gives a waiting round no crash-debt ticket. The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
   - Answers check in one order: an answered ask is decided by its answer

@@ -384,6 +384,7 @@ const RoundRow = Schema.Struct({
   wake_branch_id: Schema.NullOr(Schema.String),
   delivered_at: Schema.NullOr(Schema.Finite),
   stop_notice_at: Schema.NullOr(Schema.Finite),
+  retry_at: Schema.NullOr(Schema.Finite),
 })
 type RoundRow = typeof RoundRow.Type
 
@@ -400,6 +401,8 @@ interface RoundEnd {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
+  /** When the usage limit the round's turn failed on resets (`TurnAfterInput.retryAt`). */
+  readonly retryAt: Option.Option<number>
   readonly usage: Option.Option<typeof ChildUsage.Type>
   readonly endedAt: number
 }
@@ -657,6 +660,16 @@ const stopNoticesMigration = Effect.gen(function* () {
 })
 
 /**
+ * When the usage limit a round's turn failed on resets: a sender that is not
+ * a model turn (a machine) waits for it instead of sending again at once.
+ * Additive: a server on the code before it reads and writes the same rows.
+ */
+const roundRetryAtMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`ALTER TABLE thread_rounds ADD COLUMN retry_at INTEGER`)
+})
+
+/**
  * Runs the migrations the database has not recorded, in one transaction. A
  * run that finds another one recording the same ids treats them as done, so
  * the builds of two places over one database are safe.
@@ -665,6 +678,7 @@ const migrateThreadRounds = Migrator.make({})({
   loader: Migrator.fromRecord({
     "1_thread_rounds": threadRoundsMigration,
     "2_thread_round_stop_notices": stopNoticesMigration,
+    "3_thread_round_retry_at": roundRetryAtMigration,
   }),
   table: "thread_migrations",
 }).pipe(Effect.mapError(storageError("Thread table migration failed")))
@@ -814,6 +828,7 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
                   stream_failed = ${flag(end.streamFailed)},
                   unanswered = ${flag(end.unanswered)},
                   error = ${Option.getOrNull(end.error)},
+                  retry_at = ${Option.getOrNull(end.retryAt)},
                   usage_json = ${Option.getOrNull(usage)},
                   stopped_at = CASE
                     WHEN ${completed} = 1 AND stop_notice_at IS NOT NULL THEN NULL
@@ -1564,6 +1579,7 @@ interface TurnOutcome {
   readonly streamFailed: boolean
   readonly unanswered: boolean
   readonly error: Option.Option<string>
+  readonly retryAt: Option.Option<number>
   readonly usage: Option.Option<typeof ChildUsage.Type>
 }
 
@@ -1612,6 +1628,7 @@ const onRoundTurnAfter = Effect.fn("Threads.turnAfter")(function* (input: TurnAf
     streamFailed: input.streamFailed,
     unanswered: input.unanswered,
     error,
+    retryAt: input.retryAt,
     // A round shows the turn's total, as its receipt does: a partial count
     // would read as the whole spend.
     usage: usageOf(
@@ -1629,6 +1646,7 @@ const stoppedOutcome: TurnOutcome = {
   streamFailed: false,
   unanswered: false,
   error: Option.none(),
+  retryAt: Option.none(),
   usage: Option.none(),
 }
 
@@ -1639,11 +1657,14 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
     branchId: BranchId.make(round.branch_id),
     messageId: MessageId.make(round.message_id),
   })
-  return Option.map(end, ({ receipt, error }): TurnOutcome => ({
+  // The hook's `retryAt` is held in memory: a turn whose receipt came before
+  // the hook ran reads it from the error the turn ended on.
+  return Option.map(end, ({ receipt, error, retryAt }): TurnOutcome => ({
     interrupted: receipt.interrupted === true,
     streamFailed: receipt.streamFailed === true,
     unanswered: receipt.unanswered === true,
     error,
+    retryAt: Option.filter(retryAt, () => receipt.streamFailed === true),
     usage: usageOf(receiptTotal(receipt)),
   }))
 })
@@ -2560,6 +2581,8 @@ const RoundView = Schema.Struct({
   /** A thread.stop, or the starter's interrupt, closed the round. */
   stopped: Schema.Boolean,
   error: Schema.optionalKey(Schema.String),
+  /** When the usage limit the round's turn failed on resets, in epoch milliseconds. */
+  retryAt: Schema.optionalKey(Schema.Finite),
   usage: Schema.optionalKey(ChildUsage),
 })
 type RoundView = typeof RoundView.Type
@@ -2584,6 +2607,7 @@ const roundView = (round: RoundRow): RoundView => ({
   stopped: Predicate.isNotNull(round.stopped_at),
   ...omitUndefined({
     error: Option.getOrUndefined(Option.fromNullishOr(round.error)),
+    retryAt: Option.getOrUndefined(Option.fromNullishOr(round.retry_at)),
     usage: Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(round.usage_json), decodeUsage),
     ),

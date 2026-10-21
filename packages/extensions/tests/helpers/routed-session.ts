@@ -8,6 +8,7 @@ import type { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { BunSqlite } from "@gent/core/host-bun"
+import { omitUndefined } from "@gent/core/extensions/api"
 import {
   createE2ELayer,
   type createRpcClient,
@@ -98,16 +99,16 @@ const toolResults = (messages: ReadonlyArray<SnapshotMessage>, id: string) =>
 const callLine = (name: string, id: string, input: Schema.Json) =>
   `CALL ${name} ${id} ${encodeJson(input)}`
 
+type Calls = ReadonlyArray<readonly [tool: string, id: string, input: Schema.Json]>
+type Snapshot = Effect.Success<ReturnType<Client["session"]["getSnapshot"]>>
+
 /**
- * The starter makes each call once, in one step, and ends its turn; returns
- * each call's result by its id, in order.
+ * Sends the starter its call lines: `ran` holds of a snapshot once its turn
+ * is idle and every call has a new result, and `results` reads each call's
+ * last result by its id, in order. A test on a virtual clock polls `ran`
+ * with its own wait.
  */
-export const call = (
-  client: Client,
-  place: SessionKey,
-  calls: ReadonlyArray<readonly [tool: string, id: string, input: Schema.Json]>,
-  within = 8_000,
-) =>
+export const sendCalls = (client: Client, place: SessionKey, calls: Calls) =>
   Effect.gen(function* () {
     const before = yield* client.session.getSnapshot(place)
     const counts = calls.map(([, id]) => toolResults(before.messages, id).length)
@@ -115,25 +116,50 @@ export const call = (
       ...place,
       content: calls.map(([name, id, input]) => callLine(name, id, input)).join("\n"),
     })
-    const snapshot = yield* waitFor(
-      client.session.getSnapshot(place),
-      (current) =>
+    return {
+      label: `the starter ran ${calls.map(([, id]) => id).join(", ")}`,
+      ran: (current: Snapshot) =>
         current.runtime._tag === "Idle" &&
         calls.every(
           ([, id], index) => toolResults(current.messages, id).length > (counts[index] ?? 0),
         ),
-      within,
-      `the starter ran ${calls.map(([, id]) => id).join(", ")}`,
-    )
-    return calls.map(([, id]) => toolResults(snapshot.messages, id).at(-1))
+      results: (current: Snapshot) =>
+        calls.map(([, id]) => toolResults(current.messages, id).at(-1)),
+    }
+  })
+
+/**
+ * The starter makes each call once, in one step, and ends its turn; returns
+ * each call's result by its id, in order.
+ */
+export const call = (client: Client, place: SessionKey, calls: Calls, within = 8_000) =>
+  Effect.gen(function* () {
+    const sent = yield* sendCalls(client, place, calls)
+    const snapshot = yield* waitFor(client.session.getSnapshot(place), sent.ran, within, sent.label)
+    return sent.results(snapshot)
   })
 
 export const restartableHome = Effect.gen(function* () {
   const home = yield* makeTempDirectoryScoped("threads-restart-")
   const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
   const storagePath = `${home}/gent.db`
-  const layerFor = (providerLayer: Parameters<typeof createE2ELayer>[0]["providerLayer"]) =>
-    createE2ELayer({ ...e2ePreset, providerLayer, storagePath, cwd, home })
+  const layerFor = (
+    providerLayer: Parameters<typeof createE2ELayer>[0]["providerLayer"],
+    config: {
+      readonly configServiceLayer?: Parameters<typeof createE2ELayer>[0]["configServiceLayer"]
+      /** Test extensions beside the shipped ones. */
+      readonly extensionInputs?: typeof e2ePreset.extensionInputs
+    } = {},
+  ) =>
+    createE2ELayer({
+      ...e2ePreset,
+      ...omitUndefined({ configServiceLayer: config.configServiceLayer }),
+      extensionInputs: [...e2ePreset.extensionInputs, ...(config.extensionInputs ?? [])],
+      providerLayer,
+      storagePath,
+      cwd,
+      home,
+    })
   const sql = <A, E>(statement: Effect.Effect<A, E, SqlClient.SqlClient>) =>
     Effect.scoped(
       statement.pipe(

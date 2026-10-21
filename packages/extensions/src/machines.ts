@@ -23,6 +23,11 @@
  * run, and an answer or a stop from any session kicks it with `at: now`
  * after its commit. The owner is woken only by an ask, a final state, or a
  * failure. The design is `plans/machines-design.md`, Part B.
+ *
+ * A round the account has no lane for, or one that died at a usage limit,
+ * waits: the run keeps its state and its visit, holds nothing while it
+ * waits, and its record fires at the time the account names
+ * (`plans/kernel-orchestration.md`, P5b).
  */
 import {
   Cause,
@@ -217,7 +222,12 @@ type PlaceRecord = typeof PlaceRecord.Type
 
 /** The action a step recorded before it dispatched it: the receipt recovery reads. */
 const PendingAction = Schema.TaggedUnion({
-  /** `key` is the Threads idempotency key; `thread` and `round` are set once admitted. */
+  /**
+   * `key` is the Threads idempotency key; `thread` and `round` are set once
+   * admitted. `notBefore` (epoch ms): the round waits for the account until
+   * then, holding nothing. `fresh`: the round runs on a new thread, as a
+   * usage limit's rerun does.
+   */
   Round: {
     state: StateName,
     visit: PositiveInt,
@@ -225,6 +235,8 @@ const PendingAction = Schema.TaggedUnion({
     attempt: PositiveInt,
     thread: Schema.optionalKey(SessionId),
     round: Schema.optionalKey(Schema.String),
+    notBefore: Schema.optionalKey(Schema.Finite),
+    fresh: Schema.optionalKey(Schema.Boolean),
   },
   /**
    * `launch` is stored before the spawn, so a later server finds the
@@ -292,6 +304,11 @@ const MachineStep = Schema.TaggedUnion({
     outputTail: Schema.String,
   },
   Interrupted: { state: StateName },
+  /**
+   * The pending round waits until `until`: the account had no lane for it
+   * (`lane`), or its worker died at a usage limit (`quota`). No visit is spent.
+   */
+  Waiting: { state: StateName, until: Schema.Finite, reason: Schema.Literals(["lane", "quota"]) },
   Delivered: { askId: AskId },
   Answered: { askId: AskId, choice: Verdict, note: Schema.optionalKey(Schema.String) },
   Moved: { from: StateName, to: StateName, by: Schema.String },
@@ -724,6 +741,7 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
     case "RoundEnded":
     case "CommandEnded":
     case "Interrupted":
+    case "Waiting":
     case "Finished":
       return step.state
     case "Moved":
@@ -935,10 +953,13 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         )
 
       // The runs that held a step when the last server stopped, oldest first.
+      // A round that waits for its account held none.
+      const bootAt = yield* Clock.currentTimeMillis
       const debtRows = yield* sql`
         SELECT run FROM machine_runs
         WHERE status = 'running'
           AND json_extract(pending_json, '$._tag') IN ('Round', 'Command')
+          AND COALESCE(json_extract(pending_json, '$.notBefore'), 0) <= ${bootAt}
         ORDER BY created_at ASC, run ASC
       `.pipe(Effect.mapError(storageError("Failed to read the machine step debt")))
       const debt = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ run: RunId })))(
@@ -1235,6 +1256,17 @@ const isStepAction = Predicate.or(Predicate.isTagged("Round"), Predicate.isTagge
 const isRoundOrCommand = (pending: Option.Option<PendingAction>) =>
   Option.exists(pending, isStepAction)
 
+/** When the pending round may be sent: none when it does not wait. */
+const waitsUntil = (pending: Option.Option<PendingAction>, now: number) =>
+  Option.flatMap(pending, (action) => {
+    if (action._tag !== "Round" || Predicate.isUndefined(action.notBefore)) return Option.none()
+    return Option.liftPredicate(action.notBefore, (until) => until > now)
+  })
+
+/** A running run that takes a step now: not one whose round waits for its account. */
+const takesStep = (run: Run, now: number) =>
+  run.status === "running" && Option.isNone(waitsUntil(run.pending, now))
+
 /** A row whose end is settled and whose seq is the one the driver last acted on. */
 const isDone = (run: Run, seq: number) =>
   isTerminal(run.status) && Option.isSome(run.notifiedAt) && run.seq === seq
@@ -1410,7 +1442,7 @@ const RETIRE = true
  * The driver of one run on its host branch. It subscribes to the round ends
  * before its first read, then loops: read the row, take the one move the row
  * asks for, and read again. It holds the branch resident while the run is
- * running, and nothing while it asks. It leaves only from a row whose end is
+ * running, and nothing while it asks or its round waits for the account. It leaves only from a row whose end is
  * settled, under the lifecycle lock `arm` takes, after it reads the row
  * once more.
  */
@@ -1451,7 +1483,10 @@ const drive = (run: RunId, pokes: Queue.Queue<Poke>) =>
         // A run whose row went (its host session was deleted) has nothing left.
         onNone: () => Effect.succeed(RETIRE),
         onSome: (current) =>
-          hold(current.status === "running").pipe(Effect.andThen(advance(current, signals))),
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) => hold(takesStep(current, now))),
+            Effect.andThen(advance(current, signals)),
+          ),
       }).pipe(
         Effect.tap(() => Effect.sync(() => (failures = 0))),
         Effect.catchTag("MachineFault", (fault) =>
@@ -1520,7 +1555,10 @@ const failRun = Effect.fn("Machines.fail")(function* (run: RunId, error: string)
 const advance = (run: Run, signals: Signals) =>
   Effect.gen(function* () {
     const store = yield* MachineStore
-    if (!isRoundOrCommand(run.pending)) yield* store.permits.release(run.run)
+    const now = yield* Clock.currentTimeMillis
+    if (!isRoundOrCommand(run.pending) || Option.isSome(waitsUntil(run.pending, now))) {
+      yield* store.permits.release(run.run)
+    }
     switch (run.status) {
       case "final":
       case "failed":
@@ -1563,8 +1601,14 @@ const advancePending = (run: Run, signals: Signals) =>
         return awaitSignal(signals, { ends: false })
       },
       Round: (pending) =>
-        Effect.flatMap(MachineStore, (store) => store.permits.acquire(run.run)).pipe(
-          Effect.andThen(awaitRound(run, pending, signals)),
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          Option.match(waitsUntil(Option.some(pending), now), {
+            onSome: (until) => waitOut(run, until, signals),
+            onNone: () =>
+              Effect.flatMap(MachineStore, (store) => store.permits.acquire(run.run)).pipe(
+                Effect.andThen(awaitRound(run, pending, signals)),
+              ),
+          }),
         ),
       Command: (pending) => awaitCommand(run, pending, signals),
     }),
@@ -1586,6 +1630,49 @@ const awaitCommand = Effect.fn("Machines.awaitCommand")(function* (
     Effect.asVoid(Queue.take(signals.pokes)),
   ])
 })
+
+/**
+ * A round that waits for its account: the run's record fires at `until`, so
+ * a passivation or a restart while it waits loses nothing, and the driver
+ * sleeps until then or a poke (a stop), holding no permit and no residency.
+ */
+const waitOut = Effect.fn("Machines.waitOut")(function* (
+  run: Run,
+  until: number,
+  signals: Signals,
+) {
+  const ctx = yield* ExtensionContext
+  yield* ctx.Session.wakeAt({ ...run.host, sourceId: runSource(run.run), at: until })
+  const now = yield* Clock.currentTimeMillis
+  yield* awaitSignal(signals, { ends: false, within: Duration.millis(until - now) })
+})
+
+/**
+ * The pending round waits until `until`, at the same visit and attempt, its
+ * `Waiting` step after `lead`: a refusal of the same round again moves its
+ * time, and enters nothing.
+ */
+const waitForAccount = (
+  run: Run,
+  action: RoundAction,
+  wait: { readonly until: number; readonly reason: "lane" | "quota" },
+  lead: ReadonlyArray<MachineStep> = [],
+) =>
+  Effect.logInfo("machines.round.waiting").pipe(
+    Effect.annotateLogs({ run: run.run, state: action.state, ...wait }),
+    Effect.andThen(
+      commitMove(
+        run,
+        {
+          ...run,
+          pending: Option.some(
+            PendingAction.cases.Round.make({ ...action, notBefore: wait.until }),
+          ),
+        },
+        [...lead, MachineStep.cases.Waiting.make({ state: action.state, ...wait })],
+      ),
+    ),
+  )
 
 /** Removes the run's core record once its end is settled. */
 const withdrawWake = Effect.fn("Machines.withdrawWake")(function* (run: Run) {
@@ -1679,7 +1766,9 @@ const threadStateOf = Effect.fn("Machines.threadStateOf")(function* (run: Run, n
  * fixes before the send) are committed first, with a role's thread: a stop
  * or a crash after the admission then finds the round it must stop. A
  * commit that another writer beat sends nothing: the next read decides. A
- * busy thread or the running cap waits for a round end and sends again.
+ * busy thread or the running cap waits for a round end and sends again. An
+ * account with no lane (`LaneUnavailable`) makes the round wait until the
+ * time it names, as the same round.
  */
 const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   run: Run,
@@ -1689,14 +1778,15 @@ const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
 ) {
   const threads = yield* threadsOf
   const target = yield* Option.match(roundTarget(action), {
-    onSome: Effect.succeedSome,
+    onSome: (found) => Effect.succeedSome({ run, action, ...found }),
     onNone: () => recordRoundTarget(run, state, action),
   })
   if (Option.isNone(target)) return
-  const scope = templateScope(run, action.visit)
+  const recorded = target.value
+  const scope = templateScope(recorded.run, action.visit)
   const send: ThreadSendInput = {
     key: action.key,
-    thread: target.value.thread,
+    thread: recorded.thread,
     message: render(state.say, scope),
     notify: "none",
     ...omitUndefined({
@@ -1706,6 +1796,11 @@ const dispatchRound = Effect.fn("Machines.dispatchRound")(function* (
   const admitted = yield* threads.send(send).pipe(
     Effect.as(true),
     Effect.catchIf(isWaitRefusal, () => Effect.succeed(false)),
+    Effect.catchTag("LaneUnavailable", (lane) =>
+      waitForAccount(recorded.run, recorded.action, { until: lane.retryAt, reason: "lane" }).pipe(
+        Effect.as(true),
+      ),
+    ),
     Effect.mapError(threadFault),
   )
   // Refused (the thread is busy, or the cap is full): any round end may free
@@ -1721,10 +1816,14 @@ const roundTarget = (action: RoundAction) =>
     round: Option.fromUndefinedOr(action.round),
   })
 
+/** Whether the round runs on a thread of its own: a fresh state's, a retry's or a rerun's. */
+const ownThread = (state: ThreadState, action: RoundAction) =>
+  isFresh(state, action.visit) || action.attempt > 1 || action.fresh === true
+
 /**
  * Starts the round's thread (a fresh one is the round's own, a role's is the
- * run's, kept across visits) and commits it with the round's id; none when
- * another writer moved the row first.
+ * run's, kept across visits) and commits it with the round's id: the run and
+ * the round as committed, or none when another writer moved the row first.
  */
 const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   run: Run,
@@ -1734,7 +1833,7 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   const threads = yield* threadsOf
   const definition = yield* definitionOf(run)
   const role = definition.threads[state.thread] ?? {}
-  const fresh = isFresh(state, action.visit) || action.attempt > 1
+  const fresh = ownThread(state, action)
   const spec: Omit<ThreadStartInput, "key" | "name"> = {
     agent: role.agent ?? WORKER_AGENT,
     cwd: run.cwd,
@@ -1780,13 +1879,16 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   const committed = yield* commitMove(run, { ...run, roles, pending: Option.some(recorded) }, [
     MachineStep.cases.Recorded.make({ action: recorded }),
   ])
-  return Option.map(committed, () => ({ thread, round }))
+  return Option.map(committed, (next) => ({ run: next, action: recorded, thread, round }))
 })
 
 /**
  * Waits for the pending round's end, then takes its receipt: a verdict moves
  * the run, a dead worker runs the round once more on a new thread, and a
- * second dead round, or a round stopped from outside, asks the owner.
+ * second dead round, or a round stopped from outside, asks the owner. A
+ * worker that died at a usage limit gave no verdict and spent nothing: the
+ * round waits for the limit's reset, then runs again on a new thread under a
+ * new key, at the same visit and attempt.
  */
 const awaitRound = Effect.fn("Machines.awaitRound")(function* (
   run: Run,
@@ -1827,6 +1929,20 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       ],
     })
     yield* commitMove(run, asking.after, asking.steps)
+    return
+  }
+  if (view.streamFailed && !view.interrupted && Predicate.isNotUndefined(view.retryAt)) {
+    // The key is the `Waiting` step's seq: unique in the run, and short on a second death.
+    const rerun = PendingAction.cases.Round.make({
+      state: action.state,
+      visit: action.visit,
+      key: `machine:${run.run}:${run.seq + 2}`,
+      attempt: action.attempt,
+      fresh: true,
+    })
+    yield* waitForAccount(run, rerun, { until: view.retryAt, reason: "quota" }, [
+      MachineStep.cases.RoundEnded.make({ state: name, round: roundId, dead: true }),
+    ])
     return
   }
   const verdict: Option.Option<Option.Option<Verdict>> = Option.match(
@@ -1882,7 +1998,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     { ...run, state: to, pending: Option.none(), context: saved(run.context, name, value) },
     [ended, MachineStep.cases.Moved.make({ from: name, to, by: "verdict" })],
   )
-  if (Option.isSome(committed) && (isFresh(state, action.visit) || action.attempt > 1)) {
+  if (Option.isSome(committed) && ownThread(state, action)) {
     yield* threads
       .stop(action.thread, Option.some(`machine-done:${action.key}`))
       .pipe(
@@ -2702,7 +2818,9 @@ const MachineStopTool = tool({
 /**
  * The `wakeDue` hook: a run's record fired on its host. The driver is armed;
  * the record stays while the run is active, delivered or not, so a fire
- * that races an answer never takes the run's only trigger.
+ * that races an answer never takes the run's only trigger. A round that
+ * waits for its account keeps its time: the driver sets it again on every
+ * activation (`waitOut`), and a newer arm outlives this fire's answer.
  */
 const runDue = Effect.fn("Machines.due")(function* (input: WakeDueInput) {
   const store = yield* MachineStore
@@ -2718,7 +2836,8 @@ const runDue = Effect.fn("Machines.due")(function* (input: WakeDueInput) {
 /**
  * The loop-open repair: every active run this branch hosts gets its record
  * again and its driver, after a branch generation was rebuilt or the
- * extension was disabled and enabled.
+ * extension was disabled and enabled. A record armed with no time keeps the
+ * time a waiting round's driver set.
  */
 const repairHost = Effect.fn("Machines.repair")(function* () {
   const ctx = yield* ExtensionContext
