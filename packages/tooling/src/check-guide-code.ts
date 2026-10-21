@@ -431,7 +431,8 @@ if (import.meta.main)
   BunRuntime.runMain(
     program.pipe(
       Effect.scoped,
-      Effect.timeout("60 seconds"),
+      // A hang bound, not a speed bound: on a 3-core CI runner the gate builds and lints beside it, and one run took over a minute.
+      Effect.timeout("5 minutes"),
       // @effect-diagnostics-next-line strictEffectProvide:off -- the script's process entry provides the platform once.
       Effect.provide(BunServices.layer),
     ),
