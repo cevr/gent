@@ -143,7 +143,7 @@ import {
   completeProviderAuth,
   CredentialPlacement,
   DecisionModelResolver,
-  laneScope,
+  credentialLane,
   listAuthMethods,
   listAuthProviders,
   listCatalogProviders,
@@ -196,6 +196,7 @@ import {
 } from "../domain/agent-loop.js"
 import {
   type AgentLoopTurnProfile,
+  makeExtensionAccounts,
   resolveSessionRoute,
   routeCredentialDriver,
   runAgentLoopTurnProfile,
@@ -437,6 +438,7 @@ const createSessionResult = (operation: StoredCreateSessionResult): CreateSessio
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
+  | CredentialPlacement
   | SqlClient.SqlClient
   | EventStore
   | SessionStorage
@@ -555,6 +557,7 @@ const makeSessionMutationsService: Effect.Effect<
   const deletedSessionHostProvider = yield* makeExtensionHostContextProvider({
     host: yield* makeExtensionHostPlatform,
     models: yield* makeExtensionModels,
+    accounts: yield* makeExtensionAccounts,
   })
 
   /**
@@ -1874,7 +1877,12 @@ const RpcHandlers = GentRpcs.toLayer(
       "accounts.lanes": () =>
         Effect.gen(function* () {
           const profile = yield* profileForCwd(Option.none())
-          return yield* placement.lanes((provider) => laneScope(provider, profile.registryService))
+          return yield* placement.lanes((provider) =>
+            Effect.map(
+              credentialLane(provider, Option.none(), profile.registryService),
+              Option.map((lane) => lane.scope),
+            ),
+          )
         }).pipe(Effect.scoped),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>

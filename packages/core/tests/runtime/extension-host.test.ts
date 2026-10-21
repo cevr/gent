@@ -228,6 +228,7 @@ const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
     models: testExtensionHostContext().Models,
+    accounts: () => testExtensionHostContext().Accounts,
   })
   return provider.forRun({ sessionId, branchId, interactive: true, clientRequest: Option.none() })
 }).pipe(
@@ -3519,6 +3520,7 @@ describe("resolveTurnProfile", () => {
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
           models: testExtensionHostContext().Models,
+          accounts: () => testExtensionHostContext().Accounts,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
@@ -3548,6 +3550,7 @@ describe("resolveTurnProfile", () => {
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
           models: testExtensionHostContext().Models,
+          accounts: () => testExtensionHostContext().Accounts,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
@@ -3587,6 +3590,7 @@ describe("resolveTurnProfile", () => {
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
           models: testExtensionHostContext().Models,
+          accounts: () => testExtensionHostContext().Accounts,
         })
         const sessionId = SessionId.make("session-runtime-context-storage-failure")
         const profileFailure = yield* Effect.flip(
@@ -3666,6 +3670,7 @@ describe("resolveTurnProfile", () => {
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
           models: testExtensionHostContext().Models,
+          accounts: () => testExtensionHostContext().Accounts,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
@@ -5243,6 +5248,7 @@ describe("host session facet", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
         models: testExtensionHostContext().Models,
+        accounts: () => testExtensionHostContext().Accounts,
       })
       const ctx = provider.forRun({
         sessionId: SESSION_ID,
@@ -5306,6 +5312,7 @@ describe("client request origin", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
         models: testExtensionHostContext().Models,
+        accounts: () => testExtensionHostContext().Accounts,
         sessionControl: {
           queueFollowUp: hold,
           dequeueFollowUp: () => Effect.succeed(false),

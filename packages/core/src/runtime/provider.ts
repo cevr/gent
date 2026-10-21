@@ -4,6 +4,7 @@ import {
   Clock,
   Config,
   Context,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -76,6 +77,11 @@ import {
   ProviderAuthInfo,
   type ProviderHints,
   type ProviderResolution,
+  type LaneAccount,
+  type LaneReport,
+  LaneUnavailable,
+  type LaneWindow,
+  type ProviderLanes,
   type QuotaReading,
   type RetryPolicy,
   type StoredOAuthCredentials,
@@ -3251,20 +3257,34 @@ export const spreadsRuns = Effect.fn("CredentialOrder.spreads")(
 )
 
 /**
- * The accounts `provider`'s unpinned runs go out on, the lanes they share:
- * its pool (`authSpread`), else the first credential of its order. None
- * when its order cannot be read.
+ * The sign-in a run of `driverId` spends from (its owner) and the accounts
+ * its lane is counted over: a pinned run's pin (`pin`), else the pool
+ * (`authSpread`), else the first credential of its order. None when its
+ * order cannot be read.
  */
-export const laneScope = Effect.fn("CredentialOrder.laneScope")(
-  function* (provider: string, registry: ExtensionRegistryService) {
+export const credentialLane = Effect.fn("CredentialOrder.lane")(
+  function* (
+    driverId: string,
+    pin: Option.Option<CredentialSlot>,
+    registry: ExtensionRegistryService,
+  ) {
     const order = yield* credentialOrder(
       registry.getResolved().modelDrivers,
       yield* registry.providerConfig,
-      provider,
+      driverId,
     )
-    return Option.some(Option.getOrElse(order.pool, () => Arr.of(Arr.headNonEmpty(order.slots))))
+    const scope = Option.getOrElse(
+      Option.orElse(Option.map(pin, Arr.of), () => order.pool),
+      () => Arr.of(Arr.headNonEmpty(order.slots)),
+    )
+    return Option.some({ provider: order.provider, scope })
   },
-  Effect.orElseSucceed(() => Option.none<Arr.NonEmptyReadonlyArray<CredentialSlot>>()),
+  Effect.orElseSucceed(() =>
+    Option.none<{
+      readonly provider: string
+      readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
+    }>(),
+  ),
 )
 
 const resolveModelDefect = (
@@ -3502,6 +3522,13 @@ const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
  * the 1% step the provider reports in.
  */
 const QUOTA_OUTSIDE_POINTS = 3
+/**
+ * How long an admitted start holds its lane before its turn opens: past it,
+ * a start whose send failed frees the lane. A guess.
+ */
+const LANE_RESERVATION_MS = 2 * 60_000
+/** When a run refused for a busy lane checks again: no run says when it ends. A guess. */
+const LANE_BUSY_RETRY_MS = 60_000
 
 /** What placement reads of one pool account. */
 interface PlacementSlot {
@@ -3644,8 +3671,19 @@ interface CredentialPlacementService {
     readonly model: ModelId
     readonly left: ReadonlySet<CredentialSlot>
   }) => Effect.Effect<boolean>
-  /** The session's turn ended: a warming guard it holds is released. */
+  /** The session's turn ended: its lane and a warming guard it holds are released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
+  /**
+   * Admit a run to a lane of `provider` over `scope`: refused when the runs
+   * holding a lane there (turns open on those accounts, and starts admitted
+   * whose turn has not opened, the asker's own turn left out) reach the
+   * scope's capacity. An admitted start holds its lane, under `key`, until
+   * its turn opens or 2 minutes pass. With no capacity read, every run is
+   * admitted.
+   */
+  readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
+  /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
+  readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
    * A response on `slot` named its quota windows: each is the window's
    * latest reading, and a move of 1% closes a segment of the fuel spent on
@@ -3663,6 +3701,23 @@ interface CredentialPlacementService {
   readonly lanes: (scopeOf: LaneScopeOf) => Effect.Effect<LaneReport>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
+}
+
+/** A run that asks for a lane: the accounts its turns spend from, and the message whose turn takes it. */
+interface LaneRequest {
+  readonly provider: string
+  readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  readonly key: string
+  /** The session that asks: its own open turn holds no lane against it. */
+  readonly asker: Option.Option<SessionId>
+}
+
+/** A turn that opened on a provider's accounts. */
+interface OpenLane {
+  readonly sessionId: SessionId
+  readonly key: string
+  readonly provider: string
+  readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
 }
 
 /** The quota windows one response named, on the account its request went out on. */
@@ -3780,58 +3835,6 @@ const PlacementLedger = Schema.fromJsonString(
 type PlacementLedgerValue = typeof PlacementLedger.Type
 
 // ── lanes ──
-
-/** One quota window of one account, as `accounts.lanes` reports it. */
-const LaneWindow = Schema.Struct({
-  window: Schema.String,
-  /** The fraction used at the last reading; 0 once its reset passed. */
-  utilization: Schema.Finite,
-  resetAt: Schema.Finite,
-  readAt: Schema.Finite,
-  rejected: Schema.Boolean,
-  /** Fuel per percentage point of this window, its own, else the provider's over every account. */
-  fuelPerPct: Schema.optionalKey(Schema.Finite),
-  /** The rate's relative uncertainty from the 1% steps: 1 / the points its segments moved. */
-  band: Schema.optionalKey(Schema.Finite),
-  /** The segments the rate reads. */
-  samples: Schema.Int,
-  /** The share of the window's move no fuel of gent's explains: spend outside gent. */
-  outsideShare: Schema.Finite,
-  /** The runs the window can carry until its reset; none without a rate. */
-  sustainable: Schema.optionalKey(Schema.Finite),
-})
-
-/** One account of a provider. */
-const LaneAccount = Schema.Struct({
-  slot: CredentialSlot,
-  windows: Schema.Array(LaneWindow),
-  /** Held by a refusal or a rejected window: it carries no run now. */
-  held: Schema.Boolean,
-  /** The fewest runs any of its windows can carry; none when a window has no rate or nothing was read. */
-  sustainable: Schema.optionalKey(Schema.Finite),
-})
-
-/** One provider's lanes. */
-const ProviderLanes = Schema.Struct({
-  provider: Schema.String,
-  /** The accounts an unpinned run spends from: the pool, else the order's first. */
-  scope: Schema.Array(CredentialSlot),
-  accounts: Schema.Array(LaneAccount),
-  /**
-   * Whole runs the scope's accounts can carry: the sum of each account's
-   * fewest over its windows. None until every account of the scope has a
-   * reading and a rate.
-   */
-  capacity: Schema.optionalKey(Schema.Int),
-  /** The fuel one run burns in an hour. */
-  fuelPerHour: Schema.Finite,
-})
-
-/** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */
-export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes) })
-export type LaneReport = typeof LaneReport.Type
-type LaneAccount = typeof LaneAccount.Type
-type LaneWindow = typeof LaneWindow.Type
 
 /** A window's length from its name (`5h`, `7d`); none for a name with no unit. */
 const windowLengthMs = (window: string): Option.Option<number> => {
@@ -4018,6 +4021,42 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   >()
   /** provider, slot, window → its closed segments, oldest first. */
   const segments = new Map<string, ReadonlyArray<FuelSegment>>()
+  /** session → the provider and accounts its open turn spends from. */
+  const running = new Map<
+    SessionId,
+    { readonly provider: string; readonly scope: ReadonlyArray<CredentialSlot> }
+  >()
+  /** message key → a start admitted to a lane whose turn has not opened, until `until`. */
+  const reserved = new Map<
+    string,
+    {
+      readonly provider: string
+      readonly scope: ReadonlyArray<CredentialSlot>
+      readonly until: number
+    }
+  >()
+  /**
+   * The runs holding a lane on `provider` that share an account with
+   * `scope`; `asker`'s own open turn is left out.
+   */
+  const laneLoad = (
+    provider: string,
+    scope: ReadonlyArray<CredentialSlot>,
+    asker: Option.Option<SessionId>,
+    now: number,
+  ) => {
+    const shares = (held: {
+      readonly provider: string
+      readonly scope: ReadonlyArray<CredentialSlot>
+    }) => held.provider === provider && held.scope.some((slot) => scope.includes(slot))
+    let load = 0
+    for (const [sessionId, held] of running) {
+      if (Option.contains(asker, sessionId)) continue
+      if (shares(held)) load += 1
+    }
+    for (const held of reserved.values()) if (held.until > now && shares(held)) load += 1
+    return load
+  }
   /** Whether `slot` of `provider` is held for `model`'s runs: for all, or for that model. */
   const isHeld = (provider: string, slot: CredentialSlot, model: ModelId) =>
     held.has(placementKey(provider, slot)) || held.has(placementKey(provider, slot, model))
@@ -4262,7 +4301,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
     now: number,
-  ): typeof ProviderLanes.Type => {
+  ): ProviderLanes => {
     const fuelPerHour = FUEL_PER_LANE_HOUR_PRIOR
     const own = new Map<string, WindowFit>()
     const pooled = new Map<string, Array<FuelSegment>>()
@@ -4351,11 +4390,29 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       provider,
       scope: [...scope],
       accounts,
+      load: laneLoad(provider, scope, Option.none(), now),
       fuelPerHour,
       ...omitUndefined({
         capacity: Option.getOrUndefined(Option.filter(capacity, () => scoped.length > 0)),
       }),
     }
+  }
+  /**
+   * When a spent scope can carry a run again: the soonest account whose
+   * hold ends and whose windows short of a run have all reset.
+   */
+  const spentUntil = (lanes: ProviderLanes, now: number) => {
+    const ready = lanes.accounts
+      .filter((account) => lanes.scope.includes(account.slot))
+      .map((account) =>
+        Math.max(
+          held.get(placementKey(lanes.provider, account.slot)) ?? now,
+          ...account.windows
+            .filter((window) => (window.sustainable ?? 1) < 1)
+            .map((window) => window.resetAt),
+        ),
+      )
+    return Math.min(...ready)
   }
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
@@ -4439,7 +4496,55 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     }),
     release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {
-      yield* locked(() => unguard(sessionId))
+      yield* locked(() => {
+        unguard(sessionId)
+        running.delete(sessionId)
+      })
+    }),
+    admitLane: Effect.fn("CredentialPlacement.admitLane")(function* (request: LaneRequest) {
+      const now = yield* Clock.currentTimeMillis
+      const refusal = yield* locked((): Option.Option<LaneUnavailable> => {
+        trim(now)
+        for (const [key, held] of reserved) if (held.until <= now) reserved.delete(key)
+        // A start admitted again under its key keeps the lane it holds.
+        if (reserved.has(request.key)) return Option.none()
+        const lanes = providerLanes(request.provider, request.scope, now)
+        const load = laneLoad(request.provider, request.scope, request.asker, now)
+        const capacity = Option.fromUndefinedOr(lanes.capacity)
+        if (Option.isSome(capacity) && load >= capacity.value) {
+          let reason: LaneUnavailable["reason"] = "Busy"
+          let retryAt = now + LANE_BUSY_RETRY_MS
+          let message = `No lane on ${request.provider}: ${load} of ${capacity.value} lanes are running; one frees when a run ends`
+          if (capacity.value === 0) {
+            reason = "Spent"
+            retryAt = Math.max(spentUntil(lanes, now), retryAt)
+            message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
+          }
+          return Option.some(
+            new LaneUnavailable({
+              message,
+              provider: request.provider,
+              reason,
+              capacity: capacity.value,
+              load,
+              retryAt,
+            }),
+          )
+        }
+        reserved.set(request.key, {
+          provider: request.provider,
+          scope: request.scope,
+          until: now + LANE_RESERVATION_MS,
+        })
+        return Option.none()
+      })
+      if (Option.isSome(refusal)) return yield* refusal.value
+    }),
+    openLane: Effect.fn("CredentialPlacement.openLane")(function* (lane: OpenLane) {
+      yield* locked(() => {
+        reserved.delete(lane.key)
+        running.set(lane.sessionId, { provider: lane.provider, scope: lane.scope })
+      })
     }),
     noteQuota: Effect.fn("CredentialPlacement.noteQuota")(function* (quota: PlacementQuota) {
       const now = yield* Clock.currentTimeMillis

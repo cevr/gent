@@ -34,6 +34,7 @@ import {
   extensionServicesFromHostContext,
   type ExtensionFileLockServiceApi,
   type ExtensionExtensionsService,
+  type ExtensionAccountsService,
   type ExtensionModelsService,
   ExtensionHost,
   type ExtensionHostContext,
@@ -125,7 +126,11 @@ import {
   type ResolvedToolCapability,
   ToolRunner,
 } from "../runtime/tools.js"
-import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/turn.js"
+import {
+  type AgentLoopTurnProfile,
+  makeExtensionAccounts,
+  runAgentLoopTurnProfile,
+} from "../runtime/turn.js"
 import { isHostContextUpdate } from "../runtime/model-context.js"
 import { SessionRuntime } from "../runtime/session.js"
 import {
@@ -272,6 +277,12 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
   reload: () => die("Extensions.reload"),
 })
 
+/** A stub with no quota read: every run is admitted, and no provider has lanes. */
+const testExtensionAccounts = (): ExtensionAccountsService => ({
+  admit: () => Effect.void,
+  lanes: Effect.succeed({ providers: [] }),
+})
+
 /** A stub runtime with no classifier: none is available, and a decide dies. */
 const testExtensionModels = (): ExtensionModelsService => ({
   decide: () => die("Models.decide"),
@@ -292,6 +303,7 @@ export const testExtensionHostContext = (
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
   FileLock: overrides.FileLock ?? testExtensionFileLock(),
   Models: overrides.Models ?? testExtensionModels(),
+  Accounts: overrides.Accounts ?? testExtensionAccounts(),
   Extensions: overrides.Extensions ?? testExtensionExtensions(),
   State: overrides.State ?? (() => testExtensionState()),
   Wakes:
@@ -414,6 +426,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     Interaction: resolvedInteraction,
     FileLock: resolvedFileLock,
     Models: overrides?.Models ?? testExtensionModels(),
+    Accounts: overrides?.Accounts ?? testExtensionAccounts(),
     Extensions: overrides?.Extensions ?? testExtensionExtensions(),
     // The leaf reads the wake verbs from here, under its extension id.
     Wakes: () => ({ wakeAt: defaultSession().wakeAt, cancelWake: defaultSession().cancelWake }),
@@ -640,6 +653,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
   const hostProvider = yield* makeExtensionHostContextProvider({
     host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
     models: yield* makeExtensionModels,
+    accounts: yield* makeExtensionAccounts,
   })
   const turnProfile: AgentLoopTurnProfile = {
     turnGenerationId: profile.generationId,
@@ -672,6 +686,7 @@ export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function*
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts({ cwd: environment.cwd, home: environment.home }).host,
     models: yield* makeExtensionModels,
+    accounts: yield* makeExtensionAccounts,
     sessionControl: {
       queueFollowUp: (input) => queueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),

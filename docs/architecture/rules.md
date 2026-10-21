@@ -154,7 +154,7 @@ commit.
     that one layer.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
-    `FileLock`, `Models`, `Extensions`, `State`). An atomic write has one owner, `writeFileAtomic` in
+    `FileLock`, `Models`, `Accounts`, `Extensions`, `State`). An atomic write has one owner, `writeFileAtomic` in
     `packages/core/src/runtime/gent-platform.ts`; core config, extensions
     (through `@gent/core/extensions/api`) and the TUI (through
     `@gent/core/host`) all call it. Host facts core cannot get from

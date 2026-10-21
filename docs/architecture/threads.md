@@ -164,10 +164,12 @@
     `start`, `send`, `round`, `stop` and `subscribeRoundEnds`; the
     subscription is in memory, so after a restart a consumer reads its rows.
     A send it refuses fails with `ThreadBusy` (the open round), with
-    `ThreadsOverCap` (the threads at the running cap), or with the thread
-    loop's `FollowUpQueueFull`, so a sender that is not a model turn waits on
-    the first two and fails on the rest; the tools wrap the first two in a
-    `ThreadError` with the same words, which is the text the model reads.
+    `ThreadsOverCap` (the threads at the running cap), with
+    `LaneUnavailable` (the account has no lane: `Busy` or `Spent`, with its
+    `retryAt`), or with the thread loop's `FollowUpQueueFull`, so a sender
+    that is not a model turn waits on the first three and fails on the rest;
+    the tools wrap the first three in a `ThreadError` with the same words,
+    which is the text the model reads.
     A deleted session's `sessionDeleted` drops the rounds it ran; the rounds
     it sent stay, since the starter's thread owns them and its handoffs read
     and hear them.
@@ -208,7 +210,15 @@
     running thread spends the user's money): the count is read under one permit per server
     before a start makes its session, so a start with a task past the cap
     makes no session and names the threads that run, and again in the claim's
-    transaction, the read the table holds to. The transcript shows a round's message without its
+    transaction, the read the table holds to. Under the same permit, after
+    the cap, the account admits the round (`ExtensionContext.Accounts.admit`,
+    keyed by the round's message id, with the thread session's cwd, admission
+    and model): a full account refuses it as `Busy`, a spent one (capacity 0) as `Spent`, and a start it refuses makes no session and no copy (a
+    snapshot start asks before its copy too). An account whose capacity is
+    not read admits every round; the caller's own running turn holds no lane
+    against it. Its lane frees when the round's turn ends, before its
+    `turnAfter` hooks, so a round sent as an end is heard finds the lane
+    free (credentials.md, Account lanes). The transcript shows a round's message without its
     source line on a muted `» task from session` row (another session wrote
     it, so it never takes the reader's rail). The starter's interrupt stops
     only its `starter` rounds (the cascade above); a `user` thread runs on,

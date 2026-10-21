@@ -31,6 +31,7 @@ import {
   AuthMethod,
   CredentialOrder,
   DriverError,
+  LaneReport,
   ProviderAuthError,
 } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
@@ -40,7 +41,6 @@ import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
   AuthProviderInfo,
-  LaneReport,
   ListAuthProvidersPayload,
 } from "../runtime/provider.js"
 import {

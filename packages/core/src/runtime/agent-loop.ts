@@ -125,6 +125,7 @@ import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
   makeAgentLoopTurnExecution,
+  makeExtensionAccounts,
   makeTurnLedger,
   runAgentLoopTurnProfile,
   turnRegistry,
@@ -2067,6 +2068,7 @@ const makeAgentLoopBehavior = (
     const hostProvider = yield* makeExtensionHostContextProvider({
       host,
       models: yield* makeExtensionModels,
+      accounts: yield* makeExtensionAccounts,
       sessionControl: {
         queueFollowUp: (
           input,

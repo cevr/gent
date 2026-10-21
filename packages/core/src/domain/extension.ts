@@ -40,6 +40,8 @@ import {
 } from "./capability.js"
 import type {
   ApiClassContribution,
+  LaneReport,
+  LaneUnavailable,
   ModelDriverContribution,
   ModelRouterContribution,
 } from "./driver.js"
@@ -1391,6 +1393,37 @@ export interface ExtensionModelsService {
 }
 
 /**
+ * The run a lane is asked for: the turns a session with `admission` and
+ * `modelId` in `cwd` runs, a new one's or an existing session's own
+ * settings, and the message whose turn takes the lane.
+ */
+export interface LaneRun {
+  readonly message: MessageId
+  readonly cwd: string
+  readonly admission?: SessionAdmission
+  readonly modelId?: ModelId
+}
+
+/**
+ * The server's accounts: how many runs their quota windows carry. A run
+ * that starts other runs asks for their lanes here, as threads do.
+ */
+export interface ExtensionAccountsService {
+  /**
+   * Admit `run` to a lane of the sign-in its turns spend from, over the
+   * accounts they share (a pinned run's pin, else the pool, else the
+   * order's first credential). Fails `LaneUnavailable` when the runs that
+   * hold a lane there reach what the accounts' quota windows carry; the
+   * asking session's own turn holds none against it. An admitted start
+   * holds its lane until the turn of `message` opens, or 2 minutes pass. A
+   * sign-in that reported no quota window admits every run.
+   */
+  readonly admit: (run: LaneRun) => Effect.Effect<void, LaneUnavailable>
+  /** Each provider's lanes, as `accounts.lanes` reports them. */
+  readonly lanes: Effect.Effect<LaneReport>
+}
+
+/**
  * The extensions of the run's profile: what each is now, and a reload. Any
  * extension gets it, so an agent can write an extension, read whether it
  * loaded, and reload one, while gent runs.
@@ -1450,6 +1483,7 @@ export interface ExtensionHostContext {
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
+  readonly Accounts: ExtensionAccountsService
   readonly Extensions: ExtensionExtensionsService
   /** Reports under the leaf's extension id, which a run does not know. */
   readonly State: ExtensionStateFacet
@@ -1469,6 +1503,7 @@ export interface ExtensionContextService {
   readonly Interaction: ExtensionInteractionService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly Models: ExtensionModelsService
+  readonly Accounts: ExtensionAccountsService
   readonly Extensions: ExtensionExtensionsService
   readonly State: ExtensionStateServiceApi
 }
@@ -1508,6 +1543,7 @@ export const extensionServicesFromHostContext = (
       Interaction: ctx.Interaction,
       FileLock: ctx.FileLock,
       Models: ctx.Models,
+      Accounts: ctx.Accounts,
       Extensions: ctx.Extensions,
       State: ctx.State(extensionIdOption),
     }),

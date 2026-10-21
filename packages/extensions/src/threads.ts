@@ -65,6 +65,7 @@ import {
   headChars,
   headTailChars,
   initialSessionMetrics,
+  LaneUnavailable,
   latestAssistantText,
   MessageId,
   ModelId,
@@ -185,9 +186,9 @@ export class ThreadsOverCap extends Schema.TaggedError<
 }) {}
 
 /**
- * Every fault behind the facade is one caller-facing error. A busy thread
- * and the cap keep their own words: the model reads them as before, as a
- * `ThreadError`, and the service's callers get the typed refusal.
+ * Every fault behind the facade is one caller-facing error. A busy thread,
+ * the cap and a full account keep their own words: the model reads them as
+ * before, as a `ThreadError`, and the service's callers get the typed refusal.
  */
 const asThreadError = (what: string) =>
   Effect.mapError(
@@ -201,10 +202,15 @@ const asThreadError = (what: string) =>
         | WorkspaceError
         | ThreadBusy
         | ThreadsOverCap
+        | LaneUnavailable
         | ThreadError,
     ) => {
       if (Schema.is(ThreadError)(cause)) return cause
-      if (Schema.is(ThreadBusy)(cause) || Schema.is(ThreadsOverCap)(cause)) {
+      if (
+        Schema.is(ThreadBusy)(cause) ||
+        Schema.is(ThreadsOverCap)(cause) ||
+        Schema.is(LaneUnavailable)(cause)
+      ) {
         return new ThreadError({ message: cause.message, cause })
       }
       return new ThreadError({ message: `${what}: ${cause.message}`, cause })
@@ -2126,6 +2132,22 @@ const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number)
   return yield* capRefusal(busy)
 })
 
+/** The session settings a round's run reads its account from. */
+type RoundLane = Pick<StoredSession, "cwd" | "admission" | "modelId">
+
+/**
+ * The account admits the round's run to a lane, or refuses it as busy or
+ * spent. The lane is held under the round's message until its turn opens.
+ */
+const admitLane = Effect.fn("Threads.admitLane")(function* (roundId: string, lane: RoundLane) {
+  const ctx = yield* ExtensionContext
+  yield* ctx.Accounts.admit({
+    message: roundMessageId(roundId),
+    cwd: lane.cwd ?? ctx.cwd,
+    ...omitUndefined({ admission: lane.admission, modelId: lane.modelId }),
+  })
+})
+
 interface RoundRequest {
   readonly thread: SessionId
   readonly place: Place
@@ -2142,16 +2164,17 @@ const roundIdOf = Effect.fn("Threads.roundIdOf")(function* (kind: string, key: s
 })
 
 /**
- * Admits one round under the cap. A retry under the same key is handed the
- * round it admitted before any refusal applies, and is sent only when its
- * first call never admitted it (a crash between the row and the send).
- * `request` runs under the permit after the cap check, so a start makes its
- * session only when the cap admits it, and two calls in one model step
- * cannot both take the last place.
+ * Admits one round under the cap and its account's lanes. A retry under the
+ * same key is handed the round it admitted before any refusal applies, and
+ * is sent only when its first call never admitted it (a crash between the
+ * row and the send). `request` runs under the permit after the cap and lane
+ * checks, so a start makes its session only when both admit it, and two
+ * calls in one model step cannot both take the last place.
  */
 const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
   kind: string,
   key: string,
+  lane: RoundLane,
   request: Effect.Effect<RoundRequest, E, R>,
 ) {
   const ctx = yield* ExtensionContext
@@ -2171,6 +2194,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
         return RoundClaim.cases.Ready.make({ round: retry.value, fresh: false })
       }
       yield* refuseOverCap(cap)
+      yield* admitLane(roundId, lane)
       const input = yield* request
       return yield* rounds.claimRound({
         round: roundId,
@@ -2318,13 +2342,21 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
   const cwd = Option.map(Option.fromUndefinedOr(input.cwd), (dir) => path.resolve(ctx.cwd, dir))
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      // A start with a task is refused past the cap before its copy is made;
-      // a retry has its round already, and the cap does not apply to it.
+      const admission = threadAdmission(starter, input)
+      const route = threadRoute(starter, input)
+      const lane = (at: Option.Option<string>): RoundLane => ({
+        admission,
+        ...omitUndefined({ cwd: Option.getOrUndefined(at), modelId: route.modelId }),
+      })
+      // A start with a task is refused past the cap or a full account before
+      // its copy is made; a retry has its round already, and neither applies.
       const precheck = Effect.gen(function* () {
         if (Option.isNone(task)) return
         const rounds = yield* ThreadRounds
-        if (Option.isSome(yield* rounds.round(yield* roundIdOf("thread.start", input.key)))) return
+        const roundId = yield* roundIdOf("thread.start", input.key)
+        if (Option.isSome(yield* rounds.round(roundId))) return
         yield* refuseOverCap(yield* runningCap())
+        yield* admitLane(roundId, lane(cwd))
       })
       // `{ snapshot: true }` is the one workspace a start names today.
       const snapshot = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
@@ -2341,9 +2373,9 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
       const create = ctx.Session.create({
         name: threadName(input),
         parentBranchId: ctx.branchId,
-        admission: threadAdmission(starter, input),
+        admission,
         ...omitUndefined({
-          ...threadRoute(starter, input),
+          ...route,
           cwd: Option.getOrUndefined(
             Option.orElse(
               Option.map(snapshot, (found) => found.place.cwd),
@@ -2379,6 +2411,12 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
           admitRound(
             "thread.start",
             input.key,
+            lane(
+              Option.orElse(
+                Option.map(snapshot, (found) => found.place.cwd),
+                () => cwd,
+              ),
+            ),
             Effect.map(create, (created) => ({
               thread: created.sessionId,
               place: created,
@@ -2460,6 +2498,7 @@ const sendToThread = Effect.fn("Threads.send")(function* (input: ThreadSendInput
   const admitted = yield* admitRound(
     "thread.send",
     input.key,
+    found.current,
     Effect.map(workPlaceOf(found.current.id), (workPlace) => ({
       thread: found.thread,
       place: place.value,

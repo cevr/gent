@@ -1,7 +1,9 @@
 import { describe, expect, it } from "effect-bun-test"
 import { flow } from "effect/Function"
 import {
+  Clock,
   Context,
+  DateTime,
   Deferred,
   Effect,
   Fiber,
@@ -29,9 +31,12 @@ import {
   ExtensionServiceError,
   FollowUpQueueFull,
   getToolId,
+  LaneUnavailable,
   messagePartsDisplayText,
   type ModelPricing,
   omitUndefined,
+  type QuotaReading,
+  reportProviderQuota,
   sessionThread,
   tool,
 } from "@gent/core/extensions/api"
@@ -122,7 +127,12 @@ const reply = (text: string, usage: Option.Option<StepUsage> = Option.none()) =>
 
 /** One thread-tool call a scripted model step makes. */
 interface ThreadOp {
-  readonly tool: "thread.start" | "thread.list" | "thread.stop" | "thread.send"
+  readonly tool:
+    | "thread.start"
+    | "thread.list"
+    | "thread.stop"
+    | "thread.send"
+    | "probe.lane-on-end"
   readonly input: Record<string, string | boolean>
   readonly id: string
 }
@@ -134,7 +144,13 @@ interface ThreadOpResult {
   readonly output: string
 }
 
-const THREAD_TOOLS = new Set(["thread.start", "thread.list", "thread.stop", "thread.send"])
+const THREAD_TOOLS = new Set([
+  "thread.start",
+  "thread.list",
+  "thread.stop",
+  "thread.send",
+  "probe.lane-on-end",
+])
 
 const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
 const StartedOutput = Schema.fromJsonString(StartedResult)
@@ -171,17 +187,26 @@ const accountsRig = (options: RigAccounts) =>
     const scripted = new Map<string, ReadonlyArray<ThreadOp>>()
     const usage = Option.fromUndefinedOr(options.usage)
     let threadRequestCount = 0
+    let starterRequestCount = 0
+    const reportQuota = (step: number) =>
+      Option.match(Option.fromUndefinedOr(options.quota), {
+        onNone: () => Effect.void,
+        onSome: (quota) => reportProviderQuota(quota(step)),
+      })
     const providerLayer = LanguageModelLayers.testStream((request) => {
       if (isThreadRequest(request.prompt)) {
         threadRequestCount += 1
         return Deferred.await(gate).pipe(Effect.as(reply("THREAD-REPLY: changelog tidied", usage)))
       }
+      starterRequestCount += 1
+      const quota = reportQuota(starterRequestCount)
       if (request.prompt.content.at(-1)?.role === "tool") {
-        return Effect.succeed(reply("noted", usage))
+        return Effect.as(quota, reply("noted", usage))
       }
       const ops = scripted.get(userTexts(request.prompt).at(-1) ?? "") ?? []
-      if (ops.length === 0) return Effect.succeed(reply("nothing to do", usage))
-      return Effect.succeed(
+      if (ops.length === 0) return Effect.as(quota, reply("nothing to do", usage))
+      return Effect.as(
+        quota,
         Stream.fromIterable([
           ...ops.map((op) =>
             toolCallPart(op.tool, op.input, { toolCallId: ToolCallId.make(op.id) }),
@@ -199,7 +224,7 @@ const accountsRig = (options: RigAccounts) =>
       ...e2ePreset,
       cwd,
       providerLayer,
-      extensionInputs: [AgentsExtension, SessionToolsExtension],
+      extensionInputs: [AgentsExtension, SessionToolsExtension, ...(options.extensions ?? [])],
       ...omitUndefined({
         modelPricing: options.pricing,
         configServiceLayer: Option.getOrUndefined(
@@ -293,6 +318,66 @@ const accountsRig = (options: RigAccounts) =>
     }
   })
 
+/**
+ * Holds each thread round's turn in its `turnAfter`, after the threads' own
+ * hook heard the round's end and before the turn exits, until `hold` opens.
+ * Its tool sends `first` a round, sends `second` one beside it, and sends
+ * `second` one again as `first`'s end is heard, then opens `hold`.
+ */
+const LaneOutcome = Schema.Literals(["sent", "busy", "spent", "other"])
+type LaneOutcome = typeof LaneOutcome.Type
+const LaneOnEnd = Schema.Struct({ beside: LaneOutcome, onEnd: LaneOutcome })
+const decodeLaneOnEnd = Schema.decodeEffect(Schema.fromJsonString(LaneOnEnd))
+
+const laneOutcome = <A, E, R>(send: Effect.Effect<A, E, R>) =>
+  send.pipe(
+    Effect.match({
+      onSuccess: (): LaneOutcome => "sent",
+      onFailure: (error): LaneOutcome => {
+        if (!Schema.is(LaneUnavailable)(error)) return "other"
+        if (error.reason === "Spent") return "spent"
+        return "busy"
+      },
+    }),
+  )
+
+const laneProbe = (hold: Deferred.Deferred<void>) =>
+  defineExtension({
+    id: "threads-lane-probe",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      yield* host.register(
+        "tool",
+        tool({
+          id: "probe.lane-on-end",
+          description: "Send two threads rounds around the first one's end.",
+          params: Schema.Struct({ first: SessionId, second: SessionId }),
+          output: LaneOnEnd,
+          execute: Effect.fn("LaneOnEnd.execute")(function* (params) {
+            const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
+            const send = (thread: SessionId, key: string) =>
+              threads.send({ thread, message: THREAD_TASK, key, notify: "none" })
+            return yield* Effect.scoped(
+              Effect.gen(function* () {
+                const ends = yield* threads.subscribeRoundEnds
+                const sent = yield* send(params.first, "lane-first")
+                const beside = yield* laneOutcome(send(params.second, "lane-beside"))
+                let ended = yield* PubSub.take(ends)
+                while (ended.round !== sent.round) ended = yield* PubSub.take(ends)
+                const onEnd = yield* laneOutcome(send(params.second, "lane-on-end"))
+                return { beside, onEnd }
+              }),
+            ).pipe(Effect.ensuring(Deferred.succeed(hold, void 0)))
+          }),
+        }),
+      )
+      yield* host.on("turnAfter", (input) => {
+        if (!input.messageId.startsWith("thread-round:")) return Effect.void
+        return Deferred.await(hold)
+      })
+    }),
+  })
+
 /** The `anthropic` sign-in a rig's turns walk, and what each step costs; default: neither. */
 interface RigAccounts {
   readonly order?: {
@@ -301,6 +386,9 @@ interface RigAccounts {
   }
   readonly pricing?: ModelPricing
   readonly usage?: StepUsage
+  /** The quota windows the starter's `step`-th request names; threads' requests name none. */
+  readonly quota?: (step: number) => ReadonlyArray<QuotaReading>
+  readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
 }
 
 const threadRig = accountsRig({})
@@ -647,6 +735,155 @@ describe("threads", () => {
               account: a,
               placement: "walked",
             })
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+  })
+
+  describe("account lanes", () => {
+    const work = CredentialSlot.make("work")
+    // A thousand input tokens at $5,000 per million: $5, one million fuel,
+    // a step small enough that the window never fills.
+    const metered = {
+      order: { authOrder: [work] },
+      pricing: { input: 5_000, output: 5_000 },
+      usage: { inputTokens: 1_000, outputTokens: 0 },
+    }
+    /**
+     * The starter's first step reads the week at 10% and every later one at
+     * 11%: one million fuel per point, 89 points left and 20 hours to the
+     * reset carry 1.3 runs at the prior's 3.4 M fuel per run-hour, one lane.
+     */
+    const oneLane = (now: number) => (step: number) => [
+      {
+        window: "7d",
+        utilization: Option.getOrElse(
+          Option.liftPredicate(0.1, () => step === 1),
+          () => 0.11,
+        ),
+        resetAt: now + 20 * 3_600_000,
+        rejected: false,
+      },
+    ]
+    type LaneRig = Effect.Success<ReturnType<typeof accountsRig>>
+    const lanesOf = (rig: LaneRig) =>
+      Effect.map(rig.client.accounts.lanes(), ({ providers }) => providers[0])
+    const loadIs = (rig: LaneRig, load: number, label: string) =>
+      waitFor(lanesOf(rig), (lanes) => lanes?.load === load, 4_000, label)
+
+    it.live(
+      "a start on an account whose window is rejected is refused before its thread exists",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const resetAt = now + 3_600_000
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: () => [{ window: "5h", utilization: 1, resetAt, rejected: true }],
+            })
+            yield* Deferred.succeed(rig.gate, true)
+            const [started] = yield* rig.act(rig.starter, [
+              rig.op("thread.start", { task: THREAD_TASK }),
+            ])
+            expect(started?.ok).toBe(false)
+            expect(started?.output).toContain(
+              `No lane on anthropic: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(resetAt))}`,
+            )
+            expect(yield* rig.threadRequests).toBe(0)
+            expect(yield* rig.list(rig.starter)).toEqual([])
+            expect((yield* lanesOf(rig))?.capacity).toBe(0)
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a full account refuses a second round while one runs, and a round sent as the first one's end is heard takes its lane",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const hold = yield* Deferred.make<void>()
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: oneLane(now),
+              extensions: [laneProbe(hold)],
+            })
+            yield* Deferred.succeed(rig.gate, true)
+            // Two idle threads: a start with no task runs nothing and takes no lane.
+            const results = yield* rig.act(rig.starter, [
+              rig.op("thread.start", { name: "first" }),
+              rig.op("thread.start", { name: "second" }),
+            ])
+            const [first, second] = yield* Effect.forEach(results, (result) => {
+              if (!result.ok) return Effect.die(`thread.start failed: ${result.output}`)
+              return decodeStarted(result.output)
+            })
+            if (Predicate.isUndefined(first) || Predicate.isUndefined(second)) {
+              return yield* Effect.die("two threads were not started")
+            }
+            expect(yield* lanesOf(rig)).toMatchObject({ scope: [work], capacity: 1, load: 0 })
+            // The starter's own turn runs the probe and holds no lane against it.
+            const probed = yield* rig.one(
+              rig.starter,
+              rig.op("probe.lane-on-end", { first: first.thread, second: second.thread }),
+            )
+            expect(yield* decodeLaneOnEnd(probed)).toEqual({ beside: "busy", onEnd: "sent" })
+            yield* waitFor(
+              rig.threadRequests,
+              (sent) => sent >= 2,
+              4_000,
+              "the second thread's round",
+            )
+            yield* loadIs(rig, 0, "every lane is free once the rounds end")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a thread deleted while its round runs frees the round's lane",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
+            // The gate stays shut: the round runs until its session goes.
+            const running = yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            yield* loadIs(rig, 1, "the round holds the lane")
+            // The delete ends the loop under the turn: its end is never heard.
+            yield* rig.client.session.delete({ sessionId: running.sessionId })
+            yield* loadIs(rig, 0, "the delete frees the lane")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a stopped round frees its lane for the next start",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({ ...metered, quota: oneLane(now) })
+            // The gate stays shut: the round runs until it is stopped.
+            const running = yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            yield* loadIs(rig, 1, "the round holds the lane")
+            const [refused] = yield* rig.act(rig.starter, [
+              rig.op("thread.start", { task: THREAD_TASK }),
+            ])
+            expect(refused?.ok).toBe(false)
+            expect(refused?.output).toContain("No lane on anthropic: 1 of 1 lanes are running")
+            yield* rig.stop(rig.starter, running.thread)
+            yield* loadIs(rig, 0, "the stop frees the lane")
+            yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 2, 4_000, "the next round runs")
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "every lane is free once the rounds end")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,

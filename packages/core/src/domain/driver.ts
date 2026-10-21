@@ -665,6 +665,85 @@ export const reportProviderQuota = (readings: ReadonlyArray<QuotaReading>): Effe
   return reportToLoop((listener) => listener.quota(readings))
 }
 
+// ── Account lanes ──
+
+/** One quota window of one account, as `accounts.lanes` reports it. */
+export const LaneWindow = Schema.Struct({
+  window: Schema.String,
+  /** The fraction used at the last reading; 0 once its reset passed. */
+  utilization: Schema.Finite,
+  resetAt: Schema.Finite,
+  readAt: Schema.Finite,
+  rejected: Schema.Boolean,
+  /** Fuel per percentage point of this window, its own, else the provider's over every account. */
+  fuelPerPct: Schema.optionalKey(Schema.Finite),
+  /** The rate's relative uncertainty from the 1% steps: 1 / the points its segments moved. */
+  band: Schema.optionalKey(Schema.Finite),
+  /** The segments the rate reads. */
+  samples: Schema.Int,
+  /** The share of the window's move no fuel of gent's explains: spend outside gent. */
+  outsideShare: Schema.Finite,
+  /** The runs the window can carry until its reset; none without a rate. */
+  sustainable: Schema.optionalKey(Schema.Finite),
+})
+
+/** One account of a provider. */
+export const LaneAccount = Schema.Struct({
+  slot: CredentialSlot,
+  windows: Schema.Array(LaneWindow),
+  /** Held by a refusal or a rejected window: it carries no run now. */
+  held: Schema.Boolean,
+  /** The fewest runs any of its windows can carry; none when a window has no rate or nothing was read. */
+  sustainable: Schema.optionalKey(Schema.Finite),
+})
+
+/** One provider's lanes. */
+export const ProviderLanes = Schema.Struct({
+  provider: Schema.String,
+  /** The accounts an unpinned run spends from: the pool, else the order's first. */
+  scope: Schema.Array(CredentialSlot),
+  accounts: Schema.Array(LaneAccount),
+  /**
+   * Whole runs the scope's accounts can carry: the sum of each account's
+   * fewest over its windows. None until every account of the scope has a
+   * reading and a rate.
+   */
+  capacity: Schema.optionalKey(Schema.Int),
+  /**
+   * The runs that hold a lane on the scope's accounts now: turns open on
+   * them, and starts admitted whose turn has not opened yet.
+   */
+  load: Schema.Int,
+  /** The fuel one run burns in an hour. */
+  fuelPerHour: Schema.Finite,
+})
+
+/** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */
+export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes) })
+export type LaneReport = typeof LaneReport.Type
+export type LaneAccount = typeof LaneAccount.Type
+export type LaneWindow = typeof LaneWindow.Type
+export type ProviderLanes = typeof ProviderLanes.Type
+
+/**
+ * A run refused a lane at admission: the provider's accounts carry no more
+ * runs now. `Busy`: every lane is held by a run; one frees when a run ends.
+ * `Spent`: the quota windows carry no run until one resets (or a refusal's
+ * hold ends). `retryAt` is the next useful admission check (epoch ms), never
+ * a promise of a lane.
+ */
+export class LaneUnavailable extends Schema.TaggedError<
+  LaneUnavailable,
+  { readonly brand: unique symbol }
+>()("LaneUnavailable", {
+  message: Schema.String,
+  provider: Schema.String,
+  reason: Schema.Literals(["Busy", "Spent"]),
+  capacity: Schema.Int,
+  load: Schema.Int,
+  retryAt: Schema.Finite,
+}) {}
+
 /**
  * Stop reasons that say the context window filled while the model wrote:
  * the reply is cut, and the same window has no room to continue it.

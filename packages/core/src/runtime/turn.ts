@@ -86,8 +86,10 @@ import {
   Stream,
 } from "effect"
 import type {
+  ExtensionAccountsService,
   ExtensionHostContext,
   ExtensionModelsService,
+  LaneRun,
   TurnNotice,
   TurnProjection,
 } from "../domain/extension.js"
@@ -103,6 +105,7 @@ import {
   resolveParentBound,
   type ResourceBuildInputs,
   RunOpener,
+  SessionProfileCache,
 } from "./extension-host.js"
 import type * as Response from "effect/ai/Response"
 import * as AiError from "effect/ai/AiError"
@@ -177,6 +180,7 @@ import {
 import { ConfigService, RuntimeEnvironment, type UserConfig } from "./config.js"
 import { type AgentLoopError, asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
+  credentialLane,
   CredentialPlacement,
   driverCacheWritesByLifetime,
   driverRetryPolicy,
@@ -1704,6 +1708,108 @@ export const routeCredentialDriver = (
       },
     ),
   )
+
+/**
+ * The lane a session's turns take: the sign-in their route spends from and
+ * the accounts it is counted over, as `resolveSessionRoute` routes a turn of
+ * a session with `admission` and `modelId` in `cwd`. None for a route with
+ * no model, or a sign-in whose order does not read.
+ */
+const sessionLane = Effect.fn("TurnHelpers.sessionLane")(function* (run: {
+  readonly cwd: Option.Option<string>
+  readonly admission: Option.Option<SessionAdmission>
+  readonly modelId: Option.Option<ModelId>
+}) {
+  const registry = yield* ExtensionRegistry
+  const config = yield* (yield* ConfigService).get(Option.getOrUndefined(run.cwd))
+  const route = resolveSessionRoute({
+    agents: [...registry.getResolved().agents.values()],
+    admission: run.admission,
+    config,
+    session: omitUndefined({ modelId: Option.getOrUndefined(run.modelId) }),
+  })
+  const driverId = routeCredentialDriver(route, registry.getResolved())
+  if (Option.isNone(driverId)) return Option.none()
+  const pin = Option.flatMap(run.admission, (admission) =>
+    Option.fromUndefinedOr(admission.runSpec?.credentialSlot),
+  )
+  return yield* credentialLane(driverId.value, pin, registry)
+})
+
+/**
+ * A turn of `sessionId` runs: its admission becomes the session's running
+ * lane, counted against the account until the turn's end is heard. A lane
+ * that does not read leaves the turn uncounted; it never fails the turn.
+ */
+const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
+  readonly sessionId: SessionId
+  readonly messageId: MessageId
+}) {
+  const session = yield* (yield* SessionStorage).getSession(params.sessionId)
+  if (Predicate.isUndefined(session)) return
+  const lane = yield* sessionLane({
+    cwd: Option.fromUndefinedOr(session.cwd),
+    admission: Option.fromUndefinedOr(session.admission),
+    modelId: Option.fromUndefinedOr(session.modelId),
+  })
+  if (Option.isNone(lane)) return
+  yield* (yield* CredentialPlacement).openLane({
+    sessionId: params.sessionId,
+    key: params.messageId,
+    provider: lane.value.provider,
+    scope: lane.value.scope,
+  })
+})
+
+/**
+ * The accounts facet over the server's placement, for the runs of one
+ * session. It admits a run to a lane of the sign-in its route spends from,
+ * as the profile and config of the run's cwd route it, and the asking
+ * session's own turn holds no lane against it. Its lanes read the host
+ * cwd's profile, as `accounts.lanes` does.
+ */
+export const makeExtensionAccounts = Effect.gen(function* () {
+  const placement = yield* CredentialPlacement
+  const configService = yield* ConfigService
+  const profiles = yield* SessionProfileCache
+  const { cwd: hostCwd } = yield* RuntimeEnvironment
+  const lanes = Effect.scoped(
+    Effect.gen(function* () {
+      const { registryService } = yield* profiles.resolve(hostCwd)
+      return yield* placement.lanes((provider) =>
+        Effect.map(
+          credentialLane(provider, Option.none(), registryService),
+          Option.map((lane) => lane.scope),
+        ),
+      )
+    }),
+  )
+  return (asker: SessionId): ExtensionAccountsService => ({
+    admit: Effect.fn("ExtensionAccounts.admit")(function* (run: LaneRun) {
+      const lane = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { registryService } = yield* profiles.resolve(run.cwd)
+          return yield* sessionLane({
+            cwd: Option.some(run.cwd),
+            admission: Option.fromUndefinedOr(run.admission),
+            modelId: Option.fromUndefinedOr(run.modelId),
+          }).pipe(
+            Effect.provideService(ExtensionRegistry, registryService),
+            Effect.provideService(ConfigService, configService),
+          )
+        }),
+      )
+      if (Option.isNone(lane)) return
+      yield* placement.admitLane({
+        provider: lane.value.provider,
+        scope: lane.value.scope,
+        key: run.message,
+        asker: Option.some(asker),
+      })
+    }),
+    lanes,
+  })
+})
 
 /** The agent a session's turns run as, by name; the default when the session names none. */
 export const sessionAgentName = Effect.fn("TurnHelpers.sessionAgentName")(function* (
@@ -5478,6 +5584,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const emitTurnAfter = Effect.fn("AgentLoop.emitTurnAfter")(function* (
       params: TurnEnd & TurnReceipt & { readonly agentName: AgentNameType },
     ) {
+      // The lane frees before the end is heard: a round that starts on the
+      // end finds the account's load without this turn.
+      yield* placement.release(scope.sessionId)
       const extensionRegistry = yield* ExtensionRegistry
       // A turn that did not answer read none of its notices: they show again.
       const answered = !(params.turnInterrupted || params.streamFailed || params.unanswered)
@@ -6516,6 +6625,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
 
       return yield* Effect.gen(function* () {
+        yield* openTurnLane({ sessionId: scope.sessionId, messageId: state.message.id }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("turn lane not opened").pipe(
+              Effect.annotateLogs({ error: String(error) }),
+            ),
+          ),
+        )
         yield* persistMessageReceived({ message: state.message })
         yield* scope.inbox.settle(state.message.id)
 

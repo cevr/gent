@@ -32,6 +32,7 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
+  type ExtensionAccountsService,
   type ExtensionModelsService,
   type ExtensionHook,
   ExtensionHost,
@@ -4041,6 +4042,12 @@ interface ExtensionHostContextInput {
    * (`makeExtensionModels`), which this module cannot import.
    */
   readonly models: ExtensionModelsService
+  /**
+   * The accounts facet for the run of a session, built by the caller over
+   * `CredentialPlacement` and the route resolver (`makeExtensionAccounts`),
+   * which this module cannot import.
+   */
+  readonly accounts: (sessionId: SessionId) => ExtensionAccountsService
   /** The loop's follow-up queue. Absent outside a loop. */
   readonly sessionControl?: ExtensionSessionControlService
 }
@@ -4390,6 +4397,7 @@ export const makeExtensionHostContextProvider = (
       host,
       FileLock,
       Models: input.models,
+      Accounts: input.accounts(runInfo.sessionId),
       Extensions: extensionsFacet(runInfo.sessionCwd ?? environment.cwd),
 
       State: ((extensionId) =>
