@@ -163,7 +163,15 @@ One sketch (Codex, `8fb974f0d`, session scratchpad `stage4-sketch-codex.md`); th
 - **bash `permit`:** a foreground run holds it until its process group is gone (a timeout does not release it while cleanup runs); a background run holds it in its supervisor's job fiber, past its turn.
 - **`main-red` is not a permit.** It outlives processes and is released by a CI result, so it is a durable integration record per repository and ref (`clear → integrating → awaiting-ci → red → awaiting-ci → clear`), owned by an extension, read with `gh` on a schedule, cleared only by success for the recorded SHA on every required workflow. A short `integration:<repo>:<ref>` permit serializes changes to the record.
 - **P6 binding** reuses `Threads.start`'s cwd seam: prepare the copy, create the session with the final cwd, bind, then send. A refused start leaves no Rift; the lane is held through preparation. **Rift removal waits on the Rift backend:** gent never removes a Rift today because no backend call checks an expected copy id and no descendants under Rift's own lock (`workspaces.ts:362-374`; rift-snapshot `RemoveOptions`). That contract is an upstream change in the owned `rift` library first.
-- **Order:** (1) permits, (2) bash permits and the machines map, (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding. The Claude sketch covers 3-5 before they start.
+- **Window per role** ([context-mileage-2026-10-21.md](context-mileage-2026-10-21.md) requirement 6, folded in 2026-10-21). The burn cycle reads a tuned compaction window for each role. In gent a role is the agent name plus root or child (`resolved.child`).
+  - The tuned window only lowers the user's window. The effective window is the smaller of the tuned value and the user's window (`agent.contextLength`, else the catalog). `modelWindow` (`turn.ts:3382`) is the one read site.
+  - The tuner replays the week's stored sessions through gent's own projection (`projectContextWindow`), with each session's compactions undone, at 100k to 350k. A compaction costs its summary call, the cache restart and the reads after it of files read before it (about 20k tokens, measured in Claude Code). The tuner needs 20 agents of a role and takes the largest window within 1% of the cheapest. It runs daily from the kernel's scheduler, and it writes one durable row per role.
+  - A root compacts at a turn boundary, not in the middle of a step. A child compacts per step as today (requirement 7 later hands it off instead).
+  - The compaction prompt keeps the paths of the plan, log and state files, the current step and the user's instructions.
+  - Lanes and placement estimate a unit's fuel from its role's window, so admission sees the lower burn.
+  - Starting values (dotfiles `budget.ts --tune`, c8a469f, measured): orchestrate-worker 140k, general-purpose and root 200k.
+  - Accept: requirement 6's measures (mean context per worker call under 130k; the re-read share and the gate failures per unit do not rise).
+- **Order:** (1) permits, (2) bash permits and the machines map, (2b) the window per role (a sketch first, because the tuned-window row is a new seam), (3) the integration gate, then the Rift removal contract upstream, then (4) workspaces and (5) threads binding. The Claude sketch covers 3-5 before they start.
 
 ### P5. Accounts
 
