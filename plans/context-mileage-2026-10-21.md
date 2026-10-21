@@ -140,16 +140,20 @@ once it has passed (B2).
     window, so the pace and the lanes stay one calculation. Accept: with one
     Anthropic and one ChatGPT account, the pool's free lanes add both, and a
     spent ChatGPT window refuses only ChatGPT models.
-12. **Role fit per model.** Each machine state kind (planner, implementer,
-    reviewer, verifier) keeps a fit per model from its finished units: cost
-    (fuel per unit, from 10), quality (review verdicts, verify pass rate, gate
-    failures, rounds to accept) and efficiency (W per unit, steps per unit).
-    Placement picks the model with the best quality per fuel that has a free
-    lane, and a state's own model setting still wins. The `/agents` view and
-    `machine.status` show the fit per state. Accept: on a replay of recorded
-    units, the pick for each state matches the owner's pick or names the
-    measure that differs, and no state picks a model with fewer than 10
-    finished units of that kind.
+12. **Model tier per role.** Intelligence is hard to measure, so gent does
+    not score it. The owner names two ordered model lists beside the account
+    order: `strongest` and `efficient`. Plan and review states take the first
+    `strongest` model with a free lane. Implement and verify states take the
+    `efficient` model with the least fuel per finished unit (from 10) that
+    has a free lane. When no model in the tier has a free lane, the state
+    queues for one; it does not drop to the other tier. A state's own model
+    setting still wins. Quality (review verdicts, verify pass rate, gate
+    failures, rounds to accept) is recorded per model and state and shown in
+    the `/agents` view and `machine.status`, as a signal for the owner's
+    lists, not as a pick input. Accept: with the first `strongest` model
+    spent, a plan state takes the second one; with every `strongest` model
+    spent, it waits and no `efficient` model runs it; an implement state
+    takes the cheaper of two `efficient` models by measured fuel per unit.
 
 ## Order
 
@@ -157,4 +161,4 @@ The cost order is 2 (31% base), 3 (12%), 4 (about 9%), 6 (about 12%), 5 (6%),
 and then 1 and 7. 1 is the measure for the rest, so it lands first and stays
 small. 8 to 10 are placement work: they go with stage 4 of
 [kernel-orchestration.md](kernel-orchestration.md), 8 first, because it
-frees the most lanes. 11 follows 8, because it adds lanes the pace can then use. 12 needs 10 and the recorded units of stage 4 machines, so it lands last.
+frees the most lanes. 11 follows 8, because it adds lanes the pace can then use. 12 needs 10 for its efficient pick, so it lands last.
