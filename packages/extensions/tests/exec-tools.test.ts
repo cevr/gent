@@ -13,6 +13,7 @@ import {
   Path,
   Predicate,
   Ref,
+  Result,
   References,
   Schema,
   Scope,
@@ -69,6 +70,13 @@ import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@
 import { GentPlatform } from "@gent/core/host"
 import { BunSqlite, BunPlatformLive } from "@gent/core/host-bun"
 import {
+  defineExtension,
+  defineResource,
+  ExtensionContext,
+  type ExtensionContextService,
+  ExtensionHost,
+  ExtensionId,
+  request,
   ExtensionServiceError,
   maximumModelToolResultChars,
   runProcess,
@@ -799,7 +807,7 @@ describe("BashTool execution", () => {
         )
 
         expect(result.exitCode).toBe(0)
-        expect(result.stdout).toContain("Command started in background")
+        expect(result.stdout).toContain("Command running in background")
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
         expect(message.sourceId).toBe("bash:tc-1:complete")
@@ -3090,3 +3098,283 @@ describe("a background job the server stopped", () => {
     25_000,
   )
 })
+
+// ── named bash permits ──────────────────────────────────────────────────────
+
+/** Controlled OS lifetime. The process exits before its group cleanup ends. */
+const permittedProcessBoundary = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const exited = yield* Deferred.make<void>()
+  const cleaning = yield* Deferred.make<void>()
+  const cleaned = yield* Deferred.make<void>()
+  const events: string[] = []
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      if (command._tag !== "StandardCommand" || command.command !== "bash")
+        return yield* Effect.die("Expected bash")
+      if (command.args[2] === "gent-command") {
+        const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
+        yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
+      }
+      events.push("start")
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(cleaning, void 0)
+          yield* Deferred.await(cleaned)
+          events.push("end")
+        }),
+      )
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+        isRunning: Deferred.isDone(exited).pipe(Effect.map((done) => !done)),
+        kill: () => Deferred.succeed(exited, void 0).pipe(Effect.asVoid),
+        stdin: Sink.drain,
+        stdout: Stream.empty,
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      })
+    }),
+  )
+  // Failed assertions must not leave an uninterruptible finalizer waiting.
+  yield* Effect.addFinalizer(() => Deferred.succeed(cleaned, void 0))
+  return {
+    exited,
+    cleaning,
+    cleaned,
+    events,
+    layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+  }
+})
+
+describe("bash named permits", () => {
+  for (const background of [false, true]) {
+    it.scopedLive(
+      `a mismatched limit is a typed bash error before spawning (background=${background})`,
+      () =>
+        Effect.gen(function* () {
+          const ctx = yield* inTempCwd({
+            ...liveSession(() => Effect.void),
+            Permits: testToolContext().Permits,
+          })
+          const holder = yield* ctx.Permits.with("bash-gate", 1, Effect.never).pipe(
+            Effect.forkScoped,
+          )
+          yield* waitFor(ctx.Permits.list, (rows) => rows[0]?.holders.length === 1)
+          const result = yield* provideBun(
+            runToolWithCtx(
+              BashTool,
+              {
+                command: "must-not-spawn",
+                permit: { name: "bash-gate", limit: 2 },
+                run_in_background: background,
+              },
+              ctx,
+            ),
+          ).pipe(Effect.result)
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) {
+            expect(result.failure._tag).toBe("BashError")
+            expect(result.failure.message).toBe('Permit "bash-gate" has limit 1, requested 2')
+          }
+          yield* Fiber.interrupt(holder)
+        }).pipe(Effect.timeout("5 seconds")),
+    )
+  }
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a foreground timeout keeps its permit through detached process cleanup",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* inTempCwd({ ...stubCtx, Permits: testToolContext().Permits })
+        const boundary = yield* permittedProcessBoundary
+        const body = Effect.gen(function* () {
+          const first = yield* runToolWithCtx(
+            BashTool,
+            {
+              command: "first",
+              timeout: 100,
+              permit: { name: "bash-gate", limit: 1 },
+            },
+            ctx,
+          ).pipe(Effect.result)
+          expect(Result.isFailure(first)).toBe(true)
+          if (Result.isFailure(first)) expect(first.failure._tag).toBe("BashError")
+          yield* Deferred.await(boundary.cleaning)
+          const second = yield* runToolWithCtx(
+            BashTool,
+            {
+              command: "second",
+              permit: { name: "bash-gate", limit: 1 },
+            },
+            ctx,
+          ).pipe(Effect.forkScoped)
+          yield* waitFor(ctx.Permits.list, (rows) => rows[0]?.waiters.length === 1)
+          expect(boundary.events).toEqual(["start"])
+          yield* Deferred.succeed(boundary.exited, void 0)
+          yield* Deferred.succeed(boundary.cleaned, void 0)
+          yield* Fiber.join(second)
+          expect(boundary.events).toEqual(["start", "end", "start", "end"])
+          expect(yield* ctx.Permits.list).toEqual([])
+        })
+        yield* body.pipe(
+          Effect.ensuring(Deferred.succeed(boundary.cleaned, void 0)),
+          Effect.provide(Layer.merge(makePlatformLayer(), boundary.layer)),
+        )
+      }).pipe(Effect.timeout("6 seconds")),
+  )
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a TERM-resistant foreground group ends before the next permitted command starts",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* inTempCwd({ ...stubCtx, Permits: testToolContext().Permits })
+        const pidFile = `${ctx.cwd}/first.pid`
+        const fs = yield* FileSystem.FileSystem
+        const platform = yield* GentPlatform
+        const body = Effect.gen(function* () {
+          yield* runToolWithCtx(
+            BashTool,
+            {
+              command: `trap '' TERM; echo $$ > ${pidFile}; sleep 30`,
+              timeout: 500,
+              permit: { name: "bash-gate", limit: 1 },
+            },
+            ctx,
+          ).pipe(Effect.result)
+          const pid = Number(yield* fs.readFileString(pidFile))
+          yield* Effect.addFinalizer(() => platform.signal(-pid, "SIGKILL").pipe(Effect.ignore))
+          expect(Exit.isSuccess(yield* Effect.exit(platform.signal(-pid, 0)))).toBe(true)
+          // The next command probes the first group at its own start, before any
+          // assertions in this fiber can hide an early permit release.
+          const second = yield* runToolWithCtx(
+            BashTool,
+            {
+              command: `if kill -0 -- -${pid} 2>/dev/null; then printf overlap; else printf gone; fi`,
+              permit: { name: "bash-gate", limit: 1 },
+            },
+            ctx,
+          )
+          expect(second.stdout).toBe("gone")
+          expect(yield* ctx.Permits.list).toEqual([])
+        })
+        yield* provideBun(body)
+      }).pipe(Effect.provide(BunPlatformLive), Effect.timeout("8 seconds")),
+    10_000,
+  )
+})
+
+it.scopedLive.layer(BunServices.layer)(
+  "a queued background bash keeps its permit after its turn until process cleanup ends",
+  () =>
+    Effect.gen(function* () {
+      const boundary = yield* permittedProcessBoundary
+      const exposed = yield* Deferred.make<ExtensionContextService["Permits"]>()
+      const extensionId = ExtensionId.make("bash-permit-probe")
+      const probe = defineExtension({
+        id: extensionId,
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "bash-permit-process-boundary",
+              scope: "process",
+              layer: boundary.layer,
+            }),
+          )
+          yield* host.register(
+            "request",
+            request({
+              id: "connect",
+              input: Schema.Struct({}),
+              output: Schema.Void,
+              execute: () =>
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(exposed, (yield* ExtensionContext).Permits)
+                }),
+            }),
+          )
+        }),
+      })
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("bash", {
+          command: "first",
+          run_in_background: true,
+          permit: { name: "bash-gate", limit: 1 },
+        }),
+        textStep("accepted"),
+        textStep("finished"),
+      ])
+      const directory = yield* makeTempDirectoryScoped("gent-bash-permit-rpc-")
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer,
+        home: directory,
+        cwd: directory,
+        extensionInputs: [...e2ePreset.extensionInputs, probe],
+      })
+      yield* Effect.addFinalizer(() => Deferred.succeed(boundary.cleaned, void 0))
+      yield* client.extension.request({
+        sessionId,
+        branchId,
+        extensionId,
+        capabilityId: "connect",
+        input: {},
+      })
+      const permits = yield* Deferred.await(exposed)
+      const first = yield* permits.with("bash-gate", 1, Effect.never).pipe(Effect.forkScoped)
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.holders.length === 1)
+      yield* client.message.send({ sessionId, branchId, content: "run queued bash" })
+      const snapshot = yield* waitFor(
+        client.session.getSnapshot({ sessionId, branchId }),
+        (snapshot) =>
+          snapshot.runtime._tag === "Idle" &&
+          snapshot.messages.some((message) => message.role === "tool"),
+        5_000,
+        "the background bash turn ended",
+      )
+      const results = snapshot.messages
+        .filter((message) => message.role === "tool")
+        .flatMap((message) => message.parts)
+      expect(results).toContainEqual(
+        expect.objectContaining({
+          type: "tool-result",
+          result: expect.objectContaining({ backgroundStatus: "queued" }),
+        }),
+      )
+      expect(boundary.events).toEqual([])
+      expect((yield* client.permits.list())[0]?.waiters).toHaveLength(1)
+      yield* Fiber.interrupt(first)
+      yield* waitFor(
+        Effect.sync(() => boundary.events.length),
+        (count) => count === 1,
+      )
+      const second = yield* permits
+        .with(
+          "bash-gate",
+          1,
+          Effect.sync(() => boundary.events.push("next")),
+        )
+        .pipe(Effect.forkScoped)
+      yield* waitFor(client.permits.list(), (rows) => rows[0]?.waiters.length === 1)
+      yield* Deferred.succeed(boundary.exited, void 0)
+      yield* Deferred.await(boundary.cleaning)
+      expect(boundary.events).toEqual(["start"])
+      expect((yield* client.permits.list())[0]?.holders).toHaveLength(1)
+      yield* Deferred.succeed(boundary.cleaned, void 0)
+      yield* Fiber.join(second)
+      expect(boundary.events).toEqual(["start", "end", "next"])
+      yield* waitFor(
+        client.session.getSnapshot({ sessionId, branchId }),
+        (snapshot) =>
+          snapshot.runtime._tag === "Idle" &&
+          snapshot.messages.some((message) => message.metadata?.customType === "background-bash"),
+      )
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("12 seconds")),
+  15_000,
+)

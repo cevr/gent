@@ -2268,22 +2268,22 @@ const commandBoundary = Effect.gen(function* () {
   const events: string[] = []
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
-      if (
-        command._tag !== "StandardCommand" ||
-        command.command !== "bash" ||
-        command.args[2] !== "gent-command"
-      ) {
+      if (command._tag !== "StandardCommand" || command.command !== "bash") {
         return yield* Effect.die("Expected a recorded machine command")
       }
-      const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
-      yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
-      events.push("machine:start")
+      let label = "bash"
+      if (command.args[2] === "gent-command") {
+        const receipt = Option.getOrThrow(Option.fromUndefinedOr(command.args[3]))
+        yield* fs.writeFileString(receipt, "4242\nfixture-start\n")
+        label = "machine"
+      }
+      events.push(`${label}:start`)
       yield* Deferred.succeed(entered, true)
       yield* Effect.addFinalizer(() =>
         Deferred.succeed(exited, true).pipe(
           Effect.andThen(
             Effect.sync(() => {
-              events.push("machine:end")
+              events.push(`${label}:end`)
             }),
           ),
         ),
@@ -2470,3 +2470,30 @@ describe("machine command named permits", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
+
+it.live("bash and a machine command share one named limit through process cleanup", () =>
+  Effect.gen(function* () {
+    const boundary = yield* commandBoundary
+    const { client, owner } = yield* commandPermitHarness(boundary.layer)
+    yield* startRun(client, owner, NAMED_COMMAND, "one-command")
+    yield* Deferred.await(boundary.entered)
+    const bash = yield* call(client, owner, [
+      [
+        "bash",
+        "shared-bash",
+        {
+          command: "bash-fixture",
+          permit: { name: "machine-gate", limit: 1 },
+        },
+      ],
+    ]).pipe(Effect.forkScoped)
+    yield* waitFor(client.permits.list(), (rows) => rows[0]?.waiters.length === 1)
+    expect(boundary.events).toEqual(["machine:start"])
+    yield* Deferred.succeed(boundary.exited, true)
+    const [result] = yield* Fiber.join(bash)
+    expect(result?.failed).toBe(false)
+    expect(boundary.events).toEqual(["machine:start", "machine:end", "bash:start", "bash:end"])
+    expect(yield* client.permits.list()).toEqual([])
+    yield* waitForEnd(client, owner)
+  }).pipe(Effect.provide(BunServices.layer), Effect.scoped, Effect.timeout("12 seconds")),
+)
