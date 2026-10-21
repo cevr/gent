@@ -6927,12 +6927,22 @@ describe("addressed session verbs via RPC", () => {
           providerLayer,
           extensionInputs: [...e2ePreset.extensionInputs, extension],
         })
-        // One parent turn, so the child has history to inherit.
+        // One parent turn, so the child has history to inherit. `send` returns
+        // at admission: the spawn waits for the turn's end, when the answer
+        // is stored, or the child could fork before the parent's reply.
+        const parentTurn = yield* harness.client.session
+          .events({ sessionId: harness.sessionId, branchId: harness.branchId })
+          .pipe(
+            Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+            Stream.runDrain,
+            Effect.forkScoped,
+          )
         yield* harness.client.message.send({
           sessionId: harness.sessionId,
           branchId: harness.branchId,
           content: "hello parent",
         })
+        yield* Fiber.join(parentTurn)
 
         const spawned = yield* call(harness, Verbs.Spawn, {
           requestId: "req-1",
