@@ -169,6 +169,23 @@ gent needs no proxy: it is its own harness, and its providers already spread tur
 - **Logins stay fresh.** gent's credential store (P5) refreshes each account ahead of expiry with one call in flight and writes the token back before use (lanes §3.2), so an idle account never needs a new login.
 - **Shared accounts.** gent and Claude Code (through lanes) spend from the same accounts. Each sees the other only as utilization that moves with no fuel of its own: lanes' outside spend. Both read the headers, so the free count stays right, and the fuel fit drops outside segments.
 
+#### P5b design (2026-10-21)
+
+Two independent sketches (Claude, Codex) against `27a38b795`, kept in the session scratchpad as `p5b-sketch-claude.md` and `p5b-sketch-codex.md`. Both found that the drivers read no utilization header today (`anthropic.ts:3036-3039` says the plan's reset headers are not read), so the plan's "the drivers already read" was wrong. Decisions:
+
+- **Owner:** core `CredentialPlacement`, the one module that sees every turn on every account. A new `ExtensionContext.Accounts` facade (`admit`, `lanes`), wired in all three composition roots, so a user extension admits as threads do. Threads admit inside `admitRound`; machines reach it only through `Threads`. `threads.maxRunning` stays.
+- **A refused start leaves nothing:** no session, snapshot or round (Codex). The order inside `admitRound` is the implementor's, under that test.
+- **Readings:** one widened per-step driver reporter (`ProviderStopReason` → `ProviderReport { stopReason, quota }`), not a second service. Anthropic OAuth decodes `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset,status}` (names from [lanes.md](lanes.md):54) on every 2xx and 429. A live header capture on a scratch `GENT_DATA_DIR` comes before the decoder. OpenAI waits for its names.
+- **Fuel:** list-price cost from `calculateCost`, scaled so one reference input token is one fuel; class and model ratios are the r3 prior. Unknown usage is unknown, never zero. Class token sums are stored for a later weight fit.
+- **Capacity:** per account, the minimum over its windows, then summed over the pool (Codex: a pooled minimum alone invents a lane when account A has only weekly room and B only 5-hour room). No reading yet means `capacity: none`: admission passes and only the cap binds.
+- **Holding a lane (Claude):** nothing durable holds one. A lane is a session whose turn is open on the provider, plus an in-memory reservation from admission to that turn's start. A SIGKILL clears both; a resumed turn counts again when its loop opens (closing the gap the Claude sketch calls R-e). Durable leases with a reaper were rejected: a lease leaks until its TTL, and the turn is already the durable truth.
+- **Release before the round end is heard:** `placement.release` moves ahead of `emitTurnAfter` in `finalizeTurn` and `completeFailedTurn`; the `onExit` release stays as a backstop. Today `turnAfter` publishes the round end while the lane is still held (`turn.ts:5482` vs `:6561`).
+- **The lane does not pick the account.** Stage 0 still places at the first request, cache-aware; a `rejected` reading holds that account in placement.
+- **Persistence:** the server-wide ledger `credential-usage.json` gains optional `segments`, `readings` and `burn`; an old file decodes with none, and an old binary drops them.
+- **Machines:** a refused lane or a quota death writes `Waiting{ state, until, reason }` and `Round.notBefore`, arms `Session.wakeAt`, drops residency while waiting, and spends no visit. Threads stores the round's `retryAt` (additive migration).
+- **Surfaces:** a core `accounts.lanes` RPC; `gent ctl lanes` (a core noun, no session); a below-input band with free lanes and each active run.
+- **Commits:** (1) readings, fuel per percent, `accounts.lanes` reported but not enforced; (2) `Accounts.admit`, `LaneUnavailable`, the early release, threads admission; (3) machine waits; (4) band and `gent ctl lanes`. Review after 2 and after 4.
+
 ### P6. A thread binds its workspace at start
 
 `thread.start({ workspace: { rift: { from?, name } } | { path } })` makes or attaches the copy, runs its `postcreate` hooks, and binds the thread to it before the agent starts. `thread.stop({ thread, removeWorkspace? })` removes a Rift copy it made. Both reuse `@gent/workspaces` `locate` and `acquire`. This follows T3's `t3_thread_launch` `workspaceStrategy`: a worktree made from inside the task prompt does not move the binding. Today Rifts are never removed, and there is no standalone create.

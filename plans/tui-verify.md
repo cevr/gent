@@ -31,6 +31,14 @@ The retro measured 362 times that agents drove gent through herdr panes by hand,
 
 The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1, as the skill shows what it still needs.
 
+### Unit 1 status (2026-10-21)
+
+- **Merged** at `29e600828`, `824569f83`, fix `27a38b795` (one Codex round: 3 blockers, 8 should-fix, 1 nit, all fixed).
+- `gent ctl send|events|wait|snapshot|status|request`: exit 0 ok, 1 failed, 2 usage, 3 no server, 4 not found, 124 wait timed out. `status --run <id>` comes from the machines extension's client projection; the TUI host holds no machine code.
+- A request reply crosses the wire as a value or void, decoded with `decodeRequestReply` and the request's output schema. This also fixed the `/sessions` pane, which stayed on `Loading…` since an optional key set to `undefined` failed the encoder.
+- `.claude/skills/verify-gent`: `bun run --silent verify:launch|doctor|drive|stop` in `packages/e2e/src/verify.ts`, ten drives over six feature files, an asciicast `drive.cast` per drive, captures in files (`--print` to show them). A passing turn drive prints 32 lines (measured). Cold-start proof: scratchpad `verify-gent-proof-2/`, all ten drives `Driven`, no PID, port or run dir left.
+- **Open:** the Sessions pane takes 5 to 7 s to leave `Loading…` with 9 sessions while the server answers in about 2 ms (measured, cause not found); the Sessions detail says `(anthropic)` and the status row `(Anthropic)`; the Workbox host is unproven; most of a drive's output bytes are long evidence paths (print them relative to `--out`).
+
 ## Design
 
 1. **Assertions, not captures.** New drive steps:
@@ -48,7 +56,7 @@ The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1
 - A drive script with `expect`, `fits` and a two-size sweep passes on the current TUI and fails on a planted wrap. Each assertion is proved by breaking it first.
 - `gamut up/send/read/wait/status/down` runs with herdr not installed (`PATH` without it), and `read` after a short answer prints fewer than 10 rows.
 - A typical check (start, send a prompt, wait, assert, resize, assert) prints under 40 lines when it passes (target, guess).
-- The steering docs say that a live check is `drive.ts` or gamut, not herdr. That edit waits until the `docs/split-context` branch lands, because it splits `AGENTS.md`, `ARCHITECTURE.md` and `apps/tui/AGENTS.md`.
+- The steering docs say that a live check is verify-gent, `drive.ts` or gamut, not herdr. Done in unit 1 (`824569f83`).
 
 ## Order
 
