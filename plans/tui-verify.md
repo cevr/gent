@@ -12,6 +12,16 @@ Owner, 2026-10-21: "we should build for Gent kind of the verification tool that 
 
 An agent verifies a TUI change with one command. The command returns a few lines when the check passes, and only the rows that matter when it fails. herdr is not needed for any check.
 
+## Unit 1: `gent ctl` and the verify-gent skill (owner, 2026-10-21)
+
+The retro measured 362 times that agents drove gent through herdr panes by hand, because gent has no control CLI. P3 of [kernel-orchestration.md](kernel-orchestration.md) names it.
+
+- `gent ctl send|events|wait|snapshot|status`: JSON output over the existing RPC. One session or run per call. `wait` has its own exit code for a timeout.
+- Then `/create-verification-skill` writes `.claude/skills/verify-gent` on top of `gent ctl` and `testbeds/gamut`, with a feature map of the TUI abilities.
+- Done when the skill is proved end to end once, with its proof path in the report.
+
+The design below (assertions, size sweep, a herdr-free gamut) comes after unit 1, as the skill shows what it still needs.
+
 ## Design
 
 1. **Assertions, not captures.** New drive steps:
@@ -33,4 +43,4 @@ An agent verifies a TUI change with one command. The command returns a few lines
 
 ## Order
 
-After stage 3 of [kernel-orchestration.md](kernel-orchestration.md) merges, and before stage 4b. Every later TUI change gets cheaper to check.
+Unit 1 is the next unit after stage 3. After stage 3 of [kernel-orchestration.md](kernel-orchestration.md) merges, and before stage 4b. Every later TUI change gets cheaper to check.
