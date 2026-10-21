@@ -4007,12 +4007,20 @@ const fiveHourPoolCeiling = (
     const remaining = quotaRoom(short, full)
     const hours = quotaHours(short, now, 5)
     if (week.remaining > 0) {
-      // Complementary windows on two accounts cannot combine into fuel.
-      fuel += Math.min(week.remaining, remaining)
-      refills.push({
-        hours,
-        gain: Math.max(0, Math.min(week.remaining, full) - Math.min(week.remaining, remaining)),
-      })
+      // Complementary windows on two accounts cannot combine into fuel: an
+      // account's fuel is the lesser of its weekly and short supply so far.
+      // A weekly reset before the short one lifts the weekly cap first.
+      const before = Math.min(week.remaining, remaining)
+      fuel += before
+      let weekly = week.remaining
+      let reached = before
+      if (week.hours < hours) {
+        weekly = week.remaining + week.full
+        const lifted = Math.min(weekly, remaining)
+        refills.push({ hours: week.hours, gain: lifted - reached })
+        reached = lifted
+      }
+      refills.push({ hours, gain: Math.max(0, Math.min(weekly, full) - reached) })
     } else if (week.hours <= 5) {
       // A spent week opens fresh short room unless an independent 5h hold
       // outlasts that weekly reset. That hold clears only at its own reset.

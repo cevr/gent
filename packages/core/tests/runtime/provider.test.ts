@@ -5769,6 +5769,20 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("a weekly reset before the five-hour reset lifts the cap on unused short room", () =>
+    Effect.gen(function* () {
+      const { read, lanes, now } = yield* pacedAccounts(9_300_000, 1_000_000)
+      // 930 M week with 10 M left, resetting in 1h; 100 M of unused 5h room.
+      yield* read(a, [
+        { window: "7d", utilization: 1 - 10 / 930, resetAt: now + HOUR },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      // 10 M lasts to +1h, then the 100 M short room to +5h: 10 M/h.
+      // Capped at the weekly 10 M with no refill: 2 M/h, zero lanes.
+      expect((yield* lanes([a])).capacity).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a rolling weekly refill preserves a later rejected five-hour window", () =>
     Effect.gen(function* () {
       const { read, lanes, now } = yield* pacedAccounts()
