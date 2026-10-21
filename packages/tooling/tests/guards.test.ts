@@ -18,6 +18,7 @@ import {
   findWritersWithoutReaders,
   findUnpairedBuildDefines,
   findRetiredSurfaces,
+  findSteeringBudgetOverruns,
   findSteeringFilePaths,
   findStaleSteeringReceipts,
   type Finding,
@@ -2100,6 +2101,52 @@ const messagesOfSteeringPath = (text: string, file = "ARCHITECTURE.md"): Readonl
 
 const linesOf = (text: string, file = "ARCHITECTURE.md"): ReadonlyArray<number> =>
   findSteeringFilePaths(file, text, TRACKED).map((finding) => finding.line)
+
+describe("steering read budgets", () => {
+  const bytes = (count: number): string => "a".repeat(count)
+
+  test("a file within its budget passes, one byte past it fails with its size and budget", () => {
+    expect(findSteeringBudgetOverruns("AGENTS.md", bytes(12_000))).toEqual([])
+    expect(findSteeringBudgetOverruns("AGENTS.md", bytes(12_001))).toEqual([
+      {
+        file: "AGENTS.md",
+        line: 1,
+        message:
+          "`AGENTS.md` is 12,001 bytes, past its read budget of 12,000 bytes -- split it: move a section into its own file and leave one pointer line here that says what it covers and when to read it",
+      },
+    ])
+  })
+
+  test("each read-whole file has its own budget", () => {
+    const over = (file: string, size: number): boolean =>
+      findSteeringBudgetOverruns(file, bytes(size)).length > 0
+    expect([over("ARCHITECTURE.md", 12_000), over("ARCHITECTURE.md", 12_001)]).toEqual([
+      false,
+      true,
+    ])
+    expect([over("apps/tui/AGENTS.md", 8_000), over("apps/tui/AGENTS.md", 8_001)]).toEqual([
+      false,
+      true,
+    ])
+    expect([
+      over("docs/architecture/runtime.md", 40_000),
+      over("docs/architecture/runtime.md", 40_001),
+    ]).toEqual([false, true])
+  })
+
+  test("the budget counts UTF-8 bytes, not characters", () => {
+    // "─" is three bytes: 4,001 of them pass 12,000 bytes.
+    expect(findSteeringBudgetOverruns("ARCHITECTURE.md", "─".repeat(4_000))).toEqual([])
+    expect(findSteeringBudgetOverruns("ARCHITECTURE.md", "─".repeat(4_001))).toHaveLength(1)
+  })
+
+  test("a file no budget names, a nested area file and research are not read", () => {
+    expect(findSteeringBudgetOverruns("NORTH_STAR.md", bytes(50_000))).toEqual([])
+    expect(findSteeringBudgetOverruns("apps/tui/docs/transcript.md", bytes(50_000))).toEqual([])
+    expect(findSteeringBudgetOverruns("docs/research/2026-01-01-x.md", bytes(50_000))).toEqual([])
+    expect(findSteeringBudgetOverruns("docs/architecture/sub/x.md", bytes(50_000))).toEqual([])
+  })
+})
 
 describe("steering file paths", () => {
   test("flags a backticked file that no tracked file matches", () => {

@@ -4,7 +4,8 @@ Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
 This file is the index. Read it whole; then read the area files your change
 touches. Each area file is the one home of its material: update it when the
-code diverges.
+code diverges. A guard (`findSteeringBudgetOverruns`) holds this index to
+12 KB and each area file to 40 KB; past that, split the file behind a pointer.
 
 ## Core Model
 

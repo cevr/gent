@@ -22,6 +22,7 @@ import {
   findUnpairedBuildDefines,
   isManifest,
   findRetiredSurfaces,
+  findSteeringBudgetOverruns,
   findSteeringFilePaths,
   findStaleSteeringReceipts,
   findUnheldSteeringNames,
@@ -358,6 +359,7 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findSuppressionInventoryFindings,
   findPreCommitHookFindings,
   findRetiredSurfaces,
+  findSteeringBudgetOverruns,
   findTestLaneDefaults,
 ]
 

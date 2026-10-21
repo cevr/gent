@@ -2759,6 +2759,51 @@ const STEERING_PROSE =
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
+// ── steering prose stays within its read budget ─────────────────────────────
+
+/** A steering file an agent reads whole, and the most bytes it may hold. */
+interface SteeringBudget {
+  readonly file: RegExp
+  readonly bytes: number
+}
+
+/**
+ * The read budgets, in UTF-8 bytes (1 KB is 1,000 bytes). The root
+ * `AGENTS.md` loads on every turn and `apps/tui/AGENTS.md` whenever an agent
+ * touches the TUI; most agents read `ARCHITECTURE.md` whole, and an area file
+ * whole once its pointer fires. A file past its budget moves material behind
+ * a pointer: an area file of its own, or a topic file the guide names.
+ */
+const STEERING_BUDGETS: ReadonlyArray<SteeringBudget> = [
+  { file: /^AGENTS\.md$/, bytes: 12_000 },
+  { file: /^ARCHITECTURE\.md$/, bytes: 12_000 },
+  { file: /^apps\/tui\/AGENTS\.md$/, bytes: 8_000 },
+  { file: /^docs\/architecture\/[^/]+\.md$/, bytes: 40_000 },
+]
+
+const UTF8 = new TextEncoder()
+
+/**
+ * Guard: a steering file an agent reads whole stays within its budget
+ * (`STEERING_BUDGETS`). The finding names the file, its size and the budget,
+ * and says how to bring it back.
+ */
+export const findSteeringBudgetOverruns = (file: string, text: string): ReadonlyArray<Finding> =>
+  Arr.findFirst(STEERING_BUDGETS, (entry) => entry.file.test(file)).pipe(
+    Option.map((budget) => ({ budget: budget.bytes, size: UTF8.encode(text).byteLength })),
+    Option.filter(({ budget, size }) => size > budget),
+    Option.match({
+      onNone: () => [],
+      onSome: ({ budget, size }) => [
+        {
+          file,
+          line: 1,
+          message: `\`${file}\` is ${size.toLocaleString("en-US")} bytes, past its read budget of ${budget.toLocaleString("en-US")} bytes -- split it: move a section into its own file and leave one pointer line here that says what it covers and when to read it`,
+        },
+      ],
+    }),
+  )
+
 /** The eight roots under which a backticked path is a claim about the tree. */
 const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples|docs|patches|\.claude)\//
 
