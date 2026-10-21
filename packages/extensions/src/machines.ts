@@ -56,11 +56,13 @@ import {
   AgentName,
   BranchId,
   defineExtension,
+  defineRequests,
   defineResource,
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
   omitUndefined,
+  request,
   resolveDataDir,
   SessionId,
   sessionThread,
@@ -2629,19 +2631,43 @@ const runView = (run: Run): typeof RunView.Type => ({
 /** The steps `machine.status` shows, newest last. */
 const STATUS_STEPS = 20
 
+/** One run as `machine.status` and `MachinesRpc.Status` read it: its view and its last steps. */
+export const MachineRunStatus = Schema.Struct({ ...RunView.fields, steps: Schema.Array(StepView) })
+export type MachineRunStatus = typeof MachineRunStatus.Type
+
+const RunStatusParams = Schema.Struct({ run: RunId })
+
+const runStatus = Effect.fn("Machines.runStatus")(function* (params: typeof RunStatusParams.Type) {
+  const store = yield* MachineStore
+  const run = yield* ownedRun(params.run)
+  const steps = yield* store.steps(run.run, STATUS_STEPS)
+  return { ...runView(run), steps }
+})
+
 const MachineStatusTool = tool({
   id: "machine.status",
   resources: [MachineStoreResource],
   readonly: true,
   description: "Read one run: its state, status, pending action, visits, and its last steps.",
   promptSnippet: "Read a machine run",
-  params: Schema.Struct({ run: RunId }),
-  output: Schema.Struct({ ...RunView.fields, steps: Schema.Array(StepView) }),
-  execute: Effect.fn("MachineStatusTool.execute")(function* (params) {
-    const store = yield* MachineStore
-    const run = yield* ownedRun(params.run)
-    const steps = yield* store.steps(run.run, STATUS_STEPS)
-    return { ...runView(run), steps }
+  params: RunStatusParams,
+  output: MachineRunStatus,
+  execute: runStatus,
+})
+
+/**
+ * What a client outside any turn reads of a run (`gent ctl request`):
+ * the same view as `machine.status`, asked as a session of the owner's thread.
+ */
+export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
+  Status: request({
+    id: "run-status",
+    description: "Read one run your thread owns: its state, status, pending action and last steps",
+    answersDuringTurn: true,
+    input: RunStatusParams,
+    output: MachineRunStatus,
+    resources: [MachineStoreResource],
+    execute: runStatus,
   }),
 })
 
@@ -2723,6 +2749,7 @@ export const MachinesExtension = defineExtension({
       MachineListTool,
       MachineStopTool,
     )
+    yield* host.register("request", MachinesRpc.Status)
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))
     yield* host.on("sessionDeleted", ({ sessionId }) =>

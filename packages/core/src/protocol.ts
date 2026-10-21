@@ -24,6 +24,7 @@ export {
   BranchId,
   CredentialSlot,
   DEFAULT_CREDENTIAL_SLOT,
+  ExtensionId,
   MessageId,
   SessionId,
   ToolCallId,

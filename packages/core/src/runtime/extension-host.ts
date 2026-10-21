@@ -958,16 +958,27 @@ const runExtensionCapability = (
       },
     )
 
+    // The reply crosses the wire as the JSON of its encoded form, which every
+    // client decodes with the request's output schema. An `Option` field or a
+    // date does not survive as a decoded value, and an optional key set to
+    // `undefined` has no JSON value: the RPC encoder refuses the whole reply.
+    // A void reply has no JSON text and crosses as nothing.
+    const outputInvalid = new CapabilityErrorClass({
+      extensionId,
+      capabilityId,
+      reason: "output validation failed",
+    })
     const encodedOutput = Schema.encodeOption(capability.output)(output)
-    if (Option.isNone(encodedOutput)) {
-      return yield* new CapabilityErrorClass({
-        extensionId,
-        capabilityId,
-        reason: "output validation failed",
-      })
-    }
-    return output
+    if (Option.isNone(encodedOutput)) return yield* outputInvalid
+    if (Predicate.isUndefined(encodedOutput.value)) return encodedOutput.value
+    const replyJson = Schema.encodeOption(Schema.fromJsonString(capability.output))(output).pipe(
+      Option.flatMap(decodeReplyJson),
+    )
+    if (Option.isNone(replyJson)) return yield* outputInvalid
+    return replyJson.value
   })
+
+const decodeReplyJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))
 
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,

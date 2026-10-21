@@ -19,7 +19,7 @@ import { BunServices } from "@effect/platform-bun"
 import { BunSqlite } from "@gent/core/host-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
-import { defineExtension, ExtensionHost, omitUndefined, tool } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionHost, omitUndefined, ref, tool } from "@gent/core/extensions/api"
 import {
   createE2ELayer,
   createRpcClient,
@@ -35,6 +35,8 @@ import {
   MACHINE_ASK_TYPE,
   MACHINE_END_TYPE,
   MachineAnswerTool,
+  MachineRunStatus,
+  MachinesRpc,
   MachineStore,
   roundEndSignal,
 } from "../src/machines.js"
@@ -493,6 +495,22 @@ describe("a machine run", () => {
       const owner = { sessionId, branchId }
       const run = yield* startRun(client, owner, TRACK, "track", { spec: "S" })
       const ask = yield* askDetails(client, owner, 1)
+      // A client outside any turn reads the run as a session of its owner's thread.
+      const statusRef = ref(MachinesRpc.Status)
+      const readStatus = (session: SessionKey) =>
+        client.extension.request({
+          ...session,
+          extensionId: statusRef.extensionId,
+          capabilityId: statusRef.capabilityId,
+          input: { run },
+        })
+      const asking = yield* Schema.decodeUnknownEffect(MachineRunStatus)(yield* readStatus(owner))
+      expect(asking.status).toBe("asking")
+      expect(String(asking.state)).toBe("decide")
+      expect(asking.steps.length).toBeGreaterThan(0)
+      const stranger = yield* client.session.create({ cwd: home.cwd })
+      const refused = yield* readStatus(stranger).pipe(Effect.as("answered"), Effect.flip)
+      expect(String(refused)).toContain("belongs to another thread")
       yield* call(client, owner, [
         ["machine.answer", "answer-drop", { run, askId: ask.askId, choice: "drop" }],
       ])

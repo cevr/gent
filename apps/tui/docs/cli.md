@@ -59,3 +59,45 @@ with `streamFailed: true`, which settles the run; the send fails too, and
 whichever comes first ends it. SIGHUP exits 129, SIGINT 130 and SIGTERM 143. The run's end
 owns stderr: a failed run prints one line, an answered run prints one
 `Warning:` line for each notice.
+
+## gent ctl
+
+`gent ctl` drives a running server from a shell, one session per call, over the
+RPC the TUI uses. It finds the server through the data directory's lock
+(`GENT_DATA_DIR`, else `~/.gent`), the way `gent doctor` does, or through
+`--connect <url>`. It never starts a server: run `gent` or
+`gent server start` under the same `GENT_DATA_DIR` first. A `--debug` or
+`--isolate` TUI keeps its state in memory, and `gent ctl` cannot reach it.
+
+```bash
+gent ctl send --new --model anthropic/claude-sonnet-5 --wait "debug tools"
+gent ctl events --limit 20                  # the newest session in this directory
+gent ctl events --since 41 --tags ToolCallStarted,TurnCompleted
+gent ctl wait --message <messageId>         # the turn a send opened, even one already ended
+gent ctl wait --until InteractionPresented --timeout 20
+gent ctl snapshot -s <session-id>
+gent ctl status
+gent ctl request --extension @gent/machines --id run-status --input '{"run":"run-0123456789abcdef"}'
+```
+
+Without `--session`, a call names the newest conversation in `--cwd` (default:
+the current directory), on its active branch (`--branch` names another). A
+call prints one JSON value on stdout. An array of records in it prints one
+record per line, so `events --limit 3` prints five lines. `events` prints one
+compact record per event, and a run of `StreamChunk` events folds into one
+record; `--full` prints the stored envelopes. Each record's `id` is a cursor
+for `--since` and `--after`. `send --request-id <id>` makes a retry safe: the
+server admits one message per id. `request` sends one extension request, as a
+client extension does, and prints its encoded reply.
+
+A failure prints one tagged JSON line on stderr and exits with its code:
+
+| Exit | Error             | Meaning                                                                           |
+| ---- | ----------------- | --------------------------------------------------------------------------------- |
+| 0    |                   | Success                                                                           |
+| 1    | `CtlFailed`       | An RPC or request failure, or a lost connection                                   |
+| 1    | (parser text)     | A flag or argument the parser refuses                                             |
+| 2    | `CtlUsage`        | Flags that parse but do not fit together                                          |
+| 3    | `CtlNoServer`     | No live server for the data directory                                             |
+| 4    | `CtlNotFound`     | The session or branch does not exist                                              |
+| 124  | `CtlWaitTimedOut` | `wait` saw no match in `--timeout` seconds; `cursor` is the last event id it read |

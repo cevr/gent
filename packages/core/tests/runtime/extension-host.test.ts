@@ -4802,6 +4802,37 @@ describe("extension capability registries", () => {
       expect(result.reason).toMatch(/input decode failed/)
     }))
 
+  test("a reply is its output's encoded form, which a client decodes back", () =>
+    Effect.gen(function* () {
+      const Reply = Schema.Struct({ token: Schema.OptionFromOptionalKey(Schema.String) })
+      const cap = request({
+        id: "token",
+        input: Schema.Struct({}),
+        output: Reply,
+        execute: () => Effect.succeed({ token: Option.some("t-1") }),
+      })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const wire = yield* runRpc(resolved.rpcRegistry, cap.id, {})
+      expect(wire).toEqual({ token: "t-1" })
+      expect(yield* Schema.decodeUnknownEffect(Reply)(wire)).toEqual({ token: Option.some("t-1") })
+    }))
+
+  test("an optional key set to undefined leaves the reply, which stays a JSON value", () =>
+    Effect.gen(function* () {
+      const Reply = Schema.Struct({ name: Schema.optional(Schema.String), live: Schema.Boolean })
+      const cap = request({
+        id: "row",
+        input: Schema.Struct({}),
+        output: Reply,
+        // oxlint-disable-next-line effect/noNullish -- an extension row builds its optional keys this way, with Option.getOrUndefined.
+        execute: () => Effect.succeed({ name: undefined, live: true }),
+      })
+      const resolved = resolveExtensions([extWith("builtin", [cap])])
+      const wire = yield* runRpc(resolved.rpcRegistry, cap.id, {})
+      expect(wire).toStrictEqual({ live: true })
+      expect(Schema.is(Schema.Json)(wire)).toBe(true)
+    }))
+
   test("output validation failure is wrapped in CapabilityError", () =>
     Effect.gen(function* () {
       const cap = request({

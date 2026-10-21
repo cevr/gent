@@ -65,6 +65,7 @@ import {
   storage,
   upgrade,
 } from "./ops"
+import { ctl } from "./ctl"
 
 // Clear client log on startup
 clearClientLog()
@@ -480,7 +481,7 @@ const resume = Command.make(
 
 // Root command with subcommands
 const command = main.pipe(
-  Command.withSubcommands([resume, sessions, server, doctor, storage, upgrade]),
+  Command.withSubcommands([resume, sessions, server, doctor, storage, upgrade, ctl]),
   Command.withDescription("Gent - minimal, opinionated agent harness"),
 )
 
