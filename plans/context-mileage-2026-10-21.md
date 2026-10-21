@@ -127,6 +127,29 @@ once it has passed (B2).
     Whole-percent readings over short windows are too coarse to fit alone
     (B4): the fit spans at least a day. Accept: the fitted cost of one account
     week is within 10% of B4's 930M W for the model mix B4 measured.
+11. **Every provider that reports usage joins the pool.** The seam is already
+    normal: a driver reports `QuotaReading` (`window`, `utilization` as a
+    fraction, `resetAt`, `rejected`; `packages/core/src/domain/driver.ts:618`),
+    and lanes fit fuel per percent for each window. Only the Anthropic
+    extension reports today. Each other provider gets an adapter in its own
+    extension that turns its own usage words into readings: the OpenAI
+    extension for the ChatGPT plan (Codex), the OpenCode extension for
+    OpenCode Go. A provider that reports by headers is read on each response;
+    one that reports only by an endpoint is read on the wake clock. Whole
+    percent, request counts and token counts all become a fraction of the
+    window, so the pace and the lanes stay one calculation. Accept: with one
+    Anthropic and one ChatGPT account, the pool's free lanes add both, and a
+    spent ChatGPT window refuses only ChatGPT models.
+12. **Role fit per model.** Each machine state kind (planner, implementer,
+    reviewer, verifier) keeps a fit per model from its finished units: cost
+    (fuel per unit, from 10), quality (review verdicts, verify pass rate, gate
+    failures, rounds to accept) and efficiency (W per unit, steps per unit).
+    Placement picks the model with the best quality per fuel that has a free
+    lane, and a state's own model setting still wins. The `/agents` view and
+    `machine.status` show the fit per state. Accept: on a replay of recorded
+    units, the pick for each state matches the owner's pick or names the
+    measure that differs, and no state picks a model with fewer than 10
+    finished units of that kind.
 
 ## Order
 
@@ -134,4 +157,4 @@ The cost order is 2 (31% base), 3 (12%), 4 (about 9%), 6 (about 12%), 5 (6%),
 and then 1 and 7. 1 is the measure for the rest, so it lands first and stays
 small. 8 to 10 are placement work: they go with stage 4 of
 [kernel-orchestration.md](kernel-orchestration.md), 8 first, because it
-frees the most lanes.
+frees the most lanes. 11 follows 8, because it adds lanes the pace can then use. 12 needs 10 and the recorded units of stage 4 machines, so it lands last.
