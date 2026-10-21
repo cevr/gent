@@ -82,6 +82,7 @@ import {
   runProcess,
 } from "@gent/core/extensions/api"
 import { SqlClient } from "effect/sql"
+import { TestClock } from "effect/testing"
 import type * as Prompt from "effect/ai/Prompt"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as AiError from "effect/ai/AiError"
@@ -648,6 +649,21 @@ describe("BashTool summary", () => {
     expect(summary("", "", 2)).toBe("exit 2 · 0 lines")
     expect(summary("one", "", 0)).toBe("exit 0 · 1 line")
   })
+
+  for (const status of ["queued", "running", "completed", "failed", "interrupted"]) {
+    test(`a background phase names ${status} instead of an exit code`, () => {
+      expect(
+        toolResultSummary(
+          Option.some(BashTool),
+          { command: "make" },
+          {
+            isFailure: false,
+            result: { stdout: "Command started", stderr: "", exitCode: 0, status },
+          },
+        ),
+      ).toBe(`${status} in background`)
+    })
+  }
 
   test("a background command says so instead of an exit code", () => {
     expect(
@@ -3156,8 +3172,9 @@ describe("bash named permits", () => {
       `a mismatched limit is a typed bash error before spawning (background=${background})`,
       () =>
         Effect.gen(function* () {
+          const notices = yield* Ref.make<ReadonlyArray<Notice>>([])
           const ctx = yield* inTempCwd({
-            ...liveSession(() => Effect.void),
+            ...liveSession((notice) => Ref.update(notices, (all) => [...all, notice])),
             Permits: testToolContext().Permits,
           })
           const holder = yield* ctx.Permits.with("bash-gate", 1, Effect.never).pipe(
@@ -3165,16 +3182,40 @@ describe("bash named permits", () => {
           )
           yield* waitFor(ctx.Permits.list, (rows) => rows[0]?.holders.length === 1)
           const result = yield* provideBun(
-            runToolWithCtx(
-              BashTool,
-              {
-                command: "must-not-spawn",
-                permit: { name: "bash-gate", limit: 2 },
-                run_in_background: background,
-              },
-              ctx,
-            ),
-          ).pipe(Effect.result)
+            Effect.gen(function* () {
+              const result = yield* runToolWithCtx(
+                BashTool,
+                {
+                  command: "must-not-spawn",
+                  permit: { name: "bash-gate", limit: 2 },
+                  run_in_background: background,
+                },
+                ctx,
+              ).pipe(Effect.result)
+              if (background) {
+                const storage = yield* BackgroundBashStorage
+                const claim = yield* storage.claimStart({
+                  sessionId: ctx.sessionId,
+                  branchId: ctx.branchId,
+                  toolCallId: Option.getOrThrow(Option.fromUndefinedOr(ctx.toolCallId)),
+                  command: "must-not-spawn",
+                  cwd: Option.some(ctx.cwd),
+                })
+                let state: string = claim._tag
+                if (claim._tag === "Terminal") state = claim.state.status
+                expect({
+                  state,
+                  notices: yield* Ref.get(notices),
+                  pending: yield* storage.undeliveredJobs(ctx),
+                }).toMatchObject({
+                  state: "failed",
+                  notices: [],
+                  pending: [],
+                })
+              }
+              return result
+            }),
+          )
           expect(Result.isFailure(result)).toBe(true)
           if (Result.isFailure(result)) {
             expect(result.failure._tag).toBe("BashError")
@@ -3184,6 +3225,53 @@ describe("bash named permits", () => {
         }).pipe(Effect.timeout("5 seconds")),
     )
   }
+
+  it.scopedLive.layer(BunServices.layer)(
+    "a foreground timeout starts after its permit queue wait",
+    () =>
+      Effect.gen(function* () {
+        const ctx = yield* inTempCwd({ ...stubCtx, Permits: testToolContext().Permits })
+        const boundary = yield* permittedProcessBoundary
+        const body = Effect.gen(function* () {
+          const holder = yield* ctx.Permits.with("bash-gate", 1, Effect.never).pipe(
+            Effect.forkScoped,
+          )
+          yield* waitFor(ctx.Permits.list, (rows) => rows[0]?.holders.length === 1).pipe(
+            TestClock.withLive,
+          )
+          const queued = yield* runToolWithCtx(
+            BashTool,
+            {
+              command: "queued",
+              timeout: 100,
+              permit: { name: "bash-gate", limit: 1 },
+            },
+            ctx,
+          ).pipe(Effect.forkScoped)
+          yield* waitFor(ctx.Permits.list, (rows) => rows[0]?.waiters.length === 1).pipe(
+            TestClock.withLive,
+          )
+          yield* TestClock.adjust("200 millis")
+          yield* Deferred.succeed(boundary.exited, void 0)
+          yield* Deferred.succeed(boundary.cleaned, void 0)
+          yield* Fiber.interrupt(holder)
+          const result = yield* Fiber.join(queued)
+          expect({
+            result,
+            events: boundary.events,
+            permits: yield* ctx.Permits.list,
+          }).toMatchObject({
+            result: { exitCode: 0 },
+            events: ["start", "end"],
+            permits: [],
+          })
+        })
+        yield* body.pipe(
+          Effect.ensuring(Deferred.succeed(boundary.cleaned, void 0)),
+          Effect.provide(Layer.mergeAll(makePlatformLayer(), boundary.layer, TestClock.layer())),
+        )
+      }).pipe(Effect.timeout("6 seconds")),
+  )
 
   it.scopedLive.layer(BunServices.layer)(
     "a foreground timeout keeps its permit through detached process cleanup",
@@ -3343,7 +3431,7 @@ it.scopedLive.layer(BunServices.layer)(
       expect(results).toContainEqual(
         expect.objectContaining({
           type: "tool-result",
-          result: expect.objectContaining({ backgroundStatus: "queued" }),
+          result: expect.objectContaining({ status: "queued" }),
         }),
       )
       expect(boundary.events).toEqual([])

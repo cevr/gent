@@ -2421,7 +2421,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     BashTool,
-    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; permit?: { name: string; limit: number }; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background"; backgroundStatus?: "accepted" | "queued" | "running" | "completed" | "failed" | "interrupted"; outputFile?: string; outputChars?: number }> // Execute shell commands',
+    '- tools.bash(input: { command: string; timeout?: number; cwd?: string; permit?: { name: string; limit: number }; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number; status?: "background" | "queued" | "running" | "completed" | "failed" | "interrupted"; outputFile?: string; outputChars?: number }> // Execute shell commands',
   ],
   [
     ReadTool,

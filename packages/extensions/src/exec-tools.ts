@@ -6,13 +6,16 @@ import {
   Context,
   Crypto,
   DateTime,
+  Deferred,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Fiber,
   Layer,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Ref,
   References,
@@ -685,10 +688,9 @@ const BashResult = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.String,
   exitCode: Schema.Finite,
-  /** Absent when the command ran to its end. A background command has no real exit code yet. */
-  status: Schema.optional(Schema.Literals(["background"])),
-  backgroundStatus: Schema.optionalKey(
-    Schema.Literals(["accepted", "queued", "running", "completed", "failed", "interrupted"]),
+  /** Absent for foreground results. Background means the job's phase is unknown. */
+  status: Schema.optionalKey(
+    Schema.Literals(["background", "queued", "running", "completed", "failed", "interrupted"]),
   ),
   /**
    * The file with all of a foreground command's output, stdout and stderr in
@@ -711,7 +713,7 @@ interface BackgroundBashJob {
 
 interface BackgroundBashStart {
   readonly file: string
-  readonly state: "accepted" | "queued" | BackgroundBashStatus
+  readonly state: "background" | "queued" | BackgroundBashStatus
 }
 
 interface BackgroundBashTarget {
@@ -1957,7 +1959,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               return {
                 file: rowOutputFile(path, dataDir, keyFields, claim.outputFile),
                 // Another supervisor build can own the live row. Its phase is unknown here.
-                state: active.get(key) ?? "accepted",
+                state: active.get(key) ?? "background",
               } satisfies BackgroundBashStart
             if (claim._tag === "Terminal") {
               const outputFile = rowOutputFile(path, dataDir, keyFields, claim.state.outputFile)
@@ -2004,7 +2006,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                   ),
                   Effect.tapError((error) =>
                     Effect.sync(() => {
-                      admissionError = Option.some(error)
+                      if (active.get(key) === "queued") admissionError = Option.some(error)
                     }),
                   ),
                 ),
@@ -2019,6 +2021,13 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               }),
               Effect.catchTag("BashError", (e) => {
                 terminal = "failed"
+                if (Option.isSome(admissionError)) {
+                  // The caller holds the error. Settle without a follow-up or turn notice.
+                  return storage.markFailed(keyFields, e.message).pipe(
+                    Effect.andThen(storage.recordDelivery(keyFields, true)),
+                    Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
+                  )
+                }
                 return queueFailure(job, target, e.message)
               }),
               Effect.catchCause((cause) => {
@@ -2111,15 +2120,13 @@ export const BashTool = tool({
   id: "bash",
   destructive: true,
   resources: [BackgroundBashResource],
-  description: `Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. stdout and stderr each come back whole up to ${wholeCommandOutputText} characters; past that the result keeps each one's head and tail, and outputFile names a file with all the output (outputChars long, stdout and stderr in arrival order): page it with the read tool's offset and limit. Optional permit { name, limit } shares a server-global limit with machine commands. The process owner holds it through process-group cleanup, even after a timeout or the originating background turn ends. Background calls return queued while waiting for a slot and running once admitted. Conflicting live limits fail with a typed BashError; recursive acquisition of the same name is unsupported.`,
+  description: `Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. stdout and stderr each come back whole up to ${wholeCommandOutputText} characters; past that the result keeps each one's head and tail, and outputFile names a file with all the output (outputChars long, stdout and stderr in arrival order): page it with the read tool's offset and limit. Optional permit { name, limit } shares a server-global limit with machine commands. The process owner holds it through process-group cleanup, even after a timeout or the originating background turn ends. The foreground timeout starts at permit admission, excluding queue wait. Background calls return status queued while waiting for a slot and running once admitted; replay returns completed, failed, or interrupted, or background when the phase is unknown. Conflicting live limits fail with a typed BashError; recursive acquisition of the same name is unsupported.`,
   promptSnippet: "Execute shell commands",
   params: BashParams,
   output: BashResult,
   summary: (_input, output) => {
-    if (output.status === "background") {
-      if (output.backgroundStatus) return `${output.backgroundStatus} in background`
-      return "started in background"
-    }
+    if (output.status === "background") return "started in background"
+    if (output.status) return `${output.status} in background`
     return `exit ${output.exitCode} · ${countOf(lineCount(output.stdout) + lineCount(output.stderr), "line")}`
   },
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
@@ -2150,8 +2157,7 @@ export const BashTool = tool({
         stdout: `Command ${state} in background: \`${command}\`\nIts output streams to ${file}; read that file to see it while the command runs. You will be notified when it completes.`,
         stderr: "",
         exitCode: 0,
-        status: "background",
-        backgroundStatus: state,
+        status: state,
       }
     }
 
@@ -2172,7 +2178,10 @@ export const BashTool = tool({
         ),
       )
     }
-    const process = runBashCommand(command, cwd, spill).pipe(Effect.scoped)
+    const admitted = yield* Deferred.make<void, BashError | PlatformError.PlatformError>()
+    const process = Deferred.succeed(admitted, void 0).pipe(
+      Effect.andThen(runBashCommand(command, cwd, spill).pipe(Effect.scoped)),
+    )
     const permitted = Option.match(Option.fromUndefinedOr(params.permit), {
       onNone: () => process,
       onSome: (named) =>
@@ -2182,20 +2191,32 @@ export const BashTool = tool({
     })
     const result = yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const owner = yield* Effect.forkDetach(permitted)
+        const owner = yield* permitted.pipe(
+          Effect.onExit((exit: Exit.Exit<CommandOutput, BashError | PlatformError.PlatformError>) =>
+            Deferred.done(admitted, Exit.asVoid(exit)),
+          ),
+          Effect.forkDetach,
+        )
         return yield* restore(
-          Fiber.join(owner).pipe(
-            Effect.timeoutOrElse({
-              duration: Duration.millis(timeout),
-              orElse: () =>
-                Effect.forkDetach(Fiber.interrupt(owner), { startImmediately: true }).pipe(
-                  Effect.andThen(
-                    Effect.fail(
-                      new BashError({ message: `Command timed out after ${timeout}ms`, command }),
+          Deferred.await(admitted).pipe(
+            Effect.andThen(
+              Fiber.join(owner).pipe(
+                Effect.timeoutOrElse({
+                  duration: Duration.millis(timeout),
+                  orElse: () =>
+                    Effect.forkDetach(Fiber.interrupt(owner), { startImmediately: true }).pipe(
+                      Effect.andThen(
+                        Effect.fail(
+                          new BashError({
+                            message: `Command timed out after ${timeout}ms`,
+                            command,
+                          }),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-            }),
+                }),
+              ),
+            ),
           ),
         ).pipe(Effect.onInterrupt(() => Fiber.interrupt(owner)))
       }),
