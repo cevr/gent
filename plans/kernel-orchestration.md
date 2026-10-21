@@ -68,6 +68,7 @@ The worker primitive is the existing **thread**, improved, not a new "seat" conc
 - **`thread.start({ task?, name?, model?, effort?, cwd?, instructions?, tools?, agent?, notify?, account? })`**. Defaults are chosen for the cleanest surface; today's behaviour need not survive (no compatibility, see P1b).
   - With no `task` it opens a thread and sends nothing (a worker waiting for its first round).
   - `agent` picks a registered agent. gent registers **`worker`**: `promptCache: "session"`, and tools that deny `thread.start`, `thread.stop`, `machine.*` and `delegate.*`. Owner rule: a long-lived seat that waits between turns keeps the session cache.
+  - The `worker` agent's first request is lean: its own tool list and a short system prompt, with no user-level instructions, skills index or MCP tools it does not use. Measured in Claude Code (vperf2, 2026-10-20): the lean `orchestrate-worker` agent starts at a 37k-token floor against 79k for a full-harness agent. A worker's context is the harness's largest repeated cost, so stage 1's acceptance gains a check: the `worker` agent's first request is under 20k tokens (guess for the target), read from the round's recorded usage.
   - `instructions` becomes the run's `systemPromptAddendum`. The create's `requestId` is `thread:` and a SHA-256 digest of the calling session, branch and tool call id: a request id is matched across the workspace, and a tool call id is unique only in its session.
 - **`thread.send({ thread, message, reply?, notify? })`** returns `{ round }` at admission, addressed by the thread key, so it reaches the thread's current session after a handoff. It uses `delivery: "turn"`, `commandId: "thread-round:<toolCallId>"` and `completion: "admission"`.
   - A thread runs one round at a time.
@@ -107,7 +108,7 @@ A delegate child is a thread: one round on the `delegate` agent, ending with a w
 ### P2. Rounds as values
 
 - **Structured reply**: `thread.send`'s optional `reply` describes the value the round must return. The thread answers with the tool `thread.reply({ value })`. The tool is offered to every agent at all times, not only during a round that asks: a tool list that changed per round would change the request's tools and break the thread's cached prompt, so the tool stays and refuses a call when no open round on the caller's branch asked for a value. Its last call becomes the round's `reply`; a round that ends without one records `reply: null` and says so in the summary. Validate against a JSON Schema only if gent already carries a validator; otherwise store the value as JSON.
-- **Usage**: every round records its usage and cost, so a program can budget by them.
+- **Usage**: every round records its usage and cost, so a program can budget by them. Usage keeps the token classes apart (input, output, cache read, cache write) and the cache-read share, since the owner's target is "99.9% cache reads" (2026-10-20). A round's usage is also its fuel (P5b), so lanes and gent count one unit.
 
 ### P3. Machines: `@gent/machines`, `packages/extensions/src/machines.ts`
 
@@ -143,6 +144,8 @@ A machine avoids each of them:
   - While a run has an open action it holds the owner branch resident, through `Session.holdResident`.
   - After a restart, the extension activates only its own active runs. That needs one generic core seam, `BranchActivation.activate({ sessionId, branchId })` or an extension start hook. Stage 3's design review picks one. A sweep of every unopened session stays rejected.
 - **Tools**: `machine.define`, `machine.start({ machine, input })` (returns `{ run }` at admission), `machine.answer`, `machine.status({ run })`, `machine.list`, `machine.stop`. The owner is woken only by an `ask`, a run reaching `final`, or a run failing.
+- **Status without asking.** The owner asked for status 13 times in one bible-tools run, and the Claude Code orchestrate runs got a status mod for the same reason (dotfiles `claude/mods/status`: the pool and each run's active units on the status line). gent shows it as data, not a model turn: a TUI band with the pool's free lanes (P5b) and each active run's state, round and age, from `machine.list`; and a control CLI, `gent ctl status|runs|stop|answer`, over the same RPC, so a script or another host reads a run with no session open.
+- **A quota death is a wait.** A worker that dies at a usage limit gives no verdict (the skill's `stuck(quota)`). The run keeps its state and moves to a wait until the account's reset (`retryAt` from P5b), then reruns the step fresh. It never counts toward `maxVisits`.
 - **Natural `await` code**: deferred. If the owner wants it later, it compiles to these persisted states, since a snapshot cannot hold an async stack (`cell-value.ts:845`).
 
 ### P4. Named permits
@@ -156,6 +159,15 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 
 - **A run spec pins one credential slot** (`RunSpec.credentialSlot`, not a stored run override): the turn, its handoff summary and its no-agent child walk only that slot, and a refused pin fails the turn. `thread.start` takes an `account`.
 - **A named Anthropic credential links a Claude Code config directory**: its keychain service `Claude Code-credentials-<first 8 hex of sha256(config dir)>` on macOS (`-3ef2928b` for `$HOME/.claude2` on this laptop), its `.credentials.json` elsewhere. Each refresh is written back with compare-and-swap, and gent's credential store holds the rotation until it lands.
+
+### P5b. Lanes: one pool for gent and Claude Code
+
+lanes ([lanes.md](lanes.md), a separate repo, `cevr/lanes`) is one Effect proxy on the workbox that pools the Claude accounts for every host and serves the free lane count over HTTP, MCP and CLI. gent consumes it; it does not rebuild it.
+
+- **Admission before start.** A proxy can refuse a request only after the agent has started, and that is how agents died in the vperf2 runs. So `thread.start` and a machine's `thread` state acquire a lane first (`POST /lanes/v1/leases`), and get `LaneUnavailable{ retryAt, free, reason }` at free 0. The thread fails at admission with that error; a machine waits until `retryAt`. The lease is released when the thread's round ends or the thread stops. In Claude Code the same check is a `PreToolUse` hook on `Agent` (dotfiles `claude/hooks/guard-agent.ts` reads `budget.ts` today; lanes P4 replaces it).
+- **Fuel, not agent counts.** A lane is sized by fuel (lanes amendment r3): tokens weighted by class and model, with a learned fuel-per-percent rate per quota window. One bridge reading (2026-10-20, measured): about 3.4 M fuel per agent-hour, cache reads half of it, and seven accounts give about 250 agent-hours a week. So every saving in a worker's context (P1) and in cache misses (P2) is a lane gained.
+- **gent's own drivers.** When lanes runs, gent's Anthropic driver sends through it (`ANTHROPIC_BASE_URL`, its key in a header), so gent's own turns count in the same pool. Stage 0's account spread then picks an account only when lanes is down (lanes hooks fail open, lanes.md §4).
+- **One unit for usage.** P2's per-round usage is reported in lanes' token classes, so a machine's budget and the pool's lanes read the same numbers.
 
 ### P6. A thread binds its workspace at start
 
@@ -184,6 +196,7 @@ A server-wide counting limiter, so two gates never run at once across sessions. 
 - **Merged:** stage 0 (account spread, `a690a2f85`, 2026-10-17: one review round, fix `ba6392700`), stage 1 (`540190243` and its fixes), stage 1b (`bffe148f5`), stage 2 (`e154a0db3`, `cf8526afe`).
 - **Stage 0 review fixes:** a pool keeps in step with its order on rename and removal; a pool must be inside its order, or that sign-in fails; a rate limit or unsupported model holds the account for that model only; handoff summaries count toward load; `CredentialPlacement` is a required service in every root; the ledger stores session ids, so a restart counts a session once; nothing is written unless a sign-in spreads. Skipped: marking a session live at dispatch (a burst must see each earlier placement).
 - **baton is gone** (not installed). The `orchestrate` skill now routes Claude Code and Codex background agents, and its machine has moved past this plan's `track` example: a `plan` state with a planner, a `stuck` verdict, a failure cap of 3 that sends the unit to `decide` for a rewrite, and a dead worker (usage limit, no hand-back, empty review) that gives no verdict. Stage 3's schema and stage 5's target follow the skill, not baton.
+- **Orchestrate skill rules since 2026-10-21** (dotfiles `a1ab5bb`), which stage 5's machine takes over: the plan names what the owner opens after round 1; bulk model work with no tools runs as a Batch API script, not as agents; a sketch unit (one sketch per model family) comes before a new seam; integrate is green only when the pushed commit's CI is green, and nothing else merges while main is red (gent's own CI was red from 2026-09-25 to 2026-10-18 while merges went on); a spike's verdict goes into `NORTH_STAR.md`, `PRIOR_ART.md` Settled or an ADR.
 - **Shared seam:** the warm pre-lapse handoff (compute a handoff before the prompt cache lapses on an idle branch) needs what P3 liveness needs: wake a passivated branch at a time, or after a restart, with no user message. Stage 3's design review designs one core verb for both.
 
 ## Stages
@@ -204,7 +217,8 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
    - a server restart in the middle of a round reruns no completed round, and the run continues once activated;
    - a command interrupted by a crash moves the run to `ask`;
    - a stale or conflicting answer is refused.
-4. **P4 permits and P6 workspace binding.**
+4. **P4 permits and P6 workspace binding.** P4 also holds a `main-red` permit: integrate takes it while the pushed commit's CI runs, and a red result keeps it until a fix is green.
+   4b. **P5b lanes admission**, once lanes P3 (leases) and P5 (MCP) ship. Done when a thread start at free 0 fails at admission with `LaneUnavailable`, a machine waits until `retryAt` and then runs the step, a lease is released at round end, gent's own turns appear in `lanes status`, and the TUI band shows free lanes.
 5. **The library.** An `/orchestrate` outcome prompt in `@gent/workflows`, and the `orchestrate` skill's machine (plan, implement, review, verify, decide) as a machine definition. One real unit runs end to end in gent, with no Claude Code or Codex background agent.
 
 ## Risks
@@ -212,3 +226,5 @@ Each stage gets a Rift, a branch, the gate, then `/counsel-review`, at most two 
 - R1. Reviewer quality is gent's to improve. When the first real units show a reviewer missing a Blocker the owner catches, the fix goes into gent: the `worker` agent's prompt, its tools, or the model and effort settings.
 - R2. Expressiveness: a data machine cannot express every branch. The escape is an `ask` to the orchestrator, which costs a model turn. Watch how often real runs take it.
 - R3. Liveness after a restart depends on the core activation seam (P3). Until it lands, a run resumes when its owner's loop next opens.
+- R4. Bulk work through threads. bible-tools ran about 600 full-harness page-reader agents for work that needed no tools. A thread is the wrong primitive for that: a cell's model call, or a batch job, does it at a fraction of the context. Watch for machines whose `thread` states call no tools.
+- R5. lanes is one process on one host. When it is down, admission fails open (P5b), so a burst can overrun the pool until it is back.
