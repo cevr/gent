@@ -4,6 +4,7 @@ Each file in `packages/e2e/tests/` is one area:
 
 - `packages/e2e/tests/e2e.test.ts` and `packages/e2e/tests/scrollback.test.ts`: the TUI on a real pty.
 - `packages/e2e/tests/server-lifecycle.test.ts`: the server process lifecycle.
+- `packages/e2e/tests/machines-hard-kill.test.ts`: a machine run across a SIGKILL of its host (`packages/e2e/src/machine-host.ts`, a process entry with routed fake models): rounds, commands and answers run once, and the run goes on with no client call.
 - `packages/e2e/tests/drive.test.ts`: the drive-script runner below.
 - `packages/e2e/tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
 

@@ -139,7 +139,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `packages/e2e/tests/` holds only the slow end-to-end suite; in-process contract tests live in each package's `test` task:
 
-- `test:e2e` — PTY TUI tests and focused server-process lifecycle coverage
+- `test:e2e` — PTY TUI tests, focused server-process lifecycle coverage, and machine runs across a SIGKILL of their host
 
 ## Important files
 

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@gent/core": "workspace:*",
+    "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*"
   },
   "devDependencies": {

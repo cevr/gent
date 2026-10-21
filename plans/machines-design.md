@@ -1804,3 +1804,29 @@ should-fix items. Each fix has a test that fails with the fix disabled.
 
 The old durable shape needs no shim: the main database has no
 `machine_runs` table (measured), so no row lacks `Command.launch`.
+
+## Commit 5 facts
+
+- **The hard-kill cases are four e2e tests** in
+  `packages/e2e/tests/machines-hard-kill.test.ts`, over the host entry
+  `packages/e2e/src/machine-host.ts`. Each test kills a real host with
+  SIGKILL and starts a second host over the same files, which makes no
+  client call.
+- **C2b.** The cut round runs once more under its key (`review:2:2`), and
+  no completed round runs again. The run reaches its ask within 8 s.
+- **Two paths activate a host after a kill.** The wake clock's start pass
+  fires the run's record at once. The cluster also redelivers the driver's
+  keep-alive, but only after its 10 s storage-read retry (measured: 11.2 s
+  with the start pass removed, against 1 s with it). The 8 s bound tells
+  the two apart. An owner turn with no run behind it waits the same 10 s
+  before it resumes (measured).
+- **C3b's third case changed with R4.** A command whose process record
+  never committed (a trigger refuses the `Recorded` step) is stopped from
+  its launcher's receipt: the ask has no `mayStillRun`, and the group is
+  gone. `mayStillRun: true` now needs a receipt that cannot be read.
+- **A cut answer is not reachable.** Core stores a tool call's result when
+  the call ends, not when its step settles, so a kill after `machine.answer`
+  committed keeps its result (measured: the result was stored while its
+  sibling `bash` call still ran). The test instead sends the recorded answer
+  again after the restart, as a client whose reply was lost would: it is
+  admitted and applies nothing.
