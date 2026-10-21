@@ -16,6 +16,7 @@
         "../packages/*/README.md",
         "../apps/*/AGENTS.md",
         "../apps/*/CLAUDE.md",
+        "../apps/*/docs/**/*.md",
         "../packages/*/AGENTS.md",
         "../packages/*/CLAUDE.md",
         "../docs/**/*.md",

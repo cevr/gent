@@ -166,7 +166,7 @@ way a resume does; a binding that no longer resolves keeps the head of the
 output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
 receipts in the `cell` renderer. The headless runner indents nested calls, and
-declines every interaction unless `--approve-all` is set (`apps/tui/AGENTS.md`).
+declines every interaction unless `--approve-all` is set (`apps/tui/docs/cli.md`).
 
 When policy selects `cell` for a native model turn, only `cell` is advertised.
 ResolvedTurnContext keeps separate model and host binding maps. Both derive from

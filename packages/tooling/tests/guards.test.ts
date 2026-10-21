@@ -1997,6 +1997,7 @@ describe("retired surface guard", () => {
       "NORTH_STAR.md",
       "PRIOR_ART.md",
       "apps/tui/AGENTS.md",
+      "apps/tui/docs/transcript.md",
       "packages/core/AGENTS.md",
       "docs/extensions.md",
       "docs/guides/authoring.md",

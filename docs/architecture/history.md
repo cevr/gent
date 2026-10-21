@@ -40,6 +40,9 @@ architecture files. No brief reads it by default; the live rules are in
   totals from 52,956 to 32,647, and both listings found the right skill for
   both prompts (the short listing read a wrong skill first once and
   corrected itself in the same turn).
+- **TUI source launch.** With the source preload's transform cache, a warm
+  launch reached the first frame in about 1.1 s and a cold one in about
+  2.1 s (`apps/tui/AGENTS.md`, Preload required).
 - **Suite times (Pass 28).** Wall clock on the workbox with cached builds,
   from the Pass 28 receipts in `plans/architecture-loop-2026-09-22.md`
   (runtime and extension kernel acceptance). No guard reads them: measure

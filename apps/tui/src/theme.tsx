@@ -26,7 +26,7 @@ import tokyonight from "./themes/tokyonight.json" with { type: "json" }
 
 /**
  * The tokens a theme JSON names, each one a color gent draws: opencode's
- * names, cut to the ones with a consumer (the roles are in `apps/tui/AGENTS.md`).
+ * names, cut to the ones with a consumer (the roles are in `apps/tui/docs/theme.md`).
  * `selectedListItemText` and `backgroundPanel` may be left out: resolution
  * supplies both.
  */

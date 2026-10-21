@@ -65,7 +65,7 @@ when to read it.
 - `credentials.md` — credential slots and placement: labels, logins, rotation, `authSpread`; read when you change auth.
 - `shipped-extensions.md` — `/btw`, wake alarms and monitors, bash and background jobs, goals, the regex worker, fs-tools, workflow results, bundled skills; read when you change one of them.
 - `checkpoints.md` — turn checkpoints: capture, store, refs, reads, revert, retention; read when you change `@gent/checkpoints` or `/revert`.
-- `tui.md` — the TUI as a client, its boundaries, and TUI extensions; read with `apps/tui/AGENTS.md` when you change the TUI or a client extension.
+- `tui.md` — the TUI as a client over the contract: its production shape, boundaries and rules; read with `apps/tui/AGENTS.md`, which points to the TUI topic files, when you change the TUI.
 - `testing.md` — test boundaries, banned primitives, commands, test structure, important files; read when you add or restructure tests.
 - `history.md` — owner directions, measurements and pass evidence moved out of the live files; read only when you need why a rule was decided.
 
