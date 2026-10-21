@@ -36,6 +36,41 @@
   the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
+- The window a role compacts at is a seam too: `ModelContextWindowPolicy`
+  (`@gent/core/extensions/branch-tools`) answers `window({ agent, child })`
+  with `Option<number>`. The loop reads it with `Effect.serviceOption`, so
+  with none installed every role runs at its model's window, and a later
+  extension's policy replaces an earlier one (the Resource merge). The
+  answer only lowers the window: a value at or above the model's, or not a
+  positive integer, is ignored. The output reserve and `maxTokens` stay the
+  model window's. A spawned session runs its budget at the role window and
+  hands off between steps; a root keeps the model's window as its budget
+  and hands off at the role window only when a turn starts, anchored at the
+  new prompt (`turnBoundaryTokens`), so a turn's steps keep the cache they
+  wrote. One pure rule, `planWindow` (model-context.ts), decides `Keep`,
+  `Overflow` or `TurnBoundary` for the projection and for the tuner's
+  replay. `@gent/compaction` installs the policy as a server Resource
+  (`ContextWindows`, compaction.ts). Its `turnAfter` hook folds the turn's
+  branch events into samples: each step's input tokens (`StreamEnded.usage`),
+  model window and handoff (`ModelContextProjected`), and each first `read`
+  after a handoff of a path read before it. A `bash` command that names such
+  a path is stored too, for the tune report's `readCoverage`; a
+  `context.read` is a cell host call with no tool event and is not seen. The
+  samples go to the server's database (`context_window_steps`,
+  `context_window_rereads`), so every place's turns meet one table. When the
+  last tune is over 24 h old, the hook starts one in the Resource's scope
+  (one at a time per server; the run's hour is the primary key of
+  `context_window_tunes`, so a second server's run is a no-op). The tune
+  replays each role's last 7 days at 100k to 350k with the stored handoffs
+  undone, prices each handoff as its summary call, the restart write and the
+  role's re-reads per handoff (the fleet's below 20 handoffs, 20k with
+  neither), skips a role under 20 agents (branches), and keeps the largest
+  window within 1% of the cheapest (`tuneWindows`). A failed migration or
+  load leaves every role at its model window; a corrupt row leaves its own
+  role there, with a warning. The summary prompt keeps plan, log and state
+  file paths, the current step and the user's instructions word for word,
+  and the summary source is led by the latest earlier handoff marker, so
+  the paths it named carry forward.
 - Project instructions are an extension, not a profile field. `@gent/agents`
   reads `AGENTS.md` (or `CLAUDE.md`) from the gent home, each directory from
   the git root down to the project (the project alone outside a git work tree,

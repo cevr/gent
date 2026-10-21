@@ -213,6 +213,7 @@ import {
   ModelContextCapabilityFailure,
   type ModelCompactionError,
   type ModelContextLedger,
+  ModelContextWindowPolicy,
   announcedModel,
   assistantRunEfforts,
   modelChangeNotice,
@@ -3419,12 +3420,34 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     // The catalog's input cap binds whatever window the agent names: a provider
     // refuses input past it however large the window is.
     const inputLimit = Option.fromUndefinedOr(model.inputLimit).pipe(Option.filter(isTokenLimit))
+    // The output reserve stays the model window's: a quarter of a lower role
+    // window would cut the reply cap below the model's.
     const reservedOutputTokens = outputReserveTokens({
       contextLimitTokens: contextLimit,
       outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
     })
+    // The role's window (`ModelContextWindowPolicy`) only lowers the model's.
+    // A spawned session runs its budget at it and hands off between steps; a
+    // root keeps the model's window and hands off at it only when a turn
+    // starts (`turnBoundaryTokens`).
+    const roleWindow = yield* Effect.serviceOption(ModelContextWindowPolicy).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeedNone,
+          onSome: (policy) => policy.window({ agent: resolved.agent.name, child: resolved.child }),
+        }),
+      ),
+      Effect.map(
+        Option.filter(
+          (tokens) => Number.isSafeInteger(tokens) && tokens > 0 && tokens < contextLimit,
+        ),
+      ),
+    )
+    let budgetLimit = contextLimit
+    if (resolved.spawned) budgetLimit = Option.getOrElse(roleWindow, () => contextLimit)
+    const turnBoundaryTokens = Option.filter(roleWindow, () => !resolved.spawned)
     const budget = ModelContextBudget.make({
-      contextLimitTokens: contextLimit,
+      contextLimitTokens: budgetLimit,
       ...omitUndefined({
         inputLimitTokens: Option.getOrUndefined(inputLimit),
         imageCost: model.imageCost,
@@ -3471,6 +3494,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       cacheLifetimeMs: promptCacheTtlMsFor(model, resolved.child),
       promptCache,
       budget,
+      turnBoundaryTokens,
       turnHints,
       reasoningLevel,
       modelRequest,
@@ -3674,6 +3698,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     overflowed: params.overflowed,
     directive,
     turnStart: params.step <= 1,
+    turnBoundaryTokens: opening.turnBoundaryTokens,
     promptCache,
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens

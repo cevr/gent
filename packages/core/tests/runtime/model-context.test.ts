@@ -2668,6 +2668,7 @@ describe("turn window projection", () => {
         measure: Option.none(),
         overflowed: false,
         turnStart: false,
+        turnBoundaryTokens: Option.none(),
         promptCache: Option.none(),
         persist: (message) => {
           persisted.push(message)
@@ -2798,6 +2799,7 @@ describe("turn window projection", () => {
         measure: Option.none(),
         overflowed: false,
         turnStart: false,
+        turnBoundaryTokens: Option.none(),
         promptCache: Option.none(),
         persist: (message) => Effect.succeed(message),
         summaryModel,
@@ -2864,6 +2866,7 @@ describe("turn window projection", () => {
             measure: Option.none(),
             overflowed: false,
             turnStart: false,
+            turnBoundaryTokens: Option.none(),
             promptCache: Option.none(),
             persist: (message) => Effect.succeed(message),
             summaryModel,
@@ -2946,6 +2949,7 @@ describe("turn window projection", () => {
         measure: Option.none(),
         overflowed: false,
         turnStart: false,
+        turnBoundaryTokens: Option.none(),
         promptCache: Option.none(),
         persist: (message) => {
           persisted.push(message)
@@ -3028,6 +3032,7 @@ describe("turn window projection", () => {
           measure: Option.none(),
           overflowed: false,
           turnStart: false,
+          turnBoundaryTokens: Option.none(),
           promptCache: Option.none(),
           persist: Effect.succeed,
           summaryModel,

@@ -171,9 +171,11 @@ import {
 } from "../helpers/agent-loop"
 import {
   chainCompactors,
+  type ContextRole,
   contextWindowOf,
   ModelCompactionError,
   ModelContextCompactor,
+  ModelContextWindowPolicy,
 } from "../../src/runtime/model-context"
 import {
   e2ePreset,
@@ -6279,6 +6281,332 @@ describe("native model compaction integration", () => {
       Effect.timeout("15 seconds"),
     )
   })
+})
+
+// ── role context window ─────────────────────────────────────────────────────
+
+describe("role context window", () => {
+  const ROLE_DRIVER = "role-window-driver"
+  const roleModelId = ModelId.make(`${ROLE_DRIVER}/model`)
+  /** The model's own window; the role windows below sit under it. */
+  const MODEL_WINDOW = 200_000
+  /** A worker on the session cache: spawned, yet its role keys as `child: false`. */
+  const roleWorker = AgentDefinition.make({
+    name: AgentName.make("role-window-worker"),
+    model: roleModelId,
+    promptCache: "session",
+  })
+  const roleEcho = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+  /**
+   * One step's reply: a tool call echoing `chars` characters (about
+   * `chars / 4` tokens in the window), or text.
+   */
+  type RoleStep = { readonly echo: number } | { readonly text: string }
+  const replyOf = (step: RoleStep) => {
+    if ("text" in step) {
+      return Stream.fromIterable([textDeltaPart(step.text), finishPart({ finishReason: "stop" })])
+    }
+    return Stream.fromIterable([
+      toolCallPart("echo", { text: "x".repeat(step.echo) }),
+      finishPart({ finishReason: "tool-calls" }),
+    ])
+  }
+  const lastUserText = (prompt: Prompt.Prompt) => {
+    const last = prompt.content.findLast((message) => message.role === "user")
+    if (Predicate.isUndefined(last) || Predicate.isString(last.content)) return ""
+    return last.content
+      .flatMap((part) => {
+        if (part.type !== "text") return []
+        return [part.text]
+      })
+      .join("")
+  }
+
+  /**
+   * A root over a 200k model whose turn steps reply from `steps` in order
+   * (the summary request answers apart), with `window` as every role's
+   * window when one is set. It records the roles the policy was asked for,
+   * each request's hints and every event.
+   */
+  const roleRoot = (params: {
+    readonly window: Option.Option<number>
+    readonly steps: ReadonlyArray<RoleStep>
+  }) =>
+    Effect.gen(function* () {
+      const hints: Array<ProviderHints> = []
+      const asked: Array<ContextRole> = []
+      const events = yield* Ref.make<AgentEvent[]>([])
+      let next = 0
+      const providerLayer = LanguageModelLayers.testStream((options) => {
+        const prompt = Prompt.make(options.prompt)
+        if (lastUserText(prompt) === "summarize")
+          return Effect.succeed(replyOf({ text: "summary" }))
+        const step = params.steps[next] ?? { text: "done" }
+        next += 1
+        return Effect.succeed(replyOf(step))
+      })
+      const driver: ModelDriverContribution = {
+        id: ROLE_DRIVER,
+        name: "Role window driver",
+        resolveModel: (_modelName, _authInfo, requested) =>
+          Effect.sync(() => {
+            if (Predicate.isNotUndefined(requested)) hints.push(requested)
+            return AiModel.make(ROLE_DRIVER, "model", providerLayer)
+          }),
+      }
+      const policy = Layer.succeed(
+        ModelContextWindowPolicy,
+        ModelContextWindowPolicy.of({
+          window: (role) =>
+            Effect.sync(() => {
+              asked.push(role)
+              return params.window
+            }),
+        }),
+      )
+      const layer = actorTestRoot({
+        resolver: ModelResolver.Live.pipe(
+          Layer.provide(Auth.Test()),
+          Layer.provide(fixtureModelCatalogSource),
+        ),
+        registry: ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make(ROLE_DRIVER) },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: {
+                agents: [...testAgents, roleWorker],
+                modelDrivers: [driver],
+                tools: [roleEcho],
+              },
+            },
+          ]),
+        ),
+        eventStore: recordingEventStore(events),
+        models: [
+          Model.make({
+            id: roleModelId,
+            name: "Role window model",
+            provider: ProviderId.make(ROLE_DRIVER),
+            contextLength: MODEL_WINDOW,
+          }),
+        ],
+      }).pipe(
+        Layer.provideMerge(rangeCompactorLayer),
+        Layer.provideMerge(
+          Option.match(params.window, { onNone: () => Layer.empty, onSome: () => policy }),
+        ),
+      )
+      return { layer, hints, asked, events }
+    })
+
+  const projectedOf = (events: ReadonlyArray<AgentEvent>, sessionId: SessionId) =>
+    events.flatMap((event) => {
+      if (event._tag !== "ModelContextProjected" || event.sessionId !== sessionId) return []
+      return [event]
+    })
+  /** The turn steps' output caps: the summary request asks for its own 1,000. */
+  const turnMaxTokens = (hints: ReadonlyArray<ProviderHints>) =>
+    hints.flatMap((hint) => {
+      if (hint.maxTokens === 1_000) return []
+      return [hint.maxTokens]
+    })
+
+  /** A session spawned under a root, as a delegate's child is. */
+  const spawnedSession = (name: string, admission: SessionAdmission) =>
+    Effect.gen(function* () {
+      const parentId = SessionId.make(`${name}-parent`)
+      const parentBranch = BranchId.make(`${name}-parent-branch`)
+      yield* ensureStorageParents({ sessionId: parentId, branchId: parentBranch })
+      const sessionId = SessionId.make(`${name}-child`)
+      const now = dateFromMillis(yield* Clock.currentTimeMillis)
+      yield* (yield* SessionStorage).createSession(
+        new Session({
+          id: sessionId,
+          parentSessionId: parentId,
+          parentBranchId: parentBranch,
+          createdAt: now,
+          updatedAt: now,
+          admission,
+        }),
+      )
+      return { sessionId, branchId: BranchId.make(`${name}-child-branch`) }
+    })
+
+  const modelAdmission: SessionAdmission = { runSpec: { overrides: { model: roleModelId } } }
+  /**
+   * Two echo steps of ~50k tokens each, then text: ~100k tokens before the
+   * last step, past 120k less its 32k output reserve, within 200k less it.
+   */
+  const growingTurn: ReadonlyArray<RoleStep> = [
+    { echo: 200_000 },
+    { echo: 200_000 },
+    { text: "done" },
+  ]
+
+  it.live("a role window only lowers the budget and keeps the model's output cap", () =>
+    Effect.gen(function* () {
+      const runAt = (name: string, window: Option.Option<number>) =>
+        Effect.gen(function* () {
+          const root = yield* roleRoot({ window, steps: [{ text: "ok" }] })
+          return yield* Effect.gen(function* () {
+            const child = yield* spawnedSession(name, modelAdmission)
+            yield* runAgentLoop(
+              makeMessage(child.sessionId, child.branchId, "hello"),
+              modelAdmission,
+            )
+            const projected = projectedOf(yield* Ref.get(root.events), child.sessionId)
+            return {
+              available: projected[0]?.availableInputTokens ?? 0,
+              ceiling: projected[0]?.contextLimitTokens ?? 0,
+              maxTokens: turnMaxTokens(root.hints),
+            }
+          }).pipe(Effect.provide(root.layer), Effect.scoped)
+        })
+      const none = yield* runAt("role-lowers-none", Option.none())
+      const lower = yield* runAt("role-lowers-120k", Option.some(120_000))
+      const above = yield* runAt("role-lowers-300k", Option.some(300_000))
+      // 120k lowers the input the step may carry by the 80k it takes off the window.
+      expect(lower.available).toBe(none.available - 80_000)
+      // A window past the model's changes nothing.
+      expect(above.available).toBe(none.available)
+      // The reply cap stays the model window's 32k: a quarter of 120k is 30k.
+      expect(lower.maxTokens).toEqual([32_000])
+      expect(none.maxTokens).toEqual([32_000])
+      // The ceiling the step reports stays the model's window.
+      expect(lower.ceiling).toBe(MODEL_WINDOW)
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live("a spawned session hands off between steps at its role window", () =>
+    Effect.gen(function* () {
+      const runAt = (name: string, window: Option.Option<number>) =>
+        Effect.gen(function* () {
+          const root = yield* roleRoot({ window, steps: growingTurn })
+          return yield* Effect.gen(function* () {
+            const child = yield* spawnedSession(name, modelAdmission)
+            yield* runAgentLoop(
+              makeMessage(child.sessionId, child.branchId, "grow"),
+              modelAdmission,
+            )
+            const projected = projectedOf(yield* Ref.get(root.events), child.sessionId)
+            return { compacted: projected.map((event) => event.compacted), asked: root.asked }
+          }).pipe(Effect.provide(root.layer), Effect.scoped)
+        })
+      const lower = yield* runAt("spawned-step-120k", Option.some(120_000))
+      // ~100k tokens before step three: past 120k less the 32k reserve, so
+      // the third step hands off inside the turn.
+      expect(lower.compacted).toEqual([false, false, true])
+      expect(lower.asked[0]).toEqual({ agent: testAgent.name, child: true })
+      const model = yield* runAt("spawned-step-none", Option.none())
+      expect(model.compacted).toEqual([false, false, false])
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a worker on the session cache keys as child false and still hands off between steps",
+    () =>
+      Effect.gen(function* () {
+        const admission: SessionAdmission = { agent: roleWorker.name, ...modelAdmission }
+        const root = yield* roleRoot({ window: Option.some(120_000), steps: growingTurn })
+        yield* Effect.gen(function* () {
+          const child = yield* spawnedSession("worker-step", admission)
+          yield* runAgentLoop(makeMessage(child.sessionId, child.branchId, "grow"), admission)
+          const projected = projectedOf(yield* Ref.get(root.events), child.sessionId)
+          expect(projected.map((event) => event.compacted)).toEqual([false, false, true])
+          expect(root.asked[0]).toEqual({ agent: roleWorker.name, child: false })
+        }).pipe(Effect.provide(root.layer), Effect.scoped)
+      }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a root past its role window keeps the turn whole and hands off when the next turn starts",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("root-role-window")
+        const branchId = BranchId.make("root-role-window-branch")
+        // Each turn's echo adds ~50k tokens. The second turn starts at ~50k,
+        // under 120k less its 32k reserve, and crosses it at its second step
+        // with the first turn behind it to summarize: the turn stays whole.
+        // The third turn starts at ~100k and hands off first.
+        const root = yield* roleRoot({
+          window: Option.some(120_000),
+          steps: [
+            { echo: 200_000 },
+            { text: "first answer" },
+            { echo: 200_000 },
+            { text: "second answer" },
+            { text: "third answer" },
+          ],
+        })
+        yield* Effect.gen(function* () {
+          yield* runAgentLoop(makeMessage(sessionId, branchId, "grow"), modelAdmission)
+          yield* runAgentLoop(makeMessage(sessionId, branchId, "second turn"), modelAdmission)
+          yield* runAgentLoop(makeMessage(sessionId, branchId, "third turn"), modelAdmission)
+          const projected = projectedOf(yield* Ref.get(root.events), sessionId)
+          expect(projected.map((event) => event.compacted)).toEqual([
+            false,
+            false,
+            false,
+            false,
+            true,
+          ])
+          expect(root.asked[0]).toEqual({ agent: testAgent.name, child: false })
+          const durable = yield* (yield* MessageStorage).listMessages(branchId)
+          const marker = durable.find((message) => Option.isSome(contextWindowOf(message)))
+          if (Predicate.isUndefined(marker)) return yield* Effect.die("marker missing")
+          // The window reopens at the new prompt and summarizes both earlier turns.
+          const window = Option.getOrThrow(contextWindowOf(marker))
+          expect(window.keepFromMessageId).toBe(makeMessage(sessionId, branchId, "third turn").id)
+          expect(window.summarized?.firstMessageId).toBe(
+            makeMessage(sessionId, branchId, "grow").id,
+          )
+        }).pipe(Effect.provide(root.layer), Effect.scoped)
+      }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live("a root past its model window still hands off between steps", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("root-role-ceiling")
+      const branchId = BranchId.make("root-role-ceiling-branch")
+      const root = yield* roleRoot({
+        window: Option.some(120_000),
+        // ~90k tokens a step: past the model's 168k input before step three.
+        steps: [{ echo: 360_000 }, { echo: 360_000 }, { text: "done" }],
+      })
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "overflow"), modelAdmission)
+        const projected = projectedOf(yield* Ref.get(root.events), sessionId)
+        expect(projected.map((event) => event.compacted)).toEqual([false, false, true])
+      }).pipe(Effect.provide(root.layer), Effect.scoped)
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live("with no window policy a root keeps today's window across turns", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("root-no-policy")
+      const branchId = BranchId.make("root-no-policy-branch")
+      const root = yield* roleRoot({
+        window: Option.none(),
+        steps: [...growingTurn, { text: "second answer" }],
+      })
+      yield* Effect.gen(function* () {
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "grow"), modelAdmission)
+        yield* runAgentLoop(makeMessage(sessionId, branchId, "second turn"), modelAdmission)
+        const projected = projectedOf(yield* Ref.get(root.events), sessionId)
+        expect(projected.map((event) => event.compacted)).toEqual([false, false, false, false])
+        expect(projected.every((event) => event.contextLimitTokens === MODEL_WINDOW)).toBe(true)
+        expect(turnMaxTokens(root.hints).every((tokens) => tokens === 32_000)).toBe(true)
+      }).pipe(Effect.provide(root.layer), Effect.scoped)
+    }).pipe(Effect.timeout("20 seconds")),
+  )
 })
 
 // ── native model context projection ─────────────────────────────────────────

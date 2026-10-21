@@ -72,6 +72,14 @@ export {
   ModelContextCompactor,
 } from "../runtime/model-context.js"
 export { estimateTextTokens, ModelContextBudget } from "../runtime/model-context.js"
+
+// Setting the window each role compacts at.
+export {
+  ContextRole,
+  ModelContextWindowPolicy,
+  outputReserveTokens,
+  planWindow,
+} from "../runtime/model-context.js"
 export { Message } from "../domain/message.js"
 export { type Usage } from "../domain/event.js"
 export { type ProviderAuthError } from "../domain/driver.js"

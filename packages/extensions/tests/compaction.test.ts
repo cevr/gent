@@ -1,12 +1,31 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Predicate, Schema, Stream } from "effect"
+import { BunServices } from "@effect/platform-bun"
+import {
+  Cause,
+  Clock,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Option,
+  Predicate,
+  References,
+  Schema,
+  Stream,
+} from "effect"
+import { SqlClient } from "effect/sql"
 import { LanguageModel } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import * as AiError from "effect/ai/AiError"
 import {
+  AgentEvent,
+  AgentName,
   BranchId,
   DEFAULT_AGENT_NAME,
   MessageId,
+  ToolCallId,
   SessionId,
   dateFromMillis,
   Message,
@@ -21,6 +40,7 @@ import {
   toolCallStep,
   waitFor,
   createRpcHarness,
+  makeTempDirectoryScoped,
   systemTextOf,
   testLeafContext,
   testToolContext,
@@ -32,13 +52,22 @@ import {
   ModelContextBudget,
   ModelContextCompactor,
 } from "@gent/core/extensions/branch-tools"
+import { BunSqlite } from "@gent/core/host-bun"
 import {
   compactModelContext,
+  ContextWindows,
   MODEL_COMPACTION_OUTPUT_TOKENS,
   ModelContextCompactorLive,
   referencedBindings,
+  replayWindow,
   RetainedBindings,
+  RoleWindow,
   selectSummarySource,
+  type TuneReport,
+  tuneWindows,
+  type WindowReread,
+  type WindowStep,
+  windowSamplesOf,
 } from "../src/compaction.js"
 import { platform } from "./helpers/cell-kernel.js"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset.js"
@@ -1040,5 +1069,487 @@ describe("model compaction RPC boundary", () => {
         }).pipe(Effect.timeout("60 seconds")),
       ),
     70_000,
+  )
+})
+
+// ── role windows ────────────────────────────────────────────────────────────
+
+const worker = AgentName.make("worker")
+const workerRole = { agent: worker, child: false }
+
+/** One branch's steps: one turn, a step per input size; `compactedAt` marks stored handoffs. */
+const branchSteps = (
+  index: number,
+  inputs: ReadonlyArray<number>,
+  params: {
+    readonly compactedAt?: ReadonlyArray<number>
+    readonly spawned?: boolean
+    readonly ceilingTokens?: number
+    readonly agent?: AgentName
+  } = {},
+): ReadonlyArray<WindowStep> =>
+  inputs.map((inputTokens, step) => ({
+    sessionId: SessionId.make(`window-session-${index}`),
+    branchId: BranchId.make(`window-branch-${index}`),
+    messageId: MessageId.make(`window-turn-${index}`),
+    step: step + 1,
+    agent: params.agent ?? worker,
+    child: false,
+    spawned: params.spawned ?? true,
+    ceilingTokens: params.ceilingTokens ?? 200_000,
+    inputTokens,
+    compacted: (params.compactedAt ?? []).includes(step),
+    turnStartedAt: 0,
+  }))
+
+const ramp = (start: number, growth: number, steps: number) =>
+  Array.from({ length: steps }, (_, step) => start + step * growth)
+
+const fleet = (
+  agents: number,
+  inputs: ReadonlyArray<number>,
+  compactedAt?: ReadonlyArray<number>,
+) =>
+  Array.from({ length: agents }, (_, index) => branchSteps(index, inputs, { compactedAt })).flat()
+
+const tune = (steps: ReadonlyArray<WindowStep>, rereads: ReadonlyArray<WindowReread> = []) =>
+  tuneWindows({ steps, rereads, cutoff: 0, finishedAt: 0 })
+
+const windowOf = (report: TuneReport) => report.rows.map((row) => row.windowTokens)
+
+/** A scratch database the role windows build over, as the server's is. */
+const windowDatabase = Effect.gen(function* () {
+  const dir = yield* makeTempDirectoryScoped("compaction-windows-")
+  const file = `${dir}/gent.db`
+  const sqlLayer = BunSqlite.file(file).pipe(Layer.provide(BunServices.layer))
+  const sql = <A, E>(statement: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+    Effect.scoped(statement.pipe(Effect.provide(sqlLayer)))
+  /** One build of the windows, as a server start makes. */
+  const build = Layer.build(ContextWindows.Live.pipe(Layer.provide(sqlLayer))).pipe(
+    Effect.map((context) => Context.get(context, ContextWindows)),
+  )
+  return { file, sql, build }
+})
+
+/** A finished tune `ageMs` old, as an earlier server left it. */
+const seedTune = (ageMs: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const finished = (yield* Clock.currentTimeMillis) - ageMs
+    yield* sql`
+      INSERT INTO context_window_tunes (cutoff, finished_at, report_json)
+      VALUES (${finished}, ${finished}, '{}')
+    `
+  })
+
+const tuneCount = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{
+    readonly count: number
+  }>`SELECT COUNT(*) AS count FROM context_window_tunes`
+  return rows[0]?.count ?? 0
+})
+
+describe("role windows", () => {
+  test("a replay undoes the stored handoffs and hands off by its own window", () => {
+    // A worker that handed off at 120k, then grew 30k: as if it never had.
+    const stored = branchSteps(0, [50_000, 90_000, 120_000, 30_000, 60_000], {
+      compactedAt: [3],
+      ceilingTokens: 400_000,
+    })
+    const unrolled = branchSteps(0, [50_000, 90_000, 120_000, 120_000, 150_000], {
+      ceilingTokens: 400_000,
+    })
+    const at350 = replayWindow(stored, { windowTokens: 350_000, ceilingTokens: 400_000 })
+    expect(at350.handoffs).toBe(0)
+    expect(at350).toEqual(replayWindow(unrolled, { windowTokens: 350_000, ceilingTokens: 400_000 }))
+    // The same branch at 100k hands off on its own, past the 68k the reserve leaves.
+    expect(
+      replayWindow(stored, { windowTokens: 100_000, ceilingTokens: 400_000 }).handoffs,
+    ).toBeGreaterThan(0)
+  })
+
+  test("a root hands off only when a turn starts past its window", () => {
+    // Two turns of a root at a 200k model: the window is 100k.
+    const turns = [
+      ...branchSteps(0, [40_000, 80_000, 120_000], { spawned: false }),
+      ...branchSteps(0, [130_000, 140_000], { spawned: false }).map((step) => ({
+        ...step,
+        messageId: MessageId.make("window-turn-0b"),
+        turnStartedAt: 1,
+      })),
+    ]
+    const replay = replayWindow(turns, { windowTokens: 100_000, ceilingTokens: 200_000 })
+    // Not mid-turn at 120k: once, at the second turn's first step.
+    expect(replay.handoffs).toBe(1)
+    expect(replay.callsAfter).toBe(2)
+  })
+
+  test("re-reads after a handoff can reverse the cheapest window", () => {
+    // Twenty workers ramp from 20k to about 159k, each with one stored handoff.
+    const inputs = [...ramp(20_000, 700, 150), ...ramp(35_000, 700, 50)]
+    const steps = fleet(20, inputs, [150])
+    const handoffs = 20
+    // No re-read: frequent small handoffs are cheapest.
+    const dry = tune(steps)
+    expect(dry.rows[0]?.rereadSource).toBe("Role")
+    expect(dry.rows[0]?.rereadTokens).toBe(0)
+    expect(windowOf(dry)).toEqual([100_000])
+    // 20k read again after each handoff: fewer handoffs win.
+    const rereads = Array.from({ length: handoffs }, (_, index) => ({
+      sessionId: SessionId.make(`window-session-${index}`),
+      branchId: BranchId.make(`window-branch-${index}`),
+      toolCallId: ToolCallId.make(`window-read-${index}`),
+      agent: worker,
+      child: false,
+      tool: "read" as const,
+      tokens: 20_000,
+    }))
+    const wet = tune(steps, rereads)
+    expect(wet.rows[0]?.rereadTokens).toBe(20_000)
+    expect(windowOf(wet)).toEqual([140_000])
+    expect(wet.readCoverage).toBe(1)
+  })
+
+  test("nineteen agents write no row; a 1% tie takes the larger window", () => {
+    const inputs = ramp(20_000, 1_000, 200)
+    const few = tune(fleet(19, inputs))
+    expect(few.rows).toEqual([])
+    expect(few.skipped).toEqual([{ role: workerRole, agents: 19 }])
+    const enough = tune(fleet(20, inputs))
+    const row = enough.rows[0]
+    expect(row?.rereadSource).toBe("Prior")
+    const cost = (window: number) =>
+      row?.costByWindow.find((entry) => entry.windowTokens === window)?.cost ?? 0
+    // 120k is cheapest; 140k is within 1% of it and hands off less.
+    expect(cost(120_000)).toBeLessThan(cost(140_000))
+    expect(cost(140_000)).toBeLessThan(cost(120_000) * 1.01)
+    expect(windowOf(enough)).toEqual([140_000])
+  })
+
+  test("a turn's samples are its steps, and its reads of paths read before a handoff", () => {
+    const turnId = MessageId.make("window-turn")
+    const earlier = MessageId.make("window-earlier")
+    const base = { sessionId, branchId }
+    const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 1 })
+    const read = (id: string, path: string) =>
+      AgentEvent.cases.ToolCallStarted.make({
+        ...base,
+        toolCallId: ToolCallId.make(id),
+        toolName: "read",
+        input: { path },
+      })
+    const done = (id: string, output: string) =>
+      AgentEvent.cases.ToolCallSucceeded.make({
+        ...base,
+        toolCallId: ToolCallId.make(id),
+        toolName: "read",
+        output,
+      })
+    const projected = (compacted: boolean) =>
+      AgentEvent.cases.ModelContextProjected.make({
+        ...base,
+        estimatedTokens: 1,
+        availableInputTokens: 1,
+        contextLimitTokens: 200_000,
+        omittedMessages: 0,
+        compacted,
+      })
+    const events = [
+      // An earlier turn reads the plan.
+      projected(false),
+      AgentEvent.cases.StreamStarted.make({ ...base, messageId: earlier, step: 1 }),
+      AgentEvent.cases.StreamEnded.make({ ...base, messageId: earlier, step: 1, usage: usage(5) }),
+      read("plan-1", "plans/a.md"),
+      done("plan-1", "p".repeat(400)),
+      // This turn hands off, then reads the plan again, twice, and a new file.
+      projected(true),
+      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step: 1 }),
+      AgentEvent.cases.StreamEnded.make({
+        ...base,
+        messageId: turnId,
+        step: 1,
+        usage: usage(30_000),
+        child: true,
+      }),
+      read("plan-2", "plans/a.md"),
+      read("plan-3", "plans/a.md"),
+      read("new-1", "src/b.ts"),
+      AgentEvent.cases.ToolCallStarted.make({
+        ...base,
+        toolCallId: ToolCallId.make("cat-1"),
+        toolName: "bash",
+        input: { command: "cat plans/a.md" },
+      }),
+      done("plan-2", "p".repeat(40_000)),
+      done("plan-3", "p".repeat(400)),
+      done("new-1", "n".repeat(400)),
+      AgentEvent.cases.ToolCallSucceeded.make({
+        ...base,
+        toolCallId: ToolCallId.make("cat-1"),
+        toolName: "bash",
+        output: "p".repeat(400),
+      }),
+      projected(false),
+      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step: 2 }),
+      AgentEvent.cases.StreamEnded.make({
+        ...base,
+        messageId: turnId,
+        step: 2,
+        usage: usage(42_000),
+        child: true,
+      }),
+    ]
+    const samples = windowSamplesOf(events, {
+      sessionId,
+      branchId,
+      messageId: turnId,
+      agent: worker,
+      spawned: true,
+      startedAtMs: 7,
+    })
+    expect(
+      samples.steps.map((step) => [step.step, step.inputTokens, step.compacted, step.child]),
+    ).toEqual([
+      [1, 30_000, true, true],
+      [2, 42_000, false, true],
+    ])
+    // The first re-read counts, clipped at 8,000 characters; the repeat and the new file do not.
+    expect(
+      samples.rereads.map((reread) => [reread.toolCallId, reread.tool, reread.tokens]),
+    ).toEqual([
+      [ToolCallId.make("plan-2"), "read", 2_000],
+      [ToolCallId.make("cat-1"), "bash", 100],
+    ])
+  })
+
+  it.scopedLive("the handoff keeps the paths named only in the earlier handoff", () => {
+    let user = ""
+    let system = ""
+    return Effect.gen(function* () {
+      const marker = windowMarkerMessage({
+        sessionId,
+        branchId,
+        keepFromMessageId: MessageId.make("old-2"),
+        notice: "Context handoff. Plan: plans/orbit.md, step 3 of 7.",
+        summarized: {
+          firstMessageId: MessageId.make("old-1"),
+          lastMessageId: MessageId.make("old-1"),
+          count: 1,
+        },
+        createdAt: dateFromMillis(1_001),
+      })
+      yield* compact({
+        history: [
+          textMessage("old-1", "user", "the task", 1),
+          marker,
+          textMessage("old-2", "assistant", "x".repeat(4_000), 2),
+          textMessage("old-3", "assistant", "y".repeat(4_000), 3),
+        ],
+        budget: budget(2_200),
+      })
+      // The run of recent messages fits only one; the marker leads it.
+      expect(user).toContain("plans/orbit.md")
+      expect(user).not.toContain("x".repeat(100))
+      expect(user.indexOf("plans/orbit.md")).toBeLessThan(user.indexOf("y".repeat(100)))
+      expect(system).toContain("the path of every plan, log, notes or state file")
+    }).pipe(
+      Effect.provide(
+        summaryProvider("pinned", (prompt) => {
+          user = promptText(prompt)
+          system = systemTextOf(prompt)
+        }),
+      ),
+      Effect.timeout("10 seconds"),
+    )
+  })
+
+  it.scopedLive("a stale tune runs once over two builds; a fresh one runs none", () =>
+    Effect.gen(function* () {
+      const stale = yield* windowDatabase
+      const first = yield* stale.build
+      yield* stale.sql(seedTune(25 * 3_600_000))
+      // Two servers over one database, and two turn ends on one of them.
+      const second = yield* stale.build
+      const reports = yield* Effect.all(
+        [first.tuneIfStale, first.tuneIfStale, second.tuneIfStale],
+        { concurrency: "unbounded" },
+      )
+      expect(reports.filter(Option.isSome)).toHaveLength(1)
+      expect(yield* stale.sql(tuneCount)).toBe(2)
+      // The tune is fresh now: nothing runs again.
+      expect(Option.isNone(yield* second.tuneIfStale)).toBe(true)
+      expect(Option.isNone(yield* (yield* stale.build).tuneIfStale)).toBe(true)
+
+      const fresh = yield* windowDatabase
+      yield* fresh.build
+      yield* fresh.sql(seedTune(3_600_000))
+      const restarted = yield* fresh.build
+      expect(Option.isNone(yield* restarted.tuneIfStale)).toBe(true)
+      expect(yield* fresh.sql(tuneCount)).toBe(1)
+    }).pipe(Effect.provide(platform), Effect.timeout("20 seconds")),
+  )
+
+  it.scopedLive("a corrupt row warns and leaves its role at the model window", () => {
+    const warnings: Array<string> = []
+    const capture = Logger.make(({ message }) => {
+      warnings.push(String(message))
+    })
+    return Effect.gen(function* () {
+      const database = yield* windowDatabase
+      yield* database.build
+      const good = yield* Schema.encodeEffect(Schema.fromJsonString(RoleWindow))({
+        role: workerRole,
+        windowTokens: 140_000,
+        ceilingTokens: 200_000,
+        agents: 20,
+        rereadTokens: 0,
+        rereadSource: "Role",
+        costByWindow: [],
+      })
+      yield* database.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            INSERT INTO context_windows (agent, child, row_json, tuned_at)
+            VALUES ('worker', 0, ${good}, 0), ('main', 0, '{not json', 0)
+          `
+        }),
+      )
+      const windows = yield* database.build
+      expect(yield* windows.window(workerRole)).toEqual(Option.some(140_000))
+      expect(yield* windows.window({ agent: DEFAULT_AGENT_NAME, child: false })).toEqual(
+        Option.none(),
+      )
+      expect(warnings.some((text) => text.includes("compaction.windows.row.corrupt"))).toBe(true)
+    }).pipe(
+      Effect.provide(Logger.layer([capture])),
+      // The test preload turns logs off; this test reads the warning.
+      Effect.provideService(References.MinimumLogLevel, "Debug"),
+      Effect.provide(platform),
+      Effect.timeout("20 seconds"),
+    )
+  })
+
+  it.scopedLive(
+    "a tuned window reaches the loop: a root hands off when its next turn starts past it",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("compaction-tuned-")
+        const storagePath = `${dir}/gent.db`
+        // The server's database as an earlier tune left it: a fresh run and a
+        // 33k window for the root agent. The model's 128k window reserves 32k
+        // for output, so a turn that starts past about 1k hands off.
+        const row = yield* Schema.encodeEffect(Schema.fromJsonString(RoleWindow))({
+          role: { agent: DEFAULT_AGENT_NAME, child: false },
+          windowTokens: 33_000,
+          ceilingTokens: 128_000,
+          agents: 20,
+          rereadTokens: 0,
+          rereadSource: "Role",
+          costByWindow: [],
+        })
+        yield* Effect.gen(function* () {
+          yield* Layer.build(ContextWindows.Live)
+          const sql = yield* SqlClient.SqlClient
+          const now = yield* Clock.currentTimeMillis
+          yield* sql`
+            INSERT INTO context_window_tunes (cutoff, finished_at, report_json)
+            VALUES (${now}, ${now}, '{}')
+          `
+          yield* sql`
+            INSERT INTO context_windows (agent, child, row_json, tuned_at)
+            VALUES (${DEFAULT_AGENT_NAME}, 0, ${row}, ${now})
+          `
+        }).pipe(
+          Effect.provide(BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer))),
+          Effect.scoped,
+        )
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("first reply"),
+          textStep("the summary"),
+          textStep("second reply"),
+        ])
+        const {
+          client,
+          sessionId: turnSession,
+          branchId: turnBranch,
+        } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          storagePath,
+        })
+        const turn = (content: string, reply: string) =>
+          Effect.gen(function* () {
+            yield* client.message.send({ sessionId: turnSession, branchId: turnBranch, content })
+            return yield* waitFor(client.message.list({ branchId: turnBranch }), (items) =>
+              items.some((item) => partsText(item) === reply),
+            )
+          })
+        const first = yield* turn("first task", "first reply")
+        expect(
+          first.filter((message) => message.metadata?.customType === "context-window"),
+        ).toEqual([])
+        const second = yield* turn("second task", "second reply")
+        const markers = second.filter(
+          (message) => message.metadata?.customType === "context-window",
+        )
+        expect(markers).toHaveLength(1)
+        // Anchored at the new prompt: the handoff summarizes the whole first turn.
+        const prompt = second.find((message) => partsText(message) === "second task")
+        expect(markers[0]?.id).toBe(MessageId.make(`context-handoff:${turnBranch}:${prompt?.id}`))
+        yield* controls.assertDone
+      }).pipe(Effect.provide(platform), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.scopedLive(
+    "a turn's end records its steps in the server's database",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("compaction-turn-")
+        const storagePath = `${dir}/gent.db`
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "1" }),
+          textStep("recorded"),
+        ])
+        const {
+          client,
+          sessionId: turnSession,
+          branchId: turnBranch,
+        } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          storagePath,
+        })
+        yield* client.message.send({ sessionId: turnSession, branchId: turnBranch, content: "go" })
+        const steps = Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          return yield* sql<{
+            readonly step: number
+            readonly agent: string
+            readonly spawned: number
+            readonly input_tokens: number
+          }>`
+            SELECT step, agent, spawned, input_tokens FROM context_window_steps
+            WHERE session_id = ${turnSession} ORDER BY step
+          `
+        }).pipe(
+          Effect.provide(BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer))),
+          Effect.scoped,
+          Effect.orDie,
+        )
+        const rows = yield* waitFor(
+          steps,
+          (found) => found.length >= 2,
+          15_000,
+          "the steps recorded",
+        )
+        expect(rows.map((row) => [row.step, row.agent, row.spawned, row.input_tokens])).toEqual([
+          [1, DEFAULT_AGENT_NAME, 0, 10],
+          [2, DEFAULT_AGENT_NAME, 0, 10],
+        ])
+      }).pipe(Effect.provide(platform), Effect.timeout("25 seconds")),
+    30_000,
   )
 })

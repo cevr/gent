@@ -885,6 +885,13 @@ fails with no model call.
 extension on the compacted branch gets: `ctx.cwd` is the session's cwd, not
 the cwd setup saw, and `ctx.State.changed()` reports under the extension's id.
 
+The window a handoff happens at comes from `ModelContextWindowPolicy` in the
+same entry: `window({ agent, child })` answers a token count for the role, or
+none for the model's window. It only lowers the window. A spawned session
+hands off between steps at it; a root hands off at it only when a turn
+starts. `@gent/compaction` ships one tuned from the server's own turns; a
+Resource of a later extension that provides the Tag replaces it.
+
 ```ts
 import {
   defineExtension,

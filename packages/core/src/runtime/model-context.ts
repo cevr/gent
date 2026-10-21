@@ -26,7 +26,7 @@ import {
 import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
 import {
-  type AgentName,
+  AgentName,
   cacheWriteRate,
   ImageCost,
   type ImageLimit,
@@ -1985,6 +1985,70 @@ export class ModelContextCompactor extends Context.Service<
   ModelContextCompactorService
 >()("@gent/core/src/runtime/model-context/ModelContextCompactor") {}
 
+// ── window policy ───────────────────────────────────────────────────────────
+
+/**
+ * Whose window a policy sets: the agent a turn dispatches and whether its
+ * session keeps the child cache (`ResolvedTurn.child`). A worker on the
+ * session cache is spawned yet keys as `child: false`.
+ */
+export const ContextRole = Schema.Struct({ agent: AgentName, child: Schema.Boolean })
+export type ContextRole = typeof ContextRole.Type
+
+interface ModelContextWindowPolicyService {
+  /**
+   * The window a role compacts at, in tokens; none leaves it at the model's
+   * window. The loop only lowers: a window at or past the model's changes
+   * nothing. A spawned session hands off between steps at it; a root keeps
+   * the model's window as its hard budget and hands off at it only when a
+   * turn starts (`planWindow`).
+   */
+  readonly window: (role: ContextRole) => Effect.Effect<Option.Option<number>>
+}
+
+/**
+ * Installed by an extension as a resource; absent when no role has a window
+ * of its own. A later extension's policy replaces an earlier one.
+ */
+export class ModelContextWindowPolicy extends Context.Service<
+  ModelContextWindowPolicy,
+  ModelContextWindowPolicyService
+>()("@gent/core/src/runtime/model-context/ModelContextWindowPolicy") {}
+
+/**
+ * What a window does before a call: keep its messages, hand off because the
+ * call would carry more input than its limit (`Overflow`, at any step), or
+ * hand off because a turn starts past the role's lower window
+ * (`TurnBoundary`).
+ */
+const WindowPlan = Schema.Literals(["Keep", "Overflow", "TurnBoundary"])
+type WindowPlan = typeof WindowPlan.Type
+
+/**
+ * When a window hands off: past its input limit at any step, and past the
+ * turn-boundary limit only before a turn's first call. The projection asks
+ * it with its estimate of the window; the compaction tuner asks it with
+ * replayed input sizes, so both decide by one rule.
+ */
+export const planWindow = (step: {
+  /** The input the call would carry: messages, system prompt and tool definitions. */
+  readonly inputTokens: number
+  /** The input the call may carry at its hard budget. */
+  readonly limitTokens: number
+  /** A lower input limit that binds only at a turn start (a root's role window). */
+  readonly turnBoundaryTokens: Option.Option<number>
+  readonly turnStart: boolean
+}): WindowPlan => {
+  if (step.inputTokens > step.limitTokens) return "Overflow"
+  if (
+    step.turnStart &&
+    Option.exists(step.turnBoundaryTokens, (limit) => step.inputTokens > limit)
+  ) {
+    return "TurnBoundary"
+  }
+  return "Keep"
+}
+
 type CompactionRun = <R>(
   compact: Effect.Effect<CompactionSummary, ModelCompactionError, R>,
 ) => Effect.Effect<CompactionSummary, ModelCompactionError, R>
@@ -2306,8 +2370,9 @@ export const coldHandoffPays = (params: {
  * at the head; a handoff moves the history before the newest user message
  * behind one marker that summarizes it and names the ids it replaced. The
  * loop hands off when the window overflows, when the model asked, when the
- * provider refused the last request as too long (`overflowed`), or when a
- * turn starts on a large window whose prompt cache lapsed (cold). The
+ * provider refused the last request as too long (`overflowed`), when a
+ * turn starts on a large window whose prompt cache lapsed (cold), or when a
+ * root's turn starts past its role window (`turnBoundaryTokens`). The
  * refusal handoff happens even with no summary: the history is then dropped
  * behind a marker that says so, since the same window would be refused
  * again. The others need a compactor; without one the window stays whole.
@@ -2328,6 +2393,13 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   readonly directive: Option.Option<ContextDirective>
   /** This projection comes before the turn's first model call. */
   readonly turnStart: boolean
+  /**
+   * A root's role window (`ModelContextWindowPolicy`), below the budget's:
+   * a turn that starts on a window past it hands off first, anchored at the
+   * new prompt. Mid-turn only the budget binds. None for a spawned session,
+   * whose budget is already the role window.
+   */
+  readonly turnBoundaryTokens: Option.Option<number>
   /** The branch's last model call and its provider's cache lifetime; none when either is unknown. */
   readonly promptCache: Option.Option<PromptCache>
   readonly persist: (
@@ -2422,6 +2494,27 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
           cacheTtlMs: cache.ttlMs,
         }),
     )
+  // A root whose role window is below its model's hands off when a turn
+  // starts past it, anchored at the new prompt, and never mid-turn: the
+  // turn's steps keep the cache they wrote. Past the model's window the
+  // overflow handoff above still runs at any step.
+  const turnBoundary =
+    Result.isSuccess(fit) &&
+    planWindow({
+      inputTokens:
+        fit.success.estimatedTokens +
+        params.budget.reservedSystemTokens +
+        params.budget.reservedToolTokens,
+      limitTokens: inputCeiling(params.budget),
+      turnBoundaryTokens: Option.map(params.turnBoundaryTokens, (contextLimitTokens) =>
+        inputCeilingOf({
+          contextLimitTokens,
+          reservedOutputTokens: params.budget.reservedOutputTokens,
+          inputLimitTokens: Option.fromUndefinedOr(params.budget.inputLimitTokens),
+        }),
+      ),
+      turnStart: params.turnStart,
+    }) === "TurnBoundary"
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
@@ -2450,7 +2543,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       summary: Option.none(),
     } satisfies WindowProjection
   }
-  if (!(requested || overflowing || cold) || !summarizable) {
+  if (!(requested || overflowing || cold || turnBoundary) || !summarizable) {
     return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
   // The window the provider refused is not sent again: without a summary, the
