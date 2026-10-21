@@ -5678,6 +5678,151 @@ describe("account lanes", () => {
     }
   })
 
+  /** Fit both windows on c, outside the scopes below, through real quota/fuel receipts. */
+  const pacedAccounts = (weeklyPoint = 9_300_000, shortPoint = 200_000) =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const now = yield* Clock.currentTimeMillis
+      yield* fixture.read(c, [
+        { window: "7d", utilization: 0, resetAt: now + 168 * HOUR },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      yield* fixture.spend(c, Option.some((2 * weeklyPoint) / 200_000))
+      yield* fixture.read(c, [
+        { window: "7d", utilization: 0.02, resetAt: now + 168 * HOUR },
+        {
+          window: "5h",
+          utilization: (2 * weeklyPoint) / (100 * shortPoint),
+          resetAt: now + 5 * HOUR,
+        },
+      ])
+      return { ...fixture, now }
+    })
+
+  it.effect("rolling weekly refills give the seven-account pool eight free lanes", () =>
+    Effect.gen(function* () {
+      const { read, spend, lanes, admit } = yield* accounts()
+      const now = yield* Clock.currentTimeMillis
+      const pool = [
+        a,
+        b,
+        c,
+        ...["d", "e", "f", "g"].map((slot) => CredentialSlot.make(slot)),
+      ] as const
+      const resetAt = now + 166 * HOUR
+      // 18.6 M fuel / 2 points = 9.3 M fuel per weekly point.
+      // The same fuel / 10 points = 1.86 M per five-hour point.
+      yield* read(a, [
+        { window: "7d", utilization: 0.01, resetAt },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      yield* spend(a, Option.some(93))
+      yield* read(a, [
+        { window: "7d", utilization: 0.03, resetAt },
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+      ])
+      for (const [index, hours] of [5, 17, 33, 55, 65, 108].entries()) {
+        const slot = pool[index + 1]
+        if (Predicate.isUndefined(slot)) return yield* Effect.die("missing test account")
+        yield* read(slot, [
+          { window: "7d", utilization: 1, resetAt: now + hours * HOUR, rejected: true },
+          { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+        ])
+      }
+      // Plain hours, 100% target: in-view fuel = 930 M × 5.2973809524.
+      // Rolling = 29.324787415 M/h; floor = 902.1 M / 166 h.
+      // Weekly ceiling = 6482.1 M / 166 h; 5h ceiling = 167.4 M / 5 h.
+      // floor(min(29.324787415, 39.0487951807, 33.48) / 3.4) = 8.
+      // Before rolling: floor((902.1 / 166) / 3.4) = 1.
+      const report = yield* lanes(pool)
+      expect(report.capacity).toBe(8)
+      expect(yield* lanes([a])).toMatchObject({ capacity: 1 }) // a pin cannot borrow refills
+      // Forecasts do not make a rejected account eligible for placement now.
+      expect(
+        report.accounts.filter((account) => account.held).map((account) => account.slot),
+      ).toEqual(pool.slice(1))
+      for (let index = 0; index < 8; index += 1)
+        expect(yield* admit(pool, `rolling-${index}`)).toBe("admitted")
+      expect(yield* admit(pool, "rolling-full")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a spent week refills five-hour room at its reset within five hours, but not at six",
+    () =>
+      Effect.gen(function* () {
+        const { read, lanes, now } = yield* pacedAccounts()
+        yield* read(a, [
+          { window: "7d", utilization: 0.5, resetAt: now + 160 * HOUR },
+          { window: "5h", utilization: 0.6, resetAt: now + 4 * HOUR },
+        ])
+        yield* read(b, [
+          { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
+          { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+        ])
+        // 8 M lasts to +1h; then 28 M lasts to +4h: ceiling 7 M/h.
+        // The rolling week allows 8.5257 M/h. floor(7 / 3.4) = 2.
+        expect((yield* lanes([a, b])).capacity).toBe(2)
+        yield* read(b, [{ window: "7d", utilization: 1, resetAt: now + 6 * HOUR, rejected: true }])
+        // Without that refill in view, 8 M must last to +4h: 2 M/h.
+        expect((yield* lanes([a, b])).capacity).toBe(0)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a rolling weekly refill preserves a later rejected five-hour window", () =>
+    Effect.gen(function* () {
+      const { read, lanes, now } = yield* pacedAccounts()
+      yield* read(a, [
+        { window: "7d", utilization: 0.5, resetAt: now + 160 * HOUR },
+        { window: "5h", utilization: 0.6, resetAt: now + 4 * HOUR },
+      ])
+      yield* read(b, [
+        { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
+        { window: "5h", utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+      ])
+      // The weekly reset at +1h adds no short room. 8 M lasts to +2h:
+      // floor(4 M/h / 3.4 M/h) = 1, rather than two with a fresh 5h window.
+      expect((yield* lanes([a, b])).capacity).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("the weekly ceiling caps rolling pace before the first refill", () =>
+    Effect.gen(function* () {
+      const { read, lanes, now } = yield* pacedAccounts(21_000_000, 2_000_000)
+      yield* read(a, [
+        { window: "7d", utilization: 0.5, resetAt: now + 160 * HOUR },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      yield* read(b, [
+        { window: "7d", utilization: 1, resetAt: now + 120 * HOUR, rejected: true },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      // Rolling: (0.5 + 8/168 + 48/168) × 2100 M / 168 = 10.4167 M/h.
+      // Only 1050 M is available before +120h: ceiling 8.75 M/h.
+      // floor(8.75 / 3.4) = 2; uncapped rolling would allow three runs.
+      expect((yield* lanes([a, b])).capacity).toBe(2)
+      yield* read(a, [{ window: "7d", utilization: 1, resetAt: now + 160 * HOUR, rejected: true }])
+      expect((yield* lanes([a, b])).capacity).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("the five-hour ceiling caps the rolling weekly target", () =>
+    Effect.gen(function* () {
+      const { read, lanes, now } = yield* pacedAccounts(9_300_000, 180_000)
+      yield* read(a, [
+        { window: "7d", utilization: 0.5, resetAt: now + 160 * HOUR },
+        { window: "5h", utilization: 0.6, resetAt: now + 4 * HOUR },
+      ])
+      yield* read(b, [
+        { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
+        { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+      ])
+      // 7.2 M + 18 M at +1h must last to +4h: 6.3 M/h, one lane.
+      // The uncapped rolling target (8.5257 M/h) would admit two.
+      expect((yield* lanes([a, b])).capacity).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("with no quota readings a held account does not disable stage-0 warm preference", () =>
     Effect.gen(function* () {
       const { placement } = yield* accounts()
@@ -5847,7 +5992,7 @@ describe("account lanes", () => {
   )
 
   it.effect(
-    "capacity sums each account's fewest window over the scope, and waits for every account of it",
+    "capacity keeps account windows paired, waits for readings and caps the pool before later resets",
     () =>
       Effect.gen(function* () {
         const { read, spend, lanes } = yield* accounts()
@@ -5884,8 +6029,9 @@ describe("account lanes", () => {
           6,
         )
         expect(pooled.capacity).toBe(0)
-        // c: 99 points of each, over 1 and 2 hours: min(5.82, 2.91). In the scope, it adds 2.
-        expect((yield* lanes([a, b, c])).capacity).toBe(2)
+        // c raises the floor to 9.9 M/h, but by +24h the pool only has
+        // 40.2 M, including c's refill at +2h: 1.675 M/h < one lane.
+        expect((yield* lanes([a, b, c])).capacity).toBe(0)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

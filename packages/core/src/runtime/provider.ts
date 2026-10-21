@@ -3950,6 +3950,91 @@ const windowLengthMs = (window: string): Option.Option<number> => {
   return Option.some(count * 24 * 3_600_000)
 }
 
+/** One scoped account's weekly fuel and its next reset, in plain hours. */
+interface PoolWeek {
+  readonly account: LaneAccount
+  readonly full: number
+  readonly remaining: number
+  readonly hours: number
+}
+
+const quotaRoom = (window: LaneWindow, full: number): number => {
+  if (window.rejected) return 0
+  return Math.max(0, 1 - window.utilization) * full
+}
+
+const quotaHours = (window: LaneWindow, now: number, length: number): number => {
+  if (window.resetAt <= now) return length
+  return Math.max((window.resetAt - now) / 3_600_000, QUOTA_MIN_HORIZON_MS / 3_600_000)
+}
+
+/** In-hand expiry floor and rolling seven-day supply, under each weekly prefix ceiling. */
+const weeklyPoolPace = (weeks: ReadonlyArray<PoolWeek>) => {
+  let expiring = 0
+  let floor = 0
+  let fuel = weeks.reduce((sum, week) => sum + week.remaining, 0)
+  let ceiling = Infinity
+  // Same-deadline refills cannot lower the ceiling after the first check;
+  // the floor reaches its maximum after all their quota is counted.
+  for (const week of [...weeks].sort((left, right) => left.hours - right.hours)) {
+    ceiling = Math.min(ceiling, fuel / week.hours)
+    expiring += week.remaining
+    floor = Math.max(floor, expiring / week.hours)
+    fuel += week.full - week.remaining
+  }
+  const rolling =
+    weeks.reduce(
+      (sum, week) => sum + week.remaining + (week.full * Math.max(0, 168 - week.hours)) / 168,
+      0,
+    ) / 168
+  return { sustainable: Math.max(floor, rolling), ceiling }
+}
+
+/** Short-window fuel opens only where the same account has weekly room. */
+const fiveHourPoolCeiling = (
+  weeks: ReadonlyArray<PoolWeek>,
+  now: number,
+): Option.Option<number> => {
+  let fuel = 0
+  const refills: Array<{ readonly hours: number; readonly gain: number }> = []
+  let hasShort = false
+  for (const week of weeks) {
+    const short = week.account.windows.find((window) => window.window === "5h")
+    if (Predicate.isUndefined(short)) continue
+    if (Predicate.isUndefined(short.fuelPerPct)) return Option.none()
+    hasShort = true
+    const full = 100 * short.fuelPerPct
+    const remaining = quotaRoom(short, full)
+    const hours = quotaHours(short, now, 5)
+    if (week.remaining > 0) {
+      // Complementary windows on two accounts cannot combine into fuel.
+      fuel += Math.min(week.remaining, remaining)
+      refills.push({
+        hours,
+        gain: Math.max(0, Math.min(week.remaining, full) - Math.min(week.remaining, remaining)),
+      })
+    } else if (week.hours <= 5) {
+      // A spent week opens fresh short room unless an independent 5h hold
+      // outlasts that weekly reset. That hold clears only at its own reset.
+      let room = full
+      if (hours > week.hours) room = remaining
+      refills.push({ hours: week.hours, gain: Math.min(week.full, room) })
+      if (hours > week.hours)
+        refills.push({
+          hours,
+          gain: Math.max(0, Math.min(week.full, full) - Math.min(week.full, room)),
+        })
+    }
+  }
+  let ceiling = Infinity
+  for (const refill of refills.sort((left, right) => left.hours - right.hours)) {
+    ceiling = Math.min(ceiling, fuel / refill.hours)
+    fuel += refill.gain
+  }
+  if (hasShort) ceiling = Math.min(ceiling, fuel / 5)
+  return Option.some(ceiling)
+}
+
 /** A request's fuel: none when its price or usage is unknown, or a priced request lists no price. */
 const fuelOf = (
   costUsd: Option.Option<number>,
@@ -4651,12 +4736,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     })
   })
   /**
-   * The lanes of one provider over `scope`, under the lock. An account
-   * window carries `(1 − u) × 100 × fuelPerPct / (fuelPerHour × hours to
-   * its reset)` runs (a window whose reset passed is full again, over its
-   * length); an account carries the fewest of its windows, and the provider
-   * the sum over its scope, floored. A window with no rate of its own reads
-   * the provider's over every account.
+   * The lanes of one provider over `scope`, under the lock. Account pace
+   * remains quota in hand over time to its own reset, for placement. Pool
+   * admission takes max(expiring weekly floor, rolling seven-day supply),
+   * capped before each weekly and 5h refill, then floors once in lane units.
+   * A window with no rate of its own reads the provider's over every account.
    */
   const providerLanes = (
     provider: string,
@@ -4743,10 +4827,67 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       }
     })
     const scoped = accounts.filter((account) => scope.includes(account.slot))
-    const capacity = Option.map(
+    const accountCapacity = Option.map(
       Option.all(scoped.map((account) => Option.fromUndefinedOr(account.sustainable))),
-      (values) => Math.floor(values.reduce((sum, value) => sum + value, 0) + 1e-9),
+      (values) => values.reduce((sum, value) => sum + value, 0),
     )
+    // Placement keeps each account's current pace. Admission paces the pool:
+    // accounts whose weeks are spent can refill it later without being
+    // eligible for a request now. Unknown windows keep capacity unknown.
+    const weeks = scoped
+      .values()
+      .filter((account) => !held.has(placementKey(provider, account.slot)))
+      .map((account) => {
+        const week = account.windows.find((window) => window.window === "7d")
+        if (Predicate.isUndefined(week) || Predicate.isUndefined(week.fuelPerPct))
+          return Option.none()
+        const full = 100 * week.fuelPerPct
+        return Option.some({
+          account,
+          full,
+          remaining: quotaRoom(week, full),
+          hours: quotaHours(week, now, 168),
+        })
+      })
+    const rollingCapacity = Option.flatMap(Option.all(weeks), (due) => {
+      if (due.length === 0) return Option.none()
+      // Explicit credential refusals were left out: they predict no refill.
+      // A quota rejection alone does: its own window still supplies a reset.
+      if (
+        due.some(({ account }) =>
+          account.windows.some((window) => Predicate.isUndefined(window.sustainable)),
+        )
+      )
+        return Option.none()
+      const weekly = weeklyPoolPace(due)
+      const short = fiveHourPoolCeiling(due, now)
+      if (Option.isNone(short)) return Option.none()
+      // Other driver windows retain their current ceiling.
+      const otherWindows = new Map<string, number>()
+      for (const account of scoped)
+        for (const window of account.windows)
+          if (window.window !== "7d" && window.window !== "5h")
+            otherWindows.set(
+              window.window,
+              (otherWindows.get(window.window) ?? 0) + (window.sustainable ?? 0),
+            )
+      return Option.some(
+        Math.max(
+          0,
+          Math.min(
+            weekly.sustainable / fuelPerHour,
+            weekly.ceiling / fuelPerHour,
+            short.value / fuelPerHour,
+            ...otherWindows.values(),
+          ),
+        ),
+      )
+    })
+    let sustainable = accountCapacity
+    if (scoped.some((account) => account.windows.some((window) => window.window === "7d")))
+      sustainable = rollingCapacity
+    if (scoped.length > 0 && scoped.every((account) => account.held)) sustainable = Option.some(0)
+    const capacity = Option.map(sustainable, (value) => Math.floor(value + 1e-9))
     return {
       provider,
       scope: [...scope],

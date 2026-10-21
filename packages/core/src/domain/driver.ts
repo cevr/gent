@@ -704,9 +704,10 @@ export const ProviderLanes = Schema.Struct({
   scope: Schema.Array(CredentialSlot),
   accounts: Schema.Array(LaneAccount),
   /**
-   * Whole runs the scope's accounts can carry: the sum of each account's
-   * fewest over its windows. None until every account of the scope has a
-   * reading and a rate.
+   * Whole runs at the scope's rolling weekly pace, capped by weekly and
+   * short-window room. Account sustainable values still describe placement
+   * now. Without weekly readings, sum the account minima as before. None
+   * until the scope has the readings and rates needed for its pace.
    */
   capacity: Schema.optionalKey(Schema.Int),
   /**
