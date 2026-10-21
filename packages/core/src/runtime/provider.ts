@@ -3481,9 +3481,9 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
 // pool's accounts. A prompt cache belongs to one account, so the turn places
 // a run only where its cache starts over anyway (turn.ts decides where) and
 // keeps it there while the cache is warm. The ranking reads only what gent
-// records: the price of each account's steps over the last 7 days, and the
-// sessions whose cache lives on each account now. It makes no model call
-// and polls nothing. The provider's own refusal is the limit signal: a
+// records: quota pace and weekly resets, the price of each account's steps
+// over the last 7 days, and the sessions whose cache lives on each account
+// now. It makes no model call and polls nothing. The provider's own refusal is the limit signal: a
 // refused account is held until its reset.
 //
 // The same state reads each account's quota windows from the responses
@@ -3553,6 +3553,10 @@ interface PlacementSlot {
   readonly live: number
   /** Refused until its reset, or warmed by a fresh sibling: not placed on now. */
   readonly held: boolean
+  /** Runs this account can sustain: the minimum over its quota windows, when known. */
+  readonly sustainable?: number
+  /** Its weekly window's reset, when read. Other windows never set placement priority. */
+  readonly weeklyResetAt?: number
 }
 
 /** One placement's table: the accounts it may choose in config order, and who prefers what. */
@@ -3571,13 +3575,16 @@ interface PlacementTable {
 
 /**
  * Where a run goes, as the pool walk its turn takes: the choice first, then
- * the other eligible accounts by score, then the held ones in pool order.
+ * eligible accounts below their sustainable live load by weekly reset
+ * (missing weekly readings last), then the others by score, then held
+ * accounts in pool order. Equal resets or scores keep pool order.
  * `score = load / unit + live`, where a unit is the mean recorded price of a
  * session on the provider (`spent / sessions`; with no recorded price, or no
  * session counted, the score is the live sessions alone).
- * The preferred account wins while it scores within one session of the
- * lowest; else the lowest wins, ties by pool order. With none eligible, the
- * preferred account, else the pool's first.
+ * The preferred account stays only below pace and within one session of
+ * the first eligible account's score. With no known pace, the stage-0 score
+ * and preference rules stay unchanged. With none eligible, the preferred
+ * account, else the pool's first.
  */
 export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<CredentialSlot> => {
   // None when nothing priced was recorded, or no session counted: the score
@@ -3588,10 +3595,27 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
   )
   const score = (entry: PlacementSlot) =>
     Option.match(unit, { onNone: () => 0, onSome: (mean) => entry.load / mean }) + entry.live
-  // A stable sort: equal scores keep pool order.
+  const underPace = (entry: PlacementSlot) =>
+    Predicate.isNotUndefined(entry.sustainable) && entry.live < entry.sustainable
+  const paced = table.slots.some((entry) => Predicate.isNotUndefined(entry.sustainable))
   const eligible = table.slots
     .filter((entry) => !entry.held)
-    .sort((left, right) => score(left) - score(right))
+    .sort((left, right) => {
+      const leftUnder = underPace(left)
+      const rightUnder = underPace(right)
+      if (leftUnder && !rightUnder) return -1
+      if (!leftUnder && rightUnder) return 1
+      if (leftUnder && rightUnder) {
+        // Infinity puts a missing weekly reading last. Equal resets (including
+        // two missing readings) keep pool order without subtracting infinities.
+        const leftReset = left.weeklyResetAt ?? Infinity
+        const rightReset = right.weeklyResetAt ?? Infinity
+        if (leftReset === rightReset) return 0
+        if (leftReset < rightReset) return -1
+        return 1
+      }
+      return score(left) - score(right)
+    })
   const preferred = Option.flatMap(table.preferred, (slot) =>
     Option.fromUndefinedOr(eligible.find((entry) => entry.slot === slot)),
   )
@@ -3602,7 +3626,11 @@ export const rankPlacement = (table: PlacementTable): Arr.NonEmptyReadonlyArray<
       Option.match(preferred, {
         onNone: () => low.slot,
         onSome: (kept) => {
-          if (score(kept) <= score(low) + PLACEMENT_HYSTERESIS_SESSIONS) return kept.slot
+          if (
+            (!paced || underPace(kept)) &&
+            score(kept) <= score(low) + PLACEMENT_HYSTERESIS_SESSIONS
+          )
+            return kept.slot
           return low.slot
         },
       }),
@@ -4773,13 +4801,25 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               !Option.contains(request.preferred, slot) &&
               (warming.get(placementKey(request.provider, starter, slot))?.size ?? 0) > 0,
           )
+        // A held account can report sustainable 0 with no reading. It is
+        // not quota pace: an unread pool keeps the stage-0 ranking.
+        const accounts = providerLanes(request.provider, open, now).accounts.filter(
+          (account) => account.windows.length > 0,
+        )
         const walk = rankPlacement({
-          slots: Arr.map(open, (slot) => ({
-            slot,
-            load: load.get(slot) ?? 0,
-            live: liveOn(request.provider, slot, request.sessionId),
-            held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
-          })),
+          slots: Arr.map(open, (slot) => {
+            const account = accounts.find((account) => account.slot === slot)
+            return {
+              slot,
+              load: load.get(slot) ?? 0,
+              live: liveOn(request.provider, slot, request.sessionId),
+              held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
+              ...omitUndefined({
+                sustainable: account?.sustainable,
+                weeklyResetAt: account?.windows.find((window) => window.window === "7d")?.resetAt,
+              }),
+            }
+          }),
           spent,
           sessions,
           preferred: Option.filter(request.preferred, (slot) => !request.left.has(slot)),

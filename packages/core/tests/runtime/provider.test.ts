@@ -5100,6 +5100,109 @@ describe("credential placement", () => {
     },
   )
 
+  bunTest(
+    "under-pace accounts use the earliest weekly reset before score or a missing weekly reading",
+    () => {
+      expect(
+        rankPlacement({
+          slots: [
+            { ...row(a, 0, 0), sustainable: 2 },
+            { ...row(b, 0, 0), sustainable: 2, weeklyResetAt: 200 },
+            { ...row(c, 8, 1), sustainable: 2, weeklyResetAt: 100 },
+          ],
+          spent: 8,
+          sessions: 4,
+          preferred: Option.none(),
+        }),
+      ).toEqual([c, b, a])
+    },
+  )
+
+  bunTest(
+    "an account at its paced load spills to the next weekly reset, then uses score above pace",
+    () => {
+      const slots = [
+        { ...row(a, 0, 2), sustainable: 2, weeklyResetAt: 100 },
+        { ...row(b, 0, 0), sustainable: 2, weeklyResetAt: 300 },
+        { ...row(c, 8, 1), sustainable: 2, weeklyResetAt: 200 },
+      ] as const
+      const table = { slots, spent: 8, sessions: 4, preferred: Option.none<CredentialSlot>() }
+      expect(rankPlacement(table)).toEqual([c, b, a])
+      expect(
+        rankPlacement({
+          ...table,
+          slots: Arr.map(slots, (entry) => ({ ...entry, sustainable: 0 })),
+        }),
+      ).toEqual([b, a, c])
+    },
+  )
+
+  bunTest("a warm preferred account keeps an under-pace run only within hysteresis", () => {
+    const table = {
+      slots: [
+        { ...row(a, 0, 0), sustainable: 3, weeklyResetAt: 100 },
+        { ...row(b, 0, 1), sustainable: 3, weeklyResetAt: 200 },
+      ] as const,
+      spent: 0,
+      sessions: 0,
+      preferred: Option.some(b),
+    }
+    expect(rankPlacement(table)).toEqual([b, a])
+    expect(
+      rankPlacement({
+        ...table,
+        slots: [table.slots[0], { ...table.slots[1], live: 2 }],
+      }),
+    ).toEqual([a, b])
+  })
+
+  bunTest(
+    "a warm preferred account at pace loses to an earlier under-pace reset within hysteresis",
+    () => {
+      expect(
+        rankPlacement({
+          slots: [
+            { ...row(b, 0, 1), sustainable: 1, weeklyResetAt: 200 },
+            { ...row(a, 0, 0), sustainable: 2, weeklyResetAt: 100 },
+          ],
+          spent: 0,
+          sessions: 0,
+          preferred: Option.some(b),
+        }),
+      ).toEqual([a, b])
+    },
+  )
+
+  bunTest("held accounts stay last even with the earliest reset and a warm preference", () => {
+    expect(
+      rankPlacement({
+        slots: [
+          { ...row(a, 0, 0, true), sustainable: 3, weeklyResetAt: 100 },
+          { ...row(b, 0, 1), sustainable: 3, weeklyResetAt: 300 },
+          { ...row(c, 4, 1), sustainable: 3, weeklyResetAt: 200 },
+        ],
+        spent: 4,
+        sessions: 2,
+        preferred: Option.some(a),
+      }),
+    ).toEqual([c, b, a])
+  })
+
+  bunTest("equal weekly resets keep pool order among under-pace accounts", () => {
+    expect(
+      rankPlacement({
+        slots: [
+          { ...row(c, 8, 1), sustainable: 2, weeklyResetAt: 100 },
+          { ...row(b, 0, 0), sustainable: 2, weeklyResetAt: 100 },
+          { ...row(a, 0, 0), sustainable: 2 },
+        ],
+        spent: 8,
+        sessions: 4,
+        preferred: Option.none(),
+      }),
+    ).toEqual([c, b, a])
+  })
+
   it.effect(
     "a session counts in the hour of its latest priced step, a refusal ranks against the provider's whole spend, and a pool is open while any account is not held",
     () =>
@@ -5574,6 +5677,72 @@ describe("account lanes", () => {
       }),
     }
   })
+
+  it.effect("with no quota readings a held account does not disable stage-0 warm preference", () =>
+    Effect.gen(function* () {
+      const { placement } = yield* accounts()
+      const request = {
+        provider: "plan",
+        pool: [a, b, c] as const,
+        model: ModelId.make("plan/model"),
+        preferred: Option.none<CredentialSlot>(),
+        starter: Option.none<SessionId>(),
+        left: new Set<CredentialSlot>(),
+        ttlMs: Option.none<number>(),
+      }
+      // b has one live cache, c none. A warm b stays within hysteresis.
+      yield* placement.noteStep({
+        provider: "plan",
+        slot: b,
+        sessionId: runner,
+        costUsd: Option.none(),
+        ttlMs: Option.none(),
+      })
+      yield* placement.refuse({
+        provider: "plan",
+        slot: a,
+        signedInAt: Option.none(),
+        model: Option.none(),
+        retryAt: Option.none(),
+      })
+      expect(
+        yield* placement.place({
+          ...request,
+          sessionId: SessionId.make("next"),
+          preferred: Option.some(b),
+        }),
+      ).toEqual([b, c, a])
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "placement reads each account's sustainable minimum and weekly reset, counting live placements",
+    () =>
+      Effect.gen(function* () {
+        const { read, spend, lanes, place } = yield* accounts()
+        const now = yield* Clock.currentTimeMillis
+        const weeklyA = now + 10 * HOUR
+        const weeklyB = now + 5 * HOUR
+        // Both have 100,000 fuel per point in both windows. b resets first
+        // weekly; a resets first in 5h. Only the weekly reset sets priority.
+        const readings = (weekly: number, short: number, utilization: number) => [
+          { window: "7d", utilization, resetAt: weekly },
+          { window: "5h", utilization, resetAt: short },
+        ]
+        yield* read(a, readings(weeklyA, now + HOUR, 0.1))
+        yield* spend(a, Option.some(1))
+        yield* read(a, readings(weeklyA, now + HOUR, 0.12))
+        yield* read(b, readings(weeklyB, now + 2 * HOUR, 0.1))
+        yield* spend(b, Option.some(1))
+        yield* read(b, readings(weeklyB, now + 2 * HOUR, 0.12))
+        const report = yield* lanes([a, b])
+        expect(report.capacity).toBe(0) // floor(0.259 + 0.518), pool first
+        expect(yield* place("first")).toEqual([b, a])
+        // That placement is live before it reports a step: 1 exceeds b's
+        // sustainable 0.518, so the next run spills to a's later reset.
+        expect(yield* place("second")).toEqual([a, b])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
 
   it.effect(
     "each window's fuel per percent is the fuel spent between readings over the points they moved",
