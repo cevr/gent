@@ -1,5 +1,6 @@
 import { GENT_START_BOUND_MS } from "@gent/core/test-utils"
 import { Duration, Effect, Filter, Option, Schema, type Scope, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { fileURLToPath } from "node:url"
 
 // ── process exit ────────────────────────────────────────────────────────────
@@ -16,6 +17,33 @@ export const exitWithin = (
   within: Duration.Input,
 ): Effect.Effect<Option.Option<number>> =>
   Effect.promise(() => exited).pipe(Effect.timeoutOption(within))
+
+// ── a command run to its end ────────────────────────────────────────────────
+
+/** What a command printed on stdout, and its exit code. */
+export interface CommandRun {
+  readonly code: number
+  readonly stdout: string
+}
+
+/**
+ * Run `command` in `cwd` to its end, as a shell would: its stdout and exit
+ * code. The verify helpers and the gent wrapper they write are run this way.
+ */
+export const runCommand = (command: string, args: ReadonlyArray<string>, cwd: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(command, [...args], { cwd, forceKillAfter: "5 seconds" }),
+      )
+      const [stdout, code] = yield* Effect.all(
+        [handle.stdout.pipe(Stream.decodeText, Stream.mkString), handle.exitCode],
+        { concurrency: 2 },
+      )
+      return { code: Number(code), stdout } satisfies CommandRun
+    }),
+  )
 
 // ── server-process-fixture ──────────────────────────────────────────────────
 

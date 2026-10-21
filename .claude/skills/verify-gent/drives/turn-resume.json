@@ -1,0 +1,17 @@
+{
+  "command": ["gent", "resume"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "idle · work", 30000],
+    ["settle"],
+    ["cap", "21-resumed"],
+    ["send", "debug think"],
+    ["keys", "enter"],
+    ["waitFor", "Both chrome paths draw once", 20000],
+    ["settle"],
+    ["cap", "22-second-prompt"],
+    ["sh", "gent ctl snapshot --limit 2 > \"$EVIDENCE/ctl-resume-snapshot.json\""]
+  ]
+}

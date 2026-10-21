@@ -1,0 +1,31 @@
+{
+  "command": ["gent"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["send", "debug ask"],
+    ["keys", "enter"],
+    ["waitFor", "1 open question", 15000],
+    ["cap", "61-question-row"],
+    [
+      "sh",
+      "gent ctl wait --until ToolCallSucceeded --after 0 --timeout 10 > \"$EVIDENCE/ctl-ask-tool.json\""
+    ],
+    ["send", "/answer"],
+    ["settle", 300],
+    ["keys", "enter"],
+    ["waitFor", "Which cache backend", 5000],
+    ["cap", "62-answer-form"],
+    ["keys", "down"],
+    ["keys", "enter"],
+    ["waitFor", "✻ Worked for", 40000],
+    ["settle"],
+    ["capAll", "63-answered"],
+    [
+      "sh",
+      "gent ctl events --tags ToolCallSucceeded,MessageReceived --limit 12 > \"$EVIDENCE/ctl-ask-events.json\""
+    ]
+  ]
+}

@@ -57,6 +57,8 @@ Project safety, beside `~/.claude/skills/loop/safety.md`:
 
 ## Live check
 
+A check on the scripted model is not this one: any agent runs it with the verify-gent skill, [`.claude/skills/verify-gent/SKILL.md`](.claude/skills/verify-gent/SKILL.md), with no herdr and no paid call.
+
 The orchestrator runs it alone (Owner rules). The gamut testbed, [`testbeds/gamut/README.md`](testbeds/gamut/README.md), drives the real TUI on real models with an isolated database.
 
 - Prompt: a file whose first line sends the agent inside the gamut to read `~/.claude/skills/loop/safety.md` and this file's Owner rules in full before any action, and whose task drives every ability the batches changed (each apply report names them).

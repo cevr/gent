@@ -22,6 +22,10 @@
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && GENT_DATA_DIR=\"$d\" bun run --cwd apps/tui dev --debug -H 'Say hi in 3 words'",
     "gamut": "bun testbeds/gamut/gamut.ts",
+    "verify:launch": "bun packages/e2e/src/verify.ts launch",
+    "verify:doctor": "bun packages/e2e/src/verify.ts doctor",
+    "verify:drive": "bun packages/e2e/src/verify.ts drive",
+    "verify:stop": "bun packages/e2e/src/verify.ts stop",
     "prepare": "lefthook install && effect-tsgo patch --force"
   },
   "devDependencies": {

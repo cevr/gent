@@ -1,0 +1,39 @@
+{
+  "command": ["gent"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["cap", "71-empty-session"],
+    ["sh", "gent ctl send --new --wait \"debug think\" > \"$EVIDENCE/ctl-other-session.json\""],
+    ["send", "/sessions"],
+    ["settle", 300],
+    ["keys", "enter"],
+    ["waitFor", "Sessions · \\d+", 20000],
+    ["waitFor", "○ debug think", 20000],
+    ["wait", 300],
+    ["cap", "72-sessions-pane"],
+    ["send", "debug think"],
+    ["waitFor", "› debug think│", 5000],
+    ["wait", 300],
+    ["cap", "73-sessions-filtered"],
+    ["keys", "enter"],
+    ["waitFor", "Both chrome paths draw once", 10000],
+    ["wait", 300],
+    ["cap", "74-switched"],
+    [
+      "sh",
+      "gent ctl request --extension @gent/agents-view --id list-agents --input '{\"query\":\"debug think\"}' > \"$EVIDENCE/ctl-list-agents.json\""
+    ],
+    ["resize", 60, 20],
+    ["send", "/sessions"],
+    ["settle", 300],
+    ["keys", "enter"],
+    ["waitFor", "Sessions · \\d+", 20000],
+    ["wait", 300],
+    ["cap", "75-sessions-narrow"],
+    ["keys", "esc"],
+    ["settle", 300]
+  ]
+}

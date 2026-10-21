@@ -63,22 +63,23 @@ bun run gate              # typecheck + lint + fmt + build + test
 
 The pre-commit hook runs the guards, and oxlint and oxfmt on the staged files, in under 10 s. Typecheck, build and the tests run only in `bun run gate` and CI: run the gate before a commit that changes behavior and before a handoff.
 
-Every TUI change also needs `bun run test:e2e` and a live Herdr check before acceptance. Read [the UI comparison method](docs/architecture/ui.md); exercise each changed ability at normal and narrow sizes, including resize, and compare with installed reference TUIs such as Codex, Pi and fx. Follow `NORTH_STAR.md` Owner rules for isolated debug runs and reference credentials. Record rendered captures and mark reference screens checked through source/tests when login or a model is required.
+Every TUI change also needs `bun run test:e2e` and a live check before acceptance: the verify-gent skill (`.claude/skills/verify-gent/SKILL.md`) launches the real TUI on the scripted model in a scratch home, drives it from its feature map and keeps the captures, with no herdr. Read [the UI comparison method](docs/architecture/ui.md); exercise each changed ability at normal and narrow sizes, including resize, and compare with installed reference TUIs such as Codex, Pi and fx. Follow `NORTH_STAR.md` Owner rules for isolated debug runs and reference credentials. Record rendered captures and mark reference screens checked through source/tests when login or a model is required.
 
 Test philosophy, the test tiers, the test layers example and the test gotchas (bun:sqlite, timeouts, failed extensions, the model catalog, the scripted models, test control flow) are in `docs/architecture/testing.md`; read it before you write or restructure a test.
 
 ## Documentation
 
-| Path                       | Focus                                                                |
-| -------------------------- | -------------------------------------------------------------------- |
-| `ARCHITECTURE.md`          | Index: noun model, rules, one pointer per area file                  |
-| `NORTH_STAR.md`            | North stars, owner rules, project sweeps, live check, rejected       |
-| `PRIOR_ART.md`             | Prior-art repos and settled comparisons                              |
-| `docs/architecture/`       | Area files, the efficiency and ui sweep methods, the capture preload |
-| `apps/tui/AGENTS.md`       | OpenTUI, Solid patterns                                              |
-| `apps/tui/docs/cli.md`     | CLI usage (`bun run --cwd apps/tui dev …`), flags, headless runs     |
-| `docs/loop.md`             | The architecture loop's baselines, pathspecs and workspace steps     |
-| `testbeds/gamut/README.md` | Live TUI check: `bun run gamut up <preset>`, isolated database       |
+| Path                          | Focus                                                                |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `ARCHITECTURE.md`             | Index: noun model, rules, one pointer per area file                  |
+| `NORTH_STAR.md`               | North stars, owner rules, project sweeps, live check, rejected       |
+| `PRIOR_ART.md`                | Prior-art repos and settled comparisons                              |
+| `docs/architecture/`          | Area files, the efficiency and ui sweep methods, the capture preload |
+| `apps/tui/AGENTS.md`          | OpenTUI, Solid patterns                                              |
+| `apps/tui/docs/cli.md`        | CLI usage (`bun run --cwd apps/tui dev …`), flags, headless runs     |
+| `docs/loop.md`                | The architecture loop's baselines, pathspecs and workspace steps     |
+| `.claude/skills/verify-gent/` | Live check: launch, doctor, drive the TUI and `gent ctl`, evidence   |
+| `testbeds/gamut/README.md`    | Real-model live check (orchestrator only): `bun run gamut up`        |
 
 ## Architecture loop
 

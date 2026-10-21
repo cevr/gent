@@ -24,6 +24,7 @@
         "../testbeds/*/README.md",
         "../patches/README.md",
         "../packages/extensions/src/skills/bundled/**/*.md",
+        "../.claude/skills/*/**/*.md",
         "../apps/tui/tsconfig.json",
         "../apps/tui/package.json",
         "../packages/tooling/src/check-guide-code.ts",

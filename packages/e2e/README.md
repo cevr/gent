@@ -7,6 +7,7 @@ Each file in `packages/e2e/tests/` is one area:
 - `packages/e2e/tests/machines-hard-kill.test.ts`: a machine run across a SIGKILL of its host (`packages/e2e/src/machine-host.ts`, a process entry with routed fake models): rounds, commands and answers run once, and the run goes on with no client call.
 - `packages/e2e/tests/drive.test.ts`: the drive-script runner below.
 - `packages/e2e/tests/pty-fixture.test.ts`: the fixture's screen reads on recorded frames, with no process.
+- `packages/e2e/tests/verify.test.ts`: the verify-gent helpers (`packages/e2e/src/verify.ts`) as a shell runs them: launch, doctor, a `gent ctl` turn, stop.
 
 `bun run test:e2e` from the root runs them all, one file at a time. `bun run test` runs only the fixture test, the one that spawns nothing.
 
@@ -16,7 +17,7 @@ Every wait for a gent that a test starts from source (the first frame, the serve
 
 ## Drive scripts
 
-A live check can run as a script on the same fixture, without herdr. gent has no default model: a scratch home with no `model` starts the TUI on `no model · /model`, and a sent prompt is refused. Seed one in the scratch home before the run, as the pty fixture does:
+A live check can run as a script on the same fixture, without herdr. `bun run verify:drive` runs one inside a scratch run that `verify:launch` seeds and serves (the verify-gent skill, `.claude/skills/verify-gent/SKILL.md`); `drive.ts` below runs one with no run around it. gent has no default model: a scratch home with no `model` starts the TUI on `no model · /model`, and a sent prompt is refused. Seed one in the scratch home before the run, as the pty fixture does:
 
 ```bash
 mkdir -p /tmp/scratch/home/.gent

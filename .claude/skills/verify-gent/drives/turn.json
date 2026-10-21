@@ -1,0 +1,42 @@
+{
+  "command": ["gent"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["cap", "01-home"],
+    ["send", "debug tools"],
+    ["keys", "enter"],
+    ["waitFor", "esc cancel", 10000],
+    ["cap", "02-running"],
+    ["waitFor", "✻ Worked for", 30000],
+    ["settle"],
+    ["capAll", "03-answered"],
+    ["sh", "gent ctl wait --until idle --timeout 10 > \"$EVIDENCE/ctl-idle.json\""],
+    [
+      "sh",
+      "gent ctl events --tags ToolCallStarted,ToolCallFailed,TurnCompleted --limit 20 > \"$EVIDENCE/ctl-events.json\""
+    ],
+    ["sh", "cat gent-debug-tools/a.ts > \"$EVIDENCE/a.ts.txt\""],
+    ["send", "debug tools"],
+    ["keys", "enter"],
+    ["waitFor", "esc cancel", 10000],
+    ["keys", "esc"],
+    ["settle", 300],
+    ["waitFor", "Interrupted", 10000],
+    ["settle"],
+    ["cap", "04-interrupted"],
+    ["sh", "gent ctl send --wait \"debug think\" > \"$EVIDENCE/ctl-send.json\""],
+    ["waitFor", "Both chrome paths draw once", 20000],
+    ["settle"],
+    ["cap", "05-external"],
+    ["resize", 60, 20],
+    ["settle"],
+    ["cap", "06-narrow"],
+    ["resize", 100, 30],
+    ["settle"],
+    ["cap", "07-wide-again"],
+    ["sh", "gent ctl snapshot --limit 6 > \"$EVIDENCE/ctl-snapshot.json\""]
+  ]
+}

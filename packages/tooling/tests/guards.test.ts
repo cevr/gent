@@ -2132,6 +2132,14 @@ describe("steering read budgets", () => {
       over("docs/architecture/runtime.md", 40_000),
       over("docs/architecture/runtime.md", 40_001),
     ]).toEqual([false, true])
+    expect([
+      over(".claude/skills/verify-gent/SKILL.md", 12_000),
+      over(".claude/skills/verify-gent/SKILL.md", 12_001),
+    ]).toEqual([false, true])
+    expect([
+      over(".claude/skills/verify-gent/features/turn.md", 8_000),
+      over(".claude/skills/verify-gent/features/turn.md", 8_001),
+    ]).toEqual([false, true])
   })
 
   test("the budget counts UTF-8 bytes, not characters", () => {
@@ -2227,6 +2235,8 @@ describe("steering file paths", () => {
       "packages/e2e/README.md",
       "packages/extensions/src/skills/bundled/principles/SKILL.md",
       "packages/extensions/src/skills/bundled/principles/references/fix-root-causes.md",
+      ".claude/skills/verify-gent/SKILL.md",
+      ".claude/skills/verify-gent/features/README.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
@@ -2239,6 +2249,8 @@ describe("steering file paths", () => {
       "packages/e2e/src/README.md",
       "testbeds/gamut/fixture/README.md",
       "packages/extensions/src/skills/bundled/principles/notes.txt",
+      ".claude/settings.json",
+      ".claude/skills/verify-gent/run.sh",
     ]) {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])

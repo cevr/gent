@@ -1,0 +1,15 @@
+{
+  "command": ["gent", "-p", "debug tools"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "✻ Worked for", 30000],
+    ["settle"],
+    ["cap", "11-prompt-flag"],
+    [
+      "sh",
+      "gent ctl events --tags MessageReceived,TurnCompleted --limit 3 > \"$EVIDENCE/ctl-prompt-flag.json\""
+    ]
+  ]
+}

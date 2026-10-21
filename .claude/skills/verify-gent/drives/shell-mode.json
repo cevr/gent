@@ -1,0 +1,28 @@
+{
+  "command": ["gent"],
+  "cols": 100,
+  "rows": 30,
+  "out": "replaced-by-verify-drive-out",
+  "steps": [
+    ["waitFor", "ready · work", 30000],
+    ["send", "!"],
+    ["settle", 300],
+    ["cap", "51-shell-prompt"],
+    ["send", "echo first-$((1+1))"],
+    ["keys", "enter"],
+    ["waitFor", "first-2", 10000],
+    ["waitFor", "✻ Worked for", 20000],
+    ["settle"],
+    ["cap", "52-shell-ran"],
+    ["send", "!"],
+    ["send", "exit 3"],
+    ["keys", "enter"],
+    ["waitFor", "✻ Worked for[^\\n]*\\n[\\s\\S]*✻ Worked for", 20000],
+    ["settle"],
+    ["capAll", "53-shell-failed"],
+    [
+      "sh",
+      "gent ctl events --tags MessageReceived --limit 6 > \"$EVIDENCE/ctl-shell-messages.json\""
+    ]
+  ]
+}

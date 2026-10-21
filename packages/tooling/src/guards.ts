@@ -2749,13 +2749,14 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * `AGENTS.md` points to them), a package `README.md` (`docs/architecture/ui.md`
  * sends agents to the e2e one), `docs/` but its dated research, a testbed's
  * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), the
- * dependency patch notes in `patches/README.md`, and the skills gent ships to its own model under
- * `packages/extensions/src/skills/bundled/`. The path claims, the Markdown
- * links, the retired-surface rows and the code-block compile all read exactly
- * this set.
+ * dependency patch notes in `patches/README.md`, the skills gent ships to its own model under
+ * `packages/extensions/src/skills/bundled/`, and the repo's own agent skills
+ * under `.claude/skills/` (`verify-gent`, which a verifier follows to launch
+ * and drive the real app). The path claims, the Markdown links, the
+ * retired-surface rows and the code-block compile all read exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ART)\.md|packages\/[^/]+\/README\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|apps\/[^/]+\/docs\/.+\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE|NORTH_STAR|PRIOR_ART)\.md|packages\/[^/]+\/README\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|apps\/[^/]+\/docs\/.+\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|patches\/README\.md|packages\/extensions\/src\/skills\/bundled\/.+\.md|\.claude\/skills\/[^/]+\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2779,6 +2780,9 @@ const STEERING_BUDGETS: ReadonlyArray<SteeringBudget> = [
   { file: /^ARCHITECTURE\.md$/, bytes: 12_000 },
   { file: /^apps\/tui\/AGENTS\.md$/, bytes: 8_000 },
   { file: /^docs\/architecture\/[^/]+\.md$/, bytes: 40_000 },
+  // A skill's guide loads whole when the skill fires; a feature file when its recipe runs.
+  { file: /^\.claude\/skills\/[^/]+\/SKILL\.md$/, bytes: 12_000 },
+  { file: /^\.claude\/skills\/[^/]+\/features\/[^/]+\.md$/, bytes: 8_000 },
 ]
 
 const UTF8 = new TextEncoder()
@@ -3459,6 +3463,10 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "packages/tooling/src/check-guide-code.ts",
+    text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
+  },
+  {
+    file: "packages/e2e/src/verify.ts",
     text: "strictEffectProvide:off -- the script's process entry provides the platform once.",
   },
   {
