@@ -439,6 +439,7 @@ const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
   | CredentialPlacement
+  | ModelRegistry
   | SqlClient.SqlClient
   | EventStore
   | SessionStorage
@@ -1482,6 +1483,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const platform = yield* GentPlatform
     const profileCache = yield* SessionProfileCache
     const placement = yield* CredentialPlacement
+    const modelRegistry = yield* ModelRegistry
     const sessionStorage = yield* SessionStorage
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
@@ -1879,7 +1881,9 @@ const RpcHandlers = GentRpcs.toLayer(
           const profile = yield* profileForCwd(Option.none())
           return yield* placement.lanes((provider) =>
             Effect.map(
-              credentialLane(provider, Option.none(), profile.registryService),
+              credentialLane(provider, Option.none(), profile.registryService).pipe(
+                Effect.provideService(ModelRegistry, modelRegistry),
+              ),
               Option.map((lane) => lane.scope),
             ),
           )
@@ -1960,7 +1964,9 @@ const RpcHandlers = GentRpcs.toLayer(
               from,
               to,
               cwd,
+              // The placement's quota state follows the sign-in to its new label.
               move: renameSignIn(provider, from, to).pipe(
+                Effect.tap(() => placement.renameLabel({ provider: held.owner, from, to })),
                 Effect.mapError(
                   (error) => new ProviderAuthError({ message: error.message, cause: error }),
                 ),

@@ -1,6 +1,7 @@
 import { test } from "bun:test"
 import {
   Cause,
+  Clock,
   ConfigProvider,
   Context,
   Deferred,
@@ -45,6 +46,7 @@ import {
   SessionId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
+import { omitUndefined } from "../../src/domain/guards"
 import { TestClock } from "effect/testing"
 import { RpcClient } from "effect/rpc"
 import {
@@ -111,6 +113,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
+  interjectionMessageId,
   request,
   tool,
 } from "@gent/core/extensions/api"
@@ -1503,6 +1506,26 @@ describe("provider login", () => {
             userConfig,
             encodeJson({ providers: { "order-alias": { authOrder: ["personal", "default"] } } }),
           )
+          // The placement read personal's week rejected before this server started.
+          const now = yield* Clock.currentTimeMillis
+          yield* fs.writeFileString(
+            path.join(home, ".gent", "credential-usage.json"),
+            encodeJson({
+              buckets: [],
+              readings: [
+                {
+                  provider: "order-slots",
+                  slot: "personal",
+                  ...omitUndefined({ signedInAt: signedIn }),
+                  window: "7d",
+                  utilization: 1,
+                  resetAt: now + 48 * 3_600_000,
+                  readAt: now,
+                  rejected: true,
+                },
+              ],
+            }),
+          )
           const extension = defineExtension({
             id: "@test/order-slots",
             setup: Effect.gen(function* () {
@@ -1532,9 +1555,20 @@ describe("provider login", () => {
                 Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
                 Layer.provide(BunPlatformLive),
               ),
+              home,
             }),
           )
           const { sessionId } = yield* client.session.create({ cwd: project })
+          const heldOf = client.accounts
+            .lanes()
+            .pipe(
+              Effect.map((report) =>
+                report.providers
+                  .find((lanes) => lanes.provider === "order-slots")
+                  ?.accounts.map((account) => [account.slot, account.held]),
+              ),
+            )
+          expect(yield* heldOf).toEqual([[personal, true]])
           const orderOf = client.auth
             .listProviders({ sessionId })
             .pipe(
@@ -1554,6 +1588,8 @@ describe("provider login", () => {
           // The same credential: a cache it wrote is still its own.
           expect(moved?.signedInAt).toBe(signedIn)
           expect(yield* orderOf).toEqual([home_, fallback])
+          // The quota state went with the sign-in: home is the held account now.
+          expect(yield* heldOf).toEqual([[home_, true]])
           const written = yield* fs
             .readFileString(userConfig)
             .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
@@ -4813,6 +4849,76 @@ describe("AccountsRpcs", () => {
           ).toEqual([{ slot: work, window: "5h", utilization: 0.27 }])
           // The first step's 11 fuel moved the window 2 points.
           expect(windows?.[0]?.fuelPerPct).toBeCloseTo(5.5, 6)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  it.live(
+    "a start admitted for a message that joins its session's running turn frees its lane as it joins",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const work = CredentialSlot.make("work")
+          const requestId = RequestId.make("lane-steer")
+          // A tool admits a lane for a steer of its own branch, then sends it:
+          // the steer joins this turn, which holds the session's lane already.
+          const steerProbe = defineExtension({
+            id: "@test/lane-steer",
+            setup: Effect.gen(function* () {
+              yield* (yield* ExtensionHost).register(
+                "tool",
+                tool({
+                  id: "lane_steer",
+                  description: "Admit a lane for a steer, then steer this branch",
+                  params: Schema.Struct({}),
+                  output: Schema.Struct({}),
+                  execute: Effect.fn("LaneSteer.execute")(function* () {
+                    const ctx = yield* ExtensionContext
+                    yield* ctx.Accounts.admit({
+                      message: interjectionMessageId(requestId),
+                      cwd: ctx.cwd,
+                    })
+                    yield* ctx.Session.send({ delivery: "steer", content: "steered", requestId })
+                    return {}
+                  }),
+                }),
+              )
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            {
+              ...toolCallStep("lane_steer", {}),
+              // One reading and no rate: no capacity, every start admitted, each counted.
+              quota: [
+                { window: "5h", utilization: 0.25, resetAt: 1_800_000_000_000, rejected: false },
+              ],
+            },
+            textStep("done"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [...e2ePreset.extensionInputs, steerProbe],
+            providerLayer,
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          })
+          yield* client.message.send({ sessionId, branchId, content: "steer yourself" })
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && hasText(current.messages, "done"),
+            5_000,
+            "the turn the steer joined settles",
+          )
+          // The steer joined the turn: no turn of its own.
+          const steered = settled.messages.find((message) => hasText([message], "steered"))
+          expect(steered?.metadata?.joinedTurn).toBe(true)
+          // Read at once: nothing holds a lane, the reservation included.
+          const { providers } = yield* client.accounts.lanes()
+          expect(providers.map((lanes) => [lanes.provider, lanes.load])).toEqual([["anthropic", 0]])
         }).pipe(Effect.timeout("8 seconds")),
       ),
   )

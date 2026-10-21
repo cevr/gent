@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
+  Array as Arr,
   Cause,
   Clock,
   ConfigProvider,
@@ -24,6 +25,7 @@ import {
   type ApiClassContribution,
   type ApiClassRequest,
   AuthMethod,
+  type CredentialReceipt,
   catalogModelEntry,
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
@@ -68,6 +70,7 @@ import {
   ModelCatalogSource,
   ModelRegistry,
   modelCatalog,
+  credentialLane,
   finishPart,
   ProviderLock,
   resolveDriverModel,
@@ -5147,6 +5150,7 @@ describe("credential placement", () => {
         yield* placement.refuse({
           provider: "spread",
           slot: a,
+          signedInAt: Option.none(),
           model: Option.none(),
           retryAt: Option.some(now + 60_000),
         })
@@ -5154,6 +5158,7 @@ describe("credential placement", () => {
         yield* placement.refuse({
           provider: "spread",
           slot: b,
+          signedInAt: Option.none(),
           model: Option.none(),
           retryAt: Option.some(now + 120_000),
         })
@@ -5285,6 +5290,7 @@ describe("credential placement", () => {
       yield* placement.refuse({
         provider: "spread",
         slot: a,
+        signedInAt: Option.none(),
         model: Option.none(),
         retryAt: Option.some(now + 600_000),
       })
@@ -5298,6 +5304,7 @@ describe("credential placement", () => {
       yield* placement.refuse({
         provider: "spread",
         slot: a,
+        signedInAt: Option.none(),
         model: Option.none(),
         retryAt: Option.none(),
       })
@@ -5445,52 +5452,118 @@ describe("account lanes", () => {
   /** $1 of list price is 200,000 fuel: one fuel is one input token at $5 per million. */
   const usage = Option.some({ inputTokens: 1_000, outputTokens: 100 })
   const placementLayer = Layer.mergeAll(BunServices.layer, GentPlatform.Test())
-  type Scope = readonly [CredentialSlot, ...Array<CredentialSlot>]
-  const scopeOf = (scope: Scope) => (_provider: string) => Effect.succeedSome(scope)
+  const plan = ProviderId.make("plan")
+  /** An account as a test names it: a label, or a label with the sign-in under it. */
+  type Account = CredentialSlot | { readonly slot: CredentialSlot; readonly signedInAt: number }
+  type Scope = readonly [Account, ...Array<Account>]
+  const receiptOf = (account: Account): CredentialReceipt => {
+    if (Predicate.isString(account)) return { provider: plan, slot: account }
+    return { provider: plan, ...account }
+  }
+  const scopeOf = (scope: Scope) => (_provider: string) =>
+    Effect.succeedSome(Arr.map(scope, receiptOf))
+  const runner = SessionId.make("runner")
 
   /** One placement and the readings and fuel a test feeds it, on the provider `plan`. */
-  const accounts = Effect.gen(function* () {
-    const placement = yield* makeCredentialPlacement(Option.none())
-    const read = (
-      slot: CredentialSlot,
-      readings: ReadonlyArray<{
-        readonly window: string
-        readonly utilization: number
-        readonly resetAt: number
-        readonly rejected?: boolean
-      }>,
-    ) =>
-      placement.noteQuota({
-        provider: "plan",
-        slot,
-        readings: readings.map((reading) => ({ rejected: false, ...reading })),
-      })
-    const spend = (slot: CredentialSlot, costUsd: Option.Option<number>, spent = usage) =>
-      placement.noteFuel({ provider: "plan", slot, costUsd, usage: spent })
-    const lanes = (scope: Scope) =>
-      Effect.map(placement.lanes(scopeOf(scope)), (report) => {
-        const found = report.providers.find((lanes) => lanes.provider === "plan")
-        if (Predicate.isUndefined(found)) return Option.none()
-        return Option.some(found)
-      }).pipe(Effect.flatMap(Effect.fromOption), Effect.orDie)
-    const windowOf = (scope: Scope, slot: CredentialSlot, window: string) =>
-      Effect.flatMap(lanes(scope), (report) =>
-        Effect.fromOption(
-          Option.fromUndefinedOr(
-            report.accounts
-              .find((account) => account.slot === slot)
-              ?.windows.find((found) => found.window === window),
-          ),
-        ).pipe(Effect.orDie),
-      )
-    return { placement, read, spend, lanes, windowOf }
+  const accounts = (ledger: Parameters<typeof makeCredentialPlacement>[0] = Option.none()) =>
+    Effect.gen(function* () {
+      const placement = yield* makeCredentialPlacement(ledger)
+      const read = (
+        account: Account,
+        readings: ReadonlyArray<{
+          readonly window: string
+          readonly utilization: number
+          readonly resetAt: number
+          readonly rejected?: boolean
+        }>,
+      ) => {
+        const { slot, signedInAt } = receiptOf(account)
+        return placement.noteQuota({
+          provider: "plan",
+          slot,
+          signedInAt: Option.fromUndefinedOr(signedInAt),
+          readings: readings.map((reading) => ({ rejected: false, ...reading })),
+        })
+      }
+      const spend = (
+        account: Account,
+        costUsd: Option.Option<number>,
+        spent = usage,
+        sessionId = runner,
+      ) => {
+        const { slot, signedInAt } = receiptOf(account)
+        return placement.noteFuel({
+          provider: "plan",
+          slot,
+          signedInAt: Option.fromUndefinedOr(signedInAt),
+          sessionId,
+          costUsd,
+          usage: spent,
+        })
+      }
+      const lanes = (scope: Scope) =>
+        Effect.map(placement.lanes(scopeOf(scope)), (report) => {
+          const found = report.providers.find((lanes) => lanes.provider === "plan")
+          if (Predicate.isUndefined(found)) return Option.none()
+          return Option.some(found)
+        }).pipe(Effect.flatMap(Effect.fromOption), Effect.orDie)
+      const windowOf = (scope: Scope, slot: CredentialSlot, window: string) =>
+        Effect.flatMap(lanes(scope), (report) =>
+          Effect.fromOption(
+            Option.fromUndefinedOr(
+              report.accounts
+                .find((account) => account.slot === slot)
+                ?.windows.find((found) => found.window === window),
+            ),
+          ).pipe(Effect.orDie),
+        )
+      /** Admit a start under `key` over `scope`: "admitted", else the refusal's reason. */
+      const admit = (scope: Scope, key: string) =>
+        placement
+          .admitLane({
+            provider: "plan",
+            scope: Arr.map(scope, receiptOf),
+            key,
+            asker: Option.none(),
+          })
+          .pipe(
+            Effect.as("admitted" as const),
+            Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+          )
+      /** Where a run of `session` goes over the pool `[a, b]`, in walk order. */
+      const place = (session: string) =>
+        placement.place({
+          provider: "plan",
+          pool: [a, b],
+          model: ModelId.make("plan/model"),
+          sessionId: SessionId.make(session),
+          preferred: Option.none(),
+          starter: Option.none(),
+          left: new Set(),
+          ttlMs: Option.none(),
+        })
+      return { placement, read, spend, lanes, windowOf, admit, place }
+    })
+  /** A ledger store over a ref, as the file is over a restart. */
+  const ledgerRef = Effect.gen(function* () {
+    type Saved = Parameters<
+      Option.Option.Value<Parameters<typeof makeCredentialPlacement>[0]>["save"]
+    >[0]
+    const file = yield* Ref.make<Saved>({ buckets: [] })
+    return {
+      file,
+      store: Option.some({
+        load: Ref.get(file),
+        save: (ledger: Saved) => Ref.set(file, ledger).pipe(Effect.as(true)),
+      }),
+    }
   })
 
   it.effect(
     "each window's fuel per percent is the fuel spent between readings over the points they moved",
     () =>
       Effect.gen(function* () {
-        const { read, spend, lanes, windowOf } = yield* accounts
+        const { read, spend, lanes, windowOf } = yield* accounts()
         yield* TestClock.adjust("1 hour")
         const start = yield* Clock.currentTimeMillis
         // The window resets 2 hours after the last reading.
@@ -5509,7 +5582,8 @@ describe("account lanes", () => {
         // 600,000 fuel over 3 points.
         expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
         expect(window.samples).toBe(2)
-        expect(window.band).toBeCloseTo(1 / 3, 6)
+        // ±half a 1% step over the 3 points moved.
+        expect(window.band).toBeCloseTo(0.5 / 3, 6)
         expect(window.outsideShare).toBe(0)
         // 87 points left at 200,000 fuel each, over 2 hours at 3.4 M fuel an hour.
         expect(window.sustainable).toBeCloseTo((87 * 200_000) / (2 * 3_400_000), 6)
@@ -5523,7 +5597,7 @@ describe("account lanes", () => {
     "a reset, a fall, a gap over 15 minutes or an unpriced request drops the fuel since the last reading",
     () =>
       Effect.gen(function* () {
-        const { read, spend, windowOf } = yield* accounts
+        const { read, spend, windowOf } = yield* accounts()
         yield* TestClock.adjust("1 hour")
         const start = yield* Clock.currentTimeMillis
         const resetAt = start + 5 * HOUR
@@ -5558,23 +5632,32 @@ describe("account lanes", () => {
 
   it.effect("a move gent's fuel does not explain is spend outside gent, left out of the rate", () =>
     Effect.gen(function* () {
-      const { read, spend, windowOf } = yield* accounts
+      const { read, spend, windowOf } = yield* accounts()
       yield* TestClock.adjust("1 hour")
       const resetAt = (yield* Clock.currentTimeMillis) + 5 * HOUR
-      const step = (from: number, to: number, costUsd: number) =>
+      const step = (on: CredentialSlot, from: number, to: number, costUsd: number) =>
         Effect.gen(function* () {
-          yield* read(a, [{ window: "5h", utilization: from, resetAt }])
-          yield* spend(a, Option.some(costUsd))
-          yield* read(a, [{ window: "5h", utilization: to, resetAt }])
+          yield* read(on, [{ window: "5h", utilization: from, resetAt }])
+          yield* spend(on, Option.some(costUsd))
+          yield* read(on, [{ window: "5h", utilization: to, resetAt }])
         })
-      yield* step(0.1, 0.11, 1)
-      yield* step(0.11, 0.12, 1)
+      yield* step(a, 0.1, 0.11, 1)
+      yield* step(a, 0.11, 0.12, 1)
       // Claude Code spent 9 points of its own while gent spent $1.
-      yield* step(0.12, 0.22, 1)
+      yield* step(a, 0.12, 0.22, 1)
       const window = yield* windowOf([a], a, "5h")
       expect(window.samples).toBe(2)
       expect(window.fuelPerPct).toBeCloseTo(200_000, 3)
       expect(window.outsideShare).toBeCloseTo(10 / 12, 6)
+      // On b, one clean segment sets 200,000 fuel a point; then the same
+      // fuel moves 6 points, 5 of them outside gent's. Judged by a rate that
+      // counts it (400,000 over 7), the move would read as gent's own.
+      yield* step(b, 0.1, 0.11, 1)
+      yield* step(b, 0.11, 0.17, 1)
+      const small = yield* windowOf([b], b, "5h")
+      expect(small.samples).toBe(1)
+      expect(small.fuelPerPct).toBeCloseTo(200_000, 3)
+      expect(small.outsideShare).toBeCloseTo(6 / 7, 6)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -5582,7 +5665,7 @@ describe("account lanes", () => {
     "capacity sums each account's fewest window over the scope, and waits for every account of it",
     () =>
       Effect.gen(function* () {
-        const { read, spend, lanes } = yield* accounts
+        const { read, spend, lanes } = yield* accounts()
         yield* TestClock.adjust("1 hour")
         const now = yield* Clock.currentTimeMillis
         // Both windows learn 200,000 fuel per point on c, outside the scope.
@@ -5625,7 +5708,7 @@ describe("account lanes", () => {
     "a rejected window holds its account until it resets, then the window is full again",
     () =>
       Effect.gen(function* () {
-        const { read, lanes, windowOf } = yield* accounts
+        const { read, lanes, windowOf } = yield* accounts()
         yield* TestClock.adjust("1 hour")
         const now = yield* Clock.currentTimeMillis
         yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + HOUR, rejected: true }])
@@ -5642,7 +5725,7 @@ describe("account lanes", () => {
   )
 
   it.effect(
-    "readings and segments survive a restart in the ledger, which an older binary still reads",
+    "readings, segments and the measured burn survive a restart in the ledger, which an older binary still reads",
     () =>
       Effect.gen(function* () {
         const home = yield* makeTempDirectoryScoped("gent-lanes-ledger-")
@@ -5669,11 +5752,35 @@ describe("account lanes", () => {
               placement.noteQuota({
                 provider: "plan",
                 slot: a,
+                signedInAt: Option.none(),
                 readings: [{ window: "5h", utilization, resetAt, rejected: false }],
               })
+            const fuel = (costUsd: number) =>
+              placement.noteFuel({
+                provider: "plan",
+                slot: a,
+                signedInAt: Option.none(),
+                sessionId: runner,
+                costUsd: Option.some(costUsd),
+                usage,
+              })
             yield* quota(0.1)
-            yield* placement.noteFuel({ provider: "plan", slot: a, costUsd: Option.some(1), usage })
+            // A file with no burn reads the prior.
+            const before = (yield* placement.lanes(scopeOf([a]))).providers[0]
+            expect(before?.fuelPerHour).toBe(3_400_000)
+            expect(before?.laneHours).toBe(0)
+            // One lane runs 2 hours on $11: 2.2 M fuel, 1.1 M a lane-hour.
+            yield* placement.openLane({
+              sessionId: runner,
+              key: "run",
+              provider: "plan",
+              scope: [receiptOf(a)],
+            })
+            yield* fuel(1)
             yield* quota(0.11)
+            yield* fuel(10)
+            yield* TestClock.adjust("2 hours")
+            yield* placement.release(runner)
           }),
         )
         const restarted = yield* Effect.scoped(
@@ -5685,6 +5792,8 @@ describe("account lanes", () => {
         const window = restarted.providers[0]?.accounts[0]?.windows[0]
         expect(window?.utilization).toBe(0.11)
         expect(window?.fuelPerPct).toBeCloseTo(200_000, 3)
+        expect(restarted.providers[0]?.fuelPerHour).toBeCloseTo(1_100_000, 3)
+        expect(restarted.providers[0]?.laneHours).toBeCloseTo(2, 6)
         // The schema an older binary decodes the ledger with.
         const OlderLedger = Schema.fromJsonString(
           Schema.Struct({
@@ -5701,8 +5810,211 @@ describe("account lanes", () => {
         )
         const text = yield* fs.readFileString(file)
         expect(text).toContain('"segments"')
+        expect(text).toContain('"burn"')
         expect(text).not.toContain("sk-")
         expect(Exit.isSuccess(Schema.decodeExit(OlderLedger)(text))).toBe(true)
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+
+  it.effect(
+    "the burn is the prior until a lane-hour is measured, then the fuel per lane-hour of the lanes that ended",
+    () =>
+      Effect.gen(function* () {
+        const { placement, spend, read, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+        const lane = (session: string, hours: number, costUsd: Option.Option<number>) =>
+          Effect.gen(function* () {
+            const sessionId = SessionId.make(session)
+            yield* placement.openLane({
+              sessionId,
+              key: session,
+              provider: "plan",
+              scope: [receiptOf(a)],
+            })
+            yield* spend(a, costUsd, usage, sessionId)
+            yield* TestClock.adjust(Duration.hours(hours))
+            yield* placement.release(sessionId)
+          })
+        // Half a lane-hour on $5, a million fuel: the prior still.
+        yield* lane("short", 0.5, Option.some(5))
+        expect((yield* lanes([a])).fuelPerHour).toBe(3_400_000)
+        expect((yield* lanes([a])).laneHours).toBeCloseTo(0.5, 6)
+        // A lane an unpriced request fell in measures nothing: its fuel is unknown.
+        yield* lane("unpriced", 4, Option.none())
+        expect((yield* lanes([a])).laneHours).toBeCloseTo(0.5, 6)
+        // Another half hour on $5: two million fuel over one lane-hour, each
+        // half weighed by how many lane-hours came after it.
+        yield* lane("second", 0.5, Option.some(5))
+        const decay = 0.5 ** (0.5 / 24)
+        const measured = yield* lanes([a])
+        expect(measured.laneHours).toBeCloseTo(1, 6)
+        expect(measured.fuelPerHour).toBeCloseTo(
+          (1_000_000 * decay + 1_000_000) / (0.5 * decay + 0.5),
+          3,
+        )
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a rejected account replaced under its label is admitted, a late report of the old sign-in is dropped, and a renamed sign-in keeps its readings",
+    () =>
+      Effect.gen(function* () {
+        const { placement, read, admit, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const old = { slot: a, signedInAt: 1 }
+        const replaced = { slot: a, signedInAt: 2 }
+        const rejected = [
+          { window: "7d", utilization: 1, resetAt: now + 48 * HOUR, rejected: true },
+        ]
+        yield* read(old, rejected)
+        expect(yield* admit([old], "before")).toBe("Spent")
+        // `gent auth` signed a new account in under a: the store stamps it anew.
+        expect(yield* admit([replaced], "after")).toBe("admitted")
+        // The old sign-in's reading went with it: no window of the provider is read now.
+        expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
+        // The new sign-in reads its own window; then a response of a request the
+        // old sign-in sent before the change lands late, and leaves that reading.
+        yield* read(replaced, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
+        yield* read(old, rejected)
+        expect(
+          (yield* lanes([replaced])).accounts[0]?.windows.map((window) => window.window),
+        ).toEqual(["5h"])
+        expect(yield* admit([replaced], "late")).toBe("admitted")
+        // The new sign-in's own rejection holds it; renamed to c, it still does.
+        yield* read(replaced, rejected)
+        expect(yield* admit([replaced], "own")).toBe("Spent")
+        yield* placement.renameLabel({ provider: "plan", from: a, to: c })
+        const renamed = { slot: c, signedInAt: 2 }
+        expect(yield* admit([renamed], "renamed")).toBe("Spent")
+        const report = yield* lanes([renamed])
+        expect(report.accounts.map((account) => [account.slot, account.held])).toEqual([[c, true]])
+        // A late report under the old label counts on the new one.
+        yield* read(replaced, [{ window: "5h", utilization: 0.2, resetAt: now + HOUR }])
+        expect(
+          (yield* lanes([renamed])).accounts[0]?.windows.map((window) => window.window).sort(),
+        ).toEqual(["5h", "7d"])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a late report under the label a sign-in was renamed from holds the new label, not the old one",
+    () =>
+      Effect.gen(function* () {
+        const { placement, read, admit, place } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        expect(yield* admit([{ slot: a, signedInAt: 7 }], "before")).toBe("admitted")
+        // `/auth` moves the sign-in from a to c; a request it sent as a lands late, rejected.
+        yield* placement.renameLabel({ provider: "plan", from: a, to: c })
+        expect(yield* admit([{ slot: c, signedInAt: 7 }], "renamed")).toBe("admitted")
+        yield* read({ slot: a, signedInAt: 7 }, [
+          { window: "7d", utilization: 1, resetAt: now + 48 * HOUR, rejected: true },
+        ])
+        // a holds no sign-in now and is placed first; c is held.
+        expect(yield* place("next")).toEqual([a, b])
+        expect(yield* admit([{ slot: c, signedInAt: 7 }], "after")).toBe("Spent")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("two labels whose sign-ins carry one stamp are two accounts", () =>
+    Effect.gen(function* () {
+      const { read, admit, place } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      // Two sign-ins stamped in the same millisecond.
+      const first = { slot: a, signedInAt: 5 }
+      const second = { slot: b, signedInAt: 5 }
+      expect(yield* admit([first, second], "both")).toBe("admitted")
+      yield* read(first, [
+        { window: "7d", utilization: 1, resetAt: now + 48 * HOUR, rejected: true },
+      ])
+      yield* read(second, [{ window: "7d", utilization: 0.2, resetAt: now + 48 * HOUR }])
+      expect(yield* admit([second], "second")).toBe("admitted")
+      expect(yield* admit([first], "first")).toBe("Spent")
+      expect(yield* place("next")).toEqual([b, a])
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a rejected account is placed last before and after a restart: the readings hold it",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const before = yield* accounts(store)
+        yield* before.read(a, [
+          { window: "7d", utilization: 1, resetAt: now + 48 * HOUR, rejected: true },
+        ])
+        yield* before.read(b, [{ window: "7d", utilization: 0.2, resetAt: now + 48 * HOUR }])
+        expect(yield* before.place("first")).toEqual([b, a])
+        yield* before.placement.flush
+        expect((yield* Ref.get(file)).readings?.length).toBe(2)
+        const after = yield* accounts(store)
+        expect(yield* after.place("second")).toEqual([b, a])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("values the window no longer holds leave the ledger file on the next write", () =>
+    Effect.gen(function* () {
+      const { file, store } = yield* ledgerRef
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      const { read, spend, placement } = yield* accounts(store)
+      yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+      yield* spend(a, Option.some(1))
+      yield* read(a, [{ window: "5h", utilization: 0.11, resetAt: now + 5 * HOUR }])
+      yield* placement.flush
+      expect((yield* Ref.get(file)).readings?.length).toBe(1)
+      expect((yield* Ref.get(file)).segments?.length).toBe(1)
+      // Eight days on, nothing new was recorded; a read of the lanes trims.
+      yield* TestClock.adjust("8 days")
+      expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+      yield* placement.flush
+      const saved = yield* Ref.get(file)
+      expect(saved.readings).toBeUndefined()
+      expect(saved.segments).toBeUndefined()
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a reservation its caller frees stops counting at once", () =>
+    Effect.gen(function* () {
+      const { placement, read, admit, lanes } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+      expect(yield* admit([a], "start")).toBe("admitted")
+      expect((yield* lanes([a])).load).toBe(1)
+      yield* placement.freeReservation("start")
+      expect((yield* lanes([a])).load).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a lane's account carries the sign-in the store holds under its label now", () =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(makeRegistryLayerWithDrivers([noopProvider]))
+      const auth = Context.get(context, Auth)
+      const work = CredentialSlot.make("work")
+      const stampsOf = credentialLane(
+        "anthropic",
+        Option.some(work),
+        Context.get(context, ExtensionRegistry),
+      ).pipe(
+        Effect.provideService(ModelRegistry, Context.get(context, ModelRegistry)),
+        Effect.map(Option.map((lane) => lane.scope.map((account) => account.signedInAt))),
+      )
+      yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "first", signedInAt: 1 }), work)
+      expect(yield* stampsOf).toEqual(Option.some([1]))
+      // `gent auth` signs another account in under the label.
+      yield* auth.set(
+        "anthropic",
+        AuthApi.make({ type: "api", key: "second", signedInAt: 2 }),
+        work,
+      )
+      expect(yield* stampsOf).toEqual(Option.some([2]))
+    }).pipe(Effect.scoped),
   )
 })

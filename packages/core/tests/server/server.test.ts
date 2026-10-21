@@ -111,7 +111,13 @@ import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { HttpRouter, HttpServer } from "effect/http"
 import { Socket } from "effect/socket"
 import { SqlClient } from "effect/sql"
-import { Auth, CredentialPlacement, ModelResolver, textStep } from "../../src/runtime/provider"
+import {
+  Auth,
+  CredentialPlacement,
+  ModelRegistry,
+  ModelResolver,
+  textStep,
+} from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { SessionRuntimeStateSchema } from "../../src/domain/agent-loop"
 import { RpcClient, RpcSerialization, RpcTest } from "effect/rpc"
@@ -276,6 +282,7 @@ const sessionMutationsTestLayer = (
     defaultAgentProfiles,
     ConfigService.Test(),
     CredentialPlacement.Memory,
+    ModelRegistry.Test(),
     BunServices.layer,
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
@@ -2399,6 +2406,7 @@ describe("requestId idempotency", () => {
             testRuntimeEnvironment,
             ConfigService.Test(),
             CredentialPlacement.Memory,
+            ModelRegistry.Test(),
             BunServices.layer,
           ),
         )
@@ -2475,6 +2483,7 @@ describe("requestId idempotency", () => {
           profiles,
           ConfigService.Test(),
           CredentialPlacement.Memory,
+          ModelRegistry.Test(),
           BunServices.layer,
         )
         // The caller holds only SessionMutations: the check reads the cache

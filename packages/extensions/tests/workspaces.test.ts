@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
+  Clock,
   Context,
   Crypto,
   DateTime,
@@ -20,9 +21,18 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import type * as Prompt from "effect/ai/Prompt"
 import { Hex } from "effect/encoding"
 import { workspaceIdForCwd } from "@gent/core/host"
-import { ExtensionContext, getToolId, RequestId, runProcess } from "@gent/core/extensions/api"
+import {
+  CredentialSlot,
+  ExtensionContext,
+  getToolId,
+  type QuotaReading,
+  reportProviderQuota,
+  RequestId,
+  runProcess,
+} from "@gent/core/extensions/api"
 import {
   collectTestContributions,
+  ConfigService,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -32,10 +42,12 @@ import {
   makeTempDirectoryScoped,
   runtimeHostContext,
   runToolWithCtx,
+  TEST_MODEL_ID,
   testLeafContext,
   testToolContext,
   textDeltaPart,
   toolCallPart,
+  UserConfig,
   waitFor,
 } from "@gent/core/test-utils"
 import { BranchId, Session, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -1038,7 +1050,7 @@ const toolStep = (name: string, input: Parameters<typeof toolCallPart>[1], id: s
  * answers. The round's end wakes the starter once more. A thread's request
  * is the one whose first text (its round's text) ends with the task.
  */
-const snapshotModel = () =>
+const snapshotModel = (quota: Effect.Effect<void> = Effect.void) =>
   LanguageModelLayers.testStream((options) => {
     const texts = promptTexts(options.prompt)
     const calls = calledTools(options.prompt)
@@ -1051,7 +1063,9 @@ const snapshotModel = () =>
       return Effect.succeed(reply("wrote it"))
     }
     if (texts.some((text) => text.startsWith('Thread "'))) return Effect.succeed(reply("read it"))
-    if (calls === 0) return Effect.succeed(toolStep("thread.start", snapshotStart, "start-1"))
+    if (calls === 0) {
+      return Effect.as(quota, toolStep("thread.start", snapshotStart, "start-1"))
+    }
     return Effect.succeed(reply("started"))
   })
 
@@ -1073,6 +1087,30 @@ const harnessIn = (
     cwd: origin,
     home,
     admission,
+  })
+
+/**
+ * `harnessIn` with the starter walking the `anthropic` sign-in `work`, whose
+ * step that calls `thread.start` reads the week as `reading` says.
+ */
+const meteredHarnessIn = (origin: string, home: string, reading: QuotaReading) =>
+  createRpcHarness({
+    ...e2ePreset,
+    extensionInputs: [
+      ...e2ePreset.extensionInputs.filter(
+        (extension) => extension.manifest.id !== WORKSPACES_EXTENSION_ID,
+      ),
+      makeWorkspacesExtension({ rift: NO_RIFT }),
+    ],
+    providerLayer: snapshotModel(reportProviderQuota([reading])),
+    configServiceLayer: ConfigService.Test(
+      new UserConfig({
+        model: TEST_MODEL_ID,
+        providers: { anthropic: { authOrder: [CredentialSlot.make("work")] } },
+      }),
+    ),
+    cwd: origin,
+    home,
   })
 
 /** The message a thread's round end wakes its starter with. */
@@ -1285,6 +1323,91 @@ describe("a snapshot thread", () => {
           .pipe(Effect.orElseSucceed(() => []))
         expect(worktrees).toEqual([])
         expect(yield* sh(origin, "git for-each-ref refs/gent")).toBe("")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "on an account with no lane is refused before its copy is made",
+    () =>
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const resetAt = (yield* Clock.currentTimeMillis) + 3_600_000
+        const harness = yield* meteredHarnessIn(origin, home, {
+          window: "7d",
+          utilization: 1,
+          resetAt,
+          rejected: true,
+        })
+        const started = yield* harness.client.session
+          .events({ sessionId: harness.sessionId, branchId: harness.branchId })
+          .pipe(
+            Stream.filter(isToolResultFor("thread.start")),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.map((events) => Array.from(events)[0]?.event),
+            Effect.forkScoped,
+          )
+        yield* harness.client.message.send({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+          content: "delegate it in a copy",
+        })
+        const result = yield* Fiber.join(started)
+        expect(result?._tag).toBe("ToolCallFailed")
+        if (result?._tag !== "ToolCallFailed") return
+        expect([result.summary, result.output].join(" ")).toContain("No lane on anthropic")
+        // No copy, no record, no branch: the precheck ran before the making.
+        expect(yield* worktreeCount(origin)).toBe("1")
+        expect(yield* exists(`${home}/.gent/workspaces/worktrees`)).toBe(false)
+        const fs = yield* FileSystem.FileSystem
+        const left = yield* fs
+          .readDirectory(`${home}/.gent/workspaces`)
+          .pipe(Effect.orElseSucceed(() => []))
+        expect(left.filter((file) => file.endsWith(".json"))).toEqual([])
+        expect(yield* sh(origin, "git for-each-ref refs/gent")).toBe("")
+        const threads = (yield* harness.client.session.list()).filter(
+          (session) => session.parentSessionId === harness.sessionId,
+        )
+        expect(threads).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "whose copy cannot be made frees the lane its precheck was admitted",
+    () =>
+      Effect.gen(function* () {
+        // No repository: the copy's making fails after the precheck.
+        const origin = yield* makeTempDirectoryScoped("ws-plain-")
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        // A week that never moves: no capacity, and every admitted run counts.
+        const harness = yield* meteredHarnessIn(origin, home, {
+          window: "7d",
+          utilization: 0.1,
+          resetAt: (yield* Clock.currentTimeMillis) + 20 * 3_600_000,
+          rejected: false,
+        })
+        const session = { sessionId: harness.sessionId, branchId: harness.branchId }
+        const started = yield* harness.client.session.events(session).pipe(
+          Stream.filter(isToolResultFor("thread.start")),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.map((events) => Array.from(events)[0]?.event),
+          Effect.forkScoped,
+        )
+        yield* harness.client.message.send({ ...session, content: "delegate it in a copy" })
+        expect((yield* Fiber.join(started))?._tag).toBe("ToolCallFailed")
+        yield* waitFor(
+          harness.client.session.getSnapshot(session),
+          (current) => current.runtime._tag === "Idle",
+          10_000,
+          "the starter's turn ended",
+        )
+        // Read at once: the failed start holds no lane.
+        const lanes = yield* harness.client.accounts.lanes()
+        expect(lanes.providers.map((provider) => provider.load)).toEqual([0])
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )

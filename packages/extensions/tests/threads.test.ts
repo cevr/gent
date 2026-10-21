@@ -133,6 +133,7 @@ interface ThreadOp {
     | "thread.stop"
     | "thread.send"
     | "probe.lane-on-end"
+    | "probe.start-key"
   readonly input: Record<string, string | boolean>
   readonly id: string
 }
@@ -150,6 +151,7 @@ const THREAD_TOOLS = new Set([
   "thread.stop",
   "thread.send",
   "probe.lane-on-end",
+  "probe.start-key",
 ])
 
 const StartedResult = Schema.Struct({ thread: SessionId, sessionId: SessionId, branchId: BranchId })
@@ -377,6 +379,45 @@ const laneProbe = (hold: Deferred.Deferred<void>) =>
       })
     }),
   })
+
+/** What a start under a key got: its round, or the refusal. */
+const StartKeyed = Schema.Struct({
+  outcome: LaneOutcome,
+  round: Schema.optionalKey(Schema.String),
+})
+const decodeStartKeyed = Schema.decodeEffect(Schema.fromJsonString(StartKeyed))
+
+/** Starts a thread with a task under the key its call names, as a machine's retry does. */
+const startKeyProbe = defineExtension({
+  id: "threads-start-key-probe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "tool",
+      tool({
+        id: "probe.start-key",
+        description: "Start a thread with a task under a key.",
+        params: Schema.Struct({ key: Schema.String }),
+        output: StartKeyed,
+        execute: Effect.fn("StartKey.execute")(function* (params) {
+          const threads = Option.getOrThrow(yield* Effect.serviceOption(Threads))
+          const started = threads.start({ task: THREAD_TASK, key: params.key, notify: "none" })
+          return yield* started.pipe(
+            Effect.map((result): typeof StartKeyed.Type => ({
+              outcome: "sent",
+              ...omitUndefined({ round: result.round?.round }),
+            })),
+            Effect.catch((error) =>
+              Effect.map(laneOutcome(Effect.fail(error)), (outcome): typeof StartKeyed.Type => ({
+                outcome,
+              })),
+            ),
+          )
+        }),
+      }),
+    )
+  }),
+})
 
 /** The `anthropic` sign-in a rig's turns walk, and what each step costs; default: neither. */
 interface RigAccounts {
@@ -838,6 +879,80 @@ describe("threads", () => {
               "the second thread's round",
             )
             yield* loadIs(rig, 0, "every lane is free once the rounds end")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a send the thread refuses as busy after its lane was admitted frees that lane at once",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            // One reading that never moves: no rate, no capacity, every round
+            // admitted and each counted.
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: () => [
+                { window: "7d", utilization: 0.1, resetAt: now + 20 * 3_600_000, rejected: false },
+              ],
+            })
+            // The gate stays shut: the round runs.
+            const running = yield* rig.start(rig.starter, THREAD_TASK)
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            yield* loadIs(rig, 1, "the round holds the lane")
+            const [refused] = yield* rig.act(rig.starter, [
+              rig.op("thread.send", { thread: running.thread, message: "and again" }),
+            ])
+            expect(refused?.ok).toBe(false)
+            expect(refused?.output).toContain("is running round")
+            yield* waitFor(
+              rig.client.session.getSnapshot(rig.starter),
+              (current) => current.runtime._tag === "Idle",
+              4_000,
+              "the starter's turn ended",
+            )
+            // Read at once: the refused send holds no lane.
+            expect((yield* lanesOf(rig))?.load).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "every lane is free once the round ends")
+          }).pipe(Effect.timeout("12 seconds")),
+        ),
+      15_000,
+    )
+
+    it.live(
+      "a start sent again under its key gets the round it was admitted, while the account is full",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const rig = yield* accountsRig({
+              ...metered,
+              quota: oneLane(now),
+              extensions: [startKeyProbe],
+            })
+            const startUnder = (key: string) =>
+              Effect.flatMap(
+                rig.one(rig.starter, rig.op("probe.start-key", { key })),
+                decodeStartKeyed,
+              )
+            // The gate stays shut: the round runs and holds the one lane.
+            const first = yield* startUnder("keyed")
+            expect(first.outcome).toBe("sent")
+            yield* waitFor(rig.threadRequests, (sent) => sent >= 1, 4_000, "the round's request")
+            yield* waitFor(
+              lanesOf(rig),
+              (lanes) => lanes?.capacity === 1 && lanes.load === 1,
+              4_000,
+              "the round holds the one lane",
+            )
+            expect(yield* startUnder("other")).toEqual({ outcome: "busy" })
+            expect(yield* startUnder("keyed")).toEqual(first)
+            expect(yield* rig.threadRequests).toBe(1)
+            yield* Deferred.succeed(rig.gate, true)
+            yield* loadIs(rig, 0, "every lane is free once the round ends")
           }).pipe(Effect.timeout("12 seconds")),
         ),
       15_000,

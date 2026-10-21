@@ -134,8 +134,9 @@ accessors (`Session`, `Interaction`, `FileLock`, `Models`, `Accounts`,
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. `Accounts.admit(run)` asks a lane for a run the caller starts (its message id,
 cwd, admission and model) and fails with `LaneUnavailable` when the account
-is full or spent; `Accounts.lanes` reads each provider's windows, capacity
-and load. `Extensions.status` lists every extension of the session's profile
+is full or spent; `Accounts.cancel(message)` gives the lane back when that run
+opens no turn of its own; `Accounts.lanes` reads each provider's windows,
+capacity and load. `Extensions.status` lists every extension of the session's profile
 as an `ExtensionStatus` (`Active` with its version, `Failed` with the
 phase that stopped it, or `Disabled`), and each config file that did not
 load. An `Active` status with `reloadFailed` is a last good version still

@@ -1,5 +1,5 @@
-import { GENT_START_BOUND_MS } from "@gent/core/test-utils"
-import { Duration, Effect, Filter, Option, Schema, type Scope, Stream } from "effect"
+import { GENT_START_BOUND_MS, waitFor } from "@gent/core/test-utils"
+import { Duration, Effect, Filter, Option, Ref, Schema, type Scope, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { fileURLToPath } from "node:url"
 
@@ -192,3 +192,75 @@ export const stopProcess = (proc: Bun.Subprocess, graceMs: number): Effect.Effec
       Effect.annotateLogs({ pid: proc.pid, graceMs }),
     )
   })
+
+// ── a test host process ─────────────────────────────────────────────────────
+
+const E2E_DIRECTORY = fileURLToPath(new URL("..", import.meta.url))
+
+/** A host process a crash test runs: a test root that only a signal ends. */
+export interface TestHost {
+  readonly proc: Bun.Subprocess<"ignore", "pipe", Bun.BunFile>
+  /** The `<prefix> <event>` lines the host printed, in order, without the prefix. */
+  readonly events: Ref.Ref<ReadonlyArray<string>>
+}
+
+/** SIGKILL, then its exit: no finalizer of the host runs. A host that outlives it fails the test. */
+export const hardKill = (proc: Bun.Subprocess<"ignore", "pipe", Bun.BunFile>) =>
+  killProcess(proc, "SIGKILL").pipe(
+    Effect.andThen(exitWithin(proc.exited, "5 seconds")),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.die(new Error(`host ${proc.pid} outlived SIGKILL by 5 s`)),
+        onSome: () => Effect.void,
+      }),
+    ),
+  )
+
+/**
+ * Spawns `script` (a path under `packages/e2e`) with `dir` as gent's data
+ * dir. The scope kills it with SIGKILL if the test has not; its stderr goes
+ * to `<dir>/<label>.err`. Each stdout line that starts with `prefix` and a
+ * space is an event.
+ */
+export const spawnTestHost = (input: {
+  readonly script: string
+  readonly prefix: string
+  readonly dir: string
+  readonly label: string
+  readonly env: Readonly<Record<string, string>>
+}) =>
+  Effect.gen(function* () {
+    const proc = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        // oxlint-disable-next-line effect/noGlobals -- the test spawns the real host process with the test's environment
+        Bun.spawn(["bun", input.script], {
+          cwd: E2E_DIRECTORY,
+          // oxlint-disable-next-line effect/noGlobals -- the test spawns the real host process with the test's environment
+          env: { ...Bun.env, GENT_DATA_DIR: input.dir, ...input.env },
+          stdin: "ignore",
+          stdout: "pipe",
+          // oxlint-disable-next-line effect/noGlobals -- the host's log goes to a file the test leaves for a failed run
+          stderr: Bun.file(`${input.dir}/${input.label}.err`),
+        }),
+      ),
+      (child) => hardKill(child),
+    )
+    const events = yield* Ref.make<ReadonlyArray<string>>([])
+    const marker = `${input.prefix} `
+    yield* Stream.fromReadableStream({ evaluate: () => proc.stdout, onError: String }).pipe(
+      Stream.decodeText,
+      Stream.splitLines,
+      Stream.filter((line) => line.startsWith(marker)),
+      Stream.runForEach((line) =>
+        Ref.update(events, (seen) => [...seen, line.slice(marker.length)]),
+      ),
+      Effect.ignore,
+      Effect.forkScoped,
+    )
+    const host: TestHost = { proc, events }
+    return host
+  })
+
+/** Waits until `host` printed `event`. */
+export const hostPrinted = (host: TestHost, event: string, within: number) =>
+  waitFor(Ref.get(host.events), (seen) => seen.includes(event), within, `the host printed ${event}`)

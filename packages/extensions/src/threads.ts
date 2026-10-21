@@ -1363,7 +1363,7 @@ const sendClaimedRound = Effect.fn("Threads.sendClaimedRound")(function* (round:
   yield* sendRoundTurn(round).pipe(
     Effect.tapError((error) => {
       if (!Schema.is(FollowUpQueueFull)(error)) return Effect.void
-      return rounds.releaseRound(round.round)
+      return rounds.releaseRound(round.round).pipe(Effect.andThen(cancelLane(round.round)))
     }),
   )
 })
@@ -2148,6 +2148,12 @@ const admitLane = Effect.fn("Threads.admitLane")(function* (roundId: string, lan
   })
 })
 
+/** The round will not run: the lane its admission took frees now, not when its hold lapses. */
+const cancelLane = Effect.fn("Threads.cancelLane")(function* (roundId: string) {
+  const ctx = yield* ExtensionContext
+  yield* ctx.Accounts.cancel(roundMessageId(roundId))
+})
+
 interface RoundRequest {
   readonly thread: SessionId
   readonly place: Place
@@ -2195,27 +2201,37 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       }
       yield* refuseOverCap(cap)
       yield* admitLane(roundId, lane)
-      const input = yield* request
-      return yield* rounds.claimRound({
-        round: roundId,
-        cap,
-        thread: input.thread,
-        starter,
-        place: input.place,
-        messageId: roundMessageId(roundId),
-        content: (number) =>
-          threadRoundText({
-            number,
-            starter: ctx.sessionId,
-            message: input.message,
-            reply: input.reply,
-            notify: input.notify,
-            place: input.workPlace,
+      // Past the lane, a failed create or a claim that refuses (a busy
+      // thread, the cap) runs no round: the lane it took frees with it.
+      const input = yield* request.pipe(Effect.tapError(() => cancelLane(roundId)))
+      return yield* rounds
+        .claimRound({
+          round: roundId,
+          cap,
+          thread: input.thread,
+          starter,
+          place: input.place,
+          messageId: roundMessageId(roundId),
+          content: (number) =>
+            threadRoundText({
+              number,
+              starter: ctx.sessionId,
+              message: input.message,
+              reply: input.reply,
+              notify: input.notify,
+              place: input.workPlace,
+            }),
+          replySpec: input.reply,
+          notify: input.notify,
+          startedAt: yield* Clock.currentTimeMillis,
+        })
+        .pipe(
+          Effect.tap((claimed) => {
+            if (claimed._tag === "Ready") return Effect.void
+            return cancelLane(roundId)
           }),
-        replySpec: input.reply,
-        notify: input.notify,
-        startedAt: yield* Clock.currentTimeMillis,
-      })
+          Effect.tapError(() => cancelLane(roundId)),
+        )
     }),
   )
   if (claim._tag === "OverCap") return yield* capRefusal(claim.threads)
@@ -2350,15 +2366,19 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
       })
       // A start with a task is refused past the cap or a full account before
       // its copy is made; a retry has its round already, and neither applies.
+      const roundId = yield* roundIdOf("thread.start", input.key)
+      // Whether this call's precheck took the lane: a retry's round holds its own.
+      const admitted = yield* Ref.make(false)
       const precheck = Effect.gen(function* () {
         if (Option.isNone(task)) return
         const rounds = yield* ThreadRounds
-        const roundId = yield* roundIdOf("thread.start", input.key)
         if (Option.isSome(yield* rounds.round(roundId))) return
         yield* refuseOverCap(yield* runningCap())
         yield* admitLane(roundId, lane(cwd))
+        yield* Ref.set(admitted, true)
       })
-      // `{ snapshot: true }` is the one workspace a start names today.
+      // `{ snapshot: true }` is the one workspace a start names today. A copy
+      // that fails after this call's precheck took the lane runs no round.
       const snapshot = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
         onNone: () => Effect.succeedNone,
         onSome: () =>
@@ -2368,6 +2388,13 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
               cwd: Option.getOrElse(cwd, () => ctx.cwd),
               precheck,
             }),
+          ).pipe(
+            Effect.tapError(() =>
+              Effect.flatMap(Ref.get(admitted), (took) => {
+                if (!took) return Effect.void
+                return cancelLane(roundId)
+              }),
+            ),
           ),
       })
       const create = ctx.Session.create({

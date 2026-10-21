@@ -3259,8 +3259,10 @@ export const spreadsRuns = Effect.fn("CredentialOrder.spreads")(
 /**
  * The sign-in a run of `driverId` spends from (its owner) and the accounts
  * its lane is counted over: a pinned run's pin (`pin`), else the pool
- * (`authSpread`), else the first credential of its order. None when its
- * order cannot be read.
+ * (`authSpread`), else the first credential of its order. Each account
+ * carries the stamp of the sign-in the store holds under it now
+ * (`ModelRegistry.stamp`), so placement reads the quota state of that
+ * sign-in alone. None when its order cannot be read.
  */
 export const credentialLane = Effect.fn("CredentialOrder.lane")(
   function* (
@@ -3273,16 +3275,23 @@ export const credentialLane = Effect.fn("CredentialOrder.lane")(
       yield* registry.providerConfig,
       driverId,
     )
-    const scope = Option.getOrElse(
+    const slots = Option.getOrElse(
       Option.orElse(Option.map(pin, Arr.of), () => order.pool),
       () => Arr.of(Arr.headNonEmpty(order.slots)),
     )
+    const modelRegistry = yield* ModelRegistry
+    const provider = ProviderId.make(order.provider)
+    const stamp = (slot: CredentialSlot) => modelRegistry.stamp({ provider, slot }, registry)
+    const scope: Arr.NonEmptyReadonlyArray<CredentialReceipt> = [
+      yield* stamp(slots[0]),
+      ...(yield* Effect.forEach(slots.slice(1), stamp)),
+    ]
     return Option.some({ provider: order.provider, scope })
   },
   Effect.orElseSucceed(() =>
     Option.none<{
       readonly provider: string
-      readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
+      readonly scope: Arr.NonEmptyReadonlyArray<CredentialReceipt>
     }>(),
   ),
 )
@@ -3500,10 +3509,14 @@ const PLACEMENT_LEDGER_FILE = "credential-usage.json"
 const FUEL_REFERENCE_USD_PER_MILLION = 5
 /**
  * The fuel one run burns in an hour on the provider, before gent has
- * measured its own: the bridge reading of 2026-10-20 (lanes.md, r3), about
- * 3.4 M per agent-hour.
+ * measured an hour of its own lanes: the bridge reading of 2026-10-20
+ * (lanes.md, r3), about 3.4 M per agent-hour.
  */
 const FUEL_PER_LANE_HOUR_PRIOR = 3_400_000
+/** The lane-hours a provider's measured burn needs before it replaces the prior. */
+const LANE_BURN_MIN_HOURS = 1
+/** A lane's weight in the measured burn halves for each this many lane-hours after it. */
+const LANE_BURN_HALF_LIFE_HOURS = 24
 /** A quota window moves in 1% steps; a step this size closes a segment. */
 const QUOTA_STEP = 0.01
 /** A reading this long after the last one of its window drops the fuel between them. */
@@ -3523,8 +3536,9 @@ const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
  */
 const QUOTA_OUTSIDE_POINTS = 3
 /**
- * How long an admitted start holds its lane before its turn opens: past it,
- * a start whose send failed frees the lane. A guess.
+ * How long an admitted start holds its lane before its turn opens. Its turn
+ * opening, a turn it joins, or its caller's refusal frees it first; past it,
+ * a start whose send was lost frees the lane. A guess.
  */
 const LANE_RESERVATION_MS = 2 * 60_000
 /** When a run refused for a busy lane checks again: no run says when it ends. A guess. */
@@ -3643,6 +3657,8 @@ interface PlacementStep extends PlacementSpend {
 interface PlacementRefusal {
   readonly provider: string
   readonly slot: CredentialSlot
+  /** The sign-in the refused request went out with (`CredentialReceipt.signedInAt`). */
+  readonly signedInAt: Option.Option<number>
   /** Some: only `model`'s runs avoid the account (`refusalHoldsModel`); none: every run does. */
   readonly model: Option.Option<ModelId>
   /** The reset the failure names; none: held for 5 minutes. */
@@ -3658,12 +3674,15 @@ interface CredentialPlacementService {
   readonly noteStep: (step: PlacementStep) => Effect.Effect<void>
   /** A request that keeps no cache (a handoff summary) was priced on `slot`: its price counts. */
   readonly noteSpend: (spend: PlacementSpend) => Effect.Effect<void>
-  /** `slot` refused: held, for one model or all, until `retryAt`, else for 5 minutes. */
+  /**
+   * `slot` refused: held, for one model or all, until `retryAt`, else for 5
+   * minutes. A refusal of a sign-in the label no longer holds holds nothing.
+   */
   readonly refuse: (refusal: PlacementRefusal) => Effect.Effect<void>
   /**
    * Whether any account of `pool` is eligible for `model` now: not held by
-   * a refusal and not `left` by the turn. A run outside the pool returns to
-   * it only then.
+   * a refusal or a rejected quota window, and not `left` by the turn. A run
+   * outside the pool returns to it only then.
    */
   readonly open: (params: {
     readonly provider: string
@@ -3678,20 +3697,43 @@ interface CredentialPlacementService {
    * holding a lane there (turns open on those accounts, and starts admitted
    * whose turn has not opened, the asker's own turn left out) reach the
    * scope's capacity. An admitted start holds its lane, under `key`, until
-   * its turn opens or 2 minutes pass. With no capacity read, every run is
-   * admitted.
+   * its turn opens, `freeReservation` names it, or 2 minutes pass. With no
+   * capacity read, every run is admitted.
    */
   readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
   readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
+   * The start admitted under `key` opens no turn of its own: its message
+   * joined a turn that holds its session's lane already, or its caller's
+   * admission failed after the lane admitted it. Its lane frees now.
+   */
+  readonly freeReservation: (key: string) => Effect.Effect<void>
+  /**
+   * The store renamed `provider`'s label `from` to `to`, sign-in and all
+   * (`renameSignIn`): the quota state, holds and sign-in of `from` move to
+   * `to`, whose own go, and a late report under `from` of that sign-in
+   * counts on `to`.
+   */
+  readonly renameLabel: (rename: {
+    readonly provider: string
+    readonly from: CredentialSlot
+    readonly to: CredentialSlot
+  }) => Effect.Effect<void>
+  /**
    * A response on `slot` named its quota windows: each is the window's
    * latest reading, and a move of 1% closes a segment of the fuel spent on
    * the account since the window's last reading. A rejected window holds the
-   * account until its reset.
+   * account until its reset. A response of a sign-in the label no longer
+   * holds is dropped, and one of a sign-in renamed since is read on its
+   * new label.
    */
   readonly noteQuota: (quota: PlacementQuota) => Effect.Effect<void>
-  /** A request was priced on `slot`: its fuel counts toward the account's open segments. */
+  /**
+   * A request was priced on `slot`: its fuel counts toward the account's
+   * open segments, as `noteQuota` names its sign-in, and toward the burn of
+   * the lane its session holds.
+   */
   readonly noteFuel: (fuel: PlacementFuel) => Effect.Effect<void>
   /**
    * The lanes of every provider gent read a quota window of: each account's
@@ -3703,10 +3745,19 @@ interface CredentialPlacementService {
   readonly flush: Effect.Effect<void>
 }
 
+/**
+ * The accounts a lane is counted over, as the credential store holds them
+ * now: each label with the sign-in under it (`signedInAt`, absent for an
+ * unstamped credential). Placement reads a label's quota state only for
+ * that sign-in: a new sign-in on the label starts with none, and a renamed
+ * one keeps its own.
+ */
+type LaneScope = Arr.NonEmptyReadonlyArray<CredentialReceipt>
+
 /** A run that asks for a lane: the accounts its turns spend from, and the message whose turn takes it. */
 interface LaneRequest {
   readonly provider: string
-  readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  readonly scope: LaneScope
   readonly key: string
   /** The session that asks: its own open turn holds no lane against it. */
   readonly asker: Option.Option<SessionId>
@@ -3717,13 +3768,15 @@ interface OpenLane {
   readonly sessionId: SessionId
   readonly key: string
   readonly provider: string
-  readonly scope: Arr.NonEmptyReadonlyArray<CredentialSlot>
+  readonly scope: LaneScope
 }
 
 /** The quota windows one response named, on the account its request went out on. */
 interface PlacementQuota {
   readonly provider: string
   readonly slot: CredentialSlot
+  /** The sign-in the request went out with (`CredentialReceipt.signedInAt`). */
+  readonly signedInAt: Option.Option<number>
   readonly readings: ReadonlyArray<QuotaReading>
 }
 
@@ -3739,7 +3792,11 @@ interface FuelUsage {
 interface PlacementFuel {
   readonly provider: string
   readonly slot: CredentialSlot
-  /** None when unpriced: the open segments it falls in drop. */
+  /** The sign-in the request went out with (`CredentialReceipt.signedInAt`). */
+  readonly signedInAt: Option.Option<number>
+  /** The session whose turn spent it: its lane's burn counts it. */
+  readonly sessionId: SessionId
+  /** None when unpriced: the open segments and the lane it falls in drop. */
   readonly costUsd: Option.Option<number>
   readonly usage: Option.Option<FuelUsage>
 }
@@ -3748,9 +3805,7 @@ interface PlacementFuel {
  * The accounts a provider's unpinned run spends from: its pool, else the
  * first of its order. None when the sign-in's order cannot be read.
  */
-type LaneScopeOf = (
-  provider: string,
-) => Effect.Effect<Option.Option<Arr.NonEmptyReadonlyArray<CredentialSlot>>>
+type LaneScopeOf = (provider: string) => Effect.Effect<Option.Option<LaneScope>>
 
 /**
  * Whether a refusal holds its account for the refused model alone: a
@@ -3789,10 +3844,15 @@ const FuelTokens = Schema.Struct({
 })
 type FuelTokens = typeof FuelTokens.Type
 
-/** The latest reading of one account's quota window. */
+/**
+ * The latest reading of one account's quota window. `signedInAt` names the
+ * sign-in it was read for, absent for an unstamped credential: a restart
+ * reads the label's sign-in from it.
+ */
 const WindowReading = Schema.Struct({
   provider: Schema.String,
   slot: CredentialSlot,
+  signedInAt: Schema.optionalKey(Schema.Finite),
   window: Schema.String,
   utilization: Schema.Finite,
   /** Epoch ms. */
@@ -3812,6 +3872,7 @@ type WindowReading = typeof WindowReading.Type
 const FuelSegment = Schema.Struct({
   provider: Schema.String,
   slot: CredentialSlot,
+  signedInAt: Schema.optionalKey(Schema.Finite),
   window: Schema.String,
   /** Epoch ms of the reading that closed it. */
   endedAt: Schema.Finite,
@@ -3822,14 +3883,30 @@ const FuelSegment = Schema.Struct({
 type FuelSegment = typeof FuelSegment.Type
 
 /**
- * The ledger file. `segments` and `readings` are optional: a file an older
- * gent wrote has neither, and an older gent drops both when it reads them.
+ * The fuel one provider's lanes burn per lane-hour, as gent measured it:
+ * `fuel` and `hours` are sums over the lanes that ended, each lane's weight
+ * halved for every 24 lane-hours after it (`fuel / hours` is the rate), and
+ * `seen` the lane-hours measured in all.
+ */
+const LaneBurn = Schema.Struct({
+  provider: Schema.String,
+  fuel: Schema.Finite,
+  hours: Schema.Finite,
+  seen: Schema.Finite,
+})
+type LaneBurn = typeof LaneBurn.Type
+
+/**
+ * The ledger file. `segments`, `readings` and `burn` are optional: a file
+ * an older gent wrote has none, and an older gent drops them when it reads
+ * them.
  */
 const PlacementLedger = Schema.fromJsonString(
   Schema.Struct({
     buckets: Schema.Array(UsageBucket),
     segments: Schema.optionalKey(Schema.Array(FuelSegment)),
     readings: Schema.optionalKey(Schema.Array(WindowReading)),
+    burn: Schema.optionalKey(Schema.Array(LaneBurn)),
   }),
 )
 type PlacementLedgerValue = typeof PlacementLedger.Type
@@ -3894,26 +3971,45 @@ const weightedRate = (segments: ReadonlyArray<FuelSegment>): Option.Option<numbe
 }
 
 /**
- * Fits one window: a segment whose move passes what its fuel explains at the
- * plain rate by more than three 1% steps, or that spent no fuel, is spend
- * outside gent; the rate reads the rest. The band is `1 / Σ points` of the
- * kept segments, the 1% step over the move they span.
+ * Fits one window. A segment that spent no fuel, or whose move passes what
+ * its fuel explains by more than three 1% steps, is spend outside gent; the
+ * rate reads the rest. Each segment is judged against the plain rate of the
+ * other kept segments, never one it is part of: outside spend in a segment
+ * lowers the rate it would be judged by. The judging repeats until the kept
+ * set holds still. A segment with no other kept segment to judge it by is
+ * kept. The band is `±0.5 / Σ points` of the kept segments (lanes r3): the
+ * half-step of the 1% quantization over the move they span.
  */
 const fitWindow = (segments: ReadonlyArray<FuelSegment>): WindowFit => {
   const totalPoints = segments.reduce((sum, segment) => sum + segment.deltaPct, 0)
-  const plainFuel = segments.reduce((sum, segment) => sum + segment.fuel, 0)
-  const plain = plainFuel / totalPoints
-  const outside = (segment: FuelSegment) =>
-    segment.fuel <= 0 ||
-    !(plain > 0) ||
-    segment.deltaPct - segment.fuel / plain > QUOTA_OUTSIDE_POINTS
-  const kept = segments.filter((segment) => !outside(segment))
+  let kept: ReadonlyArray<FuelSegment> = segments.filter((segment) => segment.fuel > 0)
+  // Each pass drops or restores at least one segment, or holds still.
+  for (let pass = 0; pass <= segments.length; pass += 1) {
+    const keptFuel = kept.reduce((sum, segment) => sum + segment.fuel, 0)
+    const keptPointsNow = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
+    const keptNow = new Set(kept)
+    const outside = (segment: FuelSegment) => {
+      if (segment.fuel <= 0) return true
+      // The rate of the other kept segments: this one left out.
+      const own = Option.liftPredicate(segment, (candidate) => keptNow.has(candidate))
+      const otherFuel = keptFuel - Option.match(own, { onNone: () => 0, onSome: (it) => it.fuel })
+      const otherPoints =
+        keptPointsNow - Option.match(own, { onNone: () => 0, onSome: (it) => it.deltaPct })
+      const others = otherFuel / otherPoints
+      if (!(otherPoints > 0) || !(others > 0) || !Number.isFinite(others)) return false
+      return segment.deltaPct - segment.fuel / others > QUOTA_OUTSIDE_POINTS
+    }
+    const next = segments.filter((segment) => !outside(segment))
+    const same = next.length === kept.length && next.every((segment) => keptNow.has(segment))
+    kept = next
+    if (same) break
+  }
   const keptPoints = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
   let outsideShare = 0
   if (totalPoints > 0) outsideShare = (totalPoints - keptPoints) / totalPoints
   return {
     fuelPerPct: weightedRate(kept),
-    band: Option.liftPredicate(1 / keptPoints, () => keptPoints > 0),
+    band: Option.liftPredicate(0.5 / keptPoints, () => keptPoints > 0),
     kept,
     outsideShare,
   }
@@ -4021,11 +4117,38 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   >()
   /** provider, slot, window → its closed segments, oldest first. */
   const segments = new Map<string, ReadonlyArray<FuelSegment>>()
-  /** session → the provider and accounts its open turn spends from. */
+  /**
+   * session → the provider and accounts its open turn spends from, when it
+   * opened, and the fuel it spent since (none once an unpriced request fell
+   * in it): its lane, and that lane's burn.
+   */
   const running = new Map<
     SessionId,
-    { readonly provider: string; readonly scope: ReadonlyArray<CredentialSlot> }
+    {
+      readonly provider: string
+      readonly scope: ReadonlyArray<CredentialSlot>
+      readonly openedAt: number
+      readonly fuel: Option.Option<number>
+    }
   >()
+  /** provider → the burn its ended lanes measured. */
+  const burns = new Map<string, LaneBurn>()
+  /**
+   * provider, slot → the sign-in the label's quota state and holds belong
+   * to (`signedInAt`), as the credential store or a newer report last named
+   * it. A label with no entry has only unstamped state.
+   */
+  const signIns = new Map<
+    string,
+    { readonly provider: string; readonly slot: CredentialSlot; readonly signedInAt: number }
+  >()
+  /**
+   * provider, old label → where the store renamed the sign-in `signedInAt`
+   * to (`renameLabel`): a late report under the old label counts there. Two
+   * labels can hold sign-ins of one stamp, so a stamp alone never names a
+   * rename. Cleared when the old label holds another sign-in.
+   */
+  const renamed = new Map<string, { readonly to: CredentialSlot; readonly signedInAt: number }>()
   /** message key → a start admitted to a lane whose turn has not opened, until `until`. */
   const reserved = new Map<
     string,
@@ -4057,9 +4180,178 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const held of reserved.values()) if (held.until > now && shares(held)) load += 1
     return load
   }
-  /** Whether `slot` of `provider` is held for `model`'s runs: for all, or for that model. */
-  const isHeld = (provider: string, slot: CredentialSlot, model: ModelId) =>
-    held.has(placementKey(provider, slot)) || held.has(placementKey(provider, slot, model))
+  /**
+   * Whether a quota window of `slot` read rejected and has not reset: the
+   * readings are the one record of it, so a restart that loads them holds
+   * the account as the server before it did.
+   */
+  const quotaHeld = (provider: string, slot: CredentialSlot, now: number) =>
+    readings
+      .values()
+      .some(
+        (reading) =>
+          reading.provider === provider &&
+          reading.slot === slot &&
+          reading.rejected &&
+          reading.resetAt > now,
+      )
+  /**
+   * Whether `slot` of `provider` is held for `model`'s runs: by a refusal
+   * for all or for that model, or by a rejected quota window.
+   */
+  const isHeld = (provider: string, slot: CredentialSlot, model: ModelId, now: number) =>
+    held.has(placementKey(provider, slot)) ||
+    held.has(placementKey(provider, slot, model)) ||
+    quotaHeld(provider, slot, now)
+  /** Whether `key` of a quota map, or a hold of one model, names `provider`'s `slot`. */
+  const ofLabel = (key: string, provider: string, slot: CredentialSlot) =>
+    key.startsWith(placementKey(provider, slot, ""))
+  /** A label's quota readings, segments and holds go: the sign-in they were for left it. */
+  const forget = (provider: string, slot: CredentialSlot) => {
+    for (const key of [...readings.keys()]) if (ofLabel(key, provider, slot)) readings.delete(key)
+    for (const key of [...openSegments.keys()])
+      if (ofLabel(key, provider, slot)) openSegments.delete(key)
+    for (const key of [...segments.keys()]) if (ofLabel(key, provider, slot)) segments.delete(key)
+    for (const key of [...held.keys()])
+      if (key === placementKey(provider, slot) || ofLabel(key, provider, slot)) held.delete(key)
+  }
+  /** A label's quota state and holds move to `to`, whose own go: its sign-in was renamed. */
+  const relabel = (provider: string, from: CredentialSlot, to: CredentialSlot) => {
+    forget(provider, to)
+    const prefix = placementKey(provider, from, "")
+    const moved = (key: string) => placementKey(provider, to, key.slice(prefix.length))
+    for (const [key, reading] of [...readings]) {
+      if (!ofLabel(key, provider, from)) continue
+      readings.delete(key)
+      readings.set(moved(key), { ...reading, slot: to })
+    }
+    for (const [key, open] of [...openSegments]) {
+      if (!ofLabel(key, provider, from)) continue
+      openSegments.delete(key)
+      openSegments.set(moved(key), open)
+    }
+    for (const [key, list] of [...segments]) {
+      if (!ofLabel(key, provider, from)) continue
+      segments.delete(key)
+      segments.set(
+        moved(key),
+        list.map((segment) => ({ ...segment, slot: to })),
+      )
+    }
+    for (const [key, until] of [...held]) {
+      if (key === placementKey(provider, from)) {
+        held.delete(key)
+        held.set(placementKey(provider, to), until)
+      } else if (ofLabel(key, provider, from)) {
+        held.delete(key)
+        held.set(moved(key), until)
+      }
+    }
+  }
+  /**
+   * `slot` holds the sign-in `stamp` now: the label's state is that
+   * sign-in's. A label that held another sign-in drops its state: a new
+   * sign-in starts with no reading. Under the lock.
+   */
+  const bind = (provider: string, slot: CredentialSlot, stamp: number) => {
+    const key = placementKey(provider, slot)
+    const current = Option.fromUndefinedOr(signIns.get(key))
+    if (Option.exists(current, (entry) => entry.signedInAt === stamp)) return
+    // The binding itself is not kept: a load reads it back from the readings.
+    if (Option.isSome(current)) {
+      forget(provider, slot)
+      version += 1
+    }
+    renamed.delete(key)
+    signIns.set(key, { provider, slot, signedInAt: stamp })
+  }
+  /** The scope as the credential store holds it now: each stamped label is bound to its sign-in. */
+  const settle = (provider: string, scope: LaneScope) => {
+    for (const account of scope)
+      if (Predicate.isNotUndefined(account.signedInAt))
+        bind(provider, account.slot, account.signedInAt)
+  }
+  /**
+   * The label a report of a request on `slot` with the sign-in `stamp`
+   * counts on: its own while it holds that sign-in, the label the store
+   * renamed that sign-in to, none for a sign-in the label replaced since (a
+   * late report, dropped). A stamp newer than the label's is a new sign-in
+   * on it. An unstamped report counts on its label. Under the lock.
+   */
+  const reportedOn = (
+    provider: string,
+    slot: CredentialSlot,
+    stamp: Option.Option<number>,
+  ): Option.Option<CredentialSlot> => {
+    if (Option.isNone(stamp)) return Option.some(slot)
+    const current = Option.fromUndefinedOr(signIns.get(placementKey(provider, slot)))
+    if (Option.exists(current, (entry) => entry.signedInAt === stamp.value))
+      return Option.some(slot)
+    const moved = Option.filter(
+      Option.fromUndefinedOr(renamed.get(placementKey(provider, slot))),
+      (rename) => rename.signedInAt === stamp.value,
+    )
+    if (Option.isSome(moved)) return reportedOn(provider, moved.value.to, stamp)
+    if (Option.exists(current, (entry) => entry.signedInAt > stamp.value)) return Option.none()
+    bind(provider, slot, stamp.value)
+    return Option.some(slot)
+  }
+  /** The sign-in a label's state belongs to now; none for unstamped state. */
+  const signedInOf = (provider: string, slot: CredentialSlot) =>
+    Option.map(
+      Option.fromUndefinedOr(signIns.get(placementKey(provider, slot))),
+      (entry) => entry.signedInAt,
+    )
+  /**
+   * A lane ended at `now`: its fuel over its hours adds to its provider's
+   * burn, the burn before it halved for every 24 lane-hours it ran. A lane an
+   * unpriced request fell in adds nothing: its fuel is unknown, never zero.
+   * Nor does a lane of a provider gent read no quota window of.
+   */
+  const burnLane = (
+    lane: {
+      readonly provider: string
+      readonly openedAt: number
+      readonly fuel: Option.Option<number>
+    },
+    now: number,
+  ) => {
+    const hours = (now - lane.openedAt) / 3_600_000
+    if (!(hours > 0) || Option.isNone(lane.fuel)) return
+    // The burn sizes the lanes of a provider whose windows gent reads; with
+    // none read, it would only write a ledger nothing needs.
+    if (!readings.values().some((reading) => reading.provider === lane.provider)) return
+    const before = burns.get(lane.provider) ?? {
+      provider: lane.provider,
+      fuel: 0,
+      hours: 0,
+      seen: 0,
+    }
+    const decay = 0.5 ** (hours / LANE_BURN_HALF_LIFE_HOURS)
+    burns.set(lane.provider, {
+      provider: lane.provider,
+      fuel: before.fuel * decay + lane.fuel.value,
+      hours: before.hours * decay + hours,
+      seen: before.seen + hours,
+    })
+    version += 1
+  }
+  /** The fuel one of `provider`'s runs burns in an hour: measured once it saw a lane-hour, else the prior. */
+  const fuelPerHourOf = (provider: string) =>
+    Option.getOrElse(
+      Option.flatMap(
+        Option.filter(
+          Option.fromUndefinedOr(burns.get(provider)),
+          (burn) => burn.seen >= LANE_BURN_MIN_HOURS,
+        ),
+        (burn) =>
+          Option.liftPredicate(
+            burn.fuel / burn.hours,
+            (rate) => burn.hours > 0 && rate > 0 && Number.isFinite(rate),
+          ),
+      ),
+      () => FUEL_PER_LANE_HOUR_PRIOR,
+    )
   /** The session's first step ended, or its turn did: it warms nothing now. */
   const unguard = (sessionId: SessionId) => {
     for (const [key, children] of warming) {
@@ -4077,20 +4369,41 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /** One read or change of the state at a time: a burst of placements reads each earlier one. */
   const locked = <A>(body: () => A) => Effect.sync(body).pipe(lock.withPermits(1))
   const windowStart = (now: number) => Math.floor((now - PLACEMENT_WINDOW_MS) / PLACEMENT_BUCKET_MS)
+  /**
+   * Drops what the window no longer holds. A dropped bucket, reading or
+   * segment changes the ledger, so the next write leaves it off the file.
+   */
   const trim = (now: number) => {
     const first = windowStart(now)
-    for (const [key, bucket] of buckets) if (bucket.hour < first) buckets.delete(key)
+    let pruned = false
+    for (const [key, bucket] of buckets)
+      if (bucket.hour < first) {
+        buckets.delete(key)
+        pruned = true
+      }
     for (const [key, entry] of counted) if (entry.hour < first) counted.delete(key)
     for (const [key, entry] of live)
       if (Option.exists(entry.until, (until) => until <= now)) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
-    const kept = now - PLACEMENT_WINDOW_MS
-    for (const [key, reading] of readings) if (reading.readAt < kept) readings.delete(key)
+    if (trimQuota(now - PLACEMENT_WINDOW_MS)) pruned = true
+    if (pruned) version += 1
+  }
+  /** Drops the readings and segments older than `kept`; whether any went. */
+  const trimQuota = (kept: number) => {
+    let pruned = false
+    for (const [key, reading] of readings)
+      if (reading.readAt < kept) {
+        readings.delete(key)
+        pruned = true
+      }
     for (const [key, list] of segments) {
-      const recent = list.filter((segment) => segment.endedAt >= kept)
+      const recent = list.filter((segment) => segment.endedAt >= kept).slice(-QUOTA_SEGMENTS_KEPT)
+      if (recent.length === list.length) continue
+      pruned = true
       if (recent.length === 0) segments.delete(key)
-      else segments.set(key, recent.slice(-QUOTA_SEGMENTS_KEPT))
+      else segments.set(key, recent)
     }
+    return pruned
   }
   const lifetimeEnd = (now: number, ttlMs: Option.Option<number>) =>
     Option.map(ttlMs, (lifetime) => now + lifetime)
@@ -4128,17 +4441,35 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     buckets.set(key, { ...bucket, costUsd: bucket.costUsd + costUsd, sessions })
     version += 1
   }
-  if (Option.isSome(ledger)) {
-    const now = yield* Clock.currentTimeMillis
-    const first = windowStart(now)
-    const stored = yield* ledger.value.load
-    for (const reading of stored.readings ?? []) {
+  /**
+   * The quota state a ledger kept: readings, segments and burns, and each
+   * label's sign-in, the one its newest stamped reading names.
+   */
+  const loadQuotaState = (stored: PlacementLedgerValue) => {
+    // Oldest reading first: a later reading of a label names its sign-in now.
+    const storedReadings = [...(stored.readings ?? [])].sort(
+      (left, right) => left.readAt - right.readAt,
+    )
+    for (const reading of storedReadings) {
       readings.set(placementKey(reading.provider, reading.slot, reading.window), reading)
+      if (Predicate.isNotUndefined(reading.signedInAt))
+        signIns.set(placementKey(reading.provider, reading.slot), {
+          provider: reading.provider,
+          slot: reading.slot,
+          signedInAt: reading.signedInAt,
+        })
     }
     for (const segment of stored.segments ?? []) {
       const key = placementKey(segment.provider, segment.slot, segment.window)
       segments.set(key, [...(segments.get(key) ?? []), segment])
     }
+    for (const burn of stored.burn ?? []) burns.set(burn.provider, burn)
+  }
+  if (Option.isSome(ledger)) {
+    const now = yield* Clock.currentTimeMillis
+    const first = windowStart(now)
+    const stored = yield* ledger.value.load
+    loadQuotaState(stored)
     trim(now)
     // Oldest hour first: a session two buckets name counts in the latest.
     const loaded = [...stored.buckets].sort((left, right) => left.hour - right.hour)
@@ -4183,6 +4514,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                 readings: Option.getOrUndefined(
                   Option.liftPredicate([...readings.values()], Arr.isReadonlyArrayNonEmpty),
                 ),
+                burn: Option.getOrUndefined(
+                  Option.liftPredicate([...burns.values()], Arr.isReadonlyArrayNonEmpty),
+                ),
               }),
             },
           },
@@ -4208,30 +4542,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     return count
   }
   /**
-   * One reading of an account window, under the lock. A move of at least 1%
-   * from where the open segment opened closes it with the fuel spent since
-   * then; a reset (its time moved, or the window fell), a gap over 15
-   * minutes or a refusal drops that fuel instead; a smaller move keeps
-   * adding to it.
+   * One reading of a window of the account on `slot`, under the lock. A move
+   * of at least 1% from where the open segment opened closes it with the
+   * fuel spent since then; a reset (its time moved, or the window fell), a
+   * gap over 15 minutes or a refusal drops that fuel instead; a smaller move
+   * keeps adding to it. A rejected reading holds the account until its reset
+   * (`quotaHeld`).
    */
-  const read = (quota: PlacementQuota, reading: QuotaReading, now: number) => {
-    const key = placementKey(quota.provider, quota.slot, reading.window)
+  const read = (provider: string, slot: CredentialSlot, reading: QuotaReading, now: number) => {
+    const key = placementKey(provider, slot, reading.window)
     const last = Option.fromUndefinedOr(readings.get(key))
+    const signedInAt = Option.getOrUndefined(signedInOf(provider, slot))
     readings.set(key, {
-      provider: quota.provider,
-      slot: quota.slot,
+      provider,
+      slot,
       window: reading.window,
       utilization: reading.utilization,
       resetAt: reading.resetAt,
       readAt: now,
       rejected: reading.rejected,
+      ...omitUndefined({ signedInAt }),
     })
     version += 1
-    // A rejected window holds the account until it resets, as a refusal does.
-    if (reading.rejected && reading.resetAt > now) {
-      const account = placementKey(quota.provider, quota.slot)
-      held.set(account, Math.max(held.get(account) ?? 0, reading.resetAt))
-    }
     const fresh = {
       from: reading.utilization,
       fuel: Option.some(0),
@@ -4260,9 +4592,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     segments.set(key, [
       ...(segments.get(key) ?? []),
       {
-        provider: quota.provider,
-        slot: quota.slot,
+        provider,
+        slot,
         window: reading.window,
+        ...omitUndefined({ signedInAt }),
         endedAt: now,
         fuel: open.value.fuel.value,
         deltaPct: moved * 100,
@@ -4302,7 +4635,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     scope: ReadonlyArray<CredentialSlot>,
     now: number,
   ): ProviderLanes => {
-    const fuelPerHour = FUEL_PER_LANE_HOUR_PRIOR
+    const fuelPerHour = fuelPerHourOf(provider)
     const own = new Map<string, WindowFit>()
     const pooled = new Map<string, Array<FuelSegment>>()
     for (const [key, list] of segments) {
@@ -4319,7 +4652,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const reading of readings.values())
       if (reading.provider === provider) slots.add(reading.slot)
     const accounts = [...slots].map((slot): LaneAccount => {
-      const accountHeld = held.has(placementKey(provider, slot))
+      const accountHeld = held.has(placementKey(provider, slot)) || quotaHeld(provider, slot, now)
       const windows = readings
         .values()
         .filter((reading) => reading.provider === provider && reading.slot === slot)
@@ -4392,6 +4725,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       accounts,
       load: laneLoad(provider, scope, Option.none(), now),
       fuelPerHour,
+      laneHours: burns.get(provider)?.seen ?? 0,
       ...omitUndefined({
         capacity: Option.getOrUndefined(Option.filter(capacity, () => scoped.length > 0)),
       }),
@@ -4444,7 +4778,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             slot,
             load: load.get(slot) ?? 0,
             live: liveOn(request.provider, slot, request.sessionId),
-            held: isHeld(request.provider, slot, request.model) || warmedBySibling(slot),
+            held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
           })),
           spent,
           sessions,
@@ -4475,11 +4809,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     refuse: Effect.fn("CredentialPlacement.refuse")(function* (refusal: PlacementRefusal) {
       const now = yield* Clock.currentTimeMillis
       const until = Option.getOrElse(refusal.retryAt, () => now + PLACEMENT_REFUSAL_HOLD_MS)
-      const key = Option.match(refusal.model, {
-        onNone: () => placementKey(refusal.provider, refusal.slot),
-        onSome: (model) => placementKey(refusal.provider, refusal.slot, model),
+      yield* locked(() => {
+        // A refusal of a sign-in the label replaced since holds nothing.
+        const slot = reportedOn(refusal.provider, refusal.slot, refusal.signedInAt)
+        if (Option.isNone(slot)) return
+        const key = Option.match(refusal.model, {
+          onNone: () => placementKey(refusal.provider, slot.value),
+          onSome: (model) => placementKey(refusal.provider, slot.value, model),
+        })
+        held.set(key, until)
       })
-      yield* locked(() => held.set(key, until))
     }),
     open: Effect.fn("CredentialPlacement.open")(function* (params: {
       readonly provider: string
@@ -4491,14 +4830,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       return yield* locked(() => {
         trim(now)
         return params.pool.some(
-          (slot) => !params.left.has(slot) && !isHeld(params.provider, slot, params.model),
+          (slot) => !params.left.has(slot) && !isHeld(params.provider, slot, params.model, now),
         )
       })
     }),
     release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {
+      const now = yield* Clock.currentTimeMillis
       yield* locked(() => {
         unguard(sessionId)
+        const lane = Option.fromUndefinedOr(running.get(sessionId))
         running.delete(sessionId)
+        if (Option.isSome(lane)) burnLane(lane.value, now)
       })
     }),
     admitLane: Effect.fn("CredentialPlacement.admitLane")(function* (request: LaneRequest) {
@@ -4508,8 +4850,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const [key, held] of reserved) if (held.until <= now) reserved.delete(key)
         // A start admitted again under its key keeps the lane it holds.
         if (reserved.has(request.key)) return Option.none()
-        const lanes = providerLanes(request.provider, request.scope, now)
-        const load = laneLoad(request.provider, request.scope, request.asker, now)
+        settle(request.provider, request.scope)
+        const scope = request.scope.map((account) => account.slot)
+        const lanes = providerLanes(request.provider, scope, now)
+        const load = laneLoad(request.provider, scope, request.asker, now)
         const capacity = Option.fromUndefinedOr(lanes.capacity)
         if (Option.isSome(capacity) && load >= capacity.value) {
           let reason: LaneUnavailable["reason"] = "Busy"
@@ -4533,7 +4877,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         }
         reserved.set(request.key, {
           provider: request.provider,
-          scope: request.scope,
+          scope,
           until: now + LANE_RESERVATION_MS,
         })
         return Option.none()
@@ -4541,23 +4885,69 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (Option.isSome(refusal)) return yield* refusal.value
     }),
     openLane: Effect.fn("CredentialPlacement.openLane")(function* (lane: OpenLane) {
+      const now = yield* Clock.currentTimeMillis
       yield* locked(() => {
         reserved.delete(lane.key)
-        running.set(lane.sessionId, { provider: lane.provider, scope: lane.scope })
+        settle(lane.provider, lane.scope)
+        // A turn that opens while its session's lane is open goes on in it.
+        const before = Option.filter(
+          Option.fromUndefinedOr(running.get(lane.sessionId)),
+          (open) => open.provider === lane.provider,
+        )
+        running.set(lane.sessionId, {
+          provider: lane.provider,
+          scope: lane.scope.map((account) => account.slot),
+          openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
+          fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
+        })
+      })
+    }),
+    freeReservation: Effect.fn("CredentialPlacement.freeReservation")(function* (key: string) {
+      yield* locked(() => {
+        reserved.delete(key)
+      })
+    }),
+    renameLabel: Effect.fn("CredentialPlacement.renameLabel")(function* (rename) {
+      yield* locked(() => {
+        const fromKey = placementKey(rename.provider, rename.from)
+        const toKey = placementKey(rename.provider, rename.to)
+        const signIn = Option.fromUndefinedOr(signIns.get(fromKey))
+        relabel(rename.provider, rename.from, rename.to)
+        signIns.delete(fromKey)
+        signIns.delete(toKey)
+        renamed.delete(toKey)
+        if (Option.isSome(signIn)) {
+          signIns.set(toKey, { ...signIn.value, slot: rename.to })
+          renamed.set(fromKey, { to: rename.to, signedInAt: signIn.value.signedInAt })
+        }
+        version += 1
       })
     }),
     noteQuota: Effect.fn("CredentialPlacement.noteQuota")(function* (quota: PlacementQuota) {
       const now = yield* Clock.currentTimeMillis
       yield* locked(() => {
         trim(now)
-        for (const reading of quota.readings) read(quota, reading, now)
+        const slot = reportedOn(quota.provider, quota.slot, quota.signedInAt)
+        if (Option.isNone(slot)) return
+        for (const reading of quota.readings) read(quota.provider, slot.value, reading, now)
       })
     }),
     noteFuel: Effect.fn("CredentialPlacement.noteFuel")(function* (spend: PlacementFuel) {
       const priced = fuelOf(spend.costUsd, spend.usage)
       yield* locked(() => {
+        // The lane's burn counts what its turn spent, whichever sign-in served it.
+        const lane = running.get(spend.sessionId)
+        if (Predicate.isNotUndefined(lane) && lane.provider === spend.provider)
+          running.set(spend.sessionId, {
+            ...lane,
+            fuel: Option.flatMap(lane.fuel, (fuel) =>
+              Option.map(priced, (cost) => fuel + cost.fuel),
+            ),
+          })
+        const slot = reportedOn(spend.provider, spend.slot, spend.signedInAt)
+        if (Option.isNone(slot)) return
         for (const [key, open] of openSegments) {
-          if (!key.startsWith(placementKey(spend.provider, spend.slot, ""))) continue
+          if (!key.startsWith(placementKey(spend.provider, slot.value, ""))) continue
           openSegments.set(
             key,
             Option.match(priced, {
@@ -4587,15 +4977,22 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const scopes = yield* Effect.forEach(providers, (provider) =>
         Effect.map(scopeOf(provider), (scope) => [provider, scope] as const),
       )
-      return yield* locked((): LaneReport => ({
-        providers: scopes.map(([provider, scope]) =>
-          providerLanes(
-            provider,
-            Option.getOrElse(scope, () => []),
-            now,
+      return yield* locked((): LaneReport => {
+        for (const [provider, scope] of scopes)
+          if (Option.isSome(scope)) settle(provider, scope.value)
+        return {
+          providers: scopes.map(([provider, scope]) =>
+            providerLanes(
+              provider,
+              Option.match(scope, {
+                onNone: () => [],
+                onSome: (accounts) => accounts.map((account) => account.slot),
+              }),
+              now,
+            ),
           ),
-        ),
-      }))
+        }
+      })
     }),
     flush: write,
   } satisfies CredentialPlacementService

@@ -1771,6 +1771,7 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
 export const makeExtensionAccounts = Effect.gen(function* () {
   const placement = yield* CredentialPlacement
   const configService = yield* ConfigService
+  const modelRegistry = yield* ModelRegistry
   const profiles = yield* SessionProfileCache
   const { cwd: hostCwd } = yield* RuntimeEnvironment
   const lanes = Effect.scoped(
@@ -1778,7 +1779,9 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       const { registryService } = yield* profiles.resolve(hostCwd)
       return yield* placement.lanes((provider) =>
         Effect.map(
-          credentialLane(provider, Option.none(), registryService),
+          credentialLane(provider, Option.none(), registryService).pipe(
+            Effect.provideService(ModelRegistry, modelRegistry),
+          ),
           Option.map((lane) => lane.scope),
         ),
       )
@@ -1796,6 +1799,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
           }).pipe(
             Effect.provideService(ExtensionRegistry, registryService),
             Effect.provideService(ConfigService, configService),
+            Effect.provideService(ModelRegistry, modelRegistry),
           )
         }),
       )
@@ -1807,6 +1811,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         asker: Option.some(asker),
       })
     }),
+    cancel: (message) => placement.freeReservation(message),
     lanes,
   })
 })
@@ -3208,6 +3213,8 @@ const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
   yield* placement.noteFuel({
     provider: summaryOn.value.provider,
     slot: summaryOn.value.slot,
+    signedInAt: Option.fromUndefinedOr(summaryOn.value.signedInAt),
+    sessionId,
     costUsd,
     usage,
   })
@@ -3529,6 +3536,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             yield* placement.refuse({
               provider,
               slot,
+              signedInAt: Option.fromUndefinedOr(failed.value.signedInAt),
               model: Option.liftPredicate(resolved.modelId, () => refusalHoldsModel(cause)),
               retryAt: retryPolicy.retryAt(cause, now),
             })
@@ -3937,7 +3945,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
             Effect.forEach(
               Option.toArray(sent),
               (receipt) =>
-                placement.noteQuota({ provider: receipt.provider, slot: receipt.slot, readings }),
+                placement.noteQuota({
+                  provider: receipt.provider,
+                  slot: receipt.slot,
+                  signedInAt: Option.fromUndefinedOr(receipt.signedInAt),
+                  readings,
+                }),
               { discard: true },
             ),
           ),
@@ -5312,6 +5325,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         yield* placement.noteFuel({
           provider: credential.value.provider,
           slot: credential.value.slot,
+          signedInAt: Option.fromUndefinedOr(credential.value.signedInAt),
+          sessionId: scope.sessionId,
           costUsd,
           usage,
         })
@@ -6130,6 +6145,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
               },
             })
             yield* scope.turnLedger.noteJoined(item.message.id)
+            // A start admitted to a lane for this message opens no turn: the
+            // turn it joined holds the session's lane already.
+            yield* placement.freeReservation(item.message.id)
           }),
       })
 

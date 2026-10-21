@@ -3802,8 +3802,15 @@ describe("credential order", () => {
     const c = CredentialSlot.make("c")
     const HOUR_MS = 3_600_000
     const otherModel = ModelId.make("fallback/other")
+    /**
+     * The sign-ins of one credential store. Each root of a world is a
+     * session of one server, which reads one store, so every root holds the
+     * same sign-in under a label: the stamp is the sign-in's, not the root's.
+     */
     const keysOf = (slots: ReadonlyArray<CredentialSlot>) =>
-      slots.map((slot) => [slot, apiKey(`sk-${slot}`)] as const)
+      slots.map(
+        (slot) => [slot, AuthApi.make({ type: "api", key: `sk-${slot}`, signedInAt: 1 })] as const,
+      )
     const answers = (slots: ReadonlyArray<CredentialSlot>): Readonly<Record<string, Reply>> =>
       Object.fromEntries(slots.map((slot) => [`sk-${slot}`, answer(`from ${slot}`)]))
 
@@ -5311,6 +5318,7 @@ describe("credential order", () => {
                 yield* world.placement.refuse({
                   provider: FALLBACK,
                   slot,
+                  signedInAt: Option.none(),
                   model: Option.none(),
                   retryAt: Option.none(),
                 })

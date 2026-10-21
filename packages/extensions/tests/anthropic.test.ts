@@ -40,6 +40,7 @@ import {
   PlatformError,
   Ref,
   Predicate,
+  Record,
   Schema,
   Semaphore,
   Sink,
@@ -1583,22 +1584,57 @@ describe("Anthropic stop reason", () => {
 })
 
 /**
- * A Claude plan's quota headers, named as Claude Code 2.1.306 reads them;
- * the values are made up. Resets are epoch seconds.
+ * Recorded answers of a Claude plan, one file each: the status, the headers
+ * (sanitized) and the windows gent reads from them. A file dropped in the
+ * directory is one more case. `claude-code-2.1.306-allowed-warning.json`
+ * holds the header names Claude Code 2.1.306 reads, with made-up values; the
+ * other cases vary it.
  */
+const QUOTA_FIXTURES = Effect.flatMap(Path.Path, (path) =>
+  path.fromFileUrl(new URL("./fixtures/anthropic-quota/", import.meta.url)),
+)
+const QuotaFixture = Schema.fromJsonString(
+  Schema.Struct({
+    source: Schema.String,
+    status: Schema.Finite,
+    headers: Schema.Record(Schema.String, Schema.String),
+    quota: Schema.Array(
+      Schema.Struct({
+        window: Schema.String,
+        utilization: Schema.Finite,
+        resetAt: Schema.Finite,
+        rejected: Schema.Boolean,
+      }),
+    ),
+  }),
+)
+const readQuotaFixture = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const text = yield* fs.readFileString(path.join(yield* QUOTA_FIXTURES, file))
+    return yield* Schema.decodeEffect(QuotaFixture)(text)
+  })
+const quotaFixtures = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const files = (yield* fs.readDirectory(yield* QUOTA_FIXTURES)).filter((file) =>
+    file.endsWith(".json"),
+  )
+  return yield* Effect.forEach(files.sort(), (file) =>
+    Effect.map(readQuotaFixture(file), (fixture) => ({ file, ...fixture })),
+  )
+})
 const FIVE_HOUR_RESET_S = 1_800_000_000
 const SEVEN_DAY_RESET_S = 1_800_400_000
-const unifiedHeaders = (status: string, claim: string) => ({
-  "anthropic-ratelimit-unified-status": status,
-  "anthropic-ratelimit-unified-representative-claim": claim,
-  "anthropic-ratelimit-unified-reset": String(FIVE_HOUR_RESET_S),
-  "anthropic-ratelimit-unified-5h-utilization": "0.42",
-  "anthropic-ratelimit-unified-5h-reset": String(FIVE_HOUR_RESET_S),
-  "anthropic-ratelimit-unified-5h-surpassed-threshold": "0.4",
-  "anthropic-ratelimit-unified-7d-utilization": "0.1",
-  "anthropic-ratelimit-unified-7d-reset": String(SEVEN_DAY_RESET_S),
-  "anthropic-ratelimit-unified-overage-status": "rejected",
-})
+/** The Claude Code header set with the account's `status` and `claim`. */
+const unifiedHeaders = (status: string, claim: string) =>
+  Effect.map(readQuotaFixture("claude-code-2.1.306-allowed-warning.json"), (fixture) =>
+    Record.set(
+      Record.set(fixture.headers, "anthropic-ratelimit-unified-status", status),
+      "anthropic-ratelimit-unified-representative-claim",
+      claim,
+    ),
+  )
 
 describe("Anthropic quota windows", () => {
   const streamed = LanguageModel.streamText({ prompt: "hi" }).pipe(Stream.runDrain)
@@ -1639,38 +1675,52 @@ describe("Anthropic quota windows", () => {
     return () => answered
   }
 
-  it.live("a plan's answer reports its 5-hour and 7-day windows, streamed or not", () =>
+  it.live("each recorded answer reports the windows its file names, streamed or not", () =>
     Effect.gen(function* () {
-      const expected = [
-        { window: "5h", utilization: 0.42, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
-        { window: "7d", utilization: 0.1, resetAt: SEVEN_DAY_RESET_S * 1000, rejected: false },
-      ]
-      const headers = unifiedHeaders("allowed_warning", "five_hour")
-      const plain = yield* reportFor(
-        makeOAuthInfo(),
-        answer(
-          { ...anthropicHappyResponse(), headers: { "content-type": "application/json" } },
-          headers,
-        ),
-        generated,
-      )
-      expect(plain.quota).toEqual(expected)
-      const stream = yield* reportFor(
-        makeOAuthInfo(),
-        answer(streamReplyEnding("end_turn"), headers),
-        streamed,
-      )
-      expect(stream.quota).toEqual(expected)
-      expect(stream.stopReason).toEqual(Option.some("end_turn"))
-    }),
+      const fixtures = yield* quotaFixtures
+      expect(fixtures.length).toBeGreaterThan(0)
+      for (const fixture of fixtures) {
+        if (fixture.status === 200) {
+          const plain = yield* reportFor(
+            makeOAuthInfo(),
+            answer(
+              { ...anthropicHappyResponse(), headers: { "content-type": "application/json" } },
+              fixture.headers,
+            ),
+            generated,
+          )
+          expect([fixture.file, plain.quota]).toEqual([fixture.file, fixture.quota])
+          const stream = yield* reportFor(
+            makeOAuthInfo(),
+            answer(streamReplyEnding("end_turn"), fixture.headers),
+            streamed,
+          )
+          expect([fixture.file, stream.quota]).toEqual([fixture.file, fixture.quota])
+          expect(stream.stopReason).toEqual(Option.some("end_turn"))
+          continue
+        }
+        const refusal = {
+          status: fixture.status,
+          headers: { "content-type": "application/json", ...fixture.headers },
+          body: encodeExternalJson({
+            type: "error",
+            error: { type: "rate_limit_error", message: "limit reached" },
+          }),
+        }
+        const refused = yield* reportFor(makeOAuthInfo(), () => refusal, streamed)
+        expect([fixture.file, refused.quota]).toEqual([fixture.file, fixture.quota])
+      }
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live(
     "a refused request holds the window its claim names, full when no utilization is given",
     () =>
       Effect.gen(function* () {
-        const { "anthropic-ratelimit-unified-7d-utilization": _dropped, ...headers } =
-          unifiedHeaders("rejected", "seven_day")
+        const headers = Record.remove(
+          yield* unifiedHeaders("rejected", "seven_day"),
+          "anthropic-ratelimit-unified-7d-utilization",
+        )
         const refusal = {
           status: 429,
           headers: { "content-type": "application/json", ...headers },
@@ -1684,14 +1734,14 @@ describe("Anthropic quota windows", () => {
           { window: "5h", utilization: 0.42, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
           { window: "7d", utilization: 1, resetAt: SEVEN_DAY_RESET_S * 1000, rejected: true },
         ])
-      }),
+      }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("an answer the limiter did not run on, or an API key's, reports no window", () =>
     Effect.gen(function* () {
-      const { "anthropic-ratelimit-unified-status": _status, ...unlimited } = unifiedHeaders(
-        "allowed",
-        "five_hour",
+      const unlimited = Record.remove(
+        yield* unifiedHeaders("allowed", "five_hour"),
+        "anthropic-ratelimit-unified-status",
       )
       const noStatus = yield* reportFor(
         makeOAuthInfo(),
@@ -1701,11 +1751,11 @@ describe("Anthropic quota windows", () => {
       expect(noStatus.quota).toEqual([])
       const apiKey = yield* reportFor(
         makeApiAuthInfo("test-key"),
-        answer(streamReplyEnding("end_turn"), unifiedHeaders("allowed", "five_hour")),
+        answer(streamReplyEnding("end_turn"), yield* unifiedHeaders("allowed", "five_hour")),
         streamed,
       )
       expect(apiKey.quota).toEqual([])
-    }),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 

@@ -216,8 +216,14 @@
     and model): a full account refuses it as `Busy`, a spent one (capacity 0) as `Spent`, and a start it refuses makes no session and no copy (a
     snapshot start asks before its copy too). An account whose capacity is
     not read admits every round; the caller's own running turn holds no lane
-    against it. Its lane frees when the round's turn ends, before its
-    `turnAfter` hooks, so a round sent as an end is heard finds the lane
+    against it. A retry under the round's key finds its round before the
+    account is asked, so it gets the round it was admitted even while the
+    account is full. A round that opens no turn of its own gives its lane
+    back at once (`Accounts.cancel`): one that joins the thread's running
+    turn, one the thread refuses as busy, one whose create or claim fails,
+    one whose follow-up queue is full, and a snapshot start whose copy fails
+    after it was admitted. Its lane frees when the round's turn ends, before
+    its `turnAfter` hooks, so a round sent as an end is heard finds the lane
     free (credentials.md, Account lanes). The transcript shows a round's message without its
     source line on a muted `» task from session` row (another session wrote
     it, so it never takes the reader's rail). The starter's interrupt stops

@@ -8,78 +8,24 @@
  */
 import { describe, expect, it } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Effect, FileSystem, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/sql"
-import { fileURLToPath } from "node:url"
 import { runProcess } from "@gent/core/extensions/api"
 import { BunSqlite } from "@gent/core/host-bun"
 import { makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
-import { exitWithin, killProcess } from "../src/server-process-fixture"
+import { hardKill, hostPrinted, spawnTestHost } from "../src/server-process-fixture"
 
 // ── the host process ────────────────────────────────────────────────────────
 
-const E2E_DIRECTORY = fileURLToPath(new URL("..", import.meta.url))
-
-interface Host {
-  readonly proc: Bun.Subprocess<"ignore", "pipe", Bun.BunFile>
-  /** The `MH <event>` lines the host printed, in order, without the prefix. */
-  readonly events: Ref.Ref<ReadonlyArray<string>>
-}
-
-/**
- * Spawns a host over `dir` (its data dir and its cwd). The scope kills it
- * with SIGKILL if the test has not; its stderr goes to `<dir>/<label>.err`.
- */
+/** A machine host over `dir`, its data dir and its cwd. */
 const spawnHost = (dir: string, label: string, env: Readonly<Record<string, string>>) =>
-  Effect.gen(function* () {
-    const proc = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        // oxlint-disable-next-line effect/noGlobals -- the test spawns the real host process with the test's environment
-        Bun.spawn(["bun", "src/machine-host.ts"], {
-          cwd: E2E_DIRECTORY,
-          env: {
-            // oxlint-disable-next-line effect/noGlobals -- the test spawns the real host process with the test's environment
-            ...Bun.env,
-            GENT_DATA_DIR: dir,
-            MH_HOME: dir,
-            MH_CWD: dir,
-            ...env,
-          },
-          stdin: "ignore",
-          stdout: "pipe",
-          // oxlint-disable-next-line effect/noGlobals -- the host's log goes to a file the test leaves for a failed run
-          stderr: Bun.file(`${dir}/${label}.err`),
-        }),
-      ),
-      (child) => hardKill(child),
-    )
-    const events = yield* Ref.make<ReadonlyArray<string>>([])
-    yield* Stream.fromReadableStream({ evaluate: () => proc.stdout, onError: String }).pipe(
-      Stream.decodeText,
-      Stream.splitLines,
-      Stream.filter((line) => line.startsWith("MH ")),
-      Stream.runForEach((line) => Ref.update(events, (seen) => [...seen, line.slice(3)])),
-      Effect.ignore,
-      Effect.forkScoped,
-    )
-    const host: Host = { proc, events }
-    return host
+  spawnTestHost({
+    script: "src/machine-host.ts",
+    prefix: "MH",
+    dir,
+    label,
+    env: { MH_HOME: dir, MH_CWD: dir, ...env },
   })
-
-const hostPrinted = (host: Host, event: string, within: number) =>
-  waitFor(Ref.get(host.events), (seen) => seen.includes(event), within, `the host printed ${event}`)
-
-/** SIGKILL, then its exit: no finalizer of the host runs. A host that outlives it fails the test. */
-const hardKill = (proc: Bun.Subprocess<"ignore", "pipe", Bun.BunFile>) =>
-  killProcess(proc, "SIGKILL").pipe(
-    Effect.andThen(exitWithin(proc.exited, "5 seconds")),
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.die(new Error(`host ${proc.pid} outlived SIGKILL by 5 s`)),
-        onSome: () => Effect.void,
-      }),
-    ),
-  )
 
 /**
  * True while `pid` runs. `ps` reads the process state: no process, or a

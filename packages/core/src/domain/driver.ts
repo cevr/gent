@@ -677,7 +677,7 @@ export const LaneWindow = Schema.Struct({
   rejected: Schema.Boolean,
   /** Fuel per percentage point of this window, its own, else the provider's over every account. */
   fuelPerPct: Schema.optionalKey(Schema.Finite),
-  /** The rate's relative uncertainty from the 1% steps: 1 / the points its segments moved. */
+  /** The rate's relative uncertainty from the 1% steps (lanes r3): ±0.5 / the points its segments moved. */
   band: Schema.optionalKey(Schema.Finite),
   /** The segments the rate reads. */
   samples: Schema.Int,
@@ -714,8 +714,13 @@ export const ProviderLanes = Schema.Struct({
    * them, and starts admitted whose turn has not opened yet.
    */
   load: Schema.Int,
-  /** The fuel one run burns in an hour. */
+  /**
+   * The fuel one run burns in an hour: measured over the provider's ended
+   * lanes once they ran a lane-hour, else the bridge prior (3.4 M).
+   */
   fuelPerHour: Schema.Finite,
+  /** The lane-hours `fuelPerHour` was measured over; under 1 it is the prior. */
+  laneHours: Schema.Finite,
 })
 
 /** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */

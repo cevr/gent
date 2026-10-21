@@ -1415,10 +1415,18 @@ export interface ExtensionAccountsService {
    * order's first credential). Fails `LaneUnavailable` when the runs that
    * hold a lane there reach what the accounts' quota windows carry; the
    * asking session's own turn holds none against it. An admitted start
-   * holds its lane until the turn of `message` opens, or 2 minutes pass. A
+   * holds its lane until the turn of `message` opens, the message joins a
+   * running turn of its session, `cancel` names it, or 2 minutes pass. A
    * sign-in that reported no quota window admits every run.
    */
   readonly admit: (run: LaneRun) => Effect.Effect<void, LaneUnavailable>
+  /**
+   * The start admitted for `message` will not run: the caller's own
+   * admission refused it after `admit` (a busy thread, a full queue, a
+   * failed create). Its lane frees now. A message with no lane held is a
+   * no-op.
+   */
+  readonly cancel: (message: MessageId) => Effect.Effect<void>
   /** Each provider's lanes, as `accounts.lanes` reports them. */
   readonly lanes: Effect.Effect<LaneReport>
 }

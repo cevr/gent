@@ -1,0 +1,19 @@
+{
+  "source": "Header names as Claude Code 2.1.306's bundled reader reads them (read 2026-10-21); the values are made up. Resets are epoch seconds.",
+  "status": 200,
+  "headers": {
+    "anthropic-ratelimit-unified-status": "allowed_warning",
+    "anthropic-ratelimit-unified-representative-claim": "five_hour",
+    "anthropic-ratelimit-unified-reset": "1800000000",
+    "anthropic-ratelimit-unified-5h-utilization": "0.42",
+    "anthropic-ratelimit-unified-5h-reset": "1800000000",
+    "anthropic-ratelimit-unified-5h-surpassed-threshold": "0.4",
+    "anthropic-ratelimit-unified-7d-utilization": "0.1",
+    "anthropic-ratelimit-unified-7d-reset": "1800400000",
+    "anthropic-ratelimit-unified-overage-status": "rejected"
+  },
+  "quota": [
+    { "window": "5h", "utilization": 0.42, "resetAt": 1800000000000, "rejected": false },
+    { "window": "7d", "utilization": 0.1, "resetAt": 1800400000000, "rejected": false }
+  ]
+}
