@@ -724,17 +724,6 @@ describe("compileToolPolicy", () => {
       execute: () => Effect.succeed(null),
     })
 
-  const makeInteractiveTool = (name: string): ToolCapability =>
-    tool({
-      id: name,
-      description: name,
-      params: Schema.Struct({}),
-      output: Schema.Null,
-      interactive: true,
-      // oxlint-disable-next-line effect/noNullish -- Tool fixture intentionally exercises Schema.Null output.
-      execute: () => Effect.succeed(null),
-    })
-
   const allTools = [
     makeTool("read"),
     makeTool("grep"),
@@ -754,26 +743,23 @@ describe("compileToolPolicy", () => {
 
   test("model selection leaves admitted host tools available", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
-    const result = compileToolPolicy(allTools, agent, {}, [{ toolPolicy: { modelSet: ["read"] } }])
+    const result = compileToolPolicy(allTools, agent, [{ toolPolicy: { modelSet: ["read"] } }])
     expect(names(result.tools)).toEqual(names(allTools))
     expect(names(result.modelTools)).toEqual(["read"])
     expect(result.modelTools[0]).toBe(allTools[0])
   })
 
-  test("model selection cannot restore unknown, denied, or non-interactive tools", () => {
+  test("model selection cannot restore unknown or denied tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary"), tools: ["*", "!bash"] })
-    const result = compileToolPolicy(
-      [...allTools, makeInteractiveTool("question")],
-      agent,
-      { interactive: false },
-      [{ toolPolicy: { modelSet: ["read", "read", "bash", "question", "missing"] } }],
-    )
+    const result = compileToolPolicy(allTools, agent, [
+      { toolPolicy: { modelSet: ["read", "read", "bash", "missing"] } },
+    ])
     expect(names(result.modelTools)).toEqual(["read"])
   })
 
   test("the last explicit model selection wins and an empty set advertises no tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
-    const result = compileToolPolicy(allTools, agent, {}, [
+    const result = compileToolPolicy(allTools, agent, [
       { toolPolicy: { modelSet: ["read"] } },
       { toolPolicy: { modelSet: [] } },
       { promptSections: [] },
@@ -788,16 +774,16 @@ describe("compileToolPolicy", () => {
       tools: ["cell", "read"],
     })
     const tools = [makeTool("cell"), ...allTools]
-    const direct = compileToolPolicy(tools, agent, {}, [])
+    const direct = compileToolPolicy(tools, agent, [])
     expect(names(direct.modelTools)).toEqual(["cell", "read"])
-    const selected = compileToolPolicy(tools, agent, {}, [{ toolPolicy: { modelSet: ["cell"] } }])
+    const selected = compileToolPolicy(tools, agent, [{ toolPolicy: { modelSet: ["cell"] } }])
     expect(names(selected.modelTools)).toEqual(["cell"])
     expect(names(selected.tools)).toEqual(["cell", "read"])
   })
 
   test("an agent with tools gets exactly the tools they admit whatever an extension selects", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("painter"), tools: ["read"] })
-    const { tools, modelTools } = compileToolPolicy([makeTool("cell"), ...allTools], agent, {}, [
+    const { tools, modelTools } = compileToolPolicy([makeTool("cell"), ...allTools], agent, [
       { toolPolicy: { modelSet: ["cell", "bash", "read"] } },
     ])
     expect(names(tools)).toEqual(["read"])
@@ -837,7 +823,7 @@ describe("compileToolPolicy", () => {
 
   test("an agent with no tools field gets every tool", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary") })
-    const { tools } = compileToolPolicy(allTools, agent, {}, [])
+    const { tools } = compileToolPolicy(allTools, agent, [])
     expect(names(tools)).toEqual(names(allTools))
   })
 
@@ -846,13 +832,13 @@ describe("compileToolPolicy", () => {
       name: AgentName.make("primary"),
       tools: ["bash", "read"],
     })
-    const { tools } = compileToolPolicy(allTools, agent, {}, [])
+    const { tools } = compileToolPolicy(allTools, agent, [])
     expect(names(tools)).toEqual(["bash", "read"])
   })
 
   test("an empty tools list gives the agent no tools", () => {
     const agent = AgentDefinition.make({ name: AgentName.make("primary"), tools: [] })
-    const { tools } = compileToolPolicy(allTools, agent, {}, [])
+    const { tools } = compileToolPolicy(allTools, agent, [])
     expect(tools).toEqual([])
   })
 
@@ -862,30 +848,9 @@ describe("compileToolPolicy", () => {
       { promptSections: [{ id: "ext-a", content: "Section A", priority: 90 }] },
       { promptSections: [{ id: "ext-b", content: "Section B", priority: 91 }] },
     ]
-    const { promptSections } = compileToolPolicy(allTools, agent, {}, projections)
+    const { promptSections } = compileToolPolicy(allTools, agent, projections)
     expect(promptSections).toHaveLength(2)
     expect(promptSections.map((s) => s.id)).toEqual(["ext-a", "ext-b"])
-  })
-
-  test("interactive tools filtered when context.interactive is false", () => {
-    const interactiveTool = makeInteractiveTool("ask_user")
-    const nonInteractiveTool = makeTool("read")
-    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
-    const { tools } = compileToolPolicy(
-      [interactiveTool, nonInteractiveTool],
-      agent,
-      { interactive: false },
-      [],
-    )
-    expect(names(tools)).toEqual(["read"])
-    expect(names(tools)).not.toContain("ask_user")
-  })
-
-  test("interactive tools remain available when the run is interactive", () => {
-    const interactiveTool = makeInteractiveTool("ask_user")
-    const agent = AgentDefinition.make({ name: AgentName.make("primary") })
-    const { tools } = compileToolPolicy([interactiveTool], agent, {}, [])
-    expect(names(tools)).toContain("ask_user")
   })
 })
 

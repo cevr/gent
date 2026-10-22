@@ -1360,12 +1360,13 @@ describe("ask_user_async", () => {
   )
 
   it.live(
-    "a spawned child's task turn is not offered the tool; its parent's turn is",
+    "a spawned child's task turn lists the tools that ask and refuses their calls: no one would answer",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const childTask = "CHILD-TASK: reply with pong"
           const offered = new Map<"parent" | "child", ReadonlyArray<string>>()
+          const childResults: Array<string> = []
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const names = options.tools.map((entry) => entry.name)
             // The child reads its task as its own first message; the parent
@@ -1376,7 +1377,25 @@ describe("ask_user_async", () => {
             )
             const called = options.prompt.content.some((message) => message.role === "tool")
             if (isChild) {
-              offered.set("child", names)
+              if (!called) {
+                offered.set("child", names)
+                return Effect.succeed(
+                  Stream.fromIterable([
+                    toolCallPart("ask_user_async", cacheQuestion, {
+                      toolCallId: ToolCallId.make("child-async"),
+                    }),
+                    toolCallPart(
+                      "ask_user",
+                      { questions: [{ question: "Which cache backend?" }] },
+                      { toolCallId: ToolCallId.make("child-ask") },
+                    ),
+                    finishPart({ finishReason: "tool-calls" }),
+                  ]),
+                )
+              }
+              for (const message of options.prompt.content) {
+                if (message.role === "tool") childResults.push(jsonText(message.content))
+              }
               return Effect.succeed(
                 Stream.fromIterable([textDeltaPart("pong"), finishPart({ finishReason: "stop" })]),
               )
@@ -1404,15 +1423,26 @@ describe("ask_user_async", () => {
           const harness = yield* questionsHarness(providerLayer)
           yield* harness.client.message.send({ ...harness.target, content: "delegate it" })
           yield* waitFor(
-            Effect.sync(() => offered.has("child")),
-            (seen) => seen,
+            Effect.sync(() => childResults.length),
+            (count) => count > 0,
             5_000,
-            "the child's task turn asked the model",
+            "the child read its calls' results",
           )
           expect(offered.get("parent")).toContain("ask_user_async")
-          expect(offered.get("child")).not.toContain("ask_user_async")
-          expect(offered.get("child")).not.toContain("ask_user")
-        }).pipe(Effect.timeout("10 seconds")),
+          expect(offered.get("child")).toEqual(
+            expect.arrayContaining(["ask_user_async", "ask_user"]),
+          )
+          const results = childResults.join("\n")
+          for (const name of ["ask_user_async", "ask_user"]) {
+            expect(results).toContain(`The ${name} call did not run: no user watches this turn`)
+          }
+          // Nothing waits on an answer: the child stored no open question.
+          const fs = yield* FileSystem.FileSystem
+          const stored = yield* fs
+            .readDirectory(`${harness.home}/.gent/questions`)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+          expect(stored.filter((file) => file !== `${harness.branchId}.json`)).toEqual([])
+        }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunFileSystem.layer)),
       ),
     12_000,
   )

@@ -1147,6 +1147,13 @@ const gateToolCall = Effect.fn("ToolRunner.gate")(function* (params: {
   )
 })
 
+/**
+ * The result of an interactive tool's call in a run no user watches. The
+ * tool stays listed, so the call says who can answer instead.
+ */
+const unwatchedCall = (toolName: string) =>
+  `The ${toolName} call did not run: no user watches this turn, so no one can answer it. Report what you would ask the way this turn reports its result, then end your turn; whoever reads your report answers with a message to this session.`
+
 const runTool = Effect.fn("ToolRunner.execute")(function* (
   toolCall: ToolCall,
   toolEntry: Option.Option<ResolvedToolCapability>,
@@ -1188,6 +1195,12 @@ const runTool = Effect.fn("ToolRunner.execute")(function* (
         }),
       )
       return yield* finish(errorResult(toolCall, `Unknown tool: ${toolCall.toolName}`))
+    }
+    if (!ctx.canAsk && getToolMetadata(toolEntry.value.capability).interactive === true) {
+      yield* Effect.logInfo("tool.unwatched").pipe(
+        Effect.annotateLogs({ toolName: toolCall.toolName, toolCallId: toolCall.toolCallId }),
+      )
+      return yield* finish(errorResult(toolCall, unwatchedCall(toolCall.toolName)))
     }
     const toolCtx: ToolCapabilityContext = {
       ...ctx,
@@ -1495,24 +1508,17 @@ const collectProjectionPromptSections = (
  * Pipeline:
  * 1. The agent's `tools` patterns: the agent gets exactly the tools they
  *    admit (`AgentDefinition.admitsTool`); no extension adds a tool to the
- *    set
- * 2. Drop interactive tools in a non-interactive turn
- * 3. The last `modelSet` picks the model-facing subset
- * 4. Collect extension-contributed prompt sections
+ *    set. Who opened the turn changes nothing here: a turn no user watches
+ *    refuses an interactive tool's call when it runs (`runTool`).
+ * 2. The last `modelSet` picks the model-facing subset
+ * 3. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
   allTools: ReadonlyArray<ToolCapability>,
   agent: AgentDefinition,
-  turn: { readonly interactive?: boolean },
   extensionProjections: ReadonlyArray<TurnProjection>,
 ): CompiledToolPolicy => {
-  // 1. The agent's tool patterns
-  let tools = allTools.filter((tool) => agent.admitsTool(String(getToolId(tool))))
-
-  // 2. Filter interactive tools in a turn no user watches (`turnCanAsk`)
-  if (turn.interactive === false) {
-    tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
-  }
+  const tools = allTools.filter((tool) => agent.admitsTool(String(getToolId(tool))))
 
   let modelSet = Option.none<ReadonlyArray<string>>()
   for (const projection of extensionProjections) {

@@ -519,8 +519,6 @@ export class ExtensionLoadError extends Schema.TaggedError<
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
-  /** False when no user can answer in this turn: a spawned session's turn no client opened (`turnCanAsk`). */
-  readonly interactive?: boolean
   /**
    * Tools resolved for this turn, for a hook that renders them into the
    * rewritten prompt.
@@ -783,8 +781,7 @@ export const hook = <K extends ExtensionHookKind, E = never, R = never>(
 export interface ToolPolicyFragment {
   /**
    * Model-facing subset of the final admitted host tools. The last supplied set
-   * wins. Missing, unadmitted, and filtered interactive tools cannot be restored
-   * here. An empty set advertises no tools. Omission preserves the previous
+   * wins. Missing and unadmitted tools cannot be restored here. An empty set advertises no tools. Omission preserves the previous
    * selection.
    */
   readonly modelSet?: ReadonlyArray<string>
@@ -1512,6 +1509,11 @@ export interface ExtensionHostContext {
   readonly agentName?: AgentName
   readonly cwd: string
   readonly home: string
+  /**
+   * False: no user watches this run (`turnCanAsk`), so no one can answer an
+   * interactive tool's call and the call is refused before it runs.
+   */
+  readonly canAsk: boolean
   readonly host: ExtensionHostPlatform
   /** The leaf adds the wake verbs from `Wakes`. */
   readonly Session: Omit<ExtensionSessionService, keyof ExtensionWakesApi>

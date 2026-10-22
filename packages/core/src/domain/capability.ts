@@ -209,8 +209,12 @@ interface ToolDeclarations {
   readonly promptSnippet?: string
   /** Behavioral guidelines injected into the system prompt when this tool is active. */
   readonly promptGuidelines?: ReadonlyArray<string>
-  /** If true, requires an interactive session — filtered out in headless
-   *  mode and subagent contexts. */
+  /**
+   * If true, the tool waits on a user's answer. A turn no user watches
+   * (`turnCanAsk`) refuses its call before it runs. The tool stays listed in
+   * every turn, so a turn's tools and system prompt do not change with who
+   * opened it, and a fork or a thread's own turns read the cached prefix.
+   */
   readonly interactive?: boolean
   /**
    * If true, this tool runs other tools inside itself.

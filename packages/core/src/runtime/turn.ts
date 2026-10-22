@@ -351,8 +351,6 @@ const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(mes
 export interface AgentLoopTurnProfile {
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
-  /** Whether a user can answer in this turn (`turnCanAsk`). */
-  readonly turnInteractive: boolean
   /**
    * The services the turn and every extension leaf in it run with. It is the
    * one owner of the turn's `ExtensionRegistry`: a loop that suspends an
@@ -1896,8 +1894,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   branchId: BranchId
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
-  /** False withholds the tools that ask the user: an extension opened the turn. */
-  interactive: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
@@ -2005,7 +2001,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     cwd: hostCtx.cwd,
     parent: parentBound.success,
   })
-  const interactive = params.interactive
 
   // Derive extension projections from explicit prompt/message slots.
   const allToolEntries = staticToolEntries(extensionRegistry)
@@ -2028,7 +2023,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools: hostTools,
     modelTools: tools,
     promptSections: extensionSections,
-  } = compileToolPolicy(allTools, dispatchAgent, { interactive }, extensionProjections)
+  } = compileToolPolicy(allTools, dispatchAgent, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
     const bound = yield* attachToolBindingIdentity(entry)
@@ -2065,7 +2060,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   const systemPrompt = yield* extensionRegistry.getResolved().extensionHooks.resolveSystemPrompt({
     basePrompt: turnPrompt,
     agent: dispatchAgent,
-    interactive,
     tools,
     hostTools,
   })
@@ -6022,7 +6016,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: turnProfile.turnBaseSections,
-        interactive: turnProfile.turnInteractive,
       })
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(

@@ -266,7 +266,7 @@ const NudgeInput = Schema.Struct({
  * branch. The message claims the client origin, which only the server grants.
  * `arm` keeps the context of the request that ran it, so a later call can
  * send through it after that request ended. `handoff_probe` is an
- * interactive tool, like `handoff`: a turn no user watches does not see it.
+ * interactive tool, like `handoff`: a turn no user watches refuses its call.
  */
 const makeOriginProbe = () => {
   const armed = MutableRef.make(Option.none<ExtensionContextService>())

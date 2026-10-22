@@ -4400,6 +4400,7 @@ export const makeExtensionHostContextProvider = (
       branchId: runInfo.branchId,
       cwd: runInfo.sessionCwd ?? environment.cwd,
       home: environment.home,
+      canAsk: runInfo.interactive,
       host,
       FileLock,
       Permits: permitsFacade,
@@ -4835,7 +4836,6 @@ export const resolveTurnProfile = (params: {
     return {
       turnBaseSections: profile.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
-      turnInteractive: interactive,
       turnCapabilityContext: profile.layerContext,
       turnResourceBuilds: profile.resourceBuilds,
       turnGenerationId: profile.generationId,

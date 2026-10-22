@@ -965,9 +965,10 @@ describe("a delegate thread's round end", () => {
         expect(tools).not.toContain("thread__start")
         expect(tools).not.toContain("thread__stop")
         expect(offered).toEqual(expect.arrayContaining(["thread__start", "thread__stop"]))
-        // Nobody answers a round's turn: a confirm or a handoff would park it for good.
+        // A round's turn lists the tools that ask, as its starter's does; no
+        // one answers there, so their calls are refused when they run.
         const waitsOnUser = ["ask_user", "prompt", "handoff"]
-        expect(tools.filter((name) => waitsOnUser.includes(name))).toEqual([])
+        expect(tools).toEqual(expect.arrayContaining(waitsOnUser))
         expect(offered).toEqual(expect.arrayContaining(waitsOnUser))
       }).pipe(Effect.timeout("8 seconds")),
     ),
@@ -2824,6 +2825,55 @@ describe("a forked thread", () => {
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
+  )
+
+  // A fork runs its starter's agent on a copy of the starter's context, so
+  // its first request reads the starter's whole prefix from the provider's
+  // prompt cache only when its tools and system prompt repeat byte for byte,
+  // though no user watches the fork's turn.
+  it.live("a fork's first request repeats its starter's tools and system prompt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const parent: Array<ModelOptions> = []
+        const child: Array<ModelOptions> = []
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          if (promptTexts(options.prompt).at(-1)?.endsWith(childTask) === true) {
+            child.push(options)
+            return Effect.succeed(reply("pong"))
+          }
+          parent.push(options)
+          if (parent.length === 1) {
+            return Effect.succeed(
+              toolStep(
+                "thread.start",
+                { task: childTask, fork: true, notify: "starter" },
+                "fork-same-agent",
+              ),
+            )
+          }
+          return Effect.succeed(reply("started"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        yield* sendPrompt(harness, "fork a thread")
+        yield* waitFor(
+          Effect.sync(() => child.length),
+          (count) => count > 0,
+          5_000,
+          "the fork sent its first request",
+        )
+        const toolsOf = (options: ModelOptions) =>
+          options.tools.map((entry) => [entry.name, entry.description])
+        const starter = parent[0]!
+        const fork = child[0]!
+        expect(turnRequestText(fork.prompt).systemBlocks).toEqual(
+          turnRequestText(starter.prompt).systemBlocks,
+        )
+        expect(toolsOf(fork)).toEqual(toolsOf(starter))
+        expect(toolsOf(fork).map(([name]) => name)).toEqual(
+          expect.arrayContaining(["ask_user", "prompt", "handoff"]),
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+    ),
   )
 
   it.live(

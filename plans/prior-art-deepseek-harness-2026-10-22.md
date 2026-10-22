@@ -162,7 +162,11 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - Trade-off: the summary would read the source as conversation, not as one flattened text, so `summaryPromptText` and its keep-verbatim lines move into the final instruction. The output cap check stays. (inferred)
 - Check: a capture with `docs/architecture/fetch-capture.ts`, then compare `cache_read_input_tokens` on one paid summary call. (inferred)
 
-### G2. Prove or fix fork prefix sharing (possibly high gain, low effort to check)
+### G2. Prove or fix fork prefix sharing (possibly high gain, low effort to check) — DONE
+
+- Found: a fork shared `tools` and the shared system block, but its own block listed four fewer host tools: its turn has no watching user (`turnCanAsk`), so `compileToolPolicy` dropped the interactive tools, and the cell's catalog changed. With the filter off, every copied block was equal. (measured: fork capture probe at 4d2936fc8)
+- Done: the interactive tools stay listed in every turn; `runTool` refuses their call when `ExtensionHostContext.canAsk` is false, and the result says who answers. `SystemPromptInput.interactive` is gone. "a fork's first request repeats its starter's tools and system prompt" (`delegated-threads.test.ts`) fails with the filter back; the child refusal test (`interaction-tools.test.ts`) fails without the refusal. (measured)
+- Open: the fork's cache marker lifetime (5m) differs from the starter's (1h); whether the lifetime is in the cache key is not proven. (inferred)
 
 - Now: `fork: true` copies the starter's window into a new session. Whether its first request equals the starter's bytes through the end of the copied conversation is not proven. Risks: a different agent part of the system prompt, a different `tools` narrowing, a different cwd (workspace), the notices position. (measured that it copies; the rest inferred)
 - dsh: seeds the fork with the parent's completed-turn prefix and keeps the delegation text out of the system prompt. (measured)
@@ -172,6 +176,7 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 ### G3. Move `Working directory` out of the shared system part (medium gain, low effort) — DONE
 
 - Done: the `working-directory` section (cwd and git state) is the last section of the agent's own part; the environment section keeps platform and shell; the skills listing names local directories relative to the working directory. "a snapshot thread opens with its starter's shared part, byte for byte, though it works elsewhere" (`delegated-threads.test.ts`) fails with either change undone. (measured)
+- Known limit: a session whose cwd is a symlink to a repository subdirectory finds skills through its lexical parents (`skills.ts:245-305`), while a snapshot copy resolves the real path (`workspaces.ts:1496`), so its fork's skills listing can differ. Bun's `process.cwd()` returns the physical path, so a TUI session never has one; only a cwd given over RPC or `gent ctl` can. (measured: `process.cwd()` under `/tmp` returns `/private/tmp`; the listing difference inferred)
 
 - Now: cwd is line 1 of the environment section (priority 60), inside the shared part, before project instructions (70) and skills (80). (measured: capability.ts:88-107, agents.ts:64, skills.ts:564)
 - Effect: a thread in a `workspace` (snapshot or rift copy) has another cwd (threads.ts:2556-2562), so its shared prefix differs from the first section after the persona, and it reads nothing from the parent's entry. (measured that cwd differs; the miss inferred, because there is no marker before priority 60)

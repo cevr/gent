@@ -307,6 +307,7 @@ export const testExtensionHostContext = (
   branchId: overrides.branchId ?? BranchId.make("test-branch"),
   cwd: overrides.cwd ?? "/nonexistent/gent-test-cwd",
   home: overrides.home ?? "/nonexistent/gent-test-home",
+  canAsk: overrides.canAsk ?? true,
   host: overrides.host ?? testExtensionHostPlatform(overrides.home),
   agentName: overrides.agentName,
   Session: { ...defaultSession(), ...overrides.Session },
@@ -432,6 +433,7 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     toolCallId: ToolCallId.make("test-call"),
     cwd: "/nonexistent/gent-test-cwd",
     home: "/nonexistent/gent-test-home",
+    canAsk: true,
     host,
     Session: resolvedSession,
     Interaction: resolvedInteraction,
@@ -688,7 +690,6 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
     turnResourceBuilds: profile.resourceBuilds,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(hostRun(run)),
-    turnInteractive: hostRun(run).interactive,
   }
   const toolBindings = yield* Effect.gen(function* () {
     const bindings = new Map<string, ResolvedToolCapability>()

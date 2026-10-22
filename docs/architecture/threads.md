@@ -239,7 +239,8 @@
     source line on a muted `» task from session` row (another session wrote
     it, so it never takes the reader's rail). The starter's interrupt stops
     only its `starter` rounds (the cascade above); a `user` thread runs on,
-    and a thread's unattended turns decline their asks (`turnCanAsk`). A
+    and a thread's unattended turns decline their asks and refuse the
+    interactive tools' calls, which stay listed (`turnCanAsk`). A
     `delegate` or `worker` thread is denied `thread.start`. The `#
     Sessions` prompt section shows its `thread.*` lines only to an agent that
     may call `thread.start`.

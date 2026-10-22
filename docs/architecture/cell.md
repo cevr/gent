@@ -9,8 +9,7 @@ gets exactly the tools they admit, and no extension adds one, so the cell is
 the surface only for an agent that admits it; any other agent keeps its own
 tools as the model surface. `ToolPolicyFragment.modelSet` narrows
 the final admitted host tools for model calls. The last explicit set wins; an
-empty set advertises no tools. It cannot restore unknown, denied, or filtered
-interactive tools. Without a set, the model receives the admitted tools directly.
+empty set advertises no tools. It cannot restore unknown or denied tools. Without a set, the model receives the admitted tools directly.
 The cell extension also renders its catalog through `systemPrompt`, whose
 `hostTools` input contains the admitted host bindings' capabilities. `getToolPrompt`
 exposes catalog text without the private execution metadata. Projection hooks see

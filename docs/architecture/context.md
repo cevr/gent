@@ -115,7 +115,11 @@
   agent's own sections (tool list, tool guidelines, the cell guide, sessions and children
   guidance, an agent addendum, then the working directory and its git state,
   last at `WORKING_DIRECTORY_PRIORITY`) and what `systemPrompt` hooks append (the host
-  tool list, session naming) follow. The turn sends the parts as two system
+  tool list, session naming) follow. Neither part, nor the tools, changes with
+  who opened the turn: a turn no user watches lists the interactive tools and
+  refuses their calls (interactions.md), so a fork's first request repeats
+  its starter's tools and system prompt and reads its whole prefix from the
+  cache. The turn sends the parts as two system
   blocks (`systemPromptBlocks`), and the Anthropic driver marks the end of the
   shared one on the API-key path, so a fresh child with its parent's tool set
   reads it from its parent's cache entry (the tool definitions come first in
