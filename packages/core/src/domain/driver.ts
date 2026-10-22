@@ -627,6 +627,19 @@ export const QuotaReading = Schema.Struct({
 export type QuotaReading = typeof QuotaReading.Type
 
 /**
+ * One window of a plan that limits a model by what its requests cost, not by
+ * a server's report: at most `usd` of list price in any trailing `window`
+ * (`5h`, `7d`, `31d`). Gent meters each account's own spend on the model
+ * against it and reads the window as a quota window of that model
+ * (`ModelDriverContribution.spendLimits`).
+ */
+export const SpendLimit = Schema.Struct({
+  window: Schema.String,
+  usd: Schema.Finite,
+})
+export type SpendLimit = typeof SpendLimit.Type
+
+/**
  * What a driver that reads the wire reports about one step's request. The
  * loop provides this service to each step's model stream and reads it when
  * the step settles. `stopReason` is the provider's own word for why the
@@ -1162,6 +1175,14 @@ export interface ModelDriverContribution {
   readonly envCredential?: string
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
   readonly retry?: RetryPolicy
+  /**
+   * The spend windows a plan sets on one model (OpenCode Go), none for a
+   * model it does not limit. Gent counts each step's and summary's price on
+   * the account against them, so the account's lanes and placement read the
+   * model's windows as no response names them. Spend past a limit that the
+   * plan bills as extra usage counts as past the limit: it is never quota.
+   */
+  readonly spendLimits?: (modelName: string) => ReadonlyArray<SpendLimit>
   /**
    * A response's cache writes split by the lifetime of the entries they wrote,
    * read from its finish part's provider metadata. A driver whose request

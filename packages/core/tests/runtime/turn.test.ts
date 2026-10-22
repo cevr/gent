@@ -188,6 +188,7 @@ import * as AiModel from "effect/ai/Model"
 import {
   DEFAULT_RETRY_POLICY,
   type ModelDriverContribution,
+  type SpendLimit,
   type ModelRouteInput,
   type ModelRouterContribution,
   type ProviderAuthInfo,
@@ -2501,6 +2502,8 @@ describe("credential order", () => {
     readonly windowless?: boolean
     /** The cache lifetime a subscription sign-in lists; default `cacheTtlMs`. */
     readonly subscriptionCacheTtlMs?: number
+    /** The spend windows the driver sets on the model; default none. */
+    readonly spendLimits?: ReadonlyArray<SpendLimit>
     /** Answers every request by its credential and prompt, in place of `replies`. */
     readonly respond?: (
       credential: string,
@@ -2528,9 +2531,15 @@ describe("credential order", () => {
       }
     }
     if (Predicate.isNotUndefined(params.order)) setOrder(params.order)
+    const limits = params.spendLimits
     const driver: ModelDriverContribution = {
       id: FALLBACK,
       name: "Fallback driver",
+      ...omitUndefined({
+        spendLimits: Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(limits), (found) => () => found),
+        ),
+      }),
       // Same-credential retries end at once, so a rate limit moves on quickly.
       retry: {
         ...DEFAULT_RETRY_POLICY,
@@ -3869,6 +3878,7 @@ describe("credential order", () => {
         readonly history?: ReadonlyArray<number>
         readonly windowless?: boolean
         readonly compactor?: ModelContextCompactor["Service"]
+        readonly spendLimits?: ReadonlyArray<SpendLimit>
       } = {},
     ) => {
       const pool = options.pool ?? [a, b]
@@ -3888,6 +3898,7 @@ describe("credential order", () => {
           history: options.history,
           windowless: options.windowless,
           compactor: options.compactor,
+          spendLimits: options.spendLimits,
         }),
       })
     }
@@ -5936,6 +5947,51 @@ describe("credential order", () => {
           .reduce((sum, bucket) => sum + bucket.costUsd, 0)
         expect(onA).toBeCloseTo(3 * request, 12)
       }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a handoff summary on a model its driver limits by cost spends that model's quota",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const request = (10 * apiPricing.input + 5 * apiPricing.output) / 1_000_000
+          const root = spreadRoot(world, "summary-meter", {
+            compactor: pricedCompactor,
+            spendLimits: [{ window: "5h", usd: 10 * request }],
+          })
+          yield* runOn(root, "first")
+          yield* Effect.gen(function* () {
+            const storage = yield* MessageStorage
+            const now = yield* Clock.currentTimeMillis
+            yield* Effect.forEach(
+              Array.from({ length: 12 }, (_, index) => index),
+              (index) =>
+                storage.createMessage(
+                  Message.cases.regular.make({
+                    id: MessageId.make(`summary-meter-grown-${index + 1}`),
+                    sessionId: root.sessionId,
+                    branchId: root.branchId,
+                    role: "assistant",
+                    parts: [Prompt.textPart({ text: "x".repeat(50_000) })],
+                    createdAt: dateFromMillis(now + index),
+                  }),
+                ),
+              { discard: true },
+            )
+          }).pipe(Effect.provide(world.storage), Effect.orDie)
+          yield* runOn(root, "second")
+          expect(root.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+          // A step, the summary and a step: three requests of the ten the window holds.
+          const report = yield* world.placement.lanes(() =>
+            Effect.succeedSome([{ provider: fallbackProvider, slot: a }]),
+          )
+          const window = report.providers
+            .find((lanes) => lanes.provider === FALLBACK)
+            ?.accounts.find((account) => account.slot === a)
+            ?.windows.find((found) => found.window === "5h")
+          expect(window?.model).toBe(fallbackModel)
+          expect(window?.utilization).toBeCloseTo(0.3, 12)
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
     it.live(

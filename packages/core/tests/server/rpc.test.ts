@@ -67,6 +67,7 @@ import {
   DEFAULT_AGENT_NAME,
   Model,
   ModelId,
+  parseModelId,
   ProviderId,
 } from "../../src/domain/agent"
 import {
@@ -4958,6 +4959,92 @@ describe("AccountsRpcs", () => {
           )
           // The first step's 30 fuel moved the route model's window 2 points.
           expect(own?.fuelPerPct).toBeCloseTo(15, 6)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+  )
+
+  it.live(
+    "a step on a model its driver limits by cost reads its account's spend on that model as the model's windows",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const work = CredentialSlot.make("work")
+          const [provider, modelName] = yield* Effect.fromOption(parseModelId(TEST_MODEL_ID)).pipe(
+            Effect.orDie,
+          )
+          // The test driver, with a 5-hour limit of two steps' price.
+          const meteredTurnExtension = defineExtension({
+            id: "test-metered-turn",
+            setup: Effect.gen(function* () {
+              yield* (yield* ExtensionHost).register("modelDriver", {
+                id: provider,
+                name: "Metered test driver",
+                listModels: () =>
+                  Effect.succeed([
+                    new Model({
+                      id: TEST_MODEL_ID,
+                      name: "Test model",
+                      provider,
+                      contextLength: 128_000,
+                    }),
+                  ]),
+                resolveModel: () =>
+                  Effect.succeed(AiModel.make(provider, modelName, LanguageModelLayers.failing)),
+                spendLimits: () => [{ window: "5h", usd: 0.00011 }],
+              })
+            }),
+          })
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("ok"),
+            textStep("ok"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [
+              meteredTurnExtension,
+              ...e2ePreset.extensionInputs.filter((input) => input !== testTurnExtension),
+            ],
+            providerLayer,
+            // $5 per million tokens: a step of 10 input and 1 output token is $0.000055.
+            modelPricing: { input: 5, output: 5 },
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          })
+          const turn = (content: string, earlierTurns: number) =>
+            Effect.gen(function* () {
+              const turnCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+                Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+                Stream.drop(earlierTurns),
+                Stream.runHead,
+                Effect.forkScoped,
+              )
+              yield* client.message.send({ sessionId, branchId, content })
+              yield* Fiber.join(turnCompleted)
+            })
+          const window = Effect.map(client.accounts.lanes(), ({ providers }) => ({
+            capacity: Option.fromUndefinedOr(providers[0]?.capacity),
+            window: providers[0]?.accounts[0]?.windows.map((found) => ({
+              window: found.window,
+              model: found.model,
+              utilization: Math.round(found.utilization * 1_000) / 1_000,
+              rejected: found.rejected,
+            })),
+          }))
+          yield* turn("first", 0)
+          expect(yield* window).toEqual({
+            capacity: Option.none(),
+            window: [{ window: "5h", model: TEST_MODEL_ID, utilization: 0.5, rejected: false }],
+          })
+          yield* turn("second", 1)
+          // The account has no window of its own: its lanes stay unknown.
+          expect(yield* window).toEqual({
+            capacity: Option.none(),
+            window: [{ window: "5h", model: TEST_MODEL_ID, utilization: 1, rejected: true }],
+          })
         }).pipe(Effect.timeout("8 seconds")),
       ),
   )

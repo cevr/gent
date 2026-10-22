@@ -83,6 +83,7 @@ export {
   reportProviderQuota,
   reportProviderStopReason,
   retryAfterAt,
+  SpendLimit,
   modelFromCatalog,
   catalogModelEntry,
 } from "../domain/driver.js"

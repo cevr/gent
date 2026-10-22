@@ -193,6 +193,7 @@ import {
   credentialRefusal,
   refusalHoldsModel,
   retryReason,
+  spendLimitsOf,
   spreadsRuns,
   servedEffortRouter,
   type ServedVirtualModel,
@@ -3224,6 +3225,7 @@ const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
   if (Option.isNone(summaryOn)) return
   const { costUsd } = summary
   const placement = yield* CredentialPlacement
+  const extensionRegistry = yield* ExtensionRegistry
   yield* placement.noteFuel({
     provider: summaryOn.value.provider,
     slot: summaryOn.value.slot,
@@ -3232,9 +3234,9 @@ const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
     model: summary.modelId,
     costUsd,
     usage,
+    limits: spendLimitsOf(extensionRegistry, summary.modelId),
   })
   if (Option.isNone(costUsd)) return
-  const extensionRegistry = yield* ExtensionRegistry
   if (!(yield* spreadsRuns(summaryOn.value.provider, extensionRegistry))) return
   yield* placement.noteSpend({
     provider: summaryOn.value.provider,
@@ -5362,6 +5364,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       ) {
         const credential = yield* source.credential
         if (Option.isNone(credential)) return
+        const extensionRegistry = yield* ExtensionRegistry
         yield* placement.noteFuel({
           provider: credential.value.provider,
           slot: credential.value.slot,
@@ -5370,8 +5373,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           model: params.resolved.modelId,
           costUsd,
           usage,
+          limits: spendLimitsOf(extensionRegistry, params.resolved.modelId),
         })
-        if (!(yield* spreadsRuns(credential.value.provider, yield* ExtensionRegistry))) return
+        if (!(yield* spreadsRuns(credential.value.provider, extensionRegistry))) return
         yield* placement.noteStep({
           provider: credential.value.provider,
           slot: credential.value.slot,

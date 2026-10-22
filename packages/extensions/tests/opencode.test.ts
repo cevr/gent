@@ -1,5 +1,15 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Crypto, Effect, Layer, Option, Order, Predicate, Schema, Stream } from "effect"
+import {
+  ConfigProvider,
+  Crypto,
+  Effect,
+  Layer,
+  Option,
+  Order,
+  Predicate,
+  Schema,
+  Stream,
+} from "effect"
 import { LanguageModel, Prompt } from "effect/ai"
 import { BunCrypto } from "@effect/platform-bun"
 import {
@@ -31,7 +41,12 @@ import {
   makeFakeFetchState,
   oneGenerate,
 } from "./helpers/fake-http-client.js"
-import { buildOpenCodeModelDriver, OPENCODE_GATEWAYS, OpenCodeExtension } from "../src/opencode.js"
+import {
+  buildOpenCodeModelDriver,
+  OPENCODE_GATEWAYS,
+  OpenCodeExtension,
+  openCodeModelDrivers,
+} from "../src/opencode.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { decideTicket, systemOneBody, TICKET, TICKET_QUESTIONS } from "./helpers/decision-wire.js"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -1221,5 +1236,44 @@ describe("OpenCode sign-in", () => {
       yield* oneGenerate(model, state, gatewayReply)
       expect(lastRequest(state).headers["authorization"]).toBe("Bearer oc-go-key")
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+})
+
+describe("OpenCode Go usage limits", () => {
+  it.live(
+    "a Go model is limited by its cost in 5 hours, a week and a month; OPENCODE_GO_PLAN=plus reads Go Plus",
+    () =>
+      Effect.gen(function* () {
+        const limitsWith = (env: Record<string, string>, modelName: string) =>
+          openCodeModelDrivers.pipe(
+            Effect.map(([zen, go]) => ({
+              zenLimited: Predicate.isNotUndefined(zen.spendLimits),
+              go: go.spendLimits?.(modelName),
+            })),
+            Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+            Effect.provideServiceEffect(Crypto.Crypto, hostCrypto),
+          )
+        // GLM-5.3: $15 a month on Go, $120 on Go Plus; Zen bills as it goes.
+        expect(yield* limitsWith({}, "glm-5.3")).toEqual({
+          zenLimited: false,
+          go: [
+            { window: "5h", usd: 3 },
+            { window: "7d", usd: 7.5 },
+            { window: "31d", usd: 15 },
+          ],
+        })
+        expect((yield* limitsWith({ OPENCODE_GO_PLAN: "plus" }, "glm-5.3")).go).toEqual([
+          { window: "5h", usd: 24 },
+          { window: "7d", usd: 60 },
+          { window: "31d", usd: 120 },
+        ])
+        // An unknown plan reads Go, the stricter.
+        expect((yield* limitsWith({ OPENCODE_GO_PLAN: "pro" }, "glm-5.3")).go?.[0]).toEqual({
+          window: "5h",
+          usd: 3,
+        })
+        // A free model has no limit.
+        expect((yield* limitsWith({}, "beam-free")).go).toEqual([])
+      }).pipe(Effect.timeout("5 seconds")),
   )
 })

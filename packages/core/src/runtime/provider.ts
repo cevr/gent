@@ -83,6 +83,7 @@ import {
   type LaneWindow,
   type ProviderLanes,
   type QuotaReading,
+  SpendLimit,
   type RetryPolicy,
   type StoredOAuthCredentials,
   type VirtualModel,
@@ -3241,6 +3242,21 @@ export const requestCredentialOrder = Effect.fn("CredentialOrder.ofRequest")(fun
 })
 
 /**
+ * The spend windows the driver of `modelId` sets on it (`spendLimits`):
+ * none for a driver that limits no model by cost, or a model id it does not
+ * parse as.
+ */
+export const spendLimitsOf = (
+  registry: ExtensionRegistryService,
+  modelId: ModelId,
+): ReadonlyArray<SpendLimit> =>
+  Option.match(parseModelId(modelId), {
+    onNone: () => [],
+    onSome: ([driverId, modelName]) =>
+      registry.getResolved().modelDrivers.get(driverId)?.spendLimits?.(modelName) ?? [],
+  })
+
+/**
  * Whether `provider`'s sign-in spreads its unpinned runs over a pool
  * (`authSpread`). A sign-in whose order cannot be read does not.
  */
@@ -3507,6 +3523,8 @@ const PLACEMENT_LEDGER_FILE = "credential-usage.json"
  * 0.1, a 5-minute cache write 1.25, output 5, for that model).
  */
 const FUEL_REFERENCE_USD_PER_MILLION = 5
+/** The reference model's price of each token class, in fuel: the weights the prior was read at. */
+const FUEL_REFERENCE_WEIGHTS = { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }
 /**
  * The fuel one run burns in an hour on the provider, before gent has
  * measured an hour of its own lanes: the bridge reading of 2026-10-20
@@ -3844,6 +3862,8 @@ interface PlacementFuel {
   /** None when unpriced: the open segments and the lane it falls in drop. */
   readonly costUsd: Option.Option<number>
   readonly usage: Option.Option<FuelUsage>
+  /** The spend windows the model's driver sets on it (`spendLimitsOf`); empty for none. */
+  readonly limits: ReadonlyArray<SpendLimit>
 }
 
 /**
@@ -3944,10 +3964,43 @@ const LaneBurn = Schema.Struct({
 })
 type LaneBurn = typeof LaneBurn.Type
 
+/** The burn of one provider's lanes that ran one model, measured as `LaneBurn` is. */
+const ModelBurn = Schema.Struct({ ...LaneBurn.fields, model: ModelId })
+type ModelBurn = typeof ModelBurn.Type
+
 /**
- * The ledger file. `segments`, `readings` and `burn` are optional: a file
- * an older gent wrote has none, and an older gent drops them when it reads
- * them.
+ * One hour of a spend meter: its priced spend, the fuel its tokens burn at
+ * the reference prices (`FUEL_REFERENCE_WEIGHTS`), and whether an unpriced
+ * request fell in it.
+ */
+const MeterHour = Schema.Struct({
+  /** Epoch hours. */
+  hour: Schema.Finite,
+  usd: Schema.Finite,
+  reference: Schema.optionalKey(Schema.Finite),
+  unpriced: Schema.optionalKey(Schema.Boolean),
+})
+type MeterHour = typeof MeterHour.Type
+
+/**
+ * One account's spend on one model its driver limits by cost (`SpendLimit`):
+ * the limits the driver named last, and the spend per hour, oldest first,
+ * kept as long as the longest limit spans.
+ */
+const SpendMeter = Schema.Struct({
+  provider: Schema.String,
+  slot: CredentialSlot,
+  signedInAt: Schema.optionalKey(Schema.Finite),
+  model: ModelId,
+  limits: Schema.Array(SpendLimit),
+  hours: Schema.Array(MeterHour),
+})
+type SpendMeter = typeof SpendMeter.Type
+
+/**
+ * The ledger file. `segments`, `readings`, `burn` and `meters` are
+ * optional: a file an older gent wrote has none, and an older gent drops
+ * them when it reads them.
  */
 const PlacementLedger = Schema.fromJsonString(
   Schema.Struct({
@@ -3955,6 +4008,8 @@ const PlacementLedger = Schema.fromJsonString(
     segments: Schema.optionalKey(Schema.Array(FuelSegment)),
     readings: Schema.optionalKey(Schema.Array(WindowReading)),
     burn: Schema.optionalKey(Schema.Array(LaneBurn)),
+    modelBurn: Schema.optionalKey(Schema.Array(ModelBurn)),
+    meters: Schema.optionalKey(Schema.Array(SpendMeter)),
   }),
 )
 type PlacementLedgerValue = typeof PlacementLedger.Type
@@ -4084,6 +4139,13 @@ const fuelOf = (
     if (!Number.isFinite(cost) || cost < 0 || (cost === 0 && spent > 0)) return Option.none()
     return Option.some({ fuel: (cost * 1_000_000) / FUEL_REFERENCE_USD_PER_MILLION, tokens })
   })
+
+/** The fuel `tokens` would burn at the reference model's prices. */
+const referenceFuel = (tokens: FuelTokens) =>
+  tokens.input * FUEL_REFERENCE_WEIGHTS.input +
+  tokens.output * FUEL_REFERENCE_WEIGHTS.output +
+  tokens.cacheRead * FUEL_REFERENCE_WEIGHTS.cacheRead +
+  tokens.cacheWrite * FUEL_REFERENCE_WEIGHTS.cacheWrite
 
 /** A window's fuel per percentage point, read from its segments. */
 interface WindowFit {
@@ -4284,6 +4346,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /** provider, slot, window (`windowKey`) → its closed segments, oldest first. */
   const segments = new Map<string, ReadonlyArray<FuelSegment>>()
   /**
+   * provider, slot, model → the account's spend on a model its driver limits
+   * by cost: the source of that model's windows (`meterReadings`).
+   */
+  const spendMeters = new Map<string, SpendMeter>()
+  /**
    * session → the provider, accounts and model its open turn spends from,
    * when it opened, and the fuel it spent since (none once an unpriced
    * request fell in it): its lane, and that lane's burn.
@@ -4300,6 +4367,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   >()
   /** provider → the burn its ended lanes measured. */
   const burns = new Map<string, LaneBurn>()
+  /** provider, model → the burn its ended lanes of the model measured, for a model's own windows. */
+  const modelBurns = new Map<string, ModelBurn>()
   /**
    * provider, slot → the sign-in the label's quota state and holds belong
    * to (`signedInAt`), as the credential store or a newer report last named
@@ -4408,6 +4477,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     for (const key of [...openSegments.keys()])
       if (ofLabel(key, provider, slot)) openSegments.delete(key)
     for (const key of [...segments.keys()]) if (ofLabel(key, provider, slot)) segments.delete(key)
+    for (const key of [...spendMeters.keys()])
+      if (ofLabel(key, provider, slot)) spendMeters.delete(key)
     for (const key of [...held.keys()])
       if (key === placementKey(provider, slot) || ofLabel(key, provider, slot)) held.delete(key)
   }
@@ -4433,6 +4504,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         moved(key),
         list.map((segment) => ({ ...segment, slot: to })),
       )
+    }
+    for (const [key, meter] of [...spendMeters]) {
+      if (!ofLabel(key, provider, from)) continue
+      spendMeters.delete(key)
+      spendMeters.set(moved(key), { ...meter, slot: to })
     }
     for (const [key, until] of [...held]) {
       if (key === placementKey(provider, from)) {
@@ -4502,11 +4578,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * A lane ended at `now`: its fuel over its hours adds to its provider's
    * burn, the burn before it halved for every 24 lane-hours it ran. A lane an
    * unpriced request fell in adds nothing: its fuel is unknown, never zero.
-   * Nor does a lane of a provider gent read no quota window of.
+   * Nor does a lane of a provider gent read no quota window of. A lane of a
+   * model gent reads a window of adds to that model's burn as well.
    */
   const burnLane = (
     lane: {
       readonly provider: string
+      readonly model: Option.Option<ModelId>
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     },
@@ -4514,39 +4592,83 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ) => {
     const hours = (now - lane.openedAt) / 3_600_000
     if (!(hours > 0) || Option.isNone(lane.fuel)) return
+    const fuel = lane.fuel.value
     // The burn sizes the lanes of a provider whose windows gent reads; with
     // none read, it would only write a ledger nothing needs.
     if (!readings.values().some((reading) => reading.provider === lane.provider)) return
-    const before = burns.get(lane.provider) ?? {
-      provider: lane.provider,
-      fuel: 0,
-      hours: 0,
-      seen: 0,
-    }
     const decay = 0.5 ** (hours / LANE_BURN_HALF_LIFE_HOURS)
-    burns.set(lane.provider, {
-      provider: lane.provider,
-      fuel: before.fuel * decay + lane.fuel.value,
+    const added = (before: LaneBurn) => ({
+      fuel: before.fuel * decay + fuel,
       hours: before.hours * decay + hours,
       seen: before.seen + hours,
     })
+    const unmeasured = { provider: lane.provider, fuel: 0, hours: 0, seen: 0 }
+    burns.set(lane.provider, {
+      provider: lane.provider,
+      ...added(burns.get(lane.provider) ?? unmeasured),
+    })
+    const read = Option.filter(lane.model, (model) =>
+      readings
+        .values()
+        .some((reading) => reading.provider === lane.provider && reading.model === model),
+    )
+    if (Option.isSome(read)) {
+      const key = placementKey(lane.provider, read.value)
+      modelBurns.set(key, {
+        provider: lane.provider,
+        model: read.value,
+        ...added(modelBurns.get(key) ?? unmeasured),
+      })
+    }
     version += 1
   }
+  /** A burn's fuel per lane-hour, once it measured a lane-hour. */
+  const measuredRate = (burn: Option.Option<LaneBurn>) =>
+    Option.flatMap(
+      Option.filter(burn, (found) => found.seen >= LANE_BURN_MIN_HOURS),
+      (found) =>
+        Option.liftPredicate(
+          found.fuel / found.hours,
+          (rate) => found.hours > 0 && rate > 0 && Number.isFinite(rate),
+        ),
+    )
   /** The fuel one of `provider`'s runs burns in an hour: measured once it saw a lane-hour, else the prior. */
   const fuelPerHourOf = (provider: string) =>
     Option.getOrElse(
-      Option.flatMap(
-        Option.filter(
-          Option.fromUndefinedOr(burns.get(provider)),
-          (burn) => burn.seen >= LANE_BURN_MIN_HOURS,
-        ),
-        (burn) =>
-          Option.liftPredicate(
-            burn.fuel / burn.hours,
-            (rate) => burn.hours > 0 && rate > 0 && Number.isFinite(rate),
-          ),
-      ),
+      measuredRate(Option.fromUndefinedOr(burns.get(provider))),
       () => FUEL_PER_LANE_HOUR_PRIOR,
+    )
+  /**
+   * The price of `model`'s tokens over the reference model's, from what its
+   * meters recorded on any account: none before a priced request of it.
+   */
+  const priceRatioOf = (provider: string, model: ModelId) => {
+    let fuel = 0
+    let reference = 0
+    for (const meter of spendMeters.values()) {
+      if (meter.provider !== provider || meter.model !== model) continue
+      for (const entry of meter.hours) {
+        if (Predicate.isUndefined(entry.reference)) continue
+        fuel += (entry.usd * 1_000_000) / FUEL_REFERENCE_USD_PER_MILLION
+        reference += entry.reference
+      }
+    }
+    return Option.liftPredicate(fuel / reference, (ratio) => reference > 0 && ratio > 0)
+  }
+  /**
+   * The fuel a run of `model` burns in an hour, for the model's own windows:
+   * measured on its lanes once they saw a lane-hour, else the prior at the
+   * model's price, else the provider's. The prior was read on the reference
+   * model, and fuel is a price, so a cheaper model's run burns less of it.
+   */
+  const modelFuelPerHourOf = (provider: string, model: ModelId) =>
+    Option.getOrElse(
+      Option.orElse(
+        measuredRate(Option.fromUndefinedOr(modelBurns.get(placementKey(provider, model)))),
+        () =>
+          Option.map(priceRatioOf(provider, model), (ratio) => FUEL_PER_LANE_HOUR_PRIOR * ratio),
+      ),
+      () => fuelPerHourOf(provider),
     )
   /** The session's first step ended, or its turn did: it warms nothing now. */
   const unguard = (sessionId: SessionId) => {
@@ -4582,7 +4704,143 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (Option.exists(entry.until, (until) => until <= now)) live.delete(key)
     for (const [key, until] of held) if (until <= now) held.delete(key)
     if (trimQuota(now - PLACEMENT_WINDOW_MS)) pruned = true
+    for (const key of [...spendMeters.keys()]) if (meterReadings(key, now)) pruned = true
     if (pruned) version += 1
+  }
+  /**
+   * The windows of the meter `key` as readings at `now`, each the spend of
+   * its trailing span over its limit; hours older than the longest limit
+   * go, and a meter with none left goes with its windows. A window spent to
+   * its limit is rejected until enough of its oldest spend leaves it; one
+   * over an unpriced hour reads nothing, as its spend is unknown. Whether a
+   * value the ledger keeps changed. Under the lock.
+   */
+  const meterReadings = (key: string, now: number) => {
+    const meter = Option.fromUndefinedOr(spendMeters.get(key))
+    if (Option.isNone(meter)) return false
+    const { provider, slot, model, limits } = meter.value
+    const spans = limits.flatMap((limit) =>
+      Option.toArray(Option.map(windowLengthMs(limit.window), (length) => ({ limit, length }))),
+    )
+    const spanStart = (length: number) => Math.floor((now - length) / PLACEMENT_BUCKET_MS)
+    const longest = Math.max(0, ...spans.map((span) => span.length))
+    const hours = meter.value.hours.filter((entry) => entry.hour >= spanStart(longest))
+    if (hours.length === 0) {
+      spendMeters.delete(key)
+      for (const limit of limits)
+        readings.delete(windowKey(provider, slot, { window: limit.window, model }))
+      return true
+    }
+    let changed = hours.length !== meter.value.hours.length
+    if (changed) spendMeters.set(key, { ...meter.value, hours })
+    for (const { limit, length } of spans) {
+      const readingKey = windowKey(provider, slot, { window: limit.window, model })
+      const inSpan = hours.filter((entry) => entry.hour >= spanStart(length))
+      const last = Option.fromUndefinedOr(readings.get(readingKey))
+      if (inSpan.some((entry) => entry.unpriced === true) || !(limit.usd > 0)) {
+        if (Option.isSome(last)) changed = true
+        readings.delete(readingKey)
+        continue
+      }
+      const spent = inSpan.reduce((sum, entry) => sum + entry.usd, 0)
+      const rejected = spent >= limit.usd
+      let resetAt = now + length
+      if (rejected) {
+        // The hour whose leaving brings the span back under its limit.
+        let left = spent
+        const freeing = inSpan.find((entry) => {
+          left -= entry.usd
+          return left < limit.usd
+        })
+        if (Predicate.isNotUndefined(freeing))
+          resetAt = (freeing.hour + 1) * PLACEMENT_BUCKET_MS + length
+      }
+      const utilization = spent / limit.usd
+      if (
+        !Option.exists(
+          last,
+          (previous) =>
+            previous.utilization === utilization &&
+            previous.rejected === rejected &&
+            (!rejected || previous.resetAt === resetAt),
+        )
+      )
+        changed = true
+      readings.set(readingKey, {
+        provider,
+        slot,
+        window: limit.window,
+        model,
+        utilization,
+        resetAt,
+        readAt: now,
+        rejected,
+        ...omitUndefined({ signedInAt: meter.value.signedInAt }),
+      })
+    }
+    return changed
+  }
+  /**
+   * The fuel per point of a window a meter reads: exact, as its limit is
+   * a price. None for a window no meter reads.
+   */
+  const meterRate = (provider: string, slot: CredentialSlot, name: WindowName) =>
+    Option.flatMap(Option.fromUndefinedOr(name.model), (model) =>
+      Option.map(
+        Option.fromUndefinedOr(
+          spendMeters
+            .get(placementKey(provider, slot, model))
+            ?.limits.find((limit) => limit.window === name.window),
+        ),
+        (limit) => (limit.usd * 1_000_000) / (100 * FUEL_REFERENCE_USD_PER_MILLION),
+      ),
+    )
+  /**
+   * A request on a model its driver limits by cost: its price adds to the
+   * account's meter of that model in the hour it ended, and the meter's
+   * windows read again. Limits the driver no longer names leave with their
+   * windows. Under the lock.
+   */
+  const meter = (
+    spend: PlacementFuel,
+    slot: CredentialSlot,
+    priced: Option.Option<{ readonly fuel: number; readonly tokens: FuelTokens }>,
+    now: number,
+  ) => {
+    const key = placementKey(spend.provider, slot, spend.model)
+    const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
+    const before = Option.fromUndefinedOr(spendMeters.get(key))
+    for (const limit of Option.match(before, { onNone: () => [], onSome: (found) => found.limits }))
+      if (!spend.limits.some((named) => named.window === limit.window))
+        readings.delete(
+          windowKey(spend.provider, slot, { window: limit.window, model: spend.model }),
+        )
+    const hours: Array<MeterHour> = [
+      ...Option.match(before, { onNone: () => [], onSome: (found) => found.hours }),
+    ]
+    const latest = hours.at(-1)
+    let current: MeterHour = { hour, usd: 0 }
+    if (Predicate.isNotUndefined(latest) && latest.hour === hour) current = hours.pop() ?? current
+    // The fuel is the price over the reference rate: back to dollars.
+    const usd = Option.match(priced, {
+      onNone: () => 0,
+      onSome: (cost) => (cost.fuel * FUEL_REFERENCE_USD_PER_MILLION) / 1_000_000,
+    })
+    let next: MeterHour = { hour, usd: current.usd + usd }
+    if (Option.isSome(priced))
+      next = { ...next, reference: (current.reference ?? 0) + referenceFuel(priced.value.tokens) }
+    if (current.unpriced === true || Option.isNone(priced)) next = { ...next, unpriced: true }
+    hours.push(next)
+    spendMeters.set(key, {
+      provider: spend.provider,
+      slot,
+      model: spend.model,
+      limits: spend.limits,
+      hours,
+      ...omitUndefined({ signedInAt: Option.getOrUndefined(signedInOf(spend.provider, slot)) }),
+    })
+    meterReadings(key, now)
+    version += 1
   }
   /** Drops the readings and segments older than `kept`; whether any went. */
   const trimQuota = (kept: number) => {
@@ -4660,6 +4918,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       segments.set(key, [...(segments.get(key) ?? []), segment])
     }
     for (const burn of stored.burn ?? []) burns.set(burn.provider, burn)
+    for (const burn of stored.modelBurn ?? [])
+      modelBurns.set(placementKey(burn.provider, burn.model), burn)
+    for (const meter of stored.meters ?? [])
+      spendMeters.set(placementKey(meter.provider, meter.slot, meter.model), meter)
   }
   if (Option.isSome(ledger)) {
     const now = yield* Clock.currentTimeMillis
@@ -4712,6 +4974,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                 ),
                 burn: Option.getOrUndefined(
                   Option.liftPredicate([...burns.values()], Arr.isReadonlyArrayNonEmpty),
+                ),
+                modelBurn: Option.getOrUndefined(
+                  Option.liftPredicate([...modelBurns.values()], Arr.isReadonlyArrayNonEmpty),
+                ),
+                meters: Option.getOrUndefined(
+                  Option.liftPredicate([...spendMeters.values()], Arr.isReadonlyArrayNonEmpty),
                 ),
               }),
             },
@@ -4868,7 +5136,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         )
         .map((reading): LaneWindow => {
           const fit = Option.fromUndefinedOr(own.get(windowKey(provider, slot, reading)))
-          const ownRate = Option.flatMap(fit, (found) => found.fuelPerPct)
+          const metered = meterRate(provider, slot, reading)
+          const ownRate = Option.orElse(metered, () =>
+            Option.flatMap(fit, (found) => found.fuelPerPct),
+          )
           const fuelPerPct = Option.orElse(ownRate, () =>
             Option.flatten(Option.fromUndefinedOr(poolRate.get(poolKey(reading)))),
           )
@@ -4880,14 +5151,24 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             horizon = windowLengthMs(reading.window)
             utilization = 0
           }
+          // A model's window bounds that model's runs: they burn at its rate.
+          const runRate = Option.match(Option.fromUndefinedOr(reading.model), {
+            onNone: () => fuelPerHour,
+            onSome: (windowModel) => modelFuelPerHourOf(provider, windowModel),
+          })
           // A rejected window carries no run until it resets, rate or not.
+          // A window a spend limit meters bounds runs by its room: under the
+          // limit it carries one run at least, at the limit none. Its pace
+          // counts from one run up: below one, it would refuse every start
+          // on a small plan while the plan still has room.
           const sustainable = Option.flatMap(horizon, (ms) => {
             if (reading.rejected && !reset) return Option.some(0)
             const remaining = Math.max(0, 1 - utilization) * 100
-            return Option.map(
-              fuelPerPct,
-              (rate) => (remaining * rate * 3_600_000) / (fuelPerHour * ms),
-            )
+            return Option.map(fuelPerPct, (rate) => {
+              const pace = (remaining * rate * 3_600_000) / (runRate * ms)
+              if (Option.isSome(metered)) return Math.max(1, pace)
+              return pace
+            })
           })
           return {
             window: reading.window,
@@ -5271,6 +5552,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }),
     noteFuel: Effect.fn("CredentialPlacement.noteFuel")(function* (spend: PlacementFuel) {
       const priced = fuelOf(spend.costUsd, spend.usage)
+      const now = yield* Clock.currentTimeMillis
       yield* locked(() => {
         // The lane's burn counts what its turn spent, whichever sign-in served it.
         const lane = running.get(spend.sessionId)
@@ -5305,6 +5587,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             }),
           )
         }
+        if (spend.limits.length > 0) meter(spend, slot.value, priced, now)
       })
     }),
     lanes: Effect.fn("CredentialPlacement.lanes")(function* (scopeOf: LaneScopeOf) {

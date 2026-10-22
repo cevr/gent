@@ -40,6 +40,7 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderResolution,
+  type SpendLimit,
 } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
 import {
@@ -5615,6 +5616,7 @@ describe("account lanes", () => {
         spent = usage,
         sessionId = runner,
         model = planModel,
+        limits: ReadonlyArray<SpendLimit> = [],
       ) => {
         const { slot, signedInAt } = receiptOf(account)
         return placement.noteFuel({
@@ -5625,6 +5627,7 @@ describe("account lanes", () => {
           model,
           costUsd,
           usage: spent,
+          limits,
         })
       }
       const lanes = (scope: Scope) =>
@@ -6106,6 +6109,7 @@ describe("account lanes", () => {
             model: ModelId.make(`${provider}/model`),
             costUsd: Option.some(100),
             usage,
+            limits: [],
           })
           yield* note(0.01)
         }
@@ -6206,6 +6210,7 @@ describe("account lanes", () => {
                 model: planModel,
                 costUsd: Option.some(costUsd),
                 usage,
+                limits: [],
               })
             yield* quota(0.1)
             // A file with no burn reads the prior.
@@ -6519,6 +6524,178 @@ describe("account lanes", () => {
         expect(fiveHourRate(report)).toBeCloseTo(200_000, 3)
         expect(fiveHourRate(report, glm)).toBeCloseTo(100_000, 3)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /** The windows of `a` as a test reads them: name, model, utilization, rejected. */
+  const windowsOfA = (report: ProviderLanes) =>
+    (report.accounts.find((account) => account.slot === a)?.windows ?? []).map((window) => [
+      window.window,
+      window.model,
+      window.utilization,
+      window.rejected,
+    ])
+
+  it.effect(
+    "a model its plan limits by cost reads the account's spend on it as its windows, at the limit's own rate",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const limits = [
+          { window: "5h", usd: 2 },
+          { window: "7d", usd: 5 },
+          { window: "31d", usd: 10 },
+        ]
+        yield* fixture.spend(a, Option.some(1), usage, runner, glm, limits)
+        // Another model's spend never moves them.
+        yield* fixture.spend(a, Option.some(1))
+        const report = yield* fixture.lanes([a])
+        expect(windowsOfA(report)).toEqual([
+          ["5h", glm, 0.5, false],
+          ["7d", glm, 0.2, false],
+          ["31d", glm, 0.1, false],
+        ])
+        // $2 over 100 points, at $5 per million fuel: 4,000 fuel per point.
+        expect(fiveHourRate(report, glm)).toBeCloseTo(4_000, 6)
+        // No window of the account's own: its lanes stay unknown, and its starts admit.
+        expect(report.capacity).toBeUndefined()
+        expect(yield* fixture.admit([a], "plan-start")).toBe("admitted")
+        expect(yield* fixture.admit([a], "glm-start", glm)).toBe("admitted")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a model spent to its limit refuses its starts on the account until its oldest spend leaves the window",
+    () =>
+      Effect.gen(function* () {
+        const { spend, admit, place, windowOf } = yield* accounts()
+        const limits = [{ window: "5h", usd: 2 }]
+        yield* TestClock.adjust("1 hour")
+        yield* spend(a, Option.some(1.5), usage, runner, glm, limits)
+        yield* TestClock.adjust("2 hours")
+        // Past the limit: what the plan bills as extra usage is never quota.
+        yield* spend(a, Option.some(1), usage, runner, glm, limits)
+        expect(yield* admit([a], "glm-start", glm)).toBe("Spent")
+        expect(yield* admit([a], "plan-start")).toBe("admitted")
+        expect(yield* place("glm-run", glm)).toEqual([b, a])
+        // The first hour's $1.50 leaves the window at 2h + 5h, never 5h after now;
+        // the $1 left is under the limit.
+        const window = yield* windowOf([a], a, "5h")
+        expect([window.utilization, window.rejected, window.resetAt]).toEqual([
+          1.25,
+          true,
+          7 * HOUR,
+        ])
+        yield* TestClock.adjust("3 hours")
+        expect(yield* admit([a], "glm-start-6h", glm)).toBe("Spent")
+        yield* TestClock.adjust("1 hour")
+        expect(yield* admit([a], "glm-start-7h", glm)).toBe("admitted")
+        expect((yield* windowOf([a], a, "5h")).utilization).toBe(0.5)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a restart keeps a model's metered spend until it leaves its longest window", () =>
+    Effect.gen(function* () {
+      const { file, store } = yield* ledgerRef
+      yield* TestClock.adjust("1 hour")
+      const before = yield* accounts(store)
+      yield* before.spend(a, Option.some(2), usage, runner, glm, [{ window: "5h", usd: 2 }])
+      yield* before.placement.flush
+      expect((yield* Ref.get(file)).meters?.length).toBe(1)
+      const after = yield* accounts(store)
+      expect(yield* after.admit([a], "glm-start", glm)).toBe("Spent")
+      yield* TestClock.adjust("6 hours")
+      expect(yield* after.admit([a], "glm-later", glm)).toBe("admitted")
+      yield* after.placement.flush
+      const saved = yield* Ref.get(file)
+      expect(saved.meters).toBeUndefined()
+      expect(saved.readings).toBeUndefined()
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "an unpriced request on a metered model leaves each window it falls in unread until it leaves",
+    () =>
+      Effect.gen(function* () {
+        const { spend, lanes, placement } = yield* accounts()
+        const limits = [
+          { window: "5h", usd: 2 },
+          { window: "7d", usd: 5 },
+        ]
+        yield* TestClock.adjust("1 hour")
+        yield* spend(a, Option.some(1), usage, runner, glm, limits)
+        yield* TestClock.adjust("1 hour")
+        yield* spend(a, Option.none(), usage, runner, glm, limits)
+        // Unknown spend is never zero: neither window reads.
+        expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+        // Six hours on, the unpriced hour has left the 5h window alone.
+        yield* TestClock.adjust("6 hours")
+        expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 0, false]])
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a run of a metered model burns at that model's price: the prior at its price, then its own lanes' measured burn",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        const before = yield* accounts(store)
+        yield* TestClock.adjust("1 hour")
+        const limits = [{ window: "5h", usd: 100 }]
+        // $1 on a million input tokens: a fifth of the reference price.
+        const million = Option.some({ inputTokens: 1_000_000, outputTokens: 0 })
+        const glmRun = SessionId.make("glm-run")
+        yield* before.placement.openLane({
+          sessionId: glmRun,
+          key: "glm-run",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: glm,
+        })
+        yield* before.spend(a, Option.some(1), million, glmRun, glm, limits)
+        // 99 points at 200,000 fuel each, over 5 hours of runs at a fifth of 3.4 M.
+        const fiveHour = (report: ProviderLanes) =>
+          report.accounts[0]?.windows.find((window) => window.window === "5h")?.sustainable
+        expect(fiveHour(yield* before.lanes([a]))).toBeCloseTo((99 * 200_000) / (680_000 * 5), 6)
+        // Two lane-hours on that $1: 100,000 fuel a lane-hour, the model's own.
+        yield* TestClock.adjust("2 hours")
+        yield* before.placement.release(glmRun)
+        const measured = (99 * 200_000) / (100_000 * 5)
+        expect(fiveHour(yield* before.lanes([a]))).toBeCloseTo(measured, 6)
+        // Another model's lane moves the provider's burn, never the model's.
+        const planRun = SessionId.make("plan-run")
+        yield* before.placement.openLane({
+          sessionId: planRun,
+          key: "plan-run",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: planModel,
+        })
+        yield* before.spend(a, Option.some(10), usage, planRun)
+        yield* TestClock.adjust("1 hour")
+        yield* before.placement.release(planRun)
+        expect((yield* before.lanes([a])).fuelPerHour).toBeGreaterThan(100_000)
+        expect(fiveHour(yield* before.lanes([a]))).toBeCloseTo(measured, 6)
+        yield* before.placement.flush
+        expect((yield* Ref.get(file)).modelBurn?.length).toBe(1)
+        const after = yield* accounts(store)
+        expect(fiveHour(yield* after.lanes([a]))).toBeCloseTo(measured, 6)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a new sign-in on the label starts with no metered spend", () =>
+    Effect.gen(function* () {
+      const { spend, admit, windowOf } = yield* accounts()
+      const limits = [{ window: "5h", usd: 2 }]
+      yield* TestClock.adjust("1 hour")
+      yield* spend({ slot: a, signedInAt: 1 }, Option.some(2), usage, runner, glm, limits)
+      expect(yield* admit([{ slot: a, signedInAt: 1 }], "glm-start", glm)).toBe("Spent")
+      const signedIn = { slot: a, signedInAt: 2 }
+      expect(yield* admit([signedIn], "glm-new", glm)).toBe("admitted")
+      // The new sign-in's spend counts alone: the old one's $2 is not its quota.
+      yield* spend(signedIn, Option.some(0.5), usage, runner, glm, limits)
+      expect((yield* windowOf([signedIn], a, "5h")).utilization).toBe(0.25)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect("values the window no longer holds leave the ledger file on the next write", () =>

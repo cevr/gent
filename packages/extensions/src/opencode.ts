@@ -1,4 +1,4 @@
-import { Crypto, Effect, Option, Schema } from "effect"
+import { Crypto, Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import {
   AuthMethod,
@@ -8,6 +8,8 @@ import {
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
+  omitUndefined,
+  type SpendLimit,
 } from "@gent/core/extensions/api"
 import { typeSafeDecisionModel } from "./typesafe.js"
 import {
@@ -17,8 +19,9 @@ import {
   ResponsesTransientStreamEvent,
 } from "./providers.js"
 
-// Test seam: only tests read OPENCODE_GATEWAYS and buildOpenCodeModelDriver,
-// which let a test run one gateway's driver against a fake fetch.
+// Test seam: only tests read OPENCODE_GATEWAYS, buildOpenCodeModelDriver and
+// openCodeModelDrivers, which let a test run one gateway's driver against a
+// fake fetch and read the drivers setup registers.
 
 /**
  * OpenCode's model gateways: Zen (pay as you go) and Go (a subscription; Go
@@ -80,6 +83,70 @@ export const OPENCODE_GATEWAYS = {
 /** models.dev names this variable for both gateways. */
 const ENV_CREDENTIAL = "OPENCODE_API_KEY"
 
+// ── Go usage limits ─────────────────────────────────────────────────────────
+
+/**
+ * Go limits each model by what its requests cost at the listed token prices
+ * (models.dev lists the same prices): in any 5 hours 20% of the model's
+ * monthly dollars, in a week 50%, in a month 100%. Spend past a limit is
+ * billed as extra usage when the account turns that on, and is never quota.
+ * A model the table does not name (the free ones) has no limit.
+ *
+ * `OPENCODE_GO_PLAN=plus` reads the Go Plus column; any other value, or none,
+ * reads Go, the stricter. Gemini 4 Argon's doubled limit is for a limited
+ * time, so the table keeps its base limit. Docs:
+ * opencode.ai/v2/docs/console/go/#usage-limits (read 2026-10-22).
+ */
+const ENV_GO_PLAN = "OPENCODE_GO_PLAN"
+
+/** Model name → its monthly limit in dollars on Go and on Go Plus. */
+const GO_MONTHLY_USD = new Map<string, readonly [go: number, plus: number]>([
+  ["glm-5.3-flash", [60, 180]],
+  ["glm-5.3", [15, 120]],
+  ["glm-5.2", [60, 180]],
+  ["kimi-k3", [15, 60]],
+  ["kimi-k2.7-code", [60, 180]],
+  ["longcat-2.0", [60, 240]],
+  ["step-5-preview", [15, 60]],
+  ["mimo-v2.6-flash", [60, 120]],
+  ["mimo-v2.6-pro", [15, 60]],
+  ["mimo-v2.5", [60, 120]],
+  ["mimo-v2.5-pro", [15, 60]],
+  ["minimax-m3", [60, 180]],
+  ["muse-spark-1.3-contributor", [60, 120]],
+  ["muse-spark-1.2-contributor", [60, 120]],
+  ["qwen3.8-max", [15, 60]],
+  ["qwen3.8-flash", [30, 90]],
+  ["qwen3.7-plus", [60, 180]],
+  ["deepseek-v4.1-flash", [80, 160]],
+  ["deepseek-v4-pro", [15, 60]],
+  ["hy4-preview", [30, 120]],
+  ["hy3", [60, 240]],
+  ["grok-4.7", [15, 60]],
+  ["gpt-6-luna", [15, 60]],
+  ["gpt-5.6-luna", [15, 60]],
+  ["claude-haiku-5-5", [15, 60]],
+  ["gemini-4-argon-contributor", [30, 120]],
+])
+
+/** Each window's share of the monthly limit. */
+const GO_WINDOW_SHARES = [
+  ["5h", 0.2],
+  ["7d", 0.5],
+  ["31d", 1],
+] as const
+
+/** The spend windows a Go plan sets on each model: Go Plus when `plan` is `plus`. */
+const goSpendLimits =
+  (plan: Option.Option<string>) =>
+  (modelName: string): ReadonlyArray<SpendLimit> => {
+    const monthly = GO_MONTHLY_USD.get(modelName)
+    if (Predicate.isUndefined(monthly)) return []
+    let usd = monthly[0]
+    if (Option.contains(plan, "plus")) usd = monthly[1]
+    return GO_WINDOW_SHARES.map(([window, share]) => ({ window, usd: usd * share }))
+  }
+
 // ── headers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -133,6 +200,7 @@ export const buildOpenCodeModelDriver = (
   gateway: Gateway,
   envApiKey: Option.Option<string>,
   crypto: Crypto.Crypto,
+  spendLimits?: ModelDriverContribution["spendLimits"],
 ): ModelDriverContribution => ({
   id: gateway.id,
   name: gateway.signInName,
@@ -140,6 +208,7 @@ export const buildOpenCodeModelDriver = (
     onNone: () => ({}),
     onSome: (credentialFrom) => ({ credentialFrom }),
   }),
+  ...omitUndefined({ spendLimits }),
   envCredential: ENV_CREDENTIAL,
   retry: {
     ...DEFAULT_RETRY_POLICY,
@@ -185,18 +254,23 @@ export const buildOpenCodeModelDriver = (
     }),
 })
 
+/** The Zen and Go drivers, from `OPENCODE_API_KEY` and `OPENCODE_GO_PLAN` as setup reads them. */
+export const openCodeModelDrivers = Effect.gen(function* () {
+  const envApiKey = yield* readOptionalEnv(ENV_CREDENTIAL)
+  const goPlan = yield* readOptionalEnv(ENV_GO_PLAN)
+  // The host's Crypto, not one of the driver's own: a shipped provider is
+  // never more privileged than a user extension.
+  const crypto = yield* Crypto.Crypto
+  return [
+    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto),
+    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto, goSpendLimits(goPlan)),
+  ] as const
+})
+
 export const OpenCodeExtension = defineExtension({
   id: "@gent/provider-opencode",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    const envApiKey = yield* readOptionalEnv(ENV_CREDENTIAL)
-    // The host's Crypto, not one of the driver's own: a shipped provider is
-    // never more privileged than a user extension.
-    const crypto = yield* Crypto.Crypto
-    yield* host.register(
-      "modelDriver",
-      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto),
-      buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto),
-    )
+    yield* host.register("modelDriver", ...(yield* openCodeModelDrivers))
   }),
 })
