@@ -2386,51 +2386,116 @@ describe("a failed round-end delivery", () => {
 
 // ── thread guidance ─────────────────────────────────────────────────────────
 
+type ModelOptions = Parameters<ModelStep>[0]
+
+/** 200 host tools in one namespace, as a large MCP server adds them. */
+const bulkToolsFixture = {
+  ...defineExtension({
+    id: "bulk-tools-fixture",
+    setup: Effect.gen(function* () {
+      const host = yield* ExtensionHost
+      for (let index = 0; index < 200; index += 1)
+        yield* host.register(
+          "tool",
+          tool({
+            id: `bulk.op-${index}`,
+            description: `Read record ${index} of the bulk store and return its fields`,
+            params: Schema.Struct({
+              record: Schema.String,
+              fields: Schema.optional(Schema.Array(Schema.String)),
+            }),
+            output: Schema.String,
+            execute: () => Effect.succeed("ok"),
+          }),
+        )
+    }),
+  }),
+  artifactIdentity: LoadedArtifactIdentity.make("bulk-tools-fixture-source"),
+}
+
+/** What a request sends: every message's text and each declared tool's name, description and schema. */
+const requestChars = (options: ModelOptions): number => {
+  const messages = options.prompt.content.reduce((sum, message) => {
+    if (message.role === "system") return sum + message.content.length
+    return (
+      sum +
+      message.content.reduce((total, part) => {
+        if (part.type !== "text") return total + encodeJson(part).length
+        return total + part.text.length
+      }, 0)
+    )
+  }, 0)
+  const declarations = options.tools.reduce(
+    (sum, declared) =>
+      sum +
+      declared.name.length +
+      (AiTool.getDescription(declared) ?? "").length +
+      encodeJson(AiTool.getJsonSchema(declared)).length,
+    0,
+  )
+  return messages + declarations
+}
+
 /**
- * The shipped composition: a cell turn, project instructions in the cwd. The
- * starter starts, from the cell, one delegate thread that denies
- * `deniedTool`. Returns the system blocks of each starter and thread request,
- * once the thread sent its first.
+ * The shipped composition: a cell turn, project instructions in the cwd, and
+ * any `fixtures` beside the shipped extensions. The starter starts, from the
+ * cell, one delegate thread with the tool patterns `tools`. Returns each
+ * starter and thread request, once the thread sent its first.
  */
-const systemBlocksWithThreadDenying = (deniedTool: string) =>
+const shippedThreadRequests = (
+  tools: ReadonlyArray<string>,
+  fixtures: ReadonlyArray<(typeof shippedPreset.extensionInputs)[number]> = [],
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const home = yield* makeTempDirectoryScoped("threads-shared-home-")
     const cwd = yield* makeTempDirectoryScoped("threads-shared-cwd-")
     yield* fs.writeFileString(`${cwd}/AGENTS.md`, "PROJECT-RULE: every agent reads this.")
-    const parentBlocks: Array<ReadonlyArray<string>> = []
-    const childBlocks: Array<ReadonlyArray<string>> = []
-    let parentCalls = 0
+    const parent: Array<ModelOptions> = []
+    const child: Array<ModelOptions> = []
     const providerLayer = LanguageModelLayers.testStream((options) => {
-      const blocks = turnRequestText(options.prompt).systemBlocks
       if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
-        childBlocks.push(blocks)
+        child.push(options)
         return Effect.succeed(reply("pong"))
       }
-      parentBlocks.push(blocks)
-      parentCalls += 1
-      if (parentCalls === 1) {
-        const input = `{ task: "${childTask}", agent: "delegate", notify: "starter", tools: ["*", "!${deniedTool}"] }`
+      parent.push(options)
+      if (parent.length === 1) {
+        const input = `{ task: "${childTask}", agent: "delegate", notify: "starter", tools: ${encodeJson(tools)} }`
         const code = `await tools.thread.start(${input})`
         return Effect.succeed(toolStep("cell", { code }, "cell-start-1"))
       }
-      if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+      if (parent.length === 2) return Effect.succeed(reply("started, ending my turn"))
       return Effect.succeed(reply("read it"))
     })
-    const harness = yield* createRpcHarness({ ...shippedPreset, providerLayer, cwd, home })
+    const harness = yield* createRpcHarness({
+      ...shippedPreset,
+      extensionInputs: [...shippedPreset.extensionInputs, ...fixtures],
+      providerLayer,
+      cwd,
+      home,
+    })
     yield* harness.client.message.send({
       sessionId: harness.sessionId,
       branchId: harness.branchId,
       content: "delegate the ping",
     })
     yield* waitFor(
-      Effect.sync(() => childBlocks.length),
+      Effect.sync(() => child.length),
       (count) => count > 0,
       8_000,
       "the thread sent its first request",
     )
-    return { parentBlocks, childBlocks }
+    return { parent, child }
   }).pipe(Effect.provide(BunServices.layer))
+
+/** The system blocks of each starter and thread request, for a thread that denies `deniedTool`. */
+const systemBlocksWithThreadDenying = (deniedTool: string) =>
+  shippedThreadRequests(["*", `!${deniedTool}`]).pipe(
+    Effect.map(({ parent, child }) => ({
+      parentBlocks: parent.map((options) => turnRequestText(options.prompt).systemBlocks),
+      childBlocks: child.map((options) => turnRequestText(options.prompt).systemBlocks),
+    })),
+  )
 
 describe("thread guidance", () => {
   test("a starter round's text names its final text as the result and keeps session.send for later turns", () => {
@@ -2579,6 +2644,28 @@ describe("thread guidance", () => {
           expect(childOwn).toContain("## Available Tools")
           // Every later step of the starter sends the same shared block.
           for (const blocks of parentBlocks) expect(blocks[0]).toBe(parentShared)
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+
+  // A worker's start context is what every one of its calls carries. Gent's
+  // own part of it (no skills, a one-line project file) measured 16,156
+  // characters with these tools on 2026-10-22, about 4,000 tokens; a Claude
+  // Code subagent with every tool starts near 89k tokens, a lean one near 32k.
+  it.live(
+    "a thread with 200 more host tools starts with the cell alone and names them in one catalog line, its first request under 24,000 characters",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { child } = yield* shippedThreadRequests(["*"], [bulkToolsFixture])
+          const first = child[0]
+          if (Predicate.isUndefined(first)) return yield* Effect.die("no thread request")
+          expect(first.tools.map((declared) => declared.name)).toEqual(["cell"])
+          expect(requestChars(first)).toBeLessThan(24_000)
+          const system = systemTextOf(first.prompt)
+          expect(system).toContain("- tools.bulk.*: 200 tools (")
+          expect(system).not.toContain("tools.bulk.op-0(")
         }).pipe(Effect.timeout("14 seconds")),
       ),
     16_000,

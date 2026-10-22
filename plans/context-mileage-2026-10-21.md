@@ -57,6 +57,16 @@ finished unit. The baseline is the table above.
 2. **Lean start.** A subagent starts with the tools its role names. Every other
    tool and every MCP server is deferred (named, schema on demand). Accept:
    the start context of a worker is under 35k tokens (F4).
+   Met before this plan, by the cell (2026-10-22, measured): a thread declares
+   only `cell`, and its host tools and MCP servers reach it as one catalog of
+   at most 8,000 characters, with schemas on demand through `tools(id)`. Real
+   first calls in the owner's data.db (2026-09-15 to 09-23): children 7.4k
+   (GPT-5.6 Luna) to 12.6k (Sonnet 5) input tokens, roots 7.5k to 17.5k. In
+   the gent repo with the owner's skills directory a thread's first request is
+   29,382 characters. A guard in `delegated-threads.test.ts` keeps a thread
+   with 200 more host tools on `cell` alone and under 24,000 characters
+   (16,156 measured); with the catalog cap lifted it reads 44,806 and fails.
+   The rest is the user's: skills and project files are not capped.
 3. **Bounded results by default.** A tool result over 8k chars is stored
    whole. The model gets a head and tail preview plus its `context.read` id.
    Accept: results over 8k chars hold under 3% of W (F6). The re-reads that
