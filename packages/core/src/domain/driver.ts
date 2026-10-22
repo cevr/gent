@@ -720,6 +720,21 @@ export const LaneAccount = Schema.Struct({
   sustainable: Schema.optionalKey(Schema.Finite),
 })
 
+/**
+ * One model's quota weight on a provider: the points one fuel of it moves,
+ * over what its account window's rate says one fuel of the provider's mix
+ * moves. A window's cost of the model is its `fuelPerPct / weight`.
+ */
+export const LaneModel = Schema.Struct({
+  model: ModelId,
+  /** 1 until fitted: the model costs its list price. */
+  weight: Schema.Finite,
+  /** Whether the weight was fitted: its segments span a day, and the fit solved. */
+  fitted: Schema.Boolean,
+  /** The hours between the first and the last segment its fuel fell in. */
+  spanHours: Schema.Finite,
+})
+
 /** One provider's lanes. */
 export const ProviderLanes = Schema.Struct({
   provider: Schema.String,
@@ -745,6 +760,8 @@ export const ProviderLanes = Schema.Struct({
   fuelPerHour: Schema.Finite,
   /** The lane-hours `fuelPerHour` was measured over; under 1 it is the prior. */
   laneHours: Schema.Finite,
+  /** Each model whose fuel fell in a kept segment of an account window, with its quota weight. */
+  models: Schema.Array(LaneModel),
 })
 
 /** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */
@@ -752,6 +769,7 @@ export const LaneReport = Schema.Struct({ providers: Schema.Array(ProviderLanes)
 export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type
 export type LaneWindow = typeof LaneWindow.Type
+export type LaneModel = typeof LaneModel.Type
 export type ProviderLanes = typeof ProviderLanes.Type
 
 /**

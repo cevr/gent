@@ -63,6 +63,7 @@ import {
   limitResetAt,
   listCatalogProviders,
   makeCredentialPlacement,
+  placementLedgerFile,
   makeExtensionModels,
   rankPlacement,
   requestCredentialOrder,
@@ -6716,6 +6717,98 @@ describe("account lanes", () => {
         const after = yield* accounts(store)
         expect(fiveHour(yield* after.lanes([a]))).toBeCloseTo(measured, 6)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /**
+   * `hours` of runs on a's 7d window, read every 10 minutes in whole percent:
+   * Opus alone for four hours, Haiku alone the next four, both the four after.
+   * A 1% step of the week spans over two hours, so a shorter stretch of one
+   * mix leaves every segment the same mix, and no fit can tell the models
+   * apart. The plan counts
+   * one Haiku fuel at twice what its list price says, and an account week is
+   * 930 M fuel of Opus (context-mileage B4). The ledger is saved to `file`.
+   */
+  const opus = ModelId.make("plan/opus")
+  const haiku = ModelId.make("plan/haiku")
+  const weekOfOpus = 930_000_000
+  const mixedWeek = (hours: number, ledger: Parameters<typeof accounts>[0] = Option.none()) =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts(ledger)
+      const start = yield* Clock.currentTimeMillis
+      const resetAt = start + 200 * HOUR
+      // About 70 points over a week: 0.07 a step at Opus's rate.
+      const stepFuel = (0.07 / 100) * weekOfOpus
+      let points = 0
+      yield* fixture.read(a, [{ window: "7d", utilization: 0, resetAt }])
+      for (let step = 0; step < hours * 6; step += 1) {
+        yield* TestClock.adjust("10 minutes")
+        const phase = Math.floor(step / 24) % 3
+        let opusFuel = 0
+        let haikuFuel = 0
+        if (phase === 0) opusFuel = stepFuel
+        if (phase === 1) haikuFuel = stepFuel / 2
+        if (phase === 2) {
+          opusFuel = stepFuel / 2
+          haikuFuel = stepFuel / 4
+        }
+        // $1 of list price is 200,000 fuel.
+        if (opusFuel > 0)
+          yield* fixture.spend(a, Option.some(opusFuel / 200_000), usage, runner, opus)
+        if (haikuFuel > 0)
+          yield* fixture.spend(a, Option.some(haikuFuel / 200_000), usage, runner, haiku)
+        points += ((opusFuel + 2 * haikuFuel) / weekOfOpus) * 100
+        yield* fixture.read(a, [
+          { window: "7d", utilization: Math.floor(points + 1e-9) / 100, resetAt },
+        ])
+      }
+      return fixture
+    })
+  /** A model's weight on `plan`, as `accounts.lanes` reports it. */
+  const weightOf = (report: ProviderLanes, model: ModelId) =>
+    report.models.find((found) => found.model === model)
+
+  it.effect(
+    "a model's quota weight is fitted over a week, so an account week costs what each model burns",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* mixedWeek(7 * 24)
+        const report = yield* fixture.lanes([a])
+        const week = yield* fixture.windowOf([a], a, "7d")
+        const rate = week.fuelPerPct ?? Number.NaN
+        const opusWeight = weightOf(report, opus)
+        const haikuWeight = weightOf(report, haiku)
+        expect(opusWeight?.fitted).toBe(true)
+        expect(haikuWeight?.fitted).toBe(true)
+        // One account week of Opus: within 10% of B4's 930 M; Haiku's twice as dear per fuel.
+        const opusWeek = (100 * rate) / (opusWeight?.weight ?? Number.NaN)
+        const haikuWeek = (100 * rate) / (haikuWeight?.weight ?? Number.NaN)
+        expect(Math.abs(opusWeek / weekOfOpus - 1)).toBeLessThan(0.1)
+        expect(Math.abs(haikuWeek / (weekOfOpus / 2) - 1)).toBeLessThan(0.1)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a restart reads each segment's fuel by model, so the weights hold", () =>
+    Effect.gen(function* () {
+      // The ledger is a real file, so each segment's fuel by model passes its schema.
+      const home = yield* makeTempDirectoryScoped("gent-lanes-models-")
+      const store = Option.some(yield* placementLedgerFile(`${home}/credential-usage.json`))
+      const before = yield* mixedWeek(2 * 24, store)
+      yield* before.placement.flush
+      const weights = (yield* before.lanes([a])).models
+      expect(weights.every((found) => found.fitted && found.weight !== 1)).toBe(true)
+      const after = yield* accounts(store)
+      expect((yield* after.lanes([a])).models).toEqual(weights)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a model's quota weight stays at its list price until its segments span a day", () =>
+    Effect.gen(function* () {
+      const fixture = yield* mixedWeek(12)
+      const report = yield* fixture.lanes([a])
+      expect(weightOf(report, opus)).toMatchObject({ weight: 1, fitted: false })
+      expect(weightOf(report, haiku)).toMatchObject({ weight: 1, fitted: false })
+      expect(weightOf(report, haiku)?.spanHours).toBeGreaterThan(6)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect("a new sign-in on the label starts with no metered spend", () =>

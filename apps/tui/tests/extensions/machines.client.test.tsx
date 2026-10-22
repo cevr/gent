@@ -75,6 +75,7 @@ const measured: LaneReport = {
       load: 2,
       fuelPerHour: 3_400_000,
       laneHours: 2,
+      models: [],
     },
   ],
 }
@@ -104,6 +105,7 @@ const spent: LaneReport = {
       load: 0,
       fuelPerHour: 3_400_000,
       laneHours: 0,
+      models: [],
     },
   ],
 }
@@ -118,6 +120,7 @@ const unrated: LaneReport = {
       load: 1,
       fuelPerHour: 3_400_000,
       laneHours: 0,
+      models: [],
     },
   ],
 }
@@ -190,6 +193,7 @@ describe("the lanes band rows", () => {
           scope: [DEFAULT],
           fuelPerHour: 3_400_000,
           laneHours: 0,
+          models: [],
           accounts: [
             {
               slot: DEFAULT,

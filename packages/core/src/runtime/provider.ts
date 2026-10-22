@@ -78,6 +78,7 @@ import {
   type ProviderHints,
   type ProviderResolution,
   type LaneAccount,
+  type LaneModel,
   type LaneReport,
   LaneUnavailable,
   type LaneWindow,
@@ -3577,6 +3578,19 @@ const QUOTA_HALF_LIFE_ACTIVE_HOURS = 24
  */
 const QUOTA_OUTSIDE_POINTS = 3
 /**
+ * The hours a model's segments must span before its quota weight leaves its
+ * list price: whole-percent readings of a short stretch are too coarse to
+ * weigh one model against another (context-mileage B4).
+ */
+const MODEL_WEIGHT_MIN_SPAN_HOURS = 24
+/**
+ * The points of list-price spend each model's weight starts from: the fit
+ * reads it as if it had seen one 1% step of the model alone at its list price.
+ */
+const MODEL_WEIGHT_PRIOR_POINTS = 1
+/** A model's quota weight stays within this factor of its list price either way. */
+const MODEL_WEIGHT_BOUND = 8
+/**
  * How long an admitted start holds its lane before its turn opens. Its turn
  * opening, a turn it joins, or its caller's refusal frees it first; past it,
  * a start whose send was lost frees the lane. A guess.
@@ -3970,6 +3984,8 @@ const FuelSegment = Schema.Struct({
   fuel: Schema.Finite,
   deltaPct: Schema.Finite,
   tokens: FuelTokens,
+  /** The fuel by the model each request of it ran (`PlacementFuel.model`); absent on an older ledger. */
+  models: Schema.optionalKey(Schema.Array(Schema.Struct({ model: ModelId, fuel: Schema.Finite }))),
 })
 type FuelSegment = typeof FuelSegment.Type
 
@@ -4184,17 +4200,172 @@ interface WindowFit {
  * 24 active hours (hours with a segment) after it; none with no points.
  */
 const weightedRate = (segments: ReadonlyArray<FuelSegment>): Option.Option<number> => {
-  const hourOf = (segment: FuelSegment) => Math.floor(segment.endedAt / 3_600_000)
-  const hours = [...new Set(segments.map(hourOf))].sort((left, right) => right - left)
+  const weightOf = activeHourWeights(segments)
   let fuel = 0
   let points = 0
   for (const segment of segments) {
-    const after = hours.findIndex((hour) => hour <= hourOf(segment))
-    const weight = 0.5 ** (Math.max(0, after) / QUOTA_HALF_LIFE_ACTIVE_HOURS)
-    fuel += weight * segment.fuel
-    points += weight * segment.deltaPct
+    fuel += weightOf(segment) * segment.fuel
+    points += weightOf(segment) * segment.deltaPct
   }
   return Option.liftPredicate(fuel / points, (rate) => points > 0 && Number.isFinite(rate))
+}
+
+/** Each segment's weight: half for every 24 active hours (hours with a segment) after it. */
+const activeHourWeights = (segments: ReadonlyArray<FuelSegment>) => {
+  const hourOf = (segment: FuelSegment) => Math.floor(segment.endedAt / 3_600_000)
+  const hours = [...new Set(segments.map(hourOf))].sort((left, right) => right - left)
+  return (segment: FuelSegment) => {
+    const after = hours.findIndex((hour) => hour <= hourOf(segment))
+    return 0.5 ** (Math.max(0, after) / QUOTA_HALF_LIFE_ACTIVE_HOURS)
+  }
+}
+
+/** The row at or below `column` with the largest entry in it. */
+const pivotOf = (rows: ReadonlyArray<ReadonlyArray<number>>, column: number) => {
+  let pivot = column
+  for (let row = column + 1; row < rows.length; row += 1)
+    if (Math.abs(rows[row]?.[column] ?? 0) > Math.abs(rows[pivot]?.[column] ?? 0)) pivot = row
+  return pivot
+}
+
+/** Reduces `rows` (each a matrix row with its vector entry last) to upper triangular, in place; false when singular. */
+const eliminate = (rows: Array<Array<number>>): boolean => {
+  const size = rows.length
+  for (let column = 0; column < size; column += 1) {
+    const pivot = pivotOf(rows, column)
+    const top = rows[pivot]
+    const current = rows[column]
+    if (Predicate.isUndefined(top) || Predicate.isUndefined(current)) return false
+    if (!(Math.abs(top[column] ?? 0) > 1e-12)) return false
+    rows[pivot] = current
+    rows[column] = top
+    for (const below of rows.slice(column + 1)) {
+      const factor = (below[column] ?? 0) / (top[column] ?? 1)
+      for (let entry = column; entry <= size; entry += 1)
+        below[entry] = (below[entry] ?? 0) - factor * (top[entry] ?? 0)
+    }
+  }
+  return true
+}
+
+/** The solution of `matrix × x = vector`, by elimination with partial pivoting; none when singular. */
+const solveLinear = (
+  matrix: ReadonlyArray<ReadonlyArray<number>>,
+  vector: ReadonlyArray<number>,
+): Option.Option<ReadonlyArray<number>> => {
+  const rows = matrix.map((row, index) => [...row, vector[index] ?? 0])
+  if (!eliminate(rows)) return Option.none()
+  const size = rows.length
+  const solution = Array.from({ length: size }, () => 0)
+  for (let row = size - 1; row >= 0; row -= 1) {
+    const current = rows[row] ?? []
+    let rest = current[size] ?? 0
+    for (let entry = row + 1; entry < size; entry += 1)
+      rest -= (current[entry] ?? 0) * (solution[entry] ?? 0)
+    solution[row] = rest / (current[row] ?? 1)
+  }
+  return Option.liftPredicate(solution, (found) => found.every(Number.isFinite))
+}
+
+/** One kept segment as the model fit reads it: its move at its window's rate (`y`) and its fuel by model. */
+interface ModelFitRow {
+  readonly endedAt: number
+  readonly deltaPct: number
+  readonly y: number
+  readonly models: ReadonlyArray<{ readonly model: ModelId; readonly fuel: number }>
+}
+
+/** The hours from each model's first segment to its last. */
+const modelSpanHours = (rows: ReadonlyArray<ModelFitRow>): ReadonlyMap<ModelId, number> => {
+  const spans = new Map<ModelId, { readonly first: number; readonly last: number }>()
+  for (const { endedAt, models } of rows)
+    for (const { model } of models.filter(({ fuel }) => fuel > 0)) {
+      const known = spans.get(model)
+      spans.set(model, {
+        first: Math.min(known?.first ?? endedAt, endedAt),
+        last: Math.max(known?.last ?? endedAt, endedAt),
+      })
+    }
+  return new Map([...spans].map(([model, span]) => [model, (span.last - span.first) / 3_600_000]))
+}
+
+/**
+ * Adds one segment to the normal equations. A model that keeps its list
+ * price explains its part of the move at weight 1.
+ */
+const addFitRow = (
+  equations: { readonly matrix: Array<Array<number>>; readonly vector: Array<number> },
+  index: ReadonlyMap<ModelId, number>,
+  { models, y }: ModelFitRow,
+) => {
+  const scale = 1 / y
+  let rest = y
+  for (const { model, fuel } of models) if (!index.has(model)) rest -= fuel
+  const fitted = models.flatMap(({ model, fuel }) =>
+    Option.toArray(Option.map(Option.fromUndefinedOr(index.get(model)), (at) => ({ at, fuel }))),
+  )
+  for (const left of fitted) {
+    equations.vector[left.at] = (equations.vector[left.at] ?? 0) + scale * left.fuel * rest
+    const line = equations.matrix[left.at] ?? []
+    for (const right of fitted)
+      line[right.at] = (line[right.at] ?? 0) + scale * left.fuel * right.fuel
+  }
+}
+
+/**
+ * Fits each model's quota weight on one provider from its account windows'
+ * kept segments: the points one fuel of the model moves, over what its
+ * window's rate says one fuel of the mix moves. A segment's move, at its
+ * window's rate, is fuel of the mix (`y`); its fuel by model (`x`) explains it
+ * as `Σ weight × x`. The weights solve that by least squares, each segment
+ * weighted by 1 over its `y` (a move's error grows with its size), with each
+ * model starting from weight 1 as if the fit had seen one 1% step of it alone
+ * at its list price. Every kept segment counts alike, unlike a window's rate:
+ * one model's price against another's holds still while a plan's pace drifts.
+ * A model whose segments span under 24 hours keeps weight 1, and a weight
+ * stays within 8 times either way of it.
+ */
+const fitModelWeights = (
+  windows: ReadonlyArray<{
+    readonly kept: ReadonlyArray<FuelSegment>
+    readonly fuelPerPct: number
+  }>,
+): ReadonlyArray<LaneModel> => {
+  const rows = windows.flatMap((window) =>
+    window.kept.flatMap((segment): Array<ModelFitRow> => {
+      const models = segment.models ?? []
+      if (models.length === 0 || !(segment.deltaPct > 0) || !(segment.fuel > 0)) return []
+      const { endedAt, deltaPct } = segment
+      return [{ endedAt, deltaPct, models, y: deltaPct * window.fuelPerPct }]
+    }),
+  )
+  const spans = modelSpanHours(rows)
+  const spanHours = (model: ModelId) => spans.get(model) ?? 0
+  const all = [...spans.keys()].sort()
+  const fitted = all.filter((model) => spanHours(model) >= MODEL_WEIGHT_MIN_SPAN_HOURS)
+  const weighed = rows.reduce((sum, row) => sum + row.y, 0)
+  const points = rows.reduce((sum, row) => sum + row.deltaPct, 0)
+  const prior = (MODEL_WEIGHT_PRIOR_POINTS * weighed) / points
+  const index = new Map(fitted.map((model, at) => [model, at] as const))
+  // Each model's prior: a segment of its fuel alone, at weight 1.
+  const equations = {
+    matrix: fitted.map((_, row) => fitted.map((_, column) => Number(row === column) * prior)),
+    vector: fitted.map(() => prior),
+  }
+  for (const row of rows) addFitRow(equations, index, row)
+  const solved = Option.liftPredicate(prior, (value) => value > 0 && Number.isFinite(value)).pipe(
+    Option.flatMap(() => solveLinear(equations.matrix, equations.vector)),
+  )
+  return all.map((model) => {
+    const found = Option.flatMap(Option.fromUndefinedOr(index.get(model)), (at) =>
+      Option.flatMap(solved, (weights) => Option.fromUndefinedOr(weights[at])),
+    )
+    const weight = Option.match(found, {
+      onNone: () => 1,
+      onSome: (value) => Math.min(MODEL_WEIGHT_BOUND, Math.max(1 / MODEL_WEIGHT_BOUND, value)),
+    })
+    return { model, weight, fitted: Option.isSome(found), spanHours: spanHours(model) }
+  })
 }
 
 /**
@@ -4282,7 +4453,9 @@ const EMPTY_LEDGER: PlacementLedgerValue = { buckets: [] }
  * replaced at the next write; a write that fails is logged. The ledger
  * never fails a turn.
  */
-const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function* (file: string) {
+export const placementLedgerFile = Effect.fn("CredentialPlacement.ledgerFile")(function* (
+  file: string,
+) {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
   const platform = yield* GentPlatform
@@ -4364,6 +4537,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly model: Option.Option<ModelId>
       readonly fuel: Option.Option<number>
       readonly tokens: FuelTokens
+      readonly models: ReadonlyMap<ModelId, number>
     }
   >()
   /** provider, slot, window (`windowKey`) → its closed segments, oldest first. */
@@ -5065,6 +5239,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       model: Option.fromUndefinedOr(reading.model),
       fuel: Option.some(0),
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      models: new Map<ModelId, number>(),
     }
     const open = Option.fromUndefinedOr(openSegments.get(key))
     const continues = Option.exists(
@@ -5097,6 +5272,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         fuel: open.value.fuel.value,
         deltaPct: moved * 100,
         tokens: open.value.tokens,
+        models: [...open.value.models].map(([model, fuel]) => ({ model, fuel })),
       },
     ])
   }
@@ -5151,6 +5327,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
     const poolRate = new Map(
       [...pooled].map(([window, kept]) => [window, weightedRate(kept)] as const),
+    )
+    // A model's window meters its fuel alone: only account windows weigh one model against another.
+    const models = fitModelWeights(
+      [...own.values()].flatMap((fit) => {
+        const first = fit.kept[0]
+        if (Predicate.isUndefined(first) || Predicate.isNotUndefined(first.model)) return []
+        return Option.match(fit.fuelPerPct, {
+          onNone: () => [],
+          onSome: (fuelPerPct) => [{ kept: fit.kept, fuelPerPct }],
+        })
+      }),
     )
     const slots = new Set<CredentialSlot>(scope)
     for (const reading of readings.values())
@@ -5309,6 +5496,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       load: laneLoad(provider, scope, Option.none(), Option.none(), now),
       fuelPerHour,
       laneHours: burns.get(provider)?.seen ?? 0,
+      models,
       ...omitUndefined({
         capacity: Option.getOrUndefined(Option.filter(capacity, () => scoped.length > 0)),
       }),
@@ -5615,6 +5803,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
                   cacheRead: open.tokens.cacheRead + cost.tokens.cacheRead,
                   cacheWrite: open.tokens.cacheWrite + cost.tokens.cacheWrite,
                 },
+                models: new Map(open.models).set(
+                  spend.model,
+                  (open.models.get(spend.model) ?? 0) + cost.fuel,
+                ),
               }),
             }),
           )
