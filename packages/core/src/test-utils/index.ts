@@ -37,6 +37,7 @@ export {
   testTurnExtension,
   captureProviderReport,
   createWorkerEnv,
+  advanceUntil,
   freePort,
   GENT_START_BOUND_MS,
   interruptAtEachStep,

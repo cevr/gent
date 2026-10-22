@@ -6,6 +6,7 @@ import {
   type Crypto,
   DateTime,
   Deferred,
+  type Duration,
   Effect,
   type Exit,
   Fiber,
@@ -27,6 +28,7 @@ import {
   TxRef,
 } from "effect"
 import type { SqlClient } from "effect/sql"
+import { TestClock } from "effect/testing"
 import {
   type AnyExtensionHook,
   ExtensionContext,
@@ -2482,6 +2484,39 @@ export function waitFor<A, R = never>(
     return yield* loop
   })
 }
+
+const wallClock = Clock.Clock.defaultValue()
+
+/**
+ * Moves the virtual clock in steps of `step` until `done` holds, and returns
+ * the value that held. A timer fiber reads the clock and then sleeps; one large
+ * `TestClock.adjust` that lands between the two leaves the sleep a whole delay
+ * past the new time, and it never wakes. Steps reach that timer too. After each
+ * step the loop pauses on the wall clock for the real I/O the step released.
+ * Wall time bounds the loop: at `timeoutMs` it fails with `WaitForError`.
+ */
+export const advanceUntil = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: Predicate.Predicate<A>,
+  options: {
+    readonly label: string
+    readonly step?: Duration.Input
+    readonly timeoutMs?: number
+  },
+): Effect.Effect<A, E | WaitForError, R> =>
+  Effect.gen(function* () {
+    const deadline = wallClock.currentTimeMillisUnsafe() + (options.timeoutMs ?? 5_000)
+    while (wallClock.currentTimeMillisUnsafe() < deadline) {
+      const value = yield* read
+      if (done(value)) return value
+      yield* TestClock.adjust(options.step ?? "100 millis")
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
+      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+    }
+    return yield* new WaitForError({
+      message: `timed out advancing the clock for ${options.label}`,
+    })
+  })
 
 /** One run of `interruptAtEachStep`: what it interrupts and what must hold after. */
 export interface InterruptionTrial<A, E, R, E2, R2> {

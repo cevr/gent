@@ -1,4 +1,4 @@
-import { Crypto, Effect, Option, Path, Predicate, Schema, Struct } from "effect"
+import { Crypto, DateTime, Effect, Option, Path, Predicate, Schema, Struct } from "effect"
 import {
   BranchId,
   defineExtension,
@@ -11,13 +11,15 @@ import {
   resolveDataDir,
   tool,
   type TurnAfterInput,
+  type WakeDueInput,
+  WakeNext,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 
 // Test seam: only tests read these exports. GoalState, goalContinuationSource,
 // continuationPrompt, formatGoalUsage and the GOAL_PAUSED_* texts are pure
 // values with unit tests; GoalTool is the capability the cell signature tests
-// render.
+// render; goalResumeDue is the `wakeDue` hook a test fires as a startup pass.
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -48,6 +50,11 @@ export const GoalState = Schema.Struct({
   pausedReason: Schema.optional(Schema.String),
   /** The turn already in flight at a manual pause is still charged once. */
   pausedTurnStartedAtMs: Schema.optional(Schema.Int),
+  /**
+   * When a goal a usage limit paused resumes on its own (epoch ms): a margin
+   * after the limit resets. A core wake record (`goalResumeSource`) fires then.
+   */
+  resumeAt: Schema.optional(Schema.Int),
   createdAt: Schema.Int,
   updatedAt: Schema.Int,
 })
@@ -61,6 +68,9 @@ export type GoalSnapshot = typeof GoalSnapshot.Type
 /** Follow-up source ids must differ per continuation: the runtime keys the message on them. */
 export const goalContinuationSource = (goal: GoalState) =>
   `goal:${goal.goalId}:${goal.status}:${goal.continuationsUsed}`
+
+/** The wake record that resumes a goal a usage limit paused; one per goal. */
+const goalResumeSource = (goal: GoalState) => `goal-resume:${goal.goalId}`
 
 /** A goal still waiting on work blocks a new one; a finished goal can be replaced. */
 const isPendingGoal = (goal: GoalState): boolean => goal.status !== "complete"
@@ -95,11 +105,21 @@ Do not complete the goal unless it is complete. Do not complete it because you a
 
 /** Shown with a goal the harness paused on its own. */
 export const GOAL_PAUSED_STREAM_FAILED = "the model stream failed"
+export const GOAL_PAUSED_USAGE_LIMIT = "the model's usage limit was reached"
+export const GOAL_PAUSED_RESUME_MISSED =
+  "the usage limit reset while gent was not running; /goal resume continues"
+
+/** The goal resumes this long after its usage limit resets, as wake's auto-resume does. */
+const RESUME_MARGIN_MS = 30_000
+
+const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
 
 export const formatGoalUsage = (goal: GoalState) => {
   const seconds = Math.round(goal.timeUsedMs / 1000)
   let status: string = goal.status
   if (Predicate.isNotUndefined(goal.pausedReason)) status = `${goal.status}: ${goal.pausedReason}`
+  if (Predicate.isNotUndefined(goal.resumeAt))
+    status = `${status}; resumes at ${isoOf(goal.resumeAt)}`
   return [
     status,
     plural(goal.continuationsUsed, "continuation"),
@@ -114,6 +134,7 @@ const formatGoalStatus = (goal: Option.Option<GoalState>) =>
     onSome: (value) => {
       let command = "/goal resume"
       if (value.status === "active") command = "/goal pause"
+      else if (Predicate.isNotUndefined(value.resumeAt)) command = "/goal resume · /goal pause"
       else if (value.status === "complete") command = "/goal <objective>"
       return `${value.objective}\n\n${formatGoalUsage(value)}\n\n${command} · /goal clear (cancel/stop)`
     },
@@ -290,10 +311,15 @@ interface StatusChange {
   readonly status: GoalState["status"]
   /** The change as the user asked for it, for an error message. */
   readonly verb: "pause" | "resume" | "complete"
-  readonly allowed: ReadonlyArray<GoalState["status"]>
+  readonly allowed: (goal: GoalState) => boolean
 }
 
-/** Pause, complete, and clear also pull the pending continuation before it starts a turn. */
+/**
+ * Pause, complete, and clear also pull the pending continuation before it
+ * starts a turn. Any status the person sets drops a pending resume after a
+ * usage limit (its wake record then fires and does nothing): a pause keeps
+ * the goal paused past the reset.
+ */
 const setStatus = (change: StatusChange) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
@@ -301,7 +327,7 @@ const setStatus = (change: StatusChange) =>
       Effect.gen(function* () {
         if (Option.isNone(current))
           return yield* new GoalError({ message: "No goal on this branch" })
-        if (!change.allowed.includes(current.value.status)) {
+        if (!change.allowed(current.value)) {
           return yield* new GoalError({
             message: `Cannot ${change.verb} a goal that is ${current.value.status}`,
           })
@@ -315,7 +341,7 @@ const setStatus = (change: StatusChange) =>
         if (change.status === "active") continuationsUsed += 1
         // A status the person sets replaces any reason the harness paused for.
         const updated: GoalState = {
-          ...Struct.omit(current.value, ["pausedReason", "pausedTurnStartedAtMs"]),
+          ...Struct.omit(current.value, ["pausedReason", "pausedTurnStartedAtMs", "resumeAt"]),
           status: change.status,
           continuationsUsed,
           ...omitUndefined({
@@ -334,7 +360,7 @@ const setStatus = (change: StatusChange) =>
 const completeGoal = setStatus({
   status: "complete",
   verb: "complete",
-  allowed: ["active", "paused"],
+  allowed: (goal) => goal.status !== "complete",
 })
 
 /** Clearing forgets the goal entirely; status reports no goal afterwards. */
@@ -388,10 +414,23 @@ const decideAfterTurn = (
   const charged = chargeTurn(goal, input, updatedAt)
   // A turn that died on a broken stream must not drive the goal on: another
   // prompt would spend the goal against an answer that never arrived. It
-  // pauses, and the person decides whether to resume.
+  // pauses, and the person decides whether to resume. A usage limit that
+  // names its reset is the exception: the goal resumes on its own after it.
   if (input.streamFailed) {
     return {
-      next: { ...charged, status: "paused", pausedReason: GOAL_PAUSED_STREAM_FAILED },
+      next: Option.match(input.retryAt, {
+        onNone: (): GoalState => ({
+          ...charged,
+          status: "paused",
+          pausedReason: GOAL_PAUSED_STREAM_FAILED,
+        }),
+        onSome: (resetAt): GoalState => ({
+          ...charged,
+          status: "paused",
+          pausedReason: GOAL_PAUSED_USAGE_LIMIT,
+          resumeAt: resetAt + RESUME_MARGIN_MS,
+        }),
+      }),
       report: true,
     }
   }
@@ -458,11 +497,17 @@ const continueGoal = (input: TurnAfterInput) =>
     if (changed) yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
-    if (goal.status === "paused") {
-      yield* Effect.logWarning("goal.paused.stream-failed").pipe(
-        Effect.annotateLogs({ sessionId: String(input.sessionId), goalId: goal.goalId }),
+    const annotations = { sessionId: String(input.sessionId), goalId: goal.goalId }
+    if (goal.status === "paused" && Predicate.isNotUndefined(goal.resumeAt)) {
+      yield* ctx.Session.wakeAt({ sourceId: goalResumeSource(goal), at: goal.resumeAt })
+      return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
+        Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
       )
-      return
+    }
+    if (goal.status === "paused") {
+      return yield* Effect.logWarning("goal.paused.stream-failed").pipe(
+        Effect.annotateLogs(annotations),
+      )
     }
     yield* queueGoalMessage(goal, continuationPrompt(goal))
   }).pipe(
@@ -471,6 +516,58 @@ const continueGoal = (input: TurnAfterInput) =>
       Effect.logWarning("goal.continue.failed").pipe(Effect.annotateLogs({ error: String(error) })),
     ),
   )
+
+// ── Usage-limit resume ──
+
+/**
+ * The `wakeDue` hook: the usage limit that paused a goal has reset. A fire
+ * while the server ran resumes the goal, as `/goal resume` does. A fire from
+ * the startup pass means the reset passed while gent was not running: the
+ * goal stays paused and says so, since a start nobody expected should not
+ * spend the model. A record whose goal moved on (resumed, paused by the
+ * person, cleared, replaced) does nothing.
+ */
+export const goalResumeDue = (input: WakeDueInput) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const resumed = yield* modifyGoal((current) =>
+      Effect.gen(function* () {
+        const waiting = Option.filter(
+          current,
+          (goal) =>
+            goal.status === "paused" &&
+            Predicate.isNotUndefined(goal.resumeAt) &&
+            goalResumeSource(goal) === input.sourceId,
+        )
+        if (Option.isNone(waiting)) return { next: current, result: Option.none<GoalState>() }
+        const rest = Struct.omit(waiting.value, [
+          "pausedReason",
+          "pausedTurnStartedAtMs",
+          "resumeAt",
+        ])
+        const updatedAt = yield* now
+        if (input.cause === "start") {
+          const missed: GoalState = { ...rest, pausedReason: GOAL_PAUSED_RESUME_MISSED, updatedAt }
+          return { next: Option.some(missed), result: Option.some(missed) }
+        }
+        const active: GoalState = {
+          ...rest,
+          status: "active",
+          continuationsUsed: rest.continuationsUsed + 1,
+          updatedAt,
+        }
+        return { next: Option.some(active), result: Option.some(active) }
+      }),
+    )
+    if (Option.isNone(resumed)) return WakeNext.cases.Done.make({})
+    const goal = resumed.value
+    if (goal.status === "active") yield* queueGoalMessage(goal, continuationPrompt(goal))
+    yield* Effect.logInfo("goal.resume.fired").pipe(
+      Effect.annotateLogs({ goalId: goal.goalId, cause: input.cause, status: goal.status }),
+    )
+    yield* ctx.State.changed()
+    return WakeNext.cases.Done.make({})
+  }).pipe(serializeGoal)
 
 // ── Slash command ──
 
@@ -497,12 +594,22 @@ const GoalCommand = request({
         case "status":
           return yield* present(formatGoalStatus(yield* readGoal()))
         case "resume": {
-          const goal = yield* setStatus({ status: "active", verb: "resume", allowed: ["paused"] })
+          const goal = yield* setStatus({
+            status: "active",
+            verb: "resume",
+            allowed: (current) => current.status === "paused",
+          })
           yield* queueGoalMessage(goal, continuationPrompt(goal))
           return yield* present(`Resumed.\n\n${formatGoalUsage(goal)}`)
         }
         case "pause": {
-          const goal = yield* setStatus({ status: "paused", verb: "pause", allowed: ["active"] })
+          // A goal waiting on a usage limit can be paused too: it then stays paused past the reset.
+          const goal = yield* setStatus({
+            status: "paused",
+            verb: "pause",
+            allowed: (current) =>
+              current.status === "active" || Predicate.isNotUndefined(current.resumeAt),
+          })
           return yield* present(`Paused.\n\n${formatGoalUsage(goal)}`)
         }
         case "clear":
@@ -586,6 +693,7 @@ export const GoalExtension = defineExtension({
     yield* host.register("request", GoalCommand, GoalRpc.Get)
     yield* host.register("tool", GoalTool)
     yield* host.on("turnAfter", continueGoal)
+    yield* host.on("wakeDue", goalResumeDue)
     yield* host.on("sessionDeleted", ({ branchIds }) => store.removeBranches(branchIds))
   }),
 })

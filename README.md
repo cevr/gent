@@ -57,8 +57,13 @@ marks it complete. Its token and time usage is a report, not a limit.
 - `/goal clear`, `/goal cancel`, and `/goal stop` remove the goal and its pending
   continuation. Work already in flight finishes; these commands do not mark the goal complete.
 
-Interrupting a turn pauses its goal. Unrelated turns leave a paused goal paused.
-Only the goal tool's completion action marks it achieved.
+Interrupting a turn pauses its goal. A broken model stream pauses it too. A
+usage limit (HTTP 429) that names its reset pauses the goal until 30 seconds
+after the reset, then the goal resumes on its own. `/goal status` shows the
+resume time; `/goal pause` keeps the goal paused past it. When the reset passes
+while gent is not running, the goal stays paused until `/goal resume`.
+Unrelated turns leave a paused goal paused. Only the goal tool's completion
+action marks it achieved.
 
 ## Where to Read Next
 

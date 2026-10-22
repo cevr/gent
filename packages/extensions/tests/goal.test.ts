@@ -1,8 +1,10 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   ConfigProvider,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -14,6 +16,7 @@ import {
   Stream,
 } from "effect"
 import {
+  advanceUntil,
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -24,6 +27,7 @@ import {
   waitFor,
   createRpcHarness,
   runToolWithCtx,
+  testLeafContext,
   testToolContext,
 } from "@gent/core/test-utils"
 import {
@@ -33,21 +37,25 @@ import {
   ToolCallId,
   decodeRequestReply,
 } from "@gent/core/protocol"
-import { RequestId } from "@gent/core/extensions/api"
+import { ExtensionContext, RequestId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   continuationPrompt,
   formatGoalUsage,
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
+  GOAL_PAUSED_RESUME_MISSED,
   GOAL_PAUSED_STREAM_FAILED,
+  GOAL_PAUSED_USAGE_LIMIT,
   goalContinuationSource,
+  goalResumeDue,
   GoalSnapshot,
   type GoalState,
   GoalTool,
 } from "../src/goal.js"
 import { BunServices } from "@effect/platform-bun"
 import * as AiError from "effect/ai/AiError"
+import { TestClock } from "effect/testing"
 
 /**
  * `/goal` keeps a durable per-branch objective and re-prompts the loop after
@@ -557,6 +565,196 @@ describe("goal stream failure", () => {
         expect(Option.map(paused, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
+  )
+})
+
+// ── usage limit ─────────────────────────────────────────────────────────────
+
+/** A model step that stops on a usage limit: it resets in a minute, past every retry cap. */
+const usageLimitStream = () =>
+  Stream.fail(
+    AiError.make({
+      module: "Test",
+      method: "streamText",
+      reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(60) }),
+    }),
+  )
+
+/** The first model call hits the usage limit; each later call takes the next step of `after`. */
+const limitedModel = (after: ReadonlyArray<ScriptedStepLike>, calls: Ref.Ref<number>) =>
+  LanguageModelLayers.testStream(() =>
+    Ref.getAndUpdate(calls, (count) => count + 1).pipe(
+      Effect.map((count) => {
+        if (count === 0) return usageLimitStream()
+        const step = after[Math.min(count - 1, after.length - 1)] ?? textStep("done")
+        return Stream.fromIterable(step.parts)
+      }),
+    ),
+  )
+
+type ScriptedStepLike = ReturnType<typeof textStep>
+
+const isPaused = (goal: Option.Option<GoalState>) =>
+  Option.exists(goal, (value) => value.status === "paused")
+
+/** Moves the virtual clock to `at` in one-second steps, so each timer due on the way fires. */
+const advanceTo = (at: number) =>
+  advanceUntil(Clock.currentTimeMillis, (time) => time >= at, {
+    label: `the clock reaches ${at}`,
+    step: "1 second",
+    timeoutMs: 10_000,
+  })
+
+describe("goal usage limit", () => {
+  it.live(
+    "a usage limit pauses the goal until the reset, then the goal resumes on its own",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const providerLayer = limitedModel(
+          [toolCallStep("goal", { action: "complete" }), textStep("The poem is done.")],
+          calls,
+        )
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        yield* goalCommandOn(harness, "Write the pelican poem")
+        // The virtual clock starts at 0: the limit resets at 60 s, the goal resumes 30 s later.
+        const paused = yield* advanceUntil(goalOn(harness), isPaused, {
+          label: "the usage limit pauses the goal",
+          step: "0 millis",
+        })
+        expect(
+          Option.map(paused, (goal) => ({
+            pausedReason: goal.pausedReason,
+            resumeAt: goal.resumeAt,
+            continuationsUsed: goal.continuationsUsed,
+          })),
+        ).toEqual(
+          Option.some({
+            pausedReason: GOAL_PAUSED_USAGE_LIMIT,
+            resumeAt: 90_000,
+            continuationsUsed: 0,
+          }),
+        )
+        expect(Option.map(paused, formatGoalUsage)).toEqual(
+          Option.some(
+            `paused: ${GOAL_PAUSED_USAGE_LIMIT}; resumes at 1970-01-01T00:01:30.000Z · 0 continuations · 0 tokens · 0s`,
+          ),
+        )
+        // Nothing runs before the resume time.
+        yield* advanceTo(85_000)
+        expect(yield* Ref.get(calls)).toBe(1)
+        expect((yield* goalOn(harness)).pipe(isPaused)).toBe(true)
+
+        const completed = yield* advanceUntil(
+          goalOn(harness),
+          (goal) => Option.exists(goal, (value) => value.finalized === true),
+          { label: "the resumed goal completes", step: "1 second", timeoutMs: 10_000 },
+        )
+        expect(Option.map(completed, (goal) => goal.status)).toEqual(Option.some("complete"))
+        expect(Option.map(completed, (goal) => goal.continuationsUsed)).toEqual(Option.some(1))
+        expect(yield* Ref.get(calls)).toBe(3)
+        const snapshot = yield* harness.client.session.getSnapshot({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+        })
+        const goalMessages = snapshot.messages.filter(
+          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
+        )
+        expect(goalMessages.length).toBe(2)
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("25 seconds")),
+    30_000,
+  )
+
+  it.live(
+    "a goal paused while it waits on a usage limit stays paused past the reset",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const providerLayer = limitedModel([textStep("Still writing.")], calls)
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        yield* goalCommandOn(harness, "Write the pelican poem")
+        yield* advanceUntil(goalOn(harness), isPaused, {
+          label: "the usage limit pauses the goal",
+          step: "0 millis",
+        })
+        yield* goalCommandOn(harness, "pause")
+        const held = yield* goalOn(harness)
+        expect(Option.map(held, (goal) => goal.status)).toEqual(Option.some("paused"))
+        expect(Option.flatMap(held, (goal) => Option.fromUndefinedOr(goal.resumeAt))).toEqual(
+          Option.none(),
+        )
+        yield* advanceTo(120_000)
+        expect(yield* Ref.get(calls)).toBe(1)
+        expect((yield* goalOn(harness)).pipe(isPaused)).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("25 seconds")),
+    30_000,
+  )
+})
+
+describe("goal resume fire", () => {
+  const branchId = BranchId.make("goal-branch")
+  const waiting: GoalState = {
+    goalId: "g1",
+    branchId,
+    objective: "Write the pelican poem",
+    status: "paused",
+    pausedReason: GOAL_PAUSED_USAGE_LIMIT,
+    resumeAt: 90_000,
+    tokensUsed: 0,
+    timeUsedMs: 0,
+    continuationsUsed: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+
+  /** Fires the `wakeDue` hook over a branch whose stored goal is `goal`; returns the goal after and the sends. */
+  const fire = (goal: GoalState, sourceId: string, cause: "due" | "start") =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("goal-resume-")
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.makeDirectory(`${home}/.gent/goals`, { recursive: true })
+      yield* fs.writeFileString(
+        `${home}/.gent/goals/${branchId}.json`,
+        yield* Schema.encodeEffect(Schema.fromJsonString(GoalSnapshot))({ goal }),
+      )
+      const sent = yield* Ref.make(0)
+      const ctx = testToolContext({
+        sessionId: SessionId.make("goal-session"),
+        branchId,
+        toolCallId: ToolCallId.make("tc-goal"),
+        home,
+        Session: {
+          ...testToolContext().Session,
+          send: () => Ref.update(sent, (count) => count + 1),
+        },
+        State: { changed: () => Effect.void },
+      })
+      const leaf = testLeafContext(ctx)
+      yield* goalResumeDue({ sourceId, at: Option.some(90_000), cause }).pipe(
+        Effect.provideService(ExtensionContext, leaf),
+      )
+      const snapshot = yield* Schema.decodeEffect(Schema.fromJsonString(GoalSnapshot))(
+        yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
+      )
+      return { goal: snapshot.goal, sends: yield* Ref.get(sent) }
+    }).pipe(Effect.provide(BunServices.layer))
+
+  it.scopedLive("a fire from the startup pass leaves the goal paused and says why", () =>
+    Effect.gen(function* () {
+      const { goal, sends } = yield* fire(waiting, "goal-resume:g1", "start")
+      expect(goal?.status).toBe("paused")
+      expect(goal?.pausedReason).toBe(GOAL_PAUSED_RESUME_MISSED)
+      expect(goal?.resumeAt).toBeUndefined()
+      expect(sends).toBe(0)
+    }),
+  )
+
+  it.scopedLive("a fire for a goal this branch no longer holds changes nothing", () =>
+    Effect.gen(function* () {
+      const { goal, sends } = yield* fire(waiting, "goal-resume:g0", "due")
+      expect(goal).toEqual(waiting)
+      expect(sends).toBe(0)
+    }),
   )
 })
 
