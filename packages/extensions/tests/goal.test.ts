@@ -20,6 +20,7 @@ import {
   textDeltaPart,
   textStep,
   toolCallPart,
+  toolCallStep,
   waitFor,
   createRpcHarness,
   runToolWithCtx,
@@ -40,19 +41,17 @@ import {
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
   GOAL_PAUSED_STREAM_FAILED,
-  GOAL_PAUSED_USAGE_UNKNOWN,
   goalContinuationSource,
   GoalSnapshot,
   type GoalState,
   GoalTool,
-  remainingTokens,
 } from "../src/goal.js"
 import { BunServices } from "@effect/platform-bun"
 import * as AiError from "effect/ai/AiError"
 
 /**
  * `/goal` keeps a durable per-branch objective and re-prompts the loop after
- * each ordinary turn until the goal completes or its token budget runs out.
+ * each ordinary turn until the model marks the goal complete.
  */
 
 type GoalHarness = Pick<
@@ -89,7 +88,6 @@ const sampleGoal: GoalState = {
   branchId: BranchId.make("b1"),
   objective: "Ship <it> & test",
   status: "active",
-  tokenBudget: 100,
   tokensUsed: 40,
   timeUsedMs: 2_500,
   continuationsUsed: 2,
@@ -98,73 +96,52 @@ const sampleGoal: GoalState = {
 }
 
 describe("goals", () => {
-  test("remaining budget is absent for unbounded goals and never negative", () => {
-    expect(remainingTokens(sampleGoal)).toEqual(Option.some(60))
-    expect(remainingTokens({ ...sampleGoal, tokensUsed: 500 })).toEqual(Option.some(0))
-    const { tokenBudget: _budget, ...unbounded } = sampleGoal
-    expect(remainingTokens(unbounded)).toEqual(Option.none())
-  })
-
-  test("the continuation prompt escapes the objective and reports usage", () => {
+  test("the continuation prompt escapes the objective and reports no limit", () => {
     const prompt = continuationPrompt(sampleGoal)
     expect(prompt).toContain("Ship &lt;it&gt; &amp; test")
-    expect(prompt).toContain("remaining tokens: 60")
-    expect(formatGoalUsage(sampleGoal)).toBe(
-      "active · 2 continuations · 40 tokens · 3s · 60 remaining of 100",
-    )
+    expect(prompt).not.toMatch(/budget|tokens/i)
+    expect(formatGoalUsage(sampleGoal)).toBe("active · 2 continuations · 40 tokens · 3s")
   })
 
   it.live(
-    "a budgeted goal continues after each turn until the budget is spent",
+    "a goal continues after every turn until the model completes it",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          // Each text turn costs 10 input tokens plus a few output tokens. A budget
-          // of 15 allows one continuation; the second turn exhausts it.
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             textStep("first pass"),
             textStep("second pass"),
-            textStep("budget report"),
+            toolCallStep(
+              "goal",
+              { action: "complete" },
+              { toolCallId: ToolCallId.make("complete-1") },
+            ),
+            textStep("done"),
           ])
           const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
           const { client, sessionId, branchId } = harness
-          const command = (input: string) => goalCommandOn(harness, input)
-          const readGoal = () => goalOn(harness)
-
-          yield* command("--budget 15 Write the pelican poem")
-          const created = yield* readGoal()
-          expect(Option.isSome(created)).toBe(true)
-          if (Option.isSome(created)) {
-            expect(created.value.objective).toBe("Write the pelican poem")
-            expect(created.value.status).toBe("active")
-            expect(created.value.tokenBudget).toBe(15)
-          }
-
+          yield* goalCommandOn(harness, "Write the pelican poem")
+          const completed = yield* waitFor(
+            goalOn(harness),
+            (goal) => Option.exists(goal, (value) => value.finalized === true),
+            8_000,
+            "the completing turn ends",
+          )
+          expect(Option.map(completed, (goal) => goal.status)).toEqual(Option.some("complete"))
+          expect(Option.map(completed, (goal) => goal.continuationsUsed)).toEqual(Option.some(2))
           const snapshot = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
-            (current) => current.runtime._tag === "Idle" && current.messages.length >= 6,
-            8_000,
-            "goal turns settle",
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the branch is idle",
           )
+          // One continuation starts the goal and one follows each turn but the last.
           const goalMessages = snapshot.messages.filter(
             (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
           )
           expect(goalMessages.length).toBe(3)
           expect(new Set(goalMessages.map((message) => message.id)).size).toBe(3)
-          expect(
-            goalMessages[2]?.parts.some(
-              (part) => part.type === "text" && part.text.includes("reached its token budget"),
-            ),
-          ).toBe(true)
-
-          const limited = yield* readGoal()
-          expect(Option.isSome(limited)).toBe(true)
-          if (Option.isSome(limited)) {
-            expect(limited.value.status).toBe("budget_limited")
-            expect(limited.value.continuationsUsed).toBe(1)
-            expect(limited.value.tokensUsed).toBeGreaterThanOrEqual(15)
-          }
-          expect(yield* controls.callCount).toBe(3)
+          expect(yield* controls.callCount).toBe(4)
           yield* controls.assertDone
         }).pipe(Effect.timeout("12 seconds")),
       ),
@@ -172,50 +149,42 @@ describe("goals", () => {
   )
 
   it.live(
-    "a spent goal refuses a new goal, a resume without a fresh budget, and a second pause",
+    "a pending goal refuses a new goal, and a status change names the state it refuses",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          // The first turn spends a budget of 1; the second reads the budget prompt.
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-            textStep("first pass"),
-            textStep("budget report"),
+            { ...textStep("working"), gated: true },
           ])
           const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
           const command = (input: string) => goalCommandOn(harness, input)
-          yield* command("--budget 1 Write the pelican poem")
-          yield* waitFor(
-            harness.client.session.getSnapshot(harness),
-            (current) => current.runtime._tag === "Idle" && current.messages.length >= 4,
-            8_000,
-            "the budget report turn ends",
-          )
-          expect(Option.map(yield* goalOn(harness), (goal) => goal.status)).toEqual(
-            Option.some("budget_limited"),
-          )
-
+          yield* command("Write the pelican poem")
+          yield* controls.waitForCall(0)
           const refused = yield* Effect.exit(command("Another objective"))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
-            expect(Cause.pretty(refused.cause)).toContain("A goal is already out of budget")
+            expect(Cause.pretty(refused.cause)).toContain("A goal is already active")
           }
-          const resumed = yield* Effect.exit(command("resume"))
-          expect(Exit.isFailure(resumed)).toBe(true)
-          if (Exit.isFailure(resumed)) {
-            expect(Cause.pretty(resumed.cause)).toContain("budget is spent")
+          const resumedActive = yield* Effect.exit(command("resume"))
+          expect(Exit.isFailure(resumedActive)).toBe(true)
+          if (Exit.isFailure(resumedActive)) {
+            expect(Cause.pretty(resumedActive.cause)).toContain(
+              "Cannot resume a goal that is active",
+            )
           }
-          // A change the goal's state does not allow names the change and the state.
           yield* command("pause")
-          const pausedResume = yield* Effect.exit(command("resume"))
-          expect(Exit.isFailure(pausedResume)).toBe(true)
-          if (Exit.isFailure(pausedResume)) {
-            expect(Cause.pretty(pausedResume.cause)).toContain("budget is spent")
-          }
           const pausedTwice = yield* Effect.exit(command("pause"))
           expect(Exit.isFailure(pausedTwice)).toBe(true)
           if (Exit.isFailure(pausedTwice)) {
             expect(Cause.pretty(pausedTwice.cause)).toContain("Cannot pause a goal that is paused")
           }
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            harness.client.session.getSnapshot(harness),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the paused goal's turn ends",
+          )
           yield* controls.assertDone
         }).pipe(Effect.timeout("12 seconds")),
       ),
@@ -582,93 +551,24 @@ describe("goal phase failure", () => {
   )
 })
 
-describe("goal stream failure on a spent budget", () => {
-  it.scopedLive(
-    "a failed turn that spends the budget reads as budget-limited, not paused",
-    () =>
-      Effect.gen(function* () {
-        const calls = yield* Ref.make(0)
-        // Step one reports usage past the budget and is cut off, so the loop
-        // continues the turn; every later step breaks after partial output.
-        const providerLayer = LanguageModelLayers.testStream(() =>
-          Effect.gen(function* () {
-            const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
-            if (call === 1) {
-              return Stream.fromIterable([
-                textDeltaPart("part one"),
-                finishPart({
-                  finishReason: "length",
-                  usage: { inputTokens: 30, outputTokens: 12 },
-                }),
-              ])
-            }
-            return Stream.concat(
-              Stream.fromIterable([textDeltaPart(`part ${call}`)]),
-              Stream.fail(
-                AiError.make({
-                  module: "Test",
-                  method: "streamText",
-                  reason: new AiError.UnknownError({ description: "connection reset" }),
-                }),
-              ),
-            )
-          }),
-        )
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          providerLayer,
-        })
-        const readGoal = () => goalOn({ client, sessionId, branchId })
-        yield* client.extension.request({
-          sessionId,
-          branchId,
-          extensionId: GOAL_EXTENSION_ID,
-          capabilityId: "goal-command",
-          input: "--budget 10 Write the pelican poem",
-        })
-        const settled = yield* waitFor(
-          readGoal(),
-          (goal) =>
-            Option.exists(goal, (value) => value.status !== "active" && value.tokensUsed > 0),
-          10_000,
-          "the failed turn settles the goal",
-        )
-        expect(Option.map(settled, (goal) => goal.status)).toEqual(Option.some("budget_limited"))
-        expect(Option.map(settled, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
-        // A failed turn wakes nothing: only the first continuation exists.
-        yield* waitFor(
-          client.session.getSnapshot({ sessionId, branchId }),
-          (current) => current.runtime._tag === "Idle",
-          5_000,
-          "the branch is idle",
-        )
-        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
-        const goalMessages = snapshot.messages.filter(
-          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
-        )
-        expect(goalMessages.length).toBe(1)
-      }).pipe(Effect.timeout("14 seconds")),
-    18_000,
-  )
-})
-
 // ── partial usage ───────────────────────────────────────────────────────────
 
 /**
- * A turn whose usage is partly unknown still spent its known tokens.
- *
- * The goal is charged the steps that reported usage, and a budgeted goal
- * pauses, since its remaining budget can no longer be measured.
+ * A turn whose usage is partly unknown still spent its known tokens. The
+ * goal is charged the steps that reported usage and continues: usage is a
+ * report, not a limit.
  */
 
 describe("goal partial usage", () => {
   it.scopedLive(
-    "a turn with one step of unknown usage charges the known steps and pauses a budgeted goal",
+    "a turn with one step of unknown usage charges the known steps and continues the goal",
     () =>
       Effect.gen(function* () {
         const calls = yield* Ref.make(0)
+        const continuing = yield* Deferred.make<void>()
         // Step one reports usage and is cut off at the output limit, so the
-        // loop continues the turn. Step two answers and reports no usage.
+        // loop continues the turn. Step two answers and reports no usage. The
+        // continuation the goal queues stays open.
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
@@ -681,58 +581,33 @@ describe("goal partial usage", () => {
                 }),
               ])
             }
-            return Stream.fromIterable([
-              textDeltaPart("the answer"),
-              finishPart({ finishReason: "stop" }),
-            ])
+            if (call === 2) {
+              return Stream.fromIterable([
+                textDeltaPart("the answer"),
+                finishPart({ finishReason: "stop" }),
+              ])
+            }
+            yield* Deferred.succeed(continuing, void 0)
+            return Stream.never
           }),
         )
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...e2ePreset,
           providerLayer,
         })
-        const readGoal = () => goalOn({ client, sessionId, branchId })
-
         yield* client.extension.request({
           sessionId,
           branchId,
           extensionId: GOAL_EXTENSION_ID,
           capabilityId: "goal-command",
-          input: "--budget 1000 Write the pelican poem",
+          input: "Write the pelican poem",
         })
-
-        const paused = yield* waitFor(
-          readGoal(),
-          (goal) =>
-            Option.contains(
-              Option.map(goal, (value) => value.status),
-              "paused",
-            ),
-          10_000,
-          "goal pauses on the partial usage",
-        )
-        expect(Option.map(paused, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
-        expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
-          Option.some(GOAL_PAUSED_USAGE_UNKNOWN),
-        )
-        expect(Option.map(paused, formatGoalUsage).pipe(Option.getOrElse(() => ""))).toContain(
-          GOAL_PAUSED_USAGE_UNKNOWN,
-        )
-
-        // The paused goal queues no continuation: only the first one exists.
-        // The goal pauses before the turn ends, so the check waits for Idle first.
-        const snapshot = yield* waitFor(
-          client.session.getSnapshot({ sessionId, branchId }),
-          (current) => current.runtime._tag === "Idle",
-          5_000,
-          "the turn ended",
-        )
-        expect(snapshot.runtime._tag).toBe("Idle")
-        const goalMessages = snapshot.messages.filter(
-          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
-        )
-        expect(goalMessages.length).toBe(1)
-        expect(yield* Ref.get(calls)).toBe(2)
+        yield* Deferred.await(continuing)
+        const goal = Option.getOrThrow(yield* goalOn({ client, sessionId, branchId }))
+        expect(goal.status).toBe("active")
+        expect(goal.tokensUsed).toBe(42)
+        expect(goal.continuationsUsed).toBe(1)
+        expect(goal.pausedReason).toBeUndefined()
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
   )
@@ -777,7 +652,7 @@ const interruptedGoalHarness = (firstStep: ReadonlyArray<StepPart>) =>
       branchId,
       extensionId: GOAL_EXTENSION_ID,
       capabilityId: "goal-command",
-      input: "--budget 1000 Write the pelican poem",
+      input: "Write the pelican poem",
     })
     yield* Deferred.await(stalled)
     yield* client.steer.command({
@@ -905,7 +780,7 @@ describe("goal stop commands", () => {
             5_000,
             "the paused goal's turn ends",
           )
-        yield* command("--budget 1000 Write the pelican poem")
+        yield* command("Write the pelican poem")
         yield* controls.waitForCall(0)
         yield* command("pause").pipe(Effect.timeout("2 seconds"))
         const paused = Option.getOrThrow(yield* goalOn(harness))
@@ -930,7 +805,6 @@ describe("goal stop commands", () => {
         expect(resumed.objective).toBe(paused.objective)
         expect(resumed.tokensUsed).toBe(charged.tokensUsed)
         expect(resumed.timeUsedMs).toBe(charged.timeUsedMs)
-        expect(resumed.tokenBudget).toBe(paused.tokenBudget)
         expect(resumed.continuationsUsed).toBe(paused.continuationsUsed + 1)
         expect(resumed.status).toBe("active")
         yield* command("pause").pipe(Effect.timeout("2 seconds"))
@@ -990,7 +864,7 @@ describe("a goal created mid-turn", () => {
       Effect.gen(function* () {
         const calls = yield* Ref.make(0)
         const continuing = yield* Deferred.make<void>()
-        // Step one spends past the budget and creates the goal; step two
+        // Step one spends tokens and creates the goal; step two
         // answers. The continuation the goal queues stays open.
         const providerLayer = LanguageModelLayers.testStream(() =>
           Effect.gen(function* () {
@@ -999,7 +873,7 @@ describe("a goal created mid-turn", () => {
               return Stream.fromIterable([
                 toolCallPart(
                   "goal",
-                  { action: "create", objective: "Write the pelican poem", tokenBudget: 10 },
+                  { action: "create", objective: "Write the pelican poem" },
                   { toolCallId: ToolCallId.make("create-1") },
                 ),
                 finishPart({

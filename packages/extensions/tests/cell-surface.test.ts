@@ -2461,7 +2461,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     GoalTool,
-    '- tools.goal(input: { action: "get" | "create" | "complete"; objective?: string; tokenBudget?: number }): Promise<{ goal?: object; remainingTokens?: number; report?: string }> // Persistent goal state',
+    '- tools.goal(input: { action: "get" | "create" | "complete"; objective?: string }): Promise<{ goal?: object; report?: string }> // Persistent goal state',
   ],
   [
     AskUserTool,

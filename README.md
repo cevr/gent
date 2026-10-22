@@ -46,14 +46,14 @@ RPC has no auth. To use a server on another machine, tunnel to it
 
 ## Goals
 
-`/goal <objective>` starts a persistent goal on the current branch. Add
-`--budget N` before the objective to limit its token usage.
+`/goal <objective>` starts a persistent goal on the current branch. The
+harness continues it after every turn until the model checks the objective and
+marks it complete. Its token and time usage is a report, not a limit.
 
 - `/goal status` shows the objective and usage.
 - `/goal pause` keeps the objective and usage, removes its pending continuation,
   and lets work already in flight finish. That work is charged once.
-- `/goal resume` continues the same goal. A spent budget requires
-  `/goal resume --budget N`, which gives it a fresh N-token allowance beyond usage so far.
+- `/goal resume` continues the same goal.
 - `/goal clear`, `/goal cancel`, and `/goal stop` remove the goal and its pending
   continuation. Work already in flight finishes; these commands do not mark the goal complete.
 

@@ -21,13 +21,7 @@ export {
 } from "./checkpoints.js"
 // The TUI file popup memoizes its finder's scan with the shape the catalog and the MCP prune use.
 export { makeStartedMemo } from "./started-memo.js"
-export {
-  GOAL_CONTEXT_MESSAGE_TYPE,
-  GOAL_EXTENSION_ID,
-  GoalRpc,
-  GoalSnapshot,
-  remainingTokens,
-} from "./goal.js"
+export { GOAL_CONTEXT_MESSAGE_TYPE, GOAL_EXTENSION_ID, GoalRpc, GoalSnapshot } from "./goal.js"
 // forkQuestionText, like threadRoundText, has only a test reader here: it
 // writes the text forkQuestionBody reads. forkMergeText writes the text
 // forkMergePrompt reads, in the same way.

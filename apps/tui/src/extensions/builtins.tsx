@@ -48,7 +48,6 @@ import {
   GOAL_EXTENSION_ID,
   GoalRpc,
   type GoalSnapshot,
-  remainingTokens,
   FilesRpc,
   SkillsRpc,
   makeStartedMemo,
@@ -736,13 +735,10 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
             Option.filter((value) => value.status !== "complete"),
           )
           if (Option.isNone(goal)) return []
-          const parts = [`goal ${goal.value.status}`, `${goal.value.continuationsUsed}↻`]
-          Option.map(remainingTokens(goal.value), (remaining) => {
-            parts.push(`${remaining} left`)
-          })
+          const text = `goal ${goal.value.status} · ${goal.value.continuationsUsed}↻`
           let color: "info" | "warning" = "info"
           if (goal.value.status !== "active") color = "warning"
-          return [{ text: parts.join(" · "), color }]
+          return [{ text, color }]
         },
       }),
     )
