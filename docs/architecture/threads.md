@@ -404,8 +404,7 @@
   listing reads the subtree of the root's thread key, so a handoff's tray
   holds what the sessions it continues started. The activity watchers follow
   the loops before the fold. The pane shows
-  `N sessions` in the right column (a narrow pane drops the side-thread mark
-  first), marks the row current when the shell is on any of its sessions,
+  `N sessions` in the right column, marks the row current when the shell is on any of its sessions,
   and a second Ctrl+X deletes each session of the thread, newest first, since
   a session delete keeps a same-thread handoff.
 - Each row carries its thread's totals: `turns`, `costUsd` and `durationMs`
@@ -419,10 +418,11 @@
   `EventStorage.listBranchEvents` and `SESSION_METRIC_TAGS`), never each
   branch's log: on the owner's store (12,023 metric events on 564 branches,
   2026-10-22) the whole-workspace read took 18–19 ms of SQL and 31–59 ms to
-  decode and fold (measured), and the tray reads only its subtree. A wide
-  row (80 columns and up) draws `Model effort` and the cost before its time;
-  a narrower one keeps only the session count and the time, so the name
-  keeps its room. A section heading sums its rows' cost (`Idle (2) ·
+  decode and fold (measured), and the tray reads only its subtree. The right
+  column draws the side-thread mark, the session count, `Model effort`, the
+  cost and the time, and never takes the name's 24 columns (`rightColumn`,
+  `NAME_ROOM`): it drops the side-thread mark first, then the model, the
+  cost and the session count; the time always stays. A section heading sums its rows' cost (`Idle (2) ·
   $0.13`), and the tray's first line puts its rows' cost before its key
   hints.
 - The tray draws one row per running child, its glyph the state: the

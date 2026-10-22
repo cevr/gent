@@ -174,7 +174,7 @@ gent has durable rounds that reconcile, an interrupt cascade, and typed state. P
 ### Verdict
 
 - gent already better on the domain model.
-- Copy the idea of the forge-proof notice only if a model tool can write a `thread-round-end` custom type today. I did not check. (guess; worth a 5-minute check: can `session.send` set `customType: "thread-round-end"`?)
+- Do not copy the forge-proof notice. No model tool or client can write a `thread-round-end` custom type today: `session.send` takes only `to` and `message` and writes `session-message` (packages/extensions/src/session-tools.ts:315-320, 715); `clientMetadata` drops a client's `customType` (packages/core/src/domain/message.ts:317-324); every other extension writer passes a fixed constant (machines.ts:2992, 3026; exec-tools.ts:708). (measured, 2026-10-22)
 
 ---
 

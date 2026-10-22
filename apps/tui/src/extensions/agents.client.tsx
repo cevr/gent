@@ -939,15 +939,15 @@ const rowsCost = (rows: ReadonlyArray<AgentRowEntry>): string => {
   return formatCost(total)
 }
 
-/** Rows narrower than this drop the side-thread mark, the model and the cost. */
-const NARROW_ROW = 80
+/** Columns a row keeps for its name; the right column never takes them. */
+const NAME_ROOM = 24
 
 /**
  * The right column: the side-thread mark, the session count, the model and
- * effort, the cost, the time. In a narrow pane the side-thread mark, the
- * model and the cost go first, so the name keeps its room; the tree shape
- * still shows the nesting, the details say the model and the cost, and the
- * section heading sums the cost.
+ * effort, the cost, the time. Each field goes when the column would eat into
+ * the name's room: the side-thread mark first (the tree shape still shows the
+ * nesting), then the model (the details say it), then the cost (the section
+ * heading sums it), then the session count. The time always stays.
  */
 export const rightColumn = (
   row: AgentRowEntry,
@@ -956,14 +956,23 @@ export const rightColumn = (
   models: ReadonlyArray<Model>,
 ): string => {
   const join = (parts: ReadonlyArray<string>) => parts.filter((part) => part.length > 0).join("  ")
-  if (rowWidth < NARROW_ROW) return join([sessionsMark(row), timeFor(row, now)])
-  return join([
-    sideThreadMark(row),
-    sessionsMark(row),
-    modelLabel(row, models, " "),
-    costMark(row),
-    timeFor(row, now),
-  ])
+  // The marker, the indent, the glyph and its space, and the gap before the column.
+  const lead = textWidth(`${currentMarker(false)}${indentFor(row.depth)}`) + 4
+  const room = rowWidth - lead - NAME_ROOM
+  const time = timeFor(row, now)
+  const sessions = sessionsMark(row)
+  const cost = costMark(row)
+  const model = modelLabel(row, models, " ")
+  return (
+    [
+      [sideThreadMark(row), sessions, model, cost, time],
+      [sessions, model, cost, time],
+      [sessions, cost, time],
+      [sessions, time],
+    ]
+      .map(join)
+      .find((column) => textWidth(column) <= room) ?? time
+  )
 }
 
 /**

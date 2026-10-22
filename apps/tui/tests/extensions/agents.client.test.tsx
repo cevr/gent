@@ -42,6 +42,7 @@ import {
 import { StatusRow } from "../../src/composer"
 import { resolveThemeColor, useTheme } from "../../src/theme"
 import { DockProvider, PickerFrame } from "../../src/ui"
+import { textWidth } from "../../src/bun-adapter"
 import { RGBA } from "@opentui/core"
 import {
   createMockClient,
@@ -2035,12 +2036,30 @@ describe("agents pane counts and detail", () => {
   )
 
   it.live(
-    "a wide row names its model and effort and what it spent; a narrow one only its time",
+    "a wide row names its model and effort and what it spent; a narrow one keeps its name's room",
     () =>
       Effect.sync(() => {
         const row = { ...spent("inactive", 4), updatedAt: 0 }
         expect(rightColumn(row, 180_000, 100, [SONNET])).toBe("Claude Sonnet 5 high  $0.03  3m")
-        expect(rightColumn(row, 180_000, 60, [SONNET])).toBe("3m")
+        expect(rightColumn(row, 180_000, 60, [SONNET])).toBe("$0.03  3m")
+        expect(rightColumn(row, 180_000, 36, [SONNET])).toBe("3m")
+        // A nested side thread on a long model name: the model goes, the name keeps 24 columns.
+        const qwen = new Model({
+          id: ModelId.make("opencode/qwen3-coder"),
+          name: "Qwen3 Coder 480B A35B Instruct",
+          provider: ProviderId.make("opencode"),
+        })
+        const nested = {
+          ...row,
+          depth: 2,
+          sideThread: true,
+          model: qwen.id,
+          sessions: [SessionId.make("spent"), SessionId.make("spent-2")],
+        }
+        const column = rightColumn(nested, 180_000, 80, [qwen])
+        expect(column).toBe("2 sessions  $0.03  3m")
+        // The marker and indent (6), the glyph and its space (2), the gap (2).
+        expect(80 - 10 - textWidth(column)).toBeGreaterThanOrEqual(24)
         // A row that never ran names no model and spent nothing: only its age.
         expect(rightColumn({ ...root("new", "idle"), updatedAt: 0 }, 180_000, 100, [])).toBe("3m")
       }),
@@ -2197,7 +2216,7 @@ describe("thread rows", () => {
     "a thread's row counts its sessions, and a narrow pane drops the side-thread mark first",
     () =>
       Effect.gen(function* () {
-        // Wide enough that the list beside the details column keeps 80 columns.
+        // Wide enough that the list beside the details column has room for every field.
         const wide = yield* paneAt([thread], "elsewhere", 140)
         const wideFrame = yield* waitForFrame(
           wide,
@@ -2208,7 +2227,7 @@ describe("thread rows", () => {
         const wideRow = wideFrame.split("\n").findLast((line) => line.includes("fix auth")) ?? ""
         expect(wideRow).toContain("side thread  3 sessions")
 
-        const narrow = yield* paneAt([thread], "elsewhere", 60)
+        const narrow = yield* paneAt([thread], "elsewhere", 48)
         const narrowFrame = yield* waitForFrame(
           narrow,
           (next) => next.includes("fix auth"),
