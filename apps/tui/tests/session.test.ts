@@ -3016,8 +3016,8 @@ describe("useSessionFeed", () => {
             Stream.concat(
               Stream.make(
                 makeEnvelope(1, started),
-                makeEnvelope(1, chunk("Hello ", 0)),
                 synchronized(1),
+                makeEnvelope(1, chunk("Hello ", 0)),
                 makeEnvelope(1, chunk("world", 6)),
               ),
               Stream.fromQueue(later),
@@ -3084,8 +3084,8 @@ describe("useSessionFeed", () => {
               return Stream.concat(
                 Stream.make(
                   makeEnvelope(1, started),
-                  makeEnvelope(1, chunk("Hello ", 0)),
                   synchronized(1),
+                  makeEnvelope(1, chunk("Hello ", 0)),
                 ),
                 Stream.fail(
                   new RpcClientError({
@@ -3097,8 +3097,8 @@ describe("useSessionFeed", () => {
             // holds the text streamed while the connection was down.
             return Stream.concat(
               Stream.make(
-                makeEnvelope(1, chunk("Hello big wide ", 0)),
                 synchronized(1),
+                makeEnvelope(1, chunk("Hello big wide ", 0)),
                 makeEnvelope(1, chunk("world", 15)),
               ),
               Stream.never,

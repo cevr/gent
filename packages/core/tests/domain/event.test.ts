@@ -10,6 +10,7 @@ import {
   type EventStoreService,
   getEventBranchId,
   getEventSessionId,
+  makeEventStore,
   makeSerializedEventDelivery,
   SESSION_NOTIFICATION_CAPACITY,
   SessionNameUpdated,
@@ -374,6 +375,78 @@ const stores = [
   { name: "durable", layer: durableLayer },
 ]
 
+describe("a subscription opened before the session's first delivery", () => {
+  it.scopedLive("replays what a restarted server finds stored", () =>
+    Effect.gen(function* () {
+      const events = [
+        EventEnvelope.make({ id: EventId.make(1), event: stored(1), createdAt: 0 }),
+        EventEnvelope.make({ id: EventId.make(2), event: stored(2), createdAt: 0 }),
+      ]
+      const eventStore = yield* makeEventStore({
+        append: () => Effect.die("the restarted server appends nothing here"),
+        load: (_, afterId) => Effect.succeed(events.filter((env) => env.id > afterId)),
+        latest: () => Effect.succeed(EventId.make(events.length)),
+      })
+      const received = yield* eventStore
+        .subscribe({ sessionId, branchId, synchronize: true })
+        .pipe(Stream.take(3), Stream.runCollect, Effect.timeout("5 seconds"))
+      expect(tagged(received)).toEqual([
+        [1, "ToolCallStarted"],
+        [2, "ToolCallStarted"],
+        [2, "StreamSynchronized"],
+      ])
+    }),
+  )
+
+  it.scopedLive("places a chunk before the stored events published after it", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<EventEnvelope>>([])
+      // The subscription's first read of the store signals, and a load waits
+      // for the gate: the step ends while the subscription opens.
+      const reached = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const eventStore = yield* makeEventStore({
+        append: (event) =>
+          Ref.modify(events, (stored) => {
+            const envelope = EventEnvelope.make({
+              id: EventId.make(stored.length + 1),
+              event,
+              createdAt: 0,
+            })
+            return [envelope, [...stored, envelope]]
+          }),
+        load: (_, afterId) =>
+          Deferred.succeed(reached, void 0).pipe(
+            Effect.andThen(Deferred.await(gate)),
+            Effect.andThen(Ref.get(events)),
+            Effect.map((stored) => stored.filter((env) => env.id > afterId)),
+          ),
+        latest: () =>
+          Deferred.succeed(reached, void 0).pipe(
+            Effect.andThen(Ref.get(events)),
+            Effect.map((stored) => EventId.make(stored.length)),
+          ),
+      })
+      const collector = yield* eventStore
+        .subscribe({ sessionId, branchId, synchronize: true })
+        .pipe(Stream.take(4), Stream.runCollect, Effect.forkChild)
+      yield* Deferred.await(reached)
+      yield* eventStore.publish(started())
+      yield* eventStore.publish(chunk(0, "hi"))
+      yield* eventStore.publish(ended())
+      yield* Deferred.succeed(gate, void 0)
+      const received = yield* Fiber.join(collector).pipe(Effect.timeout("5 seconds"))
+      // The marker falls where the subscription opened; the step reads in order.
+      const step = received.filter((env) => env.event._tag !== "StreamSynchronized")
+      expect(tagged(step)).toEqual([
+        [1, "StreamStarted"],
+        [1, "hi"],
+        [2, "StreamEnded"],
+      ])
+    }).pipe(Effect.timeout("15 seconds")),
+  )
+})
+
 describe("event stream delivery", () => {
   for (const store of stores) {
     describe(store.name, () => {
@@ -469,6 +542,35 @@ describe("event stream delivery", () => {
             .subscribe({ sessionId, branchId })
             .pipe(Stream.take(3), Stream.runCollect)
           expect(ids(plain)).toEqual([1, 2, 4])
+        }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
+      )
+
+      it.scopedLive("events delivered out of id order in one burst all arrive", () =>
+        Effect.gen(function* () {
+          yield* ensureSession
+          const eventStore = yield* EventStore
+          const firstSeen = yield* Deferred.make<void>()
+          const gate = yield* Deferred.make<void>()
+          const collector = yield* eventStore.subscribe({ sessionId, branchId }).pipe(
+            Stream.tap(() =>
+              Deferred.succeed(firstSeen, void 0).pipe(Effect.andThen(Deferred.await(gate))),
+            ),
+            Stream.take(3),
+            Stream.runCollect,
+            Effect.forkChild,
+          )
+          yield* Effect.yieldNow
+          yield* eventStore.publish(stored(1))
+          // The subscriber holds the first event, so the next notifications form one burst.
+          yield* Deferred.await(firstSeen)
+          const second = yield* eventStore.append(stored(2))
+          const third = yield* eventStore.append(stored(3))
+          // Two writers: the later event's delivery lands first.
+          yield* eventStore.deliver(third)
+          yield* eventStore.deliver(second)
+          yield* Deferred.succeed(gate, void 0)
+          const received = yield* Fiber.join(collector).pipe(Effect.timeout("5 seconds"))
+          expect(ids(received)).toEqual([1, 2, 3])
         }).pipe(Effect.provide(store.layer), Effect.timeout("15 seconds")),
       )
 

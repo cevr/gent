@@ -704,10 +704,10 @@ interface EventStoreBackend {
 
 export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: EventStoreBackend) {
   const registry = yield* makeSessionPubSubRegistry
-  // Per session, written by the delivery worker only: the newest stored
-  // event delivered, and each branch's answer in progress, from its step's
-  // `StreamStarted` to its end. Both are this process's: a restarted server
-  // runs no answer.
+  // Per session: the newest stored event delivered (seeded from the store by
+  // `seedDelivered`), and each branch's answer in progress, from its step's
+  // `StreamStarted` to its end; the delivery worker writes both. Both are this
+  // process's: a restarted server runs no answer.
   const delivered = new Map<SessionId, EventId>()
   const answers = new Map<SessionId, Map<BranchId, string>>()
   const branchAnswers = (sessionId: SessionId) => {
@@ -732,6 +732,17 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
         return
     }
   }
+  /**
+   * Seeds the session's delivered point from the store the first time this
+   * process touches the session: a chunk and a subscription each need a place
+   * among the stored events. An event stored but still in delivery is at or
+   * below the seed; its notification then drains nothing new.
+   */
+  const seedDelivered = Effect.fn("EventStore.seedDelivered")(function* (sessionId: SessionId) {
+    if (delivered.has(sessionId)) return
+    const latest = yield* backend.latest(sessionId, Option.none())
+    if (!delivered.has(sessionId)) delivered.set(sessionId, latest)
+  })
   /** A chunk takes its place here: after every stored event delivered before it. */
   const broadcast = (envelope: EventEnvelope) =>
     Effect.gen(function* () {
@@ -765,11 +776,7 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
 
     publish: Effect.fn("EventStore.publish")(function* (event) {
       if (event._tag !== "StreamChunk") return yield* deliver(yield* service.append(event))
-      // A chunk before any delivery since the server started follows what is stored.
-      if (!delivered.has(event.sessionId)) {
-        const latest = yield* backend.latest(event.sessionId, Option.none())
-        if (!delivered.has(event.sessionId)) delivered.set(event.sessionId, latest)
-      }
+      yield* seedDelivered(event.sessionId)
       yield* deliver(
         EventEnvelope.make({
           id: EventId.make(0),
@@ -786,9 +793,10 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
             const { sessionId, branchId, after, synchronize } = params
             if (backend.open) yield* backend.open(params)
             const subscription = yield* registry.subscribe(sessionId)
+            yield* seedDelivered(sessionId)
             // Read together after subscribing: the answers hold every chunk
             // delivered up to that event, and a later one is in the subscription.
-            const openedAt = Option.fromUndefinedOr(delivered.get(sessionId))
+            const openedAt = delivered.get(sessionId) ?? EventId.make(0)
             const opening = Array.from(answers.get(sessionId) ?? [], ([branch, chunk]) =>
               StreamChunk.make({ sessionId, branchId: branch, offset: 0, chunk }),
             )
@@ -961,9 +969,9 @@ const makeCursorReplayStream = <E>(params: {
   /**
    * The newest stored event delivered when the subscription opened: the
    * replay stops there, and what is stored after it comes with its own
-   * notification. None before the first delivery since the server started.
+   * notification.
    */
-  readonly delivered: Option.Option<EventId>
+  readonly delivered: EventId
   /** The answers in progress when the subscription opened, each one chunk; sent after the replay. */
   readonly answers: ReadonlyArray<StreamChunk>
   /** Session events with id greater than the cursor, ascending. */
@@ -985,8 +993,7 @@ const makeCursorReplayStream = <E>(params: {
           if (Predicate.isNotUndefined(last)) cursor = last.id
           return batch.filter((env) => matchesBranchFilter(env, params.branchId))
         })
-      const initial = yield* drain(params.delivered)
-      const openedAt = Option.getOrElse(params.delivered, () => EventId.make(0))
+      const initial = yield* drain(Option.some(params.delivered))
       const createdAt = yield* Clock.currentTimeMillis
       const opening: EventEnvelope[] = []
       if (params.synchronize === true)
@@ -1010,19 +1017,21 @@ const makeCursorReplayStream = <E>(params: {
       const deliverBurst = (burst: ReadonlyArray<EventEnvelope>) =>
         Effect.gen(function* () {
           const out: EventEnvelope[] = []
-          let stored = Option.none<EventId>()
+          // The highest stored id since the last chunk, 0 for none: two writers
+          // can deliver their events out of id order.
+          let stored = 0
           for (const envelope of burst) {
             if (envelope.event._tag !== "StreamChunk") {
-              stored = Option.some(envelope.id)
+              stored = Math.max(stored, envelope.id)
               continue
             }
             // Every stored event delivered before the chunk is at or below its id.
             out.push(...(yield* drain(Option.some(envelope.id))))
-            stored = Option.none()
-            if (envelope.id >= openedAt && matchesBranchFilter(envelope, params.branchId))
+            stored = 0
+            if (envelope.id >= params.delivered && matchesBranchFilter(envelope, params.branchId))
               out.push(envelope)
           }
-          if (Option.isSome(stored)) out.push(...(yield* drain(stored)))
+          if (stored > 0) out.push(...(yield* drain(Option.some(EventId.make(stored)))))
           return out
         })
       const live = Stream.fromSubscription(params.subscription).pipe(

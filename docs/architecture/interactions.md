@@ -9,9 +9,11 @@ Slow-client policy: the session PubSub registry in `domain/event.ts` gives each 
 PubSub of notifications. Publishing never waits for a subscriber, so a
 stalled client cannot block tool execution. `makeCursorReplayStream` opens the
 subscription first, drains the durable store from the subscriber's cursor, and
-drains again on every notification burst. Lost or coalesced notifications cost
-one extra read, never an event, and replay and live delivery share one ordered
-source, so there is no replay/live race. Both `EventStoreLive` and
+drains again on every notification burst, up to the highest stored id the
+burst names: two writers can deliver out of id order. Lost or coalesced
+notifications cost one extra read, never a stored event, and replay and live
+delivery share one ordered source, so there is no replay/live race. A lost
+chunk is gone (see Live chunks). Both `EventStoreLive` and
 `EventStore.Memory` use this path; `tests/domain/event.test.ts`
 proves the stalled-subscriber, race, and branch-filter properties for both.
 
@@ -33,7 +35,13 @@ to `StreamEnded` or `TurnCompleted`, and a subscription opens with it as one
 chunk at offset 0, after the marker. That chunk can repeat text a live chunk
 also carried, so every consumer appends only `unseenText(held, chunk)`: the TUI
 feed, headless output, the agents view and the btw pane. A restarted server
-runs no answer, so it opens with none.
+runs no answer, so it opens with none. The store seeds a session's delivered
+point from its newest stored event the first time this process touches the
+session, by a chunk or a subscription, so every subscription's replay stops at
+a known point and a chunk queued behind it cannot land after a stored event
+published later. A chunk lost to the sliding PubSub leaves a gap in its offsets:
+the TUI feed and headless output take the rest from the step's stored answer;
+the agents view and the btw pane show the live text only until the step ends.
 
 One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{ approved, notes?, editedContent? }`.
 

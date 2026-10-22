@@ -39,6 +39,7 @@ import { TestClock } from "effect/testing"
 import * as Prompt from "effect/ai/Prompt"
 import {
   AgentEvent,
+  assistantMessageIdForTurn,
   BranchId,
   dateFromMillis,
   EventEnvelope,
@@ -122,6 +123,20 @@ const chunk = (text: string, offset = 0) =>
   AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
 const stepStarted = (step: number) =>
   AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: OWN_TURN, step })
+const stepEnded = (step: number) =>
+  AgentEvent.cases.StreamEnded.make({ sessionId, branchId, messageId: OWN_TURN, step })
+/** The step's stored answer, as its `MessageReceived` carries it. */
+const stepAnswer = (step: number, text: string) =>
+  MessageReceived.make({
+    message: Message.cases.regular.make({
+      id: assistantMessageIdForTurn(OWN_TURN, step),
+      sessionId,
+      branchId,
+      role: "assistant",
+      parts: [Prompt.textPart({ text })],
+      createdAt: dateFromMillis(0),
+    }),
+  })
 const completed = (
   fields: {
     readonly unanswered?: boolean
@@ -358,6 +373,31 @@ describe("runHeadless", () => {
       const { stdout } = yield* captureStdout(run(client))
       expect(stdout).toContain("Hello, world Next step.")
       expect(stdout.split("Hel")).toHaveLength(2)
+    }),
+  )
+
+  // A slow reader's subscription drops its oldest notifications, so a chunk
+  // can be lost; the step's stored answer writes what its chunks missed.
+  headlessTest("a step whose chunks were lost prints its stored answer whole", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [
+          stepStarted(1),
+          chunk("Hel"),
+          // "lo, " was lost, and so was the step's last chunk, "!".
+          chunk("world", 7),
+          stepEnded(1),
+          stepAnswer(1, "Hello, world!"),
+          stepStarted(2),
+          chunk("Done."),
+          stepEnded(2),
+          stepAnswer(2, "Done."),
+          completed(),
+        ],
+      })
+      const { stdout } = yield* captureStdout(run(client))
+      expect(stdout).toContain("Hello, world!\nDone.\n")
+      expect(stdout.split("world")).toHaveLength(2)
     }),
   )
 

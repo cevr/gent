@@ -13,9 +13,12 @@ import {
   Stream,
 } from "effect"
 import {
+  assistantMessageIdForTurn,
   formatHeadTail,
   type AgentEvent,
   type BranchId,
+  type MessageId,
+  messagePartsText,
   type SessionId,
   GentConnectionError,
   type GentNamespacedClient,
@@ -332,8 +335,42 @@ export const runHeadless = (
       // An error that is not a notice: without answer text, the turn failed.
       let failed = false
       let wroteText = false
-      // The step's answer written so far.
+      // The step's answer written so far, from its chunks. A chunk that starts
+      // past it follows a lost one (a slow reader's subscription drops the
+      // oldest notifications): the step's stored answer then writes the rest.
+      // Its line ends at the next event, after that answer.
       let answered = 0
+      let lost = false
+      let stepAnswer = Option.none<MessageId>()
+      let lineOpen = false
+      const endLine = Effect.suspend(() => {
+        if (!lineOpen) return Effect.void
+        lineOpen = false
+        return writeStdout("\n")
+      })
+      const settleAnswer = (text: string) => {
+        const rest = text.slice(answered)
+        answered = Math.max(answered, text.length)
+        lost = false
+        if (rest.trim().length > 0) wroteText = true
+        return writeStdout(rest).pipe(Effect.andThen(endLine))
+      }
+      const streamChunk = (event: Extract<AgentEvent, { readonly _tag: "StreamChunk" }>) => {
+        if (event.offset > answered) lost = true
+        if (lost) return Effect.void
+        const text = unseenText(answered, event)
+        answered = Math.max(answered, event.offset + event.chunk.length)
+        if (text.trim().length > 0) wroteText = true
+        return writeStdout(text)
+      }
+      const messageReceived = (
+        event: Extract<AgentEvent, { readonly _tag: "MessageReceived" }>,
+      ) => {
+        if (event.message.id === ownMessage) ownTurnStarted = true
+        else if (inOwnTurn() && Option.contains(stepAnswer, event.message.id))
+          return settleAnswer(messagePartsText(event.message.parts))
+        return Effect.void
+      }
       const activeTools = new Map<string, HeadlessToolCall>()
       // Cells whose admitted calls printed their own lines.
       const cellsWithPrintedOperations = new Set<string>()
@@ -417,22 +454,18 @@ export const runHeadless = (
               return
             }
             if (!live) return
-            if (event._tag === "MessageReceived") {
-              if (event.message.id === ownMessage) ownTurnStarted = true
-              return
-            }
+            if (event._tag === "MessageReceived") return yield* messageReceived(event)
             if (!inOwnTurn()) return
+            yield* endLine
             switch (event._tag) {
               case "StreamStarted":
                 answered = 0
+                lost = false
+                stepAnswer = Option.some(assistantMessageIdForTurn(event.messageId, event.step))
                 break
-              case "StreamChunk": {
-                const text = unseenText(answered, event)
-                answered = Math.max(answered, event.offset + event.chunk.length)
-                if (text.trim().length > 0) wroteText = true
-                yield* writeStdout(text)
+              case "StreamChunk":
+                yield* streamChunk(event)
                 break
-              }
               case "ToolCallStarted":
                 yield* toolStarted(event)
                 break
@@ -441,7 +474,7 @@ export const runHeadless = (
                 yield* toolEnded(event)
                 break
               case "StreamEnded":
-                yield* writeStdout("\n")
+                lineOpen = true
                 break
               case "ErrorOccurred":
                 // An error does not end the turn; its `TurnCompleted` or the
