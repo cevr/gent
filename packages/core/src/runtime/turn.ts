@@ -3426,10 +3426,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       contextLimitTokens: contextLimit,
       outputLimitTokens: Option.fromUndefinedOr(model.outputLimit),
     })
-    // The role's window (`ModelContextWindowPolicy`) only lowers the model's.
-    // A spawned session runs its budget at it and hands off between steps; a
-    // root keeps the model's window and hands off at it only when a turn
-    // starts (`turnBoundaryTokens`).
+    // The role's window (`ModelContextWindowPolicy`) only lowers the model's,
+    // and only as a soft limit: the budget stays the model's window for every
+    // session, so the role window never refuses input the model accepts. A
+    // spawned session hands off at it before any step; a root only when a
+    // turn starts (`roleWindowBinds` below).
     const roleWindow = yield* Effect.serviceOption(ModelContextWindowPolicy).pipe(
       Effect.flatMap(
         Option.match({
@@ -3443,11 +3444,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ),
       ),
     )
-    let budgetLimit = contextLimit
-    if (resolved.spawned) budgetLimit = Option.getOrElse(roleWindow, () => contextLimit)
-    const turnBoundaryTokens = Option.filter(roleWindow, () => !resolved.spawned)
     const budget = ModelContextBudget.make({
-      contextLimitTokens: budgetLimit,
+      contextLimitTokens: contextLimit,
       ...omitUndefined({
         inputLimitTokens: Option.getOrUndefined(inputLimit),
         imageCost: model.imageCost,
@@ -3494,7 +3492,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       cacheLifetimeMs: promptCacheTtlMsFor(model, resolved.child),
       promptCache,
       budget,
-      turnBoundaryTokens,
+      roleWindow,
       turnHints,
       reasoningLevel,
       modelRequest,
@@ -3698,7 +3696,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     overflowed: params.overflowed,
     directive,
     turnStart: params.step <= 1,
-    turnBoundaryTokens: opening.turnBoundaryTokens,
+    roleWindowTokens: opening.roleWindow,
+    roleWindowBinds: resolved.spawned || params.step <= 1,
     promptCache,
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
@@ -3848,6 +3847,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       estimatedTokens: projection.estimatedTokens,
       availableInputTokens: projection.availableInputTokens,
       contextLimitTokens: stepWindow.contextLimit,
+      reservedOutputTokens: stepWindow.budget.reservedOutputTokens,
+      inputLimitTokens: stepWindow.budget.inputLimitTokens,
       omittedMessages: projection.omittedMessageIds.length,
       handoffMessageId,
       compacted,

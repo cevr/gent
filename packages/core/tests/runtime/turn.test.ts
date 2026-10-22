@@ -6451,7 +6451,7 @@ describe("role context window", () => {
     { text: "done" },
   ]
 
-  it.live("a role window only lowers the budget and keeps the model's output cap", () =>
+  it.live("a role window keeps the model's budget and output cap", () =>
     Effect.gen(function* () {
       const runAt = (name: string, window: Option.Option<number>) =>
         Effect.gen(function* () {
@@ -6466,6 +6466,7 @@ describe("role context window", () => {
             return {
               available: projected[0]?.availableInputTokens ?? 0,
               ceiling: projected[0]?.contextLimitTokens ?? 0,
+              reserve: projected[0]?.reservedOutputTokens,
               maxTokens: turnMaxTokens(root.hints),
             }
           }).pipe(Effect.provide(root.layer), Effect.scoped)
@@ -6473,16 +6474,52 @@ describe("role context window", () => {
       const none = yield* runAt("role-lowers-none", Option.none())
       const lower = yield* runAt("role-lowers-120k", Option.some(120_000))
       const above = yield* runAt("role-lowers-300k", Option.some(300_000))
-      // 120k lowers the input the step may carry by the 80k it takes off the window.
-      expect(lower.available).toBe(none.available - 80_000)
-      // A window past the model's changes nothing.
+      // The budget stays the model's window: 120k is a soft limit, and a
+      // window past the model's changes nothing either.
+      expect(lower.available).toBe(none.available)
       expect(above.available).toBe(none.available)
       // The reply cap stays the model window's 32k: a quarter of 120k is 30k.
       expect(lower.maxTokens).toEqual([32_000])
       expect(none.maxTokens).toEqual([32_000])
-      // The ceiling the step reports stays the model's window.
+      // The step reports the model's window and the reserve it sent as the cap.
       expect(lower.ceiling).toBe(MODEL_WINDOW)
+      expect(lower.reserve).toBe(32_000)
     }).pipe(Effect.timeout("20 seconds")),
+  )
+
+  it.live(
+    "a spawned session whose first prompt is past its role window runs under the model's budget",
+    () =>
+      Effect.gen(function* () {
+        // ~90k tokens: past 120k less its 32k reserve, within 200k less it.
+        // Nothing comes before the prompt to summarize, so the call goes out.
+        const root = yield* roleRoot({ window: Option.some(120_000), steps: [{ text: "done" }] })
+        yield* Effect.gen(function* () {
+          const child = yield* spawnedSession("spawned-prompt-past-role", modelAdmission)
+          yield* runAgentLoop(
+            makeMessage(child.sessionId, child.branchId, "x".repeat(360_000)),
+            modelAdmission,
+          )
+          const events = yield* Ref.get(root.events)
+          expect(
+            events.filter(
+              (event) => event._tag === "ErrorOccurred" && event.sessionId === child.sessionId,
+            ),
+          ).toEqual([])
+          expect(projectedOf(events, child.sessionId).map((event) => event.compacted)).toEqual([
+            false,
+          ])
+          expect(turnMaxTokens(root.hints)).toEqual([32_000])
+          const durable = yield* (yield* MessageStorage).listMessages(child.branchId)
+          expect(
+            durable.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some((part) => part.type === "text" && part.text === "done"),
+            ),
+          ).toBe(true)
+        }).pipe(Effect.provide(root.layer), Effect.scoped)
+      }).pipe(Effect.timeout("20 seconds")),
   )
 
   it.live("a spawned session hands off between steps at its role window", () =>

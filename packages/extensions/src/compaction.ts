@@ -43,7 +43,6 @@ import {
   type ModelContextBudget,
   ModelContextCompactor,
   ModelContextWindowPolicy,
-  outputReserveTokens,
   partToText,
   planWindow,
   type ProviderAuthError,
@@ -556,6 +555,10 @@ export interface WindowStep {
   readonly spawned: boolean
   /** The model's window (`ModelContextProjected.contextLimitTokens`). */
   readonly ceilingTokens: number
+  /** The output the step kept free of that window (`ModelContextProjected.reservedOutputTokens`). */
+  readonly reservedOutputTokens: number
+  /** The model's input cap the step ran under (`ModelContextProjected.inputLimitTokens`). */
+  readonly inputLimitTokens: Option.Option<number>
   /** The input the call carried, cache reads included (`StreamEnded.usage`). */
   readonly inputTokens: number
   /** The step's projection wrote a handoff. */
@@ -606,7 +609,12 @@ const decodeBashInput = Schema.decodeUnknownOption(Schema.Struct({ command: Sche
 type EventOf<Tag extends AgentEvent["_tag"]> = Extract<AgentEvent, { readonly _tag: Tag }>
 
 const makeWindowFold = (turn: WindowTurn) => {
-  let projection = Option.none<{ readonly ceiling: number; readonly compacted: boolean }>()
+  let projection = Option.none<{
+    readonly ceiling: number
+    readonly reservedOutputTokens: Option.Option<number>
+    readonly inputLimitTokens: Option.Option<number>
+    readonly compacted: boolean
+  }>()
   let inTurn = false
   let child = false
   let handoffs = 0
@@ -618,7 +626,12 @@ const makeWindowFold = (turn: WindowTurn) => {
 
   // A handoff moves the paths read in the window it closes to the earlier ones.
   const projected = (event: EventOf<"ModelContextProjected">) => {
-    projection = Option.some({ ceiling: event.contextLimitTokens, compacted: event.compacted })
+    projection = Option.some({
+      ceiling: event.contextLimitTokens,
+      reservedOutputTokens: Option.fromUndefinedOr(event.reservedOutputTokens),
+      inputLimitTokens: Option.fromUndefinedOr(event.inputLimitTokens),
+      compacted: event.compacted,
+    })
     if (!event.compacted) return
     handoffs += 1
     for (const path of readSince) readBefore.add(path)
@@ -634,6 +647,9 @@ const makeWindowFold = (turn: WindowTurn) => {
     const usage = Option.fromUndefinedOr(event.usage)
     const step = Option.fromUndefinedOr(event.step)
     if (Option.isNone(stepProjection) || Option.isNone(step) || Option.isNone(usage)) return
+    // A step replays at the limits it ran under; a receipt without them is not replayed.
+    const reserve = stepProjection.value.reservedOutputTokens
+    if (Option.isNone(reserve)) return
     steps.push({
       sessionId: turn.sessionId,
       branchId: turn.branchId,
@@ -643,6 +659,8 @@ const makeWindowFold = (turn: WindowTurn) => {
       child: event.child ?? false,
       spawned: turn.spawned,
       ceilingTokens: stepProjection.value.ceiling,
+      reservedOutputTokens: reserve.value,
+      inputLimitTokens: stepProjection.value.inputLimitTokens,
       inputTokens: usage.value.inputTokens,
       compacted: stepProjection.value.compacted,
       turnStartedAt: turn.startedAtMs,
@@ -733,20 +751,17 @@ interface WindowReplay {
  * at full rate, writes its summary at five, and writes the context it keeps
  * again. The stored handoffs are undone first: a step that handed off adds
  * nothing, and the steps after grow from the context the replay holds. Each
- * step asks `planWindow`, the rule the loop hands off by: a spawned session
- * at the window between steps, a root at its model window between steps and
- * at the window when a turn starts.
+ * step asks `planWindow`, the rule the loop hands off by, with the limits
+ * the step ran under (its model window, output reserve and input cap): the
+ * model window binds at every step, the window at every step of a spawned
+ * session and at a root's turn start.
  */
 export const replayWindow = (
   steps: ReadonlyArray<WindowStep>,
-  params: { readonly windowTokens: number; readonly ceilingTokens: number },
+  params: { readonly windowTokens: number },
 ): WindowReplay => {
   const first = steps[0]
   if (Predicate.isUndefined(first)) return { cost: 0, handoffs: 0, callsAfter: 0 }
-  const reserve = outputReserveTokens({
-    contextLimitTokens: params.ceilingTokens,
-    outputLimitTokens: Option.none(),
-  })
   const restart = first.inputTokens + RESTART_TOKENS
   let context = first.inputTokens
   let previous = first.inputTokens
@@ -757,17 +772,13 @@ export const replayWindow = (
     let growth = Math.max(0, step.inputTokens - previous)
     if (step.compacted) growth = 0
     previous = step.inputTokens
-    let limitTokens = params.ceilingTokens - reserve
-    let turnBoundaryTokens = Option.some(params.windowTokens - reserve)
-    if (step.spawned) {
-      limitTokens = params.windowTokens - reserve
-      turnBoundaryTokens = Option.none()
-    }
     const plan = planWindow({
       inputTokens: context + growth,
-      limitTokens,
-      turnBoundaryTokens,
-      turnStart: step.step <= 1,
+      contextLimitTokens: step.ceilingTokens,
+      reservedOutputTokens: step.reservedOutputTokens,
+      inputLimitTokens: step.inputLimitTokens,
+      roleWindowTokens: Option.some(params.windowTokens),
+      roleWindowBinds: step.spawned || step.step <= 1,
     })
     // A window that holds no more than a handoff keeps has nothing to summarize.
     if (plan !== "Keep" && context > restart) {
@@ -880,7 +891,7 @@ export const tuneWindows = (params: {
       ...CANDIDATE_WINDOWS.filter((window) => window < ceilingTokens),
       ceilingTokens,
     ].map((windowTokens) => {
-      const replays = ordered.map((steps) => replayWindow(steps, { windowTokens, ceilingTokens }))
+      const replays = ordered.map((steps) => replayWindow(steps, { windowTokens }))
       const handoffs = replays.reduce((sum, replay) => sum + replay.handoffs, 0)
       const callsAfter = replays.reduce((sum, replay) => sum + replay.callsAfter, 0)
       const cost =
@@ -982,24 +993,41 @@ const contextWindowsMigration = Effect.gen(function* () {
   )
 })
 
+/**
+ * Each step's output reserve and input cap, so a replay uses the limits the
+ * step ran under. A step stored before them has no reserve and leaves the
+ * tune.
+ */
+const stepLimitsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`ALTER TABLE context_window_steps ADD COLUMN reserved_output_tokens INTEGER`)
+  yield* sql.unsafe(`ALTER TABLE context_window_steps ADD COLUMN input_limit_tokens INTEGER`)
+})
+
 const migrateContextWindows = Migrator.make({})({
-  loader: Migrator.fromRecord({ "1_context_windows": contextWindowsMigration }),
+  loader: Migrator.fromRecord({
+    "1_context_windows": contextWindowsMigration,
+    "2_context_window_step_limits": stepLimitsMigration,
+  }),
   table: "compaction_migrations",
 }).pipe(Effect.mapError(windowStorageError("Context window table migration failed")))
 
-interface StepRow {
-  readonly session_id: string
-  readonly branch_id: string
-  readonly message_id: string
-  readonly step: number
-  readonly agent: string
-  readonly child: number
-  readonly spawned: number
-  readonly ceiling_tokens: number
-  readonly input_tokens: number
-  readonly compacted: number
-  readonly turn_started_at: number
-}
+const StepRow = Schema.Struct({
+  session_id: Schema.String,
+  branch_id: Schema.String,
+  message_id: Schema.String,
+  step: Schema.Finite,
+  agent: Schema.String,
+  child: Schema.Finite,
+  spawned: Schema.Finite,
+  ceiling_tokens: Schema.Finite,
+  reserved_output_tokens: Schema.Finite,
+  input_limit_tokens: Schema.NullOr(Schema.Finite),
+  input_tokens: Schema.Finite,
+  compacted: Schema.Finite,
+  turn_started_at: Schema.Finite,
+})
+type StepRow = typeof StepRow.Type
 
 interface RereadRow {
   readonly session_id: string
@@ -1020,6 +1048,8 @@ const stepOfRow = (row: StepRow): WindowStep => ({
   child: row.child === 1,
   spawned: row.spawned === 1,
   ceilingTokens: row.ceiling_tokens,
+  reservedOutputTokens: row.reserved_output_tokens,
+  inputLimitTokens: Option.fromNullishOr(row.input_limit_tokens),
   inputTokens: row.input_tokens,
   compacted: row.compacted === 1,
   turnStartedAt: row.turn_started_at,
@@ -1135,11 +1165,14 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
           (step) => sql`
             INSERT OR IGNORE INTO context_window_steps (
               session_id, branch_id, message_id, step, agent, child, spawned,
-              ceiling_tokens, input_tokens, compacted, turn_started_at, recorded_at
+              ceiling_tokens, reserved_output_tokens, input_limit_tokens,
+              input_tokens, compacted, turn_started_at, recorded_at
             ) VALUES (
               ${step.sessionId}, ${step.branchId}, ${step.messageId}, ${step.step},
               ${step.agent}, ${flag(step.child)}, ${flag(step.spawned)},
-              ${Math.round(step.ceilingTokens)}, ${Math.round(step.inputTokens)},
+              ${Math.round(step.ceilingTokens)}, ${Math.round(step.reservedOutputTokens)},
+              ${Option.getOrNull(Option.map(step.inputLimitTokens, Math.round))},
+              ${Math.round(step.inputTokens)},
               ${flag(step.compacted)}, ${Math.round(step.turnStartedAt)}, ${now}
             )
           `,
@@ -1167,13 +1200,18 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
       const runTune = Effect.fn("ContextWindows.runTune")(function* (now: number) {
         const fresh = (finished: Option.Option<number>) =>
           Option.exists(finished, (at) => now - at < TUNE_EVERY_MS)
-        // Another server may have tuned since this one loaded.
+        // Another server may have tuned since this one loaded: its windows
+        // are the ones to answer with from now on.
         const stored = yield* latestTune
         yield* Ref.set(lastFinished, stored)
-        if (fresh(stored)) return Option.none<TuneReport>()
+        if (fresh(stored)) {
+          yield* loadWindows
+          return Option.none<TuneReport>()
+        }
         const since = now - SAMPLE_MS
         const steps = yield* sql<StepRow>`
-          SELECT * FROM context_window_steps WHERE recorded_at >= ${since}
+          SELECT * FROM context_window_steps
+          WHERE recorded_at >= ${since} AND reserved_output_tokens IS NOT NULL
         `.pipe(Effect.mapError(windowStorageError("Context window steps read failed")))
         const rereads = yield* sql<RereadRow>`
           SELECT * FROM context_window_rereads WHERE recorded_at >= ${since}

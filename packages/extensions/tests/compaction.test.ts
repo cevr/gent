@@ -4,6 +4,7 @@ import {
   Cause,
   Clock,
   Context,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -51,6 +52,7 @@ import {
   ModelCompactionError,
   ModelContextBudget,
   ModelContextCompactor,
+  planWindow,
 } from "@gent/core/extensions/branch-tools"
 import { BunSqlite } from "@gent/core/host-bun"
 import {
@@ -1085,6 +1087,7 @@ const branchSteps = (
     readonly compactedAt?: ReadonlyArray<number>
     readonly spawned?: boolean
     readonly ceilingTokens?: number
+    readonly reservedOutputTokens?: number
     readonly agent?: AgentName
   } = {},
 ): ReadonlyArray<WindowStep> =>
@@ -1097,6 +1100,8 @@ const branchSteps = (
     child: false,
     spawned: params.spawned ?? true,
     ceilingTokens: params.ceilingTokens ?? 200_000,
+    reservedOutputTokens: params.reservedOutputTokens ?? 32_000,
+    inputLimitTokens: Option.none(),
     inputTokens,
     compacted: (params.compactedAt ?? []).includes(step),
     turnStartedAt: 0,
@@ -1128,7 +1133,7 @@ const windowDatabase = Effect.gen(function* () {
   const build = Layer.build(ContextWindows.Live.pipe(Layer.provide(sqlLayer))).pipe(
     Effect.map((context) => Context.get(context, ContextWindows)),
   )
-  return { file, sql, build }
+  return { file, sqlLayer, sql, build }
 })
 
 /** A finished tune `ageMs` old, as an earlier server left it. */
@@ -1160,13 +1165,11 @@ describe("role windows", () => {
     const unrolled = branchSteps(0, [50_000, 90_000, 120_000, 120_000, 150_000], {
       ceilingTokens: 400_000,
     })
-    const at350 = replayWindow(stored, { windowTokens: 350_000, ceilingTokens: 400_000 })
+    const at350 = replayWindow(stored, { windowTokens: 350_000 })
     expect(at350.handoffs).toBe(0)
-    expect(at350).toEqual(replayWindow(unrolled, { windowTokens: 350_000, ceilingTokens: 400_000 }))
+    expect(at350).toEqual(replayWindow(unrolled, { windowTokens: 350_000 }))
     // The same branch at 100k hands off on its own, past the 68k the reserve leaves.
-    expect(
-      replayWindow(stored, { windowTokens: 100_000, ceilingTokens: 400_000 }).handoffs,
-    ).toBeGreaterThan(0)
+    expect(replayWindow(stored, { windowTokens: 100_000 }).handoffs).toBeGreaterThan(0)
   })
 
   test("a root hands off only when a turn starts past its window", () => {
@@ -1179,7 +1182,7 @@ describe("role windows", () => {
         turnStartedAt: 1,
       })),
     ]
-    const replay = replayWindow(turns, { windowTokens: 100_000, ceilingTokens: 200_000 })
+    const replay = replayWindow(turns, { windowTokens: 100_000 })
     // Not mid-turn at 120k: once, at the second turn's first step.
     expect(replay.handoffs).toBe(1)
     expect(replay.callsAfter).toBe(2)
@@ -1252,6 +1255,7 @@ describe("role windows", () => {
         estimatedTokens: 1,
         availableInputTokens: 1,
         contextLimitTokens: 200_000,
+        reservedOutputTokens: 32_000,
         omittedMessages: 0,
         compacted,
       })
@@ -1323,6 +1327,57 @@ describe("role windows", () => {
     ])
   })
 
+  test("the replay hands off where the loop does, under the reserve the step recorded", () => {
+    // A spawned worker on a 200k model whose output cap is 8k: the loop
+    // reserves 8k, so a 100k window leaves 92k of input, not 68k.
+    const turnId = MessageId.make("window-reserve-turn")
+    const base = { sessionId, branchId }
+    const stepAt = (step: number, inputTokens: number) => [
+      AgentEvent.cases.ModelContextProjected.make({
+        ...base,
+        estimatedTokens: inputTokens,
+        availableInputTokens: 192_000 - inputTokens,
+        contextLimitTokens: 200_000,
+        reservedOutputTokens: 8_000,
+        omittedMessages: 0,
+        compacted: false,
+      }),
+      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step }),
+      AgentEvent.cases.StreamEnded.make({
+        ...base,
+        messageId: turnId,
+        step,
+        usage: { inputTokens, outputTokens: 1 },
+      }),
+    ]
+    const replayAt = (inputTokens: number) =>
+      replayWindow(
+        windowSamplesOf([...stepAt(1, 20_000), ...stepAt(2, 50_000), ...stepAt(3, inputTokens)], {
+          sessionId,
+          branchId,
+          messageId: turnId,
+          agent: worker,
+          spawned: true,
+          startedAtMs: 0,
+        }).steps,
+        { windowTokens: 100_000 },
+      ).handoffs
+    // The rule the loop runs for the third step of a spawned session.
+    const loopAt = (inputTokens: number) =>
+      planWindow({
+        inputTokens,
+        contextLimitTokens: 200_000,
+        reservedOutputTokens: 8_000,
+        inputLimitTokens: Option.none(),
+        roleWindowTokens: Option.some(100_000),
+        roleWindowBinds: true,
+      })
+    expect(loopAt(75_000)).toBe("Keep")
+    expect(replayAt(75_000)).toBe(0)
+    expect(loopAt(95_000)).toBe("RoleWindow")
+    expect(replayAt(95_000)).toBe(1)
+  })
+
   it.scopedLive("the handoff keeps the paths named only in the earlier handoff", () => {
     let user = ""
     let system = ""
@@ -1364,29 +1419,79 @@ describe("role windows", () => {
     )
   })
 
-  it.scopedLive("a stale tune runs once over two builds; a fresh one runs none", () =>
+  it.scopedLive("one build runs one tune at a time: a turn end during a tune skips it", () =>
     Effect.gen(function* () {
-      const stale = yield* windowDatabase
-      const first = yield* stale.build
-      yield* stale.sql(seedTune(25 * 3_600_000))
-      // Two servers over one database, and two turn ends on one of them.
-      const second = yield* stale.build
-      const reports = yield* Effect.all(
-        [first.tuneIfStale, first.tuneIfStale, second.tuneIfStale],
-        { concurrency: "unbounded" },
+      const database = yield* windowDatabase
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let replays = 0
+      // The tune's read of the samples, counted; the first holds until released.
+      const held = Layer.effect(
+        SqlClient.SqlClient,
+        Effect.map(
+          SqlClient.SqlClient,
+          (sql) =>
+            new Proxy(sql, {
+              // A template call builds a statement; a string names an identifier.
+              apply: (
+                target,
+                _thisArg,
+                [strings, ...values]: [TemplateStringsArray | string, ...Array<unknown>],
+              ) => {
+                if (Predicate.isString(strings)) return target(strings)
+                const statement = target(strings, ...values)
+                if (!strings.join("?").includes("SELECT * FROM context_window_steps")) {
+                  return statement
+                }
+                return Effect.suspend(() => {
+                  replays += 1
+                  if (replays > 1) return statement
+                  return Deferred.succeed(entered, void 0).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(statement),
+                  )
+                })
+              },
+            }),
+        ),
+      ).pipe(Layer.provide(database.sqlLayer))
+      const windows = Context.get(
+        yield* Layer.build(ContextWindows.Live.pipe(Layer.provide(held))),
+        ContextWindows,
       )
-      expect(reports.filter(Option.isSome)).toHaveLength(1)
-      expect(yield* stale.sql(tuneCount)).toBe(2)
-      // The tune is fresh now: nothing runs again.
-      expect(Option.isNone(yield* second.tuneIfStale)).toBe(true)
-      expect(Option.isNone(yield* (yield* stale.build).tuneIfStale)).toBe(true)
+      const first = yield* Effect.forkChild(windows.tuneIfStale)
+      yield* Deferred.await(entered)
+      // A second turn end while the first tune reads its samples.
+      expect(Option.isNone(yield* windows.tuneIfStale)).toBe(true)
+      yield* Deferred.succeed(release, void 0)
+      expect(Option.isSome(yield* Fiber.join(first))).toBe(true)
+      expect(replays).toBe(1)
+      expect(yield* database.sql(tuneCount)).toBe(1)
+    }).pipe(Effect.provide(platform), Effect.timeout("20 seconds")),
+  )
 
-      const fresh = yield* windowDatabase
-      yield* fresh.build
-      yield* fresh.sql(seedTune(3_600_000))
-      const restarted = yield* fresh.build
+  it.scopedLive("a server whose tune another finished answers with that tune's windows", () =>
+    Effect.gen(function* () {
+      const database = yield* windowDatabase
+      const first = yield* database.build
+      yield* database.sql(seedTune(25 * 3_600_000))
+      const second = yield* database.build
+      // Twenty workers ramp to about 219k on a 200k model; the second server tunes.
+      const inputs = ramp(20_000, 1_000, 200)
+      yield* second.record({ steps: fleet(20, inputs), rereads: [] })
+      expect(Option.isSome(yield* second.tuneIfStale)).toBe(true)
+      const tuned = yield* second.window(workerRole)
+      expect(Option.isSome(tuned)).toBe(true)
+      // The first server still holds the stale tune; its check finds the
+      // fresh one, runs none, and answers with its window.
+      expect(yield* first.window(workerRole)).toEqual(Option.none())
+      expect(Option.isNone(yield* first.tuneIfStale)).toBe(true)
+      expect(yield* first.window(workerRole)).toEqual(tuned)
+      // A restart over the fresh tune runs none either.
+      const restarted = yield* database.build
       expect(Option.isNone(yield* restarted.tuneIfStale)).toBe(true)
-      expect(yield* fresh.sql(tuneCount)).toBe(1)
+      expect(yield* restarted.window(workerRole)).toEqual(tuned)
+      expect(yield* database.sql(tuneCount)).toBe(2)
     }).pipe(Effect.provide(platform), Effect.timeout("20 seconds")),
   )
 

@@ -1999,9 +1999,9 @@ interface ModelContextWindowPolicyService {
   /**
    * The window a role compacts at, in tokens; none leaves it at the model's
    * window. The loop only lowers: a window at or past the model's changes
-   * nothing. A spawned session hands off between steps at it; a root keeps
-   * the model's window as its hard budget and hands off at it only when a
-   * turn starts (`planWindow`).
+   * nothing. It is a soft limit: the model's window stays every session's
+   * hard budget. A spawned session hands off at it before any step; a root
+   * hands off at it only when a turn starts (`planWindow`).
    */
   readonly window: (role: ContextRole) => Effect.Effect<Option.Option<number>>
 }
@@ -2017,34 +2017,51 @@ export class ModelContextWindowPolicy extends Context.Service<
 
 /**
  * What a window does before a call: keep its messages, hand off because the
- * call would carry more input than its limit (`Overflow`, at any step), or
- * hand off because a turn starts past the role's lower window
- * (`TurnBoundary`).
+ * call would carry more input than the model accepts (`Overflow`, at any
+ * step), or hand off because the input is past the role's lower window at a
+ * step where it binds (`RoleWindow`).
  */
-const WindowPlan = Schema.Literals(["Keep", "Overflow", "TurnBoundary"])
+const WindowPlan = Schema.Literals(["Keep", "Overflow", "RoleWindow"])
 type WindowPlan = typeof WindowPlan.Type
 
 /**
- * When a window hands off: past its input limit at any step, and past the
- * turn-boundary limit only before a turn's first call. The projection asks
- * it with its estimate of the window; the compaction tuner asks it with
- * replayed input sizes, so both decide by one rule.
+ * When a window hands off. The model's window is the hard budget at every
+ * step, for every session. The role's window is a soft limit: it binds at
+ * every step of a spawned session and at a root's turn start
+ * (`roleWindowBinds`), and a handoff it asks for that has nothing to
+ * summarize leaves the call under the model's budget. Both limits are input
+ * ceilings with the same output reserve and input cap (`inputCeilingOf`), so
+ * a role window at or past the model's never binds. The projection asks it
+ * with its estimate of the window; the compaction tuner asks it with
+ * recorded input sizes and the limits each step had, so both decide by one
+ * rule.
  */
 export const planWindow = (step: {
   /** The input the call would carry: messages, system prompt and tool definitions. */
   readonly inputTokens: number
-  /** The input the call may carry at its hard budget. */
-  readonly limitTokens: number
-  /** A lower input limit that binds only at a turn start (a root's role window). */
-  readonly turnBoundaryTokens: Option.Option<number>
-  readonly turnStart: boolean
+  /** The model's window: the hard budget. */
+  readonly contextLimitTokens: number
+  /** The output the call keeps free (`outputReserveTokens` of the model's window). */
+  readonly reservedOutputTokens: number
+  /** The model's input cap, when its catalog names one. */
+  readonly inputLimitTokens: Option.Option<number>
+  /** The role's window (`ModelContextWindowPolicy`): the soft limit. */
+  readonly roleWindowTokens: Option.Option<number>
+  /** The soft limit binds at this step: a spawned session's, or a turn's first. */
+  readonly roleWindowBinds: boolean
 }): WindowPlan => {
-  if (step.inputTokens > step.limitTokens) return "Overflow"
+  const ceiling = (contextLimitTokens: number) =>
+    inputCeilingOf({
+      contextLimitTokens,
+      reservedOutputTokens: step.reservedOutputTokens,
+      inputLimitTokens: step.inputLimitTokens,
+    })
+  if (step.inputTokens > ceiling(step.contextLimitTokens)) return "Overflow"
   if (
-    step.turnStart &&
-    Option.exists(step.turnBoundaryTokens, (limit) => step.inputTokens > limit)
+    step.roleWindowBinds &&
+    Option.exists(step.roleWindowTokens, (window) => step.inputTokens > ceiling(window))
   ) {
-    return "TurnBoundary"
+    return "RoleWindow"
   }
   return "Keep"
 }
@@ -2371,8 +2388,9 @@ export const coldHandoffPays = (params: {
  * behind one marker that summarizes it and names the ids it replaced. The
  * loop hands off when the window overflows, when the model asked, when the
  * provider refused the last request as too long (`overflowed`), when a
- * turn starts on a large window whose prompt cache lapsed (cold), or when a
- * root's turn starts past its role window (`turnBoundaryTokens`). The
+ * turn starts on a large window whose prompt cache lapsed (cold), or when
+ * the window is past its role window at a step where that binds
+ * (`roleWindowTokens`). The
  * refusal handoff happens even with no summary: the history is then dropped
  * behind a marker that says so, since the same window would be refused
  * again. The others need a compactor; without one the window stays whole.
@@ -2394,12 +2412,18 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   /** This projection comes before the turn's first model call. */
   readonly turnStart: boolean
   /**
-   * A root's role window (`ModelContextWindowPolicy`), below the budget's:
-   * a turn that starts on a window past it hands off first, anchored at the
-   * new prompt. Mid-turn only the budget binds. None for a spawned session,
-   * whose budget is already the role window.
+   * The role's window (`ModelContextWindowPolicy`), a soft limit below the
+   * budget's model window: a window past it hands off first, where the role
+   * window would cut it as a budget. A handoff it cannot make (nothing to
+   * summarize) leaves the call under the budget.
    */
-  readonly turnBoundaryTokens: Option.Option<number>
+  readonly roleWindowTokens: Option.Option<number>
+  /**
+   * The role window binds at this step: every step of a spawned session, and
+   * a root's turn start only, so a root turn's steps keep the cache they
+   * wrote.
+   */
+  readonly roleWindowBinds: boolean
   /** The branch's last model call and its provider's cache lifetime; none when either is unknown. */
   readonly promptCache: Option.Option<PromptCache>
   readonly persist: (
@@ -2458,7 +2482,50 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       fit,
     }),
   )
-  const anchor = plan.anchor.pipe(
+  // Past the role window at a step where it binds, the window hands off.
+  // At a turn start it anchors at the new prompt, as a cold handoff does.
+  // Inside a spawned session's turn it cuts where the role window would cut
+  // as a budget: at the prompt when the turn fits it, else inside the turn.
+  // The model's window stays the budget, so a role window below the prompt
+  // never refuses the call, and past the model's window the overflow
+  // handoff runs at any step.
+  const roleWindow = Option.filter(
+    params.roleWindowTokens,
+    () =>
+      Result.isSuccess(fit) &&
+      planWindow({
+        inputTokens:
+          fit.success.estimatedTokens +
+          params.budget.reservedSystemTokens +
+          params.budget.reservedToolTokens,
+        contextLimitTokens: params.budget.contextLimitTokens,
+        reservedOutputTokens: params.budget.reservedOutputTokens,
+        inputLimitTokens: Option.fromUndefinedOr(params.budget.inputLimitTokens),
+        roleWindowTokens: params.roleWindowTokens,
+        roleWindowBinds: params.roleWindowBinds,
+      }) === "RoleWindow",
+  )
+  let cut = plan
+  if (Option.isSome(roleWindow) && !params.turnStart && !plan.overflowing && !params.overflowed) {
+    const roleBudget = { ...params.budget, contextLimitTokens: roleWindow.value }
+    const rolePlan = handoffPlan({
+      window,
+      budget: roleBudget,
+      measure,
+      overflowed: false,
+      fit: yield* Effect.result(
+        projectCurrentWindow({
+          modelId: params.modelId,
+          messages: durableMessages,
+          budget: roleBudget,
+          measure: params.measure,
+        }),
+      ),
+    })
+    // A role window too small for the system prompt and tools has no cut.
+    if (Result.isSuccess(rolePlan)) cut = rolePlan.success
+  }
+  const anchor = cut.anchor.pipe(
     Option.flatMap((id) => Option.fromUndefinedOr(window.find((message) => message.id === id))),
   )
   const anchorIndex = Math.max(
@@ -2494,27 +2561,6 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
           cacheTtlMs: cache.ttlMs,
         }),
     )
-  // A root whose role window is below its model's hands off when a turn
-  // starts past it, anchored at the new prompt, and never mid-turn: the
-  // turn's steps keep the cache they wrote. Past the model's window the
-  // overflow handoff above still runs at any step.
-  const turnBoundary =
-    Result.isSuccess(fit) &&
-    planWindow({
-      inputTokens:
-        fit.success.estimatedTokens +
-        params.budget.reservedSystemTokens +
-        params.budget.reservedToolTokens,
-      limitTokens: inputCeiling(params.budget),
-      turnBoundaryTokens: Option.map(params.turnBoundaryTokens, (contextLimitTokens) =>
-        inputCeilingOf({
-          contextLimitTokens,
-          reservedOutputTokens: params.budget.reservedOutputTokens,
-          inputLimitTokens: Option.fromUndefinedOr(params.budget.inputLimitTokens),
-        }),
-      ),
-      turnStart: params.turnStart,
-    }) === "TurnBoundary"
   // A history that is only an earlier marker has nothing new to summarize: a
   // second handoff to the same anchor would reuse that marker's id, spend a
   // summary call, and report a compaction that changed nothing.
@@ -2543,7 +2589,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       summary: Option.none(),
     } satisfies WindowProjection
   }
-  if (!(requested || overflowing || cold || turnBoundary) || !summarizable) {
+  if (!(requested || overflowing || cold || Option.isSome(roleWindow)) || !summarizable) {
     return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
   // The window the provider refused is not sent again: without a summary, the

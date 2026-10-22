@@ -42,25 +42,32 @@
   with none installed every role runs at its model's window, and a later
   extension's policy replaces an earlier one (the Resource merge). The
   answer only lowers the window: a value at or above the model's, or not a
-  positive integer, is ignored. The output reserve and `maxTokens` stay the
-  model window's. A spawned session runs its budget at the role window and
-  hands off between steps; a root keeps the model's window as its budget
-  and hands off at the role window only when a turn starts, anchored at the
-  new prompt (`turnBoundaryTokens`), so a turn's steps keep the cache they
-  wrote. One pure rule, `planWindow` (model-context.ts), decides `Keep`,
-  `Overflow` or `TurnBoundary` for the projection and for the tuner's
-  replay. `@gent/compaction` installs the policy as a server Resource
+  positive integer, is ignored. The role window is a soft limit: the budget,
+  the output reserve and `maxTokens` stay the model window's for every
+  session. A spawned session hands off at the role window before any step
+  (`roleWindowBinds`); a root hands off at it only when a turn starts,
+  anchored at the new prompt, so a turn's steps keep the cache they wrote.
+  A window past the role window with nothing to summarize (a first prompt
+  alone) goes out under the model's budget; only the model's window fails a
+  step. One pure rule, `planWindow` (model-context.ts), decides `Keep`,
+  `Overflow` or `RoleWindow` for the projection and for the tuner's replay,
+  from the model window, the output reserve and the input cap the step ran
+  under. `@gent/compaction` installs the policy as a server Resource
   (`ContextWindows`, compaction.ts). Its `turnAfter` hook folds the turn's
   branch events into samples: each step's input tokens (`StreamEnded.usage`),
-  model window and handoff (`ModelContextProjected`), and each first `read`
-  after a handoff of a path read before it. A `bash` command that names such
+  model window, output reserve, input cap and handoff
+  (`ModelContextProjected`; a step whose projection records no reserve is
+  not sampled), and each first `read` after a handoff of a path read before
+  it. A `bash` command that names such
   a path is stored too, for the tune report's `readCoverage`; a
   `context.read` is a cell host call with no tool event and is not seen. The
   samples go to the server's database (`context_window_steps`,
   `context_window_rereads`), so every place's turns meet one table. When the
   last tune is over 24 h old, the hook starts one in the Resource's scope
   (one at a time per server; the run's hour is the primary key of
-  `context_window_tunes`, so a second server's run is a no-op). The tune
+  `context_window_tunes`, so a second server's run is a no-op). A server
+  whose check finds a fresh tune from another server reloads that tune's
+  windows. The tune
   replays each role's last 7 days at 100k to 350k with the stored handoffs
   undone, prices each handoff as its summary call, the restart write and the
   role's re-reads per handoff (the fleet's below 20 handoffs, 20k with

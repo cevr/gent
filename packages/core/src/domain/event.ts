@@ -302,6 +302,14 @@ export const AgentEvent = Schema.TaggedUnion({
     estimatedTokens: Schema.Natural,
     availableInputTokens: Schema.Natural,
     contextLimitTokens: Schema.Natural,
+    /**
+     * The output the step kept free of its window (`maxTokens`), so a reader
+     * can price the step at the input ceiling it had. Absent in receipts from
+     * before it was recorded.
+     */
+    reservedOutputTokens: Schema.optional(Schema.Natural),
+    /** The model's input cap the step ran under; absent when its catalog names none. */
+    inputLimitTokens: Schema.optional(Schema.Natural),
     omittedMessages: Schema.Natural,
     /** The handoff marker leading this window, when it carries a summary. */
     handoffMessageId: Schema.optional(MessageId),
