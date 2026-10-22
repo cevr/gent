@@ -2397,6 +2397,10 @@ describe("a tier role's round", () => {
         expect((yield* client.session.list()).map((session) => session.id)).toEqual([
           owner.sessionId,
         ])
+        // A minute before Sonnet frees, nothing has run; small steps then reach its reset.
+        yield* TestClock.adjust(HOUR - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
         yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
         yield* askAt(client, owner, 1)
         const steps = yield* home.sql(stepsOf(run))
