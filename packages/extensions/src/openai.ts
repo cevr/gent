@@ -54,6 +54,8 @@ import {
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
+  type QuotaReading,
+  reportProviderQuota,
   type ReasoningEffort,
   type RunEffort,
   omitUndefined,
@@ -1239,8 +1241,8 @@ const buildOauthHeaders = (
  */
 export const buildCodexClient = (
   creds: CredentialCache<OpenAICredentials>,
-): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  authorizedClient(creds, (req, fresh) => {
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) => {
+  const signed = authorizedClient(creds, (req, fresh) => {
     let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
     // The SDK has not prefixed its base URL yet, so the path is relative.
     if (isCodexBoundPath(new URL(req.url, "https://codex.invalid").pathname)) {
@@ -1254,6 +1256,68 @@ export const buildCodexClient = (
       return rewriteCodexBody(withHeaders(req, headers))
     }
     return withHeaders(req, headers)
+  })
+  // Each answer the request ends with, a refusal included, names the plan's
+  // quota windows (`codexQuota`).
+  return (client) =>
+    HttpClient.tap(signed(client), (response) => reportProviderQuota(codexQuota(response.headers)))
+}
+
+// ── quota windows ──
+
+/**
+ * A ChatGPT plan's quota headers on a Codex answer, as Codex reads them
+ * (openai/codex `342ed69`, `codex-rs/codex-api/src/rate_limits.rs`, read
+ * 2026-10-22): per window (`primary`, `secondary`) the percent used
+ * (`used-percent`, 0 to 100), its length (`window-minutes`) and its reset
+ * (`reset-at`, epoch seconds). A 429 at the limit carries them too. Other
+ * limit families (`x-<limit>-…`) meter single models, so gent reads the
+ * plan's own (`codex`). An API key gets none of them.
+ */
+const CodexNumber = Schema.OptionFromOptionalKey(Schema.FiniteFromString)
+const CodexQuotaHeaders = Schema.Struct({
+  "x-codex-primary-used-percent": CodexNumber,
+  "x-codex-primary-window-minutes": CodexNumber,
+  "x-codex-primary-reset-at": CodexNumber,
+  "x-codex-secondary-used-percent": CodexNumber,
+  "x-codex-secondary-window-minutes": CodexNumber,
+  "x-codex-secondary-reset-at": CodexNumber,
+})
+
+/** A window's name from its length, as the lanes name windows (`5h`, `7d`). */
+const codexWindowName = (minutes: number): string => {
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`
+  if (minutes % 60 === 0) return `${minutes / 60}h`
+  return `${minutes}m`
+}
+
+/**
+ * The quota windows an answer's headers name. A window at its limit is
+ * rejected until its reset: past it the plan refuses, or spends credits,
+ * which are extra usage and never quota. A window with no length or no
+ * reset says nothing. Headers that do not decode report none.
+ */
+const codexQuota = (headers: Headers.Headers): ReadonlyArray<QuotaReading> =>
+  Option.match(Schema.decodeUnknownOption(CodexQuotaHeaders)(headers), {
+    onNone: () => [],
+    onSome: (codex) =>
+      (["primary", "secondary"] as const).flatMap((family) =>
+        Option.toArray(
+          Option.map(
+            Option.all({
+              used: codex[`x-codex-${family}-used-percent`],
+              minutes: Option.filter(codex[`x-codex-${family}-window-minutes`], (n) => n > 0),
+              resetSeconds: codex[`x-codex-${family}-reset-at`],
+            }),
+            (found): QuotaReading => ({
+              window: codexWindowName(found.minutes),
+              utilization: found.used / 100,
+              resetAt: found.resetSeconds * 1000,
+              rejected: found.used >= 100,
+            }),
+          ),
+        ),
+      ),
   })
 
 // ── extension ───────────────────────────────────────────────────────────────

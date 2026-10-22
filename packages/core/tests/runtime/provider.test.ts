@@ -31,6 +31,7 @@ import {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   isContextOverflow,
+  type LaneReport,
   type ModelCatalogView,
   type ModelDriverContribution,
   modelFromCatalog,
@@ -6068,6 +6069,93 @@ describe("account lanes", () => {
         expect(window.utilization).toBe(0)
         expect((yield* lanes([a])).accounts[0]?.held).toBe(false)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "two providers' plans each report their lanes, and a spent window refuses only its provider",
+    () =>
+      Effect.gen(function* () {
+        const placement = yield* makeCredentialPlacement(Option.none())
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        const windows = (utilization: number, rejected = false) => [
+          { window: "5h", utilization, resetAt: now + 5 * HOUR, rejected: false },
+          { window: "7d", utilization, resetAt: now + 100 * HOUR, rejected },
+        ]
+        // Each plan learns 20 M fuel per point from $100: a week carries lanes.
+        for (const provider of ["anthropic", "openai"]) {
+          const note = (utilization: number) =>
+            placement.noteQuota({
+              provider,
+              slot: a,
+              signedInAt: Option.none(),
+              readings: windows(utilization),
+            })
+          yield* note(0)
+          yield* placement.noteFuel({
+            provider,
+            slot: a,
+            signedInAt: Option.none(),
+            sessionId: runner,
+            costUsd: Option.some(100),
+            usage,
+          })
+          yield* note(0.01)
+        }
+        const scopes = (provider: string) =>
+          Effect.succeedSome(Arr.make({ provider: ProviderId.make(provider), slot: a }))
+        const free = (report: LaneReport) =>
+          report.providers.map((lanes) => [lanes.provider, lanes.capacity] as const)
+        const both = free(yield* placement.lanes(scopes))
+        expect(both.map(([provider]) => provider)).toEqual(["anthropic", "openai"])
+        for (const [, capacity] of both) expect(capacity).toBeGreaterThan(0)
+        const admit = (provider: string) =>
+          placement
+            .admitLane({
+              provider,
+              scope: [{ provider: ProviderId.make(provider), slot: a }],
+              key: `start-${provider}`,
+              asker: Option.none(),
+            })
+            .pipe(
+              Effect.as("admitted" as const),
+              Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+            )
+        // ChatGPT's week is spent: only its runs are refused.
+        yield* placement.noteQuota({
+          provider: "openai",
+          slot: a,
+          signedInAt: Option.none(),
+          readings: windows(1, true),
+        })
+        expect(yield* admit("openai")).toBe("Spent")
+        expect(yield* admit("anthropic")).toBe("admitted")
+        const open = (provider: string) =>
+          placement.open({
+            provider,
+            pool: [a],
+            model: ModelId.make(`${provider}/model`),
+            left: new Set(),
+          })
+        expect(yield* open("openai")).toBe(false)
+        expect(yield* open("anthropic")).toBe(true)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a window named in minutes is full again for its whole length once it resets", () =>
+    Effect.gen(function* () {
+      const { read, spend, windowOf } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      yield* read(a, [{ window: "90m", utilization: 0, resetAt: now + HOUR }])
+      yield* spend(a, Option.some(1))
+      yield* read(a, [{ window: "90m", utilization: 0.01, resetAt: now + HOUR }])
+      yield* TestClock.adjust("61 minutes")
+      // 100 points at 200,000 fuel each, over 90 minutes of 3,400,000 an hour.
+      const window = yield* windowOf([a], a, "90m")
+      expect(window.utilization).toBe(0)
+      expect(window.sustainable).toBeCloseTo((100 * 200_000) / (1.5 * 3_400_000), 6)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect(

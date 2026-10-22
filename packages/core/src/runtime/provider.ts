@@ -3949,11 +3949,12 @@ type PlacementLedgerValue = typeof PlacementLedger.Type
 
 // ── lanes ──
 
-/** A window's length from its name (`5h`, `7d`); none for a name with no unit. */
+/** A window's length from its name (`90m`, `5h`, `7d`); none for a name with no unit. */
 const windowLengthMs = (window: string): Option.Option<number> => {
-  const match = /^(\d+)([hd])$/.exec(window)
+  const match = /^(\d+)([mhd])$/.exec(window)
   if (Predicate.isNull(match)) return Option.none()
   const count = Number(match[1])
+  if (match[2] === "m") return Option.some(count * 60_000)
   if (match[2] === "h") return Option.some(count * 3_600_000)
   return Option.some(count * 24 * 3_600_000)
 }

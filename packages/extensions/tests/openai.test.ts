@@ -64,6 +64,7 @@ import {
   respondFirstWith,
 } from "./helpers/fake-http-client.js"
 import {
+  captureProviderReport,
   createRpcHarness,
   storedCredentialModel,
   fixtureModelCatalog,
@@ -1441,6 +1442,73 @@ const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchSta
     ),
     Effect.scoped,
   )
+
+describe("codexClient — quota windows", () => {
+  const FIVE_HOUR_RESET_S = 1_800_000_000
+  const WEEK_RESET_S = 1_800_400_000
+  /** The plan's headers as Codex reads them: `primary` 5 hours, `secondary` a week. */
+  const planHeaders = (weekUsed: string) => ({
+    "x-codex-primary-used-percent": "42.5",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": String(FIVE_HOUR_RESET_S),
+    "x-codex-secondary-used-percent": weekUsed,
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-at": String(WEEK_RESET_S),
+  })
+  /** What one `/responses` post reports, answered by `reply`. */
+  const reportFor = (reply: { status: number; headers: Record<string, string>; body: string }) =>
+    runOk(
+      Effect.gen(function* () {
+        const client = yield* codexClientOver({ captured: [], responder: () => reply })
+        return yield* captureProviderReport(postResponses(client))
+      }),
+    )
+
+  it.live("an answer reports the plan's 5-hour and weekly windows", () =>
+    Effect.gen(function* () {
+      const reported = yield* reportFor({ status: 200, headers: planHeaders("12"), body: "{}" })
+      expect(reported.quota).toEqual([
+        { window: "5h", utilization: 0.425, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
+        { window: "7d", utilization: 0.12, resetAt: WEEK_RESET_S * 1000, rejected: false },
+      ])
+    }),
+  )
+
+  it.live("a refusal at the weekly limit reports that window rejected until its reset", () =>
+    Effect.gen(function* () {
+      const reported = yield* reportFor({
+        status: 429,
+        headers: { ...planHeaders("100"), "x-codex-active-limit": "codex" },
+        body: encodeExternalJson({
+          error: { type: "usage_limit_reached", resets_at: WEEK_RESET_S },
+        }),
+      })
+      expect(reported.quota).toEqual([
+        { window: "5h", utilization: 0.425, resetAt: FIVE_HOUR_RESET_S * 1000, rejected: false },
+        { window: "7d", utilization: 1, resetAt: WEEK_RESET_S * 1000, rejected: true },
+      ])
+    }),
+  )
+
+  it.live("a window with no length or reset, or another limit's, reports nothing", () =>
+    Effect.gen(function* () {
+      const reported = yield* reportFor({
+        status: 200,
+        headers: {
+          "x-codex-primary-used-percent": "42.5",
+          "x-codex-primary-reset-at": String(FIVE_HOUR_RESET_S),
+          "x-codex-secondary-used-percent": "12",
+          "x-codex-secondary-window-minutes": "10080",
+          "x-codex-other-primary-used-percent": "80",
+          "x-codex-other-primary-window-minutes": "300",
+          "x-codex-other-primary-reset-at": String(FIVE_HOUR_RESET_S),
+        },
+        body: "{}",
+      })
+      expect(reported.quota).toEqual([])
+    }),
+  )
+})
 
 describe("OpenAI cache routing", () => {
   it.live(
