@@ -30,7 +30,25 @@ Source: a read-only copy of `~/.gent/data.db` (data 2026-05-07 to 2026-09-23), `
 - Anthropic reported no write and no read on 2,103 requests. Anthropic reports a write whenever a marker covers a cacheable prefix, so no marker took effect. (measured counts; cause inferred)
 - Cause: `cbc5b4f9d` ("mark prompt-cache breakpoints on both auth paths") landed 2026-09-23 08:04 EDT; the last Anthropic row is 2026-09-23 00:01 EDT. `b8dceb5bc` (end the prefix at the system prompt) and `fede624a0` (1-hour lifetime) came later. All of the data predates the markers. (measured dates)
 - The SDK maps the counters: `@effect/ai-anthropic` 4.0.5 sets `cacheRead` from `cache_read_input_tokens` and `total` as input + write + read (`AnthropicLanguageModel.ts:2115-2128, 2340-2352`); gent keeps both (`packages/core/src/domain/message.ts:2083-2107`). (measured)
-- Current main's Anthropic ratio is unmeasured. A Haiku run (`bun run gamut up haiku`) on 2026-10-22 stopped at the first request: every Anthropic lane was rate-limited until 2026-10-23 02:00. (measured)
+- A first Haiku run on 2026-10-22 stopped at the first request: gent signs Anthropic requests with its own OAuth slot (the owner's Claude Code account), which was rate-limited until 2026-10-23 02:00. The second run went through the TeamClaude pool (`eval "$(teamclaude env --mitm)"` before `gamut up`; gamut now passes the proxy variables to its pane). (measured)
+
+Current main (`395904550`), Haiku 5.5 at medium effort, one session in the ledgerline fixture: a 5-step read-only turn, a 2-step turn, then a turn that started with a handoff (`contextLength: 12000` in the run's config).
+
+| Step                          | Input  | Cache read | Cache write | Read / input | Read / previous input |
+| ----------------------------- | ------ | ---------- | ----------- | ------------ | --------------------- |
+| turn 1 step 1 (cold)          | 9,432  | 0          | 9,428       | 0%           | n/a                   |
+| turn 1 step 2                 | 10,849 | 9,428      | 1,419       | 86.9%        | 99.96%                |
+| turn 1 step 3                 | 12,095 | 10,847     | 1,246       | 89.7%        | 99.98%                |
+| turn 1 step 4                 | 14,016 | 12,093     | 1,921       | 86.3%        | 99.99%                |
+| turn 1 step 5                 | 15,665 | 14,014     | 1,649       | 89.5%        | 99.99%                |
+| turn 2 step 1                 | 16,275 | 15,663     | 608         | 96.2%        | 99.99%                |
+| turn 2 step 2                 | 17,335 | 16,271     | 1,062       | 93.9%        | 99.98%                |
+| turn 3 step 1 (after handoff) | 10,223 | 9,361      | 858         | 91.6%        | n/a                   |
+
+- Whole session: 87,677 read of 105,890 input, 82.8%; the status row read `cache hit 82%`. Without the cold first step: 90.9%. (measured)
+- Every step after the first reads the previous step's whole input from the cache, less 2 to 4 tokens, within a turn and across turns. The uncached part of a step is only what the last step added: its answer and the tool result. The session ratio climbs toward the high 90s as the session grows, which is the shape of dsh's "99%". (measured: the reuse; inferred: the climb)
+- After the handoff, the first step read 9,361 of 10,223 tokens; its request overhead (system and tools) is 6,324 tokens, so the shared prefix survived the handoff. The summary call cost $0.001016. (measured)
+- The handoff turn then failed with `BudgetExceeded projecting the context`: an agent's `contextLength` replaces the model window (turn.ts:3470), and 12,000 − 3,000 output reserve − 6,324 overhead left 2,676 input tokens, which one file read filled. This is the forced window, not a product fault: only the model window fails a step (context.md). (measured: the numbers; inferred: the cause)
 - OpenAI's ratio is 33-43% with `prompt_cache_key`. Its automatic cache matches 128-token prefix blocks; the miss causes there are not studied here. (measured ratio; the rest guess)
 
 ## 1. Anthropic breakpoints in dsh (via pi-ai)
@@ -161,6 +179,7 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - Re-estimate (2026-10-22): the source is capped at `COMPACTION_SUMMARY_INPUT_TOKENS` = 32,768 (model-context.ts:2662), so a handoff now pays at most ~33k W for it. A replay resends the whole window, ~150k at 0.1 = ~15k W, so the saving is at most ~18k W per handoff, before the summary's reasoning. (measured: the cap; inferred: the window size)
 - The replay must keep thinking on: a change that turns thinking off cannot ride inside the conversation (driver.ts:1246-1260), and the summary asks for `reasoning: "none"` because reasoning counts against its output cap (turn.ts:3915-3918). At the turn's effort, a few thousand reasoning tokens at the output rate (5x input) cancel the ~18k W. (measured: the driver rule; inferred: the reasoning size)
 - Most handoffs are cold: a root hands off at turn start, and the cold-handoff rule hands off when the cache has lapsed (context.md:65-67), where a replay writes ~150k at 1.25-2.0 instead of reading. A warm handoff can still gain: a turn-start handoff, an overflow handoff, a spawned session's mid-turn handoff at its role window (model-context.ts:2894), and an explicit `/compact` (model-context.ts:2982). (inferred: their frequency)
+- Haiku run 2026-10-22: one forced turn-start handoff, warm (the summary call came 4 min 50 s after the last step, inside the 1 h lifetime); the next step read the shared prefix (9,361 of 10,223). One handoff gives no frequency. (measured)
 - Decision: deferred. Take it only if a Haiku gamut run shows warm handoffs are common; measure warm against cold handoffs from `ModelContextProjected.compacted` rows and the step before each, split by trigger: turn start, role window, overflow, explicit. (inferred)
 - Conditions on Anthropic: (a) the same model, system blocks, tool list and thinking plan as the last turn step, or the message cache does not hit; gent's own comment says the prefix keeps "the same top-level effort" (anthropic.ts:3940-3942). (b) The region must end where an earlier step wrote an entry. (c) Ask for less reasoning with an effort marker after the replay, not with `reasoning: "none"` at the top level, which changes the thinking plan. (inferred)
 - Trade-off: the summary would read the source as conversation, not as one flattened text, so `summaryPromptText` and its keep-verbatim lines move into the final instruction. The output cap check stays. (inferred)
@@ -195,6 +214,7 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - gent already sends mid-conversation system messages for trusted notices and effort markers, so the capability gate exists. (measured)
 - Measure first: count `cache.client.tsx` "changed prefix" misses in the owner's stored sessions. If they are rare, skip this. (inferred)
 - Measured 2026-10-22: the cache extension's own fold (`makeCacheScan`, `resolveMiss`) over a read-only copy of the store (97,638 events, 3,846 steps, 657 branches) finds no changed-prefix and no extension-change miss, at a 5 min and at a 1 h lifetime; only 2 model switches and 4 tool lapses. That is no evidence: a changed prefix counts only on a model that reports cache writes, and no stored step does (section 2: every Anthropic row predates the markers; OpenAI caches implicitly). (measured)
+- Measured again 2026-10-22 on the Haiku run's store (74 events, 8 marked Anthropic steps, 2 branches): no miss of any cause at 5 min or 1 h. Eight steps in one run with no prompt edit is thin. (measured)
 - Decision: deferred until the store holds Anthropic steps with markers. Then fold the events table again, branch by branch in id order, through `makeCacheScan` and `resolveMiss`; the TUI's "cache miss: prefix changed" row shows each one meanwhile. A scripted prompt that edits AGENTS.md would prove only that the prefix moves, which is already known. (inferred)
 
 ### G5. Show the session cache-hit ratio (no direct gain, very low effort) — DONE
@@ -214,5 +234,5 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 
 ## 10. Open questions
 
-- What is gent's Anthropic hit ratio on current main? Measure it with the `haiku` gamut preset after the lanes reset: a multi-step read-only turn, then cacheRead / (input) over its `StreamEnded` rows. Do this before G1 and G4, since their gains scale with it. (inferred)
+- Answered 2026-10-22: 82.8% over a short Haiku session, 99.96% to 99.99% prefix reuse per step (section "gent's own hit ratio, measured"). (measured)
 - Does Anthropic count a 1 h entry read from a 5 min request correctly for child forks? gent orders lifetimes longer-first, so it should. (inferred)

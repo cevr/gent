@@ -42,7 +42,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { homedir, tmpdir } from "node:os"
-import { Effect, Schema } from "effect"
+import { Config, Effect, Option, Schema } from "effect"
 import { resolveDataDir } from "@gent/core/host"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -630,7 +630,7 @@ const prepareAndLaunch = async (
   const home = join(root, "home")
   buildPaneHome(homedir(), home)
   const split =
-    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data} --env HOME=${home}`.text()
+    await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data} --env HOME=${home} ${Effect.runSync(proxyEnv)}`.text()
   const pane = paneIdFromSplit(split)
 
   const state: GamutState = {
@@ -986,6 +986,37 @@ export const parseCount = (name: string, value: string): number => {
   }
   return count
 }
+
+const PROXY_VARIABLES = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
+] as const
+
+/**
+ * The caller's proxy variables as `herdr pane split` flags. The pane takes no
+ * environment from the caller, so `eval "$(teamclaude env --mitm)"` before
+ * `up` reaches the run only through these: its Anthropic requests then go
+ * through the TeamClaude account pool, not the owner's own account. An empty
+ * variable reads as unset.
+ */
+export const proxyEnv: Effect.Effect<ReadonlyArray<string>> = Effect.forEach(
+  PROXY_VARIABLES,
+  (name) =>
+    Config.option(Config.String(name)).pipe(
+      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.map((value) =>
+        Option.match(value, {
+          onNone: () => [],
+          onSome: (text) => ["--env", `${name}=${text}`],
+        }),
+      ),
+    ),
+).pipe(Effect.map((flags) => flags.flat()))
 
 const wait = async (timeoutSeconds: number) => {
   const state = await readState()

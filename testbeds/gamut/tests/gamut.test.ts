@@ -8,7 +8,7 @@ import {
 } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
 import { runProcess } from "@gent/core/extensions/api"
-import { Config, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { SqlClient } from "effect/sql"
 import { it } from "effect-bun-test"
 import {
@@ -28,6 +28,7 @@ import {
   encodeState,
   parseCount,
   parseUpArgs,
+  proxyEnv,
   runRecord,
   sessionStatuses,
   userMessageTexts,
@@ -224,6 +225,37 @@ describe("gamut shell quoting", () => {
   test("an embedded single quote is escaped, not left to close the quote", () => {
     expect(shellQuote("don't stop")).toBe(`'don'\\''t stop'`)
   })
+})
+
+describe("gamut proxy environment", () => {
+  // The pane takes no environment from the caller, so a run started under
+  // `teamclaude env --mitm` reached Anthropic on the owner's own account.
+  it.effect("each set proxy variable becomes one pane flag; unset and empty ones stay out", () =>
+    Effect.gen(function* () {
+      const flags = yield* proxyEnv
+      expect(flags).toEqual([
+        "--env",
+        "HTTPS_PROXY=http://127.0.0.1:3456",
+        "--env",
+        "NO_PROXY=localhost,127.0.0.1",
+        "--env",
+        "NODE_EXTRA_CA_CERTS=/ca.pem",
+      ])
+    }).pipe(
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnv({
+          env: {
+            HTTPS_PROXY: "http://127.0.0.1:3456",
+            NO_PROXY: "localhost,127.0.0.1",
+            NODE_EXTRA_CA_CERTS: "/ca.pem",
+            HTTP_PROXY: "",
+            PATH: "/bin",
+          },
+        }),
+      ),
+    ),
+  )
 })
 
 describe("gamut pane id", () => {
