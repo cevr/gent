@@ -209,6 +209,9 @@ const failThenSucceed = (error: ProviderOrAuth, failures: number, config = fast)
 }
 type ProviderOrAuth = ProviderError | ProviderAuthError
 
+/** A sign-in on which the owner holds no project's lanes. */
+const noHolds = () => Effect.succeed<ReadonlyMap<string, number>>(new Map())
+
 describe("provider retry", () => {
   it.effect("waits the provider's retry-after before retrying a typed rate limit", () =>
     Effect.gen(function* () {
@@ -5641,7 +5644,7 @@ describe("account lanes", () => {
         })
       }
       const lanes = (scope: Scope) =>
-        Effect.map(placement.lanes(scopeOf(scope)), (report) => {
+        Effect.map(placement.lanes(scopeOf(scope), noHolds), (report) => {
           const found = report.providers.find((lanes) => lanes.provider === "plan")
           if (Predicate.isUndefined(found)) return Option.none()
           return Option.some(found)
@@ -6218,7 +6221,7 @@ describe("account lanes", () => {
           Effect.succeedSome(Arr.make({ provider: ProviderId.make(provider), slot: a }))
         const free = (report: LaneReport) =>
           report.providers.map((lanes) => [lanes.provider, lanes.capacity] as const)
-        const both = free(yield* placement.lanes(scopes))
+        const both = free(yield* placement.lanes(scopes, noHolds))
         expect(both.map(([provider]) => provider)).toEqual(["anthropic", "openai"])
         for (const [, capacity] of both) expect(capacity).toBeGreaterThan(0)
         const admit = (provider: string) =>
@@ -6317,7 +6320,7 @@ describe("account lanes", () => {
               })
             yield* quota(0.1)
             // A file with no burn reads the prior.
-            const before = (yield* placement.lanes(scopeOf([a]))).providers[0]
+            const before = (yield* placement.lanes(scopeOf([a]), noHolds)).providers[0]
             expect(before?.fuelPerHour).toBe(3_400_000)
             expect(before?.laneHours).toBe(0)
             // One lane runs 2 hours on $11: 2.2 M fuel, 1.1 M a lane-hour.
@@ -6339,7 +6342,7 @@ describe("account lanes", () => {
         const restarted = yield* Effect.scoped(
           Effect.gen(function* () {
             const placement = Context.get(yield* Layer.build(server), CredentialPlacement)
-            return yield* placement.lanes(scopeOf([a]))
+            return yield* placement.lanes(scopeOf([a]), noHolds)
           }),
         )
         const window = restarted.providers[0]?.accounts[0]?.windows[0]
@@ -6429,7 +6432,7 @@ describe("account lanes", () => {
         // `gent auth` signed a new account in under a: the store stamps it anew.
         expect(yield* admit([replaced], "after")).toBe("admitted")
         // The old sign-in's reading went with it: no window of the provider is read now.
-        expect((yield* placement.lanes(scopeOf([replaced]))).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([replaced]), noHolds)).providers).toEqual([])
         // The new sign-in reads its own window; then a response of a request the
         // old sign-in sent before the change lands late, and leaves that reading.
         yield* read(replaced, [{ window: "5h", utilization: 0.1, resetAt: now + HOUR }])
@@ -6821,6 +6824,27 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("the lane report shows each held project with its runs now", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const held = new Map([
+        ["gent", 2],
+        ["blade", 1],
+      ])
+      expect(yield* startIn(placement, held, "gent", "gent-1")).toBe("admitted")
+      const report = yield* placement.lanes(scopeOf([a]), () => Effect.succeed(held))
+      expect(report.providers.map((lanes) => lanes.holds)).toEqual([
+        [
+          { project: "blade", lanes: 1, used: 0 },
+          { project: "gent", lanes: 2, used: 1 },
+        ],
+      ])
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("other work leaves room for a held lane that is not in use", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
@@ -7038,7 +7062,7 @@ describe("account lanes", () => {
         yield* TestClock.adjust("1 hour")
         yield* spend(a, Option.none(), usage, runner, glm, limits)
         // Unknown spend is never zero: neither window reads.
-        expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+        expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
         // Six hours on, the unpriced hour has left the 5h window alone.
         yield* TestClock.adjust("6 hours")
         expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 0, false]])
@@ -7408,7 +7432,7 @@ describe("account lanes", () => {
       expect((yield* Ref.get(file)).segments?.length).toBe(1)
       // Eight days on, nothing new was recorded; a read of the lanes trims.
       yield* TestClock.adjust("8 days")
-      expect((yield* placement.lanes(scopeOf([a]))).providers).toEqual([])
+      expect((yield* placement.lanes(scopeOf([a]), noHolds)).providers).toEqual([])
       yield* placement.flush
       const saved = yield* Ref.get(file)
       expect(saved.readings).toBeUndefined()

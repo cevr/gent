@@ -576,6 +576,9 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
         .map(([agent]) => agent),
   })
 
+/** A git config value without its surrounding quotes. */
+const configValue = (value: string) => value.trim().replace(/^"(.*)"$/, "$1")
+
 /**
  * A remote url without its scheme, user and `.git`: `git@host:owner/repo.git`
  * and `https://host/owner/repo` are `host/owner/repo`. A scheme url keeps its
@@ -583,14 +586,13 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
  * scp form has none, so its colon only ends the host.
  */
 const remoteName = (url: string) => {
-  const bare = url.trim().replace(/^"(.*)"$/, "$1")
-  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?(.*)$/i.exec(bare)?.[1]
-  let named = bare.replace(/^[^@/]+@/, "").replace(/^([^/:]+):/, "$1/")
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?(.*)$/i.exec(url)?.[1]
+  let named = url.replace(/^[^@/]+@/, "").replace(/^([^/:]+):/, "$1/")
   if (Predicate.isNotUndefined(scheme)) named = scheme
   return named.replace(/(\.git)?\/*$/, "")
 }
 
-/** The url of a git config's `[remote "origin"]`, as `git:<remoteName>`; none without one. */
+/** The url of a git config's `[remote "origin"]`; none without one. */
 const originUrl = (config: string): Option.Option<string> => {
   let inOrigin = false
   for (const raw of config.split("\n")) {
@@ -598,21 +600,49 @@ const originUrl = (config: string): Option.Option<string> => {
     if (line.startsWith("[")) inOrigin = /^\[remote\s+"origin"\]$/.test(line)
     else if (inOrigin) {
       const url = /^url\s*=\s*(.+)$/.exec(line)?.[1]
-      if (Predicate.isNotUndefined(url)) return Option.some(`git:${remoteName(url)}`)
+      if (Predicate.isNotUndefined(url)) return Option.some(configValue(url))
     }
   }
   return Option.none()
 }
 
 /**
- * The `origin` of the repository at `root`, whose `.git` is `dotGit`: a
- * directory, or a file (`linked`, a worktree) naming its git directory,
- * whose `commondir` names the one that holds the config.
+ * `url` as git fetches it: a `[url "<base>"]` section's `insteadOf = <prefix>`
+ * in any of `configs` puts `<base>` in place of the prefix. The longest
+ * prefix wins.
+ */
+const rewrittenUrl = (url: string, configs: ReadonlyArray<string>) => {
+  let match = { prefix: "", base: "" }
+  for (const config of configs) {
+    let base = Option.none<string>()
+    for (const raw of config.split("\n")) {
+      const line = raw.trim()
+      if (line.startsWith("[")) base = Option.fromUndefinedOr(/^\[url\s+"(.+)"\]$/i.exec(line)?.[1])
+      else if (Option.isSome(base)) {
+        const prefix = /^insteadof\s*=\s*(.+)$/i.exec(line)?.[1]
+        if (Predicate.isUndefined(prefix)) continue
+        const named = configValue(prefix)
+        if (url.startsWith(named) && named.length > match.prefix.length)
+          match = { prefix: named, base: base.value }
+      }
+    }
+  }
+  return match.base + url.slice(match.prefix.length)
+}
+
+/**
+ * The `origin` of the repository at `root`, as `git:<remoteName>`. Its `.git`
+ * is `dotGit`: a directory, or a file (`linked`, a worktree) naming its git
+ * directory, whose `commondir` names the one that holds the config. The url
+ * is rewritten as git rewrites it (`rewrittenUrl`) by that config and the
+ * user's global ones (`~/.gitconfig`, `~/.config/git/config`); the system
+ * config, `XDG_CONFIG_HOME` and `include` are not read.
  */
 const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
   root: string,
   dotGit: string,
   linked: boolean,
+  home: string,
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -629,7 +659,15 @@ const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
     onNone: () => gitDir,
     onSome: (text) => path.resolve(gitDir, text.trim()),
   })
-  return Option.flatMap(yield* read(path.join(common, "config")), originUrl)
+  const config = yield* read(path.join(common, "config"))
+  const origin = Option.flatMap(config, originUrl)
+  if (Option.isNone(origin)) return Option.none<string>()
+  const globals = yield* Effect.forEach(
+    [path.join(home, ".gitconfig"), path.join(home, ".config", "git", "config")],
+    read,
+  )
+  const configs = [...globals, config].flatMap((text) => Option.toArray(text))
+  return Option.some(`git:${remoteName(rewrittenUrl(origin.value, configs))}`)
 })
 
 /**
@@ -639,7 +677,7 @@ const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
  * root's real path when it has no origin; by `dir`'s own when no repository
  * holds it.
  */
-const projectOf = Effect.fn("Config.projectOf")(function* (dir: string) {
+const projectOf = Effect.fn("Config.projectOf")(function* (dir: string, home: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const start = yield* fs
@@ -652,7 +690,7 @@ const projectOf = Effect.fn("Config.projectOf")(function* (dir: string) {
     const dotGit = path.join(root, ".git")
     const info = yield* Effect.option(fs.stat(dotGit))
     if (Option.isNone(info)) continue
-    const origin = yield* repositoryOrigin(root, dotGit, info.value.type === "File")
+    const origin = yield* repositoryOrigin(root, dotGit, info.value.type === "File", home)
     return Option.getOrElse(origin, () => root)
   }
   return start
@@ -997,21 +1035,46 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         ),
       )
 
-      // A stored override that names a removed external driver decodes as
-      // absent. Say so once per file, not on every read of a project config.
-      const warnedRetiredPaths = yield* Ref.make<ReadonlySet<string>>(new Set())
+      // A file's warning is said once per file and content, not on every
+      // read of a project config.
+      const warnedKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
+      const warnOnce = (key: string, warning: Effect.Effect<void>) =>
+        Effect.gen(function* () {
+          const warned = yield* Ref.modify(warnedKeys, (keys) => [
+            keys.has(key),
+            new Set([...keys, key]),
+          ])
+          if (!warned) yield* warning
+        })
+
+      // A stored override that names a removed external driver decodes as absent.
       const warnRetiredOverrides = (filePath: string, content: string) =>
         Effect.gen(function* () {
           const agents = retiredOverrideAgents(content)
           if (agents.length === 0) return
-          const warned = yield* Ref.modify(warnedRetiredPaths, (paths) => [
-            paths.has(filePath),
-            new Set([...paths, filePath]),
-          ])
-          if (warned) return
-          yield* Effect.logWarning(
-            "Config names a removed external driver; the agent uses its default model",
-          ).pipe(Effect.annotateLogs({ path: filePath, agents: agents.join(", ") }))
+          yield* warnOnce(
+            `retired\0${filePath}`,
+            Effect.logWarning(
+              "Config names a removed external driver; the agent uses its default model",
+            ).pipe(Effect.annotateLogs({ path: filePath, agents: agents.join(", ") })),
+          )
+        })
+
+      // `authHold` and `extraUsage` count only in the user file: a project
+      // file that sets them is read without them, and says so.
+      const warnUserOnlyFields = (filePath: string, project: UserConfig) =>
+        Effect.gen(function* () {
+          const fields: Array<string> = []
+          for (const [owner, entry] of Object.entries(project.providers ?? {}))
+            for (const field of ["authHold", "extraUsage"] as const)
+              if (Predicate.isNotUndefined(entry[field])) fields.push(`providers.${owner}.${field}`)
+          if (fields.length === 0) return
+          yield* warnOnce(
+            `user-only\0${filePath}\0${fields.join(",")}`,
+            Effect.logWarning(
+              "Project config sets fields only the user config counts; they are ignored",
+            ).pipe(Effect.annotateLogs({ path: filePath, fields: fields.join(", ") })),
+          )
         })
 
       // A missing file reads as an empty config.
@@ -1207,17 +1270,17 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           Effect.provideService(Path.Path, path),
         )
         if (projectScope) {
-          const projectRead = yield* Effect.result(
-            readConfigFile(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
-          )
+          const projectPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+          const projectRead = yield* Effect.result(readConfigFile(projectPath))
           if (Result.isFailure(projectRead)) {
             failures.push(projectRead.failure)
             files.push(unreadable(projectRead.failure))
           } else {
             files.push(projectRead.success.file)
-            if (Result.isSuccess(projectRead.success.read))
+            if (Result.isSuccess(projectRead.success.read)) {
               project = projectRead.success.read.success
-            else failures.push(projectRead.success.read.failure)
+              yield* warnUserOnlyFields(projectPath, project)
+            } else failures.push(projectRead.success.read.failure)
           }
         }
         return { project, failures, files }
@@ -1257,7 +1320,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       })
 
       const project = (cwd: string) =>
-        projectOf(cwd).pipe(
+        projectOf(cwd, home).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
           Effect.provideService(Path.Path, path),
         )

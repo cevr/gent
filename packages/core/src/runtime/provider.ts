@@ -3616,7 +3616,8 @@ const LANE_BUSY_RETRY_MS = 60_000
 
 /** A provider's lanes report, and the unfloored supply admission checks against. */
 interface LaneSupply {
-  readonly lanes: ProviderLanes
+  /** The report's lanes but its holds, which the config names (`lanes`). */
+  readonly lanes: Omit<ProviderLanes, "holds">
   /** Runs the scope sustains, fractional: the report floors it to `capacity`. None when unknown. */
   readonly supply: Option.Option<number>
 }
@@ -3879,9 +3880,10 @@ interface CredentialPlacementService {
   /**
    * The lanes of every provider gent read a quota window of: each account's
    * windows, fuel per percent and sustainable runs, and the provider's
-   * capacity over the accounts `scopeOf` names (its unpinned runs' accounts).
+   * capacity over the accounts `scopeOf` names (its unpinned runs' accounts),
+   * and the lanes `holdsOf` holds for each project with the project's runs now.
    */
-  readonly lanes: (scopeOf: LaneScopeOf) => Effect.Effect<LaneReport>
+  readonly lanes: (scopeOf: LaneScopeOf, holdsOf: LaneHoldsOf) => Effect.Effect<LaneReport>
   /** Write the usage ledger now, when anything was recorded since the last write. */
   readonly flush: Effect.Effect<void>
 }
@@ -3969,6 +3971,9 @@ interface PlacementFuel {
  * first of its order. None when the sign-in's order cannot be read.
  */
 type LaneScopeOf = (provider: string) => Effect.Effect<Option.Option<LaneScope>>
+
+/** The lanes the owner holds for each project on a provider's sign-in (`ConfigService.laneHolds`). */
+type LaneHoldsOf = (provider: string) => Effect.Effect<ReadonlyMap<string, number>>
 
 /**
  * Whether a refusal holds its account for the refused model alone: a
@@ -5855,7 +5860,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * When a spent scope can carry a run again: the soonest account whose
    * hold ends and whose windows short of a run have all reset.
    */
-  const spentUntil = (lanes: ProviderLanes, now: number) => {
+  const spentUntil = (lanes: LaneSupply["lanes"], now: number) => {
     const ready = lanes.accounts
       .filter((account) => lanes.scope.includes(account.slot))
       .map((account) =>
@@ -6250,31 +6255,43 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (spend.limits.length > 0) meter(spend, slot.value, priced, now)
       })
     }),
-    lanes: Effect.fn("CredentialPlacement.lanes")(function* (scopeOf: LaneScopeOf) {
+    lanes: Effect.fn("CredentialPlacement.lanes")(function* (
+      scopeOf: LaneScopeOf,
+      holdsOf: LaneHoldsOf,
+    ) {
       const now = yield* Clock.currentTimeMillis
       const providers = yield* locked(() => {
         trim(now)
         return [...new Set([...readings.values()].map((reading) => reading.provider))].sort()
       })
       const scopes = yield* Effect.forEach(providers, (provider) =>
-        Effect.map(scopeOf(provider), (scope) => [provider, scope] as const),
+        Effect.all([Effect.succeed(provider), scopeOf(provider), holdsOf(provider)]),
       )
       return yield* locked((): LaneReport => {
         for (const [provider, scope] of scopes)
           if (Option.isSome(scope)) settle(provider, scope.value)
         return {
-          providers: scopes.map(
-            ([provider, scope]) =>
-              providerLanes(
-                provider,
-                Option.match(scope, {
-                  onNone: () => [],
-                  onSome: (accounts) => accounts.map((account) => account.slot),
-                }),
-                Option.none(),
-                now,
-              ).lanes,
-          ),
+          providers: scopes.map(([provider, scope, holds]) => ({
+            ...providerLanes(
+              provider,
+              Option.match(scope, {
+                onNone: () => [],
+                onSome: (accounts) => accounts.map((account) => account.slot),
+              }),
+              Option.none(),
+              now,
+            ).lanes,
+            // A hold counts the project's runs on every account, as admission does.
+            holds: [...holds]
+              .sort(([a], [b]) => Order.String(a, b))
+              .map(([project, lanes]) => ({
+                project,
+                lanes,
+                used: lanesHeld(provider, Option.none(), now, (held) =>
+                  Option.contains(held.project, project),
+                ),
+              })),
+          })),
         }
       })
     }),

@@ -750,6 +750,18 @@ export const LaneModel = Schema.Struct({
   spanHours: Schema.Finite,
 })
 
+/**
+ * A project's held lanes on a sign-in (`providers.<owner>.authHold`): runs
+ * of the project up to `lanes` are admitted whatever the pace.
+ */
+const LaneHold = Schema.Struct({
+  /** The project, as `ConfigService.project` names it. */
+  project: Schema.String,
+  lanes: Schema.Int,
+  /** The project's turns and admitted starts on the sign-in now, any model. */
+  used: Schema.Int,
+})
+
 /** One provider's lanes. */
 export const ProviderLanes = Schema.Struct({
   provider: Schema.String,
@@ -779,6 +791,8 @@ export const ProviderLanes = Schema.Struct({
   laneHours: Schema.Finite,
   /** Each model whose fuel fell in a kept segment of an account window, with its quota weight. */
   models: Schema.Array(LaneModel),
+  /** The projects the owner holds lanes for on this sign-in, by project. */
+  holds: Schema.Array(LaneHold),
 })
 
 /** `accounts.lanes`: every provider gent read a quota window of. Labels and numbers only. */

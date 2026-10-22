@@ -212,9 +212,10 @@ once it has passed (B2).
    admitted and a second is refused with `LaneUnavailable`.
    The hold is `providers.<owner>.authHold` in the user file, by repository
    path; a project is its origin url, else its root (docs/architecture/lanes.md).
-   Past its hold a project competes in the pool. Not done: `accounts.lanes`
-   does not show holds, a project file's `authHold` is ignored without a
-   warning, and git's url rewrites are not applied.
+   Past its hold a project competes in the pool. Its leftovers are done
+   (2026-10-22): `accounts.lanes` reports holds, a project file's `authHold`
+   or `extraUsage` logs a warning, and git's `insteadOf` rewrites apply. The
+   TUI band does not show holds yet (queue row 35).
 10. **Cost per model.** Fuel per percent is fitted for each model, not only
     for each window, so an Opus unit and a Haiku unit cost what each burns.
     Whole-percent readings over short windows are too coarse to fit alone

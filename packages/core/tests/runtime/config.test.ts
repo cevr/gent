@@ -242,6 +242,112 @@ describe("user configuration", () => {
           }).pipe(Effect.provide(live))
         }).pipe(Effect.provide(BunServices.layer)),
     )
+
+    it.scopedLive("a project's url is rewritten by git's insteadOf rules", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const repository = (name: string, config: string) =>
+          Effect.gen(function* () {
+            const dir = path.join(root, name)
+            yield* fs.makeDirectory(path.join(dir, ".git"), { recursive: true })
+            yield* fs.writeFileString(path.join(dir, ".git", "config"), config)
+            return dir
+          })
+        // Each global file holds a rule; the longest prefix wins.
+        yield* fs.writeFileString(
+          path.join(home, ".gitconfig"),
+          '[url "git@github.com:"]\n\tinsteadOf = gh:\n',
+        )
+        yield* fs.makeDirectory(path.join(home, ".config", "git"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ".config", "git", "config"),
+          '[URL "https://mirror.example/"]\n\tInsteadOf = "gh:mirrored/"\n',
+        )
+        const short = yield* repository("short", '[remote "origin"]\n\turl = gh:cevr/gent.git\n')
+        const mirrored = yield* repository(
+          "mirrored",
+          '[remote "origin"]\n\turl = gh:mirrored/repo\n',
+        )
+        // The repository's own rule counts too.
+        const own = yield* repository(
+          "own",
+          [
+            '[url "ssh://git@example.com:2222/"]',
+            "\tinsteadOf = work:",
+            '[remote "origin"]',
+            "\turl = work:team/app.git",
+            "",
+          ].join("\n"),
+        )
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: root, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect(yield* cfg.project(short)).toBe("git:github.com/cevr/gent")
+          expect(yield* cfg.project(mirrored)).toBe("git:mirror.example/repo")
+          expect(yield* cfg.project(own)).toBe("git:example.com:2222/team/app")
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a project file's authHold and extraUsage are ignored and warn once", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(
+          projectConfigPath,
+          encodeJson({
+            providers: {
+              anthropic: { authHold: { [cwd]: 3 }, extraUsage: true },
+              openai: { authOrder: ["default"] },
+            },
+          }),
+        )
+        const warnings: Array<string> = []
+        const captureLogger = Logger.make(({ message, fiber }) => {
+          let rendered = String(message)
+          if (Array.isArray(message)) rendered = message.map((entry) => String(entry)).join(" ")
+          if (rendered.includes("only the user config counts"))
+            warnings.push(
+              `${rendered} ${String(fiber.getRef(References.CurrentLogAnnotations)["fields"])}`,
+            )
+        })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* cfg.get(cwd)
+          yield* cfg.get(cwd)
+          expect(yield* cfg.extraUsage("anthropic")).toBe(false)
+          expect(yield* cfg.laneHolds("anthropic")).toEqual(new Map())
+          expect(warnings).toEqual([
+            "Project config sets fields only the user config counts; they are ignored providers.anthropic.authHold, providers.anthropic.extraUsage",
+          ])
+        }).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              live,
+              // The test preload silences logs; this test reads the warning.
+              Layer.merge(
+                Logger.layer([captureLogger]),
+                Layer.succeed(References.MinimumLogLevel, "Warn"),
+              ),
+            ),
+          ),
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
   })
 
   describe("concurrent writes", () => {

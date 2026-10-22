@@ -1823,13 +1823,15 @@ export const makeExtensionAccounts = Effect.gen(function* () {
   const lanes = Effect.scoped(
     Effect.gen(function* () {
       const { registryService } = yield* profiles.resolve(hostCwd)
-      return yield* placement.lanes((provider) =>
-        Effect.map(
-          credentialLane(provider, Option.none(), registryService).pipe(
-            Effect.provideService(ModelRegistry, modelRegistry),
+      return yield* placement.lanes(
+        (provider) =>
+          Effect.map(
+            credentialLane(provider, Option.none(), registryService).pipe(
+              Effect.provideService(ModelRegistry, modelRegistry),
+            ),
+            Option.map((lane) => lane.scope),
           ),
-          Option.map((lane) => lane.scope),
-        ),
+        configService.laneHolds,
       )
     }),
   )
