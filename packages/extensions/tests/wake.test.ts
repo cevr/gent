@@ -33,6 +33,7 @@ import {
   textStep,
   toolCallPart,
   toolCallStep,
+  advanceUntil,
   waitFor,
   collectTestContributions,
   createE2ELayer,
@@ -472,17 +473,18 @@ describe("wake", () => {
           yield* client.message.send({ sessionId, branchId, content: "remind me" })
           // Keep the alarm's clock still until the setting turn has answered.
           // Otherwise that turn's next step can read and clear the notice.
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
               current.runtime._tag === "Idle" && answered(current.messages, "reminder set"),
+            5_000,
             "the turn that set the alarm ended",
           )
           // The fire leaves a notice; the loop stays idle and no turn or wake row follows.
           yield* advanceUntil(
             list(),
             (pending) => pending.entries.length === 1 && pending.entries[0]?._tag === "notice",
-            "the notice is listed alone",
+            { label: "the notice is listed alone", timeoutMs: 5_000 },
           )
           const noticed = yield* list()
           expect(noticed.entries.map((entry) => entry._tag)).toEqual(["notice"])
@@ -493,11 +495,12 @@ describe("wake", () => {
           // The tool-call step and the reply: nothing after the fire.
           expect(idle.messages.filter((m) => m.role === "assistant").length).toBe(2)
           yield* client.message.send({ sessionId, branchId, content: "what did I miss?" })
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
               current.runtime._tag === "Idle" &&
               answered(current.messages, "read the notice with your prompt"),
+            5_000,
             "the next turn ran",
           )
           // The notice reached the model after the conversation and left the list.
@@ -587,12 +590,11 @@ describe("wake", () => {
         yield* Fiber.join(firstTurn)
         // Idle past the entity idle limit: the pending alarm holds nothing, so
         // the loop passivates and its branch scope closes, long before the alarm.
-        yield* advanceUntil(
-          Ref.get(closed),
-          (count) => count >= 1,
-          "the branch passivated",
-          "1 second",
-        )
+        yield* advanceUntil(Ref.get(closed), (count) => count >= 1, {
+          label: "the branch passivated",
+          step: "1 second",
+          timeoutMs: 5_000,
+        })
         expect(yield* Clock.currentTimeMillis).toBeLessThan(300_000)
         expect(wokenTurn.pollUnsafe()).toBeUndefined()
         // Then past the alarm. Steps, not one jump: a sleep that starts after a
@@ -600,8 +602,7 @@ describe("wake", () => {
         yield* advanceUntil(
           Effect.sync(() => Option.fromUndefinedOr(wokenTurn.pollUnsafe())),
           Option.isSome,
-          "the alarm woke the branch",
-          "10 seconds",
+          { label: "the alarm woke the branch", step: "10 seconds", timeoutMs: 5_000 },
         )
         yield* Fiber.join(wokenTurn)
         expect(yield* controls.callCount).toBe(3)
@@ -1568,7 +1569,7 @@ const afterFirstWrite = (lock: ExtensionContextService["FileLock"]) => {
  * time, not by a turn count: two thousand scheduler turns pass in a few
  * milliseconds, and under gate load a write can take longer than that, so a
  * turn count would report "still pending" on a fire that is landing.
- * Each turn advances the virtual clock (releases anything sleeping) and then
+ * Each step advances the virtual clock (releases anything sleeping) and then
  * sleeps on the wall clock (lets the I/O land). Exhaustion fails loudly; a
  * silent give-up would let a later assertion read a half-finished fire.
  */
@@ -1576,63 +1577,15 @@ const settled = (
   ids: Effect.Effect<ReadonlyArray<string>>,
   wakeId: Option.Option<string> = Option.none(),
 ) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      const running = yield* ids
-      const done = Option.match(wakeId, {
+  advanceUntil(
+    ids,
+    (running) =>
+      Option.match(wakeId, {
         onNone: () => running.length === 0,
         onSome: (id) => !running.includes(id),
-      })
-      if (done) return
-      yield* TestClock.adjust("1 milli")
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real file I/O, which only the wall clock paces
-      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    expect("wake timers still pending").toBe("no wake timer pending")
-  })
-
-/** The real clock, beside the `TestClock` the alarms run on. */
-const wallClock = Clock.Clock.defaultValue()
-
-/** Waits on the wall clock, never the virtual one, for work a `TestClock.adjust` already released. Exhaustion fails loudly. */
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean,
-  label: string,
-) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      if (done(yield* read)) return
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real file I/O, which only the wall clock paces
-      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    expect(`still waiting: ${label}`).toBe(label)
-  })
-
-/**
- * Moves the virtual clock in small steps until `done` holds. A timer fiber reads
- * the clock and then sleeps; a single `TestClock.adjust` that lands between the
- * two leaves the sleep one whole delay past the new time, and it never wakes.
- * Stepping reaches that timer too. Exhaustion fails loudly.
- */
-const advanceUntil = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean,
-  label: string,
-  step: Duration.Input = "100 millis",
-) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 5_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      if (done(yield* read)) return
-      yield* TestClock.adjust(step)
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real file I/O, which only the wall clock paces
-      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    expect(`still waiting: ${label}`).toBe(label)
-  })
+      }),
+    { label: "no wake timer pending", step: "1 milli", timeoutMs: 5_000 },
+  )
 
 /** A branch's wake file as text; a missing file is the empty list, as the store reads it. */
 const readStoredFile = (file: string) =>
@@ -2311,9 +2264,10 @@ describe("wake store", () => {
         yield* rearm
         const alarms = yield* WakeAlarms
         expect([...(yield* alarms.pending)].sort()).toEqual(["old-cleared", "old-uncleared"])
-        yield* eventually(
+        yield* waitFor(
           Ref.get(ran),
           (all) => all.length >= 2,
+          5_000,
           "the armed monitors ran their first check",
         )
         expect(yield* Ref.get(ran)).toContain("-c ls dist")
@@ -2550,12 +2504,11 @@ describe("wake store", () => {
         expect(yield* alarms.pending).toEqual([wakeId])
         expect([...(yield* Ref.get(records)).values()]).toEqual([Option.none()])
         // At its deadline it wakes timed out, and the record goes after the entry.
-        yield* advanceUntil(
-          Ref.get(records),
-          (current) => current.size === 0,
-          "the monitor ended and its record went",
-          "10 seconds",
-        )
+        yield* advanceUntil(Ref.get(records), (current) => current.size === 0, {
+          label: "the monitor ended and its record went",
+          step: "10 seconds",
+          timeoutMs: 5_000,
+        })
         expect(yield* wakeFileExists(home)).toBe(false)
         expect((yield* Ref.get(queued))[0]).toContain("timed out after")
       }).pipe(storeTest),
@@ -2743,9 +2696,10 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the resume is stored",
           )
           // The virtual clock starts at 0: the limit resets at 60 s, the resume is due 30 s later.
@@ -2760,8 +2714,7 @@ describe("auto-resume", () => {
             (current) =>
               current.runtime._tag === "Idle" &&
               answered(current.messages, "picked up where I stopped"),
-            "the resumed turn answered",
-            "5 seconds",
+            { label: "the resumed turn answered", step: "5 seconds", timeoutMs: 5_000 },
           )
           const snapshot = yield* client.session.getSnapshot(ids)
           const resumed = wakeOf(snapshot.messages)
@@ -2862,8 +2815,7 @@ describe("auto-resume", () => {
           yield* advanceUntil(
             pendingOf(client, ids),
             (pending) => pending.entries.some((entry) => entry._tag === "notice"),
-            "the cap left its notice",
-            "5 seconds",
+            { label: "the cap left its notice", step: "5 seconds", timeoutMs: 5_000 },
           )
           const pending = yield* pendingOf(client, ids)
           expect(pending.entries).toHaveLength(1)
@@ -2947,21 +2899,24 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the resume is stored",
           )
           yield* client.message.send({ ...ids, content: "never mind, do it another way" })
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot(ids),
             (current) =>
               current.runtime._tag === "Idle" && answered(current.messages, "done another way"),
+            5_000,
             "the user's turn answered",
           )
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.length === 0,
+            5_000,
             "the resume left with the user's turn",
           )
           yield* TestClock.adjust("2 minutes")
@@ -3001,24 +2956,25 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the resume is stored",
           )
           yield* client.message.send({ ...ids, content: "something else first" })
           yield* Deferred.await(started)
-          yield* advanceUntil(
-            pendingOf(client, ids),
-            (pending) => pending.entries.length === 0,
-            "the due resume dropped its row",
-            "5 seconds",
-          )
+          yield* advanceUntil(pendingOf(client, ids), (pending) => pending.entries.length === 0, {
+            label: "the due resume dropped its row",
+            step: "5 seconds",
+            timeoutMs: 5_000,
+          })
           yield* Deferred.succeed(release, void 0)
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot(ids),
             (current) =>
               current.runtime._tag === "Idle" && answered(current.messages, "answered the user"),
+            5_000,
             "the user's turn answered",
           )
           const snapshot = yield* client.session.getSnapshot(ids)
@@ -3044,9 +3000,10 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the resume is stored",
           )
           const [resume] = (yield* pendingOf(client, ids)).entries
@@ -3087,16 +3044,18 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the resume is stored",
           )
           // The resume is stored in the stopped turn's `turnAfter`, before
           // the loop takes its next item: a steer sent then gets that turn.
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot(ids),
             (snapshot) => snapshot.runtime._tag === "Idle",
+            5_000,
             "the stopped turn ended",
           )
           yield* client.steer.command({
@@ -3106,30 +3065,31 @@ describe("auto-resume", () => {
               message: "first look at the loader",
             }),
           })
-          yield* eventually(
+          yield* waitFor(
             client.queue.get(ids),
             (queue) => queue.steering.length === 1,
+            5_000,
             "the steer is parked",
           )
-          yield* advanceUntil(
-            pendingOf(client, ids),
-            (pending) => pending.entries.length === 0,
-            "the due resume dropped its row",
-            "5 seconds",
-          )
+          yield* advanceUntil(pendingOf(client, ids), (pending) => pending.entries.length === 0, {
+            label: "the due resume dropped its row",
+            step: "5 seconds",
+            timeoutMs: 5_000,
+          })
           // A fire admits its line before it drops the row.
           expect((yield* client.queue.get(ids)).steering).toHaveLength(1)
           expect(yield* Ref.get(calls)).toBe(1)
           // The user's next message is the next turn; once it answered and
           // nothing waits, the transcript is complete.
           yield* client.message.send({ ...ids, content: "go on" })
-          yield* eventually(
+          yield* waitFor(
             Effect.all([client.session.getSnapshot(ids), client.queue.get(ids)]),
             ([current, queue]) =>
               current.runtime._tag === "Idle" &&
               answered(current.messages, "answered the user") &&
               queue.steering.length === 0 &&
               queue.followUp.length === 0,
+            5_000,
             "the user's turn answered",
           )
           const snapshot = yield* client.session.getSnapshot(ids)
@@ -3156,7 +3116,7 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests", unattended: true })
-          yield* eventually(Ref.get(seen), (all) => all.length === 1, "the turn ended")
+          yield* waitFor(Ref.get(seen), (all) => all.length === 1, 5_000, "the turn ended")
           expect((yield* pendingOf(client, ids)).entries).toEqual([])
           yield* TestClock.adjust("2 minutes")
           const snapshot = yield* client.session.getSnapshot(ids)
@@ -3199,7 +3159,12 @@ describe("auto-resume", () => {
                 content: "migrate the tests",
                 unattended: true,
               })
-              yield* eventually(Ref.get(seen), (all) => all.length === 1, "the headless turn ended")
+              yield* waitFor(
+                Ref.get(seen),
+                (all) => all.length === 1,
+                5_000,
+                "the headless turn ended",
+              )
               return { sessionId: created.sessionId, branchId: created.branchId }
             }),
           )
@@ -3236,19 +3201,21 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the first resume is stored",
           )
           const [first] = (yield* pendingOf(client, ids)).entries
           yield* client.message.send({ ...ids, content: "try the loader first" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) =>
               pending.entries.some(
                 (entry) => isResumeAlarm(entry) && entry.wakeId !== first?.wakeId,
               ),
+            5_000,
             "the second turn's resume is stored",
           )
           const entries = (yield* pendingOf(client, ids)).entries
@@ -3275,27 +3242,31 @@ describe("auto-resume", () => {
           })
           const ids = { sessionId, branchId }
           yield* client.message.send({ ...ids, content: "migrate the tests" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the first resume is stored",
           )
           yield* client.message.send({ ...ids, content: "what is left?" })
-          yield* eventually(
+          yield* waitFor(
             client.session.getSnapshot(ids),
             (current) =>
               current.runtime._tag === "Idle" && answered(current.messages, "answered the user"),
+            5_000,
             "the user's turn answered",
           )
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.length === 0,
+            5_000,
             "the answered turn took the resume's place",
           )
           yield* client.message.send({ ...ids, content: "now migrate the rest" })
-          yield* eventually(
+          yield* waitFor(
             pendingOf(client, ids),
             (pending) => pending.entries.some(isResumeAlarm),
+            5_000,
             "the third turn's resume is stored",
           )
           const entries = (yield* pendingOf(client, ids)).entries

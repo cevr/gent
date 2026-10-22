@@ -2439,11 +2439,15 @@ const toWaitForError = (error: unknown) => {
   return new WaitForError({ message: String(error) })
 }
 
+/** The real clock: test waits run on it even where a `TestClock` is provided. */
+const wallClock = Clock.Clock.defaultValue()
+
 /**
  * Poll an effect until its value passes `predicate`, or fail with
  * `WaitForError` at the wall-clock deadline. A failed attempt is polled
  * again; the last failure is named in the timeout. A refinement narrows the
- * value returned (`Option.isSome` returns the `Some`).
+ * value returned (`Option.isSome` returns the `Some`). The poll runs on the
+ * wall clock, so it also waits for work a `TestClock.adjust` released.
  */
 export function waitFor<A, B extends A, R = never>(
   effect: Effect.Effect<A, unknown, R>,
@@ -2464,13 +2468,13 @@ export function waitFor<A, R = never>(
   label = "condition",
 ): Effect.Effect<A, WaitForError, R> {
   return Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs
+    const deadline = wallClock.currentTimeMillisUnsafe() + timeoutMs
     const loop: Effect.Effect<A, WaitForError, R> = Effect.gen(function* () {
       const attempt = yield* effect.pipe(Effect.exit)
       if (attempt._tag === "Success" && predicate(attempt.value)) {
         return attempt.value
       }
-      if ((yield* Clock.currentTimeMillis) >= deadline) {
+      if (wallClock.currentTimeMillisUnsafe() >= deadline) {
         let errorMessage = `timed out waiting for ${label}`
         if (attempt._tag === "Failure") {
           errorMessage += `: ${toWaitForError(Cause.squash(attempt.cause)).message}`
@@ -2478,14 +2482,12 @@ export function waitFor<A, R = never>(
         return yield* new WaitForError({ message: errorMessage })
       }
       // oxlint-disable-next-line effect/noFixedWaitInTests -- the poll interval of waitFor, the helper the rule points tests to
-      yield* Effect.sleep("5 millis")
+      yield* Effect.sleep("5 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
       return yield* loop
     })
     return yield* loop
   })
 }
-
-const wallClock = Clock.Clock.defaultValue()
 
 /**
  * Moves the virtual clock in steps of `step` until `done` holds, and returns
@@ -2494,7 +2496,8 @@ const wallClock = Clock.Clock.defaultValue()
  * past the new time, and it never wakes. Steps reach that timer too. After each
  * step the loop pauses on the wall clock for the real I/O the step released.
  * Wall time bounds the whole wait, a blocked `read` included: at `timeoutMs`
- * it fails with `WaitForError`.
+ * it fails with `WaitForError`. `adjust` moves a clock other than the
+ * provided `TestClock`, or none.
  */
 export const advanceUntil = <A, E, R>(
   read: Effect.Effect<A, E, R>,
@@ -2503,6 +2506,7 @@ export const advanceUntil = <A, E, R>(
     readonly label: string
     readonly step?: Duration.Input
     readonly timeoutMs?: number
+    readonly adjust?: (step: Duration.Input) => Effect.Effect<void>
   },
 ): Effect.Effect<A, E | WaitForError, R> =>
   Effect.raceFirst(
@@ -2510,7 +2514,7 @@ export const advanceUntil = <A, E, R>(
       for (;;) {
         const value = yield* read
         if (done(value)) return value
-        yield* TestClock.adjust(options.step ?? "100 millis")
+        yield* (options.adjust ?? TestClock.adjust)(options.step ?? "100 millis")
         // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
         yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
       }

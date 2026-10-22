@@ -59,6 +59,7 @@ import {
   TEST_MODEL_ID,
   testToolContext,
   UserConfig,
+  advanceUntil,
   waitFor,
 } from "@gent/core/test-utils"
 import type { Session } from "@gent/core/protocol"
@@ -1426,45 +1427,6 @@ const ONE_COMMAND = {
 /** The real clock, beside the `TestClock` the runs wait on. */
 const wallClock = Clock.Clock.defaultValue()
 
-/** Polls on the wall clock, for work the virtual clock already released. Exhaustion fails loudly. */
-const eventually = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean,
-  label: string,
-) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 10_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      const value = yield* read
-      if (done(value)) return value
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real database I/O, which only the wall clock paces
-      yield* Effect.sleep("5 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    return yield* Effect.die(`still waiting: ${label}`)
-  })
-
-/**
- * Moves the virtual clock in steps until `done` holds. A timer fiber reads
- * the clock and then sleeps, so one large step can land between the two and
- * leave the sleep a whole delay past the new time; small steps reach it.
- */
-const advanceUntil = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean,
-  label: string,
-) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 10_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      const value = yield* read
-      if (done(value)) return value
-      yield* TestClock.adjust("5 seconds")
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the wait is for real database I/O, which only the wall clock paces
-      yield* Effect.sleep("10 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    return yield* Effect.die(`still waiting: ${label}`)
-  })
-
 /** Lets work the virtual clock released settle, so a check that nothing ran means it. */
 // oxlint-disable-next-line effect/noFixedWaitInTests -- an absence has no event to wait on; the pause is for real database I/O
 const settle = Effect.sleep("300 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
@@ -1477,7 +1439,9 @@ const callOn = (
 ) =>
   Effect.gen(function* () {
     const sent = yield* sendCalls(client, place, calls)
-    return sent.results(yield* eventually(client.session.getSnapshot(place), sent.ran, sent.label))
+    return sent.results(
+      yield* waitFor(client.session.getSnapshot(place), sent.ran, 10_000, sent.label),
+    )
   })
 
 const startRunOn = (
@@ -1669,9 +1633,10 @@ describe("a machine waits out its account", () => {
             Option.some(yield* Clock.currentTimeMillis),
           ])
           yield* Deferred.succeed(release, void 0)
-          yield* eventually(
+          yield* waitFor(
             home.sql(runRow(run)),
             isSettled,
+            10_000,
             "the stop settled before the quota reset",
           )
           expect(yield* Ref.get(models.calls)).toEqual([])
@@ -1730,9 +1695,10 @@ describe("a machine waits out its account", () => {
             const owner = ownerOf(yield* client.session.create({}))
             yield* Ref.set(readings, rejectedUntil(reset))
             const run = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
-            yield* eventually(
+            yield* waitFor(
               home.sql(runRecords(run)),
               (records) => Option.contains(records[0] ?? Option.none(), reset),
+              10_000,
               "the future wait was armed",
             )
             return { owner, run }
@@ -1753,13 +1719,14 @@ describe("a machine waits out its account", () => {
         expect(yield* home.sql(runRecords(first.run))).toEqual([Option.some(reset)])
         const models = yield* makeModels((round) => Effect.succeed(billed(round.state)))
         yield* createRpcClient(home.layerFor(machineModels(models), oneAccount))
-        yield* eventually(
+        yield* waitFor(
           home.sql(runRow(first.run)),
           isSettled,
+          10_000,
           "the stop settled at boot with no client call",
         )
         expect(yield* Ref.get(models.calls)).toEqual([])
-        yield* eventually(
+        yield* waitFor(
           home.sql(
             Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient
@@ -1767,6 +1734,7 @@ describe("a machine waits out its account", () => {
             }),
           ),
           (records) => records.length === 0,
+          10_000,
           "both records were withdrawn",
         )
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("15 seconds")),
@@ -1793,15 +1761,17 @@ describe("a machine waits out its account", () => {
         yield* Ref.set(readings, rejectedUntil(firstReset))
         const run = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
         // The refusal is a wait: the pending round names the reset, and so does the run's record.
-        yield* eventually(
+        yield* waitFor(
           home.sql(pendingWait(run)),
           (until) => Option.contains(until, firstReset),
+          10_000,
           "the round waits for the reset",
         )
-        yield* eventually(
+        yield* waitFor(
           home.sql(runRecords(run)),
           (records) =>
             records.length === 1 && Option.contains(records[0] ?? Option.none(), firstReset),
+          10_000,
           "the run's record fires at the reset",
         )
         // A minute short of the reset, nothing ran, and the run held its host open for nothing.
@@ -1814,19 +1784,23 @@ describe("a machine waits out its account", () => {
         yield* Ref.set(readings, rejectedUntil(secondReset))
         yield* callOn(client, owner, [["machine.list", "list-waiting", {}]])
         // At the first reset the same round is refused again: its time moves, and it enters nothing.
-        yield* advanceUntil(
-          home.sql(stepsOf(run)),
-          (steps) => waitsOf(steps).length === 2,
-          "the second refusal",
-        )
+        yield* advanceUntil(home.sql(stepsOf(run)), (steps) => waitsOf(steps).length === 2, {
+          label: "the second refusal",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
         expect(yield* home.sql(pendingWait(run))).toEqual(Option.some(secondReset))
         expect(yield* Ref.get(models.calls)).toEqual([])
         yield* TestClock.adjust(secondReset - (yield* Clock.currentTimeMillis) - 60_000)
         yield* settle
         expect(yield* Ref.get(models.calls)).toEqual([])
         // At the second reset the round runs once, and a cap of one visit still moves on.
-        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, {
+          label: "the round ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const steps = yield* home.sql(stepsOf(run))
         expect(waitsOf(steps)).toEqual([
           { reason: "lane", until: firstReset },
@@ -1860,9 +1834,10 @@ describe("a machine waits out its account", () => {
         const { client } = yield* createRpcClient(home.layerFor(machineModels(models)))
         const owner = ownerOf(yield* client.session.create({}))
         const run = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
-        const steps = yield* eventually(
+        const steps = yield* waitFor(
           home.sql(stepsOf(run)),
           (found) => waitsOf(found).length === 1,
+          10_000,
           "the round waits for the limit's reset",
         )
         const until = waitsOf(steps)[0]?.until ?? 0
@@ -1872,8 +1847,12 @@ describe("a machine waits out its account", () => {
         yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 10_000)
         yield* settle
         expect(yield* Ref.get(rounds)).toBe(1)
-        yield* advanceUntil(Ref.get(rounds), (count) => count >= 2, "the rerun ran")
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* advanceUntil(Ref.get(rounds), (count) => count >= 2, {
+          label: "the rerun ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const ended = yield* home.sql(stepsOf(run))
         expect(moves(ended)).toEqual(["judge→done"])
         expect(ended.filter((step) => step._tag === "RoundEnded").map((step) => step.dead)).toEqual(
@@ -1918,21 +1897,22 @@ describe("a machine waits out its account", () => {
         )
         const owner = ownerOf(yield* client.session.create({}))
         const run = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
-        const steps = yield* eventually(
+        const steps = yield* waitFor(
           home.sql(stepsOf(run)),
           (found) => waitsOf(found).length === 1,
+          10_000,
           "the round waits for the window's reset",
         )
         expect(waitsOf(steps)).toEqual([{ reason: "quota", until: reset }])
         yield* TestClock.adjust(reset - (yield* Clock.currentTimeMillis) - 60_000)
         yield* settle
         expect(yield* Ref.get(models.calls)).toEqual(["judge:1"])
-        yield* advanceUntil(
-          Ref.get(models.calls),
-          (calls) => calls.length >= 2,
-          "the rerun ran at the reset",
-        )
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length >= 2, {
+          label: "the rerun ran at the reset",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["judge→done"])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
@@ -1956,14 +1936,15 @@ describe("a machine waits out its account", () => {
           startRunOn(client, owner, ONE_VISIT, "one-visit", tag),
         )
         yield* Effect.forEach(runs, (run) =>
-          eventually(
+          waitFor(
             home.sql(pendingWait(run)),
             (until) => Option.contains(until, reset),
+            10_000,
             `${run} waits for the reset`,
           ),
         )
         const command = yield* startRunOn(client, owner, ONE_COMMAND, "one-command")
-        yield* eventually(home.sql(runRow(command)), isSettled, "the command ran beside them")
+        yield* waitFor(home.sql(runRow(command)), isSettled, 10_000, "the command ran beside them")
         expect(yield* Ref.get(models.calls)).toEqual([])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
   )
@@ -1985,9 +1966,10 @@ describe("a machine waits out its account", () => {
           const owner = ownerOf(yield* client.session.create({}))
           yield* Ref.set(readings, rejectedUntil(reset))
           const started = yield* startRunOn(client, owner, ONE_VISIT, "one-visit")
-          yield* eventually(
+          yield* waitFor(
             home.sql(runRecords(started)),
             (records) => Option.contains(records[0] ?? Option.none(), reset),
+            10_000,
             "the run's record fires at the reset",
           )
           return started
@@ -2000,8 +1982,12 @@ describe("a machine waits out its account", () => {
       yield* settle
       expect(yield* Ref.get(models.calls)).toEqual([])
       expect(yield* home.sql(pendingWait(run))).toEqual(Option.some(reset))
-      yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
-      yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+      yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, {
+        label: "the round ran",
+        step: "5 seconds",
+        timeoutMs: 10_000,
+      })
+      yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
       expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["work→done"])
       expect(yield* Ref.get(models.calls)).toEqual(["work:1"])
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
@@ -2358,11 +2344,12 @@ const roundThreads = (steps: ReadonlyArray<typeof StepView.Type>) =>
 /** The `count`th ask the owner got, read under the test clock. */
 const askAt = (client: Client, owner: SessionKey, count: number) =>
   Effect.map(
-    eventually(
+    waitFor(
       client.session.getSnapshot(owner),
       (current) =>
         current.runtime._tag === "Idle" &&
         ofType(current.messages, MACHINE_ASK_TYPE).length >= count,
+      10_000,
       `ask ${count} reached the owner`,
     ),
     (snapshot) =>
@@ -2404,7 +2391,7 @@ describe("a tier role's round", () => {
         yield* callOn(client, owner, [
           ["machine.answer", "end-3", { run, askId: third.askId, choice: "end" }],
         ])
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const steps = yield* home.sql(stepsOf(run))
         expect(roundsRan(steps)).toEqual([
           { model: SONNET, priced: true },
@@ -2443,9 +2430,10 @@ describe("a tier role's round", () => {
           modelSpentUntil(SONNET, now + HOUR),
         ])
         const run = yield* startRunOn(client, owner, STRONG_AGAIN, "strong-again")
-        yield* eventually(
+        yield* waitFor(
           home.sql(pendingWait(run)),
           (until) => Option.contains(until, now + HOUR),
+          10_000,
           "the round waits for the first model to free",
         )
         yield* settle
@@ -2459,7 +2447,11 @@ describe("a tier role's round", () => {
         yield* TestClock.adjust(HOUR - 60_000)
         yield* settle
         expect(yield* Ref.get(models.calls)).toEqual([])
-        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, {
+          label: "the round ran",
+          step: "5 seconds",
+          timeoutMs: 10_000,
+        })
         yield* askAt(client, owner, 1)
         const steps = yield* home.sql(stepsOf(run))
         expect(waitsOf(steps)).toEqual([{ reason: "lane", until: now + HOUR }])
@@ -2481,7 +2473,7 @@ describe("a tier role's round", () => {
         )
         const owner = ownerOf(yield* client.session.create({}))
         const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         // Opus first, as listed; Haiku once to measure it; then Haiku, a fifth of Opus's price.
         expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
           { model: OPUS, priced: true },
@@ -2511,7 +2503,7 @@ describe("a tier role's round", () => {
         )
         const owner = ownerOf(yield* client.session.create({}))
         const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         // Each measured once; then Sonnet, the one whose price says what a round costs.
         expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
           { model: HAIKU, priced: false },
@@ -2579,7 +2571,7 @@ describe("a model's quality in a machine's state", () => {
         )
         const owner = ownerOf(yield* client.session.create({}))
         const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
-        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         // An earlier run of the machine: Sonnet works, Haiku reviews, a check
         // fails them; Sonnet dies once and works again, the check passes, the
         // gate is green and the run finishes.
@@ -3560,9 +3552,10 @@ describe("an integrate state while CI runs", () => {
       )
       const owner = ownerOf(yield* client.session.create({}))
       const run = yield* startRunOn(client, owner, SHIP, "ship")
-      const steps = yield* eventually(
+      const steps = yield* waitFor(
         home.sql(stepsOf(run)),
         (found) => waitsOf(found).length === 1,
+        10_000,
         "the run waits for the gate",
       )
       const until = waitsOf(steps)[0]?.until ?? 0
@@ -3574,13 +3567,14 @@ describe("an integrate state while CI runs", () => {
       yield* advanceUntil(
         Effect.sync(() => github.remote.pushes.length),
         (count) => count > 0,
-        "the retry pushed",
+        { label: "the retry pushed", step: "5 seconds", timeoutMs: 10_000 },
       )
       expect(github.remote.pushes).toEqual([CANDIDATE])
-      yield* eventually(
+      yield* waitFor(
         home.sql(runRow(run)),
         (row) =>
           Option.exists(row, (found) => (found.pending_json ?? "").includes('"generation":1')),
+        10_000,
         "the run recorded the push",
       )
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),

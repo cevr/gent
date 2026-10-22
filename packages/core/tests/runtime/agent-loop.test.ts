@@ -80,6 +80,7 @@ import {
   testSqliteStorage,
   testTurnExtension,
   turnRequestText,
+  advanceUntil,
   waitFor,
 } from "../../src/test-utils/harness"
 import {
@@ -8231,30 +8232,6 @@ const wakeRoot = (config: {
 /** The real clock, beside the `TestClock` a wake test runs on. */
 const wallClock = Clock.Clock.defaultValue()
 
-/**
- * Moves the virtual clock in steps until `done` holds. A sleep that starts
- * after one big jump would never see the clock move; stepping reaches it.
- * Each step lets the work it released run on the wall clock. Exhaustion
- * fails loudly.
- */
-const advanceUntil = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean,
-  label: string,
-  step: Duration.Input,
-  adjust: (step: Duration.Input) => Effect.Effect<void> = TestClock.adjust,
-) =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + 6_000
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      if (done(yield* read)) return
-      yield* adjust(step)
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
-      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    expect(`still waiting: ${label}`).toBe(label)
-  })
-
 /** Whether `deferred` completes within `within` of wall time. */
 const completesWithin = <A>(deferred: Deferred.Deferred<A>, within: Duration.Input) =>
   Deferred.await(deferred).pipe(
@@ -8315,21 +8292,19 @@ describe("durable wakes", () => {
 
         // Idle past the entity idle limit: no client holds the branch, so
         // it passivates, and its generation closes before the record is due.
-        yield* advanceUntil(
-          Ref.get(probe.releases),
-          (n) => n >= 1,
-          "the branch passivated",
-          "1 second",
-        )
+        yield* advanceUntil(Ref.get(probe.releases), (n) => n >= 1, {
+          label: "the branch passivated",
+          step: "1 second",
+          timeoutMs: 6_000,
+        })
         expect(yield* Clock.currentTimeMillis).toBeLessThan(at)
         expect(yield* Ref.get(probe.fired)).toEqual([])
 
-        yield* advanceUntil(
-          Ref.get(probe.fired),
-          (all) => all.length > 0,
-          "the wake fired",
-          "1 second",
-        )
+        yield* advanceUntil(Ref.get(probe.fired), (all) => all.length > 0, {
+          label: "the wake fired",
+          step: "1 second",
+          timeoutMs: 6_000,
+        })
         const fired = yield* Ref.get(probe.fired)
         expect(fired).toEqual([
           {
@@ -8338,12 +8313,11 @@ describe("durable wakes", () => {
           },
         ])
         expect(yield* Clock.currentTimeMillis).toBeGreaterThanOrEqual(at)
-        yield* advanceUntil(
-          read(wakeRows),
-          (rows) => rows.length === 0,
-          "Done removed the record",
-          "1 second",
-        )
+        yield* advanceUntil(read(wakeRows), (rows) => rows.length === 0, {
+          label: "Done removed the record",
+          step: "1 second",
+          timeoutMs: 6_000,
+        })
         // The fire ran no turn.
         expect(yield* controls.callCount).toBe(0)
         expect(yield* Ref.get(probe.fired)).toHaveLength(1)
@@ -8784,13 +8758,12 @@ describe("durable wakes", () => {
           // from that sleep alone. Stepping and timing the poll instead counted
           // the fire's real I/O as clock time, a step late under load.
           yield* test.adjust(WAKE_CLOCK_MAX_SLEEP)
-          yield* advanceUntil(
-            firedSources,
-            (sources) => sources.includes("forward"),
-            "the forward jump fired the record within the longest sleep",
-            "1 second",
-            () => Effect.void,
-          )
+          yield* advanceUntil(firedSources, (sources) => sources.includes("forward"), {
+            label: "the forward jump fired the record within the longest sleep",
+            step: "1 second",
+            timeoutMs: 6_000,
+            adjust: () => Effect.void,
+          })
 
           // Backward: due in an hour, then the wall time jumps back a day.
           // An hour of sleep passes, and the wall time is still a day early.
@@ -8805,20 +8778,22 @@ describe("durable wakes", () => {
           yield* advanceUntil(
             Effect.sync(() => test.currentTimeMillisUnsafe() - backAt),
             (slept) => slept >= 3_660_000,
-            "an hour of sleep passed",
-            "10 seconds",
-            (duration) => test.adjust(duration),
+            {
+              label: "an hour of sleep passed",
+              step: "10 seconds",
+              timeoutMs: 6_000,
+              adjust: (duration) => test.adjust(duration),
+            },
           )
           expect(yield* firedSources).toEqual(["forward"])
           // The record is kept: once the wall time is back, it fires.
           skew.ms += 86_400_000
-          yield* advanceUntil(
-            firedSources,
-            (sources) => sources.includes("backward"),
-            "the record fired once the wall time came back",
-            "1 second",
-            (duration) => test.adjust(duration),
-          )
+          yield* advanceUntil(firedSources, (sources) => sources.includes("backward"), {
+            label: "the record fired once the wall time came back",
+            step: "1 second",
+            timeoutMs: 6_000,
+            adjust: (duration) => test.adjust(duration),
+          })
         }).pipe(Effect.provide(clocks))
       }).pipe(Effect.timeout("20 seconds")),
     25_000,

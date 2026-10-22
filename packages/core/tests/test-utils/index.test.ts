@@ -1,6 +1,6 @@
 import { BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Context, Effect, Fiber, FileSystem, Layer, Path, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
 import { LanguageModel } from "effect/ai"
 import type * as Response from "effect/ai/Response"
 import { AgentDefinition, AgentName, ModelId } from "../../src/domain/agent"
@@ -17,6 +17,7 @@ import {
   runToolWithCtx,
   testToolContext,
   type SequenceStep,
+  waitFor,
 } from "../../src/test-utils/harness"
 import { convertTools } from "../../src/runtime/tools"
 import { ModelResolver, textStep, toolCallStep } from "../../src/runtime/provider"
@@ -482,6 +483,22 @@ describe("advanceUntil", () => {
       expect(error).toMatchObject({
         message: "timed out advancing the clock for a read that never returns",
       })
+    }),
+  )
+})
+
+describe("waitFor", () => {
+  it.live("polls on the wall clock while a TestClock is provided", () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make(0)
+      // A poll that slept on the virtual clock would never wake for the second read.
+      const count = yield* waitFor(
+        Ref.updateAndGet(reads, (n) => n + 1),
+        (n) => n >= 3,
+        1_000,
+        "the third read",
+      ).pipe(Effect.provide(TestClock.layer()), Effect.timeout("2 seconds"))
+      expect(count).toBe(3)
     }),
   )
 })
