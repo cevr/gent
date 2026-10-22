@@ -413,8 +413,43 @@ What gent takes from it, folded into the pruned handoff (memory note
 - Not taken: fixed-width records and the file store (gent has SQLite), the
   "run memo first" prompt contract (gent owns the window).
 
-Next: measure on Haiku gamut runs how much of a step's input is tool
-results older than 5 steps, then decide the stub rule.
+### Measured on Haiku gamut (2026-10-22)
+
+One `haiku` gamut run on the ledgerline fixture: an orchestrator and six
+workers, 38 steps, 587,165 reported input tokens, no compaction, 17 of 18
+tests passing at the end. The script folds each branch's stored messages:
+a step's input is every message before it, and a result's age is the number
+of assistant steps after it. (measured)
+
+| Branch       | Steps | Old results, share of input tokens |
+| ------------ | ----- | ---------------------------------- |
+| Orchestrator | 14    | 5.3%                               |
+| Workers (6)  | 3-7   | 0%                                 |
+| All          | 38    | 2.4%                               |
+
+- "Old" is a result more than 5 steps old, counted at 4 characters a token.
+  Over 10 steps: 2.1% of the message text; over 20: none. (measured; the
+  token rate estimated)
+- Tool results are 66.7% of the message text, so the results are the bulk
+  of what grows. (measured)
+- The fixed request overhead (system prompt and tool definitions,
+  `requestOverheadTokens`) is 6.0k to 6.3k tokens a step, 43% of all input.
+  86.6% of input was a cache read. (measured)
+
+Decision: the stub rule stays at the cold point only, results more than 5
+steps old become one-line stubs with their `context.read` id, and the last
+5 steps stay verbatim. A stub on every step would rewrite the prefix and
+miss the cache for a gain of 2.4% to 5.3%, most of it already priced as a
+cache read. (inferred) The worker sessions never reach the age line, so the
+rule only matters for an orchestrator or a long single session; the owner's
+data puts 50.3% of resident bytes there. (measured for the data, inferred
+for the reach)
+
+Not built yet: a gamut run is too short to show the gain. Build the stub
+with the pruned handoff, and measure it on the first long Haiku session
+that hands off. The larger lever in short runs is the size of each read
+(46% of resident bytes are 4k to 16k results) and the fixed overhead.
+(inferred)
 
 ## Order
 
