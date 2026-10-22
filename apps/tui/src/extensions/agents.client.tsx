@@ -6,6 +6,8 @@ import {
   AgentsViewRpc,
   BTW_EXTENSION_ID,
   type ListAgentsInput,
+  MachinesRpc,
+  type ModelQuality,
   SESSION_TOOLS_EXTENSION_ID,
   threadRoundBody,
 } from "@gent/extensions/client"
@@ -332,7 +334,7 @@ interface AgentsController {
    * stay cheap by carrying identity and liveness only; this is the second
    * read, made for one row at a time.
    */
-  readonly detail: () => Option.Option<ExtensionAgentDetail>
+  readonly detail: () => Option.Option<AgentDetail>
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
   /** Whether the pane is showing: the host's pane slot names it. */
@@ -361,6 +363,14 @@ const AGENTS_PANE = "agents.pane"
 
 type RowKey = Pick<AgentRowEntry, "sessionId" | "branchId">
 
+/**
+ * A row's detail: its loop's, and how each model fared in the machine state
+ * the row works rounds of (none for a session that is not a round thread).
+ */
+export type AgentDetail = ExtensionAgentDetail & {
+  readonly quality: ReadonlyArray<ModelQuality>
+}
+
 const sameKey = (left: RowKey, right: RowKey): boolean =>
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
@@ -385,7 +395,7 @@ export const makeAgentsController = (
   fetchRows: (
     input: ListAgentsInput,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
-  fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
+  fetchDetail: (key: RowKey) => Effect.Effect<AgentDetail, { readonly message: string }>,
 ): Effect.Effect<AgentsSource, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle, activity } = yield* ClientContext
@@ -396,7 +406,7 @@ export const makeAgentsController = (
     let query = ""
     const open = () => shell.pane.isOpen(AGENTS_PANE)
 
-    const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
+    const [detail, setDetail] = createSignal<Option.Option<AgentDetail>>(Option.none())
     // The row the cursor is on, while it has a loop to ask.
     let selected = Option.none<RowKey>()
     // The selected row's progress as the listing showed it at the last detail read.
@@ -888,6 +898,69 @@ const formatTurns = (turns: number): string => {
   return `${turns} turns`
 }
 
+const formatRounds = (rounds: number): string => {
+  if (rounds === 1) return "1 round"
+  return `${rounds} rounds`
+}
+
+/** A mean, with one decimal. */
+const tenths = (value: number): string => String(Math.round(value * 10) / 10)
+
+/** Lines after a model's own are indented under it. */
+const QUALITY_INDENT = "  "
+
+/**
+ * `parts` joined by ` · ` into lines of at most `width` columns, the first
+ * led by `lead` and the rest indented under it. A part wider than the line
+ * keeps a line of its own, and the draw cuts that one.
+ */
+const packParts = (
+  parts: ReadonlyArray<string>,
+  width: number,
+  lead: string,
+): ReadonlyArray<string> => {
+  const lines: Array<string> = []
+  for (const part of parts) {
+    const joined = `${lines.at(-1) ?? ""} · ${part}`
+    if (lines.length === 0) lines.push(`${lead}${part}`)
+    else if (textWidth(joined) <= width) lines[lines.length - 1] = joined
+    else lines.push(`${QUALITY_INDENT}${part}`)
+  }
+  return lines
+}
+
+/**
+ * How one model fared in the row's machine state, across the machine's
+ * runs, in lines of the details column's `width`: `Haiku · 3 rounds ·
+ * 1 dead · $0.04/round`, then `pass 2/3 · green 1/1 · 2.5 rounds to
+ * accept`, then its verdicts, each wrapped between its parts. A count with
+ * nothing in it is left out, and so is a line left with nothing.
+ */
+const qualityLines = (
+  row: ModelQuality,
+  models: ReadonlyArray<Model>,
+  width: number,
+): ReadonlyArray<string> => {
+  const head = [modelIdName(row.model, models), formatRounds(row.rounds)]
+  if (row.dead > 0) head.push(`${row.dead} dead`)
+  if (row.priced > 0) head.push(`${formatCost(row.costUsd / row.priced)}/round`)
+  const checks = row.checks.pass + row.checks.fail
+  const gates = row.gates.green + row.gates.red
+  const outcome: Array<string> = []
+  if (checks > 0) outcome.push(`pass ${row.checks.pass}/${checks}`)
+  if (gates > 0) outcome.push(`green ${row.gates.green}/${gates}`)
+  if (row.accepted.runs > 0) {
+    outcome.push(`${tenths(row.accepted.rounds / row.accepted.runs)} rounds to accept`)
+  }
+  const verdicts = Object.entries(row.verdicts)
+    .toSorted(([left], [right]) => Order.String(left, right))
+    .map(([verdict, count]) => `${verdict} ${count}`)
+  return [
+    ...packParts(head, width, ""),
+    ...[outcome, verdicts].flatMap((parts) => packParts(parts, width, QUALITY_INDENT)),
+  ]
+}
+
 /**
  * The detail line for the selected row. Absent fields are dropped rather than
  * shown as placeholders — a session that never streamed has no model, and a
@@ -961,27 +1034,30 @@ const progressLabel = (value: ExtensionAgentDetail): string => {
 
 /**
  * How a details run is drawn: the agent name, the state glyph, plain text,
- * muted, or a muted path (cut from its start).
+ * muted, a muted path (cut from its start), or a muted line of a model's
+ * quality (the pane grows by those lines).
  */
-type DetailTone = "name" | "glyph" | "plain" | "muted" | "path"
+type DetailTone = "name" | "glyph" | "plain" | "muted" | "path" | "quality"
 
 type DetailRun = TextRun<DetailTone>
 
 /**
  * The selected row's details, one array of runs per line: its name; its
  * glyph and state word (and why it needs the reader); `model · effort`;
- * turns, cost and time; its cwd; what it does now, else the head of its last
- * answer; and its task. A line with nothing to say is left out, so a stored
- * session (no live detail) shows its name, state and cwd.
+ * turns, cost and time; how each model fared in a round thread's state; its
+ * cwd; what it does now, else the head of its last answer; and its task. A
+ * line with nothing to say is left out, so a stored session (no live
+ * detail) shows its name, state and cwd.
  */
 const detailLines = (
   row: AgentRowEntry,
   section: AgentRowEntry["section"],
   glyph: string,
-  detail: Option.Option<ExtensionAgentDetail>,
+  detail: Option.Option<AgentDetail>,
   place: PathPlace,
   answerLines: number,
   models: ReadonlyArray<Model>,
+  width: number,
 ): ReadonlyArray<ReadonlyArray<DetailRun>> => {
   const reason = needsReason(row, detail)
   const state = [
@@ -1002,6 +1078,9 @@ const detailLines = (
     ].join(" · ")
     if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
     lines.push([{ text: progressLabel(detail.value), tone: "muted" }])
+    for (const row of detail.value.quality) {
+      for (const text of qualityLines(row, models, width)) lines.push([{ text, tone: "quality" }])
+    }
   }
   if (Predicate.isNotUndefined(row.cwd)) {
     lines.push([{ text: homePath(row.cwd, place.home), tone: "path" }])
@@ -1092,6 +1171,8 @@ export function AgentsPane(props: {
     if (wide()) return detailsWidth(dimensions().width)
     return 0
   }
+  // The columns a details line may use: the column's, less its border and gutter.
+  const detailTextWidth = () => Math.max(0, columnWidth() - 3)
   // The columns a list row may use: the picker's, less the details column.
   const listWidth = () => Math.max(0, rowWidth() - columnWidth())
 
@@ -1246,6 +1327,7 @@ export function AgentsPane(props: {
           props.place,
           answerLines,
           props.models(),
+          detailTextWidth(),
         ),
     })
   // Lines the list draws: its filter row, each row, and a heading per section.
@@ -1257,9 +1339,15 @@ export function AgentsPane(props: {
   }
   // A wide pane asks for the rows its taller column needs: the list's, or
   // the details' with the whole answer head. The frame keeps its own caps.
+  // A round thread's quality lines come on top of the rows the pane keeps.
+  const qualityRows = () => details(0).filter((line) => line[0]?.tone === "quality").length
   const wideHeight = () =>
     Option.liftPredicate(
-      pickerHeight(Math.max(listLines(), details(ANSWER_LINES).length) - 1, dimensions().height, 1),
+      pickerHeight(
+        Math.max(listLines(), details(ANSWER_LINES).length - qualityRows()) - 1,
+        dimensions().height,
+        1 + qualityRows(),
+      ),
       wide,
     )
   // The answer head takes what the column's rows leave, at least one line.
@@ -1349,7 +1437,7 @@ export function AgentsPane(props: {
                 {(runs) => (
                   <text wrapMode="none" height={1} flexShrink={0}>
                     <ToneRuns
-                      runs={fitRuns(runs, Math.max(0, columnWidth() - 3))}
+                      runs={fitRuns(runs, detailTextWidth())}
                       color={(tone) => columnColor(tone, cursorSection())}
                     />
                   </text>
@@ -1375,7 +1463,20 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           Effect.mapError((error) => ({ message: String(error) })),
         ),
       (key) =>
-        transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
+        Effect.all(
+          {
+            detail: transport.agentDetail(key),
+            // A session that is no round thread, or a run the caller does
+            // not own, has no quality to show.
+            quality: transport
+              .request(ref(MachinesRpc.Quality), { session: key.sessionId })
+              .pipe(Effect.orElseSucceed((): ReadonlyArray<ModelQuality> => [])),
+          },
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(({ detail, quality }) => ({ ...detail, quality })),
+          Effect.mapError((error) => ({ message: String(error) })),
+        ),
     )
     const openPane = () => {
       shell.pane.open(AGENTS_PANE)

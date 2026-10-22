@@ -285,12 +285,18 @@
     that `Accounts.probe` admits now: `strongest` in the list's order;
     `efficient` a model with no round of the state yet first (list order),
     then by priced cost per finished round at the provider's fitted quota
-    weight (`accounts.lanes`), over every run of the machine. The role's
+    weight (`accounts.lanes`), over every run of the machine; a model whose
+    rounds carried no price comes last. The role's
     thread is tried first while its model is in the tier, so the role keeps
     its thread and cache; another pick starts a new thread that becomes the
     role's. With no model of the tier free, the round waits (`lane`) until
     the first frees; another tier is never a fallback. Every `RoundEnded`
-    step keeps the thread's model and the turn's `costUsd`. The owner is woken only by an ask (`machine-ask`), a final
+    step keeps the thread's model and the turn's `costUsd`. Quality is
+    shown, not picked on: `machine.status` and `MachinesRpc.Quality` (by a
+    session of a round thread) count per state and model, over the
+    machine's runs, the rounds, dead ones, priced cost, verdicts, the
+    check (`pass`/`fail`) and gate (`green`/`red`) moves after each round,
+    and the rounds a finished run took. The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
   - Answers check in one order: an answered ask is decided by its answer
@@ -429,9 +435,12 @@
   question`). The title counts each state there is (`Sessions · 1 needs you
   · 2 running`). From 100 terminal columns a details column (40% of the
   width, ruled off in `border`) shows the selected row: name, state, `model ·
-  effort`, turns · cost · time, cwd, what it does now or the head of its
-  last answer, and its task. The detail is the one per-row snapshot read
-  (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and `lastAnswer`);
+  effort`, turns · cost · time, each model's quality in a round thread's
+  state (wrapped between its parts to the column; the pane grows by those
+  lines up to half the terminal), cwd, what it does now or the head
+  of its last answer, and its task. The detail is the per-row snapshot
+  read (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and
+  `lastAnswer`) beside the quality read;
   under 100 columns the one-line detail stays. While the session in view
   is a child (its row names a parent), the extension's status label reads
   `↳ child <name> · ← sessions`, derived from the latest listing. The

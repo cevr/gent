@@ -73,4 +73,4 @@ export {
   threadRoundText,
 } from "./threads.js"
 export { WorkspacePlace } from "./workspaces.js"
-export { type MachineRunView, MachinesRpc } from "./machines.js"
+export { type MachineRunView, MachinesRpc, ModelQuality } from "./machines.js"

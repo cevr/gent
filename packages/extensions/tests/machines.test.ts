@@ -36,10 +36,12 @@ import {
   type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
+  type CapabilityRef,
   Model,
   ModelId,
   omitUndefined,
   ProviderId,
+  SessionId,
   type QuotaReading,
   ref,
   reportProviderQuota,
@@ -2214,15 +2216,40 @@ const EFFICIENT_AGAIN = {
   },
 }
 
-/** An ended round as the run's log stores it. */
+/** An ended round, a move and a finish as the run's log stores them. */
 const SeededRound = Schema.TaggedStruct("RoundEnded", {
   state: Schema.String,
   round: Schema.String,
   dead: Schema.Boolean,
   model: Schema.String,
+  verdict: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
 })
-const encodeSeededRound = Schema.encodeSync(Schema.fromJsonString(SeededRound))
+const SeededMove = Schema.TaggedStruct("Moved", {
+  from: Schema.String,
+  to: Schema.String,
+  by: Schema.String,
+})
+const SeededFinish = Schema.TaggedStruct("Finished", { state: Schema.String })
+const SeededStep = Schema.Union([SeededRound, SeededMove, SeededFinish])
+const encodeSeededStep = Schema.encodeSync(Schema.fromJsonString(SeededStep))
+
+/** The state a seeded step's row is filed under, as the store files it. */
+const seededState = (step: typeof SeededStep.Type): string => {
+  if (step._tag === "Moved") return step.to
+  return step.state
+}
+
+/** Steps written into the run's log after its own, as earlier work of its machine left them. */
+const seedSteps = (run: string, steps: ReadonlyArray<typeof SeededStep.Type>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    for (const [index, step] of steps.entries()) {
+      const seq = 10_000 + index
+      yield* sql`INSERT INTO machine_steps (run, seq, at, state, step_json)
+        VALUES (${run}, ${seq}, 0, ${seededState(step)}, ${encodeSeededStep(step)})`
+    }
+  })
 
 /** Ended rounds of `state` written into the run's log, as earlier rounds of its machine left them. */
 const seedRounds = (
@@ -2230,17 +2257,38 @@ const seedRounds = (
   state: string,
   rounds: ReadonlyArray<{ readonly model: ModelId; readonly costUsd?: number }>,
 ) =>
+  seedSteps(
+    run,
+    rounds.map((round, index) =>
+      SeededRound.make({ state, round: `seeded-${10_000 + index}`, dead: false, ...round }),
+    ),
+  )
+
+/** `run`'s row again as `copy`, with no steps: another run of its machine, of the same owner. */
+const copyRun = (run: string, copy: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
-    for (const [index, round] of rounds.entries()) {
-      const seq = 10_000 + index
-      const step = encodeSeededRound(
-        SeededRound.make({ state, round: `seeded-${seq}`, dead: false, ...round }),
-      )
-      yield* sql`INSERT INTO machine_steps (run, seq, at, state, step_json)
-        VALUES (${run}, ${seq}, 0, ${state}, ${step})`
-    }
+    yield* sql`CREATE TEMP TABLE run_copy AS SELECT * FROM machine_runs WHERE run = ${run}`
+    yield* sql`UPDATE run_copy SET run = ${copy}`
+    yield* sql`INSERT INTO machine_runs SELECT * FROM run_copy`
+    yield* sql`DROP TABLE run_copy`
   })
+
+/** A request of the machines extension, sent as a session of `session`'s thread. */
+const machinesRequest = <Input, Output>(
+  client: Client,
+  session: SessionKey,
+  capability: CapabilityRef<Input, Output>,
+  input: Input,
+) =>
+  client.extension
+    .request({
+      ...session,
+      extensionId: capability.extensionId,
+      capabilityId: capability.capabilityId,
+      input,
+    })
+    .pipe(Effect.flatMap(decodeRequestReply(capability.output)))
 
 /** The thread each recorded round ran on, in order. */
 const roundThreads = (steps: ReadonlyArray<typeof StepView.Type>) =>
@@ -2450,6 +2498,147 @@ describe("a tier role's round", () => {
           (step) => !(step.round ?? "").startsWith("seeded-"),
         )
         expect(roundsRan(ran).map((round) => round.model)).toEqual([HAIKU, SONNET, SONNET])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
+
+describe("a model's quality in a machine's state", () => {
+  it.live(
+    "counts each model's rounds, cost, verdicts, the checks and gates after them, and the rounds a finished run took",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), tieredAccount({ efficient: [OPUS, HAIKU] })),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        // An earlier run of the machine: Sonnet works, Haiku reviews, a check
+        // fails them; Sonnet dies once and works again, the check passes, the
+        // gate is green and the run finishes.
+        const earlier = "run-00000000000000e1"
+        yield* home.sql(copyRun(run, earlier))
+        yield* home.sql(
+          seedSteps(earlier, [
+            SeededRound.make({
+              state: "work",
+              round: "w1",
+              dead: false,
+              model: SONNET,
+              costUsd: 0.2,
+            }),
+            SeededRound.make({
+              state: "review",
+              round: "r1",
+              dead: false,
+              model: HAIKU,
+              verdict: "revise",
+              costUsd: 0.1,
+            }),
+            SeededMove.make({ from: "check", to: "work", by: "fail" }),
+            SeededRound.make({ state: "work", round: "w2", dead: true, model: SONNET }),
+            SeededRound.make({
+              state: "work",
+              round: "w3",
+              dead: false,
+              model: SONNET,
+              costUsd: 0.4,
+            }),
+            SeededMove.make({ from: "check", to: "ship", by: "pass" }),
+            SeededMove.make({ from: "ship", to: "done", by: "green" }),
+            SeededFinish.make({ state: "done" }),
+          ]),
+        )
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        const rows = status.quality.map(({ costUsd: _cost, ...row }) => ({
+          ...row,
+          state: String(row.state),
+        }))
+        const costs = status.quality.map((row) => Math.round(row.costUsd * 1_000) / 1_000)
+        const none = { checks: { pass: 0, fail: 0 }, gates: { green: 0, red: 0 }, verdicts: {} }
+        expect(rows).toEqual([
+          {
+            state: "review",
+            model: HAIKU,
+            rounds: 1,
+            dead: 0,
+            priced: 1,
+            verdicts: { revise: 1 },
+            // The failed check judged its round; the passing one, only Sonnet's after it.
+            checks: { pass: 0, fail: 1 },
+            gates: { green: 1, red: 0 },
+            accepted: { runs: 1, rounds: 1 },
+          },
+          // This run's own rounds: Opus once to measure it, then Haiku twice.
+          {
+            state: "work",
+            model: HAIKU,
+            rounds: 2,
+            dead: 0,
+            priced: 2,
+            ...none,
+            accepted: { runs: 1, rounds: 2 },
+          },
+          {
+            state: "work",
+            model: OPUS,
+            rounds: 1,
+            dead: 0,
+            priced: 1,
+            ...none,
+            accepted: { runs: 1, rounds: 1 },
+          },
+          {
+            state: "work",
+            model: SONNET,
+            rounds: 3,
+            dead: 1,
+            priced: 2,
+            verdicts: {},
+            checks: { pass: 1, fail: 1 },
+            gates: { green: 1, red: 0 },
+            accepted: { runs: 1, rounds: 3 },
+          },
+        ])
+        expect(costs[3]).toBe(0.6)
+        // The TUI asks by a round's thread: the rows of that thread's state alone.
+        const threads = roundThreads(yield* home.sql(stepsOf(run)))
+        const quality = ref(MachinesRpc.Quality)
+        const byThread = yield* machinesRequest(client, owner, quality, {
+          session: SessionId.make(threads.at(-1) ?? ""),
+        })
+        expect(byThread.map((row) => [String(row.state), row.model])).toEqual([
+          ["work", HAIKU],
+          ["work", OPUS],
+          ["work", SONNET],
+        ])
+        // A session handed off from the round's thread asks by its own id.
+        const handoff = ownerOf(yield* client.session.create({}))
+        yield* home.sql(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql`UPDATE sessions SET thread_id = ${threads.at(-1) ?? ""} WHERE id = ${handoff.sessionId}`
+          }),
+        )
+        const byHandoff = yield* machinesRequest(client, owner, quality, {
+          session: handoff.sessionId,
+        })
+        expect(byHandoff.map((row) => row.model)).toEqual([HAIKU, OPUS, SONNET])
+        // A thread no round ran on has none.
+        expect(
+          yield* machinesRequest(client, owner, quality, { session: owner.sessionId }),
+        ).toEqual([])
+        // Another thread's session cannot read the run's.
+        const stranger = ownerOf(yield* client.session.create({}))
+        const refused = yield* machinesRequest(client, stranger, quality, {
+          session: SessionId.make(threads.at(-1) ?? ""),
+        }).pipe(Effect.flip)
+        expect(String(refused)).toContain("belongs to another thread")
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )

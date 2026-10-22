@@ -1,17 +1,29 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Clock, Deferred, Effect, Exit, Layer, Option, Predicate, Scope } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Option, Predicate, Schema, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { createSignal, Show } from "solid-js"
-import { BranchId, Model, ModelId, ProviderId, SessionId } from "@gent/core/protocol"
+import {
+  AgentName,
+  BranchId,
+  GentRpcError,
+  Model,
+  ModelId,
+  ProviderId,
+  SessionId,
+  SessionRuntimeStateSchema,
+} from "@gent/core/protocol"
+import { emptyQueueSnapshot } from "@gent/core/test-utils"
 import {
   type AgentRowEntry,
   BTW_EXTENSION_ID,
   type ListAgentsInput,
+  ModelQuality,
   SESSION_TOOLS_EXTENSION_ID,
   threadRoundText,
 } from "@gent/extensions/client"
 import {
+  type AgentDetail,
   default as agentsExtension,
   AgentsPane,
   detailLabel,
@@ -22,7 +34,6 @@ import {
 import {
   ClientContext,
   makeClientContextLayer,
-  type ExtensionAgentDetail,
   STATUS_YIELD,
   type StatusLabelItem,
 } from "../../src/extensions/client-facets"
@@ -75,13 +86,14 @@ const row = (id: string, live = true): AgentRowEntry => ({
   sideThread: false,
 })
 
-const detail = (turns: number): ExtensionAgentDetail => ({
+const detail = (turns: number): AgentDetail => ({
   status: "Idle",
   model: Option.some("anthropic/claude-sonnet-5"),
   turns,
   costUsd: 0,
   durationMs: 0,
   omittedMessages: 0,
+  quality: [],
   effort: Option.none(),
   firstPrompt: Option.none(),
   lastAnswer: Option.none(),
@@ -92,8 +104,8 @@ describe("Agents controller detail", () => {
     Effect.gen(function* () {
       // Stands in for the client's `cast`, which runs effects on the shell's
       // own runtime; here that is the surrounding test context.
-      const slow = yield* Deferred.make<ExtensionAgentDetail>()
-      const fast = yield* Deferred.make<ExtensionAgentDetail>()
+      const slow = yield* Deferred.make<AgentDetail>()
+      const fast = yield* Deferred.make<AgentDetail>()
       const gates = new Map([
         ["first", slow],
         ["second", fast],
@@ -128,7 +140,7 @@ describe("Agents controller detail", () => {
 
   it.scopedLive("clears detail when the selection goes away", () =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<ExtensionAgentDetail>()
+      const gate = yield* Deferred.make<AgentDetail>()
 
       const controller = yield* provideClientServices(
         makeAgentsController(
@@ -735,7 +747,7 @@ describe("Agents pane navigation", () => {
       const parent = rowPane("detail-root", "Alpha", 0)
       const child = rowPane("detail-child", "Beta", 1)
       const asked: Array<string> = []
-      const [detail, setDetail] = createSignal(Option.none<ExtensionAgentDetail>())
+      const [detail, setDetail] = createSignal(Option.none<AgentDetail>())
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
@@ -764,6 +776,7 @@ describe("Agents pane navigation", () => {
                       costUsd: 0.125,
                       durationMs: 93_000,
                       omittedMessages: 0,
+                      quality: [],
                       effort: Option.none(),
                       firstPrompt: Option.none(),
                       lastAnswer: Option.none(),
@@ -822,6 +835,7 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
+                quality: [],
                 effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
@@ -867,6 +881,7 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
+                quality: [],
                 effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
@@ -1019,6 +1034,7 @@ describe("Agents pane reopen", () => {
               costUsd: 0,
               durationMs: 0,
               omittedMessages: 0,
+              quality: [],
               effort: Option.none(),
               firstPrompt: Option.none(),
               lastAnswer: Option.none(),
@@ -1094,6 +1110,7 @@ describe("Agents pane framing", () => {
                     costUsd: 0.125,
                     durationMs: 93_000,
                     omittedMessages: 0,
+                    quality: [],
                     effort: Option.none(),
                     firstPrompt: Option.none(),
                     lastAnswer: Option.none(),
@@ -1495,7 +1512,7 @@ describe("agents pane command center", () => {
    * The selected row's live detail: a delegate thread parked on an ask, three
    * turns in. Its first prompt is its task under the starter's round frame.
    */
-  const asking: ExtensionAgentDetail = {
+  const asking: AgentDetail = {
     status: "WaitingForInteraction",
     model: Option.some("anthropic/claude-sonnet-5-5"),
     effort: Option.some("high"),
@@ -1503,6 +1520,7 @@ describe("agents pane command center", () => {
     costUsd: 0.012,
     durationMs: 72_000,
     omittedMessages: 0,
+    quality: [],
     firstPrompt: Option.some(
       threadRoundText({
         number: 1,
@@ -1520,7 +1538,7 @@ describe("agents pane command center", () => {
   const paneAt = (
     listed: ReadonlyArray<AgentRowEntry>,
     width: number,
-    detail: Option.Option<ExtensionAgentDetail> = Option.some(asking),
+    detail: Option.Option<AgentDetail> = Option.some(asking),
   ) =>
     Effect.gen(function* () {
       let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
@@ -1686,6 +1704,73 @@ describe("agents pane command center", () => {
       // The model reads by the name the status row gives it, never its id.
       expect(frame).not.toContain("claude-sonnet-5-5")
     }),
+  )
+
+  it.scopedLive(
+    "a round thread's details say how each model fared in its state, leaving out empty counts",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const quality = yield* Schema.decodeEffect(Schema.Array(ModelQuality))([
+          {
+            state: "work",
+            model: "anthropic/claude-sonnet-5-5",
+            rounds: 4,
+            dead: 1,
+            priced: 2,
+            costUsd: 0.06,
+            verdicts: { approve: 1, revise: 2 },
+            checks: { pass: 1, fail: 2 },
+            gates: { green: 1, red: 0 },
+            accepted: { runs: 2, rounds: 5 },
+          },
+          {
+            state: "work",
+            model: "openai/gpt-5.5-mini",
+            rounds: 1,
+            dead: 0,
+            priced: 0,
+            costUsd: 0,
+            verdicts: {},
+            checks: { pass: 0, fail: 0 },
+            gates: { green: 0, red: 0 },
+            accepted: { runs: 0, rounds: 0 },
+          },
+        ]).pipe(Effect.orDie)
+        const { lines } = yield* paneAt(waiting(now), 140, Option.some({ ...asking, quality }))
+        const column = (text: string) => {
+          const line = lines.find((candidate) => candidate.includes(text)) ?? ""
+          return line.slice(line.lastIndexOf("│") + 1).trim()
+        }
+        // The catalog names the model; a mean of 2.5 rounds keeps its decimal.
+        expect(column("4 rounds")).toBe("Claude Sonnet 5.5 · 4 rounds · 1 dead · $0.03/round")
+        expect(column("pass 1/3")).toBe("pass 1/3 · green 1/1 · 2.5 rounds to accept")
+        expect(column("approve 1")).toBe("approve 1 · revise 2")
+        // A model with only rounds says only that: one line, no zero counts.
+        expect(column("gpt-5.5-mini")).toBe("gpt-5.5-mini · 1 round")
+        expect(lines.filter((line) => line.includes("pass 0") || line.includes("$0.00"))).toEqual(
+          [],
+        )
+        // The pane grows by the quality lines: the row's own details still draw.
+        for (const text of ["~/work/docs", "Which docs folder is current?", "Task: Check docs"]) {
+          expect(column(text)).toContain(text)
+        }
+        // A narrower column wraps a line between its parts, so none is cut.
+        const narrow = yield* paneAt(waiting(now), 104, Option.some({ ...asking, quality }))
+        const narrowColumn = (text: string) => {
+          const line = narrow.lines.find((candidate) => candidate.includes(text)) ?? ""
+          return line.slice(line.lastIndexOf("│") + 1).trim()
+        }
+        expect(narrowColumn("4 rounds")).toBe("Claude Sonnet 5.5 · 4 rounds · 1 dead")
+        expect(narrowColumn("/round")).toBe("$0.03/round")
+        expect(narrowColumn("pass 1/3")).toBe("pass 1/3 · green 1/1")
+        expect(narrowColumn("to accept")).toBe("2.5 rounds to accept")
+        expect(narrow.lines.filter((line) => line.includes("…") && line.includes("round"))).toEqual(
+          [],
+        )
+        // The pane stops at half the terminal: the details' last lines give way first.
+        expect(narrowColumn("Which docs folder is current?")).toBe("Which docs folder is current?")
+      }),
   )
 
   it.scopedLive("under 100 columns the one-line detail stays and no column draws", () =>
@@ -1868,16 +1953,14 @@ describe("the status row names the child the reader watches", () => {
 describe("agents pane counts and detail", () => {
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
-      const detail = (
-        status: ExtensionAgentDetail["status"],
-        turns: number,
-      ): ExtensionAgentDetail => ({
+      const detail = (status: AgentDetail["status"], turns: number): AgentDetail => ({
         status,
         model: Option.some("anthropic/claude-sonnet-5"),
         turns,
         costUsd: 0.028,
         durationMs: 0,
         omittedMessages: 0,
+        quality: [],
         effort: Option.none(),
         firstPrompt: Option.none(),
         lastAnswer: Option.none(),
@@ -2109,6 +2192,107 @@ describe("thread rows", () => {
         expect(deleted).toEqual(["third", "second", "first"])
         yield* Effect.promise(() => runtime.dispose())
       }),
+  )
+})
+
+describe("agents pane quality read", () => {
+  const worker = { ...root("worker", "idle"), name: "implement the parser" }
+  const sonnet = {
+    state: "work",
+    model: "anthropic/claude-sonnet-5-5",
+    rounds: 2,
+    dead: 0,
+    priced: 2,
+    costUsd: 0.08,
+    verdicts: {},
+    checks: { pass: 1, fail: 1 },
+    gates: { green: 0, red: 0 },
+    accepted: { runs: 0, rounds: 0 },
+  }
+  /** The agents extension over a server that lists `worker` and answers its quality read with `quality`. */
+  const paneOver = (asked: Array<unknown>, quality: Effect.Effect<unknown, GentRpcError>) =>
+    Effect.gen(function* () {
+      const runtime = makeClientExtensionRuntime({
+        transport: {
+          ...makeClientTestTransport({ requestReply: { rows: [worker] } }),
+          client: createMockClient({
+            extension: {
+              request: (request: { readonly capabilityId: string; readonly input: unknown }) => {
+                if (request.capabilityId !== "thread-quality") {
+                  return Effect.succeed({ rows: [worker] })
+                }
+                asked.push(request.input)
+                return quality
+              },
+            },
+            session: {
+              getSnapshot: () =>
+                Effect.succeed({
+                  sessionId: worker.sessionId,
+                  branchId: worker.branchId,
+                  messages: [],
+                  lastEventId: 0,
+                  resolvedModelId: "anthropic/claude-sonnet-5-5",
+                  agent: AgentName.make("main"),
+                  runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                    queue: emptyQueueSnapshot(),
+                  }),
+                  metrics: { turns: 2, durationMs: 4_000, costUsd: 0.08 },
+                }),
+            },
+          }),
+        },
+      })
+      const contributions = yield* runClientExtensionSetup(runtime, agentsExtension)
+      const commands = contributions.commands ?? []
+      const pane = Option.getOrThrow(
+        Option.fromUndefinedOr(contributions.widgets?.find((w) => w.id === "agents.pane")),
+      )
+      const Session = () => {
+        const command = useCommand()
+        useScopedKeyboard((event) => command.handleKeybind(event, commands, true))
+        return <pane.component />
+      }
+      const setup = yield* renderScoped(() => <Session />, { width: 140, height: 30 })
+      setup.mockInput.pressArrow("left")
+      return { setup, runtime }
+    })
+
+  it.scopedLive("the selected row's details ask its quality by the row's session", () =>
+    Effect.gen(function* () {
+      const asked: Array<unknown> = []
+      const { setup, runtime } = yield* paneOver(asked, Effect.succeed([sonnet]))
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("2 rounds · $0.04/round"),
+        "the quality line",
+      )
+      expect(frame).toContain("pass 1/2")
+      expect(asked).toEqual([{ session: worker.sessionId }])
+      yield* Effect.promise(() => runtime.dispose())
+    }),
+  )
+
+  it.scopedLive("a refused quality read leaves the row's details whole", () =>
+    Effect.gen(function* () {
+      const asked: Array<unknown> = []
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded error frame the client decodes off the wire
+      const refusal = yield* Schema.decodeEffect(GentRpcError)({
+        _tag: "ExtensionProtocolError",
+        extensionId: "@gent/machines",
+        tag: "thread-quality",
+        message: "Run run-0000000000000001 belongs to another thread; machine.list shows yours",
+      }).pipe(Effect.orDie)
+      const { setup, runtime } = yield* paneOver(asked, Effect.fail(refusal))
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("2 turns · $0.08"),
+        "the progress line",
+      )
+      expect(asked).toEqual([{ session: worker.sessionId }])
+      expect(frame).not.toContain("rounds")
+      yield* Effect.promise(() => runtime.dispose())
+    }),
   )
 })
 

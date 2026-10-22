@@ -998,6 +998,7 @@ describe("Herdr integration", () => {
             costUsd: 0,
             durationMs: 0,
             omittedMessages: 0,
+            quality: [],
             effort: Option.none(),
             firstPrompt: Option.none(),
             lastAnswer: Option.none(),

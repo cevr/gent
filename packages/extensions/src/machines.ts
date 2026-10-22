@@ -46,6 +46,7 @@ import {
   Layer,
   Match,
   Option,
+  Order,
   Path,
   Predicate,
   PubSub,
@@ -393,6 +394,12 @@ const MachineStep = Schema.TaggedUnion({
 })
 type MachineStep = typeof MachineStep.Type
 type RoundEnded = Extract<MachineStep, { readonly _tag: "RoundEnded" }>
+
+/** One step of a run's log, as a model's quality is read from it. */
+interface RunOutcome {
+  readonly run: RunId
+  readonly step: MachineStep
+}
 
 // ── errors ──────────────────────────────────────────────────────────────────
 
@@ -818,6 +825,9 @@ const StepRow = Schema.Struct({
   step_json: StepJson,
 })
 const decodeStepRows = Schema.decodeUnknownEffect(Schema.Array(StepRow))
+const decodeOutcomeRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ run: RunId, ...StepRow.fields })),
+)
 
 const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
   switch (step._tag) {
@@ -901,10 +911,22 @@ const machineRoundsMigration = Effect.gen(function* () {
   )
 })
 
+/**
+ * A round's thread finds its run: the recorded rounds by thread. The query
+ * repeats the index's expressions, as SQLite matches them.
+ */
+const machineThreadsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS machine_steps_thread
+    ON machine_steps (json_extract(step_json, '$.action.thread'))
+    WHERE json_extract(step_json, '$._tag') = 'Recorded'`)
+})
+
 const migrateMachineTables = Migrator.make({})({
   loader: Migrator.fromRecord({
     "1_machine_tables": machineTablesMigration,
     "2_machine_rounds": machineRoundsMigration,
+    "3_machine_threads": machineThreadsMigration,
   }),
   table: "machine_migrations",
 }).pipe(Effect.mapError(storageError("Machine table migration failed")))
@@ -961,6 +983,17 @@ interface MachineStoreService {
     machine: MachineName,
     state: StateName,
   ) => Effect.Effect<ReadonlyArray<RoundEnded>, MachineStorageError>
+  /** Every ended round, move and finish in every run of `machine`, by run, oldest first. */
+  readonly outcomesOf: (
+    machine: MachineName,
+  ) => Effect.Effect<ReadonlyArray<RunOutcome>, MachineStorageError>
+  /** The run and state of the newest round recorded on `thread`. */
+  readonly roundOn: (
+    thread: SessionId,
+  ) => Effect.Effect<
+    Option.Option<{ readonly run: RunId; readonly state: StateName }>,
+    MachineStorageError
+  >
   readonly ownedBy: (thread: SessionId) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   /** The runs a branch hosts that have work left. */
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
@@ -1192,6 +1225,33 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
             })
           },
           Effect.mapError(storageError("Failed to read a machine's rounds")),
+        ),
+        outcomesOf: Effect.fn("MachineStore.outcomesOf")(
+          function* (machine) {
+            const rows = yield* sql`SELECT s.run, s.seq, s.at, s.step_json FROM machine_runs r
+              JOIN machine_steps s ON s.run = r.run
+              WHERE r.machine = ${machine}
+                AND json_extract(s.step_json, '$._tag') IN ('RoundEnded', 'Moved', 'Finished')
+              ORDER BY s.run ASC, s.seq ASC`
+            const decoded = yield* decodeOutcomeRows(rows)
+            return decoded.map((row) => ({ run: row.run, step: row.step_json }))
+          },
+          Effect.mapError(storageError("Failed to read a machine's outcomes")),
+        ),
+        roundOn: Effect.fn("MachineStore.roundOn")(
+          function* (thread) {
+            const rows = yield* sql`SELECT run, seq, at, step_json FROM machine_steps
+              WHERE json_extract(step_json, '$._tag') = 'Recorded'
+                AND json_extract(step_json, '$.action.thread') = ${thread}
+              ORDER BY at DESC, seq DESC LIMIT 1`
+            const decoded = yield* decodeOutcomeRows(rows)
+            return Option.flatMap(Option.fromUndefinedOr(decoded[0]), (row) => {
+              const step = row.step_json
+              if (step._tag !== "Recorded") return Option.none()
+              return Option.some({ run: row.run, state: step.action.state })
+            })
+          },
+          Effect.mapError(storageError("Failed to find a thread's round")),
         ),
         ownedBy: Effect.fn("MachineStore.ownedBy")(
           function* (thread) {
@@ -3344,11 +3404,148 @@ const runView = (run: Run): typeof RunView.Type => ({
   }),
 })
 
+/**
+ * How one model fared in one state of a machine, over every run of it. A
+ * check (a command's `pass` or `fail`) and a gate (`green` or `red`) count
+ * for each model that ran a round since the run's last one. `accepted`: the
+ * finished runs it had rounds in, and those rounds, so `rounds / runs` is
+ * what a run that got there took of it.
+ */
+export const ModelQuality = Schema.Struct({
+  state: StateName,
+  model: ModelId,
+  rounds: Count,
+  /** Rounds that ended with no verdict. */
+  dead: Count,
+  /** Rounds whose turn was priced, and their summed cost. */
+  priced: Count,
+  costUsd: Schema.Finite,
+  verdicts: Schema.Record(Schema.String, Count),
+  checks: Schema.Struct({ pass: Count, fail: Count }),
+  gates: Schema.Struct({ green: Count, red: Count }),
+  accepted: Schema.Struct({ runs: Count, rounds: Count }),
+})
+export type ModelQuality = typeof ModelQuality.Type
+
+/** One state and model's record while it is counted. */
+interface QualityTally {
+  readonly state: StateName
+  readonly model: ModelId
+  rounds: number
+  dead: number
+  priced: number
+  costUsd: number
+  readonly verdicts: Record<string, number>
+  readonly checks: { pass: number; fail: number }
+  readonly gates: { green: number; red: number }
+  readonly accepted: { runs: number; rounds: number }
+}
+
+/** What one run's log has counted so far: each row's rounds in it, and the rows a check or a gate has yet to judge. */
+interface RunTally {
+  readonly rounds: Map<QualityTally, number>
+  readonly sinceCheck: Set<QualityTally>
+  readonly sinceGate: Set<QualityTally>
+}
+
+/** The `by` of a command's move, and of an integrate's. */
+const isCheckMove = Schema.is(Schema.Literals(["pass", "fail"]))
+const isGateMove = Schema.is(Schema.Literals(["green", "red"]))
+
+const tallyRound = (row: QualityTally, step: RoundEnded, run: RunTally): void => {
+  row.rounds += 1
+  if (step.dead) row.dead += 1
+  if (Predicate.isNotUndefined(step.costUsd)) {
+    row.priced += 1
+    row.costUsd += step.costUsd
+  }
+  if (Predicate.isNotUndefined(step.verdict)) {
+    row.verdicts[step.verdict] = (row.verdicts[step.verdict] ?? 0) + 1
+  }
+  run.rounds.set(row, (run.rounds.get(row) ?? 0) + 1)
+  run.sinceCheck.add(row)
+  run.sinceGate.add(row)
+}
+
+const tallyMove = (by: string, run: RunTally): void => {
+  if (isCheckMove(by)) {
+    for (const row of run.sinceCheck) row.checks[by] += 1
+    run.sinceCheck.clear()
+  }
+  if (isGateMove(by)) {
+    for (const row of run.sinceGate) row.gates[by] += 1
+    run.sinceGate.clear()
+  }
+}
+
+const tallyFinish = (run: RunTally): void => {
+  for (const [row, count] of run.rounds) {
+    row.accepted.runs += 1
+    row.accepted.rounds += count
+  }
+}
+
+/** Counts one run's steps into `tallyOf`'s rows. */
+const tallyRun = (
+  steps: ReadonlyArray<MachineStep>,
+  tallyOf: (state: StateName, model: ModelId) => QualityTally,
+): void => {
+  const run: RunTally = { rounds: new Map(), sinceCheck: new Set(), sinceGate: new Set() }
+  for (const step of steps) {
+    if (step._tag === "RoundEnded" && Predicate.isNotUndefined(step.model)) {
+      tallyRound(tallyOf(step.state, step.model), step, run)
+    }
+    if (step._tag === "Moved") tallyMove(step.by, run)
+    if (step._tag === "Finished") tallyFinish(run)
+  }
+}
+
+/** Each state and model's record over `outcomes` (by run, oldest first), by state then model. */
+const qualityOf = (outcomes: ReadonlyArray<RunOutcome>): ReadonlyArray<ModelQuality> => {
+  const rows = new Map<string, QualityTally>()
+  const tallyOf = (state: StateName, model: ModelId): QualityTally => {
+    const key = `${state}\u0000${model}`
+    const found = rows.get(key)
+    if (Predicate.isNotUndefined(found)) return found
+    const row: QualityTally = {
+      state,
+      model,
+      rounds: 0,
+      dead: 0,
+      priced: 0,
+      costUsd: 0,
+      verdicts: {},
+      checks: { pass: 0, fail: 0 },
+      gates: { green: 0, red: 0 },
+      accepted: { runs: 0, rounds: 0 },
+    }
+    rows.set(key, row)
+    return row
+  }
+  const byRun = new Map<RunId, Array<MachineStep>>()
+  for (const outcome of outcomes) {
+    const steps = byRun.get(outcome.run) ?? []
+    steps.push(outcome.step)
+    byRun.set(outcome.run, steps)
+  }
+  for (const steps of byRun.values()) tallyRun(steps, tallyOf)
+  return [...rows.values()].toSorted(
+    (left, right) => Order.String(left.state, right.state) || Order.String(left.model, right.model),
+  )
+}
+
 /** The steps `machine.status` shows, newest last. */
 const STATUS_STEPS = 20
 
-/** One run as `machine.status` and `MachinesRpc.Status` read it: its view and its last steps. */
-export const MachineRunStatus = Schema.Struct({ ...RunView.fields, steps: Schema.Array(StepView) })
+/**
+ * One run as `machine.status` and `MachinesRpc.Status` read it: its view,
+ * its last steps, and how each model fared in each state of its machine.
+ */
+export const MachineRunStatus = Schema.Struct({
+  ...RunView.fields,
+  steps: Schema.Array(StepView),
+  quality: Schema.Array(ModelQuality),
+})
 export type MachineRunStatus = typeof MachineRunStatus.Type
 
 const RunStatusParams = Schema.Struct({ run: RunId })
@@ -3357,14 +3554,40 @@ const runStatus = Effect.fn("Machines.runStatus")(function* (params: typeof RunS
   const store = yield* MachineStore
   const run = yield* ownedRun(params.run)
   const steps = yield* store.steps(run.run, STATUS_STEPS)
-  return { ...runView(run), steps }
+  const quality = qualityOf(yield* store.outcomesOf(run.machine))
+  return { ...runView(run), steps, quality }
+})
+
+const ThreadQualityParams = Schema.Struct({ session: SessionId })
+
+/**
+ * How each model fared in the state whose newest round ran on `session`'s
+ * thread, in every run of its machine; empty when no run recorded a round
+ * on it.
+ */
+const threadQuality = Effect.fn("Machines.threadQuality")(function* (
+  params: typeof ThreadQualityParams.Type,
+) {
+  const ctx = yield* ExtensionContext
+  const store = yield* MachineStore
+  const session = yield* ctx.Session.getSession(params.session)
+  const thread = Option.getOrElse(
+    Option.map(Option.fromUndefinedOr(session), sessionThread),
+    () => params.session,
+  )
+  const found = yield* store.roundOn(thread)
+  if (Option.isNone(found)) return []
+  const run = yield* ownedRun(found.value.run)
+  const quality = qualityOf(yield* store.outcomesOf(run.machine))
+  return quality.filter((row) => row.state === found.value.state)
 })
 
 const MachineStatusTool = tool({
   id: "machine.status",
   resources: [MachineStoreResource],
   readonly: true,
-  description: "Read one run: its state, status, pending action, visits, and its last steps.",
+  description:
+    "Read one run: its state, status, pending action, visits, its last steps, and how each model fared in each state of its machine over every run.",
   promptSnippet: "Read a machine run",
   params: RunStatusParams,
   output: MachineRunStatus,
@@ -3404,6 +3627,16 @@ export const MachinesRpc = defineRequests(MACHINES_EXTENSION_ID, {
     output: Schema.Array(RunView),
     resources: [MachineStoreResource],
     execute: () => ownedRuns(),
+  }),
+  Quality: request({
+    id: "thread-quality",
+    description:
+      "How each model fared in the state a session's thread works rounds of, in your runs' machine: its rounds, cost, verdicts, checks, gates and finished runs",
+    answersDuringTurn: true,
+    input: ThreadQualityParams,
+    output: Schema.Array(ModelQuality),
+    resources: [MachineStoreResource],
+    execute: threadQuality,
   }),
 })
 
@@ -3487,7 +3720,7 @@ export const MachinesExtension = defineExtension({
       MachineListTool,
       MachineStopTool,
     )
-    yield* host.register("request", MachinesRpc.Status, MachinesRpc.Runs)
+    yield* host.register("request", MachinesRpc.Status, MachinesRpc.Runs, MachinesRpc.Quality)
     yield* host.on("wakeDue", (input) => runDue(input))
     yield* host.on("loopOpen", () => repairHost().pipe(logFailure("machines.repair.failed")))
     yield* host.on("sessionDeleted", ({ sessionId }) =>
