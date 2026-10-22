@@ -87,7 +87,6 @@ export type MessageChunkRow = typeof MessageChunkRow.Type
 
 const EventRow = Schema.Struct({
   id: EventId,
-  event_tag: Schema.String,
   event_json: Schema.String,
   created_at: Schema.Finite,
   trace_id: Schema.NullOr(Schema.String),
@@ -117,10 +116,7 @@ export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.k
 
 const decodeAdmission = Schema.decodeEffect(Schema.fromJsonString(SessionAdmission))
 
-/**
- * The `reasoning_level` of a session on `/effort auto`. An older build
- * reads it as no level: it is not a `ReasoningEffort`.
- */
+/** The `reasoning_level` of a session on `/effort auto`: not a `ReasoningEffort`. */
 const REASONING_AUTO = "auto"
 
 /** The `reasoning_level` a session stores: `auto`, its level, or none. */

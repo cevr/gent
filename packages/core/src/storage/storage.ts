@@ -70,7 +70,7 @@ import {
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { toolImageDigests } from "../runtime/tool-image.js"
 import {
-  AgentEvent,
+  type AgentEvent,
   EventEnvelope,
   EventId,
   getEventBranchId,
@@ -714,13 +714,6 @@ type EventDecodeOperation = typeof EventDecodeError.fields.operation.Type
 export type EventStorageError = StorageError | EventDecodeError
 const isEventDecodeError = Schema.is(EventDecodeError)
 
-/**
- * A retired event type stays in the table after its feature is removed. Replay
- * skips those rows with a warning instead of making the whole session
- * unloadable; a known tag with a bad payload is corruption and still fails.
- */
-const isKnownEventTag = (tag: string): boolean => Object.hasOwn(AgentEvent.cases, tag)
-
 const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(function* (params: {
   eventId: EventId
   eventJson: string
@@ -748,23 +741,16 @@ const decodePersistedEvent = Effect.fn("EventStorage.decodePersistedEvent")(func
 })
 
 /**
- * Turn raw event rows into envelopes, dropping rows whose tag no longer
- * exists. Both replay reads share this: the only difference between them is
- * which operation a decode failure reports.
+ * Turn raw event rows into envelopes. Both replay reads share this: the only
+ * difference between them is which operation a decode failure reports.
  */
 const rowsToEnvelopes = Effect.fn("EventStorage.rowsToEnvelopes")(function* (
   rawRows: ReadonlyArray<unknown>,
   operation: EventDecodeOperation,
 ) {
   const rows = yield* Effect.forEach(rawRows, (row) => decodeEventRow(row))
-  const envelopes = yield* Effect.forEach(rows, (row) =>
+  return yield* Effect.forEach(rows, (row) =>
     Effect.gen(function* () {
-      if (!isKnownEventTag(row.event_tag)) {
-        yield* Effect.logWarning("event.retired-tag-skipped").pipe(
-          Effect.annotateLogs({ event_id: row.id, event_tag: row.event_tag }),
-        )
-        return Option.none<EventEnvelope>()
-      }
       const decoded = yield* decodePersistedEvent({
         eventId: row.id,
         eventJson: row.event_json,
@@ -778,10 +764,9 @@ const rowsToEnvelopes = Effect.fn("EventStorage.rowsToEnvelopes")(function* (
       if (!Predicate.isNull(row.trace_id)) {
         Object.assign(fields, { traceId: row.trace_id })
       }
-      return Option.some(EventEnvelope.make(fields))
+      return EventEnvelope.make(fields)
     }),
   )
-  return Arr.getSomes(envelopes)
 })
 
 interface EventStorageService {
@@ -872,8 +857,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
           function* ({ sessionId, branchId, afterId }) {
             const workspaceId = yield* CurrentWorkspaceId
             const sinceId = afterId ?? 0
-            const rawRows =
-              yield* sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+            const rawRows = yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
               FROM events e
               JOIN sessions s ON s.id = e.session_id
               WHERE e.session_id = ${sessionId}
@@ -934,8 +918,7 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
               onNone: () => sql.literal(""),
               onSome: (boundary) => sql`AND e.id < ${boundary.id}`,
             })
-            const rawRows =
-              yield* sql`SELECT e.id, e.event_tag, e.event_json, e.created_at, e.trace_id
+            const rawRows = yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
               FROM events e
               JOIN sessions s ON s.id = e.session_id
               WHERE e.session_id = ${sessionId}
@@ -1177,7 +1160,7 @@ const InteractionRequestRow = Schema.Struct({
   branch_id: BranchId,
   params_json: Schema.String,
   decision_json: Schema.NullOr(Schema.String),
-  // Null on rows stored before owners were recorded (migration 021).
+  // Null when the request was asked outside a tool call.
   owner_tool_call_id: Schema.NullOr(Schema.String),
   owner_occurrence: Schema.NullOr(Schema.Int),
   // Read raw status string off the wire; the transform coerces
@@ -2402,8 +2385,7 @@ const readsSafeIntegers = Effect.gen(function* () {
  * `last_reply_id`, the id of a reply row, set to null when the storage
  * deletes that reply. So an id past 2^53 - 1 in either comes with one in
  * these four, and none of the two is larger than the largest of these: the
- * boot's read searches four indexes, and the renumber, once it runs, reads
- * all six columns.
+ * boot's read searches four indexes.
  */
 const INDEXED_ID_COLUMNS = [
   ["cluster_messages", "id"],
@@ -2411,15 +2393,6 @@ const INDEXED_ID_COLUMNS = [
   ["cluster_replies", "id"],
   ["cluster_replies", "request_id"],
 ] as const
-
-/** Every id value the cluster tables hold, from each of the six columns that holds one. */
-const clusterIdValues = `
-  SELECT id AS v FROM cluster_messages
-  UNION ALL SELECT request_id FROM cluster_messages
-  UNION ALL SELECT reply_id FROM cluster_messages
-  UNION ALL SELECT last_reply_id FROM cluster_messages
-  UNION ALL SELECT id FROM cluster_replies
-  UNION ALL SELECT request_id FROM cluster_replies`
 
 const countOf = (rows: ReadonlyArray<typeof CountRow.Type>) =>
   Option.getOrElse(
@@ -2452,59 +2425,24 @@ const readIdBounds = Effect.gen(function* () {
 })
 
 /**
- * Moves every id past 2^53 - 1 (a default snowflake an earlier build wrote)
- * under it, then answers the largest id stored. The ids past the bound are
- * numbered in their order from just above the largest exact one, and each of
- * the six columns is rewritten through the one map, so a row keeps its place
- * (the storage delivers by rowid, which is the id) and every reference names
- * the same value as before. The SQL compares and copies the 64-bit values;
- * none passes through a number. A boot with no such id reads four indexes.
+ * The largest id stored, which the exact generator counts up from. An id
+ * past 2^53 - 1 is a defect on this client: only Effect's generator writes
+ * one, and a store from a build before the exact one is wiped at open
+ * (`KERNEL_SCHEMA_VERSION`).
  */
-const moveIdsUnderExactBound = Effect.gen(function* () {
+const exactIdFloor = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const tables = yield* sql`
     SELECT COUNT(*) AS n FROM sqlite_master
     WHERE type = 'table' AND name IN ('cluster_messages', 'cluster_replies')
   `.pipe(Effect.flatMap(decodeCount), Effect.map(countOf))
   if (tables < 2) return 0
-  const before = yield* readIdBounds
-  if (!before.stale) return before.floor
-  const moving = yield* sql
-    .unsafe(`SELECT COUNT(DISTINCT v) AS n FROM (${clusterIdValues}) WHERE v > ${MAX_EXACT_ID}`)
-    .pipe(Effect.flatMap(decodeCount), Effect.map(countOf))
-  if (before.floor + moving > MAX_EXACT_ID)
+  const bounds = yield* readIdBounds
+  if (bounds.stale)
     return yield* new StorageError({
-      message: `${moving} cluster ids past 2^53 - 1 do not fit above ${before.floor}`,
+      message: "a stored cluster id is past 2^53 - 1, which this client cannot read exactly",
     })
-  const renumbered = (table: string) => (column: string) =>
-    `${column} = COALESCE((SELECT new FROM cluster_id_renumber WHERE old = ${table}.${column}), ${column})`
-  yield* Effect.gen(function* () {
-    yield* sql.unsafe(
-      "CREATE TABLE cluster_id_renumber (old INTEGER PRIMARY KEY, new INTEGER NOT NULL)",
-    )
-    yield* sql.unsafe(`
-      INSERT INTO cluster_id_renumber (old, new)
-      SELECT v, ${before.floor} + ROW_NUMBER() OVER (ORDER BY v)
-      FROM (SELECT DISTINCT v FROM (${clusterIdValues}) WHERE v > ${MAX_EXACT_ID})`)
-    yield* sql.unsafe(`
-      UPDATE cluster_messages
-      SET ${["id", "request_id", "reply_id", "last_reply_id"].map(renumbered("cluster_messages")).join(", ")}
-      WHERE id > ${MAX_EXACT_ID} OR request_id > ${MAX_EXACT_ID}
-        OR reply_id > ${MAX_EXACT_ID} OR last_reply_id > ${MAX_EXACT_ID}`)
-    yield* sql.unsafe(`
-      UPDATE cluster_replies
-      SET ${["id", "request_id"].map(renumbered("cluster_replies")).join(", ")}
-      WHERE id > ${MAX_EXACT_ID} OR request_id > ${MAX_EXACT_ID}`)
-    yield* sql.unsafe("DROP TABLE cluster_id_renumber")
-  }).pipe(sql.withTransaction)
-  const left = yield* sql
-    .unsafe(`SELECT COUNT(*) AS n FROM (${clusterIdValues}) WHERE v > ${MAX_EXACT_ID}`)
-    .pipe(Effect.flatMap(decodeCount), Effect.map(countOf))
-  if (left > 0)
-    return yield* new StorageError({
-      message: `${left} cluster ids past 2^53 - 1 remain after renumbering`,
-    })
-  return before.floor + moving
+  return bounds.floor
 })
 
 /**
@@ -2552,7 +2490,7 @@ const clusterIdGenerator = (reads: Ref.Ref<Option.Option<ClusterIdReads>>) =>
         return yield* Snowflake.makeGenerator
       }
       yield* Ref.set(reads, Option.some<ClusterIdReads>("lossy"))
-      return yield* makeExactIdGenerator(yield* moveIdsUnderExactBound)
+      return yield* makeExactIdGenerator(yield* exactIdFloor)
     }).pipe(Effect.mapError(storageError("Failed to set up the cluster id generator"))),
   )
 

@@ -509,7 +509,7 @@ const rowOutputLines = (call: ToolCall): number => {
   return lineCount(Option.getOrElse(rowOutputText(call), () => ""))
 }
 
-/** A declined command (stored by an earlier version) never ran and a background one has not ended: neither has lines to count. */
+/** A background command has not ended: it has no lines to count. */
 const hasNoOutputYet = (call: ToolCall): boolean =>
   call.toolName === "bash" &&
   Option.exists(parseBashOutput(call.output), (value) => Option.isSome(value.status))
@@ -600,7 +600,6 @@ const runtimeRows = {
   ),
   continuation: "lane",
   "max-steps": "lane",
-  steering: "lane",
 } satisfies Record<RuntimeUserMessageType, MessageRenderer | "lane">
 
 const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)

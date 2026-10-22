@@ -432,8 +432,7 @@ const isReconnectingState = ConnectionState.isAnyOf(["Connecting", "Reconnecting
  * What this UI can ask a running loop to do.
  *
  * Narrower than the wire `SteerCommand` on purpose. The domain also carries
- * `Interrupt`, which the loop handles as `Cancel` (`runtime/agent-loop.ts`),
- * and `wake` on an interjection, which this UI never needs: it interjects only
+ * `wake` on an interjection, which this UI never needs: it interjects only
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
  *

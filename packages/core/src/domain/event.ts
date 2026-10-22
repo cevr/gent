@@ -74,18 +74,8 @@ export type ContextRenter = typeof ContextRenter.Type
 export const EventId = Schema.Finite.pipe(Schema.brand("EventId"))
 export type EventId = typeof EventId.Type
 
-/**
- * Tags of `StepOutcome` (`runtime/turn.ts`), as they travel on `StreamEnded`.
- * `External` is retired with the external turn executors; stored events can
- * still carry it, so it stays decodable.
- */
-const StepOutcomeTag = Schema.Literals([
-  "Interrupted",
-  "Failed",
-  "External",
-  "ToolCalls",
-  "Answered",
-])
+/** Tags of `StepOutcome` (`runtime/turn.ts`), as they travel on `StreamEnded`. */
+const StepOutcomeTag = Schema.Literals(["Interrupted", "Failed", "ToolCalls", "Answered"])
 
 export const AgentEvent = Schema.TaggedUnion({
   SessionStarted: {

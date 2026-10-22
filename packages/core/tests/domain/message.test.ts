@@ -24,7 +24,6 @@ import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
   splitLines,
-  SteerCommand,
   tailChars,
   toolCallReceipts,
   ToolInteraction,
@@ -32,19 +31,6 @@ import {
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Predicate, Schema } from "effect"
 import * as Response from "effect/ai/Response"
-
-describe("steer command", () => {
-  test("a stored Interrupt row still decodes", () => {
-    // oxlint-disable-next-line effect/preferTaggedConstructors -- the stored row this test decodes
-    const decoded = Schema.decodeSync(SteerCommand)({
-      _tag: "Interrupt",
-      sessionId: "stored-session",
-      branchId: "stored-branch",
-      requestId: "stored-request",
-    })
-    expect(decoded._tag).toBe("Interrupt")
-  })
-})
 
 describe("message branch copies", () => {
   test("preserves interjection variant when copying to a new branch", () => {

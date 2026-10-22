@@ -951,6 +951,7 @@ describe("BashTool execution", () => {
             toolCallId,
             command: "printf stored-terminal",
             cwd: Option.some(ctx.cwd),
+            outputFile: `${directory}/tc-terminal-retry.txt`,
           })
           expect(claim._tag).toBe("Started")
           yield* storage.markCompleted(
@@ -982,7 +983,7 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  // A row can hold a whole long output with no job file beside it. A replay
+  // A row can hold a whole long output while its job file is gone. A replay
   // cuts that message to its head and tail and writes no file for it.
   it.scopedLive(
     "a replayed row that holds a whole long output is cut, with no file written",
@@ -1005,6 +1006,7 @@ describe("BashTool execution", () => {
             toolCallId,
             command: "seq-old",
             cwd: Option.some(ctx.cwd),
+            outputFile: `${home}/gone.txt`,
           })
           yield* storage.markCompleted(
             { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
@@ -1030,13 +1032,13 @@ describe("BashTool execution", () => {
         expect(message.content).toContain("old line 3000\n")
         expect(message.content).toContain("characters truncated")
         expect(message.content).not.toContain("The whole output is in")
-        expect(yield* fs.exists(`${home}/.gent/background-bash`)).toBe(false)
+        expect(yield* fs.exists(`${home}/gone.txt`)).toBe(false)
       }).pipe(Effect.provide(BunFileSystem.layer), withProcessTimeout),
     processTestTimeout,
   )
 
-  // A row can keep a follow-up's worth of output while the job's file at the
-  // sanitized path holds all of it. A replay names that file, unchanged.
+  // A row can keep a follow-up's worth of output while the job's file holds
+  // all of it. A replay names that file, unchanged.
   it.scopedLive(
     "a replayed row longer than its bound names the job's file when it exists",
     () =>
@@ -1062,6 +1064,7 @@ describe("BashTool execution", () => {
             toolCallId,
             command: "seq-row",
             cwd: Option.some(ctx.cwd),
+            outputFile: file,
           })
           yield* storage.markCompleted(
             { sessionId: ctx.sessionId, branchId: ctx.branchId, toolCallId },
@@ -1224,6 +1227,7 @@ describe("BashTool execution", () => {
             toolCallId: ctx.toolCallId,
             command: "sleep 2",
             cwd: Option.none(),
+            outputFile: `${directory}/second-claim.txt`,
           })
         }).pipe(Effect.provideContext(secondProfile))
         expect(claim._tag).toBe("AlreadyRunning")
@@ -1239,9 +1243,9 @@ describe("BashTool execution", () => {
         const storage = yield* BackgroundBashStorage
         // `running` belongs to a server that is gone and recorded no process.
         yield* sql`
-            INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
-            VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
-                   ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL)
+            INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at, output_file)
+            VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5, '/out/earlier.txt'),
+                   ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL, '/out/running.txt')
           `
         yield* storage.reconcileInterrupted([])
         const before = yield* storage.interruptedJobs(branch)
@@ -1253,8 +1257,18 @@ describe("BashTool execution", () => {
       }).pipe(Effect.provide(BackgroundBashStorage.Live))
       // `running` recorded no process, so nothing tells whether it still runs.
       expect(unread.before).toEqual([
-        { toolCallId: ToolCallId.make("earlier"), command: "sleep 8", mayStillRun: false },
-        { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
+        {
+          toolCallId: ToolCallId.make("earlier"),
+          command: "sleep 8",
+          outputFile: "/out/earlier.txt",
+          mayStillRun: false,
+        },
+        {
+          toolCallId: ToolCallId.make("running"),
+          command: "sleep 9",
+          outputFile: "/out/running.txt",
+          mayStillRun: true,
+        },
       ])
       expect(unread.after).toEqual([])
     }).pipe(
@@ -1864,8 +1878,8 @@ describe("a command's recorded process", () => {
           const sql = yield* SqlClient.SqlClient
           yield* sql`
             INSERT INTO background_bash_jobs
-              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, process_token, process_receipt)
-            VALUES ('s', 'b', 'receipt-only', 'node &', 'running', 0, 'earlier-process', ${launch.token}, ${launch.receipt})
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, process_token, process_receipt, output_file)
+            VALUES ('s', 'b', 'receipt-only', 'node &', 'running', 0, 'earlier-process', ${launch.token}, ${launch.receipt}, '/out/receipt-only.txt')
           `
         }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
 
@@ -2399,13 +2413,14 @@ describe("a background completion the full follow-up queue refused", () => {
             ...job(finished),
             command: "seq 1 1000",
             cwd: Option.some(directory),
+            outputFile: file,
           })
           yield* storage.markCompleted(job(finished), { exitCode: 0, message: printed })
-          yield* storage.recordDelivery(job(finished), false)
           yield* storage.claimStart({
             ...job(stopped),
             command: "sleep 100",
             cwd: Option.some(directory),
+            outputFile: `${directory}/tc-stopped-no-file.txt`,
           })
           yield* storage.markInterrupted(job(stopped))
         }).pipe(
@@ -2575,6 +2590,7 @@ describe("a background job the server stopped", () => {
                       ...key,
                       command: "sleep 30",
                       cwd: Option.some(directory),
+                      outputFile: `${directory}/second-claim.txt`,
                     }),
                   ),
                   Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))),
@@ -2616,6 +2632,7 @@ describe("a background job the server stopped", () => {
             toolCallId: ctx.toolCallId,
             command: "sleep 2",
             cwd: Option.none(),
+            outputFile: `${directory}/second-claim.txt`,
           })
         }).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(claim._tag).toBe("Terminal")
@@ -2749,8 +2766,8 @@ describe("a background job the server stopped", () => {
           const sql = yield* SqlClient.SqlClient
           yield* sql`
             INSERT INTO background_bash_jobs
-              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id)
-            VALUES ('s', 'b', 'reused', 'sleep 30', 'running', 0, 'earlier-process', ${other.pid}, 'Thu Jan  1 00:00:00 1970')
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id, output_file)
+            VALUES ('s', 'b', 'reused', 'sleep 30', 'running', 0, 'earlier-process', ${other.pid}, 'Thu Jan  1 00:00:00 1970', '/out/reused.txt')
           `
         }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
 
@@ -2809,8 +2826,8 @@ describe("a background job the server stopped", () => {
           const sql = yield* SqlClient.SqlClient
           yield* sql`
             INSERT INTO background_bash_jobs
-              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id)
-            VALUES ('s', 'b', 'denied', 'sleep 30', 'running', 0, 'earlier-process', 4242, ${startedAt})
+              (session_id, branch_id, tool_call_id, command, status, started_at, owner_generation, pid, process_start_id, output_file)
+            VALUES ('s', 'b', 'denied', 'sleep 30', 'running', 0, 'earlier-process', 4242, ${startedAt}, '/out/denied.txt')
           `
         }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provideMerge(storageLayer))))
 
@@ -3115,6 +3132,7 @@ describe("bash named permits", () => {
                   toolCallId: Option.getOrThrow(Option.fromUndefinedOr(ctx.toolCallId)),
                   command: "must-not-spawn",
                   cwd: Option.some(ctx.cwd),
+                  outputFile: `${ctx.cwd}/must-not-spawn.txt`,
                 })
                 let state: string = claim._tag
                 if (claim._tag === "Terminal") state = claim.state.status

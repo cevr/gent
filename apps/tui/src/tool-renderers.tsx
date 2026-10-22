@@ -606,30 +606,18 @@ function BashToolRenderer(props: ToolRendererProps) {
   const exitCodeColor = () => {
     const d = data()
     if (Option.isNone(d)) return theme.textMuted
-    if (Option.contains(d.value.status, "blocked")) return theme.warning
     if (Option.contains(d.value.status, "background")) return theme.info
     if (d.value.exitCode === 0) return theme.success
     return theme.error
   }
 
-  // A blocked command (stored by an earlier version) never ran and a
-  // background one has not ended: neither has an exit code or a line count to
+  // A background command has not ended: it has no exit code or line count to
   // draw.
   const status = () => Option.flatMap(data(), (d) => d.status)
   const Outcome = () => (
     <Show
       when={Option.isNone(status())}
-      fallback={
-        <span style={{ fg: exitCodeColor() }}>
-          {Option.match(
-            Option.filter(status(), (value) => value === "blocked"),
-            {
-              onNone: () => "in background",
-              onSome: () => "declined",
-            },
-          )}
-        </span>
-      }
+      fallback={<span style={{ fg: exitCodeColor() }}>in background</span>}
     >
       <span style={{ fg: exitCodeColor() }}>exit {Option.getOrUndefined(data())?.exitCode}</span>
       <span style={{ fg: theme.textMuted }}> · {plural(output().total, "line")}</span>

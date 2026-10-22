@@ -229,19 +229,15 @@ interface BashOutput {
   readonly stdout: string
   readonly stderr: string
   readonly exitCode: number
-  /**
-   * `background`: it runs on past the call. `blocked`: a result an earlier
-   * version stored for a command the user declined, which never ran. Neither
-   * has a real exit code.
-   */
-  readonly status: Option.Option<"blocked" | "background">
+  /** `background`: it runs on past the call, and has no exit code yet. */
+  readonly status: Option.Option<"background">
 }
 
 const BashOutputSchema = Schema.Struct({
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
   exitCode: Schema.Finite,
-  status: Schema.optional(Schema.Literals(["blocked", "background"])),
+  status: Schema.optional(Schema.Literal("background")),
 })
 
 /**

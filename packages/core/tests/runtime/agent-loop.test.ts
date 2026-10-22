@@ -4595,21 +4595,6 @@ describe("startup recovery", () => {
       },
     },
     {
-      // Steering delivered at a step boundary joins the turn already running
-      // and never gets a `TurnCompleted` of its own. The shape older builds of
-      // `deliverSteeringAtStepBoundary` wrote is still on disk: a user-role
-      // interjection carrying the `steering` marker.
-      name: "startup does not answer delivered steering as a user turn",
-      seed: (sessionId, branchId) => {
-        const message = userMessage(sessionId, branchId, "msg-steering", "answer me", 0)
-        const delivered = Message.cases.regular.make({
-          ...userMessage(sessionId, branchId, "msg-steering-interject", "also do this", 1),
-          metadata: { customType: "steering" },
-        })
-        return { messages: [message, delivered], completedId: message.id }
-      },
-    },
-    {
       // A turn that died writes no `TurnCompleted`. Once a later turn has
       // completed, the dead one is history: reopening must not answer it.
       name: "startup does not replay a failed turn that newer completed turns followed",
@@ -6864,7 +6849,7 @@ describe("turn scheduling", () => {
       )
     }),
   )
-  it.live("interrupt scoped to session/branch", () =>
+  it.live("cancel scoped to session/branch", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         { ...textStep("ok"), gated: true },
@@ -6879,15 +6864,14 @@ describe("turn scheduling", () => {
           const fiberB = yield* Effect.forkChild(runAgentLoop(messageB))
           yield* controls.waitForCall(0)
           yield* controls.waitForCall(1)
-          // No writer sends `Interrupt` now; a stored steer row with it still cancels.
           yield* steerAgentLoop(
-            SteerCommand.cases.Interrupt.make({
+            SteerCommand.cases.Cancel.make({
               sessionId: SessionId.make("s1"),
               branchId: BranchId.make("b1"),
-              requestId: "req-interrupt-s1",
+              requestId: "req-cancel-s1",
             }),
           )
-          // A ends on the interrupt alone: both model gates stay shut.
+          // A ends on the cancel alone: both model gates stay shut.
           yield* Fiber.join(fiberA).pipe(Effect.timeout("2 seconds"))
           const statusB = fiberB.pollUnsafe()
           expect(statusB).toBeUndefined()

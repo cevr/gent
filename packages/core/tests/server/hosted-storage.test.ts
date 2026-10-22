@@ -284,47 +284,6 @@ const rowIdsOf = (disk: DurableObjectDisk) =>
 /** Whether a number holds the id exactly, as the driver reads it. */
 const readsExactly = (id: bigint) => String(Number(id)) === String(id)
 
-const LinkRow = Schema.Struct({
-  table: Schema.String,
-  kind: Schema.NullOr(Schema.Finite),
-  tag: Schema.NullOr(Schema.String),
-  id: Schema.String,
-  request_id: Schema.String,
-  reply_id: Schema.NullOr(Schema.String),
-})
-
-/**
- * The cluster rows in delivery order, each id replaced by its rank among the
- * ids: two stores with the same links hold the same rows in the same order,
- * linked the same way, whatever their id values.
- */
-const linksOf = (disk: DurableObjectDisk) => {
-  const rows = disk.rowsOf(
-    LinkRow,
-    `SELECT * FROM (
-       SELECT 'message' AS "table", kind, tag, CAST(id AS TEXT) AS id, CAST(request_id AS TEXT) AS request_id, CAST(reply_id AS TEXT) AS reply_id FROM cluster_messages
-       UNION ALL
-       SELECT 'reply', kind, NULL, CAST(id AS TEXT), CAST(request_id AS TEXT), NULL FROM cluster_replies
-     ) ORDER BY "table", CAST(id AS INTEGER)`,
-  )
-  const replyOf = (row: typeof LinkRow.Type) => Option.fromNullishOr(row.reply_id)
-  const ids = new Set(
-    rows.flatMap((row) => [row.id, row.request_id, ...Option.toArray(replyOf(row))]),
-  )
-  const ranks = new Map(
-    Arr.sort([...ids], Order.mapInput(Order.BigInt, BigInt)).map((id, rank) => [id, rank]),
-  )
-  const rankOf = (id: string) => ranks.get(id) ?? -1
-  return rows.map((row) => ({
-    table: row.table,
-    kind: row.kind,
-    tag: row.tag,
-    id: rankOf(row.id),
-    request: rankOf(row.request_id),
-    reply: Option.getOrElse(Option.map(replyOf(row), rankOf), () => -1),
-  }))
-}
-
 /**
  * One activation of the object: a fresh storage handle, a root built on its
  * client in a scope of its own, and the eviction that kills the handle, then
@@ -373,126 +332,6 @@ const clusterRootOver = <A, E>(
     Layer.provideMerge(Layer.merge(hostedSqlOf(disk.activate("enforce").storage), BunCrypto.layer)),
     withClusterIdSpace,
   )
-
-const ClusterRowText = Schema.Struct({ row: Schema.String })
-
-/** Each cluster row's ids and tag, exact, in delivery (rowid) order. */
-const clusterRowsOf = (disk: DurableObjectDisk) => [
-  ...disk
-    .rowsOf(
-      ClusterRowText,
-      `SELECT tag || ' ' || id || ' ' || request_id || ' ' || IFNULL(reply_id, '-') || ' ' || IFNULL(last_reply_id, '-') AS row
-       FROM cluster_messages ORDER BY rowid`,
-    )
-    .map((row) => row.row),
-  ...disk
-    .rowsOf(
-      ClusterRowText,
-      "SELECT 'reply ' || id || ' ' || request_id AS row FROM cluster_replies ORDER BY rowid",
-    )
-    .map((row) => row.row),
-]
-
-/**
- * A turn evicted while its second model step waits, its ids then moved past
- * 2^53 as an older build's default snowflakes are, resumed by the next
- * activation. With `exactTurnFirst`, a first turn completes before it, and
- * its ids stay under 2^53: the store holds both kinds.
- */
-const staleIdsResume = (options: { readonly exactTurnFirst: boolean }) =>
-  Effect.gen(function* () {
-    const dir = yield* makeTempDirectoryScoped("gent-do-stale-")
-    const cwd = yield* makeTempDirectoryScoped("gent-do-stale-cwd-")
-    const home = yield* makeTempDirectoryScoped("gent-do-stale-home-")
-    const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
-    const runs = yield* Ref.make(0)
-    const root = (
-      sql: Layer.Layer<SqlClient.SqlClient>,
-      providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-    ) => hostedRoot({ sql, cwd, home, runs, providerLayer })
-    const exactTurn = Arr.filter([textStep("first")], () => options.exactTurnFirst)
-    const turns = exactTurn.length + 1
-
-    // Activation 1 runs the tool and is evicted while step 2 waits, with
-    // the turn's request and its keep-alive unprocessed.
-    const first = yield* LanguageModelLayers.sequence([
-      ...exactTurn,
-      toolCallStep("echo", { text: "hello" }),
-      { ...textStep("never emitted"), gated: true },
-    ])
-    const activation1 = yield* activate(disk, "boot-1", (sql, scope) =>
-      createRpcClient(root(sql, first.layer)).pipe(Effect.provideService(Scope.Scope, scope)),
-    )
-    const { client } = activation1.built
-    const { sessionId, branchId } = yield* client.session.create({ cwd })
-    if (options.exactTurnFirst) {
-      yield* client.message.send({ sessionId, branchId, content: "first" })
-      yield* waitFor(eventCount(disk, "TurnCompleted"), (n) => n >= 1, 15_000, "first turn")
-      yield* waitFor(
-        Effect.sync(() => unprocessedTags(disk)),
-        (tags) => tags.length === 0,
-        5_000,
-        "first turn processed",
-      )
-    }
-    const exactIds = Arr.sort(storedClusterIds(disk), Order.BigInt)
-    const boundary = Option.getOrElse(Arr.last(exactIds), () => 0n)
-    yield* client.message.send({ sessionId, branchId, content: "echo hello" })
-    yield* first.controls.waitForCall(turns)
-    yield* activation1.evict
-    expect(unprocessedTags(disk)).toContain(KEEP_ALIVE)
-
-    // An older build's ids: the rows past the boundary with their ids past
-    // 2^53, as Effect's default snowflakes are, written exactly through the API.
-    disk.setPhase("older-build")
-    const shifted = (column: string) =>
-      `${column} = CASE WHEN ${column} > ${boundary} THEN ${column} + ${2n ** 60n} ELSE ${column} END`
-    const older = disk.activate("enforce").storage
-    for (const [table, columns] of Object.entries(ID_COLUMNS))
-      older.sql.exec(`UPDATE ${table} SET ${columns.map(shifted).join(", ")}`)
-    const staleLinks = linksOf(disk)
-    expect(storedClusterIds(disk).filter((id) => id > boundary && id <= MAX_EXACT_ID)).toEqual([])
-    expect(boundary > 0n).toBe(options.exactTurnFirst)
-
-    // Activation 2, the alarm: the root moves the ids under 2^53, and the
-    // turn resumes from storage.
-    const second = yield* LanguageModelLayers.sequence([textStep("done")])
-    const activation2 = yield* activate(disk, "boot-2", (sql, scope) =>
-      Layer.buildWithScope(root(sql, second.layer), scope),
-    )
-    disk.setPhase("resume")
-    yield* Context.get(activation2.built, Sharding.Sharding).pollStorage
-    yield* waitFor(eventCount(disk, "TurnCompleted"), (n) => n >= turns, 15_000, "TurnCompleted")
-    yield* waitFor(
-      Effect.sync(() => unprocessedTags(disk)),
-      (tags) => tags.length === 0,
-      5_000,
-      "every message processed",
-    )
-
-    // Each row keeps its place and every link names the same row; the
-    // rows the turn wrote since sort after them, and the exact ids keep
-    // their values.
-    const moved = linksOf(disk)
-    const olderRows = ["message", "reply"].flatMap((table) =>
-      moved
-        .filter((row) => row.table === table)
-        .slice(0, staleLinks.filter((row) => row.table === table).length),
-    )
-    expect(olderRows).toEqual(staleLinks)
-    expect(
-      Arr.sort(
-        storedClusterIds(disk).filter((id) => id <= boundary),
-        Order.BigInt,
-      ),
-    ).toEqual(exactIds)
-    expect(storedClusterIds(disk).filter((id) => id > MAX_EXACT_ID)).toEqual([])
-    expect(Option.isNone(yield* nextClusterWake(disk))).toBe(true)
-    expect(yield* eventCount(disk, "TurnCompleted")).toBe(turns)
-    expect(yield* Ref.get(runs)).toBe(1)
-    expect(yield* second.controls.callCount).toBe(1)
-    expect(wallsOf(disk)).toEqual([])
-  }).pipe(Effect.timeout("45 seconds"))
 
 // ── tests ───────────────────────────────────────────────────────────────────
 
@@ -948,67 +787,30 @@ describe("Durable-Object-shaped storage", () => {
   )
 
   it.scopedLive(
-    "ids past 2^53 are numbered in their order above the exact ones, and each link keeps its row",
+    "a lossy root fails on a stored cluster id past 2^53 - 1, which only Effect's generator writes",
     () =>
       Effect.gen(function* () {
-        const dir = yield* makeTempDirectoryScoped("gent-do-order-")
+        const dir = yield* makeTempDirectoryScoped("gent-do-past-")
         const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
         const cluster = SingleRunner.layer({ runnerStorage: "memory" })
         yield* Layer.build(clusterRootOver(disk, cluster)).pipe(Effect.scoped)
 
-        // Processed rows an older build left: one exact, the rest past
-        // 2^53, two messages of one request, each reply named by the
-        // message it answers.
-        const stale = (offset: number) => String(2n ** 60n + BigInt(offset))
-        const older = disk.activate("enforce").storage
-        // An empty reply id stores no reply.
-        const message = (tag: string, id: string, request: string, reply: string, last: string) =>
-          older.sql.exec(
-            `INSERT INTO cluster_messages (id, shard_id, entity_type, entity_id, kind, tag, payload, processed, request_id, reply_id, last_reply_id)
-             VALUES (?, 'default:1', 'Planted', 'e', 0, ?, '{}', 1, ?, NULLIF(?, ''), NULLIF(?, ''))`,
-            id,
-            tag,
-            request,
-            reply,
-            last,
-          )
-        const reply = (id: string, request: string) =>
-          older.sql.exec(
-            "INSERT INTO cluster_replies (id, kind, request_id, payload, acked) VALUES (?, 0, ?, '{}', 1)",
-            id,
-            request,
-          )
-        message("exact", "1000", "1000", "", "")
-        message("a", stale(10), stale(10), stale(30), stale(30))
-        message("b", stale(20), stale(20), "", stale(40))
-        message("a-again", stale(25), stale(10), "", "")
-        reply(stale(30), stale(10))
-        reply(stale(40), stale(20))
+        // A processed message with Effect's default snowflake, past 2^53.
+        disk.activate("enforce").storage.sql.exec(
+          `INSERT INTO cluster_messages (id, shard_id, entity_type, entity_id, kind, tag, payload, processed, request_id)
+             VALUES (?, 'default:1', 'Planted', 'e', 0, 'past', '{}', 1, ?)`,
+          String(2n ** 60n),
+          String(2n ** 60n),
+        )
 
-        yield* Layer.build(clusterRootOver(disk, cluster)).pipe(Effect.scoped)
-        expect(clusterRowsOf(disk)).toEqual([
-          "exact 1000 1000 - -",
-          "a 1001 1001 1004 1004",
-          "b 1002 1002 - 1005",
-          "a-again 1003 1001 - -",
-          "reply 1004 1001",
-          "reply 1005 1002",
-        ])
-        expect(wallsOf(disk)).toEqual([])
+        const failure = yield* Layer.build(clusterRootOver(disk, cluster)).pipe(
+          Effect.scoped,
+          Effect.flip,
+          Effect.map(String),
+        )
+        expect(failure).toContain("past 2^53 - 1")
       }).pipe(Effect.timeout("20 seconds")),
     30_000,
-  )
-
-  it.scopedLive(
-    "ids an older build left past 2^53 move under it in their order, and its turn resumes and releases",
-    () => staleIdsResume({ exactTurnFirst: false }),
-    60_000,
-  )
-
-  it.scopedLive(
-    "ids past 2^53 move above the exact ids a store already holds, which keep their values",
-    () => staleIdsResume({ exactTurnFirst: true }),
-    60_000,
   )
 
   it.scopedLive("a session tree and a branch list of over 100 pass the bound-parameter cap", () =>

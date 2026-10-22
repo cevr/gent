@@ -555,9 +555,9 @@ const refusedAgentKeys = (input: AgentDefinitionInput): Option.Option<string> =>
  * (`resolveAgentRoster`). Per-run overrides are a part of the same patch, on
  * `RunSpec`; their `tools` and `paths` only narrow the agent (`SessionAgent`).
  * A config entry keeps the keys its author wrote (`AuthoredAgentPatch`);
- * stored rows and the wire also carry the old keys, for an older gent
- * (`StoredRunOverrides`, `StoredAgentDefinition`). A `thread.start` call
- * writes the new keys only.
+ * the wire also carries the old keys, for an older client
+ * (`StoredAgentDefinition`). A stored run holds the new keys only
+ * (`RunOverrides`).
  */
 export class AgentDefinition extends Schema.Class<
   AgentDefinition,
@@ -874,25 +874,11 @@ const RUN_OVERRIDE_KEYS = [
 
 /**
  * A run's overrides as `RunSpec` stores them (`sessions.admission_json`):
- * the run fields of a stored patch, through `readStoredPatch` and
- * `writeStoredPatch`, so an old row keeps its meaning and an older gent
- * reads a new one. A caller writes the new keys: a `thread.start` call
- * names its own (`model`, `effort`, `tools`, `instructions`) and the thread
- * builds its run from them.
+ * the run fields of a patch. A `thread.start` call names its own (`model`,
+ * `effort`, `tools`, `instructions`) and the thread builds its run from them.
  */
-const StoredRunOverrides = StoredPatchFields.mapFields(
-  Struct.pick([...RUN_OVERRIDE_KEYS, "modelId", "allowedTools", "deniedTools"] as const),
-).pipe(
-  Schema.decodeTo(
-    Schema.toType(
-      PatchFields.mapFields(Struct.pick([...RUN_OVERRIDE_KEYS, "legacyTools"] as const)),
-    ),
-    {
-      decode: SchemaGetter.transform(readStoredPatch),
-      encode: SchemaGetter.transform(writeStoredPatch),
-    },
-  ),
-)
+const RunOverrides = AgentPatch.mapFields(Struct.pick(RUN_OVERRIDE_KEYS))
+type RunOverrides = typeof RunOverrides.Type
 
 // ── agent resolution ────────────────────────────────────────────────────────
 
@@ -967,15 +953,14 @@ export const resolveSessionAgent = (params: {
   readonly agents: Iterable<AgentDefinition>
   readonly configAgents: Option.Option<Readonly<Record<AgentName, StoredAgentPatch>>>
   readonly name: AgentName
-  readonly overrides: Option.Option<StoredAgentPatch>
+  readonly overrides: Option.Option<RunOverrides>
 }): Option.Option<AgentDefinition> =>
   Option.map(
     Option.fromUndefinedOr(resolveAgentRoster(params.agents, params.configAgents).get(params.name)),
     (agent) =>
       Option.match(params.overrides, {
         onNone: () => agent,
-        onSome: ({ tools: _tools, legacyTools: _legacy, paths: _paths, ...fields }) =>
-          applyAgentPatch(agent, fields),
+        onSome: ({ tools: _tools, paths: _paths, ...fields }) => applyAgentPatch(agent, fields),
       }),
   )
 
@@ -984,31 +969,25 @@ export const resolveSessionAgent = (params: {
  * bound is `parent` (`noRunBound` for none). The definition is the bound
  * its author set, and a run only narrows it (least authority): the run's
  * `tools` patterns are one more list a tool must pass, so `["*"]` holds
- * what the agent holds; its `paths` are one more scope; an old tool edit
- * narrows as the patterns it gives every tool. A child never exceeds its
+ * what the agent holds; its `paths` are one more scope. A child never exceeds its
  * parent: the parent's lists and scopes come after, each scope with its
  * own cwd.
  */
 export const bindSessionAgent = (
   definition: AgentDefinition,
   params: {
-    readonly overrides: Option.Option<StoredAgentPatch>
+    readonly overrides: Option.Option<RunOverrides>
     readonly cwd: string
     readonly parent: RunBound
   },
 ): SessionAgent => {
-  const run = Option.getOrElse(params.overrides, (): StoredAgentPatch => ({}))
-  const runTools = Option.orElse(Option.fromUndefinedOr(run.tools), () =>
-    Option.map(Option.fromUndefinedOr(run.legacyTools), (edit) =>
-      applyLegacyToolEdit(Option.none(), edit),
-    ),
-  )
+  const run = Option.getOrElse(params.overrides, (): RunOverrides => ({}))
   const scope = (entries: Option.Option<ReadonlyArray<AgentPathEntry>>) =>
     Option.map(entries, (some): PathScope => ({ cwd: params.cwd, entries: some }))
   return new SessionAgent(definition, {
     tools: [
       ...Option.toArray(Option.fromUndefinedOr(definition.tools)),
-      ...Option.toArray(runTools),
+      ...Option.toArray(Option.fromUndefinedOr(run.tools)),
       ...params.parent.tools,
     ],
     paths: [
@@ -1125,19 +1104,14 @@ export const effectiveModelDriver = (
 // Every child is a durable session driven by the same loop as its parent.
 
 /**
- * Rows written before `parentToolCallId` was dropped still carry it; a struct
- * decode ignores the extra key. Overrides go through `StoredRunOverrides`,
- * which reads rows written before `tools` and writes rows an older gent reads.
- *
  * `credentialSlot` pins the run to one credential of the sign-in each request
  * dispatches through: that slot alone is the order every turn walks, in place
  * of the config `authOrder`, so a refusal on it fails the turn and never
  * spends another account. It is not an agent field: config cannot set it, and
- * no agent patch carries it. A row without it walks the `authOrder`, and an
- * older gent ignores it.
+ * no agent patch carries it. A row without it walks the `authOrder`.
  */
 export const RunSpecSchema = Schema.Struct({
-  overrides: Schema.optional(StoredRunOverrides),
+  overrides: Schema.optional(RunOverrides),
   credentialSlot: Schema.optional(CredentialSlot),
 })
 

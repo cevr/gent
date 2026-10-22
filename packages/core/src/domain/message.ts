@@ -243,11 +243,6 @@ export type MessageRole = typeof MessageRole.Type
  * instruction that opens its last call, which runs with tools off as the
  * `max-steps` step does. Their details are the reading each was written at
  * (`ModelAttempts`); one call left is the last call's.
- *
- * `steering` is the marker older builds wrote over the custom type of an
- * interjection delivered at a step boundary. Stored rows still carry it, so
- * it stays a runtime type. A delivery now keeps the sender's custom type and
- * sets `MessageMetadata.joinedTurn` instead.
  */
 export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
@@ -255,7 +250,6 @@ export const RuntimeUserMessageType = Schema.Literals([
   "max-steps",
   "model-attempts",
   "model-change",
-  "steering",
 ])
 export type RuntimeUserMessageType = typeof RuntimeUserMessageType.Type
 const isRuntimeUserMessageType = Schema.is(RuntimeUserMessageType)
@@ -388,12 +382,6 @@ const SteerTargetFields = {
 
 export const SteerCommand = Schema.Union([
   Schema.TaggedStruct("Cancel", {
-    ...SteerTargetFields,
-    messageId: Schema.optional(MessageId),
-  }),
-  // No writer sends `Interrupt`; it stays so stored Steer mailbox rows still decode.
-  // The loop treats it as `Cancel`.
-  Schema.TaggedStruct("Interrupt", {
     ...SteerTargetFields,
     messageId: Schema.optional(MessageId),
   }),
@@ -607,7 +595,7 @@ export class Session extends Schema.Class<Session, { readonly brand: unique symb
   /**
    * `/effort auto`: each turn asks the effort router for its level
    * (`ModelRouterContribution.effort`). Never set with `reasoningLevel`;
-   * stored as `auto` in the same column, which an older build reads as none.
+   * stored as `auto` in the same column.
    */
   reasoningAuto: Schema.optional(Schema.Literal(true)),
   activeBranchId: Schema.optional(BranchId),
@@ -1840,26 +1828,17 @@ export type RequesterBranch = typeof RequesterBranch.Type
 export const requesterBranchKey = (branch: RequesterBranch): string =>
   `${branch.sessionId}/${branch.branchId}`
 
-/**
- * One turn waiting in a branch's queue. A row written before admission moved
- * onto the session may still carry `agentOverride`, `runSpec` or
- * `interactive`; the struct ignores keys it does not declare, so the row
- * decodes, and migration 023 copied that admission onto its session.
- */
+/** One turn waiting in a branch's queue. */
 export const QueuedTurnItem = Schema.Struct({
   message: Message,
   /**
    * The other branch that steered this item in. A stop that branch asks for
    * takes the item back with the turn it waited to join. Absent on the
-   * branch's own items and on rows written before the field.
+   * branch's own items.
    */
   sender: Schema.optional(RequesterBranch),
   /**
    * The admitter asked for a turn even when the branch has no prior history.
-   *
-   * A row written before this field set shrank may still carry `keyed`. The
-   * struct ignores keys it does not declare, so such a row decodes and the
-   * next write drops the key.
    */
   wake: Schema.optional(Schema.Boolean),
 })

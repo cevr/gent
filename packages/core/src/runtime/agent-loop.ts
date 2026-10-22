@@ -57,7 +57,7 @@ import {
   type RequesterBranch,
   requesterBranchKey,
   SteeringQueueEntryInfo,
-  type SteerCommand,
+  SteerCommand,
 } from "../domain/message.js"
 import {
   AgentLoopQueueStorage,
@@ -3684,8 +3684,6 @@ const agentLoopActorHandlers = Effect.gen(function* () {
     yield* awaitTurnCompletion(handle, baseline, operation.message.id, orCleanup(handle))
   })
 
-  const isCancellation = Predicate.or(Predicate.isTagged("Cancel"), Predicate.isTagged("Interrupt"))
-
   const interjectionItem = Effect.fn("AgentLoopActor.interjectionItem")(function* (
     commandId: ActorCommandId,
     command: InterjectCommand,
@@ -3823,33 +3821,27 @@ const agentLoopActorHandlers = Effect.gen(function* () {
   ) {
     yield* ensureTarget(command)
     yield* markWrite
-    if (isCancellation(command) && Predicate.isNotUndefined(command.messageId)) {
+    if (SteerCommand.guards.Cancel(command) && Predicate.isNotUndefined(command.messageId)) {
       yield* stopMessage(command.messageId, Option.none())
       return
     }
     const handle = yield* ensureStarted
-
-    switch (command._tag) {
-      case "Cancel":
-      case "Interrupt":
-        // A cancellation that names a message took the `stopMessage` path above.
-        if (isActiveLoopState(yield* handle.inbox.phase)) {
-          yield* handle.interrupt().pipe(orCleanup(handle))
-        }
-        return
-
-      case "Interject":
-        // A mailbox steer carries no client grant: it came from outside the branch.
-        yield* interject(
-          handle,
-          commandId,
-          command,
-          Option.none(),
-          (h) => startNextQueuedTurnIfIdle(h),
-          sender,
-        )
-        return
+    if (SteerCommand.guards.Cancel(command)) {
+      // A cancellation that names a message took the `stopMessage` path above.
+      if (isActiveLoopState(yield* handle.inbox.phase)) {
+        yield* handle.interrupt().pipe(orCleanup(handle))
+      }
+      return
     }
+    // A mailbox steer carries no client grant: it came from outside the branch.
+    yield* interject(
+      handle,
+      commandId,
+      command,
+      Option.none(),
+      (h) => startNextQueuedTurnIfIdle(h),
+      sender,
+    )
   })
 
   /**

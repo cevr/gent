@@ -413,8 +413,6 @@ describe("context handoff", () => {
         const result = yield* compact({
           history: [
             textMessage("task", "user", "Rename the billing module.", 1),
-            // An older build stored a user's mid-turn correction as "steering".
-            typedMessage("correction", "Keep the old export name.", 2, { customType: "steering" }),
             // The user's `/goal` runs as a client request: the goal it queues is the user's.
             typedMessage("slash", "Rename it in every package.", 3, {
               customType: "goal-context",
@@ -455,7 +453,7 @@ describe("context handoff", () => {
           budget: budget(1_700),
         })
         expect(result.notice).toContain(
-          "The user's messages, oldest first:\n- task: Rename the billing module.\n- correction: Keep the old export name.\n- slash: Rename it in every package.\n- btw: Which package is first?\nBefore you continue",
+          "The user's messages, oldest first:\n- task: Rename the billing module.\n- slash: Rename it in every package.\n- btw: Which package is first?\nBefore you continue",
         )
       }).pipe(Effect.provide(summaryProvider("tail only")), Effect.timeout("10 seconds")),
   )

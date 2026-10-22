@@ -225,7 +225,6 @@ describe("Sessions", () => {
         const column = sql<{
           readonly reasoning_level: string
         }>`SELECT reasoning_level FROM sessions WHERE id = ${id}`
-        // An older build reads `auto` as no level: it is not a reasoning effort.
         expect((yield* column)[0]?.reasoning_level).toBe("auto")
         const auto = yield* sessions.getSession(id)
         expect(auto?.reasoningAuto).toBe(true)
@@ -798,10 +797,11 @@ describe("Sessions", () => {
 describe("persisted loop queue format", () => {
   /**
    * The queue row is the loop's only durable memory of accepted-but-unanswered
-   * input. A field renamed, reordered into a required position, or dropped
-   * means a branch silently loses queued work on the next open, so the whole
-   * shape is pinned here as raw JSON rather than as a value built from the
-   * schema — a schema change cannot quietly move this literal with it.
+   * input. A field renamed, made required, or dropped without a
+   * `KERNEL_SCHEMA_VERSION` bump means a branch fails to read its queued work
+   * on the next open, so the whole shape is pinned here as raw JSON rather
+   * than as a value built from the schema — a schema change cannot quietly
+   * move this literal with it.
    */
   const storedQueueJson = `{
     "steering": [
@@ -809,13 +809,13 @@ describe("persisted loop queue format", () => {
         "message": {
           "_tag": "interjection",
           "id": "steer-1",
-          "sessionId": "legacy-session",
-          "branchId": "legacy-branch",
+          "sessionId": "queued-session",
+          "branchId": "queued-branch",
           "role": "user",
           "parts": [{ "options": {}, "type": "text", "text": "steer me" }],
           "createdAt": 1767225600000
         },
-        "agentOverride": "main",
+        "sender": { "sessionId": "other-session", "branchId": "other-branch" },
         "wake": true
       }
     ],
@@ -824,22 +824,20 @@ describe("persisted loop queue format", () => {
         "message": {
           "_tag": "regular",
           "id": "follow-1",
-          "sessionId": "legacy-session",
-          "branchId": "legacy-branch",
+          "sessionId": "queued-session",
+          "branchId": "queued-branch",
           "role": "user",
           "parts": [{ "options": {}, "type": "text", "text": "next" }],
           "createdAt": 1767225600000
-        },
-        "interactive": false,
-        "keyed": true
+        }
       }
     ],
     "inFlight": {
       "message": {
         "_tag": "regular",
         "id": "in-flight-1",
-        "sessionId": "legacy-session",
-        "branchId": "legacy-branch",
+        "sessionId": "queued-session",
+        "branchId": "queued-branch",
         "role": "user",
         "parts": [{ "options": {}, "type": "text", "text": "running" }],
         "createdAt": 1767225600000
@@ -852,8 +850,8 @@ describe("persisted loop queue format", () => {
       const queues = yield* AgentLoopQueueStorage
       const sql = yield* SqlClient.SqlClient
       const now = FIXED_NOW
-      const sessionId = SessionId.make("legacy-session")
-      const branchId = BranchId.make("legacy-branch")
+      const sessionId = SessionId.make("queued-session")
+      const branchId = BranchId.make("queued-branch")
       yield* ensureStorageParents({ sessionId, branchId })
       yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at) VALUES (${DefaultWorkspaceId}, ${sessionId}, ${branchId}, ${storedQueueJson}, ${now.getTime()})`
 
@@ -862,11 +860,7 @@ describe("persisted loop queue format", () => {
       expect(loaded.steering[0]?.wake).toBe(true)
       expect(loaded.steering[0]?.message._tag).toBe("interjection")
       expect(loaded.followUp).toHaveLength(1)
-      // Retired keys on an old row are ignored, not rejected. The admission
-      // keys moved to the session in migration 023 (schema.test.ts).
-      expect(Object.keys(loaded.steering[0] ?? {})).not.toContain("agentOverride")
-      expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("interactive")
-      expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("keyed")
+      expect(String(loaded.steering[0]?.sender?.sessionId)).toBe("other-session")
       expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
     }).pipe(Effect.provide(testSqliteStorage)),
   )
@@ -1407,59 +1401,32 @@ describe("Message Metadata", () => {
 
 describe("Event decoding", () => {
   const layer = testSqliteStorage
-  it.live("listEvents skips an event whose tag was retired and keeps the rest", () =>
+  it.live("listEvents fails with a tagged decode error for a bad payload", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const branches = yield* BranchStorage
       const events = yield* EventStorage
       const sql = yield* SqlClient.SqlClient
-      const sessionId = SessionId.make("unknown-event-session")
-      const branchId = BranchId.make("unknown-event-branch")
-      const unknownEventJson =
-        '{"_tag":"__test_unknown__","sessionId":"unknown-event-session","branchId":"unknown-event-branch","toolCallId":"tc-1","toolName":"bash"}'
+      const sessionId = SessionId.make("corrupt-event-session")
+      const branchId = BranchId.make("corrupt-event-branch")
+      const corruptEventJson =
+        '{"_tag":"SessionStarted","sessionId":"corrupt-event-session","branchId":42}'
       yield* sessions.createSession(
         new Session({
           id: sessionId,
-          name: "unknown-event",
+          name: "corrupt-event",
           createdAt: FIXED_NOW,
           updatedAt: FIXED_NOW,
         }),
       )
       yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
-      yield* events.appendEvent(SessionStarted.make({ sessionId, branchId }))
-      yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, '__test_unknown__', ${unknownEventJson}, ${FIXED_NOW_MILLIS})`
-      const listed = yield* events.listEvents({ sessionId, branchId })
-      expect(listed.map((envelope) => envelope.event._tag)).toEqual(["SessionStarted"])
+      yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${corruptEventJson}, ${FIXED_NOW_MILLIS})`
+      const error = yield* events.listEvents({ sessionId, branchId }).pipe(Effect.flip)
+      expect(error._tag).toBe("EventDecodeError")
+      if (error._tag !== "EventDecodeError") return
+      expect(error).toBeInstanceOf(EventDecodeError)
+      expect(error.operation).toBe("listEvents")
     }).pipe(Effect.provide(layer)),
-  )
-  it.live(
-    "listEvents still fails with a tagged decode error for a known tag with a bad payload",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const branches = yield* BranchStorage
-        const events = yield* EventStorage
-        const sql = yield* SqlClient.SqlClient
-        const sessionId = SessionId.make("corrupt-event-session")
-        const branchId = BranchId.make("corrupt-event-branch")
-        const corruptEventJson =
-          '{"_tag":"SessionStarted","sessionId":"corrupt-event-session","branchId":42}'
-        yield* sessions.createSession(
-          new Session({
-            id: sessionId,
-            name: "corrupt-event",
-            createdAt: FIXED_NOW,
-            updatedAt: FIXED_NOW,
-          }),
-        )
-        yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
-        yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${corruptEventJson}, ${FIXED_NOW_MILLIS})`
-        const error = yield* events.listEvents({ sessionId, branchId }).pipe(Effect.flip)
-        expect(error._tag).toBe("EventDecodeError")
-        if (error._tag !== "EventDecodeError") return
-        expect(error).toBeInstanceOf(EventDecodeError)
-        expect(error.operation).toBe("listEvents")
-      }).pipe(Effect.provide(layer)),
   )
 })
 

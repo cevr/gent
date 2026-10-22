@@ -2293,7 +2293,6 @@ describe("model context window", () => {
       runtimeLine("notice", { customType: "model-change" }),
       runtimeLine("final", { customType: "max-steps" }),
       runtimeLine("continue", { customType: "continuation" }),
-      runtimeLine("legacy-steer", { customType: "steering" }),
       runtimeLine("steer", { customType: "wake", joinedTurn: true }),
     ]
     for (const line of lines) {

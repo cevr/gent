@@ -333,9 +333,6 @@ const previewOf = (message: Message): string => {
   return `${headChars(line, HANDOFF_PREVIEW_CHARS)}…`
 }
 
-/** The custom type an older build gave a user's mid-turn correction. */
-const LEGACY_STEERING_TYPE = "steering"
-
 /**
  * Whether the user asked a message, read from its origin. A message a client
  * sent is the user's whatever its custom type (a `/goal` runs as a client
@@ -345,16 +342,14 @@ const LEGACY_STEERING_TYPE = "steering"
  * (`extensionId`: a wake, a goal continuation, a child's completion, a
  * background job, another session's message or a child's question) is not,
  * and neither is a runtime notice (continuation, max-steps, model-change),
- * which carries a custom type and no origin. A row stored before the origin
- * stamps carries neither: it is the user's when it has no custom type, or
- * when it is an older build's "steering" correction.
+ * which carries a custom type and no origin. A message with neither origin
+ * is the user's when it has no custom type.
  */
 const askedByUser = (message: Message): boolean => {
   if (message.metadata?.fromClient === true) return true
   if (Predicate.isNotUndefined(message.metadata?.userText)) return true
   if (Predicate.isNotUndefined(message.metadata?.extensionId)) return false
-  const customType = message.metadata?.customType
-  return Predicate.isUndefined(customType) || customType === LEGACY_STEERING_TYPE
+  return Predicate.isUndefined(message.metadata?.customType)
 }
 
 /**

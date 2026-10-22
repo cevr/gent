@@ -64,42 +64,13 @@ describe("effective model driver", () => {
   })
 })
 
-// ── run spec ────────────────────────────────────────────────────────────────
-
-describe("run spec", () => {
-  test("a stored run spec that still carries the dropped parentToolCallId decodes", () => {
-    const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
-      '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',
-    )
-    expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
-  })
-
-  test("a run spec that names tools keeps them over the old lists", () => {
-    const decoded = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))(
-      '{"overrides":{"tools":["read"],"deniedTools":["read"],"model":"a/b","modelId":"c/d"}}',
-    )
-    expect(decoded).toEqual({ overrides: { tools: ["read"], model: ModelId.make("a/b") } })
-  })
-})
-
 // ── the previous gent ───────────────────────────────────────────────────────
 
 /**
- * The run spec and agent shapes as the previous gent reads them (the base of
- * the `tools` change): a test fixture, so a row or a reply written now is
- * read here the way an older process or client reads it.
+ * An agent as a client of the previous gent reads it (the base of the
+ * `tools` change): a test fixture, so a reply written now is read here the
+ * way an older client reads it.
  */
-const PreviousRunOverrides = Schema.Struct({
-  modelId: Schema.optional(Schema.String),
-  allowedTools: Schema.optional(Schema.Array(Schema.String)),
-  deniedTools: Schema.optional(Schema.Array(Schema.String)),
-  reasoningEffort: Schema.optional(Schema.String),
-  contextLength: Schema.optional(Schema.Finite),
-  maxSteps: Schema.optional(Schema.Finite),
-  maxModelAttempts: Schema.optional(Schema.Finite),
-  systemPromptAddendum: Schema.optional(Schema.String),
-})
-const PreviousRunSpec = Schema.Struct({ overrides: Schema.optional(PreviousRunOverrides) })
 const PreviousAgentDefinition = Schema.Struct({
   name: Schema.String,
   model: Schema.optional(Schema.String),
@@ -107,69 +78,9 @@ const PreviousAgentDefinition = Schema.Struct({
   deniedTools: Schema.optional(Schema.Array(Schema.String)),
 })
 
-/** The previous gent's `admitsTool` over its two lists. */
-const previousAdmits = (
-  lists: {
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly deniedTools?: ReadonlyArray<string>
-  },
-  id: string,
-) =>
-  Option.match(Option.fromUndefinedOr(lists.allowedTools), {
-    onNone: () => true,
-    onSome: (allowed) => allowed.includes(id),
-  }) &&
-  !Option.getOrElse(
-    Option.fromUndefinedOr(lists.deniedTools),
-    (): ReadonlyArray<string> => [],
-  ).includes(id)
-
-const writeRunSpec = Schema.encodeSync(Schema.fromJsonString(RunSpecSchema))
 const readRunSpec = Schema.decodeSync(Schema.fromJsonString(RunSpecSchema))
-const readInPrevious = Schema.decodeSync(Schema.fromJsonString(PreviousRunSpec))
 
-/** A run's overrides as the previous gent reads what this gent wrote. */
-const previousOverrides = (
-  overrides: (typeof RunSpecSchema.Type)["overrides"],
-): typeof PreviousRunOverrides.Type =>
-  Option.getOrElse(
-    Option.fromUndefinedOr(readInPrevious(writeRunSpec({ overrides })).overrides),
-    () => ({}),
-  )
-
-describe("a run spec the previous gent reads", () => {
-  test("the model and the tool patterns it can express keep their meaning", () => {
-    const model = ModelId.make("test/chosen")
-    expect(previousOverrides({ model, tools: ["read", "bash"] })).toEqual({
-      modelId: "test/chosen",
-      allowedTools: ["read", "bash"],
-    })
-    expect(previousOverrides({ tools: ["*", "!bash"] })).toEqual({ deniedTools: ["bash"] })
-    expect(previousOverrides({ tools: ["read", "bash", "!bash"] })).toEqual({
-      allowedTools: ["read", "bash"],
-      deniedTools: ["bash"],
-    })
-    expect(previousOverrides({ tools: [] })).toEqual({ allowedTools: [] })
-  })
-
-  // A wildcard the previous gent cannot read becomes an empty allow list:
-  // the old reader holds no tool rather than every tool.
-  test("a pattern the previous gent cannot express leaves it no tool", () => {
-    for (const tools of [["film.*"], ["*", "!film.*"], ["!bash", "read"], ["read", "!x", "bash"]]) {
-      const read = previousOverrides({ tools })
-      expect(["read", "bash", "film.look"].filter((id) => previousAdmits(read, id))).toEqual([])
-    }
-  })
-
-  test("an old row reads back out as the lists it was read from", () => {
-    for (const row of [
-      '{"overrides":{"modelId":"a/b","deniedTools":["bash"]}}',
-      '{"overrides":{"allowedTools":["read","bash"]}}',
-    ]) {
-      expect(readInPrevious(writeRunSpec(readRunSpec(row)))).toEqual(readInPrevious(row))
-    }
-  })
-
+describe("an agent the previous gent's client reads", () => {
   test("a definition a client of the previous gent reads keeps its model and tool lists", () => {
     const write = Schema.encodeSync(Schema.fromJsonString(StoredAgentDefinition))
     const read = Schema.decodeSync(Schema.fromJsonString(PreviousAgentDefinition))
@@ -191,7 +102,7 @@ describe("a run spec the previous gent reads", () => {
   })
 })
 
-// ── old tool lists ──────────────────────────────────────────────────────────
+// ── run tools ──────────────────────────────────────────────────────────
 
 /** The agent `name` runs as, in cwd `/w` with no parent, under the run overrides a stored row holds. */
 const runAs = (agent: AgentDefinition, row: string) => {
@@ -205,34 +116,13 @@ const runAs = (agent: AgentDefinition, row: string) => {
   return bindSessionAgent(definition, { overrides, cwd: "/w", parent: noRunBound })
 }
 
-describe("old tool lists", () => {
+describe("run tools", () => {
   const reader = AgentDefinition.make({
     name: AgentName.make("reader"),
     tools: ["read", "grep", "!bash"],
   })
   const held = (agent: AgentDefinition) =>
     ["read", "grep", "write", "bash"].filter((id) => agent.admitsTool(id))
-
-  // A deny list alone took tools away from the ones the agent had.
-  test("an old deny-only override keeps the tools the agent inherits", () => {
-    expect(held(runAs(reader, '{"overrides":{"deniedTools":["grep"]}}'))).toEqual(["read"])
-  })
-
-  // An allow list alone replaced the agent's allow list and kept its
-  // denials; a run now only narrows, so a tool the agent lacks stays out.
-  test("an old allow-only override narrows the tools the agent holds", () => {
-    expect(held(runAs(reader, '{"overrides":{"allowedTools":["read","write","bash"]}}'))).toEqual([
-      "read",
-    ])
-  })
-
-  test("both old lists narrow the agent's tools", () => {
-    expect(
-      held(
-        runAs(reader, '{"overrides":{"allowedTools":["grep","write"],"deniedTools":["write"]}}'),
-      ),
-    ).toEqual(["grep"])
-  })
 
   test("new tool patterns narrow the agent's tools", () => {
     expect(held(runAs(reader, '{"overrides":{"tools":["*","!read"]}}'))).toEqual(["grep"])

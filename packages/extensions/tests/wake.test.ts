@@ -1363,65 +1363,6 @@ describe("notices", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
-
-  it.live(
-    "a blocked notice an earlier version stored shows in the next turn, and an answered turn clears it",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const home = yield* makeTempDirectoryScoped("wake-blocked-once-")
-          const cwd = yield* makeTempDirectoryScoped("gent-test-cwd-")
-          const requests: Array<{ readonly systemPrompt: string; readonly notices: string }> = []
-          let calls = 0
-          const providerLayer = LanguageModelLayers.testStream((options) => {
-            requests.push(turnRequestText(options.prompt))
-            calls += 1
-            return Effect.succeed(replyStream(`reply ${calls}`))
-          })
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            cwd,
-            home,
-          })
-          const fs = yield* FileSystem.FileSystem
-          const file = yield* writeWakeFile(
-            home,
-            [
-              WakeEntry.cases.notice.make({
-                wakeId: "old-blocked",
-                outcome: "blocked",
-                firedAt: 1_000,
-                content: "Monitor old-blocked was not re-armed: it was never approved. check",
-                note: "check",
-              }),
-            ],
-            branchId,
-          )
-          const answer = (content: string, reply: string) =>
-            client.message
-              .send({ sessionId, branchId, content })
-              .pipe(
-                Effect.andThen(
-                  waitFor(
-                    client.session.getSnapshot({ sessionId, branchId }),
-                    (current) =>
-                      current.runtime._tag === "Idle" && answered(current.messages, reply),
-                    8_000,
-                    `${reply} was answered`,
-                  ),
-                ),
-              )
-          yield* answer("I'm back", "reply 1")
-          expect(requests[0]?.notices).toContain("never approved")
-          // The answered turn cleared the last entry, and the file with it.
-          expect(yield* fs.exists(file)).toBe(false)
-          yield* answer("anything else?", "reply 2")
-          expect(requests[1]?.notices).not.toContain("never approved")
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
-      ),
-    15_000,
-  )
 })
 
 // ── wake store ──────────────────────────────────────────────────────────────

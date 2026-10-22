@@ -89,7 +89,7 @@ interface BackgroundBashJobKeyFields {
 interface BackgroundBashStartInput extends BackgroundBashJobKeyFields {
   readonly command: string
   readonly cwd: Option.Option<string>
-  readonly outputFile?: string
+  readonly outputFile: string
   /** Where the job's launcher writes its process, stored with the claim before the spawn. */
   readonly launch?: CommandLaunch
 }
@@ -99,13 +99,13 @@ const BackgroundBashTerminalState = Schema.Struct({
   command: Schema.String,
   exitCode: Schema.optional(Schema.Finite),
   message: Schema.optional(Schema.String),
-  outputFile: Schema.optional(Schema.String),
+  outputFile: Schema.String,
 })
 type BackgroundBashTerminalState = typeof BackgroundBashTerminalState.Type
 
 const BackgroundBashClaim = Schema.TaggedUnion({
   Started: {},
-  AlreadyRunning: { outputFile: Schema.optional(Schema.String) },
+  AlreadyRunning: { outputFile: Schema.String },
   Terminal: {
     state: BackgroundBashTerminalState,
   },
@@ -117,7 +117,7 @@ const BackgroundBashJobRow = Schema.Struct({
   status: BackgroundBashStatus,
   exit_code: Schema.NullOr(Schema.Finite),
   message: Schema.NullOr(Schema.String),
-  output_file: Schema.NullOr(Schema.String),
+  output_file: Schema.String,
 })
 type BackgroundBashJobRow = typeof BackgroundBashJobRow.Type
 
@@ -191,7 +191,7 @@ interface BackgroundBashStorageService {
     ReadonlyArray<{
       readonly toolCallId: ToolCallId
       readonly command: string
-      readonly outputFile?: string
+      readonly outputFile: string
       /** A restart could not tell whether its process still runs. */
       readonly mayStillRun: boolean
     }>,
@@ -200,11 +200,9 @@ interface BackgroundBashStorageService {
   /**
    * Settled jobs start with a pending delivery mark. An accepted follow-up
    * clears it; a refused send keeps it, and the next turn reads a notice.
-   * Recording a refusal also marks older rows that predate this contract.
    */
-  readonly recordDelivery: (
+  readonly markDelivered: (
     key: BackgroundBashJobKeyFields,
-    delivered: boolean,
   ) => Effect.Effect<void, BackgroundBashStorageError>
   /** The branch's settled jobs whose follow-up was not delivered and no answered turn has read, oldest first. */
   readonly undeliveredJobs: (
@@ -254,7 +252,7 @@ const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState =
     command: row.command,
     exitCode: Option.getOrUndefined(Option.fromNullishOr(row.exit_code)),
     message: Option.getOrUndefined(Option.fromNullishOr(row.message)),
-    outputFile: Option.getOrUndefined(Option.fromNullishOr(row.output_file)),
+    outputFile: row.output_file,
   }
 }
 
@@ -286,7 +284,7 @@ const ensureBackgroundBashTable = ensureExtensionTables({
         owner_generation TEXT,
         notice_read_at INTEGER,
         undelivered_at INTEGER,
-        output_file TEXT,
+        output_file TEXT NOT NULL,
         pid INTEGER,
         process_start_id TEXT,
         process_token TEXT,
@@ -354,9 +352,7 @@ export class BackgroundBashStorage extends Context.Service<
                 if (Option.isSome(existing)) {
                   if (existing.value.status === "running")
                     return BackgroundBashClaim.cases.AlreadyRunning.make({
-                      outputFile: Option.getOrUndefined(
-                        Option.fromNullishOr(existing.value.output_file),
-                      ),
+                      outputFile: existing.value.output_file,
                     })
                   return BackgroundBashClaim.cases.Terminal.make({
                     state: terminalState(existing.value),
@@ -387,7 +383,7 @@ export class BackgroundBashStorage extends Context.Service<
                     'running',
                     ${startedAt},
                     ${generation},
-                    ${Option.getOrNull(Option.fromUndefinedOr(input.outputFile))},
+                    ${input.outputFile},
                     ${Option.getOrNull(Option.fromUndefinedOr(input.launch?.token))},
                     ${Option.getOrNull(Option.fromUndefinedOr(input.launch?.receipt))}
                   )
@@ -492,35 +488,22 @@ export class BackgroundBashStorage extends Context.Service<
               return rows.map((row) => ({
                 toolCallId: ToolCallId.make(row.tool_call_id),
                 command: row.command,
-                outputFile: Option.getOrUndefined(Option.fromNullishOr(row.output_file)),
+                outputFile: row.output_file,
                 mayStillRun: row.message === RESTART_UNCHECKED_MESSAGE,
               }))
             },
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
           ),
 
-          recordDelivery: Effect.fn("BackgroundBashStorage.recordDelivery")(
-            function* (key, delivered) {
-              if (delivered) {
-                yield* sql`
-                  UPDATE background_bash_jobs
-                  SET undelivered_at = NULL
-                  WHERE session_id = ${key.sessionId}
-                    AND branch_id = ${key.branchId}
-                    AND tool_call_id = ${key.toolCallId}
-                    AND undelivered_at IS NOT NULL
-                `
-                return
-              }
-              const undeliveredAt = (yield* DateTime.nowAsDate).getTime()
+          markDelivered: Effect.fn("BackgroundBashStorage.markDelivered")(
+            function* (key) {
               yield* sql`
                 UPDATE background_bash_jobs
-                SET undelivered_at = ${undeliveredAt}
+                SET undelivered_at = NULL
                 WHERE session_id = ${key.sessionId}
                   AND branch_id = ${key.branchId}
                   AND tool_call_id = ${key.toolCallId}
-                  AND status IN ('completed', 'failed')
-                  AND undelivered_at IS NULL
+                  AND undelivered_at IS NOT NULL
               `
             },
             Effect.mapError(mapError("Failed to record background bash job delivery")),
@@ -747,32 +730,11 @@ const queueBackgroundFollowUp = (params: {
 // reach a message. A file, not a reader behind `context.read`: every agent has
 // the read tool, and no other module learns how a command keeps its output.
 
-/**
- * `<data dir>/background-bash/<sessionId>/<branchId>/<sanitized call id>.txt`:
- * the file of a job row stored without `output_file`, which only an older
- * build wrote.
- */
-const sanitizedOutputFile = (path: Path.Path, dataDir: string, key: BackgroundBashJobKeyFields) =>
-  path.resolve(
-    sessionOutputDirectory(path, dataDir, key.sessionId),
-    key.branchId,
-    `${key.toolCallId.replace(/[^\w.:-]/g, "_")}.txt`,
-  )
-
-/** A job row's output file: the one it stored, else `sanitizedOutputFile`. */
-const rowOutputFile = (
-  path: Path.Path,
-  dataDir: string,
-  key: BackgroundBashJobKeyFields,
-  stored?: string,
-) => stored ?? sanitizedOutputFile(path, dataDir, key)
-
 const encodeCallIdentity = Schema.encodeSync(Schema.fromJsonString(ToolCallId))
 /**
  * `<data dir>/background-bash/<sessionId>/<branchId>/calls/<digest>.txt`: one
  * file per bash call. The digest is SHA-256 of the whole JSON-encoded call id,
- * every UTF-16 code unit included; the separate `calls` directory keeps new
- * writes from overwriting a file an older build named. The path is absolute:
+ * every UTF-16 code unit included. The path is absolute:
  * a relative `GENT_DATA_DIR` resolves against the server's cwd, as the
  * database does, and the read tool resolves a relative path against the
  * session cwd instead.
@@ -1672,14 +1634,12 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const ctx = yield* ExtensionContext
   const storage = yield* BackgroundBashStorage
   const branch = { sessionId: ctx.sessionId, branchId: ctx.branchId }
-  const path = yield* Path.Path
-  const dataDir = yield* resolveDataDir(ctx.home)
   const stopped = yield* storage.interruptedJobs(branch)
   const saved = new Map(
     yield* Effect.forEach(stopped.slice(0, maximumNoticeJobs), (job) =>
-      savedOutput(
-        rowOutputFile(path, dataDir, { ...branch, toolCallId: job.toolCallId }, job.outputFile),
-      ).pipe(Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where])),
+      savedOutput(job.outputFile).pipe(
+        Effect.map((where): readonly [ToolCallId, string] => [job.toolCallId, where]),
+      ),
     ),
   )
   const interrupted = jobNotice(stopped, {
@@ -1696,15 +1656,7 @@ const jobNotices = Effect.fn("ExecTools.jobNotices")(function* () {
   const finished = yield* storage.undeliveredJobs(branch)
   const outputs = new Map(
     yield* Effect.forEach(finished.slice(0, maximumNoticeJobs), (job) =>
-      storedOutputFile(
-        rowOutputFile(
-          path,
-          dataDir,
-          { ...branch, toolCallId: job.toolCallId },
-          job.state.outputFile,
-        ),
-        job.state,
-      ).pipe(
+      storedOutputFile(job.state.outputFile, job.state).pipe(
         Effect.map((file): readonly [ToolCallId, string] => [
           job.toolCallId,
           storedJobOutput(job.state.message ?? "", file)(maximumNoticeOutputChars),
@@ -1828,6 +1780,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         command: job.command,
         exitCode,
         message: jobOutputText(output, maximumNoticeOutputChars),
+        outputFile: target.outputFile,
       }
       yield* storage.markCompleted(backgroundJobKeyFields(target), {
         exitCode,
@@ -1857,8 +1810,8 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               return storedJobOutput(state.message ?? "", yield* storedOutputFile(file, state))
             }),
         })
-        const delivered = yield* queueTerminalFollowUp(target, state, text)
-        return yield* storage.recordDelivery(backgroundJobKeyFields(target), delivered)
+        if (yield* queueTerminalFollowUp(target, state, text))
+          yield* storage.markDelivered(backgroundJobKeyFields(target))
       })
 
     const queueFailure = (job: BackgroundBashJob, target: BackgroundBashTarget, message: string) =>
@@ -1866,7 +1819,12 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         const keyFields = backgroundJobKeyFields(target)
         yield* storage.markFailed(keyFields, message).pipe(
           Effect.andThen(
-            deliverTerminal(target, { status: "failed", command: job.command, message }),
+            deliverTerminal(target, {
+              status: "failed",
+              command: job.command,
+              message,
+              outputFile: target.outputFile,
+            }),
           ),
           Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
         )
@@ -1918,12 +1876,12 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
             })
             if (claim._tag === "AlreadyRunning")
               return {
-                file: rowOutputFile(path, dataDir, keyFields, claim.outputFile),
+                file: claim.outputFile,
                 // Another supervisor build can own the live row. Its phase is unknown here.
                 state: active.get(key) ?? "background",
               } satisfies BackgroundBashStart
             if (claim._tag === "Terminal") {
-              const outputFile = rowOutputFile(path, dataDir, keyFields, claim.state.outputFile)
+              const outputFile = claim.state.outputFile
               yield* restore(deliverTerminal({ ...target, outputFile }, claim.state))
               yield* rememberCompleted(key, { file: outputFile, state: claim.state.status })
               return { file: outputFile, state: claim.state.status } satisfies BackgroundBashStart
@@ -1985,7 +1943,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
                 if (Option.isSome(admissionError)) {
                   // The caller holds the error. Settle without a follow-up or turn notice.
                   return storage.markFailed(keyFields, e.message).pipe(
-                    Effect.andThen(storage.recordDelivery(keyFields, true)),
+                    Effect.andThen(storage.markDelivered(keyFields)),
                     Effect.catchTag("BackgroundBashStorageError", () => Effect.void),
                   )
                 }

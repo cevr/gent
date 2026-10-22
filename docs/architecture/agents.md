@@ -18,7 +18,7 @@ The roster (`resolveAgentRoster`) is the extension agents with each config
 entry of their name applied, plus a new agent for each entry that names none.
 A patch replaces the fields it names; `systemPromptAddendum` appends. A field
 resolves project entry > user entry > extension (`mergeAgentPatches` in
-`mergeConfigs`), and a run's `RunSpec.overrides` (`StoredRunOverrides`, a pick of the patch) wins
+`mergeConfigs`), and a run's `RunSpec.overrides` (`RunOverrides`, a pick of the patch) wins
 over all (`resolveSessionAgent`), so a workspace pins its orchestrator model
 under `main` and its delegate threads' model under `delegate`, and a
 `thread.start` call can still pick a different model and effort for one
@@ -98,14 +98,14 @@ its `pathScopes()` (`PathScopeError`) after links and `..` resolve, each
 scope's entries against that scope's cwd; `read` and `grep` accept any
 entry, `write` and `edit` only a write entry. It is not a sandbox: bash and the
 cell are not confined. One reader owns the encoded agent (`readStoredPatch`): it
-reads config entries (`AuthoredAgentPatch`), `sessions.admission_json`
-(`StoredRunOverrides`) and `driver.list` (`StoredAgentDefinition`), with the
-keys before `tools` (`allowedTools`, `deniedTools`, `modelId`), and prefers
-the new ones. A `deniedTools` list alone keeps an internal
+reads config entries (`AuthoredAgentPatch`) and `driver.list`
+(`StoredAgentDefinition`), with the keys before `tools` (`allowedTools`,
+`deniedTools`, `modelId`), and prefers the new ones. `sessions.admission_json`
+holds the new keys only (`RunOverrides`). A `deniedTools` list alone keeps an internal
 `legacyTools` edit that the merge resolves against the inherited tools (they
 minus those ids); an `allowedTools` list alone replaces and keeps the
-inherited denials; both replace. An explicit `tools` replaces. A stored row
-and a wire reply get the new keys and also the old ones
+inherited denials; both replace. An explicit `tools` replaces. A wire reply
+gets the new keys and also the old ones
 (`writeStoredPatch`), so the previous gent, SDK and TUI read them the same
 way: `model` also as `modelId`, patterns the old lists
 can express as those lists, and any other patterns as `allowedTools: []`, so
@@ -115,7 +115,7 @@ an old reader drops it. A config entry writes back the keys its author used
 JSON, so a config file never gains keys for an older gent. A `thread.start`
 call names its overrides as flat parameters (`model`, `effort`, `tools`,
 `instructions`), and the thread writes them to its run spec with the new
-keys only. Stored and wire readers stay tolerant of unknown keys;
+keys only. Wire readers stay tolerant of unknown keys;
 authoring is strict: a config entry, `AgentDefinition.make` and
 `new AgentDefinition` refuse a key the schema does not name, so TypeScript
 that still passes `allowedTools` fails to load rather than run with every tool. Each turn reads the config files as

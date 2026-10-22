@@ -71,12 +71,8 @@ export const WAKE_MESSAGE_TYPE = "wake"
 const WakeMode = Schema.Literals(["wake", "notify"])
 type WakeMode = typeof WakeMode.Type
 
-/**
- * How a notice came about. `blocked` is read only from notices stored by an
- * earlier version, which dropped an unapproved monitor on re-arm; nothing
- * writes it now.
- */
-const NoticeOutcome = Schema.Literals(["fired", "matched", "timed-out", "blocked"])
+/** How a notice came about: `fired` is an alarm, the rest a monitor. */
+const NoticeOutcome = Schema.Literals(["fired", "matched", "timed-out"])
 
 /**
  * What makes an alarm an auto-resume: the turn a usage limit stopped, and
@@ -98,8 +94,7 @@ type ResumeAlarm = typeof ResumeAlarm.Type
 /**
  * One pending wake. An alarm fires at a time, and again every `everySeconds`
  * when it repeats; a monitor runs a command on an interval and fires when it
- * succeeds, its output matches `until`, or the deadline passes. A monitor row
- * from an earlier version may carry a `cleared` key; decoding ignores it.
+ * succeeds, its output matches `until`, or the deadline passes.
  */
 export const WakeEntry = Schema.TaggedUnion({
   alarm: {
@@ -148,7 +143,7 @@ export type WakePending = typeof WakePending.Type
 
 /** `details` on a fired wake message; the transcript collapses the row to the outcome and `note`. `fired` is an alarm, the rest a monitor. */
 export const WakeDetails = Schema.Struct({
-  outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+  outcome: NoticeOutcome,
   note: Schema.String,
   /** Epoch milliseconds; keys the queued line so a repeat's fires never merge. Rows written before repeats existed have none. */
   firedAt: Schema.optionalKey(Schema.Finite),
