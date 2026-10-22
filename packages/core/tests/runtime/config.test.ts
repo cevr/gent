@@ -147,6 +147,91 @@ describe("user configuration", () => {
     )
   })
 
+  describe("lane holds", () => {
+    it.scopedLive(
+      "a hold names a repository: its clones, worktrees and rifts are one project, and only the user file holds",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+          const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped())
+          const gitConfig = (origin: string) =>
+            [
+              "[core]",
+              "\tbare = false",
+              '[remote "upstream"]',
+              "\turl = https://example.com/other/repo.git",
+              '[remote "origin"]',
+              `\turl = ${origin}`,
+              "",
+            ].join("\n")
+          // The main checkout, a copy of it cloned over https, and a worktree of the main one.
+          const main = path.join(root, "gent")
+          const rift = path.join(root, "rifts", "held")
+          const worktree = path.join(root, "trees", "wt")
+          yield* fs.makeDirectory(path.join(main, ".git", "worktrees", "wt"), { recursive: true })
+          yield* fs.makeDirectory(path.join(main, "packages", "core"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(main, ".git", "config"),
+            gitConfig("git@github.com:cevr/gent.git"),
+          )
+          yield* fs.writeFileString(
+            path.join(main, ".git", "worktrees", "wt", "commondir"),
+            "../..\n",
+          )
+          yield* fs.makeDirectory(path.join(rift, ".git"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(rift, ".git", "config"),
+            gitConfig("https://github.com/cevr/gent/"),
+          )
+          yield* fs.makeDirectory(worktree, { recursive: true })
+          yield* fs.writeFileString(
+            path.join(worktree, ".git"),
+            `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`,
+          )
+          // A repository with no origin is its root; a directory in none is itself.
+          const local = path.join(home, "local")
+          yield* fs.makeDirectory(path.join(local, ".git"), { recursive: true })
+          yield* fs.writeFileString(path.join(local, ".git", "config"), "[core]\n")
+          const plain = path.join(root, "plain")
+          yield* fs.makeDirectory(path.join(plain, ".gent"), { recursive: true })
+          // The project file holds lanes for itself: it does not count.
+          yield* fs.writeFileString(
+            path.join(plain, ConfigService.CONFIG_RELATIVE),
+            encodeJson({ providers: { anthropic: { authHold: { [plain]: 3 } } } }),
+          )
+          yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+          yield* fs.writeFileString(
+            path.join(home, ConfigService.CONFIG_RELATIVE),
+            encodeJson({
+              providers: { anthropic: { authHold: { [main]: 2, [rift]: 1, "~/local": 1 } } },
+            }),
+          )
+          const live = ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: plain, home })),
+            Layer.provide(BunServices.layer),
+          )
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            const gent = "git:github.com/cevr/gent"
+            expect(yield* cfg.project(path.join(main, "packages", "core"))).toBe(gent)
+            expect(yield* cfg.project(rift)).toBe(gent)
+            expect(yield* cfg.project(worktree)).toBe(gent)
+            expect(yield* cfg.project(local)).toBe(local)
+            expect(yield* cfg.project(plain)).toBe(plain)
+            expect(yield* cfg.laneHolds("anthropic")).toEqual(
+              new Map([
+                [gent, 2],
+                [local, 1],
+              ]),
+            )
+            expect(yield* cfg.laneHolds("openai")).toEqual(new Map())
+          }).pipe(Effect.provide(live))
+        }).pipe(Effect.provide(BunServices.layer)),
+    )
+  })
+
   describe("concurrent writes", () => {
     it.scopedLive("first-run setup preserves a config created before its default write", () =>
       Effect.gen(function* () {

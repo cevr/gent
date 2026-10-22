@@ -131,11 +131,17 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * placement, runtime/provider.ts). A pool is opt-in: an order may hold a
  * billed key as a fallback that nobody wants spread onto. A pool that names
  * a credential its order does not (with no `authOrder`, the order is the
- * default alone) fails that sign-in, as conflicting orders do.
+ * default alone) fails that sign-in, as conflicting orders do. `authHold`
+ * holds lanes of the sign-in for projects, by repository path: a project
+ * runs that many at once whatever the pace, and other work leaves room for
+ * them (`ConfigService.laneHolds`). Only the user file's holds count.
  */
 const ProviderConfigEntry = Schema.Struct({
   authOrder: Schema.optional(CredentialOrder.check(Schema.isMinLength(1))),
   authSpread: Schema.optional(CredentialOrder.check(Schema.isMinLength(2))),
+  authHold: Schema.optional(
+    Schema.Record(Schema.String, Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+  ),
   name: Schema.optional(Schema.String),
   class: Schema.optional(Schema.String),
   api: Schema.optional(Schema.String),
@@ -565,6 +571,83 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
         .map(([agent]) => agent),
   })
 
+/** A remote url without its scheme, user and `.git`: `git@host:owner/repo.git` is `host/owner/repo`. */
+const remoteName = (url: string) =>
+  url
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .replace(/^[^@/]+@/, "")
+    .replace(/^([^/:]+):(?!\/)/, "$1/")
+    .replace(/(\.git)?\/*$/, "")
+
+/** The url of a git config's `[remote "origin"]`, as `git:<remoteName>`; none without one. */
+const originUrl = (config: string): Option.Option<string> => {
+  let inOrigin = false
+  for (const raw of config.split("\n")) {
+    const line = raw.trim()
+    if (line.startsWith("[")) inOrigin = /^\[remote\s+"origin"\]$/.test(line)
+    else if (inOrigin) {
+      const url = /^url\s*=\s*(.+)$/.exec(line)?.[1]
+      if (Predicate.isNotUndefined(url)) return Option.some(`git:${remoteName(url)}`)
+    }
+  }
+  return Option.none()
+}
+
+/**
+ * The `origin` of the repository at `root`, whose `.git` is `dotGit`: a
+ * directory, or a file (`linked`, a worktree) naming its git directory,
+ * whose `commondir` names the one that holds the config.
+ */
+const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
+  root: string,
+  dotGit: string,
+  linked: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const read = (file: string) => Effect.option(fs.readFileString(file))
+  let gitDir = dotGit
+  if (linked) {
+    const named = Option.flatMap(yield* read(dotGit), (text) =>
+      Option.fromUndefinedOr(/^gitdir:\s*(.+)$/m.exec(text)?.[1]),
+    )
+    if (Option.isNone(named)) return Option.none<string>()
+    gitDir = path.resolve(root, named.value.trim())
+  }
+  const common = Option.match(yield* read(path.join(gitDir, "commondir")), {
+    onNone: () => gitDir,
+    onSome: (text) => path.resolve(gitDir, text.trim()),
+  })
+  return Option.flatMap(yield* read(path.join(common, "config")), originUrl)
+})
+
+/**
+ * The project `dir` works in, as lane holds name it: the nearest directory
+ * at or above it that holds `.git`, named by the repository's `origin`, so
+ * a clone, a worktree and a rift of one repository are one project; by the
+ * root's real path when it has no origin; by `dir`'s own when no repository
+ * holds it.
+ */
+const projectOf = Effect.fn("Config.projectOf")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const start = yield* fs
+    .realPath(path.resolve(dir))
+    .pipe(Effect.orElseSucceed(() => path.resolve(dir)))
+  const ancestors = [start]
+  for (let parent = path.dirname(start); !ancestors.includes(parent); parent = path.dirname(parent))
+    ancestors.push(parent)
+  for (const root of ancestors) {
+    const dotGit = path.join(root, ".git")
+    const info = yield* Effect.option(fs.stat(dotGit))
+    if (Option.isNone(info)) continue
+    const origin = yield* repositoryOrigin(root, dotGit, info.value.type === "File")
+    return Option.getOrElse(origin, () => root)
+  }
+  return start
+})
+
 // ConfigService
 
 interface ConfigServiceService {
@@ -586,6 +669,16 @@ interface ConfigServiceService {
    * health, providers and the route a client reads use the lenient config.
    */
   readonly getFresh: (cwd: string) => Effect.Effect<FreshConfig>
+  /** The project `cwd` works in, as lane holds name it (`projectOf`). */
+  readonly project: (cwd: string) => Effect.Effect<string>
+  /**
+   * The lanes the user file holds for each project on `owner`'s sign-in
+   * (`providers.<owner>.authHold`), by project (`project` of each path; `~`
+   * is home). Only the user file counts: every run reads the same holds, and
+   * a project file holds no lane for itself. Two paths of one project hold
+   * the larger.
+   */
+  readonly laneHolds: (owner: string) => Effect.Effect<ReadonlyMap<string, number>>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  The write starts from the user config on disk now, so a hand edit
    *  made while gent runs survives. Fails with
@@ -1148,6 +1241,12 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         }
       })
 
+      const project = (cwd: string) =>
+        projectOf(cwd).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        )
+
       const service: ConfigServiceService = {
         get: Effect.fn("ConfigService.get")(function* (cwd) {
           const fresh = yield* readFresh(
@@ -1157,6 +1256,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         }),
 
         getFresh: readFresh,
+
+        project,
+
+        laneHolds: Effect.fn("ConfigService.laneHolds")(function* (owner) {
+          const { user } = yield* readUser
+          const holds = new Map<string, number>()
+          for (const [dir, lanes] of Object.entries(user.providers?.[owner]?.authHold ?? {})) {
+            const held = yield* project(path.resolve(home, dir.replace(/^~(?=\/|$)/, home)))
+            holds.set(held, Math.max(lanes, holds.get(held) ?? 0))
+          }
+          return holds
+        }),
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
@@ -1255,6 +1366,13 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
                 fingerprint: "test",
               }
             }),
+          // No filesystem: a cwd is its own project, and a hold path names it as written.
+          project: (cwd) => Effect.succeed(cwd),
+          laneHolds: (owner) =>
+            Effect.map(
+              SynchronizedRef.get(userConfigRef),
+              (user) => new Map(Object.entries(user.providers?.[owner]?.authHold ?? {})),
+            ),
           setDriverOverride: (agent, driver) =>
             SynchronizedRef.update(userConfigRef, (current) =>
               configUpdates.setDriverOverride(current, agent, driver),

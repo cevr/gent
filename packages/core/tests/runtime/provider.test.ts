@@ -5656,6 +5656,8 @@ describe("account lanes", () => {
             key,
             asker: Option.none(),
             model: Option.some(model),
+            project: Option.none(),
+            holds: new Map(),
           })
           .pipe(
             Effect.as("admitted" as const),
@@ -5681,6 +5683,8 @@ describe("account lanes", () => {
             scope: Arr.map(scope, receiptOf),
             asker: Option.none(),
             model: Option.some(model),
+            project: Option.none(),
+            holds: new Map(),
           })
           .pipe(
             Effect.as("admitted" as const),
@@ -6142,6 +6146,8 @@ describe("account lanes", () => {
               key: `start-${provider}`,
               asker: Option.none(),
               model: Option.some(ModelId.make(`${provider}/model`)),
+              project: Option.none(),
+              holds: new Map(),
             })
             .pipe(
               Effect.as("admitted" as const),
@@ -6238,6 +6244,7 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
+              project: Option.none(),
             })
             yield* fuel(1)
             yield* quota(0.11)
@@ -6296,6 +6303,7 @@ describe("account lanes", () => {
               provider: "plan",
               scope: [receiptOf(a)],
               model: planModel,
+              project: Option.none(),
             })
             yield* spend(a, costUsd, usage, sessionId)
             yield* TestClock.adjust(Duration.hours(hours))
@@ -6527,6 +6535,8 @@ describe("account lanes", () => {
         scope: Arr.map([a] as const, receiptOf),
         asker: Option.none(),
         model: Option.some(glm),
+        project: Option.none(),
+        holds: new Map(),
       }
       const probed = yield* Effect.flip(placement.probeLane(request))
       const admitted = yield* Effect.flip(placement.admitLane({ ...request, key: "glm-start" }))
@@ -6555,10 +6565,129 @@ describe("account lanes", () => {
         provider: "plan",
         scope: [receiptOf(a)],
         model: glm,
+        project: Option.none(),
       })
       yield* placement.freeReservation("plan-start")
       expect(yield* admit([a], "glm-second", glm)).toBe("Busy")
       expect(yield* admit([a], "plan-second")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /** Admit a run of the plan model in `project` under `key` on `[a]`, with `holds`: "admitted", else the refusal's reason. */
+  const startIn = (
+    placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,
+    holds: ReadonlyMap<string, number>,
+    project: string,
+    key: string,
+  ) =>
+    placement
+      .admitLane({
+        provider: "plan",
+        scope: [receiptOf(a)],
+        key,
+        asker: Option.none(),
+        model: Option.some(planModel),
+        project: Option.some(project),
+        holds,
+      })
+      .pipe(
+        Effect.as("admitted" as const),
+        Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+      )
+
+  it.effect("a held project gets its lane with the pool full, and no more", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      // The account's window carries 2 runs.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const start = (holds: ReadonlyMap<string, number>, project: string, key: string) =>
+        startIn(placement, holds, project, key)
+      // With nothing held, other work fills the pool: it is at free 0.
+      expect(yield* start(new Map(), "other", "other-1")).toBe("admitted")
+      expect(yield* start(new Map(), "other", "other-2")).toBe("admitted")
+      const gentHeld = new Map([["gent", 1]])
+      expect(yield* start(gentHeld, "gent", "gent-1")).toBe("admitted")
+      expect(yield* start(gentHeld, "gent", "gent-2")).toBe("Busy")
+      expect(yield* start(gentHeld, "other", "other-3")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("other work leaves room for a held lane that is not in use", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const gentHeld = new Map([["gent", 1]])
+      const start = (project: string, key: string) => startIn(placement, gentHeld, project, key)
+      expect(yield* start("other", "other-1")).toBe("admitted")
+      const refused = yield* Effect.flip(
+        placement.probeLane({
+          provider: "plan",
+          scope: [receiptOf(a)],
+          asker: Option.none(),
+          model: Option.some(planModel),
+          project: Option.some("other"),
+          holds: gentHeld,
+        }),
+      )
+      expect(refused.reason).toBe("Busy")
+      expect(refused.message).toContain("1 of 2 lanes are running, and 1 held for other projects")
+      // Gent takes its lane; once the other run ends, the free lane is anyone's.
+      expect(yield* start("gent", "gent-1")).toBe("admitted")
+      yield* placement.freeReservation("other-1")
+      expect(yield* start("other", "other-2")).toBe("admitted")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a held lane admits its project whatever the pace, but not on a held account", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, read, lanes } = fixture
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      // Twenty hours to the reset at the prior burn: the pace carries no run.
+      yield* fuelBothWindows(fixture, now, 20 * HOUR)
+      const paced = yield* lanes([a])
+      expect(paced.capacity).toBe(0)
+      expect(paced.accounts.map((account) => account.held)).toEqual([false])
+      const gentHeld = new Map([["gent", 1]])
+      expect(yield* startIn(placement, gentHeld, "other", "other-1")).toBe("Spent")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("Spent")
+      // A rejected window holds the account: no hold runs on it.
+      yield* placement.freeReservation("gent-1")
+      yield* read(a, [{ window: "5h", utilization: 1, resetAt: now + 20 * HOUR, rejected: true }])
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-3")).toBe("Spent")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("an open turn counts against its project's hold", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement } = fixture
+      yield* TestClock.adjust("1 hour")
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const gentHeld = new Map([["gent", 1]])
+      expect(yield* startIn(placement, new Map(), "other", "other-1")).toBe("admitted")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-1")).toBe("admitted")
+      yield* placement.openLane({
+        sessionId: SessionId.make("gent-run"),
+        key: "gent-1",
+        provider: "plan",
+        scope: [receiptOf(a)],
+        model: planModel,
+        project: Option.some("gent"),
+      })
+      // The open turn holds gent's lane, and the other run fills the pool.
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("Busy")
+      yield* placement.release(SessionId.make("gent-run"))
+      yield* placement.freeReservation("other-1")
+      expect(yield* startIn(placement, gentHeld, "other", "other-2")).toBe("admitted")
+      expect(yield* startIn(placement, gentHeld, "other", "other-3")).toBe("Busy")
+      expect(yield* startIn(placement, gentHeld, "gent", "gent-2")).toBe("admitted")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6745,6 +6874,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: glm,
+          project: Option.none(),
         })
         yield* before.spend(a, Option.some(1), million, glmRun, glm, limits)
         // 99 points at 200,000 fuel each, over 5 hours of runs at a fifth of 3.4 M.
@@ -6764,6 +6894,7 @@ describe("account lanes", () => {
           provider: "plan",
           scope: [receiptOf(a)],
           model: planModel,
+          project: Option.none(),
         })
         yield* before.spend(a, Option.some(10), usage, planRun)
         yield* TestClock.adjust("1 hour")

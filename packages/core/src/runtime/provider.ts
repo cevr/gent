@@ -3791,10 +3791,12 @@ interface CredentialPlacementService {
   /**
    * Admit a run to a lane of `provider` over `scope`: refused when the runs
    * holding a lane there (turns open on those accounts, and starts admitted
-   * whose turn has not opened, the asker's own turn left out) reach the
-   * scope's capacity. An admitted start holds its lane, under `key`, until
-   * its turn opens, `freeReservation` names it, or 2 minutes pass. With no
-   * capacity read, every run is admitted.
+   * whose turn has not opened, the asker's own turn left out) and the lanes
+   * other projects hold and do not use reach the scope's capacity. A run of
+   * a project under its hold is admitted whatever the pace, refused only
+   * when every account of the scope is held. An admitted start holds its
+   * lane, under `key`, until its turn opens, `freeReservation` names it, or
+   * 2 minutes pass. With no capacity read, every run is admitted.
    */
   readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
   /**
@@ -3877,6 +3879,15 @@ interface LaneRequest {
    * account's. None when its route names none: the account's alone count.
    */
   readonly model: Option.Option<ModelId>
+  /** The project the run works in (`ConfigService.project`); none outside one. */
+  readonly project: Option.Option<string>
+  /**
+   * The lanes the owner holds for each project on this sign-in
+   * (`ConfigService.laneHolds`). Up to its hold, a project's run is admitted
+   * whatever the pace; past it, the run takes a lane of the pool as any
+   * other does. Other work leaves room for the held lanes not in use.
+   */
+  readonly holds: ReadonlyMap<string, number>
 }
 
 /** A turn that opened on a provider's accounts. */
@@ -3885,6 +3896,8 @@ interface OpenLane {
   readonly key: string
   readonly provider: string
   readonly scope: LaneScope
+  /** The project it works in: it counts against that project's hold. */
+  readonly project: Option.Option<string>
   /** The model its turns run: it counts against that model's own windows too. */
   readonly model: ModelId
 }
@@ -4790,9 +4803,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    */
   const spendMeters = new Map<string, SpendMeter>()
   /**
-   * session → the provider, accounts and model its open turn spends from,
-   * when it opened, and the fuel it spent since (none once an unpriced
-   * request fell in it): its lane, and that lane's burn.
+   * session → the provider, accounts, model and project its open turn
+   * spends from, when it opened, and the fuel it spent since (none once an
+   * unpriced request fell in it): its lane, and that lane's burn.
    */
   const running = new Map<
     SessionId,
@@ -4800,6 +4813,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
+      readonly project: Option.Option<string>
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     }
@@ -4829,7 +4843,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * `until`, or while any of its `holders` holds it through its preparation.
    * `admission` tells one admission under a key from a later one, so a hold
    * releases only the reservation it held. `model` is the model its turns
-   * will run, none when its route named none.
+   * will run, none when its route named none; `project` the project it works in.
    */
   const reserved = new Map<
     string,
@@ -4837,6 +4851,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
+      readonly project: Option.Option<string>
       readonly until: number
       readonly holders: number
       readonly admission: number
@@ -4847,8 +4862,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     entry.holders > 0 || entry.until > now
   /**
    * The runs holding a lane on `provider` that share an account with
-   * `scope`, of `model` alone when one is named; `asker`'s own open turn is
-   * left out.
+   * `scope`, of `model` alone when one is named, and of `project` alone when
+   * one is named; `asker`'s own open turn is left out.
    */
   const laneLoad = (
     provider: string,
@@ -4856,17 +4871,23 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     model: Option.Option<ModelId>,
     asker: Option.Option<SessionId>,
     now: number,
+    project: Option.Option<string> = Option.none(),
   ) => {
     const shares = (held: {
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly model: Option.Option<ModelId>
+      readonly project: Option.Option<string>
     }) =>
       held.provider === provider &&
       held.scope.some((slot) => scope.includes(slot)) &&
       Option.match(model, {
         onNone: () => true,
         onSome: (named) => Option.contains(held.model, named),
+      }) &&
+      Option.match(project, {
+        onNone: () => true,
+        onSome: (named) => Option.contains(held.project, named),
       })
     let load = 0
     for (const [sessionId, held] of running) {
@@ -5773,8 +5794,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   }
   /**
    * Why a run of `request` gets no lane now, under the lock: the runs that
-   * hold one reach the capacity of the account's windows or of the model's
-   * own. None when it would be admitted.
+   * hold one and the lanes other projects hold and do not use reach the
+   * capacity of the account's windows or of the model's own. A run of a
+   * project under its hold is refused only when every account of the scope
+   * is held. None when it would be admitted.
    */
   const laneRefusal = (
     request: Omit<LaneRequest, "key">,
@@ -5782,6 +5805,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   ): Option.Option<LaneUnavailable> => {
     settle(request.provider, request.scope)
     const scope = request.scope.map((account) => account.slot)
+    // A hold counts the project's lanes on the accounts, whatever their model.
+    const heldLoad = (project: string) =>
+      laneLoad(request.provider, scope, Option.none(), request.asker, now, Option.some(project))
+    const underHold = Option.exists(
+      request.project,
+      (project) => heldLoad(project) < (request.holds.get(project) ?? 0),
+    )
+    let unused = 0
+    for (const [project, hold] of request.holds)
+      if (!Option.contains(request.project, project))
+        unused += Math.max(0, hold - heldLoad(project))
     // The account's windows bound every run on it; a model's own bound
     // only that model's runs, so each counts its own load.
     const full = Arr.findFirst(
@@ -5789,20 +5823,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       (model) => {
         const lanes = providerLanes(request.provider, scope, model, now)
         const load = laneLoad(request.provider, scope, model, request.asker, now)
+        const allHeld = lanes.accounts
+          .filter((account) => scope.includes(account.slot))
+          .every((account) => account.held)
         return Option.filter(
           Option.map(Option.fromUndefinedOr(lanes.capacity), (capacity) => ({
             lanes,
             load,
             capacity,
           })),
-          (check) => check.load >= check.capacity,
+          (check) => {
+            if (underHold) return check.capacity === 0 && allHeld
+            return check.load + unused >= check.capacity
+          },
         )
       },
     )
     return Option.map(full, ({ lanes, load, capacity }) => {
       let reason: LaneUnavailable["reason"] = "Busy"
       let retryAt = now + LANE_BUSY_RETRY_MS
-      let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running; one frees when a run ends`
+      let heldText = ""
+      if (unused > 0) heldText = `, and ${unused} held for other projects`
+      let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running${heldText}; one frees when a run ends`
       if (capacity === 0) {
         reason = "Spent"
         retryAt = Math.max(spentUntil(lanes, now), retryAt)
@@ -5942,6 +5984,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           provider: request.provider,
           scope: request.scope.map((account) => account.slot),
           model: request.model,
+          project: request.project,
           until: now + LANE_RESERVATION_MS,
           holders: 0,
           admission: (lastAdmission += 1),
@@ -5975,6 +6018,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           provider: lane.provider,
           scope: lane.scope.map((account) => account.slot),
           model: Option.some(lane.model),
+          project: lane.project,
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
         })

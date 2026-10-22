@@ -231,7 +231,7 @@
     one whose follow-up queue is full, and a snapshot start whose copy fails
     after it was admitted. Its lane frees when the round's turn ends, before
     its `turnAfter` hooks, so a round sent as an end is heard finds the lane
-    free (credentials.md, Account lanes). The transcript shows a round's message without its
+    free (lanes.md). The transcript shows a round's message without its
     source line on a muted `» task from session` row (another session wrote
     it, so it never takes the reader's rail). The starter's interrupt stops
     only its `starter` rounds (the cascade above); a `user` thread runs on,
