@@ -109,6 +109,7 @@ import {
   messagePartsText,
   messagePartsToolCallParts,
   type QueuedTurnItem,
+  RuntimeUserMessageType,
   Session,
   SteerCommand,
   toolResultMessageIdForTurn,
@@ -175,7 +176,6 @@ import {
   hostContextUpdateText,
   isHostContextUpdate,
   ModelContextLedger,
-  windowMarkerMessage,
 } from "../../src/runtime/model-context"
 import { omitUndefined } from "../../src/domain/guards"
 import { e2ePreset, testAgents } from "../helpers/test-preset"
@@ -4523,9 +4523,6 @@ describe("startup recovery", () => {
     15000,
   )
 
-  // Each seed is a branch's event log, in order, whose last user-role message
-  // is already answered or is history. Reopening the loop must not take it for
-  // an unanswered turn.
   const userMessage = (
     sessionId: SessionId,
     branchId: BranchId,
@@ -4543,73 +4540,25 @@ describe("startup recovery", () => {
     })
   const receipt = (sessionId: SessionId, branchId: BranchId, messageId: MessageId) =>
     TurnCompleted.make({ streamFailed: false, sessionId, branchId, messageId, durationMs: 1 })
-  const answeredSeeds: ReadonlyArray<{
-    readonly name: string
-    readonly seed: (sessionId: SessionId, branchId: BranchId) => ReadonlyArray<AgentEvent>
-  }> = [
-    {
-      // A continuation prompt is persisted as a user message inside a turn
-      // and never gets a TurnCompleted of its own. Seen in the gamut testbed:
-      // startup took it for an unanswered turn and sent a transcript that
-      // ended with the assistant reply, which the provider rejected. It lands
-      // after the last receipt, where only the runtime-line filter skips it.
-      name: "startup does not replay a continuation prompt as a user turn",
-      seed: (sessionId, branchId) => {
-        const message = userMessage(sessionId, branchId, "msg-continuation", "answer me", 0)
-        const continuation = Message.cases.regular.make({
-          ...userMessage(
-            sessionId,
-            branchId,
-            `${message.id}:continuation:2`,
-            "Answer the request now.",
-            1,
-          ),
-          metadata: { customType: "continuation", details: { step: 2 } },
-        })
-        return [
-          MessageReceived.make({ message }),
-          receipt(sessionId, branchId, message.id),
-          MessageReceived.make({ message: continuation }),
-        ]
-      },
-    },
-    {
-      // A handoff marker is a user-role message the loop persists mid-turn.
-      // Seen on the gamut at a 20k window: reopening a finished child took
-      // the marker for an unanswered turn and the provider rejected the
-      // transcript, which ended with the assistant reply. It lands after the
-      // last receipt, where only the runtime-line filter skips it.
-      name: "startup does not answer a context handoff marker as a user turn",
-      seed: (sessionId, branchId) => {
-        const message = userMessage(sessionId, branchId, "msg-marker", "answer me", 0)
-        const reply = Message.cases.regular.make({
-          id: MessageId.make("msg-marker-reply"),
-          sessionId,
-          branchId,
-          role: "assistant",
-          parts: [Prompt.textPart({ text: "answered" })],
-          createdAt: dateFromMillis(1_767_225_600_001),
-        })
-        const marker = windowMarkerMessage({
-          sessionId,
-          branchId,
-          keepFromMessageId: reply.id,
-          notice: "Context handoff.",
-          createdAt: dateFromMillis(1_767_225_600_002),
-        })
-        return [
-          MessageReceived.make({ message }),
-          MessageReceived.make({ message: reply }),
-          receipt(sessionId, branchId, message.id),
-          MessageReceived.make({ message: marker }),
-        ]
-      },
-    },
-    {
-      // A turn that died writes no `TurnCompleted`. Once a later turn has
-      // completed, the dead one is history: reopening must not answer it.
-      name: "startup does not replay a failed turn that newer completed turns followed",
-      seed: (sessionId, branchId) => {
+
+  it.live(
+    "startup does not replay a failed turn that newer completed turns followed",
+    () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make("session-loop-failed-history")
+        const branchId = BranchId.make("branch-loop-failed-history")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        // A turn that died writes no `TurnCompleted`. Once a later turn has
+        // completed, the dead one is history: reopening must not answer it.
         const failed = userMessage(sessionId, branchId, "msg-failed", "the turn that failed", 0)
         const answered = userMessage(
           sessionId,
@@ -4618,44 +4567,84 @@ describe("startup recovery", () => {
           "the turn that answered",
           10,
         )
-        return [
-          MessageReceived.make({ message: failed }),
-          MessageReceived.make({ message: answered }),
-          receipt(sessionId, branchId, answered.id),
-        ]
-      },
-    },
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: failed }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: answered }))
+            yield* eventStorage.appendEvent(receipt(sessionId, branchId, answered.id))
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            // The loop decides recovery as it opens, before `getState` answers.
+            expect(yield* Deferred.isDone(providerCalled)).toBe(false)
+          }).pipe(Effect.provide(actorTestRoot({ provider: providerLayer }))),
+        )
+      }),
+    15000,
+  )
+
+  // A turn writes its runtime user-role lines (a continuation prompt, a handoff
+  // marker, a step or model-call limit, a model-change notice) and joins a steer
+  // before its receipt. A restart between the two leaves the line as the last
+  // user-role message; recovery resumes the turn's own message, never the line.
+  // Seen in the gamut testbed: a resumed continuation sent a transcript that
+  // ended with the assistant reply, which the provider rejected.
+  const runtimeLines: ReadonlyArray<{
+    readonly name: string
+    readonly metadata: Message["metadata"]
+  }> = [
+    ...RuntimeUserMessageType.literals.map((customType) => ({
+      name: `a ${customType} line`,
+      metadata: { customType },
+    })),
+    { name: "a steer that joined the turn", metadata: { joinedTurn: true } },
   ]
 
-  for (const { name, seed } of answeredSeeds) {
+  for (const { name, metadata } of runtimeLines) {
     it.live(
-      name,
+      `startup resumes the interrupted turn's message, not ${name} it wrote`,
       () =>
         Effect.gen(function* () {
-          const sessionId = SessionId.make("session-loop-answered-seed")
-          const branchId = BranchId.make("branch-loop-answered-seed")
-          const providerCalled = yield* Deferred.make<void>()
+          const sessionId = SessionId.make("session-loop-interrupted-line")
+          const branchId = BranchId.make("branch-loop-interrupted-line")
           const providerLayer = LanguageModelLayers.testStream(() =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(providerCalled, void 0).pipe(Effect.ignore)
-              return Stream.fromIterable([
-                textDeltaPart("replayed"),
+            Effect.succeed(
+              Stream.fromIterable([
+                textDeltaPart("recovered"),
                 finishPart({ finishReason: "stop" }),
-              ] satisfies LanguageModelStreamPart[])
-            }),
+              ] satisfies LanguageModelStreamPart[]),
+            ),
           )
-          const events = seed(sessionId, branchId)
+          const earlier = userMessage(sessionId, branchId, "msg-earlier", "answered first", 0)
+          const interrupted = userMessage(sessionId, branchId, "msg-interrupted", "answer me", 10)
+          const line = Message.cases.regular.make({
+            ...userMessage(sessionId, branchId, "msg-interrupted:line", "runtime line", 20),
+            metadata,
+          })
           yield* Effect.scoped(
             Effect.gen(function* () {
               yield* ensureStorageParents({ sessionId, branchId })
               const eventStorage = yield* EventStorage
-              for (const event of events) yield* eventStorage.appendEvent(event)
+              yield* eventStorage.appendEvent(MessageReceived.make({ message: earlier }))
+              yield* eventStorage.appendEvent(receipt(sessionId, branchId, earlier.id))
+              yield* eventStorage.appendEvent(MessageReceived.make({ message: interrupted }))
+              yield* eventStorage.appendEvent(MessageReceived.make({ message: line }))
 
+              const resumed = yield* (yield* EventStore).subscribe({ sessionId, branchId }).pipe(
+                Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.forkScoped,
+              )
               const agentLoop = yield* makeAgentLoopService
-              const state = yield* agentLoop.getState({ sessionId, branchId })
-              expect(state._tag).toBe("Idle")
-              // The loop decides recovery as it opens, before `getState` answers.
-              expect(yield* Deferred.isDone(providerCalled)).toBe(false)
+              yield* agentLoop.getState({ sessionId, branchId })
+              const completed = yield* Fiber.join(resumed).pipe(Effect.timeout("4 seconds"))
+              expect(
+                completed.map(({ event }) => event._tag === "TurnCompleted" && event.messageId),
+              ).toEqual([interrupted.id])
             }).pipe(Effect.provide(actorTestRoot({ provider: providerLayer }))),
           )
         }),
