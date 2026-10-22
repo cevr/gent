@@ -1053,6 +1053,66 @@ const setupWithCatalog = (
     }
   })
 
+describe("cache hit share", () => {
+  // The share is of every step's input on the branch, as dsh counts it: a
+  // compaction rewrites the prefix but not what the branch has spent.
+  it.live("counts every step's input across a compaction", () =>
+    Effect.sync(() => {
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 20_000, cacheWriteTokens: 20_000 },
+      })
+      history.input(MINUTE, "t2")
+      history.compaction(MINUTE + 500)
+      history.step({
+        start: MINUTE + 10 * SECOND,
+        end: 2 * MINUTE,
+        turn: "t2",
+        usage: { inputTokens: 80_000, cacheReadTokens: 79_600, cacheWriteTokens: 400 },
+      })
+      const scan = makeCacheScan()
+      for (const envelope of history.envelopes) scan.fold(envelope)
+      // 79.6k read of 100k sent, not the 99.5% of the step after the
+      // compaction alone.
+      expect(Option.map(scan.hits(), (hits) => [hits.inputTokens, hits.cacheReadTokens])).toEqual(
+        Option.some([100_000, 79_600]),
+      )
+    }),
+  )
+
+  it.scopedLive("a branch that never reported cache activity shows no share", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.some(models))
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({ start: SECOND, end: 10 * SECOND, turn: "t1", usage: { inputTokens: 30_000 } })
+      extension.deliver(history.envelopes)
+      // A provider that reports no cache tokens would read as 0% served.
+      expect(extension.label()).toEqual([])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("the status row rounds the share down", () =>
+    Effect.gen(function* () {
+      const extension = yield* setupWithCatalog(Option.some(models))
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 1_000, cacheReadTokens: 996, cacheWriteTokens: 4 },
+      })
+      extension.deliver(history.envelopes)
+      expect(extension.label()).toEqual([{ text: "cache hit 99%", color: "textMuted" }])
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
 describe("cache client extension", () => {
   it.scopedLive("a routed step's row carries the price of the model the runtime priced", () =>
     Effect.gen(function* () {
@@ -1081,7 +1141,9 @@ describe("cache client extension", () => {
       expect(rowsOf(extension.rows()).map((row) => row.text)).toEqual([
         "cache expired after 14m idle · 30k tokens re-billed ~$0.07",
       ])
-      expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+      expect(extension.label()).toEqual([
+        { text: "cache hit 0% · waste $0.07", color: "textMuted" },
+      ])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -1107,7 +1169,9 @@ describe("cache client extension", () => {
       })
       extension.deliver(history.envelopes)
       // 1.1k missed tokens re-billed at 2.3 $/M: a quarter of a cent.
-      expect(extension.label()).toEqual([{ text: "cache waste $0.003", color: "textMuted" }])
+      expect(extension.label()).toEqual([
+        { text: "cache hit 0% · waste $0.003", color: "textMuted" },
+      ])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -1178,7 +1242,8 @@ describe("cache client extension", () => {
       const extension = yield* setupWithCatalog(Option.some(unnamed))
       extension.deliver(twoMissHistory().envelopes)
       expect(rowsOf(extension.rows())).toEqual([])
-      expect(extension.label()).toEqual([])
+      // The served share needs no lifetime: 30k read of 96k sent.
+      expect(extension.label()).toEqual([{ text: "cache hit 31%", color: "textMuted" }])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -1186,9 +1251,10 @@ describe("cache client extension", () => {
     Effect.gen(function* () {
       const extension = yield* setupWithCatalog(Option.none())
       extension.deliver(twoMissHistory().envelopes)
-      // No catalog yet: the source cannot say what its rows are.
+      // No catalog yet: the source cannot say what its rows are, or price
+      // the waste; the served share needs no catalog.
       expect(Option.isNone(extension.rows())).toBe(true)
-      expect(extension.label()).toEqual([])
+      expect(extension.label()).toEqual([{ text: "cache hit 31%", color: "textMuted" }])
       extension.setCatalog(Option.some(models))
       const [born] = rowsOf(extension.rows())
       expect(born?.text).toBe("cache expired after 14m idle · 30k tokens re-billed ~$0.07")
@@ -1208,7 +1274,9 @@ describe("cache client extension", () => {
       extension.setCatalog(Option.some(doubled))
       const [after] = rowsOf(extension.rows())
       expect(after).toBe(born)
-      expect(extension.label()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+      expect(extension.label()).toEqual([
+        { text: "cache hit 31% · waste $0.07", color: "textMuted" },
+      ])
     }).pipe(Effect.timeout("4 seconds")),
   )
 
@@ -1239,7 +1307,9 @@ describe("cache client extension", () => {
       expect(rows[0]?.createdAt).toBe(14 * MINUTE + 10 * SECOND)
       const [label] = contributions.statusLabels ?? []
       // 30k + 2k missed tokens, each re-billed at 2.3 $/M.
-      expect(label?.produce()).toEqual([{ text: "cache waste $0.07", color: "textMuted" }])
+      expect(label?.produce()).toEqual([
+        { text: "cache hit 31% · waste $0.07", color: "textMuted" },
+      ])
       const misses = scanCacheMisses(history.envelopes)
       expect(misses.length).toBe(2)
       const total = misses.reduce(
@@ -1259,7 +1329,7 @@ describe("cache client extension", () => {
       yield* waitForTerminal(setup.rendered, (text) => text.includes(`◌ ${IDLE_ROW}`), "miss row")
       yield* waitForFrame(
         setup.rendered,
-        (frame) => frame.includes("cache waste $0.07"),
+        (frame) => frame.includes("cache hit 31% · waste $0.07"),
         "status total",
       )
     }).pipe(Effect.timeout("8 seconds")),

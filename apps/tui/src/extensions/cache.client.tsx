@@ -49,8 +49,10 @@ import {
  * lifetime an expiry cannot be told from a changed prefix.
  *
  * Nothing is stored and the model never sees it. A notice row shows a miss
- * large enough to matter; the status row shows the branch's total, and, in
- * its right group, the time the cached prefix has left (`cache 42m`, then
+ * large enough to matter; the status row shows the share of the branch's
+ * input the cache served and the misses' total (`cache hit 97% · waste
+ * $0.07`), and, in its right group, the time the cached prefix has left
+ * (`cache 42m`, then
  * `cache cold`, with `next turn compacts` when the loop would hand the
  * window off first).
  */
@@ -314,7 +316,23 @@ export interface CacheScan {
   readonly refresh: () => Option.Option<CacheRefresh>
   /** The history the next turn would hand off; `None` before a projection. */
   readonly window: () => Option.Option<CacheWindow>
+  /**
+   * Every step's input on the branch and the part the cache served, across
+   * compactions. `None` on a branch that never reported cache activity: a
+   * provider that reports nothing would read as 0%.
+   */
+  readonly hits: () => Option.Option<CacheHits>
 }
+
+/** A branch's input and the part of it read from the prompt cache. */
+interface CacheHits {
+  readonly inputTokens: number
+  readonly cacheReadTokens: number
+}
+
+/** The served share in whole percent, rounded down: 99.6% is not every token. */
+const hitPercent = (hits: CacheHits): number =>
+  Math.floor((hits.cacheReadTokens * 100) / hits.inputTokens)
 
 /** One branch's incremental fold. Feed it that branch's envelopes in id order. */
 export const makeCacheScan = (): CacheScan => {
@@ -345,6 +363,9 @@ export const makeCacheScan = (): CacheScan => {
   }>()
   /** Some step on the branch reported a cache read or write. */
   let cacheReported = false
+  /** Every step's input and cache reads; a compaction does not reset them. */
+  let totalInputTokens = 0
+  let totalCacheReadTokens = 0
   /** A compaction since the last request went out: the prefix that request cached is gone. */
   let compactedSince = false
   /** The last projection's estimate and budget. */
@@ -407,6 +428,8 @@ export const makeCacheScan = (): CacheScan => {
     const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
     if (reported) cacheReported = true
+    totalInputTokens += promptTokens
+    totalCacheReadTokens += cacheReadTokens
     if (cacheWriteTokens > 0) writers.add(model)
     const miss = Option.flatMap(
       Option.all([previous, refreshed]),
@@ -590,7 +613,12 @@ export const makeCacheScan = (): CacheScan => {
       availableInputTokens: projected.availableInputTokens,
     }))
 
-  return { fold, refresh, window }
+  const hits = (): Option.Option<CacheHits> =>
+    Option.some({ inputTokens: totalInputTokens, cacheReadTokens: totalCacheReadTokens }).pipe(
+      Option.filter(() => cacheReported),
+    )
+
+  return { fold, refresh, window, hits }
 }
 
 // ── cache timer ─────────────────────────────────────────────────────────────
@@ -793,6 +821,8 @@ interface BranchMisses {
 interface BranchClock {
   readonly refresh: Option.Option<CacheRefresh>
   readonly window: Option.Option<CacheWindow>
+  /** What the left label reads: the scan's totals after the last fold. */
+  readonly hits: Option.Option<CacheHits>
 }
 
 export default defineClientExtension(CACHE_EXTENSION_ID, {
@@ -820,6 +850,7 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
         const [clock, setClock] = createSignal<BranchClock>({
           refresh: Option.none(),
           window: Option.none(),
+          hits: Option.none(),
         })
         const created = {
           scan: makeCacheScan(),
@@ -841,7 +872,11 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
             Option.map(target.scan.fold(envelope), (miss) =>
               target.setMisses((misses) => [...misses, miss]),
             )
-            target.setClock({ refresh: target.scan.refresh(), window: target.scan.window() })
+            target.setClock({
+              refresh: target.scan.refresh(),
+              window: target.scan.window(),
+              hits: target.scan.hits(),
+            })
           }),
         ),
       )
@@ -903,17 +938,30 @@ export default defineClientExtension(CACHE_EXTENSION_ID, {
               misses.flatMap((miss) => Option.toArray(miss.row)),
             ),
         }),
+        // The served share needs no catalog; the waste is priced once it is there.
         statusLabelContribution({
           priority: 60,
           produce: (): ReadonlyArray<{ readonly text: string; readonly color: "textMuted" }> => {
+            const key = branchKey(transport.currentSession())
             const total = Option.getOrElse(
-              Option.map(priced(branchKey(transport.currentSession())), (misses) =>
+              Option.map(priced(key), (misses) =>
                 misses.reduce((sum, miss) => sum + miss.costUsd, 0),
               ),
               () => 0,
             )
-            if (total <= 0) return []
-            return [{ text: `cache waste ${formatCost(total)}`, color: "textMuted" }]
+            const parts = [
+              ...Option.toArray(
+                Option.map(branch(key).clock().hits, (hits) => `hit ${hitPercent(hits)}%`),
+              ),
+              ...Option.toArray(
+                Option.some(total).pipe(
+                  Option.filter((usd) => usd > 0),
+                  Option.map((usd) => `waste ${formatCost(usd)}`),
+                ),
+              ),
+            ]
+            if (parts.length === 0) return []
+            return [{ text: `cache ${parts.join(" · ")}`, color: "textMuted" }]
           },
         }),
         // The time the cached prefix has left: a glance number, so it sits in
