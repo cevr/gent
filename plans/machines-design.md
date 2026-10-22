@@ -1,6 +1,7 @@
 # Machines (stage 3, P3): design for the counsel review
 
-Status: design only, 2026-10-17. Nothing here is built. It answers the plan's
+Status: built. Stage 3 merged 2026-10-21 (`637ab3cad`..`722f913fb`); this
+file keeps the 2026-10-17 design and its receipts. It answers the plan's
 first stage-3 item in [kernel-orchestration.md](kernel-orchestration.md) (P3, Status
 "Shared seam", Stages 3, R3): the core activation seam and the machine schema.
 Line numbers are against `main` at `6f8cdaf7e` (no file under
