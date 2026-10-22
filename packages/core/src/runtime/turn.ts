@@ -1768,6 +1768,7 @@ const openTurnLane = Effect.fn("TurnHelpers.openTurnLane")(function* (params: {
     key: params.messageId,
     provider: lane.value.provider,
     scope: lane.value.scope,
+    model: lane.value.modelId,
   })
 })
 

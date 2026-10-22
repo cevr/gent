@@ -6218,6 +6218,7 @@ describe("account lanes", () => {
               key: "run",
               provider: "plan",
               scope: [receiptOf(a)],
+              model: planModel,
             })
             yield* fuel(1)
             yield* quota(0.11)
@@ -6275,6 +6276,7 @@ describe("account lanes", () => {
               key: session,
               provider: "plan",
               scope: [receiptOf(a)],
+              model: planModel,
             })
             yield* spend(a, costUsd, usage, sessionId)
             yield* TestClock.adjust(Duration.hours(hours))
@@ -6409,12 +6411,16 @@ describe("account lanes", () => {
       .find((account) => account.slot === a)
       ?.windows.find((window) => window.window === "5h" && window.model === model)?.fuelPerPct
   /**
-   * Fuel both 5h windows of `a`: $1 of glm and $3 of the plan's model. The
-   * account's moves 4 points, glm's 2.
+   * Fuel both 5h windows of `a`, which reset `resetIn` from `now`: $1 of glm
+   * and $3 of the plan's model. The account's moves 4 points, glm's 2.
    */
-  const fuelBothWindows = (fixture: Effect.Success<ReturnType<typeof accounts>>, now: number) =>
+  const fuelBothWindows = (
+    fixture: Effect.Success<ReturnType<typeof accounts>>,
+    now: number,
+    resetIn = 5 * HOUR,
+  ) =>
     Effect.gen(function* () {
-      const resetAt = now + 5 * HOUR
+      const resetAt = now + resetIn
       yield* fixture.read(a, [
         { window: "5h", utilization: 0.1, resetAt },
         { window: "5h", model: glm, utilization: 0.1, resetAt },
@@ -6463,6 +6469,32 @@ describe("account lanes", () => {
       // 800,000 fuel over 4 points; glm's 200,000 over 2.
       expect(fiveHourRate(report)).toBeCloseTo(200_000, 3)
       expect(fiveHourRate(report, glm)).toBeCloseTo(100_000, 3)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a model's window counts that model's runs alone; the account's counts every run", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, admit } = fixture
+      yield* TestClock.adjust("1 hour")
+      // Two hours to the reset at the prior burn: the account's window carries 2 runs, glm's 1.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      expect(yield* admit([a], "plan-start")).toBe("admitted")
+      expect(yield* admit([a], "glm-start", glm)).toBe("admitted")
+      expect(yield* admit([a], "glm-second", glm)).toBe("Busy")
+      expect(yield* admit([a], "plan-second")).toBe("Busy")
+      // The glm start's turn opens and the plan start frees: the running glm
+      // turn still fills glm's window, and the account has room for one more.
+      yield* placement.openLane({
+        sessionId: SessionId.make("glm-run"),
+        key: "glm-start",
+        provider: "plan",
+        scope: [receiptOf(a)],
+        model: glm,
+      })
+      yield* placement.freeReservation("plan-start")
+      expect(yield* admit([a], "glm-second", glm)).toBe("Busy")
+      expect(yield* admit([a], "plan-second")).toBe("admitted")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

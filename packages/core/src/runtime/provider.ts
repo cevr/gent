@@ -3810,6 +3810,8 @@ interface OpenLane {
   readonly key: string
   readonly provider: string
   readonly scope: LaneScope
+  /** The model its turns run: it counts against that model's own windows too. */
+  readonly model: ModelId
 }
 
 /** The quota windows one response named, on the account its request went out on. */
@@ -4282,15 +4284,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   /** provider, slot, window (`windowKey`) → its closed segments, oldest first. */
   const segments = new Map<string, ReadonlyArray<FuelSegment>>()
   /**
-   * session → the provider and accounts its open turn spends from, when it
-   * opened, and the fuel it spent since (none once an unpriced request fell
-   * in it): its lane, and that lane's burn.
+   * session → the provider, accounts and model its open turn spends from,
+   * when it opened, and the fuel it spent since (none once an unpriced
+   * request fell in it): its lane, and that lane's burn.
    */
   const running = new Map<
     SessionId,
     {
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
+      readonly model: Option.Option<ModelId>
       readonly openedAt: number
       readonly fuel: Option.Option<number>
     }
@@ -4317,13 +4320,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * message key → a start admitted to a lane whose turn has not opened, until
    * `until`, or while any of its `holders` holds it through its preparation.
    * `admission` tells one admission under a key from a later one, so a hold
-   * releases only the reservation it held.
+   * releases only the reservation it held. `model` is the model its turns
+   * will run, none when its route named none.
    */
   const reserved = new Map<
     string,
     {
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
+      readonly model: Option.Option<ModelId>
       readonly until: number
       readonly holders: number
       readonly admission: number
@@ -4334,18 +4339,27 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     entry.holders > 0 || entry.until > now
   /**
    * The runs holding a lane on `provider` that share an account with
-   * `scope`; `asker`'s own open turn is left out.
+   * `scope`, of `model` alone when one is named; `asker`'s own open turn is
+   * left out.
    */
   const laneLoad = (
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
+    model: Option.Option<ModelId>,
     asker: Option.Option<SessionId>,
     now: number,
   ) => {
     const shares = (held: {
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
-    }) => held.provider === provider && held.scope.some((slot) => scope.includes(slot))
+      readonly model: Option.Option<ModelId>
+    }) =>
+      held.provider === provider &&
+      held.scope.some((slot) => scope.includes(slot)) &&
+      Option.match(model, {
+        onNone: () => true,
+        onSome: (named) => Option.contains(held.model, named),
+      })
     let load = 0
     for (const [sessionId, held] of running) {
       if (Option.contains(asker, sessionId)) continue
@@ -4979,7 +4993,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       provider,
       scope: [...scope],
       accounts,
-      load: laneLoad(provider, scope, Option.none(), now),
+      load: laneLoad(provider, scope, Option.none(), Option.none(), now),
       fuelPerHour,
       laneHours: burns.get(provider)?.seen ?? 0,
       ...omitUndefined({
@@ -5124,14 +5138,29 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         if (reserved.has(request.key)) return Option.none()
         settle(request.provider, request.scope)
         const scope = request.scope.map((account) => account.slot)
-        const lanes = providerLanes(request.provider, scope, request.model, now)
-        const load = laneLoad(request.provider, scope, request.asker, now)
-        const capacity = Option.fromUndefinedOr(lanes.capacity)
-        if (Option.isSome(capacity) && load >= capacity.value) {
+        // The account's windows bound every run on it; a model's own bound
+        // only that model's runs, so each counts its own load.
+        const full = Arr.findFirst(
+          [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
+          (model) => {
+            const lanes = providerLanes(request.provider, scope, model, now)
+            const load = laneLoad(request.provider, scope, model, request.asker, now)
+            return Option.filter(
+              Option.map(Option.fromUndefinedOr(lanes.capacity), (capacity) => ({
+                lanes,
+                load,
+                capacity,
+              })),
+              (check) => check.load >= check.capacity,
+            )
+          },
+        )
+        if (Option.isSome(full)) {
+          const { lanes, load, capacity } = full.value
           let reason: LaneUnavailable["reason"] = "Busy"
           let retryAt = now + LANE_BUSY_RETRY_MS
-          let message = `No lane on ${request.provider}: ${load} of ${capacity.value} lanes are running; one frees when a run ends`
-          if (capacity.value === 0) {
+          let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running; one frees when a run ends`
+          if (capacity === 0) {
             reason = "Spent"
             retryAt = Math.max(spentUntil(lanes, now), retryAt)
             message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
@@ -5141,7 +5170,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               message,
               provider: request.provider,
               reason,
-              capacity: capacity.value,
+              capacity,
               load,
               retryAt,
             }),
@@ -5150,6 +5179,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         reserved.set(request.key, {
           provider: request.provider,
           scope,
+          model: request.model,
           until: now + LANE_RESERVATION_MS,
           holders: 0,
           admission: (lastAdmission += 1),
@@ -5171,6 +5201,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         running.set(lane.sessionId, {
           provider: lane.provider,
           scope: lane.scope.map((account) => account.slot),
+          model: Option.some(lane.model),
           openedAt: Option.match(before, { onNone: () => now, onSome: (open) => open.openedAt }),
           fuel: Option.match(before, { onNone: () => Option.some(0), onSome: (open) => open.fuel }),
         })
