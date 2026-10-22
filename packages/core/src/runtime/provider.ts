@@ -3804,11 +3804,14 @@ interface CredentialPlacementService {
    * When the quota windows of `slot` that bound a run of `model` all reset:
    * the latest reset among those read rejected and not reset yet; none when
    * none is. A refusal's hold is not a full window: it says nothing of how
-   * a served answer would be billed.
+   * a served answer would be billed. The label is read for the sign-in it
+   * holds now (`signedInAt`): a new sign-in drops the old one's readings,
+   * and one the label replaced since has filled nothing.
    */
   readonly filledUntil: (params: {
     readonly provider: string
     readonly slot: CredentialSlot
+    readonly signedInAt: Option.Option<number>
     readonly model: ModelId
   }) => Effect.Effect<Option.Option<number>>
   /** The session's turn ended: its lane and a warming guard it holds are released. */
@@ -6055,17 +6058,20 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     filledUntil: Effect.fn("CredentialPlacement.filledUntil")(function* (params: {
       readonly provider: string
       readonly slot: CredentialSlot
+      readonly signedInAt: Option.Option<number>
       readonly model: ModelId
     }) {
       const now = yield* Clock.currentTimeMillis
       return yield* locked(() => {
+        const slot = reportedOn(params.provider, params.slot, params.signedInAt)
+        if (Option.isNone(slot)) return Option.none<number>()
         trim(now)
         const resets = readings
           .values()
           .filter(
             (reading) =>
               reading.provider === params.provider &&
-              reading.slot === params.slot &&
+              reading.slot === slot.value &&
               reading.rejected &&
               reading.resetAt > now &&
               meters(reading, Option.some(params.model)),

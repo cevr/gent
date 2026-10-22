@@ -4392,16 +4392,20 @@ describe("credential order", () => {
         return yield* eventsOf(world, first)
       })
 
-    /** `slot`'s five-hour window is full until `resetAt`, as a served response's headers say. */
+    /**
+     * `slot`'s five-hour window is full until `resetAt`, as a served
+     * response's headers say, for the sign-in `signedInAt` (default unstamped).
+     */
     const fill = (
       placement: CredentialPlacement["Service"],
       slot: CredentialSlot,
       resetAt: number,
+      signedInAt: Option.Option<number> = Option.none(),
     ) =>
       placement.noteQuota({
         provider: FALLBACK,
         slot,
-        signedInAt: Option.none(),
+        signedInAt,
         readings: [{ window: "5h", utilization: 1, resetAt, rejected: true }],
       })
     /** A tool step whose response fills its account's window, then `then` on each later request. */
@@ -4534,6 +4538,97 @@ describe("credential order", () => {
           // Every other filled: the refusal ends the turn, or the next goes on extra usage.
           expect(yield* run("refused-all-filled", [b, c], false)).toEqual(["sk-a"])
           expect(yield* run("refused-takes-filled", [b, c], true)).toEqual(["sk-a", "sk-b"])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a step whose account filled its window moves to an account signed in again since its old sign-in filled one",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const resetAt = (yield* Clock.currentTimeMillis) + HOUR_MS
+          // b's old sign-in (stamp 0) filled its window; the store holds a new one (stamp 1).
+          yield* fill(world.placement, b, resetAt, Option.some(0))
+          // An order, not a pool: nothing binds b's new sign-in before the move reads it.
+          const root = credentialRoot({
+            name: "filled-replaced-sign-in",
+            order: [a, b],
+            stored: keysOf([a, b]),
+            replies: {
+              "sk-a": fillingToolStep(fill(world.placement, a, resetAt), answer("from a")),
+              "sk-b": answer("from b"),
+            },
+            storage: world.storage,
+            placement: world.placement,
+          })
+          yield* runOn(root, "first")
+          expect(root.sent).toEqual(["sk-a", "sk-b"])
+          expect(failuresOf(yield* eventsOf(world, root))).toEqual([])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a turn that starts on its order's full first account and moves back to the account its last turn ran on reads that warm cache; a move to another hands a large history off",
+      () =>
+        Effect.gen(function* () {
+          /**
+           * Two turns on the order `[a, b]` with a one-hour cache. a's window
+           * is full before the first turn (`fullFirst`), which then runs on
+           * b, or after it, which ran on a. Between them the history grows
+           * large; the second turn starts at a, full, and moves to b.
+           */
+          const run = (name: string, fullFirst: boolean) =>
+            Effect.gen(function* () {
+              const world = yield* spreadWorld
+              const resetAt = (yield* Clock.currentTimeMillis) + HOUR_MS
+              // Two sign-ins: a cache is a sign-in's, whatever label holds it.
+              const root = credentialRoot({
+                name,
+                order: [a, b],
+                stored: [
+                  [a, AuthApi.make({ type: "api", key: "sk-a", signedInAt: 1 })],
+                  [b, AuthApi.make({ type: "api", key: "sk-b", signedInAt: 2 })],
+                ],
+                replies: answers([a, b]),
+                storage: world.storage,
+                placement: world.placement,
+                cacheTtlMs: HOUR_MS,
+              })
+              if (fullFirst) yield* fill(world.placement, a, resetAt)
+              yield* runOn(root, "first")
+              if (!fullFirst) yield* fill(world.placement, a, resetAt)
+              // Dated before the turns' prompts, as a seeded history is: all
+              // of it is history before the second prompt.
+              yield* Effect.gen(function* () {
+                const storage = yield* MessageStorage
+                yield* Effect.forEach(
+                  [0, 1, 2],
+                  (index) =>
+                    storage.createMessage(
+                      Message.cases.regular.make({
+                        id: MessageId.make(`${name}-grown-${index + 1}`),
+                        sessionId: root.sessionId,
+                        branchId: root.branchId,
+                        role: "assistant",
+                        parts: [Prompt.textPart({ text: "x".repeat(110_000) })],
+                        createdAt: dateFromMillis(1_000 + index),
+                      }),
+                    ),
+                  { discard: true },
+                )
+              }).pipe(Effect.provide(world.storage), Effect.orDie)
+              yield* runOn(root, "second")
+              const events = yield* eventsOf(world, root)
+              return {
+                sent: root.sent,
+                compacted: credentialReport(events).projected.map((event) => event.compacted),
+              }
+            })
+          const returned = yield* run("filled-warm-return", true)
+          expect(returned).toEqual({ sent: ["sk-b", "sk-b"], compacted: [false, false] })
+          const moved = yield* run("filled-cold-move", false)
+          expect(moved.sent.at(-1)).toBe("sk-b")
+          expect(moved.compacted).toEqual([false, true])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 
@@ -6182,6 +6277,57 @@ describe("credential order", () => {
             ?.windows.find((found) => found.window === "5h")
           expect(window?.model).toBe(fallbackModel)
           expect(window?.utilization).toBeCloseTo(0.3, 12)
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a handoff summary that fills its account's window moves the step after it to an account that has not",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const request = (10 * apiPricing.input + 5 * apiPricing.output) / 1_000_000
+          // An order, not a pool: the step after the summary is placed nowhere.
+          const root = credentialRoot({
+            name: "summary-fills",
+            order: [a, b],
+            stored: keysOf([a, b]),
+            replies: answers([a, b]),
+            storage: world.storage,
+            placement: world.placement,
+            cacheTtlMs: HOUR_MS,
+            compactor: pricedCompactor,
+            // The first turn's step and the summary fill a's window between them.
+            spendLimits: [{ window: "5h", usd: 1.5 * request }],
+          })
+          yield* runOn(root, "first")
+          yield* Effect.gen(function* () {
+            const storage = yield* MessageStorage
+            // Dated before the turns' prompts: history the second turn hands off.
+            yield* Effect.forEach(
+              Array.from({ length: 12 }, (_, index) => index),
+              (index) =>
+                storage.createMessage(
+                  Message.cases.regular.make({
+                    id: MessageId.make(`summary-fills-grown-${index + 1}`),
+                    sessionId: root.sessionId,
+                    branchId: root.branchId,
+                    role: "assistant",
+                    parts: [Prompt.textPart({ text: "x".repeat(50_000) })],
+                    createdAt: dateFromMillis(1_000 + index),
+                  }),
+                ),
+              { discard: true },
+            )
+          }).pipe(Effect.provide(world.storage), Effect.orDie)
+          yield* runOn(root, "second")
+          // A step and the summary on a, then the step on b.
+          expect(root.sent).toEqual(["sk-a", "sk-a", "sk-b"])
+          expect(credentialReport(yield* eventsOf(world, root)).errors).toEqual([
+            {
+              error: `Credential "a" of ${FALLBACK} filled its quota window; continuing with "b"`,
+              notice: true,
+            },
+          ])
         }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 

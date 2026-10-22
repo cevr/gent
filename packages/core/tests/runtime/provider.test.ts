@@ -5867,7 +5867,7 @@ describe("account lanes", () => {
         const now = yield* Clock.currentTimeMillis
         const otherModel = ModelId.make("plan/other")
         const filled = (slot: CredentialSlot, model = planModel) =>
-          placement.filledUntil({ provider: "plan", slot, model })
+          placement.filledUntil({ provider: "plan", slot, signedInAt: Option.none(), model })
         // Two full windows: filled until the later reset.
         yield* read(a, [
           { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
@@ -5888,6 +5888,26 @@ describe("account lanes", () => {
         expect(yield* filled(a)).toEqual(Option.some(now + 2 * HOUR))
         yield* TestClock.adjust("1 hour")
         expect(yield* filled(a)).toEqual(Option.none())
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "an account's full window belongs to the sign-in that filled it: an older sign-in reads none, and a new one drops it",
+    () =>
+      Effect.gen(function* () {
+        const { read, placement } = yield* accounts()
+        const now = yield* Clock.currentTimeMillis
+        const filled = (signedInAt: Option.Option<number>) =>
+          placement.filledUntil({ provider: "plan", slot: a, signedInAt, model: planModel })
+        yield* read({ slot: a, signedInAt: 1 }, [
+          { window: "5h", utilization: 1, resetAt: now + HOUR, rejected: true },
+        ])
+        expect(yield* filled(Option.some(1))).toEqual(Option.some(now + HOUR))
+        // A sign-in the label replaced since has filled nothing.
+        expect(yield* filled(Option.some(0))).toEqual(Option.none())
+        // A new sign-in starts with no reading, and the old one's is gone.
+        expect(yield* filled(Option.some(2))).toEqual(Option.none())
+        expect(yield* filled(Option.none())).toEqual(Option.none())
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

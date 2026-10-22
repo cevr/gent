@@ -3327,8 +3327,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   rent: ContextRent
   /** When the branch's last model request went out, in epoch milliseconds. */
   lastCallAtMillis: Option.Option<number>
-  /** The model the branch's last model request ran on. */
-  lastCallModel: Option.Option<ModelIdType>
+  /** The model and the account the branch's last model request ran on. */
+  lastCall: Option.Option<RequestCall>
   /** The branch's step receipts, by the id of the assistant message each step wrote. */
   stepEfforts: ReadonlyMap<string, StepEffort>
   /**
@@ -3494,7 +3494,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     // account does not gate it: the handoff waits for the lifetime to lapse,
     // and then every account's cache is cold, so a move that the order makes
     // (a first credential that keeps refusing) hands off as any cold turn does.
-    const sameModel = Option.contains(params.lastCallModel, params.resolved.modelId)
+    const sameModel = Option.exists(
+      params.lastCall,
+      (call) => call.model === params.resolved.modelId,
+    )
     const promptCache = Option.map(
       Option.all([
         Option.filter(params.lastCallAtMillis, () => sameModel),
@@ -3591,6 +3594,22 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   let opening = yield* modelWindow(yield* listedModel(first))
   const eventStore = yield* EventStore
   const configService = yield* ConfigService
+  /** When `slot`'s full windows of the step's model reset, for the sign-in it holds now. */
+  const filledUntil = Effect.fn("TurnHelpers.filledUntil")(function* (
+    provider: string,
+    slot: CredentialSlot,
+  ) {
+    const receipt = yield* modelRegistry.stamp(
+      { provider: ProviderId.make(provider), slot },
+      extensionRegistry,
+    )
+    return yield* placement.filledUntil({
+      provider,
+      slot,
+      signedInAt: Option.fromUndefinedOr(receipt.signedInAt),
+      model: resolved.modelId,
+    })
+  })
   /**
    * Leave `from`, the account the turn is on, for the next one of its order
    * that has not filled a quota window of the step's model: a spread run for
@@ -3652,10 +3671,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       })
       const open = candidates.filter((candidate) => !leaving.has(candidate))
       const unfilled = yield* Effect.findFirst(open, (candidate) =>
-        Effect.map(
-          placement.filledUntil({ provider, slot: candidate, model: resolved.modelId }),
-          Option.isNone,
-        ),
+        Effect.map(filledUntil(provider, candidate), Option.isNone),
       )
       const next = Option.orElse(unfilled, () =>
         Option.fromUndefinedOr(open[0]).pipe(Option.filter(() => leave.mayTakeFilled)),
@@ -3702,16 +3718,11 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
   // An account that filled a quota window of the step's model serves it
   // only on the plan's extra usage. The step leaves it for one that has
-  // not; with none, the turn goes on there only when the sign-in allows
-  // extra usage (`extraUsage`), and else stops until the first of the
-  // order's full windows resets. A moved step's cache is cold on the new
-  // account, so its window may hand off first (`accountMoved`).
+  // not (true when it moved); with none, the turn goes on there only when
+  // the sign-in allows extra usage (`extraUsage`), and else stops until the
+  // first of the order's full windows resets.
   const meetFullWindow = Effect.fn("TurnHelpers.meetFullWindow")(function* (on: CredentialReceipt) {
-    const filled = yield* placement.filledUntil({
-      provider: on.provider,
-      slot: on.slot,
-      model: resolved.modelId,
-    })
+    const filled = yield* filledUntil(on.provider, on.slot)
     if (Option.isNone(filled)) return false
     const moved = yield* leaveCredential({
       from: on,
@@ -3739,7 +3750,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     ).pipe(Effect.orElseSucceed(Option.none))
     const resets = yield* Effect.forEach(
       Option.match(order, { onNone: () => [on.slot], onSome: (found) => found.slots }),
-      (slot) => placement.filledUntil({ provider: on.provider, slot, model: resolved.modelId }),
+      (slot) => filledUntil(on.provider, slot),
     )
     return yield* new QuotaWindowsFull({
       message: `Every credential of ${on.provider} filled its quota window; set providers.${on.provider}.extraUsage to go on past it`,
@@ -3747,11 +3758,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       retryAt: Math.min(filled.value, ...resets.flatMap(Option.toArray)),
     })
   })
-  const accountMoved = yield* Option.match(first, {
-    onNone: () => Effect.succeed(false),
-    onSome: meetFullWindow,
-  })
-  if (accountMoved) opening = yield* modelWindow(yield* listedModel(yield* firstCredential))
+  // A moved step's cache is cold on its new account, so its window may hand
+  // off first (`accountMoved`), unless the branch's last request wrote its
+  // cache there: a turn that starts at its order's full first slot and moves
+  // back to the account the last turn ran on.
+  let accountMoved = false
+  if (yield* Option.match(first, { onNone: () => Effect.succeed(false), onSome: meetFullWindow })) {
+    const moved = yield* firstCredential
+    opening = yield* modelWindow(yield* listedModel(moved))
+    const lastAccount = Option.flatMap(params.lastCall, (call) => call.credential)
+    accountMoved = !Option.exists(Option.all([lastAccount, moved]), ([last, next]) =>
+      sameCredential(last, next),
+    )
+  }
   const { budget, promptCache, turnHints, modelRequest, cacheLifetimeMs } = opening
   // The slot the last request went out with, set as it is chosen: the
   // receipt, the price and a move name that slot, not the one the order
@@ -4009,13 +4028,20 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       ).pipe(Effect.map((costUsd) => Option.some({ costUsd }))),
   })
   const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
-  if (Option.isSome(summary))
+  if (Option.isSome(summary)) {
     yield* noteSummarySpend(
       params.sessionId,
       yield* credential,
       { modelId: summary.value.modelId, costUsd: compactionCostUsd },
       Option.fromUndefinedOr(summary.value.usage),
     )
+    // The summary's spend may fill its account's window: the step's request
+    // meets it as the turn's first does. A summary warms no cache, so the
+    // step is cold wherever it goes.
+    const next = yield* firstCredential
+    if (Option.isSome(next) && (yield* meetFullWindow(next.value)))
+      stepWindow = yield* modelWindow(yield* listedModel(yield* firstCredential))
+  }
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
   const projection = yield* projectCurrentWindow({
@@ -5424,7 +5450,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       measure: Option.Option<StepMeasure>
       rent: ContextRent
       lastCallAtMillis: Option.Option<number>
-      lastCallModel: Option.Option<ModelIdType>
+      lastCall: Option.Option<RequestCall>
       stepEfforts: ReadonlyMap<string, StepEffort>
       overflowed: boolean
       /** The turn profile's revision, named on `StreamStarted`. */
@@ -5479,7 +5505,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         measure: params.measure,
         rent: params.rent,
         lastCallAtMillis: params.lastCallAtMillis,
-        lastCallModel: params.lastCallModel,
+        lastCall: params.lastCall,
         stepEfforts: params.stepEfforts,
         overflowed: params.overflowed,
         ledger: scope.ledger,
@@ -6704,7 +6730,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             measure: knownSteps.measure,
             rent: knownSteps.rent,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
-            lastCallModel: knownSteps.lastCallModel,
+            lastCall: knownSteps.lastCall,
             stepEfforts: knownSteps.stepEfforts,
             overflowed: params.overflowed,
             profileRevision: Option.fromUndefinedOr(params.turnProfile.turnProfileRevision),
