@@ -283,10 +283,12 @@ commit.
     warm. Each request names its session as the cache key and its turn (the
     turn message id) as `ProviderHints.turnKey`. Over ChatGPT sign-in OpenAI
     sends the key as the `session-id` header and both in `client_metadata`,
-    and sends the route a turn's first answer names (`x-codex-turn-state`)
-    back on that turn's later requests, on the same account only, as Codex
+    and sends the route a turn's first successful answer names
+    (`x-codex-turn-state`) back on that turn's later requests, as Codex
     does: without it a step can land on a backend that holds none of the
-    turn's prefix. The TUI's cache notice reads the same catalog lifetime and the same
+    turn's prefix. The route is held in memory by account, session and
+    turn, so a sign-in that replaces another in its slot starts without one,
+    and a restarted turn starts without one. The TUI's cache notice reads the same catalog lifetime and the same
     request-start clock, an interrupted request included. Anthropic gives
     every marker of a request the one lifetime, a marker the SDK rendered from
     a message option too, and prices each model's `cacheWrite` at that

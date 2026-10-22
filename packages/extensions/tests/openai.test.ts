@@ -58,6 +58,7 @@ import {
   type FakeClientState,
   fakeFetchLayer,
   type FakeFetchState,
+  type FakeResponder,
   makeFakeClient,
   makeFakeFetchState,
   oneGenerate,
@@ -1595,74 +1596,136 @@ describe("OpenAI cache routing", () => {
   )
 
   // ChatGPT names a turn's route on the turn's first answer; Codex sends it
-  // back on that turn's later requests only (codex-rs `core/src/client.rs`,
+  // back on that turn's later requests only, and keeps it only from an
+  // answer that succeeded (codex-rs `core/src/client.rs`,
   // `ModelClientSession.turn_state`).
-  it.live("OAuth requests send a turn's route back within the turn, on its account only", () =>
-    Effect.gen(function* () {
-      const { driver } = yield* makeDriver()
-      const fetchState = makeFakeFetchState()
-      const other = { ...makeOAuthInfo(), slot: CredentialSlot.make("other") }
-      const send = (
-        hints: { readonly cacheKey: string; readonly turnKey?: string },
-        route: string,
-        authInfo: ProviderAuthInfo = makeOAuthInfo(),
-      ) =>
-        Effect.gen(function* () {
-          const model = yield* driver.resolveModel("gpt-5.4", authInfo, hints)
-          yield* oneGenerate(model, fetchState, () => ({
+  it.live(
+    "OAuth requests send a turn's route back within the turn, for the account that answered",
+    () =>
+      Effect.gen(function* () {
+        const { driver } = yield* makeDriver()
+        const fetchState = makeFakeFetchState()
+        const signIn = (access: string, signedInAt: number): ProviderAuthInfo =>
+          ProviderAuthInfo.cases.Oauth.make({
+            update: updateOf(
+              oauthInfo({ access, refresh: `${access}-refresh`, expires: FAR_FUTURE_MS }),
+            ),
+            signedInAt,
+          })
+        const first = signIn("fake-first", 1)
+        // Another sign-in renamed into the same slot: another account.
+        const replaced = signIn("fake-replaced", 2)
+        const answer =
+          (route: string, status: number = 200) =>
+          () => ({
             ...openaiResponsesHappyResponse(),
+            status,
             headers: { "content-type": "application/json", "x-codex-turn-state": route },
-          })).pipe(Effect.orDie)
-        })
-      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-1")
-      // The turn's first answer named its route; a later one does not move it.
-      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-later")
-      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-later")
-      yield* send({ cacheKey: "s2", turnKey: "t1" }, "route-s2")
-      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-other", other)
-      yield* send({ cacheKey: "s1", turnKey: "t2" }, "route-2")
-      yield* send({ cacheKey: "s1", turnKey: "t2" }, "route-later")
-      yield* send({ cacheKey: "s1" }, "route-none")
-      expect(
-        fetchState.captured.map((request) =>
-          Option.fromUndefinedOr(request.headers["x-codex-turn-state"]),
-        ),
-      ).toEqual([
-        Option.none(),
-        Option.some("route-1"),
-        Option.some("route-1"),
-        Option.none(),
-        Option.none(),
-        Option.none(),
-        Option.some("route-2"),
-        Option.none(),
-      ])
-      const codec = Schema.fromJsonString(
-        Schema.Struct({
-          client_metadata: Schema.optional(
-            Schema.Struct({ session_id: Schema.String, turn_id: Schema.String }),
+          })
+        const send = (
+          hints: { readonly cacheKey: string; readonly turnKey?: string },
+          responder: FakeResponder,
+          authInfo: ProviderAuthInfo = first,
+        ) =>
+          Effect.gen(function* () {
+            const model = yield* driver.resolveModel("gpt-5.4", authInfo, hints)
+            yield* oneGenerate(model, fetchState, responder).pipe(Effect.exit)
+          })
+        const stream = (hints: { readonly cacheKey: string; readonly turnKey: string }) =>
+          Effect.gen(function* () {
+            const model = yield* driver.resolveModel("gpt-5.4", first, hints)
+            yield* LanguageModel.streamText({ prompt: "hi" }).pipe(
+              Stream.runDrain,
+              Effect.provide(
+                Layer.provideMerge(
+                  model,
+                  fakeFetchLayer(fetchState, () => ({
+                    status: 200,
+                    headers: {
+                      "content-type": "text/event-stream",
+                      "x-codex-turn-state": "route-4",
+                    },
+                    body: `data: ${encodeExternalJson({
+                      type: "response.completed",
+                      sequence_number: 0,
+                      response: openaiResponsesBody,
+                    })}\n\n`,
+                  })),
+                ),
+              ),
+              Effect.scoped,
+              Effect.orDie,
+            )
+          })
+        const expected: Array<Option.Option<string>> = []
+        const step = <E>(sent: Effect.Effect<void, E>, route: Option.Option<string>) =>
+          sent.pipe(Effect.tap(() => Effect.sync(() => expected.push(route))))
+        yield* step(send({ cacheKey: "s1", turnKey: "t1" }, answer("route-1")), Option.none())
+        // The turn's first answer named its route; a later one does not move it.
+        yield* step(
+          send({ cacheKey: "s1", turnKey: "t1" }, answer("route-later")),
+          Option.some("route-1"),
+        )
+        yield* step(send({ cacheKey: "s2", turnKey: "t1" }, answer("route-s2")), Option.none())
+        yield* step(
+          send({ cacheKey: "s1", turnKey: "t1" }, answer("route-replaced"), replaced),
+          Option.none(),
+        )
+        yield* step(
+          send({ cacheKey: "s1", turnKey: "t1" }, answer("route-later"), replaced),
+          Option.some("route-replaced"),
+        )
+        yield* step(send({ cacheKey: "s1", turnKey: "t2" }, answer("route-2")), Option.none())
+        yield* step(
+          send({ cacheKey: "s1", turnKey: "t2" }, answer("route-later")),
+          Option.some("route-2"),
+        )
+        // Another branch's turn of the same session ran between; the first keeps its route.
+        yield* step(
+          send({ cacheKey: "s1", turnKey: "t1" }, answer("route-later")),
+          Option.some("route-1"),
+        )
+        // A refused answer names no route that lasts.
+        yield* step(
+          send({ cacheKey: "s3", turnKey: "t1" }, answer("route-refused", 400)),
+          Option.none(),
+        )
+        yield* step(send({ cacheKey: "s3", turnKey: "t1" }, answer("route-3")), Option.none())
+        yield* step(
+          send({ cacheKey: "s3", turnKey: "t1" }, answer("route-later")),
+          Option.some("route-3"),
+        )
+        // A streamed answer names the route as a whole one does.
+        yield* step(stream({ cacheKey: "s4", turnKey: "t1" }), Option.none())
+        yield* step(
+          send({ cacheKey: "s4", turnKey: "t1" }, answer("route-later")),
+          Option.some("route-4"),
+        )
+        yield* step(send({ cacheKey: "s1" }, answer("route-none")), Option.none())
+        expect(
+          fetchState.captured.map((request) =>
+            Option.fromUndefinedOr(request.headers["x-codex-turn-state"]),
           ),
-        }),
-      )
-      const metadata = yield* Effect.forEach(fetchState.captured, (request) =>
-        Schema.decodeEffect(codec)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
-          Effect.map((body) => Option.fromUndefinedOr(body.client_metadata)),
-        ),
-      )
-      expect(metadata).toEqual([
-        Option.some({ session_id: "s1", turn_id: "t1" }),
-        Option.some({ session_id: "s1", turn_id: "t1" }),
-        Option.some({ session_id: "s1", turn_id: "t1" }),
-        Option.some({ session_id: "s2", turn_id: "t1" }),
-        Option.some({ session_id: "s1", turn_id: "t1" }),
-        Option.some({ session_id: "s1", turn_id: "t2" }),
-        Option.some({ session_id: "s1", turn_id: "t2" }),
-        Option.none(),
-      ])
-    }),
+        ).toEqual(expected)
+        const codec = Schema.fromJsonString(
+          Schema.Struct({
+            client_metadata: Schema.optional(
+              Schema.Struct({ session_id: Schema.String, turn_id: Schema.String }),
+            ),
+          }),
+        )
+        const metadata = yield* Effect.forEach(fetchState.captured, (request) =>
+          Schema.decodeEffect(codec)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
+            Effect.map((body) => Option.fromUndefinedOr(body.client_metadata)),
+          ),
+        )
+        expect(metadata.at(0)).toEqual(Option.some({ session_id: "s1", turn_id: "t1" }))
+        expect(metadata.at(5)).toEqual(Option.some({ session_id: "s1", turn_id: "t2" }))
+        expect(metadata.at(-1)).toEqual(Option.none())
+      }),
   )
 
-  it.live("an account keeps the routes of its 256 latest sessions", () =>
+  it.live("a driver keeps its 256 latest turn routes", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()
       const fetchState = makeFakeFetchState()
