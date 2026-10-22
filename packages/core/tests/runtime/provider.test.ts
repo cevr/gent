@@ -7105,7 +7105,7 @@ describe("account lanes", () => {
   )
 
   it.effect(
-    "a run of a metered model burns at that model's price: the prior at its price, then its own lanes' measured burn",
+    "a run of a metered model burns at that model's price: the prior at its price, then its own lanes' measured burn, on its window and in its share of the account's",
     () =>
       Effect.gen(function* () {
         const { file, store } = yield* ledgerRef
@@ -7152,6 +7152,19 @@ describe("account lanes", () => {
         expect((yield* Ref.get(file)).modelBurn?.length).toBe(1)
         const after = yield* accounts(store)
         expect(fiveHour(yield* after.lanes([a]))).toBeCloseTo(measured, 6)
+        // A glm turn holds its measured 100,000 fuel a lane-hour of the
+        // account's mean run, not the 680,000 its price gives.
+        yield* after.placement.openLane({
+          sessionId: SessionId.make("glm-next"),
+          key: "glm-next",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: glm,
+          project: Option.none(),
+        })
+        const report = yield* after.lanes([a])
+        expect(weightOf(report, glm)?.fitted).not.toBe(true)
+        expect(report.load).toBeCloseTo(100_000 / report.fuelPerHour, 6)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 

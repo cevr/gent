@@ -233,7 +233,9 @@ once it has passed (B2).
     capacity unfloored, so a window at 0.95 lanes admits a half-price run;
     holds reserve the account's lanes alone. Placement weighs each live
     session at its model's share and reads the account's pace in mean runs.
-    Open: a model's measured burn feeds the share untested.
+    A model's measured burn feeds its share (tested 2026-10-22): a glm
+    turn holds its lanes' 100,000 fuel a lane-hour of the mean run, not
+    the 680,000 its price gives.
 11. **Every provider that reports usage joins the pool.** (ChatGPT plan
     merged at 415a2b09c (2026-10-22): the Codex client reads the
     `x-codex-primary-*` and `x-codex-secondary-*` headers on each answer,
