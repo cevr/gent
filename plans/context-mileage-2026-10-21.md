@@ -124,8 +124,16 @@ finished unit. The baseline is the table above.
    reached another backend (inferred). Gent sent `prompt_cache_key` and the
    `session-id` header already. Added the turn route Codex sends
    (`x-codex-turn-state`, `client_metadata`; openai/codex `342ed69`): see
-   `docs/architecture/rules.md`. Not yet measured: a second `sol` run checks
-   that ChatGPT answers gent with the route and that the misses fall.
+   `docs/architecture/rules.md`. Two more `sol` runs (measured, 2026-10-22):
+   11 misses of 64 calls (18.5% of W), then 4 of 69 (12.2%). In the second,
+   the debug log `codex turn route` shows that ChatGPT named a route on the
+   first answer of each of 20 turns and that gent sent it on all 49 later
+   calls. So the route works as in Codex, but misses stay: each read 0
+   tokens 3 to 6 s after the call before it, and the next call read the
+   whole prefix again. The spread between runs is larger than any change
+   the route made (inferred, three runs). No further lever found on the
+   OpenAI side: the route stays, because Codex sends it and it costs
+   nothing. The 2% target is not met for OpenAI.
 6. **Compaction window per role, tuned from the burn.** (Merged at
    `e26b1525c`, 2026-10-21; see `docs/architecture/context.md`. Re-reads by
    `context.read` are not seen.)
