@@ -731,6 +731,16 @@ describe("a machine command across a clean stop", () => {
             8_000,
             "the command recorded its process",
           )
+          // The process is recorded at its spawn: the stop waits until the command ran.
+          yield* waitFor(
+            Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(`${home.cwd}/ran.log`)).pipe(
+              Effect.provide(BunServices.layer),
+              Effect.orDie,
+            ),
+            (exists) => exists,
+            8_000,
+            "the command ran",
+          )
           return { owner, run }
         }),
       )
