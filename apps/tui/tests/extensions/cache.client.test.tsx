@@ -1081,6 +1081,12 @@ describe("cache hit share", () => {
       expect(Option.map(scan.hits(), (hits) => [hits.inputTokens, hits.cacheReadTokens])).toEqual(
         Option.some([100_000, 79_600]),
       )
+      // The feed replays the branch from the start on every mount; a replay
+      // must not count a step twice, though the share would read the same.
+      for (const envelope of history.envelopes) scan.fold(envelope)
+      expect(Option.map(scan.hits(), (hits) => [hits.inputTokens, hits.cacheReadTokens])).toEqual(
+        Option.some([100_000, 79_600]),
+      )
     }),
   )
 

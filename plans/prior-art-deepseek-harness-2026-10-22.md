@@ -160,8 +160,8 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - Gain: the summary source moves from 1.0 to about 0.1 per token. With a source of ~150k tokens that is ~135k W saved per handoff. (inferred; size guess)
 - Re-estimate (2026-10-22): the source is capped at `COMPACTION_SUMMARY_INPUT_TOKENS` = 32,768 (model-context.ts:2662), so a handoff now pays at most ~33k W for it. A replay resends the whole window, ~150k at 0.1 = ~15k W, so the saving is at most ~18k W per handoff, before the summary's reasoning. (measured: the cap; inferred: the window size)
 - The replay must keep thinking on: a change that turns thinking off cannot ride inside the conversation (driver.ts:1246-1260), and the summary asks for `reasoning: "none"` because reasoning counts against its output cap (turn.ts:3915-3918). At the turn's effort, a few thousand reasoning tokens at the output rate (5x input) cancel the ~18k W. (measured: the driver rule; inferred: the reasoning size)
-- Most handoffs are cold: a root hands off at turn start, and the cold-handoff rule hands off when the cache has lapsed (context.md:65-67), where a replay writes ~150k at 1.25-2.0 instead of reading. Only a warm turn-start handoff and an overflow handoff could gain. (inferred)
-- Decision: deferred. Take it only if a Haiku gamut run shows warm handoffs are common; measure warm against cold handoffs from `ModelContextProjected.compacted` rows and the step before each. (inferred)
+- Most handoffs are cold: a root hands off at turn start, and the cold-handoff rule hands off when the cache has lapsed (context.md:65-67), where a replay writes ~150k at 1.25-2.0 instead of reading. A warm handoff can still gain: a turn-start handoff, an overflow handoff, a spawned session's mid-turn handoff at its role window (model-context.ts:2894), and an explicit `/compact` (model-context.ts:2982). (inferred: their frequency)
+- Decision: deferred. Take it only if a Haiku gamut run shows warm handoffs are common; measure warm against cold handoffs from `ModelContextProjected.compacted` rows and the step before each, split by trigger: turn start, role window, overflow, explicit. (inferred)
 - Conditions on Anthropic: (a) the same model, system blocks, tool list and thinking plan as the last turn step, or the message cache does not hit; gent's own comment says the prefix keeps "the same top-level effort" (anthropic.ts:3940-3942). (b) The region must end where an earlier step wrote an entry. (c) Ask for less reasoning with an effort marker after the replay, not with `reasoning: "none"` at the top level, which changes the thinking plan. (inferred)
 - Trade-off: the summary would read the source as conversation, not as one flattened text, so `summaryPromptText` and its keep-verbatim lines move into the final instruction. The output cap check stays. (inferred)
 - Check: a capture with `docs/architecture/fetch-capture.ts`, then compare `cache_read_input_tokens` on one paid summary call. (inferred)
@@ -188,12 +188,14 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - Fix options: put cwd in the agent part or in a turn notice; keep project-instruction text cwd-free. (inferred)
 - Gain: one shared-prefix write saved per workspace thread, ~the shared prompt size × (2.0 − 0.1). (inferred)
 
-### G4. In-history system-prompt updates on Claude 5.5-era models (gain unknown, medium-high effort; measure first)
+### G4. In-history system-prompt updates on Claude 5.5-era models (gain unknown, medium-high effort; measure first) — DEFERRED
 
 - Now: any change to a section (AGENTS.md edit, a skill added on the branch, `Models.available` flip, an MCP or host tool change) rewrites the system blocks, so the request misses everything: tools, system and the whole conversation. (measured that the sections can change; the full miss inferred)
 - dsh: appends the changed prompt after the cached history as a mid-conversation system message; consolidates at the head only on a model that lacks the feature. (measured)
 - gent already sends mid-conversation system messages for trusted notices and effort markers, so the capability gate exists. (measured)
 - Measure first: count `cache.client.tsx` "changed prefix" misses in the owner's stored sessions. If they are rare, skip this. (inferred)
+- Measured 2026-10-22: the cache extension's own fold (`makeCacheScan`, `resolveMiss`) over a read-only copy of the store (97,638 events, 3,846 steps, 657 branches) finds no changed-prefix and no extension-change miss, at a 5 min and at a 1 h lifetime; only 2 model switches and 4 tool lapses. That is no evidence: a changed prefix counts only on a model that reports cache writes, and no stored step does (section 2: every Anthropic row predates the markers; OpenAI caches implicitly). (measured)
+- Decision: deferred until the store holds Anthropic steps with markers. Then fold the events table again, branch by branch in id order, through `makeCacheScan` and `resolveMiss`; the TUI's "cache miss: prefix changed" row shows each one meanwhile. A scripted prompt that edits AGENTS.md would prove only that the prefix moves, which is already known. (inferred)
 
 ### G5. Show the session cache-hit ratio (no direct gain, very low effort) — DONE
 
