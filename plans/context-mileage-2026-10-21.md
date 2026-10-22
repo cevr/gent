@@ -201,6 +201,19 @@ once it has passed (B2).
       with a model's 5-hour spend at its limit, a thread start for that
       model on that account is refused with `LaneUnavailable`, and no request
       for it leaves gent.
+    - **The limit error, from opencode's source** (`anomalyco/opencode`
+      `1b1ad48`, 2026-10-21). opencode has no usage plugin and reads no
+      usage endpoint. It learns of a Go limit only from the refusal: HTTP
+      429 from `opencode.ai/inference/go/…`, body
+      `{"type":"error","error":{"type":"GoUsageLimitError","message":"Subscription quota exceeded."}}`,
+      with `retry-after` in seconds (`packages/core/test/session-error.test.ts`,
+      `packages/ai/test/provider-error.test.ts`). It classifies that as
+      quota, not throttling, and does not retry it. Zen's free tier answers
+      `FreeUsageLimitError` the same way. So the adapter also reads a
+      `GoUsageLimitError` 429 as `rejected` for that (account, model), with
+      `resetAt` = now + `retry-after`. With Extra usage on, this error
+      should not arrive until the balance runs out (inferred), so gent's own
+      sum stays the first stop; the error covers spend outside gent.
     - **Seam change:** `QuotaReading` is per account today. Go's limits are
       per model, so the reading gains an optional `model`, and a lane for
       that account counts only requests for that model.
