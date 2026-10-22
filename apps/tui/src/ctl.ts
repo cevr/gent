@@ -261,6 +261,7 @@ const eventFields = (event: AgentEvent): Omit<CompactEvent, "id" | "tag"> =>
       ms: e.durationMs,
       flags: turnFlags(e),
     }),
+    TurnResumed: ({ messageId }) => ({ message: messageId }),
     ModelContextProjected: () => ({}),
     ToolCallStarted: ({ toolName, toolCallId }) => ({ tool: toolName, call: toolCallId }),
     ToolCallSucceeded: (e) => ({

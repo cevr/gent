@@ -107,6 +107,13 @@ Shape:
   extension's `listActiveLoops` read open it with `ensureOpen` and leave the
   work deferred. A `wakeDue` hook's sends to its own branch then queue behind
   the cut-short turn.
+- Resume bound: each promotion of a cut-short turn writes a `TurnResumed`
+  event before the turn runs. The build counts them since the turn's last
+  answered question (`incompleteUserTurn`, a fold over the branch log). After
+  `TURN_RESUME_LIMIT` (5), the next promotion writes an `ErrorOccurred` and
+  starts the turn with its stop latch set, so it ends interrupted through
+  `finalizeTurn` and calls no model. A turn parked on an open question is not
+  bounded: a restart while it waits for its user is not a crash loop.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 
 - A session takes its name from its first user message: at a turn end,

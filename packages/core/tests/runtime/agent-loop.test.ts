@@ -49,6 +49,7 @@ import {
   makeAgentLoopWorker,
   makeHoldCount,
   makeLoopInbox,
+  TURN_RESUME_LIMIT,
   type TurnWork,
   wantsWakeOnRecovery,
   BranchWakesLive,
@@ -165,11 +166,14 @@ import {
   EventId,
   EventStore,
   EventStoreError,
+  InteractionPresented,
+  InteractionResolved,
   MessageReceived,
   type StreamEnded,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
+  TurnResumed,
 } from "../../src/domain/event"
 import { type ActiveStreamHandle, ToolResultReplayError, TurnOutcome } from "../../src/runtime/turn"
 import {
@@ -4523,6 +4527,131 @@ describe("startup recovery", () => {
       }),
     15000,
   )
+
+  /**
+   * Open a loop over a user turn a restart cut short, after the stored
+   * events `history` makes for it; answer the model calls and the events
+   * the open wrote, once its turn completed.
+   */
+  const openCutShortTurn = (
+    name: string,
+    history: (ids: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly messageId: MessageId
+    }) => ReadonlyArray<AgentEvent>,
+  ) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make(`session-${name}`)
+      const branchId = BranchId.make(`branch-${name}`)
+      const messageId = MessageId.make(`msg-${name}`)
+      const providerCalls = yield* Ref.make(0)
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Ref.update(providerCalls, (n) => n + 1).pipe(
+          Effect.as(
+            Stream.fromIterable([
+              textDeltaPart("recovered"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[]),
+          ),
+        ),
+      )
+      const message = Message.cases.regular.make({
+        id: messageId,
+        sessionId,
+        branchId,
+        role: "user",
+        parts: [Prompt.textPart({ text: "recover me" })],
+        createdAt: dateFromMillis(1_767_225_600_000),
+      })
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* ensureStorageParents({ sessionId, branchId })
+          const eventStorage = yield* EventStorage
+          yield* eventStorage.appendEvent(MessageReceived.make({ message }))
+          for (const event of history({ sessionId, branchId, messageId })) {
+            yield* eventStorage.appendEvent(event)
+          }
+          // What the open writes, up to and with the turn's end.
+          const opened = yield* (yield* EventStore).subscribe({ sessionId, branchId }).pipe(
+            Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          const agentLoop = yield* makeAgentLoopService
+          yield* agentLoop.getState({ sessionId, branchId })
+          const written = yield* Fiber.join(opened).pipe(Effect.timeout("4 seconds"))
+          return {
+            calls: yield* Ref.get(providerCalls),
+            written: written.map(({ event }) => event),
+          }
+        }).pipe(Effect.provide(actorTestRoot({ provider: providerLayer }))),
+      )
+    })
+
+  const resumes = (
+    ids: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly messageId: MessageId
+    },
+    count: number,
+  ) => Array.from({ length: count }, () => TurnResumed.make(ids))
+
+  it.live(
+    "a turn cut short on each of its resumes ends interrupted at the next open, with no model call",
+    () =>
+      Effect.gen(function* () {
+        const { calls, written } = yield* openCutShortTurn("resumes-spent", (ids) =>
+          resumes(ids, TURN_RESUME_LIMIT),
+        )
+        expect(calls).toBe(0)
+        // The ended turn delivers its message again, as every turn does.
+        const ended = written.filter((event) => event._tag !== "MessageReceived")
+        expect(ended.map((event) => event._tag)).toEqual(["ErrorOccurred", "TurnCompleted"])
+        const [notice, completed] = ended
+        expect(notice?._tag === "ErrorOccurred" && notice.error).toContain("cut it short 6 times")
+        expect(completed?._tag === "TurnCompleted" && completed.interrupted).toBe(true)
+      }),
+    15000,
+  )
+
+  it.live("a resume under the limit is recorded, and the turn runs again", () =>
+    Effect.gen(function* () {
+      const { calls, written } = yield* openCutShortTurn("resumes-left", (ids) =>
+        resumes(ids, TURN_RESUME_LIMIT - 1),
+      )
+      expect(calls).toBe(1)
+      expect(written[0]?._tag).toBe("TurnResumed")
+      expect(written.filter((event) => event._tag === "ErrorOccurred")).toEqual([])
+    }),
+  )
+
+  for (const question of ["open", "answered"] as const) {
+    it.live(`resumes while the turn waits on an ${question} question do not count`, () =>
+      Effect.gen(function* () {
+        const { calls } = yield* openCutShortTurn(`resumes-${question}-question`, (ids) => {
+          const asked = InteractionPresented.make({
+            sessionId: ids.sessionId,
+            branchId: ids.branchId,
+            requestId: InteractionRequestId.make("question"),
+            text: "go on?",
+          })
+          const answered = InteractionResolved.make({
+            sessionId: ids.sessionId,
+            branchId: ids.branchId,
+            requestId: InteractionRequestId.make("question"),
+            approved: true,
+          })
+          // A turn parked on its question, restarted while it waited.
+          const parked = [asked, ...resumes(ids, TURN_RESUME_LIMIT)]
+          if (question === "open") return parked
+          return [...parked, answered]
+        })
+        expect(calls).toBe(1)
+      }),
+    )
+  }
 
   const userMessage = (
     sessionId: SessionId,

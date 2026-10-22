@@ -316,6 +316,16 @@ export const AgentEvent = Schema.TaggedUnion({
      */
     costUsd: Schema.optional(Schema.Finite),
   },
+  /**
+   * A restart resumed the turn of this message: written once per resume,
+   * before the resumed turn runs. The resumes since the turn's last answer
+   * bound it: after `TURN_RESUME_LIMIT` of them the next one ends it, interrupted.
+   */
+  TurnResumed: {
+    sessionId: SessionId,
+    branchId: BranchId,
+    messageId: MessageId,
+  },
   /** What the model saw this turn after projection and compaction. */
   ModelContextProjected: {
     sessionId: SessionId,
@@ -510,6 +520,8 @@ export const CredentialAssigned = AgentEvent.cases.CredentialAssigned
 export type CredentialAssigned = typeof AgentEvent.cases.CredentialAssigned.Type
 export const TurnCompleted = AgentEvent.cases.TurnCompleted
 export type TurnCompleted = typeof AgentEvent.cases.TurnCompleted.Type
+export const TurnResumed = AgentEvent.cases.TurnResumed
+export type TurnResumed = typeof AgentEvent.cases.TurnResumed.Type
 export const ModelContextProjected = AgentEvent.cases.ModelContextProjected
 export type ModelContextProjected = typeof AgentEvent.cases.ModelContextProjected.Type
 export const ToolCallStarted = AgentEvent.cases.ToolCallStarted

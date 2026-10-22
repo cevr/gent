@@ -110,7 +110,7 @@ import {
   type WaitingForInteractionState,
   WakeFired,
 } from "../domain/agent-loop.js"
-import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
+import { type AgentEvent, ErrorOccurred, EventStore, TurnResumed } from "../domain/event.js"
 import {
   BranchAddress,
   BranchWakes,
@@ -316,6 +316,19 @@ export const wantsWakeOnRecovery = (
 //
 // No caller outside this file sees these. They are the only code that knows
 // the queue has three compartments.
+
+/**
+ * The resumes a cut-short turn gets: a turn a restart cut short this many
+ * times since its last question ends at the next one, as pi durable parks a
+ * task past its `restartLimit` and opencode ends a turn past `maxAttempts`.
+ */
+export const TURN_RESUME_LIMIT = 5
+
+/** The turn a restart cut short, and whether its resumes are spent. */
+interface RecoveredTurn {
+  readonly item: QueuedTurnItem
+  readonly exhausted: boolean
+}
 
 const FOLLOW_UP_QUEUE_MAX = 10
 
@@ -1594,18 +1607,35 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
    * that slot when it settles.
    */
   const promoteRecovered = Effect.fn("AgentLoop.promoteRecovered")(function* (recovery: {
-    readonly recovered: Option.Option<QueuedTurnItem>
+    readonly recovered: Option.Option<RecoveredTurn>
     readonly priorHistory: boolean
   }) {
     const start = yield* Effect.uninterruptible(
       Effect.gen(function* () {
-        const reserved = yield* scope.inbox.settleRecovery(recovery)
+        const reserved = yield* scope.inbox.settleRecovery({
+          recovered: Option.map(recovery.recovered, (turn) => turn.item),
+          priorHistory: recovery.priorHistory,
+        })
         if (Option.isNone(reserved)) return Option.none<Fiber.Fiber<void, AgentLoopError>>()
-        return Option.some(
-          yield* startInLoop(
-            scope.turnInterruption.beginTurn.pipe(Effect.andThen(advanceOrIdle(reserved))),
-          ),
-        )
+        // A turn that died on each of its last resumes ends now, interrupted,
+        // and calls no model; it waits for its user, not for the next restart.
+        let begin = scope.turnInterruption.beginTurn
+        if (Option.isSome(recovery.recovered)) {
+          const { item, exhausted } = recovery.recovered.value
+          const ids = { sessionId: scope.sessionId, branchId: scope.branchId }
+          if (exhausted) {
+            yield* scope.publishEvent(
+              ErrorOccurred.make({
+                ...ids,
+                error: `This turn stopped: a restart cut it short ${TURN_RESUME_LIMIT + 1} times in a row. Send a message to go on.`,
+              }),
+            )
+            begin = begin.pipe(Effect.andThen(scope.turnInterruption.interrupt))
+          } else {
+            yield* scope.publishEvent(TurnResumed.make({ ...ids, messageId: item.message.id }))
+          }
+        }
+        return Option.some(yield* startInLoop(begin.pipe(Effect.andThen(advanceOrIdle(reserved)))))
       }),
     )
     if (Option.isSome(start)) yield* awaitStart(start.value)
@@ -1787,12 +1817,12 @@ type AgentLoopBehavior = {
    * The newest user message whose turn never completed, with what admitted
    * it; what a reopened loop resumes.
    */
-  incompleteUserTurn: Effect.Effect<Option.Option<QueuedTurnItem>>
+  incompleteUserTurn: Effect.Effect<Option.Option<RecoveredTurn>>
   /**
    * The turn a restart cut short, as the build read it: what promotion
    * resumes. Nothing changes it while recovery is deferred.
    */
-  recoveredTurn: Option.Option<QueuedTurnItem>
+  recoveredTurn: Option.Option<RecoveredTurn>
   /** Whether this session has ever written to the branch; a cold loop with history wakes. */
   hasPriorHistory: Effect.Effect<boolean>
   /**
@@ -1823,7 +1853,7 @@ type AgentLoopBehavior = {
   ) => Effect.Effect<Option.Option<Exit.Exit<WakeNext, unknown>>, AgentLoopError>
   /** Promote the work a restart left (`LoopInbox.settleRecovery`); only recovery promotion calls it. */
   promoteRecovered: (recovery: {
-    readonly recovered: Option.Option<QueuedTurnItem>
+    readonly recovered: Option.Option<RecoveredTurn>
     readonly priorHistory: boolean
   }) => Effect.Effect<void, AgentLoopError>
   /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
@@ -2502,9 +2532,24 @@ const makeAgentLoopBehavior = (
         return []
       })
       const message = incomplete.at(-1)
-      if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
+      if (Predicate.isUndefined(message)) return Option.none<RecoveredTurn>()
+      // The resumes since the turn's last answer: a turn parked on a question
+      // waits for its user, not a restart, and an answer starts the count over.
+      let resumes = 0
+      const open = new Set<string>()
+      for (const { event } of envelopes.slice(lastCompletion + 1)) {
+        if (event._tag === "TurnResumed" && event.messageId === message.id) resumes += 1
+        if (event._tag === "InteractionPresented") open.add(event.requestId)
+        if (event._tag === "InteractionResolved") {
+          open.delete(event.requestId)
+          resumes = 0
+        }
+      }
       // The session names the agent the resumed turn runs as.
-      return Option.some<QueuedTurnItem>({ message })
+      return Option.some<RecoveredTurn>({
+        item: { message },
+        exhausted: open.size === 0 && resumes >= TURN_RESUME_LIMIT,
+      })
     })
 
     // Recovery is deferred only when the build found work a restart left: a
