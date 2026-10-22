@@ -258,7 +258,13 @@
   admission.
   - A run is one row in `machine_runs` and an append-only log in
     `machine_steps` (at the machines' own schema version). Every
-    write compares and sets the row's `seq`. A step records the action it
+    write compares and sets the row's `seq`. A run's visits and its saved
+    values are a fold over its steps (`foldSteps`), never a column: a
+    state's visit count is the highest visit its `Dispatched` actions name
+    (or its `Finished`), a `Granted` step is one visit past the cap, and a
+    `Saved` step is the value a visit left for `{{<state>.*}}` and
+    `{{all.<state>}}`. A read folds the stored steps, a commit folds its new
+    ones, and `machine.status` leaves `Saved` steps out of its view. A step records the action it
     dispatches before it dispatches it (`Dispatched`), and the action's
     receipt once it has one (`Recorded`: a round's thread and id, a
     command's process), so a restart never repeats an ambiguous effect: a

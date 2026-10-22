@@ -732,6 +732,62 @@ describe("a machine run across a clean restart", () => {
   )
 })
 
+/** An ask whose note the round reads, then a round capped at one visit that asks to go again. */
+const REVISIT = {
+  name: "revisit",
+  threads: { worker: {} },
+  start: "note",
+  states: {
+    note: { kind: "ask", ask: "Note?", on: { go: "work" } },
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}\nNOTE {{note.note}}",
+      on: { again: "work", end: "done" },
+      maxVisits: 1,
+    },
+    done: { kind: "final" },
+  },
+}
+
+describe("a run's visits and saved values across a restart", () => {
+  it.live("a grant, the visit count and a saved note come back from the step log", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const models = yield* makeModels((round) =>
+        Effect.succeed(replyWith(round, { next: "again" })),
+      )
+      const layer = () => home.layerFor(machineModels(models))
+      const owner = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(layer())
+          const owner = ownerOf(yield* client.session.create({}))
+          yield* startRun(client, owner, REVISIT, "revisit")
+          yield* answerAsk(client, owner, 1, "go", "keep")
+          expect(yield* askDetails(client, owner, 2)).toMatchObject({ reason: "exhausted" })
+          return owner
+        }),
+      )
+      const run = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(layer())
+          const retried = yield* answerAsk(client, owner, 2, "retry")
+          expect(yield* askDetails(client, owner, 3)).toMatchObject({ reason: "exhausted" })
+          return retried.run
+        }),
+      )
+      // The retry ran the one granted visit, and the round read the note
+      // the first server saved.
+      expect(yield* Ref.get(models.calls)).toEqual(["work:1", "work:2"])
+      const texts = new Map(yield* Ref.get(models.texts))
+      expect(texts.get("work:2")).toContain("NOTE keep")
+      const stored = yield* home.sql(storedRun(run))
+      expect(stored.visits).toEqual({ counts: { note: 1, work: 2 }, grants: { work: 1 } })
+      expect(stored.context.last["note"]).toEqual({ choice: "go", note: "keep" })
+    }).pipe(Effect.scoped, Effect.timeout("60 seconds")),
+  )
+})
+
 // ── C3: a command cut by a clean stop ───────────────────────────────────────
 
 describe("a machine command across a clean stop", () => {
@@ -1482,20 +1538,17 @@ const pendingWait = (run: string) =>
     ),
   )
 
-const decodeVisits = Schema.decodeUnknownSync(
-  Schema.Array(
-    Schema.Struct({ counts: Schema.fromJsonString(Schema.Record(Schema.String, Schema.Int)) }),
-  ),
-)
+const decodeRunId = Schema.decodeUnknownSync(AnswerParams.fields.run)
+
+/** The run as the store reads it: its row, and the fold of its steps. */
+const storedRun = (run: string) =>
+  Effect.flatMap(MachineStore, (store) => store.read(decodeRunId(run))).pipe(
+    Effect.map(Option.getOrThrow),
+    Effect.provide(MachineStore.Live),
+  )
 
 /** How often the run entered each state. */
-const visitCounts = (run: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql`SELECT json_extract(visits_json, '$.counts') AS counts
-      FROM machine_runs WHERE run = ${run}`
-    return decodeVisits(rows)[0]?.counts ?? {}
-  })
+const visitCounts = (run: string) => Effect.map(storedRun(run), (found) => found.visits.counts)
 
 const waitsOf = (steps: ReadonlyArray<typeof StepView.Type>) =>
   steps.flatMap((step) => {
@@ -2027,6 +2080,13 @@ const PlantedRound = Schema.TaggedStruct("Round", {
   attempt: Schema.Int,
 })
 
+/** The steps a server writes as a run starts, and as it enters a thread state. */
+const PlantedStarted = Schema.TaggedStruct("Started", {
+  machine: Schema.String,
+  input: Schema.Json,
+})
+const PlantedDispatched = Schema.TaggedStruct("Dispatched", { action: Schema.Json })
+
 interface PlantedRun {
   readonly run: string
   readonly host: SessionKey
@@ -2049,34 +2109,38 @@ const plantRuns = (
       const sql = yield* SqlClient.SqlClient
       const workspace = workspaceIdForCwd(home.cwd)
       for (const planted of runs) {
-        const input = encodeJson({ tag: planted.run })
+        const input = { tag: planted.run }
         // A debt run entered `work` and recorded its round's key, and sent nothing.
         let pending = Option.none<string>()
-        let visits = encodeJson({ counts: {}, grants: {} })
+        const steps = [
+          { state: "start", json: encodeJson(PlantedStarted.make({ machine: "budget", input })) },
+        ]
         if (planted.debt) {
-          pending = Option.some(
-            encodeJson({
-              ...PlantedRound.make({
-                state: "work",
-                visit: 1,
-                key: `machine:${planted.run}:2`,
-                attempt: 1,
-              }),
-              ...omitUndefined({ notBefore: planted.waitsUntil }),
+          const round = {
+            ...PlantedRound.make({
+              state: "work",
+              visit: 1,
+              key: `machine:${planted.run}:2`,
+              attempt: 1,
             }),
-          )
-          visits = encodeJson({ counts: { work: 1 }, grants: {} })
+            ...omitUndefined({ notBefore: planted.waitsUntil }),
+          }
+          pending = Option.some(encodeJson(round))
+          steps.push({ state: "work", json: encodeJson(PlantedDispatched.make({ action: round })) })
         }
         yield* sql`INSERT INTO machine_runs (
             run, machine, definition_json, host_session_id, host_branch_id, owner_thread,
-            cwd, input_json, context_json, visits_json, roles_json, state, status, pending_json,
-            seq, created_at, updated_at
+            cwd, input_json, roles_json, state, status, pending_json, seq, created_at, updated_at
           ) VALUES (
             ${planted.run}, 'budget', ${definitionJson}, ${planted.host.sessionId},
             ${planted.host.branchId}, ${planted.host.sessionId}, ${home.cwd},
-            ${input}, '{"last":{},"all":{}}', ${visits}, '{}', 'work', 'running',
-            ${Option.getOrNull(pending)}, 1, ${planted.createdAt}, ${planted.createdAt}
+            ${encodeJson(input)}, '{}', 'work', 'running',
+            ${Option.getOrNull(pending)}, ${steps.length}, ${planted.createdAt}, ${planted.createdAt}
           )`
+        for (const [index, step] of steps.entries()) {
+          yield* sql`INSERT INTO machine_steps (run, seq, at, state, step_json)
+            VALUES (${planted.run}, ${index + 1}, ${planted.createdAt}, ${step.state}, ${step.json})`
+        }
         yield* sql`INSERT INTO branch_wakes (
             workspace_id, session_id, branch_id, extension_id, source_id, at, version, attempts,
             armed_boot, created_at
@@ -3184,18 +3248,9 @@ const githubBoundary = (layer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawn
     }),
   })
 
-const RunContextView = Schema.Struct({
-  context_json: Schema.fromJsonString(
-    Schema.Struct({ last: Schema.Record(Schema.String, Schema.Json) }),
-  ),
-})
-const decodeRunContext = Schema.decodeUnknownSync(Schema.Array(RunContextView))
+/** The value the state's last visit left. */
 const savedValue = (run: string, state: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql`SELECT context_json FROM machine_runs WHERE run = ${run}`
-    return decodeRunContext(rows)[0]?.context_json.last[state]
-  })
+  Effect.map(storedRun(run), (found) => found.context.last[state])
 
 /**
  * CI time passes while no server runs: the poll the gate names and the

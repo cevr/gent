@@ -388,6 +388,10 @@ const MachineStep = Schema.TaggedUnion({
   },
   Delivered: { askId: AskId },
   Answered: { askId: AskId, choice: Verdict, note: Schema.optionalKey(Schema.String) },
+  /** The value a state's visit left: templates read it as `{{<state>.*}}` and `{{all.<state>}}`. */
+  Saved: { state: StateName, value: Schema.Json },
+  /** A `retry` answer to an `exhausted` ask granted the state one visit past its cap. */
+  Granted: { state: StateName },
   Moved: { from: StateName, to: StateName, by: Schema.String },
   Finished: { state: StateName },
   Failed: { error: Schema.String },
@@ -727,7 +731,7 @@ const saved = (context: RunContext, state: StateName, value: Schema.Json): RunCo
 // ── runs ────────────────────────────────────────────────────────────────────
 
 /** One run as its row holds it. */
-interface Run {
+interface RunRecord {
   readonly run: RunId
   readonly machine: MachineName
   readonly definitionJson: string
@@ -738,8 +742,6 @@ interface Run {
   readonly deliveryPlace: Option.Option<PlaceRecord>
   readonly cwd: string
   readonly input: Schema.Json
-  readonly context: RunContext
-  readonly visits: Visits
   /** The thread of each role: its last round's, unless that round was a retry or a rerun. */
   readonly roles: Readonly<Record<string, SessionId>>
   readonly state: StateName
@@ -752,6 +754,14 @@ interface Run {
   readonly error: Option.Option<string>
   readonly createdAt: number
 }
+
+/** The part of a run that is a fold over its steps (`foldSteps`); the row keeps no copy. */
+interface RunMemo {
+  readonly visits: Visits
+  readonly context: RunContext
+}
+
+type Run = RunRecord & RunMemo
 
 const isTerminal = (status: RunStatus) =>
   status === "final" || status === "failed" || status === "stopped"
@@ -776,8 +786,6 @@ const RunRow = Schema.Struct({
   owner_branch_id: Schema.NullOr(BranchId),
   cwd: Schema.String,
   input_json: Schema.fromJsonString(Schema.Json),
-  context_json: Schema.fromJsonString(RunContext),
-  visits_json: Schema.fromJsonString(Visits),
   roles_json: Schema.fromJsonString(Schema.Record(Schema.String, SessionId)),
   state: StateName,
   status: RunStatus,
@@ -790,7 +798,7 @@ const RunRow = Schema.Struct({
 })
 const decodeRunRow = Schema.decodeUnknownEffect(RunRow)
 
-const runOfRow = (row: typeof RunRow.Type): Run => ({
+const recordOfRow = (row: typeof RunRow.Type): RunRecord => ({
   run: row.run,
   machine: row.machine,
   definitionJson: row.definition_json,
@@ -802,8 +810,6 @@ const runOfRow = (row: typeof RunRow.Type): Run => ({
   }),
   cwd: row.cwd,
   input: row.input_json,
-  context: row.context_json,
-  visits: row.visits_json,
   roles: row.roles_json,
   state: row.state,
   status: row.status,
@@ -815,8 +821,6 @@ const runOfRow = (row: typeof RunRow.Type): Run => ({
 })
 
 const encodeInput = Schema.encodeEffect(Schema.fromJsonString(Schema.Json))
-const encodeContext = Schema.encodeEffect(Schema.fromJsonString(RunContext))
-const encodeVisits = Schema.encodeEffect(Schema.fromJsonString(Visits))
 const encodeRoles = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, SessionId)),
 )
@@ -844,6 +848,8 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
     case "Interrupted":
     case "Waiting":
     case "Finished":
+    case "Saved":
+    case "Granted":
       return step.state
     case "Moved":
       return step.to
@@ -874,8 +880,6 @@ const createMachineTables = Effect.gen(function* () {
         owner_branch_id TEXT,
         cwd TEXT NOT NULL,
         input_json TEXT NOT NULL,
-        context_json TEXT NOT NULL,
-        visits_json TEXT NOT NULL,
         roles_json TEXT NOT NULL,
         state TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('running','asking','final','failed','stopped')),
@@ -914,7 +918,7 @@ const createMachineTables = Effect.gen(function* () {
 
 const ensureMachineTables = ensureExtensionTables({
   owner: "@gent/machines",
-  version: 1,
+  version: 2,
   tables: ["machine_steps", "machine_runs"],
   create: createMachineTables,
 }).pipe(Effect.mapError(storageError("Machine table setup failed")))
@@ -939,16 +943,19 @@ interface StepPermits {
 }
 
 interface MachineStoreService {
-  readonly insert: (run: Run, started: MachineStep) => Effect.Effect<void, MachineStorageError>
+  readonly insert: (
+    run: RunRecord,
+    started: MachineStep,
+  ) => Effect.Effect<void, MachineStorageError>
   readonly read: (run: RunId) => Effect.Effect<Option.Option<Run>, MachineStorageError>
   /**
    * Writes `after` and appends `steps` in one transaction, only while the
-   * row is at `before.seq`: the new run, or none when another writer moved
-   * it first.
+   * row is at `before.seq`: the new run, its memo folded over `steps`, or
+   * none when another writer moved it first.
    */
   readonly commit: (
     before: Run,
-    after: Run,
+    after: RunRecord,
     steps: ReadonlyArray<MachineStep>,
   ) => Effect.Effect<Option.Option<Run>, MachineStorageError>
   readonly steps: (
@@ -1051,7 +1058,7 @@ const makeStepPermits = Effect.fn("MachineStore.stepPermits")(function* (
 })
 
 const RUN_COLUMNS = `run, machine, definition_json, host_session_id, host_branch_id, owner_thread,
-  owner_session_id, owner_branch_id, cwd, input_json, context_json, visits_json, roles_json,
+  owner_session_id, owner_branch_id, cwd, input_json, roles_json,
   state, status, pending_json, seq, notified_at, error, created_at, updated_at`
 
 /**
@@ -1068,9 +1075,32 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
       const sql = yield* SqlClient.SqlClient
       yield* ensureMachineTables
 
+      // A run is its row and the fold of its steps: the row keeps no memo.
+      const memoOf = Effect.fn("MachineStore.memoOf")(function* (run: RunId) {
+        const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
+          WHERE run = ${run}
+            AND json_extract(step_json, '$._tag') IN (${sql.literal(
+              MEMO_TAGS.map((tag) => `'${tag}'`).join(", "),
+            )})
+          ORDER BY seq ASC`
+        const decoded = yield* decodeStepRows(rows).pipe(
+          Effect.mapError(storageError("A machine step row does not decode")),
+        )
+        return foldSteps(
+          EMPTY_MEMO,
+          decoded.map((row) => row.step_json),
+        )
+      })
       const decodeRuns = (rows: ReadonlyArray<unknown>) =>
-        Effect.forEach(rows, (row) => Effect.map(decodeRunRow(row), runOfRow)).pipe(
-          Effect.mapError(storageError("A machine run row does not decode")),
+        Effect.forEach(rows, (row) =>
+          Effect.gen(function* () {
+            const record = recordOfRow(
+              yield* decodeRunRow(row).pipe(
+                Effect.mapError(storageError("A machine run row does not decode")),
+              ),
+            )
+            return { ...record, ...(yield* memoOf(record.run)) } satisfies Run
+          }),
         )
 
       // The runs that held a step when the last server stopped, oldest first.
@@ -1105,19 +1135,17 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         insert: Effect.fn("MachineStore.insert")(
           function* (run, started) {
             const inputJson = yield* encodeInput(run.input)
-            const contextJson = yield* encodeContext(run.context)
-            const visitsJson = yield* encodeVisits(run.visits)
             const rolesJson = yield* encodeRoles(run.roles)
             const now = yield* Clock.currentTimeMillis
             yield* Effect.gen(function* () {
               const inserted = yield* sql`INSERT INTO machine_runs (
                   run, machine, definition_json, host_session_id, host_branch_id, owner_thread,
-                  cwd, input_json, context_json, visits_json, roles_json, state, status, seq,
+                  cwd, input_json, roles_json, state, status, seq,
                   created_at, updated_at
                 ) VALUES (
                   ${run.run}, ${run.machine}, ${run.definitionJson}, ${run.host.sessionId},
                   ${run.host.branchId}, ${run.ownerThread}, ${run.cwd}, ${inputJson},
-                  ${contextJson}, ${visitsJson}, ${rolesJson}, ${run.state}, ${run.status}, 1,
+                  ${rolesJson}, ${run.state}, ${run.status}, 1,
                   ${now}, ${now}
                 ) ON CONFLICT (run) DO NOTHING RETURNING run`
               if (inserted.length === 0) return
@@ -1137,8 +1165,6 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         ),
         commit: Effect.fn("MachineStore.commit")(
           function* (before, after, steps) {
-            const contextJson = yield* encodeContext(after.context)
-            const visitsJson = yield* encodeVisits(after.visits)
             const rolesJson = yield* encodeRoles(after.roles)
             const pendingJson = yield* Option.match(after.pending, {
               onNone: () => Effect.succeed(Option.none<string>()),
@@ -1152,8 +1178,6 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                   state = ${after.state},
                   status = ${after.status},
                   pending_json = ${Option.getOrNull(pendingJson)},
-                  context_json = ${contextJson},
-                  visits_json = ${visitsJson},
                   roles_json = ${rolesJson},
                   owner_session_id = ${Option.getOrNull(Option.map(place, (found) => found.sessionId))},
                   owner_branch_id = ${Option.getOrNull(Option.map(place, (found) => found.branchId))},
@@ -1165,15 +1189,18 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                 RETURNING run`
               if (updated.length === 0) return Option.none<Run>()
               yield* insertSteps(before.run, before.seq, steps)
-              return Option.some<Run>({ ...after, seq })
+              const memo = foldSteps({ visits: before.visits, context: before.context }, steps)
+              return Option.some<Run>({ ...after, ...memo, seq })
             }).pipe(sql.withTransaction)
           },
           Effect.mapError(storageError("Failed to commit a machine step")),
         ),
         steps: Effect.fn("MachineStore.steps")(
           function* (run, limit) {
+            // A saved value is the round's text again: the view leaves it out.
             const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
-              WHERE run = ${run} ORDER BY seq DESC LIMIT ${limit}`
+              WHERE run = ${run} AND json_extract(step_json, '$._tag') != 'Saved'
+              ORDER BY seq DESC LIMIT ${limit}`
             const decoded = yield* decodeStepRows(rows)
             return decoded
               .map((row) => ({ seq: row.seq, at: row.at, step: row.step_json }))
@@ -1498,6 +1525,44 @@ const visited = (visits: Visits, state: StateName): Visits => ({
   counts: { ...visits.counts, [state]: visitsOf(visits, state) + 1 },
 })
 
+const EMPTY_MEMO: RunMemo = { visits: { counts: {}, grants: {} }, context: { last: {}, all: {} } }
+
+/**
+ * One step's change to the memo. A state's visits are the highest visit its
+ * dispatched actions name (a resumed round dispatches its visit again), and
+ * a final state's `Finished` is its visit; an exhausted ask names the visit
+ * its cap refused, so it counts none.
+ */
+const foldStep = (memo: RunMemo, step: MachineStep): RunMemo => {
+  switch (step._tag) {
+    case "Dispatched": {
+      const action = step.action
+      if (action._tag === "Ask" && action.reason === "exhausted") return memo
+      if (action.visit <= visitsOf(memo.visits, action.state)) return memo
+      const counts = { ...memo.visits.counts, [action.state]: action.visit }
+      return { ...memo, visits: { ...memo.visits, counts } }
+    }
+    case "Finished":
+      return { ...memo, visits: visited(memo.visits, step.state) }
+    case "Granted": {
+      const grants = memo.visits.grants
+      const granted = { ...grants, [step.state]: (grants[step.state] ?? 0) + 1 }
+      return { ...memo, visits: { ...memo.visits, grants: granted } }
+    }
+    case "Saved":
+      return { ...memo, context: saved(memo.context, step.state, step.value) }
+    default:
+      return memo
+  }
+}
+
+/** The memo after `steps`: from `EMPTY_MEMO` it is the whole run's. */
+const foldSteps = (memo: RunMemo, steps: ReadonlyArray<MachineStep>): RunMemo =>
+  steps.reduce(foldStep, memo)
+
+/** The steps `foldStep` reads: a read of the memo loads only these. */
+const MEMO_TAGS = ["Dispatched", "Finished", "Granted", "Saved"] as const
+
 /** The choices an ask offers, by its reason and its state (the table in the design, B2). */
 const choicesOf = (
   state: MachineState,
@@ -1543,7 +1608,6 @@ const askingRun = (
     readonly reason: AskReason
     readonly lead: ReadonlyArray<MachineStep>
     readonly mayStillRun?: boolean
-    readonly visits?: Visits
   },
 ) => {
   const mayStillRun = input.mayStillRun === true
@@ -1559,11 +1623,10 @@ const askingRun = (
     }),
   })
   steps.push(MachineStep.cases.Dispatched.make({ action }))
-  const after: Run = {
+  const after: RunRecord = {
     ...run,
     status: "asking",
     pending: Option.some(action),
-    visits: input.visits ?? run.visits,
   }
   return { after, steps }
 }
@@ -1692,7 +1755,7 @@ const armDriver = Effect.fn("Machines.arm")(function* (run: RunId) {
 })
 
 /** Commits a move, or finds the row moved: the next read decides. */
-const commitMove = (before: Run, after: Run, steps: ReadonlyArray<MachineStep>) =>
+const commitMove = (before: Run, after: RunRecord, steps: ReadonlyArray<MachineStep>) =>
   Effect.flatMap(MachineStore, (store) => store.commit(before, after, steps))
 
 /**
@@ -1943,9 +2006,11 @@ const leaveIntegrate = (
       ...run,
       state: to,
       pending: Option.none(),
-      context: saved(run.context, action.state, value),
     },
-    [MachineStep.cases.Moved.make({ from: action.state, to, by })],
+    [
+      MachineStep.cases.Saved.make({ state: action.state, value }),
+      MachineStep.cases.Moved.make({ from: action.state, to, by }),
+    ],
   )
 
 /**
@@ -2140,15 +2205,14 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
       return
     }
   }
-  const visits = visited(run.visits, name)
   switch (state.kind) {
     case "final":
-      yield* commitMove(run, { ...run, status: "final", visits }, [
+      yield* commitMove(run, { ...run, status: "final" }, [
         MachineStep.cases.Finished.make({ state: name }),
       ])
       return
     case "ask": {
-      const asking = askingRun(run, { state, name, visit, reason: "asked", lead: [], visits })
+      const asking = askingRun(run, { state, name, visit, reason: "asked", lead: [] })
       yield* commitMove(run, asking.after, asking.steps)
       return
     }
@@ -2161,7 +2225,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
         startedAt: yield* Clock.currentTimeMillis,
         launch: yield* commandLaunch(yield* resolveDataDir(ctx.home)),
       })
-      const committed = yield* commitMove(run, { ...run, visits, pending: Option.some(action) }, [
+      const committed = yield* commitMove(run, { ...run, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
       ])
       if (Option.isSome(committed)) yield* startCommand(committed.value, state, action)
@@ -2175,7 +2239,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
         requestId: `machine:${run.run}:${run.seq + 1}`,
         ...omitUndefined({ repairOf: Option.getOrUndefined(repairOf(run.context, name)) }),
       })
-      yield* commitMove(run, { ...run, visits, pending: Option.some(action) }, [
+      yield* commitMove(run, { ...run, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
       ])
       return
@@ -2188,7 +2252,7 @@ const enter = Effect.fn("Machines.enter")(function* (run: Run, signals: Signals)
         key: `machine:${run.run}:${run.seq + 1}`,
         attempt: 1,
       })
-      const committed = yield* commitMove(run, { ...run, visits, pending: Option.some(action) }, [
+      const committed = yield* commitMove(run, { ...run, pending: Option.some(action) }, [
         MachineStep.cases.Dispatched.make({ action }),
       ])
       if (Option.isSome(committed)) yield* dispatchRound(committed.value, state, action, signals)
@@ -2646,11 +2710,11 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     onSome: (next) => state.on?.[next] ?? name,
   })
   const value: Schema.Json = { text: view.text, reply: view.reply }
-  const committed = yield* commitMove(
-    run,
-    { ...run, state: to, pending: Option.none(), context: saved(run.context, name, value) },
-    [ended, MachineStep.cases.Moved.make({ from: name, to, by: "verdict" })],
-  )
+  const committed = yield* commitMove(run, { ...run, state: to, pending: Option.none() }, [
+    ended,
+    MachineStep.cases.Saved.make({ state: name, value }),
+    MachineStep.cases.Moved.make({ from: name, to, by: "verdict" }),
+  ])
   if (Option.isSome(committed) && ownThread(state, action)) {
     yield* threads
       .stop(action.thread, Option.some(`machine-done:${action.key}`))
@@ -2689,7 +2753,7 @@ const isSameCommand = (pending: Option.Option<PendingAction>, action: CommandAct
 const whileCommandPending = (
   runId: RunId,
   action: CommandAction,
-  change: (run: Run) => { readonly after: Run; readonly steps: ReadonlyArray<MachineStep> },
+  change: (run: Run) => { readonly after: RunRecord; readonly steps: ReadonlyArray<MachineStep> },
 ) =>
   Effect.gen(function* () {
     const store = yield* MachineStore
@@ -2754,7 +2818,6 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
           ...current,
           state: to,
           pending: Option.none(),
-          context: saved(current.context, action.state, value),
         },
         steps: [
           MachineStep.cases.CommandEnded.make({
@@ -2763,6 +2826,7 @@ const startCommand = Effect.fn("Machines.startCommand")(function* (
             outputTail,
             ...omitUndefined({ exitCode: Option.getOrUndefined(result.exitCode) }),
           }),
+          MachineStep.cases.Saved.make({ state: action.state, value }),
           MachineStep.cases.Moved.make({
             from: action.state,
             to,
@@ -2963,7 +3027,7 @@ const deliver = Effect.fn("Machines.deliver")(function* (
   settle: (
     run: Run,
     at: number,
-  ) => { readonly after: Run; readonly steps: ReadonlyArray<MachineStep> },
+  ) => { readonly after: RunRecord; readonly steps: ReadonlyArray<MachineStep> },
 ) {
   const ctx = yield* ExtensionContext
   const target = yield* deliveryPlaceOf(run)
@@ -3194,20 +3258,15 @@ const answer = Effect.fn("Machines.answer")(function* (params: AnswerParams) {
     })
     const value: Schema.Json = { choice: params.choice, ...omitUndefined({ note: params.note }) }
     // A retry of an exhausted ask grants the state one visit past its cap.
-    let grants = run.visits.grants
-    if (params.choice === "retry" && action.reason === "exhausted") {
-      grants = { ...grants, [action.state]: (grants[action.state] ?? 0) + 1 }
-    }
-    let after: Run = {
-      ...run,
-      status: "running",
-      state: move.to,
-      pending: Option.none(),
-      context: saved(run.context, action.state, value),
-      visits: { ...run.visits, grants },
-    }
+    const granted = Option.liftPredicate(
+      MachineStep.cases.Granted.make({ state: action.state }),
+      () => params.choice === "retry" && action.reason === "exhausted",
+    )
+    let after: RunRecord = { ...run, status: "running", state: move.to, pending: Option.none() }
     let steps: ReadonlyArray<MachineStep> = [
       answered,
+      MachineStep.cases.Saved.make({ state: action.state, value }),
+      ...Option.toArray(granted),
       MachineStep.cases.Moved.make({ from: action.state, to: move.to, by: "answer" }),
     ]
     if (move.stop) {
@@ -3429,7 +3488,7 @@ const MachineStartTool = tool({
     yield* checkRemotes(definition, cwd)
     const host = { sessionId: ctx.sessionId, branchId: ctx.branchId }
     const input = params.input ?? {}
-    const run: Run = {
+    const run: RunRecord = {
       run: runId,
       machine: definition.name,
       definitionJson: yield* Schema.encodeEffect(DefinitionJson)(definition),
@@ -3438,8 +3497,6 @@ const MachineStartTool = tool({
       deliveryPlace: Option.none(),
       cwd,
       input,
-      context: { last: {}, all: {} },
-      visits: { counts: {}, grants: {} },
       roles: {},
       state: definition.start,
       status: "running",
