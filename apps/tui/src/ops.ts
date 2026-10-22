@@ -36,7 +36,14 @@ import {
   type ServerLockEntry,
   type ServerLockStatus,
 } from "@gent/sdk"
-import { BranchStorage, GentPlatform, MessageStorage, SessionStorage } from "@gent/core/host"
+import {
+  BranchStorage,
+  GentPlatform,
+  KERNEL_SCHEMA_OWNER,
+  KERNEL_SCHEMA_VERSION,
+  MessageStorage,
+  SessionStorage,
+} from "@gent/core/host"
 import * as Prompt from "effect/ai/Prompt"
 import { Argument, Command, Flag } from "effect/cli"
 import {
@@ -59,14 +66,18 @@ const STORAGE_TABLES = [
   "events",
 ] satisfies ReadonlyArray<string>
 
+/**
+ * The database as a server would find it. `stale`: it holds another kernel
+ * schema version, or none, so the next server start wipes it and builds the
+ * current tables.
+ */
 interface StorageHealth {
   readonly dbPath: string
   readonly exists: boolean
   readonly sizeBytes: number
-  readonly migrationTable: "missing" | "present"
-  readonly migrationCount: number
+  readonly schemaVersion: Option.Option<number>
   readonly existingStorageTables: ReadonlyArray<string>
-  readonly status: "missing" | "ok" | "incompatible" | "unreadable"
+  readonly status: "missing" | "ok" | "stale" | "unreadable"
   readonly error?: string
 }
 
@@ -106,8 +117,8 @@ type SqliteHealth = Omit<StorageHealth, "dbPath" | "exists" | "sizeBytes">
 const decodeTableRows = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ name: Schema.String })),
 )
-const decodeCountRows = Schema.decodeUnknownEffect(
-  Schema.Array(Schema.Struct({ count: Schema.Finite })),
+const decodeVersionRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ version: Schema.Finite })),
 )
 
 const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
@@ -116,25 +127,20 @@ const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
     const tables = (yield* decodeTableRows(
       yield* rows("SELECT name FROM sqlite_master WHERE type = 'table'"),
     )).map((row) => row.name)
-    let migrationTable: StorageHealth["migrationTable"] = "missing"
-    if (tables.includes("gent_storage_migrations")) migrationTable = "present"
-    let migrationCount = 0
-    if (migrationTable === "present") {
-      const counted = yield* decodeCountRows(
-        yield* rows("SELECT COUNT(*) AS count FROM gent_storage_migrations"),
+    let schemaVersion = Option.none<number>()
+    if (tables.includes("gent_schema")) {
+      const versions = yield* decodeVersionRows(
+        yield* rows(`SELECT version FROM gent_schema WHERE owner = '${KERNEL_SCHEMA_OWNER}'`),
       )
-      migrationCount = Option.getOrElse(
-        Option.map(Option.fromNullishOr(counted[0]), (row) => row.count),
-        () => 0,
-      )
+      schemaVersion = Option.map(Option.fromNullishOr(versions[0]), (row) => row.version)
     }
     const existingStorageTables = STORAGE_TABLES.filter((table) => tables.includes(table))
-    const incompatible = existingStorageTables.length > 0 && migrationCount === 0
     let status: StorageHealth["status"] = "ok"
-    if (incompatible) status = "incompatible"
+    if (tables.length > 0 && !Option.contains(schemaVersion, KERNEL_SCHEMA_VERSION)) {
+      status = "stale"
+    }
     return {
-      migrationTable,
-      migrationCount,
+      schemaVersion,
       existingStorageTables,
       status,
     } satisfies SqliteHealth
@@ -142,8 +148,7 @@ const readSqliteHealth = (dbPath: string): Effect.Effect<SqliteHealth> =>
     Effect.scoped,
     Effect.catchEager((error) =>
       Effect.succeed({
-        migrationTable: "missing",
-        migrationCount: 0,
+        schemaVersion: Option.none(),
         existingStorageTables: [],
         status: "unreadable",
         error: String(error),
@@ -163,8 +168,7 @@ export const inspectStorage = (
         dbPath,
         exists: false,
         sizeBytes: 0,
-        migrationTable: "missing",
-        migrationCount: 0,
+        schemaVersion: Option.none(),
         existingStorageTables: [],
         status: "missing",
       }
@@ -374,8 +378,12 @@ export const formatDoctorReport = (report: DoctorReport): string => {
   const storage = report.storage
   let storageLine = `missing (${storage.dbPath})`
   if (storage.status !== "missing") {
-    storageLine = `${storage.status} (${storage.dbPath}, ${formatBytes(storage.sizeBytes)}, migrations: ${storage.migrationCount})`
+    storageLine = `${storage.status} (${storage.dbPath}, ${formatBytes(storage.sizeBytes)})`
   }
+  const schemaLine = Option.match(storage.schemaVersion, {
+    onNone: () => `none, current ${KERNEL_SCHEMA_VERSION}`,
+    onSome: (version) => `${version}, current ${KERNEL_SCHEMA_VERSION}`,
+  })
   let tableLine = "none"
   if (storage.existingStorageTables.length > 0) {
     tableLine = storage.existingStorageTables.join(", ")
@@ -388,11 +396,14 @@ export const formatDoctorReport = (report: DoctorReport): string => {
     "",
     "Storage:",
     `  DB: ${storageLine}`,
-    `  Migration table: ${storage.migrationTable}`,
+    `  Schema version: ${schemaLine}`,
     `  Existing storage tables: ${tableLine}`,
   ]
   const error = Option.fromNullishOr(storage.error)
   if (Option.isSome(error)) lines.push(`  Error: ${error.value}`)
+  if (storage.status === "stale") {
+    lines.push("  The next server start wipes it and builds the current tables.")
+  }
   lines.push(
     "",
     "Server:",

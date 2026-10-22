@@ -46,7 +46,7 @@ import {
   Schema,
 } from "effect"
 import { Hex } from "effect/encoding"
-import { Migrator, SqlClient } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import {
   BranchId,
   defineExtension,
@@ -63,6 +63,7 @@ import {
   tool,
   type WakeDueInput,
   WakeNext,
+  ensureExtensionTables,
 } from "@gent/core/extensions/api"
 
 const INTEGRATION_EXTENSION_ID = ExtensionId.make("@gent/integration")
@@ -275,9 +276,9 @@ const storageError = (message: string) => (cause: unknown) =>
 
 // ── storage ─────────────────────────────────────────────────────────────────
 
-const gatesMigration = Effect.gen(function* () {
+const createGatesTable = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS integration_gates (
+  yield* sql.unsafe(`CREATE TABLE integration_gates (
     repo TEXT NOT NULL,
     ref TEXT NOT NULL,
     record_json TEXT NOT NULL,
@@ -287,10 +288,12 @@ const gatesMigration = Effect.gen(function* () {
   )`)
 })
 
-const migrateGates = Migrator.make({})({
-  loader: Migrator.fromRecord({ "1_integration_gates": gatesMigration }),
-  table: "integration_migrations",
-}).pipe(Effect.mapError(storageError("Integration table migration failed")))
+const ensureGatesTable = ensureExtensionTables({
+  owner: "@gent/integration",
+  version: 1,
+  tables: ["integration_gates"],
+  create: createGatesTable,
+}).pipe(Effect.mapError(storageError("Integration table setup failed")))
 
 const GateRow = Schema.Struct({
   record_json: Schema.fromJsonString(GateRecord),
@@ -314,7 +317,7 @@ interface IntegrationStoreService {
   ) => Effect.Effect<boolean, IntegrationError>
 }
 
-/** The `integration_gates` table. Building it runs the migrations it lacks. */
+/** The `integration_gates` table. Building it makes the table when the database lacks it at this version. */
 export class IntegrationStore extends Context.Service<IntegrationStore, IntegrationStoreService>()(
   "@gent/extensions/src/integration/IntegrationStore",
 ) {
@@ -322,7 +325,7 @@ export class IntegrationStore extends Context.Service<IntegrationStore, Integrat
     IntegrationStore,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      yield* migrateGates
+      yield* ensureGatesTable
       const decode = (rows: ReadonlyArray<unknown>) =>
         decodeRows(rows).pipe(
           Effect.map((decoded) =>

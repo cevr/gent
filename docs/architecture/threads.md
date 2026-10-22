@@ -24,8 +24,7 @@
   round stops on its own, eight at a time. The rows that keep a stop notice
   are read by the threads' `turnProjection` into a `# Stopped threads` turn
   notice (one line per thread, newest stop first, at most eight, then a
-  count), as `@gent/wake` does for a `notify` fire (migration
-  `2_thread_round_stop_notices`). `turnAfter` clears exactly the rounds in
+  count), as `@gent/wake` does for a `notify` fire (`stop_notice_at`). `turnAfter` clears exactly the rounds in
   `readNotices`, which an answered turn hands back; a notice the turn did not
   show, because its read failed or the cap left it out, stays. The stop
   starts no turn; the starter's next turn, whoever starts it, knows the
@@ -117,8 +116,8 @@
     busy refusal; it re-sends only a round whose message never reached the
     branch. A repeat of a round's command (`completion: "admission"`)
     admits nothing new and returns at once; it does not wait for the turn.
-  - `thread_rounds` (one table in the server's database; its migrations are
-    recorded in `thread_migrations`, apart from core's chain) keeps each round: its thread key, the
+  - `thread_rounds` (one table in the server's database, at the threads' own
+    schema version, apart from the kernel's) keeps each round: its thread key, the
     session and branch it ran on, the sender and the sender's thread key,
     the reply it asked for, `notify`, and once it ends the text, the last
     `thread.reply` value, the turn's flags, its error, its usage and cost,
@@ -249,7 +248,7 @@
   SHA-256 over the caller's session, branch and tool call id) and returns at
   admission.
   - A run is one row in `machine_runs` and an append-only log in
-    `machine_steps` (their own migrations, in `machine_migrations`). Every
+    `machine_steps` (at the machines' own schema version). Every
     write compares and sets the row's `seq`. A step records the action it
     dispatches before it dispatches it (`Dispatched`), and the action's
     receipt once it has one (`Recorded`: a round's thread and id, a

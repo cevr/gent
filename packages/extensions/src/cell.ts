@@ -49,6 +49,7 @@ import {
   ToolImage,
   ToolResultFailure,
   GentPlatform,
+  ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
   AgentLoopError,
@@ -88,7 +89,7 @@ import {
   toolResultSummary,
   type TurnStop,
 } from "@gent/core/extensions/branch-tools"
-import { Migrator, SqlClient } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import { Decision } from "effect/ai"
 import * as Prompt from "effect/ai/Prompt"
 import { canonicalJsonString } from "effect-encore"
@@ -760,21 +761,13 @@ const makeNamespaceStorage = Effect.gen(function* () {
 // ── cell storage ────────────────────────────────────────────────────────────
 
 /**
- * The tables the cell owns, in the session database.
- *
- * The cell runs its own migrations, recorded in its own table
- * (`cell_migrations`), so its ids never meet core's chain. The tables first
- * shipped as migrations 012-014 of core's chain: a database from that time
- * has them and keeps those three ids in `gent_storage_migrations`, which core
- * never reuses. So the first migration creates each table only where it is
- * missing, with the same columns, keys and checks; on such a database it
- * changes nothing. A later migration must be additive: a server that still
- * runs the code before it reads the same tables.
+ * The tables the cell owns, in the session database, kept at their own
+ * schema version.
  */
-const cellTablesMigration = Effect.gen(function* () {
+const createCellTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS cell_executions (
+    CREATE TABLE cell_executions (
       assistant_message_id TEXT NOT NULL,
       tool_call_id TEXT NOT NULL,
       started_at INTEGER NOT NULL,
@@ -786,7 +779,7 @@ const cellTablesMigration = Effect.gen(function* () {
     )
   `)
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS cell_tool_operations (
+    CREATE TABLE cell_tool_operations (
       assistant_message_id TEXT NOT NULL,
       cell_tool_call_id TEXT NOT NULL,
       operation_id TEXT NOT NULL,
@@ -798,7 +791,7 @@ const cellTablesMigration = Effect.gen(function* () {
     )
   `)
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS cell_namespaces (
+    CREATE TABLE cell_namespaces (
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
       snapshot_json TEXT NOT NULL,
@@ -809,17 +802,12 @@ const cellTablesMigration = Effect.gen(function* () {
   `)
 })
 
-/**
- * Runs the cell's migrations that the database has not recorded. It runs in
- * one transaction, and a run that finds another one recording the same ids
- * treats them as done, so two builds over one database are safe.
- */
-const migrateCellTables = Migrator.make({})({
-  loader: Migrator.fromRecord({ "1_cell_tables": cellTablesMigration }),
-  table: "cell_migrations",
-}).pipe(
-  Effect.mapError((cause) => new StorageError({ message: "Cell table migration failed", cause })),
-)
+const ensureCellTables = ensureExtensionTables({
+  owner: "@gent/cell",
+  version: 1,
+  tables: ["cell_tool_operations", "cell_executions", "cell_namespaces"],
+  create: createCellTables,
+}).pipe(Effect.mapError((cause) => new StorageError({ message: "Cell table setup failed", cause })))
 
 /**
  * The cell's three tables as one service: inner operation receipts, outer
@@ -838,7 +826,7 @@ export class CellStorage extends Context.Service<
   static Live = Layer.effect(
     CellStorage,
     Effect.gen(function* () {
-      yield* migrateCellTables
+      yield* ensureCellTables
       return CellStorage.of({
         operations: yield* makeToolOperationStorage,
         executions: yield* makeExecutionStorage,

@@ -124,7 +124,7 @@ they are then, so an edit reaches the next turn without a restart.
 ## Session admission, model and effort
 
 - The agent is a session property. `Session.admission` (agent, run spec;
-  `sessions.admission_json`, migration 023) is fixed at creation,
+  `sessions.admission_json`) is fixed at creation,
   and every turn of the session runs under it: the first, a wake, a queued
   follow-up, a steer that starts a turn, and a recovered turn after a restart.
   `resolveSessionRoute` (`runtime/turn.ts`) resolves it once for the turn,

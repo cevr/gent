@@ -105,14 +105,11 @@ built for a terminated session skips its eager open. So a send after a delete
 or a terminate runs no `loopOpen` hook and builds no branch Resources.
 The cell owns its state through two Resources it registers, as any extension
 can. `CellStorageResource` (process scope) builds `CellStorage` and the
-`RetainedBindings` projection over the session database: it runs the cell's
-own migrations, recorded in `cell_migrations`, so its ids never meet core's
-chain. Migration `1_cell_tables` creates `cell_executions`,
-`cell_tool_operations` and `cell_namespaces` only where they are missing, with
-the columns, keys and checks they had as migrations 012-014 of core's chain; a
-database from that time keeps those three ids in `gent_storage_migrations`,
-and core never reuses them. A database opened earlier without the cell gets
-the tables when the cell first loads. `CellKernelResource` (branch scope)
+`RetainedBindings` projection over the session database: it keeps
+`cell_executions`, `cell_tool_operations` and `cell_namespaces` at the cell's
+own schema version (`@gent/cell` in `gent_schema`), apart from the kernel's. A
+database opened earlier without the cell gets the tables when the cell first
+loads. `CellKernelResource` (branch scope)
 names the storage and reads `BranchAddress`; it builds `CellExecution`, so
 each branch owns a separate service and lazy worker, and closing the branch's
 generation closes that worker. Its build key holds only the cell's own process

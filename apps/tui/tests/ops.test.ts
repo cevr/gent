@@ -52,7 +52,7 @@ import {
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/sql"
-import { GentPlatform } from "@gent/core/host"
+import { GentPlatform, KERNEL_SCHEMA_OWNER, KERNEL_SCHEMA_VERSION } from "@gent/core/host"
 import {
   dateFromMillis,
   ExtensionHealthIssue,
@@ -338,7 +338,26 @@ describe("local health", () => {
     })
   })
 
-  it.scopedLive("reports incompatible storage tables without migration records", () =>
+  it.scopedLive("a database at another kernel schema version is stale", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const { dbPath } = yield* dataPaths(home)
+      yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
+      yield* createDb(
+        dbPath,
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
+        `INSERT INTO gent_schema (owner, version) VALUES ('${KERNEL_SCHEMA_OWNER}', ${KERNEL_SCHEMA_VERSION + 1})`,
+      )
+
+      const storage = yield* inspectStorage(home)
+      expect(storage.status).toBe("stale")
+      expect(storage.schemaVersion).toEqual(Option.some(KERNEL_SCHEMA_VERSION + 1))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a database with no kernel schema version is stale", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -351,16 +370,17 @@ describe("local health", () => {
       )
 
       const storage = yield* inspectStorage(home)
-      expect(storage.status).toBe("incompatible")
+      expect(storage.status).toBe("stale")
       expect(storage.existingStorageTables).toEqual(["sessions"])
-      expect(storage.migrationCount).toBe(0)
+      expect(storage.schemaVersion).toEqual(Option.none())
 
       const report = formatDoctorReport(
         yield* makeDoctorReport(home, absentServer, yield* readDoctorExtensionHealth(absentServer)),
       )
       expect(report).toContain("Gent doctor")
-      expect(report).toContain("incompatible")
-      expect(report).toContain("Migration table: missing")
+      expect(report).toContain("stale")
+      expect(report).toContain(`Schema version: none, current ${KERNEL_SCHEMA_VERSION}`)
+      expect(report).toContain("The next server start wipes it")
       expect(report).toContain("Extensions:")
       expect(report).toContain("Status: No server for this data directory.")
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
@@ -569,7 +589,7 @@ describe("local health", () => {
       yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true })
       yield* createDb(
         dbPath,
-        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
       )
 
       const result = yield* resetStorage(home)
@@ -605,7 +625,7 @@ describe("local health", () => {
       )
       yield* createDb(
         paths.dbPath,
-        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
       )
       reported.stderr = ""
       const refused = yield* reportFailureOnStderr(resetStorage(home)).pipe(Effect.flip)
@@ -647,7 +667,7 @@ describe("local health", () => {
       yield* base.makeDirectory(dataDir, { recursive: true })
       yield* createDb(
         dbPath,
-        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
       )
       // A server start takes this ownership; it releases it when its scope closes.
       const serverStart = Effect.scoped(serverLock.hold(home)).pipe(
@@ -692,15 +712,15 @@ describe("local health", () => {
       const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
-        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
-        "INSERT INTO gent_storage_migrations (migration_id, name) VALUES (1, 'initial')",
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
+        `INSERT INTO gent_schema (owner, version) VALUES ('${KERNEL_SCHEMA_OWNER}', ${KERNEL_SCHEMA_VERSION})`,
       )
 
       const storage = yield* inspectStorage(home).pipe(withDataDir(dataDir))
       expect(storage.dbPath).toBe(dbPath)
       expect(storage.exists).toBe(true)
       expect(storage.status).toBe("ok")
-      expect(storage.migrationCount).toBe(1)
+      expect(storage.schemaVersion).toEqual(Option.some(KERNEL_SCHEMA_VERSION))
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
@@ -712,7 +732,7 @@ describe("local health", () => {
       const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
-        "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
+        "CREATE TABLE gent_schema (owner TEXT PRIMARY KEY, version INTEGER NOT NULL)",
       )
 
       const result = yield* resetStorage(home).pipe(withDataDir(dataDir))

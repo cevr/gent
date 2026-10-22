@@ -12,7 +12,7 @@ import {
   type Scope,
   Stream,
 } from "effect"
-import { Migrator, SqlClient } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import {
   type AgentEvent,
   AgentName,
@@ -30,6 +30,7 @@ import {
   SessionId,
   ToolCallId,
   type TurnAfterInput,
+  ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
   type CompactionRequest,
@@ -938,12 +939,11 @@ const windowStorageError = (message: string) => (cause: unknown) =>
   new ContextWindowStorageError({ message, cause })
 
 /**
- * The role windows' tables, in the server's database, with their own
- * migration ledger (`compaction_migrations`), as threads keep theirs. A
- * later migration must be additive: a server that still runs the code
- * before it reads the same tables.
+ * The role windows' tables, in the server's database, kept at their own
+ * schema version. Each step keeps its output reserve and input cap, so a
+ * replay uses the limits the step ran under.
  */
-const contextWindowsMigration = Effect.gen(function* () {
+const createContextWindowTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* Effect.forEach(
     [
@@ -960,6 +960,8 @@ const contextWindowsMigration = Effect.gen(function* () {
         compacted INTEGER NOT NULL,
         turn_started_at INTEGER NOT NULL,
         recorded_at INTEGER NOT NULL,
+        reserved_output_tokens INTEGER,
+        input_limit_tokens INTEGER,
         PRIMARY KEY (session_id, branch_id, message_id, step)
       )`,
       `CREATE INDEX context_window_steps_recorded ON context_window_steps (recorded_at)`,
@@ -993,24 +995,17 @@ const contextWindowsMigration = Effect.gen(function* () {
   )
 })
 
-/**
- * Each step's output reserve and input cap, so a replay uses the limits the
- * step ran under. A step stored before them has no reserve and leaves the
- * tune.
- */
-const stepLimitsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`ALTER TABLE context_window_steps ADD COLUMN reserved_output_tokens INTEGER`)
-  yield* sql.unsafe(`ALTER TABLE context_window_steps ADD COLUMN input_limit_tokens INTEGER`)
-})
-
-const migrateContextWindows = Migrator.make({})({
-  loader: Migrator.fromRecord({
-    "1_context_windows": contextWindowsMigration,
-    "2_context_window_step_limits": stepLimitsMigration,
-  }),
-  table: "compaction_migrations",
-}).pipe(Effect.mapError(windowStorageError("Context window table migration failed")))
+const ensureContextWindowTables = ensureExtensionTables({
+  owner: "@gent/compaction",
+  version: 1,
+  tables: [
+    "context_window_steps",
+    "context_window_rereads",
+    "context_windows",
+    "context_window_tunes",
+  ],
+  create: createContextWindowTables,
+}).pipe(Effect.mapError(windowStorageError("Context window table setup failed")))
 
 const StepRow = Schema.Struct({
   session_id: Schema.String,
@@ -1089,8 +1084,8 @@ interface ContextWindowsService {
 }
 
 /**
- * The role windows, their samples and their tune runs. Building it migrates
- * the tables and loads the windows; a failed migration or load leaves every
+ * The role windows, their samples and their tune runs. Building it creates
+ * the tables and loads the windows; a failed table setup or load leaves every
  * role at its model window, and a corrupt row leaves its own role there.
  */
 export class ContextWindows extends Context.Service<ContextWindows, ContextWindowsService>()(
@@ -1107,10 +1102,10 @@ export class ContextWindows extends Context.Service<ContextWindows, ContextWindo
       const warn = (event: string) => (cause: Cause.Cause<unknown>) =>
         Effect.logWarning(event).pipe(Effect.annotateLogs({ cause: Cause.pretty(cause) }))
 
-      const ready = yield* migrateContextWindows.pipe(
+      const ready = yield* ensureContextWindowTables.pipe(
         Effect.as(true),
         Effect.catchCause((cause) =>
-          warn("compaction.windows.migrate.failed")(cause).pipe(Effect.as(false)),
+          warn("compaction.windows.setup.failed")(cause).pipe(Effect.as(false)),
         ),
       )
       if (!ready) {

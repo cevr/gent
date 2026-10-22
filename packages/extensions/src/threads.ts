@@ -53,7 +53,7 @@ import {
   Stream,
 } from "effect"
 import { Hex } from "effect/encoding"
-import { Migrator, SqlClient } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import {
   ActorCommandId,
   AgentDefinition,
@@ -84,6 +84,7 @@ import {
   stepSessionMetrics,
   tool,
   type TurnAfterInput,
+  ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
   ChildToolLine,
@@ -617,18 +618,16 @@ const makeReconciledBranches = Effect.map(
 )
 
 /**
- * The round table, in the server's database. Threads run their own
- * migrations, recorded in their own table (`thread_migrations`), as the cell
- * does, so their ids never meet core's chain. The table first shipped
- * without a ledger, on an unreleased branch, so the first migration drops a
- * table that build left and creates it whole. A later migration must be
- * additive: a server that still runs the code before it reads the same table.
+ * The round table, in the server's database, kept at its own schema version.
+ * `stop_notice_at` is when the stop notice of a round the starter's interrupt
+ * stopped was written, until a turn of the starter reads it. `retry_at` is
+ * when the usage limit a round's turn failed on resets: a sender that is not
+ * a model turn (a machine) waits for it instead of sending again at once.
  */
-const threadRoundsMigration = Effect.gen(function* () {
+const createThreadRounds = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* Effect.forEach(
     [
-      `DROP TABLE IF EXISTS thread_rounds`,
       `CREATE TABLE thread_rounds (
         round TEXT PRIMARY KEY,
         thread TEXT NOT NULL,
@@ -654,28 +653,14 @@ const threadRoundsMigration = Effect.gen(function* () {
         usage_json TEXT,
         wake_session_id TEXT,
         wake_branch_id TEXT,
-        delivered_at INTEGER
+        delivered_at INTEGER,
+        stop_notice_at INTEGER,
+        retry_at INTEGER
       )`,
       `CREATE INDEX thread_rounds_by_thread ON thread_rounds (thread, ended_at)`,
       `CREATE INDEX thread_rounds_open_at ON thread_rounds (session_id, branch_id) WHERE ended_at IS NULL`,
       `CREATE INDEX thread_rounds_open_by_starter ON thread_rounds (starter_thread) WHERE ended_at IS NULL`,
       `CREATE INDEX thread_rounds_undelivered ON thread_rounds (starter_thread) WHERE delivered_at IS NULL`,
-    ],
-    (statement) => sql.unsafe(statement),
-    { discard: true },
-  )
-})
-
-/**
- * The stop notice of a round the starter's interrupt stopped: when it was
- * written, until a turn of the starter reads it. Additive: a server on the
- * code before it reads and writes the same rows.
- */
-const stopNoticesMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* Effect.forEach(
-    [
-      `ALTER TABLE thread_rounds ADD COLUMN stop_notice_at INTEGER`,
       `CREATE INDEX thread_rounds_stop_notices ON thread_rounds (wake_session_id, wake_branch_id) WHERE stop_notice_at IS NOT NULL`,
     ],
     (statement) => sql.unsafe(statement),
@@ -683,33 +668,17 @@ const stopNoticesMigration = Effect.gen(function* () {
   )
 })
 
-/**
- * When the usage limit a round's turn failed on resets: a sender that is not
- * a model turn (a machine) waits for it instead of sending again at once.
- * Additive: a server on the code before it reads and writes the same rows.
- */
-const roundRetryAtMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`ALTER TABLE thread_rounds ADD COLUMN retry_at INTEGER`)
-})
-
-/**
- * Runs the migrations the database has not recorded, in one transaction. A
- * run that finds another one recording the same ids treats them as done, so
- * the builds of two places over one database are safe.
- */
-const migrateThreadRounds = Migrator.make({})({
-  loader: Migrator.fromRecord({
-    "1_thread_rounds": threadRoundsMigration,
-    "2_thread_round_stop_notices": stopNoticesMigration,
-    "3_thread_round_retry_at": roundRetryAtMigration,
-  }),
-  table: "thread_migrations",
-}).pipe(Effect.mapError(storageError("Thread table migration failed")))
+const ensureThreadRounds = ensureExtensionTables({
+  owner: "@gent/threads",
+  version: 1,
+  tables: ["thread_rounds"],
+  create: createThreadRounds,
+}).pipe(Effect.mapError(storageError("Thread table setup failed")))
 
 /**
  * The `thread_rounds` table, the feed of round ends and the admission permit.
- * Building it runs the migrations it lacks. It is a server resource: a thread
+ * Building it makes the table when the database lacks it at this version. It
+ * is a server resource: a thread
  * started with `cwd` runs in another place than its starter, and its round's
  * sender and end must meet one feed and one permit.
  */
@@ -732,7 +701,7 @@ export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsServ
         [...starting].filter(([key, entry]) => key !== round && entry.thread === starterThread)
           .length
       const reconciled = yield* makeReconciledBranches
-      yield* migrateThreadRounds
+      yield* ensureThreadRounds
 
       const selectRound = Effect.fn("ThreadRounds.selectRound")(function* (round: string) {
         const rows =

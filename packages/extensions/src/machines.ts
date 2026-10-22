@@ -60,7 +60,7 @@ import {
 import { Tool } from "effect/ai"
 import { Hex } from "effect/encoding"
 import type { ChildProcessSpawner } from "effect/process/ChildProcessSpawner"
-import { Migrator, SqlClient } from "effect/sql"
+import { SqlClient } from "effect/sql"
 import {
   AgentName,
   BranchId,
@@ -81,6 +81,7 @@ import {
   type WakeDueInput,
   WakeNext,
   writeFileAtomic,
+  ensureExtensionTables,
 } from "@gent/core/extensions/api"
 import {
   type CommandProcess,
@@ -850,15 +851,15 @@ const stateOfStep = (step: MachineStep, fallback: StateName): StateName => {
 // ── storage ─────────────────────────────────────────────────────────────────
 
 /**
- * The tables, in the server's database. Machines run their own migrations,
- * recorded in their own table (`machine_migrations`), as threads do, so
- * their ids never meet core's chain.
+ * The tables, in the server's database, kept at their own schema version: a
+ * change to a table or to a stored shape bumps it, and a database at another
+ * version loses these tables and gets them again.
  */
-const machineTablesMigration = Effect.gen(function* () {
+const createMachineTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* Effect.forEach(
     [
-      `CREATE TABLE IF NOT EXISTS machine_runs (
+      `CREATE TABLE machine_runs (
         run TEXT PRIMARY KEY,
         machine TEXT NOT NULL,
         definition_json TEXT NOT NULL,
@@ -881,10 +882,10 @@ const machineTablesMigration = Effect.gen(function* () {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )`,
-      `CREATE INDEX IF NOT EXISTS machine_runs_host ON machine_runs (host_session_id, host_branch_id)
+      `CREATE INDEX machine_runs_host ON machine_runs (host_session_id, host_branch_id)
         WHERE status IN ('running','asking') OR notified_at IS NULL`,
-      `CREATE INDEX IF NOT EXISTS machine_runs_owner ON machine_runs (owner_thread, created_at)`,
-      `CREATE TABLE IF NOT EXISTS machine_steps (
+      `CREATE INDEX machine_runs_owner ON machine_runs (owner_thread, created_at)`,
+      `CREATE TABLE machine_steps (
         run TEXT NOT NULL REFERENCES machine_runs(run) ON DELETE CASCADE,
         seq INTEGER NOT NULL,
         at INTEGER NOT NULL,
@@ -892,44 +893,27 @@ const machineTablesMigration = Effect.gen(function* () {
         step_json TEXT NOT NULL,
         PRIMARY KEY (run, seq)
       )`,
+      // A tier pick reads one machine's rounds of one state: the runs by
+      // machine, their steps by state.
+      `CREATE INDEX machine_runs_machine ON machine_runs (machine)`,
+      `CREATE INDEX machine_steps_state ON machine_steps (run, state)`,
+      // A round's thread finds its run: the recorded rounds by thread. The
+      // query repeats the index's expressions, as SQLite matches them.
+      `CREATE INDEX machine_steps_thread
+        ON machine_steps (json_extract(step_json, '$.action.thread'))
+        WHERE json_extract(step_json, '$._tag') = 'Recorded'`,
     ],
     (statement) => sql.unsafe(statement),
     { discard: true },
   )
 })
 
-/** A tier pick reads one machine's rounds of one state: the runs by machine, their steps by state. */
-const machineRoundsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* Effect.forEach(
-    [
-      `CREATE INDEX IF NOT EXISTS machine_runs_machine ON machine_runs (machine)`,
-      `CREATE INDEX IF NOT EXISTS machine_steps_state ON machine_steps (run, state)`,
-    ],
-    (statement) => sql.unsafe(statement),
-    { discard: true },
-  )
-})
-
-/**
- * A round's thread finds its run: the recorded rounds by thread. The query
- * repeats the index's expressions, as SQLite matches them.
- */
-const machineThreadsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS machine_steps_thread
-    ON machine_steps (json_extract(step_json, '$.action.thread'))
-    WHERE json_extract(step_json, '$._tag') = 'Recorded'`)
-})
-
-const migrateMachineTables = Migrator.make({})({
-  loader: Migrator.fromRecord({
-    "1_machine_tables": machineTablesMigration,
-    "2_machine_rounds": machineRoundsMigration,
-    "3_machine_threads": machineThreadsMigration,
-  }),
-  table: "machine_migrations",
-}).pipe(Effect.mapError(storageError("Machine table migration failed")))
+const ensureMachineTables = ensureExtensionTables({
+  owner: "@gent/machines",
+  version: 1,
+  tables: ["machine_steps", "machine_runs"],
+  create: createMachineTables,
+}).pipe(Effect.mapError(storageError("Machine table setup failed")))
 
 /** At most this many rounds and commands run at once in one server, over every machine. */
 const MAX_ACTIVE_MACHINE_STEPS = 4
@@ -1067,8 +1051,8 @@ const RUN_COLUMNS = `run, machine, definition_json, host_session_id, host_branch
   state, status, pending_json, seq, notified_at, error, created_at, updated_at`
 
 /**
- * The run tables and the step permits. Building it runs
- * the migrations it lacks and reads the crash debt. It is a server resource:
+ * The run tables and the step permits. Building it makes the tables
+ * when the database lacks them at this version, and reads the crash debt. It is a server resource:
  * one server's machines share the permits.
  */
 export class MachineStore extends Context.Service<MachineStore, MachineStoreService>()(
@@ -1078,7 +1062,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
     MachineStore,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      yield* migrateMachineTables
+      yield* ensureMachineTables
 
       const decodeRuns = (rows: ReadonlyArray<unknown>) =>
         Effect.forEach(rows, (row) => Effect.map(decodeRunRow(row), runOfRow)).pipe(

@@ -46,6 +46,7 @@ import {
   testLeafContext,
   testToolContext,
   windowMarkerMessage,
+  SqliteStorage,
 } from "@gent/core/test-utils"
 import {
   estimateTextTokens,
@@ -54,7 +55,7 @@ import {
   ModelContextCompactor,
   planWindow,
 } from "@gent/core/extensions/branch-tools"
-import { BunSqlite } from "@gent/core/host-bun"
+import { BunPlatformLive, BunSqlite } from "@gent/core/host-bun"
 import {
   compactModelContext,
   ContextWindows,
@@ -1542,8 +1543,9 @@ describe("role windows", () => {
       Effect.gen(function* () {
         const dir = yield* makeTempDirectoryScoped("compaction-tuned-")
         const storagePath = `${dir}/gent.db`
-        // The server's database as an earlier tune left it: a fresh run and a
-        // 33k window for the root agent. The model's 128k window reserves 32k
+        // The server's database as an earlier tune left it: the kernel's
+        // tables, a fresh run and a 33k window for the root agent. A database
+        // with no kernel version is wiped when the server opens it. The model's 128k window reserves 32k
         // for output, so a turn that starts past about 1k hands off.
         const row = yield* Schema.encodeEffect(Schema.fromJsonString(RoleWindow))({
           role: { agent: DEFAULT_AGENT_NAME, child: false },
@@ -1567,7 +1569,11 @@ describe("role windows", () => {
             VALUES (${DEFAULT_AGENT_NAME}, 0, ${row}, ${now})
           `
         }).pipe(
-          Effect.provide(BunSqlite.file(storagePath).pipe(Layer.provide(BunServices.layer))),
+          Effect.provide(
+            SqliteStorage.WithSql(BunSqlite.file(storagePath)).pipe(
+              Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)),
+            ),
+          ),
           Effect.scoped,
         )
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

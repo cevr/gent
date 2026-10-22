@@ -90,7 +90,7 @@
   undone, prices each handoff as its summary call, the restart write and the
   role's re-reads per handoff (the fleet's below 20 handoffs, 20k with
   neither), skips a role under 20 agents (branches), and keeps the largest
-  window within 1% of the cheapest (`tuneWindows`). A failed migration or
+  window within 1% of the cheapest (`tuneWindows`). A failed table setup or
   load leaves every role at its model window; a corrupt row leaves its own
   role there, with a warning. The summary prompt keeps plan, log and state
   file paths, the current step and the user's instructions word for word,

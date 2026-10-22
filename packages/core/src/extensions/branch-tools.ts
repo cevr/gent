@@ -8,7 +8,7 @@
  * and recover their own calls across a restart.
  *
  * Such an extension uses the ordinary vocabulary for its state: a process
- * `defineResource` owns its tables and migrates them, a branch
+ * `defineResource` owns its tables and creates them, a branch
  * `defineResource` owns its per-branch services, a tool reads its turn's stop
  * through `CurrentTurnStop`, and `tool({ recover })` settles the calls a
  * crash left in flight. This entry adds only the core services such a tool

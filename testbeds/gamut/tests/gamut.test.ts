@@ -527,10 +527,10 @@ describe("gamut status", () => {
   })
 })
 
-describe("gamut reads the schema gent migrates", () => {
+describe("gamut reads the schema gent builds", () => {
   // SQLite prepares each query as it runs, so a table or a column the
-  // migrated schema lacks fails the read here, not in the next live run.
-  it.live("every status and wait query runs on a freshly migrated database", () =>
+  // current schema lacks fails the read here, not in the next live run.
+  it.live("every status and wait query runs on a fresh database", () =>
     Effect.gen(function* () {
       const dir = yield* makeTempDirectoryScoped("gent-gamut-schema-")
       const file = `${dir}/data.db`

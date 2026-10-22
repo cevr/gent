@@ -534,7 +534,7 @@ describe("Durable-Object-shaped storage", () => {
       const dir = yield* makeTempDirectoryScoped("gent-do-init-")
       const disk = yield* makeDurableObjectDisk(`${dir}/object.db`)
       const { storage } = disk.activate("enforce")
-      // Init is portable DDL and the generic migrator: no PRAGMA of the
+      // Init is portable DDL: no PRAGMA of the
       // connection's, which the host owns.
       yield* Layer.build(StorageInitLive.pipe(Layer.provide(hostedSqlOf(storage))))
       expect(wallsOf(disk)).toEqual([])

@@ -764,10 +764,10 @@ the session database (`SqlClient` from `effect/sql`, and `InteractionStorage`
 from `@gent/core/extensions/branch-tools`). So an extension can own tables in
 the session database, with foreign keys to core tables and their delete
 cascades, and write an interaction request and its own row in one
-transaction. A process Resource that owns tables creates and migrates them in
-its layer, under a migration table of its own: the cell runs `effect/sql`'s
-`Migrator` over `cell_migrations` with `CREATE TABLE IF NOT EXISTS`
-migrations. A list in a query binds through `sqlInList(sql, values)` from
+transaction. A process Resource that owns tables creates them in its layer
+with `ensureExtensionTables({ owner, version, tables, create })` from
+`@gent/core/extensions/api`: an open at another version drops `tables` and runs
+`create`. A change to the tables bumps `version`; no migration runs. A list in a query binds through `sqlInList(sql, values)` from
 `@gent/core/extensions/api` (one JSON parameter), not `sql.in`: a hosted
 SQLite refuses more than 100 bound parameters, and a guard reports `sql.in`. A `branch` Resource also gets its `BranchAddress` (session id,
 branch id, cwd, home) and the services of the `process` Resources of its own

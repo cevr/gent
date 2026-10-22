@@ -2156,8 +2156,8 @@ interface DependenciesConfig {
    * The SQLite client this deployment keeps its state in, opened by the host
    * and built once: the Bun host's file or in-memory connection
    * (`BunSqlite.file(dbPath)`, `BunSqlite.memory` from `@gent/core/host-bun`),
-   * or a host's own (a Durable Object's storage). The root runs its
-   * migrations and repositories over it; the client layer sets its PRAGMAs.
+   * or a host's own (a Durable Object's storage). The root builds its
+   * tables and repositories over it; the client layer sets its PRAGMAs.
    */
   sql: Layer.Layer<
     SqlClient.SqlClient,

@@ -2,7 +2,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { BunSqlite } from "../../src/runtime/gent-platform-bun"
 import * as Prompt from "effect/ai/Prompt"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import {
   Cause,
   Clock,
@@ -208,7 +207,7 @@ describe("Sessions", () => {
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const sql = yield* SqlClient.SqlClient
-      yield* sql`INSERT INTO sessions (id, reasoning_level, created_at, updated_at) VALUES (${"invalid-reasoning"}, ${"too-spicy"}, ${FIXED_NOW_MILLIS}, ${FIXED_NOW_MILLIS})`
+      yield* sql`INSERT INTO sessions (id, workspace_id, reasoning_level, created_at, updated_at) VALUES (${"invalid-reasoning"}, ${DefaultWorkspaceId}, ${"too-spicy"}, ${FIXED_NOW_MILLIS}, ${FIXED_NOW_MILLIS})`
       const retrieved = yield* sessions.getSession(SessionId.make("invalid-reasoning"))
       expect(retrieved?.reasoningLevel).toBeUndefined()
     }).pipe(Effect.provide(testSqliteStorage)),
@@ -241,7 +240,7 @@ describe("Sessions", () => {
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
       const sql = yield* SqlClient.SqlClient
-      yield* sql`INSERT INTO sessions (id, created_at, updated_at) VALUES (${"invalid-session-row"}, ${"not-a-number"}, ${FIXED_NOW_MILLIS})`
+      yield* sql`INSERT INTO sessions (id, workspace_id, created_at, updated_at) VALUES (${"invalid-session-row"}, ${DefaultWorkspaceId}, ${"not-a-number"}, ${FIXED_NOW_MILLIS})`
       const error = yield* Effect.flip(sessions.getSession(SessionId.make("invalid-session-row")))
       expect(error).toBeInstanceOf(StorageError)
     }).pipe(Effect.provide(testSqliteStorage)),
@@ -303,191 +302,6 @@ describe("Sessions", () => {
         expect(walAutocheckpoint[0]?.wal_autocheckpoint).toBe(1000)
         expect(foreignKeys[0]?.foreign_keys).toBe(1)
       }).pipe(Effect.provide(layer))
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-  it.scoped("migrator runs forward-only and is idempotent on reboot", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const dbPath = path.join(dir, "gent.db")
-      const layer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
-        Layer.provide(BunFileSystem.layer),
-        Layer.provide(BunServices.layer),
-        Layer.provide(GentPlatform.Test()),
-      )
-      const sessionId = SessionId.make("migrator-session")
-
-      yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        yield* sessions.createSession(
-          new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
-        )
-        const sql = yield* SqlClient.SqlClient
-        const migrations = yield* sql<{
-          name: string
-        }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
-        expect(migrations.map((row) => row.name)).toEqual([
-          "init",
-          "agent_loop_queue",
-          "session_workspace",
-          "agent_loop_queue_workspace",
-          "interaction_decision",
-          "durable_operations",
-          "durable_operation_integrity",
-          "agent_loop_queue_integrity",
-          "tool_call_bindings",
-          "resource_graph_state",
-          "message_insertion_order",
-          "drop_resource_graph_state",
-          "drop_write_only_storage",
-          "session_model",
-          "turn_records",
-          "session_thread",
-          "drop_message_search_index",
-          "interaction_owner",
-          "turn_record_admission",
-          "session_admission",
-          "model_catalog_snapshots",
-          "tool_image_references",
-          "branch_wakes",
-        ])
-      }).pipe(Effect.provide(layer))
-
-      // Reboot — migrator must not re-run the init migration.
-      yield* Effect.gen(function* () {
-        const sessions = yield* SessionStorage
-        const found = yield* sessions.getSession(sessionId)
-        expect(found?.id).toBe(sessionId)
-        const sql = yield* SqlClient.SqlClient
-        const migrations = yield* sql<{
-          name: string
-        }>`SELECT name FROM gent_storage_migrations ORDER BY migration_id`
-        expect(migrations.map((row) => row.name)).toEqual([
-          "init",
-          "agent_loop_queue",
-          "session_workspace",
-          "agent_loop_queue_workspace",
-          "interaction_decision",
-          "durable_operations",
-          "durable_operation_integrity",
-          "agent_loop_queue_integrity",
-          "tool_call_bindings",
-          "resource_graph_state",
-          "message_insertion_order",
-          "drop_resource_graph_state",
-          "drop_write_only_storage",
-          "session_model",
-          "turn_records",
-          "session_thread",
-          "drop_message_search_index",
-          "interaction_owner",
-          "turn_record_admission",
-          "session_admission",
-          "model_catalog_snapshots",
-          "tool_image_references",
-          "branch_wakes",
-        ])
-      }).pipe(Effect.provide(layer))
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-  it.scoped("upgrades equal-time message order without changing stored content", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const layer = SqliteStorage.WithSql(BunSqlite.file(path.join(dir, "gent.db"))).pipe(
-        Layer.provide(BunFileSystem.layer),
-        Layer.provide(BunServices.layer),
-        Layer.provide(GentPlatform.Test()),
-      )
-      const sessionId = SessionId.make("order-upgrade-session")
-      const branchId = BranchId.make("order-upgrade-branch")
-      yield* Effect.gen(function* () {
-        const messages = yield* MessageStorage
-        yield* ensureStorageParents({ sessionId, branchId })
-        for (const id of ["step9", "step10"]) {
-          yield* messages.createMessage(
-            Message.cases.regular.make({
-              id: MessageId.make(id),
-              sessionId,
-              branchId,
-              role: "assistant",
-              parts: [Prompt.textPart({ text: id })],
-              createdAt: FIXED_NOW,
-            }),
-          )
-        }
-        // Restore the version-10 schema in this temporary test database.
-        const sql = yield* SqlClient.SqlClient
-        yield* sql.unsafe("DROP TRIGGER messages_assign_insertion_order")
-        yield* sql.unsafe("DROP INDEX idx_messages_branch_created")
-        yield* sql.unsafe("DROP INDEX idx_messages_insertion_order")
-        yield* sql.unsafe("ALTER TABLE messages DROP COLUMN insertion_order")
-        yield* sql.unsafe(
-          "CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, id)",
-        )
-        yield* sql.unsafe("DELETE FROM gent_storage_migrations WHERE migration_id >= 11")
-      }).pipe(Effect.provide(layer))
-      yield* Effect.gen(function* () {
-        const messages = yield* MessageStorage
-        const before = yield* messages.listMessages(branchId)
-        expect(before.map((message) => message.id)).toEqual([
-          MessageId.make("step9"),
-          MessageId.make("step10"),
-        ])
-        expect(before.map((message) => message.parts)).toEqual([
-          [Prompt.textPart({ text: "step9" })],
-          [Prompt.textPart({ text: "step10" })],
-        ])
-        yield* messages.createMessageIfAbsent(
-          Message.cases.regular.make({
-            id: MessageId.make("step11"),
-            sessionId,
-            branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: "next turn" })],
-            createdAt: FIXED_NOW,
-          }),
-        )
-        expect((yield* messages.listMessages(branchId)).map((message) => message.id)).toEqual([
-          MessageId.make("step9"),
-          MessageId.make("step10"),
-          MessageId.make("step11"),
-        ])
-      }).pipe(Effect.provide(layer))
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-  it.scoped("reports existing storage tables without migration records", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const dbPath = path.join(dir, "gent.db")
-
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient
-        yield* sql.unsafe(`
-          CREATE TABLE sessions (
-            id TEXT PRIMARY KEY,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-          )
-        `)
-      }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
-
-      const layer = SqliteStorage.WithSql(BunSqlite.file(dbPath)).pipe(
-        Layer.provide(BunFileSystem.layer),
-        Layer.provide(BunServices.layer),
-        Layer.provide(GentPlatform.Test()),
-      )
-      const exit = yield* Effect.exit(Layer.buildWithScope(layer, yield* Effect.scope))
-
-      expect(exit._tag).toBe("Failure")
-      if (Exit.isFailure(exit)) {
-        expect(String(exit.cause)).toContain("existing storage tables")
-        expect(String(exit.cause)).toContain("gent_storage_migrations")
-      }
     }).pipe(Effect.provide(BunServices.layer)),
   )
   it.live("rejects orphan branch, message, event, queue, and durable operation rows", () =>
@@ -2606,21 +2420,6 @@ describe("TurnRecordStorage", () => {
     }).pipe(Effect.provide(storageLayer)),
   )
 
-  it.live("a row that still holds a turn admission reads as its position", () =>
-    Effect.gen(function* () {
-      const key = yield* makeFixtureTurnRecord("admission")
-      const storage = yield* TurnRecordStorage
-      const sql = yield* SqlClient.SqlClient
-      // Written by the per-turn admission before migration 023 moved it to the session.
-      const admission = `{"agentOverride":"helper","runSpec":{"overrides":{"maxSteps":4}},"interactive":false}`
-      yield* sql`
-        INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
-        VALUES (${key.sessionId}, ${key.branchId}, ${key.messageId}, ${2}, ${0}, ${"[]"}, ${admission}, ${FIXED_NOW.getTime()})
-      `
-      expect(yield* storage.get(key)).toEqual({ step: 2, continuations: 0, pendingToolCalls: [] })
-    }).pipe(Effect.provide(storageLayer)),
-  )
-
   it.live("refuses a negative or fractional position instead of storing it", () =>
     Effect.gen(function* () {
       const key = yield* makeFixtureTurnRecord("invalid-position")
@@ -2682,7 +2481,7 @@ describe("TurnRecordStorage", () => {
   )
 })
 
-describe("turn_records migration", () => {
+describe("turn_records table", () => {
   it.live("creates the turn_records table with its turn key", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
@@ -2690,7 +2489,6 @@ describe("turn_records migration", () => {
         SELECT name, pk FROM pragma_table_info('turn_records')
       `
       expect(columns.map((column) => column.name).sort()).toEqual([
-        "admission_json",
         "branch_id",
         "continuations",
         "message_id",

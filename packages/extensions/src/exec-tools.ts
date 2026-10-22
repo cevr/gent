@@ -32,6 +32,7 @@ import {
   BranchId,
   defineExtension,
   defineResource,
+  ensureExtensionTables,
   ExtensionContext,
   type ExtensionContextService,
   ExtensionHost,
@@ -54,8 +55,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process"
 
 // Test seam: only tests read these exports. BackgroundBashStorage, its error,
 // BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
-// storage fault; addBackgroundBashColumn lets it replay a migration race.
-// BashParams encodes a model's tool input.
+// storage fault. BashParams encodes a model's tool input.
 
 // ── background bash storage ─────────────────────────────────────────────────
 
@@ -258,37 +258,44 @@ const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState =
   }
 }
 
-const backgroundBashColumns = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const rows = yield* sql<{ readonly name: string }>`
-    SELECT name FROM pragma_table_info('background_bash_jobs')
-  `
-  return rows.map((row) => row.name)
-}).pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
-
 /**
- * Adds a column the table read as `columns` lacks. Another process may have
- * read the same old table and added it first: when the add fails, the table
- * is read again, and a column that is there now is no failure.
+ * The background jobs table, kept at its own schema version. `owner_generation`
+ * is the server process that started the job. `output_file` is the job's
+ * artifact pointer. `pid` and `process_start_id` are the process a restart
+ * checks; `process_token` names its group and `process_receipt` is its
+ * `CommandLaunch` receipt. A NULL in either means the job recorded no process.
  */
-export const addBackgroundBashColumn = (
-  columns: ReadonlyArray<string>,
-  name: string,
-  type: "TEXT" | "INTEGER",
-) =>
-  Effect.gen(function* () {
-    if (columns.includes(name)) return
+const ensureBackgroundBashTable = ensureExtensionTables({
+  owner: "@gent/exec-tools",
+  version: 1,
+  tables: ["background_bash_jobs"],
+  create: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
-    yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN ${name} ${type}`).pipe(
-      Effect.catchCause((cause) =>
-        Effect.flatMap(backgroundBashColumns, (current) => {
-          if (current.includes(name)) return Effect.void
-          return Effect.failCause(cause)
-        }),
-      ),
-      Effect.mapError(mapError(`Failed to add background bash jobs column ${name}`)),
-    )
-  })
+    yield* sql.unsafe(`
+      CREATE TABLE background_bash_jobs (
+        session_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        command TEXT NOT NULL,
+        cwd TEXT,
+        status TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        exit_code INTEGER,
+        message TEXT,
+        owner_generation TEXT,
+        notice_read_at INTEGER,
+        undelivered_at INTEGER,
+        output_file TEXT,
+        pid INTEGER,
+        process_start_id TEXT,
+        process_token TEXT,
+        process_receipt TEXT,
+        PRIMARY KEY (session_id, branch_id, tool_call_id)
+      )
+    `)
+  }),
+}).pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
 
 export class BackgroundBashStorage extends Context.Service<
   BackgroundBashStorage,
@@ -300,53 +307,7 @@ export class BackgroundBashStorage extends Context.Service<
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
 
-        yield* sql
-          .unsafe(
-            `
-            CREATE TABLE IF NOT EXISTS background_bash_jobs (
-              session_id TEXT NOT NULL,
-              branch_id TEXT NOT NULL,
-              tool_call_id TEXT NOT NULL,
-              command TEXT NOT NULL,
-              cwd TEXT,
-              status TEXT NOT NULL,
-              started_at INTEGER NOT NULL,
-              completed_at INTEGER,
-              exit_code INTEGER,
-              message TEXT,
-              owner_generation TEXT,
-              notice_read_at INTEGER,
-              undelivered_at INTEGER,
-              output_file TEXT,
-              pid INTEGER,
-              process_start_id TEXT,
-              PRIMARY KEY (session_id, branch_id, tool_call_id)
-            )
-          `,
-          )
-          .pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
-        // A table from before `owner_generation` gets the column; its rows keep
-        // NULL. One from before `notice_read_at` gets it too, and its
-        // interrupted jobs stay unread: the earlier code told a branch only
-        // when its loop opened, so a job is shown once more at worst, never lost.
-        // One from before `undelivered_at` gets it with NULL: no old job is owed a notice.
-        const columns = yield* backgroundBashColumns
-        yield* addBackgroundBashColumn(columns, "owner_generation", "TEXT")
-        yield* addBackgroundBashColumn(columns, "notice_read_at", "INTEGER")
-        yield* addBackgroundBashColumn(columns, "undelivered_at", "INTEGER")
-        // NULL belongs to the earlier sanitized layout. New claims retain
-        // their exact artifact pointer even if opening the file fails or stops.
-        yield* addBackgroundBashColumn(columns, "output_file", "TEXT")
-        // NULL: the job recorded no process (an earlier build, or a start time
-        // that could not be read), so a restart cannot check it.
-        yield* addBackgroundBashColumn(columns, "pid", "INTEGER")
-        yield* addBackgroundBashColumn(columns, "process_start_id", "TEXT")
-        // NULL: a job from before the token, whose group a restart stops only
-        // while its leader runs.
-        yield* addBackgroundBashColumn(columns, "process_token", "TEXT")
-        // NULL: a job from before receipts (`CommandLaunch`), which a restart
-        // finds only through the process its server copied into the row.
-        yield* addBackgroundBashColumn(columns, "process_receipt", "TEXT")
+        yield* ensureBackgroundBashTable
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))

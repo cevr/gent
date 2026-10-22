@@ -321,13 +321,13 @@ commit.
     register the resource definition a leaf or a branch Resource names; the
     check is by identity, so another definition under the same id fails too.
     A server or process Resource names none, and a branch Resource names
-    only process Resources. An extension that owns tables creates and migrates them in a
-    server or process Resource over the host's `SqlClient`, under a migration table of
-    its own; core's migration chain builds only the kernel's tables, and the
+    only process Resources. An extension that owns tables creates them in a
+    server or process Resource over the host's `SqlClient`, at a schema version of
+    its own (`ensureExtensionTables`); core builds only the kernel's tables, and the
     root takes no feature input. The cell is the shipped process case
     (`CellStorageResource`, `CellKernelResource`), and a user extension has
     the same two declarations; the threads' round table is the server case
-    (`ThreadsResource`, `thread_migrations`). Receipts:
+    (`ThreadsResource`, `@gent/threads`). Receipts:
     `packages/core/src/domain/capability.ts` (`tool`, `request`),
     `packages/core/src/domain/extension.ts` (`defineResource`,
     `RequiredDeclarations`, `validateLeafResources`), `packages/extensions/src/cell.ts`,

@@ -162,7 +162,7 @@ interface RoundRecord {
   readonly stop_noticed: number
 }
 
-/** The round table once the threads' migrations ran: the stop-notice index is the last one. */
+/** The round table once the threads built it: the stop-notice index is the last one. */
 const roundTableReady = (sql: Sql) =>
   waitFor(
     sql(

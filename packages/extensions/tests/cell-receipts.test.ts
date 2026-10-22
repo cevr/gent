@@ -567,42 +567,6 @@ describe("cell approvals", () => {
 
 // ── cell tables ─────────────────────────────────────────────────────────────
 
-/**
- * The cell tables as migrations 012-014 of core's chain created them, before
- * the cell ran its own migrations. An existing database holds these, with
- * the three ids recorded in `gent_storage_migrations`.
- */
-const recordedCellTables = [
-  `CREATE TABLE cell_executions (
-      assistant_message_id TEXT NOT NULL,
-      tool_call_id TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      result_json TEXT,
-      completed_at INTEGER,
-      PRIMARY KEY (assistant_message_id, tool_call_id),
-      CHECK ((result_json IS NULL) = (completed_at IS NULL)),
-      FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
-    )`,
-  `CREATE TABLE cell_tool_operations (
-      assistant_message_id TEXT NOT NULL,
-      cell_tool_call_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      request_id TEXT UNIQUE,
-      PRIMARY KEY (assistant_message_id, cell_tool_call_id, operation_id),
-      FOREIGN KEY (assistant_message_id, cell_tool_call_id)
-        REFERENCES cell_executions(assistant_message_id, tool_call_id) ON DELETE CASCADE
-    )`,
-  `CREATE TABLE cell_namespaces (
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      snapshot_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )`,
-]
-
 /** One read of the database file between two servers, or beside one. */
 const readDatabase = <A>(storagePath: string, read: (db: Database) => A) =>
   Effect.acquireUseRelease(
@@ -619,16 +583,15 @@ const cellTableNames = (db: Database) =>
     .all()
     .map((row) => row.name)
 
-const migrationIds = (db: Database, table: string) =>
+/** The schema version the cell's tables are at, as `gent_schema` records it. */
+const cellSchemaVersion = (db: Database) =>
   db
-    .query<{ migration_id: number }, []>(`SELECT migration_id FROM ${table} ORDER BY migration_id`)
+    .query<{ version: number }, []>("SELECT version FROM gent_schema WHERE owner = '@gent/cell'")
     .all()
-    .map((row) => row.migration_id)
+    .map((row) => row.version)
 
 const rowCount = (db: Database, table: string) =>
   db.query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count ?? 0
-
-const squashed = (sql: string) => sql.replaceAll(/\s+/g, " ").trim()
 
 /** A server on one database file: without the cell, or with the approval cell. */
 const cellServer = (params: {
@@ -694,7 +657,7 @@ describe("cell tables", () => {
       Effect.gen(function* () {
         const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
         const storagePath = (yield* Path.Path).join(directory, "gent.db")
-        // First server: no cell. Core's own migrations create no cell table.
+        // First server: no cell. Core's own schema has no cell table.
         yield* Effect.scoped(
           Effect.gen(function* () {
             const { client } = yield* cellServer({
@@ -731,49 +694,23 @@ describe("cell tables", () => {
         )
         const after = yield* readDatabase(storagePath, (db) => ({
           tables: cellTableNames(db),
-          cellMigrations: migrationIds(db, "cell_migrations"),
-          coreMigrations: migrationIds(db, "gent_storage_migrations"),
+          version: cellSchemaVersion(db),
           executions: rowCount(db, "cell_executions"),
           namespaces: rowCount(db, "cell_namespaces"),
         }))
-        expect(after.tables).toEqual([
-          "cell_executions",
-          "cell_migrations",
-          "cell_namespaces",
-          "cell_tool_operations",
-        ])
-        expect(after.cellMigrations).toEqual([1])
-        expect(after.coreMigrations).not.toContain(12)
+        expect(after.tables).toEqual(["cell_executions", "cell_namespaces", "cell_tool_operations"])
+        expect(after.version).toEqual([1])
         expect(after).toMatchObject({ executions: 0, namespaces: 0 })
       }).pipe(Effect.timeout("25 seconds"), Effect.provide(platform)),
     30000,
   )
 
   it.scopedLive(
-    "an existing database keeps its cell rows: a waiting operation resumes and a saved binding comes back",
+    "a restart keeps the cell rows: a waiting operation resumes and a saved binding comes back",
     () =>
       Effect.gen(function* () {
         const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped()
         const storagePath = (yield* Path.Path).join(directory, "gent.db")
-        // A database as an earlier build left it: core's tables, and the cell
-        // tables that core's chain created as migrations 012-014.
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const { client } = yield* cellServer({
-              storagePath,
-              cell: Option.none(),
-              steps: [textStep("no cell")],
-            })
-            const target = yield* client.session.create({})
-            yield* runTurn(client, target, "hello")
-          }),
-        )
-        yield* readDatabase(storagePath, (db) => {
-          for (const statement of recordedCellTables) db.exec(statement)
-          db.exec(
-            "INSERT INTO gent_storage_migrations (migration_id, name) VALUES (12, 'cell_executions'), (13, 'cell_tool_operations'), (14, 'cell_namespaces')",
-          )
-        })
         const cell = yield* approvalCell
         // A server keeps a binding, and stops while a cell waits on an approval.
         const first = yield* Effect.scoped(
@@ -855,25 +792,7 @@ describe("cell tables", () => {
             expect(results[2]).toMatchObject({ isFailure: false, result: { display: "42" } })
           }),
         )
-        const after = yield* readDatabase(storagePath, (db) => ({
-          tables: db
-            .query<{ sql: string }, []>(
-              "SELECT sql FROM sqlite_master WHERE type = 'table' AND name IN ('cell_executions', 'cell_tool_operations', 'cell_namespaces') ORDER BY name",
-            )
-            .all()
-            .map((row) => squashed(row.sql)),
-          cellMigrations: migrationIds(db, "cell_migrations"),
-          coreMigrations: migrationIds(db, "gent_storage_migrations"),
-        }))
-        // The tables are the ones the earlier build created, and the
-        // recorded ids stay.
-        expect(after.tables).toEqual(
-          [recordedCellTables[0], recordedCellTables[2], recordedCellTables[1]].map((sql) =>
-            squashed(sql ?? ""),
-          ),
-        )
-        expect(after.cellMigrations).toEqual([1])
-        expect(after.coreMigrations).toEqual(expect.arrayContaining([12, 13, 14]))
+        expect(yield* readDatabase(storagePath, cellSchemaVersion)).toEqual([1])
       }).pipe(Effect.timeout("30 seconds"), Effect.provide(platform)),
     35000,
   )

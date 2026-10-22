@@ -21,7 +21,6 @@ import {
   Stream,
 } from "effect"
 import {
-  addBackgroundBashColumn,
   BackgroundBashLayer,
   BackgroundBashStorage,
   BackgroundBashStorageError,
@@ -618,24 +617,6 @@ describe("Bash command semantics", () => {
     }
   }
 })
-
-/** A jobs table with no read-mark column for interrupted jobs. */
-const oldBackgroundBashTable = `
-  CREATE TABLE background_bash_jobs (
-    session_id TEXT NOT NULL,
-    branch_id TEXT NOT NULL,
-    tool_call_id TEXT NOT NULL,
-    command TEXT NOT NULL,
-    cwd TEXT,
-    status TEXT NOT NULL,
-    started_at INTEGER NOT NULL,
-    completed_at INTEGER,
-    exit_code INTEGER,
-    message TEXT,
-    owner_generation TEXT,
-    PRIMARY KEY (session_id, branch_id, tool_call_id)
-  )
-`
 
 describe("BashTool summary", () => {
   test("names the exit code and the printed line count", () => {
@@ -1250,101 +1231,35 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
-  it.live("a running job from a table before owner generations is interrupted", () =>
+  it.live("an unread interrupted job and a running job of a gone server are each shown once", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      yield* sql.unsafe(`
-        CREATE TABLE background_bash_jobs (
-          session_id TEXT NOT NULL,
-          branch_id TEXT NOT NULL,
-          tool_call_id TEXT NOT NULL,
-          command TEXT NOT NULL,
-          cwd TEXT,
-          status TEXT NOT NULL,
-          started_at INTEGER NOT NULL,
-          completed_at INTEGER,
-          exit_code INTEGER,
-          message TEXT,
-          PRIMARY KEY (session_id, branch_id, tool_call_id)
-        )
-      `)
-      yield* sql`
-        INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at)
-        VALUES ('s', 'b', 'legacy', 'sleep 9', 'running', 0)
-      `
-      const claim = yield* Effect.gen(function* () {
+      const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
+      const unread = yield* Effect.gen(function* () {
         const storage = yield* BackgroundBashStorage
-        yield* storage.reconcileInterrupted([])
-        return yield* storage.claimStart({
-          sessionId: SessionId.make("s"),
-          branchId: BranchId.make("b"),
-          toolCallId: ToolCallId.make("legacy"),
-          command: "sleep 9",
-          cwd: Option.none(),
-        })
-      }).pipe(Effect.provide(BackgroundBashStorage.Live))
-      expect(claim._tag).toBe("Terminal")
-      if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
-    }).pipe(
-      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
-    ),
-  )
-
-  it.live("a column another process added after this one read the table is no failure", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient
-      yield* sql.unsafe(oldBackgroundBashTable)
-      // This process read the old table; then the other one added the column.
-      const staleColumns = ["session_id", "branch_id", "tool_call_id", "owner_generation"]
-      yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN notice_read_at INTEGER`)
-      const added = yield* Effect.exit(
-        addBackgroundBashColumn(staleColumns, "notice_read_at", "INTEGER"),
-      )
-      expect(added._tag).toBe("Success")
-      // A failure that leaves the column missing still fails.
-      yield* sql.unsafe(`DROP TABLE background_bash_jobs`)
-      const missing = yield* Effect.exit(addBackgroundBashColumn([], "notice_read_at", "INTEGER"))
-      expect(missing._tag).toBe("Failure")
-    }).pipe(
-      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
-    ),
-  )
-
-  it.live(
-    "a job interrupted before notices had a read mark is shown once more, never dropped",
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient
-        yield* sql.unsafe(oldBackgroundBashTable)
-        // A row of this table does not tell whether the branch was shown
-        // `earlier`. `running` belongs to a server that is gone.
+        // `running` belongs to a server that is gone and recorded no process.
         yield* sql`
-        INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
-        VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
-               ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL)
-      `
-        const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
-        const unread = yield* Effect.gen(function* () {
-          const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted([])
-          const before = yield* storage.interruptedJobs(branch)
-          yield* storage.markNoticesRead(branch, [
-            ToolCallId.make("earlier"),
-            ToolCallId.make("running"),
-          ])
-          return { before, after: yield* storage.interruptedJobs(branch) }
-        }).pipe(Effect.provide(BackgroundBashStorage.Live))
-        // `running` recorded no process, so nothing tells whether it still runs.
-        expect(unread.before).toEqual([
-          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8", mayStillRun: false },
-          { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
+            INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
+            VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
+                   ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL)
+          `
+        yield* storage.reconcileInterrupted([])
+        const before = yield* storage.interruptedJobs(branch)
+        yield* storage.markNoticesRead(branch, [
+          ToolCallId.make("earlier"),
+          ToolCallId.make("running"),
         ])
-        expect(unread.after).toEqual([])
-      }).pipe(
-        Effect.provide(
-          SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive)),
-        ),
-      ),
+        return { before, after: yield* storage.interruptedJobs(branch) }
+      }).pipe(Effect.provide(BackgroundBashStorage.Live))
+      // `running` recorded no process, so nothing tells whether it still runs.
+      expect(unread.before).toEqual([
+        { toolCallId: ToolCallId.make("earlier"), command: "sleep 8", mayStillRun: false },
+        { toolCallId: ToolCallId.make("running"), command: "sleep 9", mayStillRun: true },
+      ])
+      expect(unread.after).toEqual([])
+    }).pipe(
+      Effect.provide(SqliteStorage.WithSql(BunSqlite.memory).pipe(Layer.provide(BunPlatformLive))),
+    ),
   )
 
   it.scopedLive(

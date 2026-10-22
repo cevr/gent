@@ -196,7 +196,7 @@ describe("core feature independence guard", () => {
       "    CREATE TABLE cell_executions (",
     )
     expect(findings).toHaveLength(1)
-    expect(findings[0]!.message).toContain("migrates its own tables in a process Resource")
+    expect(findings[0]!.message).toContain("creates its own tables in a process Resource")
   })
 
   test("lets the cell extension name its own tables", () => {
@@ -1844,11 +1844,8 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/extensions/src/x.ts", "ctx.extension.request(ref)", "ctx.extension"],
   ["packages/extensions/src/x.ts", "// typed RPC helpers", "typed RPC helpers"],
   ["packages/core/src/runtime/x.ts", "const span = GentSpan.start()", "GentSpan"],
-  [
-    "packages/core/src/storage/x.ts",
-    "yield* resetIncompatibleStorageSchema()",
-    "resetIncompatibleStorageSchema",
-  ],
+  ["packages/core/src/storage/x.ts", 'import { Migrator } from "effect/sql"', "Migrator"],
+  ["packages/extensions/src/x.ts", "ALTER TABLE jobs ADD COLUMN pid INTEGER", "ALTER TABLE"],
   ["packages/core/src/runtime/x.ts", "const layer = AuthStorage.LiveFile(path)", "LiveFile"],
   [
     "packages/core/src/server/x.ts",

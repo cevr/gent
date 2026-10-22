@@ -71,7 +71,7 @@ It reads the run's own `data.db` read-only and prints:
 ## The four traps it removes
 
 1. **The real database.** A binary built anywhere opens `~/.gent/data.db` and
-   runs its migrations there, which breaks every older binary. `up` exports
+   wipes it when its schema version differs, which breaks every older binary. `up` exports
    `GENT_DATA_DIR` at the pane, so the run writes its own `data.db` in the
    scratch dir. Auth is unaffected: the auth store resolves from
    `${home}/.gent/auth`, not the data dir, so the real credentials still work.

@@ -45,8 +45,7 @@ Shape:
 - Durable wakes (the `durable wakes` section of `agent-loop.ts`): an
   extension arms a wake record on a branch with
   `ExtensionContext.Session.wakeAt({ sourceId, at? })` and removes it with
-  `cancelWake({ sourceId })`. The record lives in `branch_wakes` (migration
-  `026_branch_wakes`, keyed by session, branch, extension and `sourceId`,
+  `cancelWake({ sourceId })`. The record lives in `branch_wakes` (keyed by session, branch, extension and `sourceId`,
   with a foreign key to its branch, so a session delete removes it); a
   repeat with the same `sourceId` is one upsert that replaces `at` (no `at`
   keeps the time set), bumps `version` and clears `attempts`. Each record

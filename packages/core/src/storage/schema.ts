@@ -10,8 +10,9 @@ import {
 } from "../domain/message.js"
 import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
-import { BranchId, MessageId, SessionId, DefaultWorkspaceId } from "../domain/ids.js"
-import { Migrator, SqlClient } from "effect/sql"
+import { BranchId, MessageId, SessionId } from "../domain/ids.js"
+import { SqlClient } from "effect/sql"
+import type { SqlError } from "effect/sql/SqlError"
 import { storageError, StorageError } from "../domain/errors.js"
 
 // ── stored rows ─────────────────────────────────────────────────────────────
@@ -267,60 +268,153 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
   })
 })
 
-const tableExists = (name: string) =>
+/**
+ * The version of the kernel's tables and of every JSON shape they store.
+ * Gent keeps no migrations while it has no users: a change to a table or to
+ * a stored shape bumps this, and a database at another version is wiped and
+ * built again when it opens.
+ */
+export const KERNEL_SCHEMA_VERSION = 1
+
+/** The schema owner the kernel's row names; an extension's row names its id. */
+export const KERNEL_SCHEMA_OWNER = "kernel"
+
+/** Each schema owner's version, one row per owner. */
+const createSchemaVersions = `
+  CREATE TABLE IF NOT EXISTS gent_schema (
+    owner TEXT PRIMARY KEY,
+    version INTEGER NOT NULL
+  )
+`
+
+const SchemaVersionRows = Schema.Array(Schema.Struct({ version: Schema.Finite }))
+const TableRows = Schema.Array(Schema.Struct({ name: Schema.String }))
+
+const storedVersion = (owner: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql<{ name: string }>`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ${name}
-      LIMIT 1
-    `
-    return rows.length > 0
+    const rows = yield* Schema.decodeUnknownEffect(SchemaVersionRows)(
+      yield* sql`SELECT version FROM gent_schema WHERE owner = ${owner}`,
+    )
+    return Option.map(Option.fromUndefinedOr(rows[0]), (row) => row.version)
   })
 
-const migrationCount = Effect.gen(function* () {
+/** Every table in the database but SQLite's own. */
+const everyTable = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  const hasMigrationTable = yield* tableExists("gent_storage_migrations")
-  if (!hasMigrationTable) return 0
-  const rows = yield* sql<{ count: number }>`
-    SELECT COUNT(*) AS count
-    FROM gent_storage_migrations
-  `
-  return rows[0]?.count ?? 0
+  const rows = yield* Schema.decodeUnknownEffect(TableRows)(
+    yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+  )
+  return rows.map((row) => row.name)
 })
 
-const assertMigrationStateCompatible = Effect.fn("Storage.assertMigrationStateCompatible")(
-  function* () {
-    const existingStorageTables = yield* Effect.forEach(
-      ["sessions", "branches", "messages", "events"],
-      tableExists,
+const ReferenceRows = Schema.Array(Schema.Struct({ child: Schema.String, parent: Schema.String }))
+
+/**
+ * `tables` in an order that drops each one after every table that references
+ * it. A drop of a table whose parent is already gone fails ("no such table").
+ * Tables left in a reference cycle come last, in the order given.
+ */
+const dropOrder = (
+  tables: ReadonlyArray<string>,
+  references: typeof ReferenceRows.Type,
+): ReadonlyArray<string> => {
+  const order: Array<string> = []
+  let remaining = tables
+  while (remaining.length > 0) {
+    const left = remaining
+    const referenced = new Set(
+      references
+        .filter((row) => row.child !== row.parent && left.includes(row.child))
+        .map((row) => row.parent),
     )
-    const hasExistingStorageTables = existingStorageTables.some((exists) => exists)
-    if (!hasExistingStorageTables) return
+    const free = left.filter((table) => !referenced.has(table))
+    if (free.length === 0) return [...order, ...left]
+    order.push(...free)
+    remaining = left.filter((table) => referenced.has(table))
+  }
+  return order
+}
 
-    const appliedMigrations = yield* migrationCount
-    if (appliedMigrations > 0) return
+const dropTables = (tables: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const references = yield* Schema.decodeUnknownEffect(ReferenceRows)(
+      yield* sql`SELECT m.name AS child, f."table" AS parent
+        FROM sqlite_master m, pragma_foreign_key_list(m.name) f
+        WHERE m.type = 'table'`,
+    )
+    for (const table of dropOrder(tables, references))
+      yield* sql.unsafe(`DROP TABLE IF EXISTS "${table}"`)
+  })
 
-    return yield* new StorageError({
-      message:
-        "Incompatible Gent SQLite database: found existing storage tables but no gent_storage_migrations records. Move or delete ~/.gent/data.db, or run a dedicated migration repair, before starting Gent.",
-    })
-  },
-)
+/**
+ * Keep `owner`'s tables at `version`: a database that records another
+ * version, or none, loses them (`drop`) and gets them again (`create`).
+ * One transaction, so a second process opening the same file waits and then
+ * finds the version recorded. Foreign keys stay on, since Durable Object
+ * storage refuses `PRAGMA foreign_keys`: the drop orders the tables instead
+ * (`dropOrder`).
+ */
+const ensureVersion = <E, R>(params: {
+  readonly owner: string
+  readonly version: number
+  readonly drop: Effect.Effect<void, SqlError | Schema.SchemaError, SqlClient.SqlClient>
+  readonly create: Effect.Effect<void, E | SqlError, R | SqlClient.SqlClient>
+}) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* Effect.gen(function* () {
+      yield* sql.unsafe(createSchemaVersions)
+      if (Option.contains(yield* storedVersion(params.owner), params.version)) return
+      yield* params.drop
+      yield* sql.unsafe(createSchemaVersions)
+      yield* params.create
+      yield* sql`INSERT INTO gent_schema (owner, version) VALUES (${params.owner}, ${params.version})
+        ON CONFLICT(owner) DO UPDATE SET version = excluded.version`
+    }).pipe(sql.withTransaction)
+  })
 
-const initialMigration = Effect.gen(function* () {
+/**
+ * The tables an extension owns, kept at its own version. A database at
+ * another version loses `tables` and runs `create`, which makes them as the
+ * extension's code reads them now; the kernel's rows stay. A kernel version
+ * change wipes every table, the extension's included.
+ */
+export const ensureExtensionTables = <E, R>(params: {
+  readonly owner: string
+  readonly version: number
+  readonly tables: ReadonlyArray<string>
+  readonly create: Effect.Effect<void, E | SqlError, R | SqlClient.SqlClient>
+}) =>
+  ensureVersion({
+    owner: params.owner,
+    version: params.version,
+    drop: dropTables(params.tables),
+    create: params.create,
+  })
+
+const createKernelTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
 
+  // `workspace_id` scopes a session to the project that opened it.
+  // `thread_id` is the thread the session belongs to: a compaction handoff
+  // continues its parent's thread, a spawn (a delegate run, a `/btw` fork)
+  // starts its own. `admission_json` is the agent its turns run as, with the
+  // run overrides, set when the session is created; NULL runs the default agent.
   yield* sql.unsafe(`
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
       name TEXT,
       cwd TEXT,
+      model_id TEXT,
       reasoning_level TEXT,
       active_branch_id TEXT,
       parent_session_id TEXT,
       parent_branch_id TEXT,
+      thread_id TEXT,
+      admission_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       ${SESSION_PARENT_BRANCH_CHECK},
@@ -329,6 +423,9 @@ const initialMigration = Effect.gen(function* () {
       FOREIGN KEY (parent_branch_id, parent_session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
     )
   `)
+  yield* sql.unsafe(`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id)`)
+  yield* sql.unsafe(`CREATE INDEX idx_sessions_workspace ON sessions(workspace_id, updated_at)`)
+  yield* sql.unsafe(`CREATE INDEX idx_sessions_thread ON sessions(workspace_id, thread_id)`)
 
   yield* sql.unsafe(`
     CREATE TABLE branches (
@@ -343,7 +440,10 @@ const initialMigration = Effect.gen(function* () {
       FOREIGN KEY (parent_branch_id, session_id) REFERENCES branches(id, session_id) DEFERRABLE INITIALLY DEFERRED
     )
   `)
+  yield* sql.unsafe(`CREATE INDEX idx_branches_session ON branches(session_id)`)
 
+  // `insertion_order` breaks a `created_at` tie: a rowid can change when
+  // SQLite runs VACUUM. The trigger numbers a row inserted without one.
   yield* sql.unsafe(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -354,21 +454,31 @@ const initialMigration = Effect.gen(function* () {
       created_at INTEGER NOT NULL,
       turn_duration_ms INTEGER,
       metadata TEXT,
+      insertion_order INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-
-  yield* sql.unsafe(`CREATE UNIQUE INDEX idx_branches_id_session ON branches(id, session_id)`)
+  yield* sql.unsafe(`CREATE UNIQUE INDEX idx_messages_insertion_order ON messages(insertion_order)`)
+  yield* sql.unsafe(
+    `CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, insertion_order)`,
+  )
+  yield* sql.unsafe(`
+    CREATE TRIGGER messages_assign_insertion_order AFTER INSERT ON messages
+    WHEN NEW.insertion_order = 0
+    BEGIN
+      UPDATE messages
+      SET insertion_order = (SELECT COALESCE(MAX(insertion_order), 0) + 1 FROM messages)
+      WHERE id = NEW.id;
+    END
+  `)
 
   yield* sql.unsafe(`
     CREATE TABLE content_chunks (
       id TEXT PRIMARY KEY,
-      part_type TEXT NOT NULL,
       part_json TEXT NOT NULL
     )
   `)
-
   yield* sql.unsafe(`
     CREATE TABLE message_chunks (
       message_id TEXT NOT NULL,
@@ -379,6 +489,7 @@ const initialMigration = Effect.gen(function* () {
       FOREIGN KEY (chunk_id) REFERENCES content_chunks(id)
     )
   `)
+  yield* sql.unsafe(`CREATE INDEX idx_message_chunks_chunk ON message_chunks(chunk_id)`)
 
   yield* sql.unsafe(`
     CREATE TABLE events (
@@ -393,145 +504,35 @@ const initialMigration = Effect.gen(function* () {
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
+  yield* sql.unsafe(`CREATE INDEX idx_events_session ON events(session_id, id)`)
+  yield* sql.unsafe(`CREATE INDEX idx_events_session_branch ON events(session_id, branch_id, id)`)
+  yield* sql.unsafe(`CREATE INDEX idx_events_session_tag ON events(session_id, event_tag, id)`)
 
+  // The owner columns name the call that asked, so an answer goes back to it
+  // after a restart; a request no call owns leaves them NULL.
   yield* sql.unsafe(`
     CREATE TABLE interaction_requests (
       request_id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
       params_json TEXT NOT NULL,
+      decision_json TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
-	      created_at INTEGER NOT NULL,
+      owner_tool_call_id TEXT,
+      owner_occurrence INTEGER,
+      created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-
-  yield* sql.unsafe(`CREATE INDEX idx_messages_branch ON messages(branch_id)`)
-  yield* sql.unsafe(
-    `CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, id)`,
-  )
-  yield* sql.unsafe(`CREATE INDEX idx_message_chunks_chunk ON message_chunks(chunk_id)`)
-  yield* sql.unsafe(`CREATE INDEX idx_events_session ON events(session_id, id)`)
-  yield* sql.unsafe(`CREATE INDEX idx_events_session_branch ON events(session_id, branch_id, id)`)
-  yield* sql.unsafe(`CREATE INDEX idx_events_session_tag ON events(session_id, event_tag, id)`)
-  yield* sql.unsafe(`CREATE INDEX idx_branches_session ON branches(session_id)`)
-  yield* sql.unsafe(`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id)`)
   yield* sql.unsafe(`CREATE INDEX idx_interaction_requests_status ON interaction_requests(status)`)
   yield* sql.unsafe(
     `CREATE UNIQUE INDEX idx_interaction_requests_pending_singleton ON interaction_requests(session_id, branch_id) WHERE status = 'pending'`,
   )
-})
-
-const agentLoopQueueMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql.unsafe(`
-    CREATE TABLE agent_loop_queues (
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      queue_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (session_id, branch_id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-})
-
-// The driver wraps the SQLiteError in an SqlError whose message is generic;
-// the "duplicate column name" text lives on the cause.
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
-const sqliteMessageIncludes = (error: unknown, expected: string): boolean => {
-  if (String(error).toLowerCase().includes(expected.toLowerCase())) return true
-  if (Predicate.hasProperty(error, "cause")) return sqliteMessageIncludes(error.cause, expected)
-  return false
-}
-
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
-const isAlreadyAppliedSqliteError = (error: unknown) =>
-  sqliteMessageIncludes(error, "duplicate column name") ||
-  sqliteMessageIncludes(error, "already exists")
-
-const ignoreAlreadyAppliedSqliteError =
-  (migration: string, operation: string) =>
-  <E, R>(effect: Effect.Effect<void, E, R>): Effect.Effect<void, E, R> =>
-    effect.pipe(
-      Effect.catchIf(isAlreadyAppliedSqliteError, () =>
-        Effect.logWarning(`${migration}: ${operation} skipped because it is already applied`),
-      ),
-    )
-
-const sessionWorkspaceMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql
-    .unsafe(
-      `ALTER TABLE sessions ADD COLUMN workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}'`,
-    )
-    .pipe(ignoreAlreadyAppliedSqliteError("003_session_workspace", "ADD COLUMN workspace_id"))
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at)`,
-  )
-})
-
-const agentLoopQueueWorkspaceMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql.unsafe(`
-    CREATE TABLE agent_loop_queues_next (
-      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
-      session_id TEXT NOT NULL,
-      branch_id TEXT NOT NULL,
-      queue_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (workspace_id, session_id, branch_id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
-    )
-  `)
-  yield* sql.unsafe(`
-    INSERT INTO agent_loop_queues_next (workspace_id, session_id, branch_id, queue_json, updated_at)
-    SELECT '${DefaultWorkspaceId}', session_id, branch_id, queue_json, updated_at
-    FROM agent_loop_queues
-  `)
-  yield* sql.unsafe(`DROP TABLE agent_loop_queues`)
-  yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
-})
-
-const interactionDecisionMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql
-    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN decision_json TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("005_interaction_decision", "ADD COLUMN decision_json"))
-})
-
-const durableOperationsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
 
   yield* sql.unsafe(`
     CREATE TABLE durable_operations (
-      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
-      operation TEXT NOT NULL,
-      request_id TEXT NOT NULL,
-      result_json TEXT NOT NULL,
-      subject_session_id TEXT,
-      subject_branch_id TEXT,
-      created_at INTEGER NOT NULL,
-      PRIMARY KEY (workspace_id, operation, request_id)
-    )
-  `)
-  yield* sql.unsafe(`CREATE INDEX idx_durable_operations_created ON durable_operations(created_at)`)
-})
-
-const durableOperationIntegrityMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  yield* sql.unsafe(`
-    CREATE TABLE durable_operations_next (
-      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+      workspace_id TEXT NOT NULL,
       operation TEXT NOT NULL,
       request_id TEXT NOT NULL,
       result_json TEXT NOT NULL,
@@ -543,48 +544,11 @@ const durableOperationIntegrityMigration = Effect.gen(function* () {
       FOREIGN KEY (subject_branch_id, subject_session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-  yield* sql.unsafe(`
-    INSERT INTO durable_operations_next (
-      workspace_id,
-      operation,
-      request_id,
-      result_json,
-      subject_session_id,
-      subject_branch_id,
-      created_at
-    )
-    SELECT
-      durable_operations.workspace_id,
-      durable_operations.operation,
-      durable_operations.request_id,
-      durable_operations.result_json,
-      CASE durable_operations.operation
-        WHEN 'session.create' THEN json_extract(durable_operations.result_json, '$.sessionId')
-        WHEN 'branch.switch' THEN json_extract(durable_operations.result_json, '$.sessionId')
-        ELSE branches.session_id
-      END AS subject_session_id,
-      CASE durable_operations.operation
-        WHEN 'branch.switch' THEN json_extract(durable_operations.result_json, '$.toBranchId')
-        ELSE json_extract(durable_operations.result_json, '$.branchId')
-      END AS subject_branch_id,
-      durable_operations.created_at
-    FROM durable_operations
-    LEFT JOIN branches
-      ON branches.id = json_extract(durable_operations.result_json, '$.branchId')
-    WHERE subject_session_id IS NOT NULL
-      AND subject_branch_id IS NOT NULL
-  `)
-  yield* sql.unsafe(`DROP TABLE durable_operations`)
-  yield* sql.unsafe(`ALTER TABLE durable_operations_next RENAME TO durable_operations`)
   yield* sql.unsafe(`CREATE INDEX idx_durable_operations_created ON durable_operations(created_at)`)
-})
-
-const agentLoopQueueIntegrityMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
 
   yield* sql.unsafe(`
-    CREATE TABLE agent_loop_queues_next (
-      workspace_id TEXT NOT NULL DEFAULT '${DefaultWorkspaceId}',
+    CREATE TABLE agent_loop_queues (
+      workspace_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
       queue_json TEXT NOT NULL,
@@ -594,18 +558,6 @@ const agentLoopQueueIntegrityMigration = Effect.gen(function* () {
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-  yield* sql.unsafe(`
-    INSERT INTO agent_loop_queues_next (workspace_id, session_id, branch_id, queue_json, updated_at)
-    SELECT q.workspace_id, q.session_id, q.branch_id, q.queue_json, q.updated_at
-    FROM agent_loop_queues q
-    JOIN branches b ON b.id = q.branch_id AND b.session_id = q.session_id
-  `)
-  yield* sql.unsafe(`DROP TABLE agent_loop_queues`)
-  yield* sql.unsafe(`ALTER TABLE agent_loop_queues_next RENAME TO agent_loop_queues`)
-})
-
-const toolCallBindingsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
 
   yield* sql.unsafe(`
     CREATE TABLE tool_call_bindings (
@@ -617,179 +569,8 @@ const toolCallBindingsMigration = Effect.gen(function* () {
       FOREIGN KEY (assistant_message_id) REFERENCES messages(id) ON DELETE CASCADE
     )
   `)
-  yield* sql.unsafe(
-    `CREATE INDEX idx_tool_call_bindings_tool_call ON tool_call_bindings(tool_call_id)`,
-  )
-})
 
-// The durable resource graph (tables resource_graph_state and
-// resource_graph_commands) was removed. Migration 010 stays as a recorded
-// no-op so existing databases keep a contiguous history; 015 drops the tables
-// where an earlier build created them. Ids 012-014 created the cell's tables
-// in this chain. The cell now migrates them through its own process Resource
-// and migration table, and a database that recorded 012-014 keeps those rows.
-const resourceGraphStateMigration = Effect.void
-
-const dropResourceGraphStateMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`DROP TABLE IF EXISTS resource_graph_commands`)
-  yield* sql.unsafe(`DROP TABLE IF EXISTS resource_graph_state`)
-})
-
-const messageInsertionOrderMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  // Persist the tie-break: implicit rowids can change when SQLite runs VACUUM.
-  yield* sql.unsafe(`ALTER TABLE messages ADD COLUMN insertion_order INTEGER NOT NULL DEFAULT 0`)
-  yield* sql.unsafe(`UPDATE messages SET insertion_order = rowid`)
-  yield* sql.unsafe(`CREATE UNIQUE INDEX idx_messages_insertion_order ON messages(insertion_order)`)
   yield* sql.unsafe(`
-    CREATE TRIGGER messages_assign_insertion_order AFTER INSERT ON messages
-    WHEN NEW.insertion_order = 0
-    BEGIN
-      UPDATE messages
-      SET insertion_order = (SELECT COALESCE(MAX(insertion_order), 0) + 1 FROM messages)
-      WHERE id = NEW.id;
-    END
-  `)
-  yield* sql.unsafe(`DROP INDEX idx_messages_branch_created`)
-  yield* sql.unsafe(
-    `CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, insertion_order)`,
-  )
-})
-
-// Columns every writer filled with a constant and no reader selected, and
-// indexes no query used: `idx_messages_branch` is a prefix of
-// `idx_messages_branch_created`, and bindings are only read by full key.
-const dropColumnIfPresent = (table: string, column: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    const rows = yield* sql<{ readonly name: string }>`
-      SELECT name FROM pragma_table_info(${table}) WHERE name = ${column}
-    `
-    if (rows.length === 0) return
-    yield* sql.unsafe(`ALTER TABLE ${table} DROP COLUMN ${column}`)
-  })
-
-const dropWriteOnlyStorageMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* dropColumnIfPresent("interaction_requests", "type")
-  yield* dropColumnIfPresent("content_chunks", "part_type")
-  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_messages_branch`)
-  yield* sql.unsafe(`DROP INDEX IF EXISTS idx_tool_call_bindings_tool_call`)
-})
-
-/**
- * Drop the message full-text index.
- *
- * `messages_fts` was written on every message insert and read by exactly one
- * storage method that no extension, app or SDK ever called. The cell reads the
- * database directly and its guidance names `sessions`, `messages`,
- * `message_chunks`, `content_chunks` and `events` — never this table — so no
- * model is told to query it either. A database created by any earlier build
- * still holds the table, so the drop is a migration, not a schema edit.
- */
-const dropMessageSearchIndexMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`DROP TABLE IF EXISTS messages_fts`)
-})
-
-const sessionModelMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE sessions ADD COLUMN model_id TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("017_session_model", "ADD COLUMN model_id"))
-})
-
-/**
- * The call that owns an interaction request, so an answer goes back to the
- * call that asked after a restart. Both columns are nullable: a row stored
- * before this migration has no owner and loads as before.
- */
-const interactionOwnerMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN owner_tool_call_id TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("021_interaction_owner", "ADD COLUMN owner_tool_call_id"))
-  yield* sql
-    .unsafe(`ALTER TABLE interaction_requests ADD COLUMN owner_occurrence INTEGER`)
-    .pipe(ignoreAlreadyAppliedSqliteError("021_interaction_owner", "ADD COLUMN owner_occurrence"))
-})
-
-/**
- * What admitted a turn, once kept beside its position. Admission is a
- * session property now (023); the column stays so the chain and older rows
- * are unchanged, and migration 023 reads it once.
- */
-const turnRecordAdmissionMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE turn_records ADD COLUMN admission_json TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("022_turn_record_admission", "ADD COLUMN admission_json"))
-})
-
-/**
- * The agent a session's turns run as, set when the session is created.
- * Nullable: a plain session and every row stored before this column run as
- * the default agent. A session whose turns were admitted per turn before this
- * existed (a delegate child's first turn, a headless `--agent` run) takes the
- * admission its stored turn record or queued turn carried, so its later turns
- * keep the agent, the run overrides and the withheld tools.
- *
- * When rows disagree, the turn that runs next wins: the one in flight, then
- * steering, then follow-ups, each in queue order. After those, the latest
- * stored turn wins, by `updated_at` and then by rowid.
- */
-const sessionAdmissionMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE sessions ADD COLUMN admission_json TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("023_session_admission", "ADD COLUMN admission_json"))
-  yield* sql.unsafe(`
-    WITH admitted(session_id, admission, source, position, tiebreak) AS (
-      SELECT q.session_id, json_remove(json_extract(q.queue_json, '$.inFlight'), '$.message', '$.wake', '$.keyed'), 0, 0, 0
-      FROM agent_loop_queues q
-      WHERE json_extract(q.queue_json, '$.inFlight') IS NOT NULL
-      UNION ALL
-      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 1, e.key, 0
-      FROM agent_loop_queues q, json_each(q.queue_json, '$.steering') e
-      UNION ALL
-      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 2, e.key, 0
-      FROM agent_loop_queues q, json_each(q.queue_json, '$.followUp') e
-      UNION ALL
-      SELECT session_id, admission_json, 3, -updated_at, -rowid
-      FROM turn_records WHERE admission_json IS NOT NULL
-    ),
-    renamed(session_id, admission, source, position, tiebreak) AS (
-      SELECT session_id,
-        CASE WHEN json_extract(admission, '$.agentOverride') IS NULL
-          THEN json_remove(admission, '$.agentOverride')
-          ELSE json_remove(
-            json_set(admission, '$.agent', json_extract(admission, '$.agentOverride')),
-            '$.agentOverride'
-          )
-        END,
-        source, position, tiebreak
-      FROM admitted
-    )
-    UPDATE sessions SET admission_json = (
-      SELECT r.admission FROM renamed r
-      WHERE r.session_id = sessions.id AND r.admission <> '{}'
-      ORDER BY r.source, r.position, r.tiebreak LIMIT 1
-    )
-    WHERE admission_json IS NULL
-  `)
-})
-
-const turnRecordsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-
-  // One row per turn: the step whose messages committed, the continuations
-  // the turn has spent, and the tool calls the current step has not settled.
-  // The row is written after the step's messages, in its own transaction, so
-  // a resumed turn reads it as a hint and confirms it against the messages
-  // instead of probing every derived message id.
-  yield* sql
-    .unsafe(`
     CREATE TABLE turn_records (
       session_id TEXT NOT NULL,
       branch_id TEXT NOT NULL,
@@ -803,68 +584,14 @@ const turnRecordsMigration = Effect.gen(function* () {
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-    .pipe(ignoreAlreadyAppliedSqliteError("018_turn_records", "CREATE TABLE turn_records"))
-})
 
-/**
- * Give every session the thread it belongs to.
- *
- * `parent_session_id` was carrying two meanings: "continued from" for a
- * compaction handoff, and "spawned by" for a delegate run or a `/btw`
- * fork. Reading a thread from it needs the spawn receipt to tell the two
- * apart, and that still fails from inside a spawn — the spawn climbs into its
- * parent's tree and is then filtered out of it. One column, written when the
- * writer already knows which kind of child it is making, answers both.
- *
- * The backfill uses the receipt, which is the right tool once: an existing
- * session is a spawn exactly when an `agent.start` receipt names it. Every
- * other session inherits the thread of the nearest ancestor that is not a
- * spawn, so an existing handoff chain keeps one thread.
- */
-const sessionThreadMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql
-    .unsafe(`ALTER TABLE sessions ADD COLUMN thread_id TEXT`)
-    .pipe(ignoreAlreadyAppliedSqliteError("019_session_thread", "ADD COLUMN thread_id"))
+  // The models.dev catalog as served: one row per source (`api.json`, and
+  // `api.json?type=decision`), with the raw body and its ETag, so a parser
+  // change re-reads the row with no refetch and a revalidation sends
+  // `If-None-Match`. `fetched_at` is when the body arrived (a 200),
+  // `checked_at` the last 200 or 304.
   yield* sql.unsafe(`
-    WITH RECURSIVE spawned(id) AS (
-      SELECT s.id FROM sessions s
-      WHERE s.parent_session_id IS NULL
-         OR EXISTS (
-           SELECT 1 FROM durable_operations d
-           WHERE d.workspace_id = s.workspace_id
-             AND d.operation = 'agent.start'
-             AND json_extract(d.result_json, '$.sessionId') = s.id
-         )
-    ),
-    threads(id, thread_id, depth) AS (
-      SELECT id, id, 0 FROM spawned
-      UNION ALL
-      SELECT s.id, t.thread_id, t.depth + 1
-      FROM sessions s
-      JOIN threads t ON s.parent_session_id = t.id
-      WHERE t.depth < 100 AND s.id NOT IN (SELECT id FROM spawned)
-    )
-    UPDATE sessions SET thread_id = (SELECT t.thread_id FROM threads t WHERE t.id = sessions.id)
-  `)
-  // A session orphaned by a deleted ancestor still belongs to a thread: its own.
-  yield* sql.unsafe(`UPDATE sessions SET thread_id = id WHERE thread_id IS NULL`)
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_sessions_thread ON sessions(workspace_id, thread_id)`,
-  )
-})
-
-/**
- * The models.dev catalog as served: one row per source (`api.json`, and
- * `api.json?type=decision`), with the raw body and its ETag, so a parser
- * change re-reads the row with no refetch and a revalidation sends
- * `If-None-Match`. `fetched_at` is when the body arrived (a 200),
- * `checked_at` the last 200 or 304. Additive: no other table changes.
- */
-const modelCatalogSnapshotsMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS model_catalog_snapshots (
+    CREATE TABLE model_catalog_snapshots (
       source TEXT PRIMARY KEY,
       body TEXT NOT NULL,
       etag TEXT,
@@ -872,19 +599,12 @@ const modelCatalogSnapshotsMigration = Effect.gen(function* () {
       checked_at INTEGER NOT NULL
     )
   `)
-})
 
-/**
- * One row for each tool image a stored message references, so the blob
- * sweep keeps every image some message still holds. An image is content
- * addressed and shared: the rows count its references, and each goes with
- * its message (and so with its session) by foreign key. Additive: a message
- * stored before it has no row, as no stored message held a tool image yet.
- */
-const toolImageReferencesMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
+  // One row for each tool image a stored message references, so the blob
+  // sweep keeps every image some message still holds. An image is content
+  // addressed and shared: the rows count its references.
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS tool_image_references (
+    CREATE TABLE tool_image_references (
       sha256 TEXT NOT NULL,
       message_id TEXT NOT NULL,
       PRIMARY KEY (sha256, message_id),
@@ -892,27 +612,20 @@ const toolImageReferencesMigration = Effect.gen(function* () {
     )
   `)
   yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_tool_image_references_message ON tool_image_references(message_id)`,
+    `CREATE INDEX idx_tool_image_references_message ON tool_image_references(message_id)`,
   )
-})
 
-/**
- * The durable wake records an extension arms with `Session.wakeAt`: one row
- * per branch, extension and source. `at` is when the record fires (epoch
- * ms); a NULL `at` fires only at the next server start. `version` grows with
- * every arm, and every write after a fire names the version it read, so a
- * newer arm during the fire stands. Each row goes with its branch (and so
- * with its session) by foreign key. Additive: no other table changes.
- */
-// `incarnation` never repeats, deletes included (AUTOINCREMENT): a record
-// cancelled and armed again is a new one, which a write after an older fire
-// cannot reach. `armed_boot` is the server start that inserted the record
-// (`branch_wake_boots`), so a start fires the start-only records an earlier
-// start armed and none of its own.
-const branchWakesMigration = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
+  // The durable wake records an extension arms with `Session.wakeAt`: one row
+  // per branch, extension and source. `at` is when the record fires (epoch
+  // ms); a NULL `at` fires only at the next server start. `version` grows
+  // with every arm, and every write after a fire names the version it read,
+  // so a newer arm during the fire stands. `incarnation` never repeats,
+  // deletes included (AUTOINCREMENT): a record cancelled and armed again is a
+  // new one, which a write after an older fire cannot reach. `armed_boot` is
+  // the server start that inserted the record (`branch_wake_boots`), so a
+  // start fires the start-only records an earlier start armed and none of its own.
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS branch_wakes (
+    CREATE TABLE branch_wakes (
       incarnation INTEGER PRIMARY KEY AUTOINCREMENT,
       workspace_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
@@ -928,60 +641,29 @@ const branchWakesMigration = Effect.gen(function* () {
       FOREIGN KEY (branch_id, session_id) REFERENCES branches(id, session_id) ON DELETE CASCADE
     )
   `)
-  yield* sql.unsafe(
-    `CREATE INDEX IF NOT EXISTS idx_branch_wakes_due ON branch_wakes(at) WHERE at IS NOT NULL`,
-  )
+  yield* sql.unsafe(`CREATE INDEX idx_branch_wakes_due ON branch_wakes(at) WHERE at IS NOT NULL`)
   yield* sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS branch_wake_boots (
+    CREATE TABLE branch_wake_boots (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       boot INTEGER NOT NULL
     )
   `)
 })
 
-const StorageCompatibilityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
+// Init is portable DDL over any SQLite `SqlClient`. The connection's PRAGMAs
+// belong to the client layer that opens the connection (`storage.ts`); a
+// hosted client's platform owns them. A kernel version change wipes every
+// table, an extension's and the cluster's included: they are built again
+// after this, by their own owners.
+const StorageSchemaLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
-    assertMigrationStateCompatible().pipe(
-      Effect.mapError(storageError("Storage compatibility check failed")),
-    ),
+    ensureVersion({
+      owner: KERNEL_SCHEMA_OWNER,
+      version: KERNEL_SCHEMA_VERSION,
+      drop: Effect.flatMap(everyTable, dropTables),
+      create: createKernelTables,
+    }).pipe(Effect.mapError(storageError("Storage schema setup failed"))),
   )
-
-// The generic migrator: init is portable DDL over any SQLite `SqlClient`. The
-// connection's PRAGMAs belong to the client layer that opens the connection
-// (`storage.ts`); a hosted client's platform owns them.
-const runMigrations = Migrator.make({})
-
-const StorageMigratorLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  Layer.effectDiscard(
-    runMigrations({
-      loader: Migrator.fromRecord({
-        "001_init": initialMigration,
-        "002_agent_loop_queue": agentLoopQueueMigration,
-        "003_session_workspace": sessionWorkspaceMigration,
-        "004_agent_loop_queue_workspace": agentLoopQueueWorkspaceMigration,
-        "005_interaction_decision": interactionDecisionMigration,
-        "006_durable_operations": durableOperationsMigration,
-        "007_durable_operation_integrity": durableOperationIntegrityMigration,
-        "008_agent_loop_queue_integrity": agentLoopQueueIntegrityMigration,
-        "009_tool_call_bindings": toolCallBindingsMigration,
-        "010_resource_graph_state": resourceGraphStateMigration,
-        "011_message_insertion_order": messageInsertionOrderMigration,
-        "015_drop_resource_graph_state": dropResourceGraphStateMigration,
-        "016_drop_write_only_storage": dropWriteOnlyStorageMigration,
-        "017_session_model": sessionModelMigration,
-        "018_turn_records": turnRecordsMigration,
-        "019_session_thread": sessionThreadMigration,
-        "020_drop_message_search_index": dropMessageSearchIndexMigration,
-        "021_interaction_owner": interactionOwnerMigration,
-        "022_turn_record_admission": turnRecordAdmissionMigration,
-        "023_session_admission": sessionAdmissionMigration,
-        "024_model_catalog_snapshots": modelCatalogSnapshotsMigration,
-        "025_tool_image_references": toolImageReferencesMigration,
-        "026_branch_wakes": branchWakesMigration,
-      }),
-      table: "gent_storage_migrations",
-    }).pipe(Effect.mapError(storageError("Storage migration failed"))),
-  ).pipe(Layer.provideMerge(StorageCompatibilityLive))
 
 const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
   Layer.effectDiscard(
@@ -991,4 +673,4 @@ const StorageIntegrityLive: Layer.Layer<never, StorageError, SqlClient.SqlClient
   )
 
 export const StorageInitLive: Layer.Layer<never, StorageError, SqlClient.SqlClient> =
-  StorageIntegrityLive.pipe(Layer.provideMerge(StorageMigratorLive))
+  StorageIntegrityLive.pipe(Layer.provideMerge(StorageSchemaLive))

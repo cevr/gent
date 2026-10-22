@@ -604,8 +604,8 @@ export const findBannedEslintDisableBlocks = (
 /**
  * SQL table-name prefixes owned by a feature.
  *
- * Core's migration chain builds the kernel's tables. An extension that owns
- * tables creates and migrates them in a process Resource of its own, so a core
+ * Core builds the kernel's tables. An extension that owns tables creates them
+ * in a process Resource of its own, at its own schema version, so a core
  * source file naming one of these is core reaching back into an extension it
  * should not know about.
  */
@@ -642,7 +642,7 @@ export const findCoreFeatureIndependenceFindings = (
     findings.push({
       file,
       line: index + 1,
-      message: `core must not name a "${table.value}" table; the extension that owns it migrates its own tables in a process Resource`,
+      message: `core must not name a "${table.value}" table; the extension that owns it creates its own tables in a process Resource`,
     })
   }
   return findings
@@ -2463,9 +2463,10 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
   },
   {
     on: "line",
-    match: identifiers("resetIncompatibleStorageSchema"),
+    match: /(?<![A-Za-z0-9_$])Migrator(?![A-Za-z0-9_$])|\bALTER TABLE\b/,
     scope: "shipped",
-    message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
+    message:
+      "Gent keeps no migrations: change the CREATE TABLE and bump the owner's schema version (KERNEL_SCHEMA_VERSION, ensureExtensionTables); the next open rebuilds the tables",
   },
   {
     on: "line",

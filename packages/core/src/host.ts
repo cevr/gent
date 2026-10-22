@@ -24,6 +24,7 @@ export {
   type ModuleGraphs,
 } from "./runtime/extension-host.js"
 export { ModelRegistry, ModelResolver, ScriptedLanguageModel } from "./runtime/provider.js"
+export { KERNEL_SCHEMA_OWNER, KERNEL_SCHEMA_VERSION } from "./storage/schema.js"
 export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage.js"
 export {
   provideWorkspaceIdHeader,

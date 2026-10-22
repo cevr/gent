@@ -213,6 +213,7 @@ export {
   writeFileAtomic,
 } from "../runtime/gent-platform.js"
 // An extension that owns tables binds a SQL list as one parameter, as core's storage does.
+export { ensureExtensionTables } from "../storage/schema.js"
 export { sqlInList } from "../storage/storage.js"
 export { headChars, headTailChars, lineCount, splitLines, tailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
