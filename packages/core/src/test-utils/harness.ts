@@ -223,6 +223,7 @@ const defaultSession = (): ExtensionSessionService => ({
         parent: noRunBound,
       }),
     ),
+  getModel: () => die("Session.getModel"),
   renameCurrent: () => die("Session.renameCurrent"),
   forkBranch: () => die("Session.forkBranch"),
   create: () => die("Session.create"),

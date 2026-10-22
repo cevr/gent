@@ -385,6 +385,7 @@ const stubCtx = testToolContext({
     getSession: dieStub("getSession"),
     getDetail: dieStub("getDetail"),
     getAgent: dieStub("getAgent"),
+    getModel: dieStub("getModel"),
     renameCurrent: dieStub("renameCurrent"),
     forkBranch: dieStub("forkBranch"),
     listBranches: Effect.die("listBranches not wired in test"),

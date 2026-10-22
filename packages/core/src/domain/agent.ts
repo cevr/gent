@@ -965,6 +965,26 @@ export const resolveSessionAgent = (params: {
   )
 
 /**
+ * The model a session's turns run: its own (`/model`, `--model`), else its
+ * agent's (`resolveSessionAgent`), else the one its starter chose
+ * (`RunSpec.inheritedModel`), else config `model`. None when none names one:
+ * a send is then refused (`NoModelError`).
+ */
+export const sessionModel = (params: {
+  readonly session: Option.Option<ModelId>
+  readonly agent: Option.Option<AgentDefinition>
+  readonly inherited: Option.Option<ModelId>
+  readonly config: Option.Option<ModelId>
+}): Option.Option<ModelId> =>
+  params.session.pipe(
+    Option.orElse(() =>
+      Option.flatMap(params.agent, (agent) => Option.fromUndefinedOr(agent.model)),
+    ),
+    Option.orElse(() => params.inherited),
+    Option.orElse(() => params.config),
+  )
+
+/**
  * `definition` as one session's run, in `cwd`, spawned under a run whose
  * bound is `parent` (`noRunBound` for none). The definition is the bound
  * its author set, and a run only narrows it (least authority): the run's

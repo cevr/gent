@@ -116,6 +116,7 @@ import {
   ParentBoundError,
   SessionAgentError,
   resolveSessionAgent,
+  sessionModel,
   type RunBound,
 } from "../domain/agent.js"
 import { causeChainMessage, causeMessage, omitUndefined } from "../domain/guards.js"
@@ -4490,6 +4491,34 @@ export const makeExtensionHostContextProvider = (
             inWorkspace,
           )
         },
+        getModel: (sessionId) =>
+          sessions((storage) => storage.getSession(sessionId ?? runInfo.sessionId)).pipe(
+            Effect.flatMap((session) => {
+              if (Predicate.isUndefined(session)) return Effect.succeedNone
+              const cwd = session.cwd ?? environment.cwd
+              return profiles((cache) =>
+                configs((configService) =>
+                  Effect.gen(function* () {
+                    const profile = yield* cache.resolve(cwd).pipe(Effect.scoped)
+                    const config = yield* configService.get(cwd)
+                    return sessionModel({
+                      session: Option.fromUndefinedOr(session.modelId),
+                      agent: resolveSessionAgent({
+                        agents: profile.resolved.agents.values(),
+                        configAgents: Option.fromUndefinedOr(config.agents),
+                        name: session.admission?.agent ?? DEFAULT_AGENT_NAME,
+                        overrides: Option.fromUndefinedOr(session.admission?.runSpec?.overrides),
+                      }),
+                      inherited: Option.fromUndefinedOr(session.admission?.runSpec?.inheritedModel),
+                      config: Option.fromUndefinedOr(config.model),
+                    })
+                  }),
+                ),
+              )
+            }),
+            Effect.mapError(sessionError("getModel")),
+            inWorkspace,
+          ),
         renameCurrent: (name, options) =>
           mutations((service) =>
             service.renameSession({ sessionId: runInfo.sessionId, name, ...options }),

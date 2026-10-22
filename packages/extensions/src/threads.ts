@@ -2912,9 +2912,13 @@ const makeThreads = (rounds: ThreadRoundsService) => {
     round: (round: string) => readRound(round).pipe(withRounds),
     /** The round with this id, none when no send admitted it. */
     findRound: (round: string) => findRound(round).pipe(withRounds),
-    /** The model the thread's current session runs; none when it names none and runs its agent's. */
+    /** The model the thread's current session runs, as its turns resolve it (`Session.getModel`). */
     model: (thread: string) =>
-      Effect.map(ownThread(thread), (found) => Option.fromUndefinedOr(found.current.modelId)),
+      Effect.gen(function* () {
+        const found = yield* ownThread(thread)
+        const ctx = yield* ExtensionContext
+        return yield* ctx.Session.getModel(found.current.id)
+      }),
     /**
      * The round a send under `key` admits, known before the send: a sender
      * records it first, so a crash or a stop after the admission finds the

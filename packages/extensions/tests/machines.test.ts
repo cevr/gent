@@ -2557,6 +2557,46 @@ describe("a tier role's round", () => {
   )
 })
 
+/** One round of a role that names no model and no tier, then the end. */
+const UNNAMED_ONCE = {
+  name: "unnamed-once",
+  threads: { worker: {} },
+  start: "work",
+  states: {
+    work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "done" },
+    done: { kind: "final" },
+  },
+}
+
+describe("a role that names no model", () => {
+  it.live(
+    "records the starter's model as its round's when neither the role, its agent nor the config names one",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        // A headless run: `--model` sets the owner session's model, and the config names none.
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), {
+            configServiceLayer: ConfigService.Test(new UserConfig({})),
+            models: "catalog",
+          }),
+        )
+        const owner = ownerOf(yield* client.session.create({ modelId: HAIKU }))
+        const run = yield* startRunOn(client, owner, UNNAMED_ONCE, "unnamed-once")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([{ model: HAIKU, priced: true }])
+        const status = yield* machinesRequest(client, owner, ref(MachinesRpc.Status), { run })
+        expect(status.quality.map((row) => [String(row.state), row.model, row.rounds])).toEqual([
+          ["work", HAIKU, 1],
+        ])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
+
 describe("a model's quality in a machine's state", () => {
   it.live(
     "counts each model's rounds, cost, verdicts, the checks and gates after them, and the rounds a finished run took",

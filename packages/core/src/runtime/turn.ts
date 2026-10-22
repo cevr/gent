@@ -5,6 +5,7 @@ import {
   bindSessionAgent,
   noRunBound,
   resolveSessionAgent,
+  sessionModel,
   type calculateCost,
   DEFAULT_AGENT_NAME,
   type DriverRef,
@@ -1684,15 +1685,14 @@ export const resolveSessionRoute = (params: {
       Option.fromUndefinedOr(admission.runSpec?.overrides),
     ),
   })
-  const modelId = Option.fromUndefinedOr(params.session.modelId).pipe(
-    Option.orElse(() => Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.model))),
-    Option.orElse(() =>
-      Option.flatMap(params.admission, (admission) =>
-        Option.fromUndefinedOr(admission.runSpec?.inheritedModel),
-      ),
+  const modelId = sessionModel({
+    session: Option.fromUndefinedOr(params.session.modelId),
+    agent: definition,
+    inherited: Option.flatMap(params.admission, (admission) =>
+      Option.fromUndefinedOr(admission.runSpec?.inheritedModel),
     ),
-    Option.orElse(() => Option.fromUndefinedOr(params.config.model)),
-  )
+    config: Option.fromUndefinedOr(params.config.model),
+  })
   const defaultReasoningLevel = Option.flatMap(definition, (agent) =>
     Option.fromUndefinedOr(agent.reasoningEffort),
   )

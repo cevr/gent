@@ -1148,6 +1148,15 @@ export interface ExtensionSessionService {
     sessionId?: SessionId,
   ) => Effect.Effect<SessionAgent, ExtensionServiceError | SessionAgentError>
   /**
+   * The model a session's next turn runs, resolved as its turns resolve it
+   * (`sessionModel`): its own, its agent's, its starter's, else config
+   * `model`. None when none names one, or the session cannot be read. The
+   * current session when none is named.
+   */
+  readonly getModel: (
+    sessionId?: SessionId,
+  ) => Effect.Effect<Option.Option<ModelId>, ExtensionServiceError>
+  /**
    * Rename the current session. With `expectedName` it renames only while
    * the stored name is still that one, checked in the transaction that
    * writes it, so a name another rename set first wins.
