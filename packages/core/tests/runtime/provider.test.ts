@@ -5224,6 +5224,7 @@ describe("credential placement", () => {
             provider: "spread",
             slot,
             sessionId: SessionId.make(session),
+            model: spreadModel,
             costUsd: Option.some(costUsd),
             ttlMs: Option.some(1),
           })
@@ -5322,6 +5323,7 @@ describe("credential placement", () => {
               provider: "spread",
               slot,
               sessionId: long,
+              model: spreadModel,
               costUsd: Option.some(1),
               ttlMs: Option.some(1),
             })
@@ -5410,6 +5412,7 @@ describe("credential placement", () => {
         provider: "spread",
         slot: b,
         sessionId: SessionId.make("spent"),
+        model: spreadModel,
         costUsd: Option.some(5),
         ttlMs: Option.some(1),
       })
@@ -5734,36 +5737,46 @@ describe("account lanes", () => {
       return { ...fixture, now }
     })
 
-  it.effect("rolling weekly refills give the seven-account pool eight free lanes", () =>
-    Effect.gen(function* () {
-      const { read, spend, lanes, admit } = yield* accounts()
-      const now = yield* Clock.currentTimeMillis
-      const pool = [
-        a,
-        b,
-        c,
-        ...["d", "e", "f", "g"].map((slot) => CredentialSlot.make(slot)),
-      ] as const
-      const resetAt = now + 166 * HOUR
-      // 18.6 M fuel / 2 points = 9.3 M fuel per weekly point.
-      // The same fuel / 10 points = 1.86 M per five-hour point.
-      yield* read(a, [
-        { window: "7d", utilization: 0.01, resetAt },
+  /**
+   * Seven accounts: a read through real receipts, six rejected weeks that
+   * reset over the next 108 hours. The pool carries 8.6 mean runs.
+   */
+  const rollingPool = Effect.gen(function* () {
+    const fixture = yield* accounts()
+    const { read, spend } = fixture
+    const now = yield* Clock.currentTimeMillis
+    const pool = [
+      a,
+      b,
+      c,
+      ...["d", "e", "f", "g"].map((slot) => CredentialSlot.make(slot)),
+    ] as const
+    const resetAt = now + 166 * HOUR
+    // 18.6 M fuel / 2 points = 9.3 M fuel per weekly point.
+    // The same fuel / 10 points = 1.86 M per five-hour point.
+    yield* read(a, [
+      { window: "7d", utilization: 0.01, resetAt },
+      { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
+    ])
+    yield* spend(a, Option.some(93))
+    yield* read(a, [
+      { window: "7d", utilization: 0.03, resetAt },
+      { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+    ])
+    for (const [index, hours] of [5, 17, 33, 55, 65, 108].entries()) {
+      const slot = pool[index + 1]
+      if (Predicate.isUndefined(slot)) return yield* Effect.die("missing test account")
+      yield* read(slot, [
+        { window: "7d", utilization: 1, resetAt: now + hours * HOUR, rejected: true },
         { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
       ])
-      yield* spend(a, Option.some(93))
-      yield* read(a, [
-        { window: "7d", utilization: 0.03, resetAt },
-        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
-      ])
-      for (const [index, hours] of [5, 17, 33, 55, 65, 108].entries()) {
-        const slot = pool[index + 1]
-        if (Predicate.isUndefined(slot)) return yield* Effect.die("missing test account")
-        yield* read(slot, [
-          { window: "7d", utilization: 1, resetAt: now + hours * HOUR, rejected: true },
-          { window: "5h", utilization: 0, resetAt: now + 5 * HOUR },
-        ])
-      }
+    }
+    return { ...fixture, pool }
+  })
+
+  it.effect("rolling weekly refills give the seven-account pool eight free lanes", () =>
+    Effect.gen(function* () {
+      const { lanes, admit, pool } = yield* rollingPool
       // Plain hours, 100% target: in-view fuel = 930 M × 5.2973809524.
       // Rolling = 29.324787415 M/h; floor = 902.1 M / 166 h.
       // Weekly ceiling = 6482.1 M / 166 h; 5h ceiling = 167.4 M / 5 h.
@@ -5779,6 +5792,17 @@ describe("account lanes", () => {
       for (let index = 0; index < 8; index += 1)
         expect(yield* admit(pool, `rolling-${index}`)).toBe("admitted")
       expect(yield* admit(pool, "rolling-full")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("the rolling pool carries a cheap model's runs at their share", () =>
+    Effect.gen(function* () {
+      const fixture = yield* rollingPool
+      const { mini } = yield* priceModels(fixture)
+      // 8.6 mean runs: seventeen half-price runs, not eight.
+      for (let index = 0; index < 17; index += 1)
+        expect(yield* fixture.admit(fixture.pool, `mini-${index}`, mini)).toBe("admitted")
+      expect(yield* fixture.admit(fixture.pool, "mini-full", mini)).toBe("Busy")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -5889,6 +5913,7 @@ describe("account lanes", () => {
         provider: "plan",
         slot: b,
         sessionId: runner,
+        model: planModel,
         costUsd: Option.none(),
         ttlMs: Option.none(),
       })
@@ -6594,22 +6619,111 @@ describe("account lanes", () => {
         const limits = [{ window: "31d", usd: 1_000_000 }]
         yield* spend(a, Option.some(2.5), million, SessionId.make("mini-run"), mini, limits)
         yield* spend(a, Option.some(10), million, SessionId.make("big-run"), big, limits)
-        // Two hours to the reset at the prior burn: the account's window carries 2 runs.
+        // Two hours to the reset at the prior burn: the account's window carries 2.6 runs.
         yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
-        for (const key of ["mini-1", "mini-2", "mini-3", "mini-4"])
+        for (const key of ["mini-1", "mini-2", "mini-3", "mini-4", "mini-5"])
           expect(yield* admit([a], key, mini)).toBe("admitted")
-        expect(yield* admit([a], "mini-5", mini)).toBe("Busy")
+        expect(yield* admit([a], "mini-6", mini)).toBe("Busy")
         expect(yield* admit([a], "plan-1")).toBe("Busy")
-        expect((yield* lanes([a])).load).toBeCloseTo(2)
+        expect((yield* lanes([a])).load).toBeCloseTo(2.5)
         for (const key of ["mini-1", "mini-2", "mini-3"]) yield* placement.freeReservation(key)
-        expect((yield* lanes([a])).load).toBeCloseTo(0.5)
-        // Half a lane is free: a big run needs two, a plan run one.
+        expect((yield* lanes([a])).load).toBeCloseTo(1)
+        // 1.6 lanes are free: a big run needs two, a plan run one.
         expect(yield* admit([a], "big-1", big)).toBe("Busy")
         expect(yield* admit([a], "plan-1")).toBe("admitted")
-        yield* placement.freeReservation("mini-4")
-        yield* placement.freeReservation("plan-1")
+        for (const key of ["mini-4", "mini-5", "plan-1"]) yield* placement.freeReservation(key)
         expect(yield* admit([a], "big-1", big)).toBe("admitted")
-        expect(yield* admit([a], "mini-6", mini)).toBe("Busy")
+        // Its turn opens: the running turn holds the same two lanes.
+        yield* placement.openLane({
+          sessionId: SessionId.make("big-turn"),
+          key: "big-1",
+          provider: "plan",
+          scope: [receiptOf(a)],
+          model: big,
+          project: Option.none(),
+        })
+        expect((yield* lanes([a])).load).toBeCloseTo(2)
+        expect(yield* admit([a], "big-2", big)).toBe("Busy")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  /** Spend a million input tokens of `mini` (half the reference price) and `big` (twice) on `a`; their own windows bound no run. */
+  const priceModels = (fixture: Effect.Success<ReturnType<typeof accounts>>) =>
+    Effect.gen(function* () {
+      const mini = ModelId.make("plan/mini")
+      const big = ModelId.make("plan/big")
+      const million = Option.some({ inputTokens: 1_000_000, outputTokens: 0 })
+      const limits = [{ window: "31d", usd: 1_000_000 }]
+      yield* fixture.spend(a, Option.some(2.5), million, SessionId.make("mini-run"), mini, limits)
+      yield* fixture.spend(a, Option.some(10), million, SessionId.make("big-run"), big, limits)
+      return { mini, big }
+    })
+
+  it.effect("a window short of a whole lane still carries a cheap run that fits in it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const { mini } = yield* priceModels(fixture)
+      // 16/3 hours to the reset: the account's window carries 0.95 of a run.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, (16 * HOUR) / 3)
+      expect((yield* fixture.lanes([a])).capacity).toBe(0)
+      expect(yield* fixture.admit([a], "mini-1", mini)).toBe("admitted")
+      // A second half lane does not fit: one frees when the first run ends.
+      expect(yield* fixture.admit([a], "mini-2", mini)).toBe("Busy")
+      // A whole run fits in no part of it: the window is spent for it.
+      expect(yield* fixture.admit([a], "plan-1")).toBe("Spent")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a hold reserves the account's lanes, not a model's own window", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      // The account's window carries 2 runs, glm's own 1.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      const start = (holds: ReadonlyMap<string, number>, project: string, key: string) =>
+        fixture.placement
+          .admitLane({
+            provider: "plan",
+            scope: [receiptOf(a)],
+            key,
+            asker: Option.none(),
+            model: Option.some(glm),
+            project: Option.some(project),
+            holds,
+          })
+          .pipe(
+            Effect.as("admitted" as const),
+            Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+          )
+      // gent's unused lane leaves the account one: glm's window carries the run.
+      expect(yield* start(new Map([["gent", 1]]), "other", "glm-1")).toBe("admitted")
+      expect(yield* start(new Map([["gent", 1]]), "other", "glm-2")).toBe("Busy")
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "placement weighs live sessions at their model's price against the account's pace",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const { mini, big } = yield* priceModels(fixture)
+        const now = yield* Clock.currentTimeMillis
+        // Each account's window carries 2 mean runs: 4 of mini, 1 of big.
+        yield* fuelBothWindows(fixture, now, 2 * HOUR)
+        yield* fixture.read(b, [{ window: "5h", utilization: 0.14, resetAt: now + 2 * HOUR }])
+        // Two big sessions live on a: 4 mean runs, past its pace.
+        for (const session of ["big-1", "big-2"])
+          yield* fixture.placement.noteStep({
+            provider: "plan",
+            slot: a,
+            sessionId: SessionId.make(session),
+            model: big,
+            costUsd: Option.none(),
+            ttlMs: Option.some(HOUR),
+          })
+        expect((yield* fixture.place("mini-run", mini))[0]).toBe(b)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
@@ -6675,7 +6789,7 @@ describe("account lanes", () => {
         }),
       )
       expect(refused.reason).toBe("Busy")
-      expect(refused.message).toContain("1 of 2 lanes are running, and 1 held for other projects")
+      expect(refused.message).toContain("1 of 2.6 lanes are running, and 1 held for other projects")
       // Gent takes its lane; once the other run ends, the free lane is anyone's.
       expect(yield* start("gent", "gent-1")).toBe("admitted")
       yield* placement.freeReservation("other-1")
@@ -7049,6 +7163,26 @@ describe("account lanes", () => {
         expect(Math.abs(opusWeek / weekOfOpus - 1)).toBeLessThan(0.1)
         expect(Math.abs(haikuWeek / (weekOfOpus / 2) - 1)).toBeLessThan(0.1)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a run holds its model's fitted weight of a lane", () =>
+    Effect.gen(function* () {
+      const fixture = yield* mixedWeek(2 * 24)
+      const weight = weightOf(yield* fixture.lanes([a]), haiku)
+      expect(weight?.fitted).toBe(true)
+      expect(weight?.weight).not.toBeCloseTo(1)
+      // An open turn of haiku: the load counts it whatever room the week has.
+      yield* fixture.placement.openLane({
+        sessionId: SessionId.make("haiku-turn"),
+        key: "haiku-start",
+        provider: "plan",
+        scope: [receiptOf(a)],
+        model: haiku,
+        project: Option.none(),
+      })
+      // No meter prices haiku and no lane burned: its fuel per hour is the mean run's.
+      expect((yield* fixture.lanes([a])).load).toBeCloseTo(weight?.weight ?? Number.NaN)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect("a restart reads each segment's fuel by model, so the weights hold", () =>

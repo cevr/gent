@@ -5437,6 +5437,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           provider: credential.value.provider,
           slot: credential.value.slot,
           sessionId: scope.sessionId,
+          model: params.resolved.modelId,
           costUsd,
           ttlMs: Option.match(listed, {
             onNone: () => source.cacheLifetimeMs,

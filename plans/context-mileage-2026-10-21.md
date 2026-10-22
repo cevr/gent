@@ -228,8 +228,11 @@ once it has passed (B2).
     run at its model's share of a mean run (2026-10-22): with the account
     window at 2 lanes, 4 runs of a model at half the price are admitted,
     and a run at twice the price waits for both lanes. The TUI row reads
-    the shares to a tenth. Open: placement still compares live sessions,
-    counted whole, against the account's pace in runs of the placed model.
+    the shares to a tenth, and a sliver as `<0.1`. The check reads the
+    capacity unfloored, so a window at 0.95 lanes admits a half-price run;
+    holds reserve the account's lanes alone. Placement weighs each live
+    session at its model's share and reads the account's pace in mean runs.
+    Open: a model's measured burn feeds the share untested.
 11. **Every provider that reports usage joins the pool.** (ChatGPT plan
     merged at 415a2b09c (2026-10-22): the Codex client reads the
     `x-codex-primary-*` and `x-codex-secondary-*` headers on each answer,

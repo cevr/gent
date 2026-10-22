@@ -3855,6 +3855,7 @@ describe("credential order", () => {
         provider: FALLBACK,
         slot,
         sessionId: SessionId.make(session),
+        model: fallbackModel,
         costUsd: Option.some(costUsd),
         ttlMs: Option.some(0),
       })
@@ -4997,6 +4998,7 @@ describe("credential order", () => {
             provider: FALLBACK,
             slot: a,
             sessionId: SessionId.make("live-on-a"),
+            model: fallbackModel,
             costUsd: Option.none(),
             ttlMs: Option.some(HOUR_MS),
           })
@@ -5102,6 +5104,7 @@ describe("credential order", () => {
               provider: FALLBACK,
               slot: a,
               sessionId: SessionId.make(other),
+              model: fallbackModel,
               costUsd: Option.none(),
               ttlMs: Option.some(HOUR_MS),
             })

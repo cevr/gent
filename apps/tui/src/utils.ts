@@ -482,8 +482,19 @@ const windowWords = (window: LaneWindow): ReadonlyArray<string> => {
   return [`${band} · out ${percent(window.outsideShare)}`, band, rate]
 }
 
-/** The lanes free of `capacity` under `load`, as the row reads them: shares round to a tenth. */
-const freeLanes = (capacity: number, load: number) => Math.max(0, roundLanes(capacity - load))
+/** The lanes free of `capacity` under `load`: none once shares fill it, to a float's error. */
+const freeLanes = (capacity: number, load: number) => {
+  const free = capacity - load
+  if (free < 1e-9) return 0
+  return free
+}
+
+/** A free count as the row reads it: shares round to a tenth, and a sliver reads `<0.1`. */
+const freeText = (free: number) => {
+  const shown = roundLanes(free)
+  if (shown === 0) return "<0.1"
+  return String(shown)
+}
 
 /**
  * One provider's band row, longest form that fits `width` first: the free
@@ -536,7 +547,8 @@ const providerLaneRow = (
       },
     })
   }
-  const head = `lanes ${lanes.provider} ${free}/${capacity} free`
+  const shown = freeText(free)
+  const head = `lanes ${lanes.provider} ${shown}/${capacity} free`
   const rates = Option.match(bindingWindow(lanes), {
     onNone: (): ReadonlyArray<string> => [],
     onSome: windowWords,
@@ -544,8 +556,8 @@ const providerLaneRow = (
   return fit([
     ...rates.map((words) => `${head} · ${words}`),
     head,
-    `lanes ${free}/${capacity} free`,
-    `${free}/${capacity} free`,
+    `lanes ${shown}/${capacity} free`,
+    `${shown}/${capacity} free`,
   ])
 }
 

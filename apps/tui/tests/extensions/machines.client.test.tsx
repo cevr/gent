@@ -219,8 +219,12 @@ describe("the lanes band rows", () => {
     expect(laneRows(shared(2.5), NOW, 30, utc)).toEqual([
       { text: "lanes anthropic 2.5/5 free", state: "free" },
     ])
-    // Shares that sum to all but a rounding of the lanes leave none free.
-    expect(laneRows(shared(4.98), NOW, 120, utc)).toEqual([
+    // A sliver under a tenth still admits a cheap enough run: it reads free.
+    expect(laneRows(shared(4.98), NOW, 30, utc)).toEqual([
+      { text: "lanes anthropic <0.1/5 free", state: "free" },
+    ])
+    // Shares that fill the lanes to a float's error leave none free.
+    expect(laneRows(shared(0.1 + 0.2 + 4.7), NOW, 120, utc)).toEqual([
       { text: "lanes anthropic 0/5 free · 5 running", state: "none" },
     ])
   })

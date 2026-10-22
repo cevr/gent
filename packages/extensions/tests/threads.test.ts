@@ -1002,7 +1002,7 @@ describe("threads", () => {
               rig.op("thread.start", { task: THREAD_TASK }),
             ])
             expect(refused?.ok).toBe(false)
-            expect(refused?.output).toContain("No lane on anthropic: 1 of 1 lanes are running")
+            expect(refused?.output).toContain("No lane on anthropic: 1 of 1.3 lanes are running")
             yield* rig.stop(rig.starter, running.thread)
             yield* loadIs(rig, 0, "the stop frees the lane")
             yield* rig.start(rig.starter, THREAD_TASK)

@@ -3614,16 +3614,26 @@ const LANE_RESERVATION_MS = 2 * 60_000
 /** When a run refused for a busy lane checks again: no run says when it ends. A guess. */
 const LANE_BUSY_RETRY_MS = 60_000
 
+/** A provider's lanes report, and the unfloored supply admission checks against. */
+interface LaneSupply {
+  readonly lanes: ProviderLanes
+  /** Runs the scope sustains, fractional: the report floors it to `capacity`. None when unknown. */
+  readonly supply: Option.Option<number>
+}
+
 /** What placement reads of one pool account. */
 interface PlacementSlot {
   readonly slot: CredentialSlot
   /** The recorded price of its steps in the window, USD. */
   readonly load: number
-  /** Sessions whose newest placement or step is on it and whose cache still lives, the placed one left out. */
+  /**
+   * Sessions whose newest placement or step is on it and whose cache still
+   * lives, the placed one left out, each at its model's share of a mean run.
+   */
   readonly live: number
   /** Refused until its reset, or warmed by a fresh sibling: not placed on now. */
   readonly held: boolean
-  /** Runs this account can sustain: the minimum over its quota windows, when known. */
+  /** Mean runs this account can sustain: the minimum over its quota windows, when known. */
   readonly sustainable?: number
   /** Its weekly window's reset, when read. Other windows never set placement priority. */
   readonly weeklyResetAt?: number
@@ -3749,6 +3759,8 @@ interface PlacementSpend {
 interface PlacementStep extends PlacementSpend {
   /** How long the session's cache lives from now; none: it never goes cold. */
   readonly ttlMs: Option.Option<number>
+  /** The step's model: a live session weighs its share of a lane (`runShare`). */
+  readonly model: ModelId
 }
 
 /** What a refusal holds: the whole account, or the account for one model. */
@@ -4762,12 +4774,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const buckets = new Map<string, HeldBucket>()
   /** provider, session → the bucket (provider, slot, hour) the session is counted in. */
   const counted = new Map<string, { readonly bucket: string; readonly hour: number }>()
-  /** provider, session → where its cache lives and until when (none: it never goes cold). */
+  /** provider, session → where its cache lives, of which model, until when (none: it never goes cold). */
   const live = new Map<
     string,
     {
       readonly provider: string
       readonly slot: CredentialSlot
+      readonly model: ModelId
       readonly until: Option.Option<number>
     }
   >()
@@ -5499,16 +5512,22 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     }, writeLock.withPermits(1)),
   })
-  const liveOn = (provider: string, slot: CredentialSlot, except: SessionId) => {
-    let count = 0
+  /** The live sessions on `slot` but `except`, each at its model's share of a mean run. */
+  const liveOn = (
+    provider: string,
+    slot: CredentialSlot,
+    except: SessionId,
+    models: ReadonlyArray<LaneModel>,
+  ) => {
+    let load = 0
     for (const [key, entry] of live)
       if (
         entry.provider === provider &&
         entry.slot === slot &&
         key !== placementKey(provider, except)
       )
-        count += 1
-    return count
+        load += runShare(provider, models, Option.some(entry.model))
+    return load
   }
   /**
    * One reading of a window of the account on `slot`, under the lock. A move
@@ -5587,7 +5606,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   }
   const spendAt = Effect.fn("CredentialPlacement.spendAt")(function* (
     spend: PlacementSpend,
-    cache: Option.Option<{ readonly ttlMs: Option.Option<number> }>,
+    cache: Option.Option<{ readonly ttlMs: Option.Option<number>; readonly model: ModelId }>,
   ) {
     const now = yield* Clock.currentTimeMillis
     const hour = Math.floor(now / PLACEMENT_BUCKET_MS)
@@ -5598,6 +5617,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         live.set(placementKey(spend.provider, spend.sessionId), {
           provider: spend.provider,
           slot: spend.slot,
+          model: cache.value.model,
           until: lifetimeEnd(now, cache.value.ttlMs),
         })
       }
@@ -5613,14 +5633,15 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * The lanes are those of a run of `model`: its own windows and the
    * account's count (`meters`), the account's in runs of that model
    * (`runShare`). With no model, the report lists every window and counts
-   * the account's alone, in mean runs.
+   * the account's alone, in mean runs. The report floors its capacity to
+   * whole lanes; `supply` keeps the fraction, as a cheap run fits in one.
    */
   const providerLanes = (
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
     model: Option.Option<ModelId>,
     now: number,
-  ): ProviderLanes => {
+  ): LaneSupply => {
     const fuelPerHour = fuelPerHourOf(provider)
     const counts = (name: WindowName) => meters(name, model)
     /** A window's name across accounts: each model's windows pool apart. */
@@ -5800,18 +5821,20 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     if (scoped.some((account) => account.windows.some((window) => isAccountWindow(window, "7d"))))
       sustainable = rollingCapacity
     if (scoped.length > 0 && scoped.every((account) => account.held)) sustainable = Option.some(0)
-    const capacity = Option.map(sustainable, (value) => Math.floor(value + 1e-9))
+    const supply = Option.filter(sustainable, () => scoped.length > 0)
+    const capacity = Option.map(supply, (value) => Math.floor(value + 1e-9))
     return {
-      provider,
-      scope: [...scope],
-      accounts,
-      load: laneLoad(provider, scope, Option.none(), models, Option.none(), now),
-      fuelPerHour,
-      laneHours: burns.get(provider)?.seen ?? 0,
-      models,
-      ...omitUndefined({
-        capacity: Option.getOrUndefined(Option.filter(capacity, () => scoped.length > 0)),
-      }),
+      lanes: {
+        provider,
+        scope: [...scope],
+        accounts,
+        load: laneLoad(provider, scope, Option.none(), models, Option.none(), now),
+        fuelPerHour,
+        laneHours: burns.get(provider)?.seen ?? 0,
+        models,
+        ...omitUndefined({ capacity: Option.getOrUndefined(capacity) }),
+      },
+      supply,
     }
   }
   /**
@@ -5859,40 +5882,46 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (!Option.contains(request.project, project))
         unused += Math.max(0, hold - heldLoad(project))
     // The account's windows bound every run on it; a model's own bound
-    // only that model's runs, so each counts its own load.
+    // only that model's runs, so each counts its own load. A hold reserves
+    // the account's lanes, in mean runs: it is no claim on a model's own.
     const full = Arr.findFirst(
       [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
       (model) => {
-        const lanes = providerLanes(request.provider, scope, model, now)
+        const { lanes, supply } = providerLanes(request.provider, scope, model, now)
         const load = laneLoad(request.provider, scope, model, lanes.models, request.asker, now)
         // The account's windows count the run at its share; a model's own, whole.
         const size = Option.match(model, {
           onNone: () => runShare(request.provider, lanes.models, request.model),
           onSome: () => 1,
         })
+        const reserved = Option.match(model, { onNone: () => unused, onSome: () => 0 })
         const allHeld = lanes.accounts
           .filter((account) => scope.includes(account.slot))
           .every((account) => account.held)
         return Option.filter(
-          Option.map(Option.fromUndefinedOr(lanes.capacity), (capacity) => ({
+          Option.map(supply, (lanesFree) => ({
             lanes,
             load,
-            capacity,
+            supply: lanesFree,
+            size,
+            reserved,
+            capacity: Math.floor(lanesFree + 1e-9),
           })),
           (check) => {
             if (underHold) return check.capacity === 0 && allHeld
-            return check.load + unused + size > check.capacity + 1e-9
+            return check.load + check.reserved + check.size > check.supply + 1e-9
           },
         )
       },
     )
-    return Option.map(full, ({ lanes, load, capacity }) => {
+    return Option.map(full, ({ lanes, load, supply, size, reserved, capacity }) => {
       let reason: LaneUnavailable["reason"] = "Busy"
       let retryAt = now + LANE_BUSY_RETRY_MS
       let heldText = ""
-      if (unused > 0) heldText = `, and ${unused} held for other projects`
-      let message = `No lane on ${request.provider}: ${roundLanes(load)} of ${capacity} lanes are running${heldText}; one frees when a run ends`
-      if (capacity === 0) {
+      if (reserved > 0) heldText = `, and ${reserved} held for other projects`
+      let message = `No lane on ${request.provider}: ${roundLanes(load)} of ${roundLanes(supply)} lanes are running${heldText}; one frees when a run ends`
+      // Spent: the windows carry no run of this size even with none running.
+      if (size > supply + 1e-9) {
         reason = "Spent"
         retryAt = Math.max(spentUntil(lanes, now), retryAt)
         message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
@@ -5934,22 +5963,24 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           )
         // A held account can report sustainable 0 with no reading. It is
         // not quota pace: an unread pool keeps the stage-0 ranking.
-        const accounts = providerLanes(
-          request.provider,
-          open,
-          Option.some(request.model),
-          now,
-        ).accounts.filter((account) => account.windows.length > 0)
+        const { lanes } = providerLanes(request.provider, open, Option.some(request.model), now)
+        const accounts = lanes.accounts.filter((account) => account.windows.length > 0)
+        // The report paces runs of the placed model; live sessions weigh
+        // their own. Both read in mean runs, so a cheap run's pace and an
+        // expensive session's load compare in one unit.
+        const share = runShare(request.provider, lanes.models, Option.some(request.model))
         const walk = rankPlacement({
           slots: Arr.map(open, (slot) => {
             const account = accounts.find((account) => account.slot === slot)
             return {
               slot,
               load: load.get(slot) ?? 0,
-              live: liveOn(request.provider, slot, request.sessionId),
+              live: liveOn(request.provider, slot, request.sessionId, lanes.models),
               held: isHeld(request.provider, slot, request.model, now) || warmedBySibling(slot),
               ...omitUndefined({
-                sustainable: account?.sustainable,
+                sustainable: Option.getOrUndefined(
+                  Option.map(Option.fromUndefinedOr(account?.sustainable), (runs) => runs * share),
+                ),
                 weeklyResetAt: account?.windows.find((window) => isAccountWindow(window, "7d"))
                   ?.resetAt,
               }),
@@ -5964,6 +5995,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         live.set(placementKey(request.provider, request.sessionId), {
           provider: request.provider,
           slot: choice,
+          model: request.model,
           until: lifetimeEnd(now, request.ttlMs),
         })
         if (Option.isSome(request.starter) && !Option.contains(request.preferred, choice)) {
@@ -5976,7 +6008,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     }),
     noteStep: Effect.fn("CredentialPlacement.noteStep")(function* (step: PlacementStep) {
-      yield* spendAt(step, Option.some({ ttlMs: step.ttlMs }))
+      yield* spendAt(step, Option.some({ ttlMs: step.ttlMs, model: step.model }))
     }),
     noteSpend: Effect.fn("CredentialPlacement.noteSpend")(function* (spend: PlacementSpend) {
       yield* spendAt(spend, Option.none())
@@ -6191,16 +6223,17 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const [provider, scope] of scopes)
           if (Option.isSome(scope)) settle(provider, scope.value)
         return {
-          providers: scopes.map(([provider, scope]) =>
-            providerLanes(
-              provider,
-              Option.match(scope, {
-                onNone: () => [],
-                onSome: (accounts) => accounts.map((account) => account.slot),
-              }),
-              Option.none(),
-              now,
-            ),
+          providers: scopes.map(
+            ([provider, scope]) =>
+              providerLanes(
+                provider,
+                Option.match(scope, {
+                  onNone: () => [],
+                  onSome: (accounts) => accounts.map((account) => account.slot),
+                }),
+                Option.none(),
+                now,
+              ).lanes,
           ),
         }
       })
