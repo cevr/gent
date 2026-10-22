@@ -124,8 +124,8 @@
     and when its end was delivered. The thread's `turnAfter` hook matches the
     open round's message id (or a message joined into the turn), records the
     end (the first writer wins), then delivers it: `notify: "user"` (the
-    default) tells nobody, the user reads the thread; `"starter"` queues a
-    wake to the starter thread's current session that carries the answer
+    default) tells nobody, the user reads the thread; `"starter"` steers a
+    waking message into the starter thread's current session that carries the answer
     (a header that names the thread, its agent, the round and its outcome,
     then the round's text, then how to read the rest) and the details its
     row draws (`ThreadRoundEndDetails`: flags, tool counts, last calls,
@@ -133,8 +133,13 @@
     before the first wake is sent, so a delivery after a crash and a handoff
     goes where the first one went; a saved place whose session was deleted
     since is replaced, once, by the starter thread's current place
-    (compare-and-swap on the saved session) (`sourceId:
-    "thread-round-end:<round>"`, `customType: "thread-round-end"`); `"none"`
+    (compare-and-swap on the saved session) (`requestId:
+    "thread-round-end:<round>"`, `customType: "thread-round-end"`). A steer,
+    not a queued follow-up: a running starter reads the end at its next step,
+    and an idle one wakes into a turn that reads every end waiting with it in
+    one request. A queued end opened one starter turn per thread, each
+    resending the starter's context (Prime Agent's live run, 2026-10-22:
+    `plans/prior-art-prime-agent-2026-10-22.md`). `"none"`
     is the service's own. The one writer that marks it delivered publishes it
     to `Threads.subscribeRoundEnds`: one feed per server, since the threads'
     resource is a server resource, and a thread started with `cwd` runs in

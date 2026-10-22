@@ -1075,7 +1075,8 @@ export const mapExtensionServiceError = <A, E, R>(
  *   is a promise: it is stored before `send` returns, and a restart before
  *   its turn starts runs it once, with no new test of `ifLatest`.
  * - `steer` joins the running turn at its next step. An idle branch parks it
- *   unless `wake` asks for a turn now. A `requestId` makes a repeat a no-op,
+ *   unless `wake` asks for a turn now; a turn that opens reads every steer
+ *   waiting with it in its first request. A `requestId` makes a repeat a no-op,
  *   and names the message: `interjectionMessageId(requestId)`. A `stopMessage` with
  *   that `messageId` takes the steer back while it waits, and stops the turn
  *   it opened.

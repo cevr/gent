@@ -1045,8 +1045,8 @@ const requireToolCall = Effect.fn("Threads.requireToolCall")(function* (operatio
 /** The message that opens a round's turn on the thread; the turn's command id is the same. */
 const roundMessageId = (round: string) => MessageId.make(`thread-round:${round}`)
 
-/** The follow-up source of a round's end: the starter's message id derives from it. */
-const roundEndSourceId = (round: string) => `thread-round-end:${round}`
+/** The steer that carries a round's end: the starter's message id derives from it. */
+const roundEndRequestId = (round: string) => RequestId.make(`thread-round-end:${round}`)
 
 // ── rounds ──────────────────────────────────────────────────────────────────
 
@@ -1567,9 +1567,12 @@ const roundEndMessage = Effect.fn("Threads.roundEndMessage")(function* (round: R
 })
 
 /**
- * Hands a recorded end to whoever hears it. A `starter` round wakes the
- * starter with its answer, once: the message id derives from the source id
- * and the saved place, so a second delivery after a crash is a no-op. A
+ * Hands a recorded end to whoever hears it. A `starter` round steers its
+ * answer into the starter, once: the message id derives from the round, and
+ * the loop refuses a steer whose message is stored, so a second delivery
+ * after a crash is a no-op. A running starter reads it at its next step; an
+ * idle one wakes, and its turn reads every end that waits with it in one
+ * request. A
  * round `thread.stop` or the starter's interrupt closed wakes nobody: its
  * stopper knows, and an interrupt's notice tells the starter's next turns.
  * Every end is then marked delivered, and the one writer that marked it
@@ -1582,9 +1585,9 @@ const deliverRoundEnd = Effect.fn("Threads.deliverRoundEnd")(function* (round: R
     const place = yield* wakeTarget(round)
     const ended = yield* roundEndMessage(round)
     yield* ctx.Session.send({
-      delivery: "queue",
+      delivery: "steer",
       ...place,
-      sourceId: roundEndSourceId(round.round),
+      requestId: roundEndRequestId(round.round),
       wake: true,
       content: ended.content,
       metadata: { customType: THREAD_ROUND_END_TYPE, details: ended.details },

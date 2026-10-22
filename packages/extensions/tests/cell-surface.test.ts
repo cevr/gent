@@ -1622,8 +1622,11 @@ describe("branch cell lifetime", () => {
           textStep(`done-${index}`),
         ])
         steps.splice(1, 0, { ...textStep("child reply"), gated: true })
+        // The thread answers only once the starter is idle: a round that ended
+        // while the starter ran would join that turn, and open none of its own.
         steps.splice(12, 0, {
           ...textStep("verified child result"),
+          gated: true,
           assertRequest: (request) => {
             expect(request.model).toBe("custom/model")
             expect(request.reasoning).toBe("high")
@@ -1719,6 +1722,7 @@ describe("branch cell lifetime", () => {
             .flatMap((message) => message.parts)
             .filter((part) => part.type === "tool-result" && part.name === "cell")
           expect(results.at(-1)).toMatchObject({ isFailure: false, result: { display: "true" } })
+          if (index === 5) yield* controls.emitAll(12)
         }
         const parentMessages = yield* client.message.list({ branchId })
         // Only the finished round woke the parent; the stopped one told its stopper.

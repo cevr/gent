@@ -1248,6 +1248,77 @@ describe("the round-end message", () => {
   )
 })
 
+/**
+ * A round end steers its starter. Ends that land while the starter runs join
+ * its turn; they open no turn each, which would resend the starter's whole
+ * context once per thread.
+ */
+describe("round ends while the starter runs", () => {
+  it.live(
+    "three threads that end while the starter answers join its turn, read by one request",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const delivered = yield* Deferred.make<void>()
+          const starterRequests: Array<ReadonlyArray<string>> = []
+          const tasks = [
+            "CHILD-ONE: reply pong",
+            "CHILD-TWO: reply pong",
+            "CHILD-THREE: reply pong",
+          ]
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (tasks.some((task) => texts[0]?.endsWith(task) === true)) {
+              return Effect.succeed(reply("pong"))
+            }
+            starterRequests.push(texts)
+            if (starterRequests.length === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  ...tasks.map((task, index) =>
+                    toolCallPart("thread.start", delegated(task), {
+                      toolCallId: ToolCallId.make(`start-${index}`),
+                    }),
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            // The answer step waits until every round's end is in the starter's queue.
+            if (starterRequests.length === 2) {
+              return Deferred.await(delivered).pipe(Effect.as(reply("started three")))
+            }
+            return Effect.succeed(reply("read the three ends"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const starter = { sessionId: harness.sessionId, branchId: harness.branchId }
+          yield* sendPrompt(harness, "delegate three tasks")
+          yield* waitFor(
+            roundsOf(harness.sql),
+            (rounds) => rounds.length === 3 && rounds.every((round) => round.delivered === 1),
+            8_000,
+            "every round's end was sent to the starter",
+          )
+          yield* Deferred.succeed(delivered, void 0)
+          const settled = yield* waitFor(
+            harness.client.session.getSnapshot(starter),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("read the three ends"),
+            8_000,
+            "the starter read the round ends",
+          )
+          expect(roundEndMessages(settled.messages)).toHaveLength(3)
+          // One starter turn: the ends joined it at its answer.
+          expect(yield* turnReceipts(harness, starter)).toHaveLength(1)
+          expect(starterRequests).toHaveLength(3)
+          expect(starterRequests[2]?.filter(isRoundEndText)).toHaveLength(3)
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
+    18_000,
+  )
+})
+
 // ── the starter's interrupt ─────────────────────────────────────────────────
 
 /**
@@ -3331,7 +3402,12 @@ const correctRunningThread = (options: {
     }
     if (parentCalls === 2) {
       const to = Option.getOrThrow(startedSessionId(request.prompt))
-      return Effect.succeed(toolStep("session.send", { to, message: correction }, "send-fix"))
+      // Sent once the thread streams: a correction that waited before the
+      // thread's first request would be read by it (a fresh turn joins its
+      // waiting steers).
+      return Deferred.await(options.childStreaming).pipe(
+        Effect.as(toolStep("session.send", { to, message: correction }, "send-fix")),
+      )
     }
     return Effect.succeed(stalledStream("waiting on the thread", options.parentStreaming))
   })

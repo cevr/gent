@@ -1305,6 +1305,62 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
+  // Children that end while their starter is idle each leave a steer. The
+  // turn the first one opens reads them all in its first request, not one
+  // model step per message.
+  it.live("a woken turn reads every waiting steer in its first request", () =>
+    Effect.gen(function* () {
+      const idleSessionId = SessionId.make("cont-waiting-steers-session")
+      const idleBranchId = BranchId.make("cont-waiting-steers-branch")
+      const firstRequest: Array<string> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("Read all three."),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "user") continue
+              for (const part of message.content) {
+                if (part.type === "text") firstRequest.push(part.text)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const steer = (requestId: string, message: string, wake: boolean) =>
+          steerAgentLoop(
+            SteerCommand.cases.Interject.make({
+              sessionId: idleSessionId,
+              branchId: idleBranchId,
+              requestId,
+              message,
+              wake,
+            }),
+          )
+        yield* steer("req-waiting-first", "FIRST-CHILD", false)
+        yield* steer("req-waiting-second", "SECOND-CHILD", false)
+        yield* steer("req-waiting-third", "THIRD-CHILD", true)
+        yield* waitForPhase(agentLoop, { sessionId: idleSessionId, branchId: idleBranchId }, "Idle")
+        expect(yield* controls.callCount).toBe(1)
+        expect(firstRequest).toEqual(["FIRST-CHILD", "SECOND-CHILD", "THIRD-CHILD"])
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter(Schema.is(TurnCompleted))).toHaveLength(1)
+        const messages = yield* messageStorage.listMessages(idleBranchId)
+        const joined = messages.filter(
+          (message) => message._tag === "interjection" && isRuntimeUserMessage(message),
+        )
+        // The two the turn did not open are answered by it: a restart does not answer them again.
+        expect(joined.map((message) => message.id)).toEqual([
+          interjectionMessageId(RequestId.make("req-waiting-second")),
+          interjectionMessageId(RequestId.make("req-waiting-third")),
+        ])
+        yield* controls.assertDone
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("a cancel during the continuation step ends the turn interrupted", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([

@@ -6956,6 +6956,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           return resumed.interaction.value
         }
         if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
+        // A fresh turn takes the steering that waited with its opener before
+        // the first model request: several children that ended while the
+        // branch was idle or busy are read by one request, not one step each.
+        // They would join at the first step boundary anyway (`runTurnStep`).
+        if (resumed.step === 0) yield* deliverSteeringAtStepBoundary({ finalStep: false })
         const knownSteps = yield* readKnownSteps.pipe(
           Effect.catch((cause) =>
             Effect.logWarning("turn.credential-resume-read-failed").pipe(
