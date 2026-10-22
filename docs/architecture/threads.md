@@ -211,11 +211,17 @@
     running thread spends the user's money): the count is read under one permit per server
     before a start makes its session, so a start with a task past the cap
     makes no session and names the threads that run, and again in the claim's
-    transaction, the read the table holds to. Under the same permit, after
+    transaction, the read the table holds to. Both reads count the starts
+    still preparing (in memory, from the permit to the claim), so two starts
+    cannot each pass and one be refused after its copy is made. Under the same permit, after
     the cap, the account admits the round (`ExtensionContext.Accounts.admit`,
     keyed by the round's message id, with the thread session's cwd, admission
     and model): a full account refuses it as `Busy`, a spent one (capacity 0) as `Spent`, and a start it refuses makes no session and no copy (a
-    snapshot start asks before its copy too). An account whose capacity is
+    workspace start asks before its copy too). A start's order: resolve
+    the place (`Workspaces.locate`), admit the cap and the lane, hold the
+    lane (`Accounts.hold`, so setup hooks longer than the lane's 2 minutes
+    do not lapse it), copy and run the hooks, create the session, bind,
+    claim the round, send. Every refusal comes before the copy. An account whose capacity is
     not read admits every round; the caller's own running turn holds no lane
     against it. A retry under the round's key finds its round before the
     account is asked, so it gets the round it was admitted even while the

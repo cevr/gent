@@ -282,6 +282,7 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
 const testExtensionAccounts = (): ExtensionAccountsService => ({
   admit: () => Effect.void,
   cancel: () => Effect.void,
+  hold: () => Effect.void,
   lanes: Effect.succeed({ providers: [] }),
 })
 

@@ -1813,6 +1813,7 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       })
     }),
     cancel: (message) => placement.freeReservation(message),
+    hold: (message) => placement.holdReservation(message),
     lanes,
   })
 })

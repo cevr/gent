@@ -71,7 +71,11 @@ import {
   Threads,
   ThreadsOverCap,
 } from "../src/threads.js"
-import { WorkspaceKind } from "../src/workspaces.js"
+import {
+  makeWorkspacesExtension,
+  WORKSPACES_EXTENSION_ID,
+  WorkspaceKind,
+} from "../src/workspaces.js"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   acted,
@@ -2240,6 +2244,107 @@ describe("thread round ownership", () => {
           ])
           expect(second?.failed).toBe(true)
           expect(textOf(second?.result)).toContain("already runs 1 thread:")
+          // The place is resolved before the cap: a place that cannot be made is the refusal.
+          const [nowhere] = yield* call(client, starter, [
+            [
+              "thread.start",
+              "start-cap-3",
+              { agent: "worker", task: "HANG third", workspace: { snapshot: true } },
+            ],
+          ])
+          expect(nowhere?.failed).toBe(true)
+          expect(textOf(nowhere?.result)).toContain("A snapshot workspace")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "a start preparing its copy counts against the cap, so another start in the thread is refused before it makes anything",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sh = (cwd: string, command: string) =>
+            runProcess("sh", ["-c", command], { cwd }).pipe(
+              Effect.flatMap((result) => {
+                if (result.exitCode === 0) return Effect.succeed(result.stdout.trim())
+                return Effect.die(`${command} exited ${result.exitCode}: ${result.stderr}`)
+              }),
+              Effect.orDie,
+              Effect.provide(BunServices.layer),
+            )
+          const gate = yield* sh(yield* makeTempDirectoryScoped("threads-gate-"), "pwd -P")
+          const root = yield* makeTempDirectoryScoped("threads-preparing-")
+          // The copy's setup hook says it started, then waits for the gate.
+          yield* sh(
+            root,
+            [
+              "mkdir origin && cd origin",
+              "git init -q -b main",
+              "git config user.name Test",
+              "git config user.email test@example.com",
+              `printf 'version = 1\\n[[hooks.postcreate]]\\nrun = "touch ${gate}/started; while [ ! -f ${gate}/go ]; do sleep 0.05; done"\\n' > .rift.toml`,
+              "git add -A",
+              "git commit -qm init",
+            ].join(" && "),
+          )
+          const origin = yield* sh(`${root}/origin`, "pwd -P")
+          const home = yield* makeTempDirectoryScoped("threads-preparing-home-")
+          yield* sh(
+            home,
+            `mkdir .gent && printf '%s' '{"threads":{"maxRunning":1}}' > .gent/config.json`,
+          )
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            extensionInputs: [
+              ...e2ePreset.extensionInputs.filter(
+                (extension) => extension.manifest.id !== WORKSPACES_EXTENSION_ID,
+              ),
+              makeWorkspacesExtension({ rift: "/nonexistent/gent-test/rift" }),
+            ],
+            providerLayer: workerModels(),
+            cwd: origin,
+            home,
+          })
+          const older = { sessionId, branchId }
+          // A second session of the same thread shares its cap.
+          const newer: SessionKey = yield* client.session.create({
+            parentSessionId: older.sessionId,
+            parentBranchId: older.branchId,
+            continueThread: true,
+          })
+          const copying = yield* Effect.forkChild(
+            call(client, older, [
+              [
+                "thread.start",
+                "start-copy",
+                { agent: "worker", task: "ECHO copied", workspace: { snapshot: true } },
+              ],
+            ]),
+          )
+          yield* waitFor(
+            sh(gate, "ls"),
+            (listed) => listed.includes("started"),
+            10_000,
+            "the copy's setup hook started",
+          )
+          const [plain] = yield* call(client, newer, [
+            ["thread.start", "start-plain", { agent: "worker", task: "ECHO plain" }],
+          ])
+          expect(plain?.failed).toBe(true)
+          expect(textOf(plain?.result)).toContain(
+            "This session's thread is starting already 1 thread.",
+          )
+          yield* sh(gate, "touch go")
+          const [copied] = yield* Fiber.join(copying)
+          expect(copied?.failed).toBe(false)
+          const threads = (yield* client.session.list()).filter(
+            (session) =>
+              session.id !== newer.sessionId &&
+              (session.parentSessionId === older.sessionId ||
+                session.parentSessionId === newer.sessionId),
+          )
+          expect(threads).toHaveLength(1)
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

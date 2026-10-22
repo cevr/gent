@@ -6338,6 +6338,34 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "a reservation held through its start's preparation outlasts 2 minutes, then lapses 2 minutes after the hold ends",
+    () =>
+      Effect.gen(function* () {
+        const { placement, read, admit, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+        expect(yield* admit([a], "start")).toBe("admitted")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* placement.holdReservation("start")
+            yield* TestClock.adjust("10 minutes")
+            expect((yield* lanes([a])).load).toBe(1)
+            // A second admission under the key keeps the lane it holds.
+            expect(yield* admit([a], "start")).toBe("admitted")
+          }),
+        )
+        yield* TestClock.adjust("1 minute")
+        expect((yield* lanes([a])).load).toBe(1)
+        yield* TestClock.adjust("1 minute")
+        expect((yield* lanes([a])).load).toBe(0)
+        // A hold on a key with no lane held holds nothing.
+        yield* Effect.scoped(placement.holdReservation("none"))
+        expect((yield* lanes([a])).load).toBe(0)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a lane's account carries the sign-in the store holds under its label now", () =>
     Effect.gen(function* () {
       const context = yield* Layer.build(makeRegistryLayerWithDrivers([noopProvider]))

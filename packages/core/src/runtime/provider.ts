@@ -3738,6 +3738,13 @@ interface CredentialPlacementService {
    */
   readonly freeReservation: (key: string) => Effect.Effect<void>
   /**
+   * While the scope is open, the start admitted under `key` keeps its lane
+   * past its 2 minutes: a caller preparing the run's place holds it through.
+   * When the scope closes, its 2 minutes start again. A key with no lane
+   * held is a no-op.
+   */
+  readonly holdReservation: (key: string) => Effect.Effect<void, never, Scope.Scope>
+  /**
    * The store renamed `provider`'s label `from` to `to`, sign-in and all
    * (`renameSignIn`): the quota state, holds and sign-in of `from` move to
    * `to`, whose own go, and a late report under `from` of that sign-in
@@ -4270,15 +4277,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * rename. Cleared when the old label holds another sign-in.
    */
   const renamed = new Map<string, { readonly to: CredentialSlot; readonly signedInAt: number }>()
-  /** message key → a start admitted to a lane whose turn has not opened, until `until`. */
+  /**
+   * message key → a start admitted to a lane whose turn has not opened, until
+   * `until`, or while a caller `held` it through its preparation.
+   */
   const reserved = new Map<
     string,
     {
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly until: number
+      readonly held: boolean
     }
   >()
+  const reserving = (entry: { readonly until: number; readonly held: boolean }, now: number) =>
+    entry.held || entry.until > now
   /**
    * The runs holding a lane on `provider` that share an account with
    * `scope`; `asker`'s own open turn is left out.
@@ -4298,7 +4311,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       if (Option.contains(asker, sessionId)) continue
       if (shares(held)) load += 1
     }
-    for (const held of reserved.values()) if (held.until > now && shares(held)) load += 1
+    for (const held of reserved.values()) if (reserving(held, now) && shares(held)) load += 1
     return load
   }
   /**
@@ -5036,7 +5049,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const now = yield* Clock.currentTimeMillis
       const refusal = yield* locked((): Option.Option<LaneUnavailable> => {
         trim(now)
-        for (const [key, held] of reserved) if (held.until <= now) reserved.delete(key)
+        for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
         // A start admitted again under its key keeps the lane it holds.
         if (reserved.has(request.key)) return Option.none()
         settle(request.provider, request.scope)
@@ -5068,6 +5081,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           provider: request.provider,
           scope,
           until: now + LANE_RESERVATION_MS,
+          held: false,
         })
         return Option.none()
       })
@@ -5096,6 +5110,21 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         reserved.delete(key)
       })
     }),
+    holdReservation: (key: string) => {
+      const mark = (held: boolean) =>
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          locked(() => {
+            const entry = Option.filter(Option.fromUndefinedOr(reserved.get(key)), (found) =>
+              reserving(found, now),
+            )
+            if (Option.isNone(entry)) return
+            reserved.set(key, { ...entry.value, held, until: now + LANE_RESERVATION_MS })
+          }),
+        )
+      return Effect.acquireRelease(mark(true), () => mark(false)).pipe(
+        Effect.withSpan("CredentialPlacement.holdReservation"),
+      )
+    },
     renameLabel: Effect.fn("CredentialPlacement.renameLabel")(function* (rename) {
       yield* locked(() => {
         const fromKey = placementKey(rename.provider, rename.from)

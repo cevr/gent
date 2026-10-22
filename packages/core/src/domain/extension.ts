@@ -1428,6 +1428,13 @@ export interface ExtensionAccountsService {
    * no-op.
    */
   readonly cancel: (message: MessageId) => Effect.Effect<void>
+  /**
+   * While the scope is open, the start admitted for `message` keeps its lane
+   * past its 2 minutes: a start that prepares its place (a copy and its
+   * setup hooks) holds it through. When the scope closes, its 2 minutes
+   * start again. A message with no lane held is a no-op.
+   */
+  readonly hold: (message: MessageId) => Effect.Effect<void, never, Scope.Scope>
   /** Each provider's lanes, as `accounts.lanes` reports them. */
   readonly lanes: Effect.Effect<LaneReport>
 }

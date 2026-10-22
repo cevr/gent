@@ -48,6 +48,7 @@ import {
   Ref,
   Schema,
   SchemaGetter,
+  type Scope,
   Semaphore,
   Stream,
 } from "effect"
@@ -559,6 +560,18 @@ interface ThreadRoundsService {
    * session it guards are one step, so a start past the cap makes no session.
    */
   readonly admissions: Semaphore.Semaphore
+  /**
+   * Counts a start with a task as running while it prepares its workspace,
+   * until the scope closes or its round is claimed. In memory, as a lane's
+   * hold is: a restart starts it empty, and a retry under the same key
+   * prepares again.
+   */
+  readonly prepare: (
+    round: string,
+    starterThread: SessionId,
+  ) => Effect.Effect<void, never, Scope.Scope>
+  /** The starts `starterThread` is preparing, `round` left out: each counts against the cap. */
+  readonly preparing: (starterThread: SessionId, round: string) => Effect.Effect<number>
   /** The branches whose turns reconciled since the last failed hook step. */
   readonly reconciled: ReconciledBranches
 }
@@ -709,6 +722,10 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
       const sql = yield* SqlClient.SqlClient
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
+      /** round → the starter thread of a start that is preparing its workspace. */
+      const starting = new Map<string, SessionId>()
+      const preparingOthers = (starterThread: string, round: string) =>
+        [...starting].filter(([key, thread]) => key !== round && thread === starterThread).length
       const reconciled = yield* makeReconciledBranches
       yield* migrateThreadRounds
 
@@ -780,7 +797,9 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
               const open = yield* selectOpenRound(input.thread)
               if (Option.isSome(open)) return RoundClaim.cases.Busy.make({ round: open.value })
               const busy = yield* selectBusyThreads(input.starter.thread)
-              if (busy.length >= input.cap) return RoundClaim.cases.OverCap.make({ threads: busy })
+              if (busy.length + preparingOthers(input.starter.thread, input.round) >= input.cap) {
+                return RoundClaim.cases.OverCap.make({ threads: busy })
+              }
               const counted = yield* sql<{
                 readonly rounds: number
               }>`SELECT COUNT(*) AS rounds FROM thread_rounds WHERE thread = ${input.thread}`
@@ -806,7 +825,15 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
                 onSome: (round) =>
                   Effect.succeed(RoundClaim.cases.Ready.make({ round, fresh: true })),
               })
-            }).pipe(sql.withTransaction)
+            }).pipe(
+              sql.withTransaction,
+              // The claimed round's row counts it now; its preparation no longer does.
+              Effect.tap((claimed) =>
+                Effect.sync(() => {
+                  if (claimed._tag === "Ready") starting.delete(input.round)
+                }),
+              ),
+            )
           },
           Effect.mapError(storageError("Failed to admit the round")),
         ),
@@ -995,6 +1022,18 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
 
         ended,
         admissions,
+        prepare: (round, starterThread) =>
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              starting.set(round, starterThread)
+            }),
+            () =>
+              Effect.sync(() => {
+                starting.delete(round)
+              }),
+          ),
+        preparing: (starterThread, round) =>
+          Effect.sync(() => preparingOthers(starterThread, round)),
         reconciled,
       })
     }),
@@ -2192,8 +2231,11 @@ const threadsWord = (count: number) => {
   return "threads"
 }
 
-/** The cap's refusal, naming the threads the starter's thread runs. */
-const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArray<string>) {
+/** The cap's refusal, naming the threads the starter's thread runs and counting the ones it is starting. */
+const capRefusal = Effect.fn("Threads.capRefusal")(function* (
+  busy: ReadonlyArray<string>,
+  starting: number,
+) {
   const started = yield* startedThreads()
   const names = busy
     .map((thread) => {
@@ -2201,22 +2243,31 @@ const capRefusal = Effect.fn("Threads.capRefusal")(function* (busy: ReadonlyArra
       return `${thread} "${name}"`
     })
     .join(", ")
+  const clauses: Array<string> = []
+  if (busy.length > 0)
+    clauses.push(`already runs ${busy.length} ${threadsWord(busy.length)}: ${names}`)
+  if (starting > 0 && busy.length > 0) clauses.push(`is starting ${starting} more`)
+  if (starting > 0 && busy.length === 0) {
+    clauses.push(`is starting already ${starting} ${threadsWord(starting)}`)
+  }
   return yield* new ThreadsOverCap({
-    message: `This session's thread already runs ${busy.length} ${threadsWord(busy.length)}: ${names}. Stop one with thread.stop, or send this round when one ends.`,
+    message: `This session's thread ${clauses.join(", and ")}. Stop one with thread.stop, or send this round when one ends.`,
     threads: busy,
   })
 })
 
 /**
  * The cap, read before a start makes its session, so a start past it makes
- * none. The claim reads it again in its transaction: that read is the one
- * the table holds to.
+ * none. The starts preparing a workspace count, `round` left out. The claim
+ * reads it again in its transaction: that read is the one the table holds to.
  */
-const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number) {
+const refuseOverCap = Effect.fn("Threads.refuseOverCap")(function* (cap: number, round: string) {
   const rounds = yield* ThreadRounds
-  const busy = yield* rounds.busyThreads(yield* callerThread())
-  if (busy.length < cap) return
-  return yield* capRefusal(busy)
+  const starter = yield* callerThread()
+  const busy = yield* rounds.busyThreads(starter)
+  const starting = yield* rounds.preparing(starter, round)
+  if (busy.length + starting < cap) return
+  return yield* capRefusal(busy, starting)
 })
 
 /** The session settings a round's run reads its account from. */
@@ -2286,7 +2337,7 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
       if (Option.isSome(retry)) {
         return RoundClaim.cases.Ready.make({ round: retry.value, fresh: false })
       }
-      yield* refuseOverCap(cap)
+      yield* refuseOverCap(cap, roundId)
       yield* admitLane(roundId, lane)
       // Past the lane, a failed create or a claim that refuses (a busy
       // thread, the cap) runs no round: the lane it took frees with it.
@@ -2321,7 +2372,9 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
         )
     }),
   )
-  if (claim._tag === "OverCap") return yield* capRefusal(claim.threads)
+  if (claim._tag === "OverCap") {
+    return yield* capRefusal(claim.threads, yield* rounds.preparing(starter.thread, roundId))
+  }
   if (claim._tag === "Busy") {
     return yield* new ThreadBusy({
       message: `Thread ${claim.round.thread} is running round ${claim.round.number} (${claim.round.round}); send the next round when it ends`,
@@ -2374,8 +2427,9 @@ const storedThreadIn = Effect.fn("Threads.storedThreadIn")(function* (cwd: strin
 /**
  * A thread's workspace, made outside the admission permit: a copy runs its
  * `postcreate` hooks, which can take minutes, and must not hold every other
- * admission on the server. `precheck` refuses a start past the cap before
- * the place is made. A copy's record exists from the first step of its
+ * admission on the server. The place resolves first, so a start with a bad
+ * workspace takes nothing; then `precheck` refuses a start past the cap or a
+ * full account before the place is made. A copy's record exists from the first step of its
  * making. When the start fails or is interrupted (the finalizer on the
  * start's scope), storage decides what happens to a copy, not what this
  * fiber saw: core can store the session and then be interrupted before
@@ -2398,12 +2452,12 @@ const workspacePlace = Effect.fn("Threads.workspacePlace")(function* <E, R>(inpu
         "A thread workspace needs the @gent/workspaces extension, which is not active for this session",
     })
   }
-  yield* input.precheck
   const start = yield* places.value.locate({
     key: input.key,
     cwd: input.cwd,
     workspace: input.workspace,
   })
+  yield* input.precheck
   const acquired = yield* Ref.make(Option.none<WorkspacePlace>())
   yield* Effect.addFinalizer((exit) =>
     Effect.gen(function* () {
@@ -2471,13 +2525,26 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
       const roundId = yield* roundIdOf("thread.start", input.key)
       // Whether this call's precheck took the lane: a retry's round holds its own.
       const admitted = yield* Ref.make(false)
+      // One admission step, as a round's: the cap (starts in preparation
+      // counted), the lane, and this start counted as preparing. The lane
+      // and the count hold until the round is claimed or the start ends.
       const precheck = Effect.gen(function* () {
         if (Option.isNone(task)) return
         const rounds = yield* ThreadRounds
-        if (Option.isSome(yield* rounds.round(roundId))) return
-        yield* refuseOverCap(yield* runningCap())
-        yield* admitLane(roundId, lane(cwd))
+        const cap = yield* runningCap()
+        const took = yield* Semaphore.withPermit(
+          rounds.admissions,
+          Effect.gen(function* () {
+            if (Option.isSome(yield* rounds.round(roundId))) return false
+            yield* refuseOverCap(cap, roundId)
+            yield* admitLane(roundId, lane(cwd))
+            yield* rounds.prepare(roundId, yield* callerThread())
+            return true
+          }),
+        )
+        if (!took) return
         yield* Ref.set(admitted, true)
+        yield* ctx.Accounts.hold(roundMessageId(roundId))
       })
       // A workspace that fails after this call's precheck took the lane runs no round.
       const workspace = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
