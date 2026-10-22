@@ -13,11 +13,12 @@ import {
   createRpcHarness,
   waitFor,
 } from "@gent/core/test-utils"
-import { WorkflowsExtension } from "../src/workflows.js"
+import { ORCHESTRATE_MACHINE, WorkflowsExtension } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
 
 const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("WorkflowsExtension via RPC", () => {
   it.scopedLive(
@@ -118,6 +119,7 @@ describe("WorkflowsExtension via RPC", () => {
             "Audit",
             "Counsel",
             "Handoff",
+            "Orchestrate",
             "Plan",
             "Research",
             "Review",
@@ -199,6 +201,51 @@ describe("WorkflowsExtension via RPC", () => {
         expect(savedPlan).toContain("Do not depend on kernel bindings")
         expect(savedPlan).not.toContain("atomic: true")
       }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
+  it.scopedLive(
+    "/orchestrate writes the shipped machine, keeps a project's own, and queues its outcome prompt",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-orchestrate-" })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          cwd,
+        })
+        const orchestrate = (input: string) =>
+          client.extension.request({
+            sessionId,
+            branchId,
+            extensionId: WORKFLOWS_EXTENSION_ID,
+            capabilityId: "orchestrate-command",
+            input,
+          })
+        const machineFile = path.join(cwd, ".gent", "machines", "orchestrate.json")
+        yield* orchestrate("  plans/next.md  ")
+        // The file machine.start reads, as machine.define would write it.
+        expect(decodeJson(yield* fs.readFileString(machineFile))).toEqual(ORCHESTRATE_MACHINE)
+        const own = '{ "name": "orchestrate", "mine": true }\n'
+        yield* fs.writeFileString(machineFile, own)
+        yield* orchestrate("plans/next.md")
+        expect(yield* fs.readFileString(machineFile)).toBe(own)
+        yield* orchestrate("")
+        const { followUp } = yield* client.queue.get({ sessionId, branchId })
+        const [shipped, kept, empty] = followUp.map((item) => item.content)
+        expect(shipped).toContain("Orchestrate: plans/next.md\n")
+        expect(shipped).toContain(`/.gent/results/${sessionId}/${branchId}/orchestrate/plan.md`)
+        expect(shipped).toContain("write no product code")
+        expect(shipped).toContain("machine.start the orchestrate machine")
+        expect(shipped).toContain(`The orchestrate machine is ${machineFile}.`)
+        expect(kept).toContain(
+          `${machineFile} differs from the shipped orchestrate machine and was kept`,
+        )
+        expect(empty).toBe("Ask which plan or goal to orchestrate.")
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
 

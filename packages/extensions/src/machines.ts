@@ -3234,6 +3234,58 @@ const DefineResult = Schema.Struct({
   written: Schema.Boolean,
 })
 
+/**
+ * Where a definition's project file stands after a write: written, already
+ * the same content, or `kept` -- a different file a write that does not
+ * replace left as it was.
+ */
+type DefinitionWrite = "written" | "unchanged" | "kept"
+
+/**
+ * Checks a definition as `machine.define` does, then writes its project file
+ * atomically. `replace: false` keeps a different file already there.
+ */
+const writeDefinition = Effect.fn("Machines.writeDefinition")(function* (
+  proposed: MachineDefinition,
+  options: { readonly replace: boolean },
+) {
+  const definition = yield* checkedDefinition(proposed)
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const file = yield* definitionPath(definition.name)
+  const content = `${yield* Schema.encodeEffect(DefinitionFile)(definition)}\n`
+  const digest = (yield* sha256Hex(content)).slice(0, 16)
+  const existing = yield* fs.readFileString(file).pipe(Effect.option)
+  const written = (outcome: DefinitionWrite) => ({
+    name: definition.name,
+    path: file,
+    digest,
+    outcome,
+  })
+  if (Option.contains(existing, content)) return written("unchanged")
+  if (Option.isSome(existing) && !options.replace) return written("kept")
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+  yield* writeFileAtomic(file, content)
+  return written("written")
+})
+
+/** A definition as JSON holds it, before the schema brands its names. */
+export type MachineDefinitionJson = typeof MachineDefinition.Encoded
+
+/**
+ * Writes a definition another extension ships, through the checks
+ * `machine.define` runs. A project file of that name with other content is
+ * the owner's: it is kept, and the outcome says so.
+ */
+export const shipDefinition = Effect.fn("Machines.shipDefinition")(function* (
+  definition: MachineDefinitionJson,
+) {
+  const decoded = yield* Schema.decodeEffect(MachineDefinition)(definition).pipe(
+    Effect.mapError((cause) => new MachineError({ message: `Not a machine: ${cause.message}` })),
+  )
+  return yield* writeDefinition(decoded, { replace: false })
+})
+
 const MachineDefineTool = tool({
   id: "machine.define",
   resources: [MachineStoreResource],
@@ -3243,19 +3295,8 @@ const MachineDefineTool = tool({
   params: Schema.Struct({ definition: MachineDefinition }),
   output: DefineResult,
   execute: Effect.fn("MachineDefineTool.execute")(function* (params) {
-    const definition = yield* checkedDefinition(params.definition)
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const file = yield* definitionPath(definition.name)
-    const content = `${yield* Schema.encodeEffect(DefinitionFile)(definition)}\n`
-    const digest = (yield* sha256Hex(content)).slice(0, 16)
-    const existing = yield* fs.readFileString(file).pipe(Effect.option)
-    if (Option.contains(existing, content)) {
-      return { name: definition.name, path: file, digest, written: false }
-    }
-    yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-    yield* writeFileAtomic(file, content)
-    return { name: definition.name, path: file, digest, written: true }
+    const { outcome, ...written } = yield* writeDefinition(params.definition, { replace: true })
+    return { ...written, written: outcome === "written" }
   }),
 })
 

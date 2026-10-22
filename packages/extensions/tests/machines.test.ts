@@ -76,6 +76,7 @@ import {
   roundEndSignal,
 } from "../src/machines.js"
 import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
+import { ORCHESTRATE_MACHINE } from "../src/workflows.js"
 import {
   acted,
   billed,
@@ -96,7 +97,11 @@ import { CANDIDATE, fakeGitHub, REPO } from "./helpers/fake-github"
 
 // ── the routed models ───────────────────────────────────────────────────────
 
-/** One worker round, as its rendered `say` names it: `STATE <state> <visit>`, `MODE <mode>`. */
+/**
+ * One worker round, as its rendered `say` names it: `STATE <state> <visit>`,
+ * or `Unit <unit>, <state>, visit <visit>.` in the shipped orchestrate
+ * machine; `MODE <mode>`.
+ */
 interface RoundCall {
   readonly state: string
   readonly visit: number
@@ -107,7 +112,7 @@ interface RoundCall {
 
 const roundCallOf = (prompt: Prompt.Prompt): RoundCall => {
   const text = lastUserText(prompt)
-  const header = /^STATE (\S+) (\d+)$/m.exec(text)
+  const header = /^STATE (\S+) (\d+)$/m.exec(text) ?? /^Unit \S+, (\S+), visit (\d+)\.$/m.exec(text)
   const mode = /^MODE (\S*)$/m.exec(text)
   return {
     state: header?.[1] ?? "unknown",
@@ -3618,5 +3623,209 @@ describe("an integrate state while CI runs", () => {
         "the run recorded the push",
       )
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+})
+
+// ── the shipped orchestrate machine ─────────────────────────────────────────
+
+const UNIT_DIR = "/units/u1"
+
+/** A unit's run input; an empty gate is the unit with none named. */
+const unitInput = (gate: string) => ({ unit: "u1", goal: "G", dir: UNIT_DIR, gate })
+
+const UNIT_VERDICTS = new Map([
+  ["plan", "ready"],
+  ["implement", "ready"],
+  ["review", "accepted"],
+  ["verify", "pass"],
+])
+
+/** Each round replies the verdict `verdicts` names for its `state:visit`, else its state's happy one, with a file of its own. */
+const unitWorker =
+  (verdicts: Readonly<Record<string, string>>) =>
+  (round: RoundCall): Effect.Effect<WorkerStream> => {
+    const next =
+      verdicts[`${round.state}:${round.visit}`] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
+    const file = `${UNIT_DIR}/${round.state}-${round.visit}.md`
+    return Effect.succeed(replyWith(round, { next, file }))
+  }
+
+/** The orchestrate machine's tiers, each its own model: a round's model names its tier. */
+const unitTiers = () => tieredAccount({ strongest: [OPUS], efficient: [HAIKU] })
+
+/** Answers the owner's `count`-th ask with `choice`, and returns that ask. */
+const answerAsk = (
+  client: Client,
+  owner: SessionKey,
+  count: number,
+  choice: string,
+  note?: string,
+) =>
+  Effect.gen(function* () {
+    const ask = yield* askDetails(client, owner, count)
+    const [answered] = yield* call(client, owner, [
+      [
+        "machine.answer",
+        `answer-${count}-${choice}`,
+        { run: ask.run, askId: ask.askId, choice, ...omitUndefined({ note }) },
+      ],
+    ])
+    expect(answered?.failed).toBe(false)
+    return ask
+  })
+
+const unitRun = (verdicts: Readonly<Record<string, string>>, input: Schema.Json = unitInput("")) =>
+  Effect.gen(function* () {
+    const home = yield* restartableHome
+    const models = yield* makeModels(unitWorker(verdicts))
+    const { client } = yield* createRpcClient(home.layerFor(machineModels(models), unitTiers()))
+    const owner = ownerOf(yield* client.session.create({}))
+    const run = yield* startRun(client, owner, ORCHESTRATE_MACHINE, "orchestrate", input)
+    return { home, models, client, owner, run }
+  })
+
+describe("the shipped orchestrate machine", () => {
+  it.live(
+    "plans, implements, reviews and verifies a unit, each role on its tier, then decides",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run } = yield* unitRun({})
+        const approve = yield* answerAsk(client, owner, 1, "go")
+        expect(approve).toMatchObject({ state: "approve", choices: ["go", "replan", "drop"] })
+        const decide = yield* answerAsk(client, owner, 2, "drop")
+        expect(decide).toMatchObject({
+          state: "decide",
+          reason: "asked",
+          choices: ["merge", "changes", "replan", "rewrite", "drop"],
+        })
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→verify",
+          "verify→decide",
+          "decide→dropped",
+        ])
+        // Planning and review on the strongest tier, implementing and verifying on the efficient one.
+        expect(roundsRan(steps).map((round) => round.model)).toEqual([OPUS, HAIKU, OPUS, HAIKU])
+        expect(yield* Ref.get(models.calls)).toEqual([
+          "plan:1",
+          "implement:1",
+          "review:1",
+          "verify:1",
+        ])
+        // The reviewer and the verifier read the request the implementor's reply named.
+        const texts = new Map(yield* Ref.get(models.texts))
+        expect(texts.get("review:1")).toContain(`Request: ${UNIT_DIR}/implement-1.md`)
+        expect(texts.get("verify:1")).toContain(`Request: ${UNIT_DIR}/implement-1.md`)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a review's changes and a verify's fail each go back to implement, and the third failed round goes to decide",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run } = yield* unitRun({
+          "review:1": "changes",
+          "verify:1": "fail",
+          "review:3": "changes",
+        })
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→implement",
+          "implement→review",
+          "review→verify",
+          "verify→implement",
+          "implement→review",
+          "review→implement",
+          "implement→decide",
+          "decide→dropped",
+        ])
+        expect(yield* Ref.get(models.calls)).toEqual([
+          "plan:1",
+          "implement:1",
+          "review:1",
+          "implement:2",
+          "review:2",
+          "verify:1",
+          "implement:3",
+          "review:3",
+        ])
+        // Implement keeps its thread for two visits and takes a new one from the third; review is fresh each time.
+        const [, impl1, rev1, impl2, rev2, , impl3] = roundThreads(steps)
+        expect(impl2).toBe(impl1)
+        expect(impl3).not.toBe(impl1)
+        expect(rev2).not.toBe(rev1)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "a stuck review and a stuck verify each go to decide, and changes there carry the note to implement",
+    () =>
+      Effect.gen(function* () {
+        const { home, models, client, owner, run } = yield* unitRun({
+          "review:1": "stuck",
+          "verify:1": "stuck",
+        })
+        yield* answerAsk(client, owner, 1, "go")
+        const first = yield* answerAsk(client, owner, 2, "changes", "split the parser")
+        expect(first.state).toBe("decide")
+        const second = yield* answerAsk(client, owner, 3, "drop")
+        expect(second.state).toBe("decide")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→decide",
+          "decide→implement",
+          "implement→review",
+          "review→verify",
+          "verify→decide",
+          "decide→dropped",
+        ])
+        const texts = new Map(yield* Ref.get(models.texts))
+        expect(texts.get("implement:2")).toContain("split the parser")
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "merge runs the unit's gate first: a unit with no gate goes back to implement, never to the push",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run } = yield* unitRun({ "implement:2": "blocked" })
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        // The gate failed, so the unit went back to implement, whose round is blocked.
+        expect(yield* askDetails(client, owner, 3)).toMatchObject({
+          state: "blocked",
+          choices: ["resume", "replan", "drop"],
+        })
+        yield* answerAsk(client, owner, 3, "drop")
+        yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+          "plan→approve",
+          "approve→implement",
+          "implement→review",
+          "review→verify",
+          "verify→decide",
+          "decide→gate",
+          "gate→implement",
+          "implement→blocked",
+          "blocked→dropped",
+        ])
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
   )
 })
