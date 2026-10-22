@@ -91,6 +91,13 @@ finished unit. The baseline is the table above.
    result (`models.json` `truncation_policy`), Pi 50 KB (`truncate.ts`). The
    cost is the turn's working set, held through the turn: requirement 7
    holds it for fewer calls.
+   A `sol` gamut run (2026-10-22, all gpt-6.1-sol, 7 sessions, 60 calls,
+   276k W; one run, a small sample) agrees: results over 8,000 raw
+   characters hold 23.7% of W, all bounded `cell` results of 2.2k to 2.8k
+   tokens, most of them the orchestrator's early multi-file reads, held 17
+   to 19 calls. No `context.read` call; the orchestrator paged by slicing
+   the value in the cell. A 4,000 bound saves 15.2% of W at most, before the
+   paging calls it adds (about 8 cancel most of it, guess). No bound change.
 4. **Thinking leaves the context.** Thinking from replies older than the last
    turn is dropped at the next cache breakpoint, so the drop costs one
    re-write, not one per call. Accept: replies hold under 10% of W (F7), and
@@ -102,11 +109,23 @@ finished unit. The baseline is the table above.
    calls (guess, from their docs), so dropping older turns' reasoning is
    worth less than one re-write. A reply goes back with its provider state
    only after the last model change (`reasoningReplayAt`).
+   The `sol` gamut run (see 3) meets the target: replies hold 5.4% of W
+   (measured). No drop.
 5. **TTL by expected idle.** A call before a known long wait (a gate, a
    `wait` on a process, a scheduled wake past 5 minutes) writes with the 1 h
    TTL. Other calls write with the 5 m TTL. The Anthropic extension
    (`packages/extensions/src/anthropic.ts`, the `ttl` marker) takes the choice
    from the turn. Accept: misses under 2% of W (F8).
+   Anthropic already splits the lifetime: 1 h for a root, 5 m for a child
+   (`Model.childPromptCacheTtlMs`). On the `sol` gamut run (see 3) misses
+   cost 14.3% of W (measured): 4 of 60 calls, all inside a turn, with no
+   gap, so not a lapsed lifetime. One kept exactly the first call's prefix
+   (5,504 of 9,945 tokens), so the prefix was stable and the request
+   reached another backend (inferred). Gent sent `prompt_cache_key` and the
+   `session-id` header already. Added the turn route Codex sends
+   (`x-codex-turn-state`, `client_metadata`; openai/codex `342ed69`): see
+   `docs/architecture/rules.md`. Not yet measured: a second `sol` run checks
+   that ChatGPT answers gent with the route and that the misses fall.
 6. **Compaction window per role, tuned from the burn.** (Merged at
    `e26b1525c`, 2026-10-21; see `docs/architecture/context.md`. Re-reads by
    `context.read` are not seen.)
@@ -140,6 +159,11 @@ finished unit. The baseline is the table above.
 7. **Short agents over long ones.** A unit that outgrows one window goes to a
    fresh agent with a handoff, not a compaction. Accept: compactions per
    worker under 1.
+   Met, no change made (2026-10-22). The owner's data.db holds 338 children
+   with replies and 16 handoffs on 3 of them, 0.047 per worker (measured);
+   15 of the 16 came from gamut runs at `contextLength: 20000`, removed
+   2026-09-15. A role window already hands off to a fresh window from a
+   summary. The `sol` gamut run had no window marker.
 
 ## Budget learnings (dotfiles budget.ts, 2026-10-21)
 

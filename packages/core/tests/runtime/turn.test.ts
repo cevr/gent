@@ -6838,82 +6838,105 @@ describe("native model context projection", () => {
     }).pipe(Effect.timeout("5 seconds"))
   })
 
-  it.live("asks for the output the budget reserves and passes the stable session cache key", () => {
-    const modelId = ModelId.make("context-driver/model")
-    let observedMaxTokens = Option.none<number>()
-    const observedCacheKeys: Array<Option.Option<string>> = []
-    const providerLayer = LanguageModelLayers.testStream(() =>
-      Effect.succeed(
-        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
-      ),
-    )
-    const driver: ModelDriverContribution = {
-      id: "context-driver",
-      name: "Context driver",
-      resolveModel: (_modelName, _authInfo, hints) =>
+  it.live(
+    "asks for the output the budget reserves and passes the stable session cache key and the turn's key",
+    () => {
+      const modelId = ModelId.make("context-driver/model")
+      let observedMaxTokens = Option.none<number>()
+      const observedCacheKeys: Array<Option.Option<string>> = []
+      const observedTurnKeys: Array<Option.Option<string>> = []
+      let streams = 0
+      // The first turn takes two steps: a tool call, then its answer.
+      const providerLayer = LanguageModelLayers.testStream(() =>
         Effect.sync(() => {
-          const maxTokens = Option.fromUndefinedOr(hints).pipe(
-            Option.flatMap((value) => Option.fromUndefinedOr(value.maxTokens)),
-          )
-          if (Option.isSome(maxTokens)) observedMaxTokens = maxTokens
-          observedCacheKeys.push(Option.fromUndefinedOr(hints?.cacheKey))
-          return AiModel.make("context-driver", "model", providerLayer)
+          streams += 1
+          if (streams === 1)
+            return Stream.make(
+              toolCallPart("echo", { text: "step" }),
+              finishPart({ finishReason: "tool-calls" }),
+            )
+          return Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })])
         }),
-    }
-    const resolved = resolveExtensions([
-      {
-        manifest: { id: ExtensionId.make("model-context-driver") },
-        scope: "builtin",
-        sourcePath: "test",
-        contributions: { agents: testAgents, modelDrivers: [driver] },
-      },
-    ])
-    const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
-    const modelResolver = ModelResolver.Live.pipe(
-      Layer.provide(Auth.Test()),
-      Layer.provide(fixtureModelCatalogSource),
-    )
-    const layer = actorTestRoot({
-      registry: extensionRegistry,
-      models: [
-        Model.make({
-          id: modelId,
-          name: "Context model",
-          provider: ProviderId.make("context-driver"),
-          contextLength: 128_000,
-          outputLimit: 16_000,
-        }),
-      ],
-      resolver: modelResolver,
-    })
+      )
+      const echoTool = tool({
+        id: "echo",
+        description: "Echoes input",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ text: Schema.String }),
+        execute: (params) => Effect.succeed({ text: params.text }),
+      })
+      const driver: ModelDriverContribution = {
+        id: "context-driver",
+        name: "Context driver",
+        resolveModel: (_modelName, _authInfo, hints) =>
+          Effect.sync(() => {
+            const maxTokens = Option.fromUndefinedOr(hints).pipe(
+              Option.flatMap((value) => Option.fromUndefinedOr(value.maxTokens)),
+            )
+            if (Option.isSome(maxTokens)) observedMaxTokens = maxTokens
+            observedCacheKeys.push(Option.fromUndefinedOr(hints?.cacheKey))
+            observedTurnKeys.push(Option.fromUndefinedOr(hints?.turnKey))
+            return AiModel.make("context-driver", "model", providerLayer)
+          }),
+      }
+      const resolved = resolveExtensions([
+        {
+          manifest: { id: ExtensionId.make("model-context-driver") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: { agents: testAgents, modelDrivers: [driver], tools: [echoTool] },
+        },
+      ])
+      const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
+      const modelResolver = ModelResolver.Live.pipe(
+        Layer.provide(Auth.Test()),
+        Layer.provide(fixtureModelCatalogSource),
+      )
+      const layer = actorTestRoot({
+        registry: extensionRegistry,
+        models: [
+          Model.make({
+            id: modelId,
+            name: "Context model",
+            provider: ProviderId.make("context-driver"),
+            contextLength: 128_000,
+            outputLimit: 16_000,
+          }),
+        ],
+        resolver: modelResolver,
+      })
 
-    return Effect.scoped(
-      Effect.gen(function* () {
-        yield* runAgentLoop(
-          makeMessage(
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const first = makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
             "request provider budget",
-          ),
-          { runSpec: { overrides: { model: modelId } } },
-        )
-        // The catalog cap is under 32k, so the request asks for all of it.
-        expect(observedMaxTokens).toEqual(Option.some(16_000))
-        yield* runAgentLoop(
-          makeMessage(
+          )
+          yield* runAgentLoop(first, { runSpec: { overrides: { model: modelId } } })
+          // The catalog cap is under 32k, so the request asks for all of it.
+          expect(observedMaxTokens).toEqual(Option.some(16_000))
+          const second = makeMessage(
             SessionId.make("model-context-driver-session"),
             BranchId.make("model-context-driver-branch"),
             "continue with the same cache key",
-          ),
-          { runSpec: { overrides: { model: modelId } } },
-        )
-        expect(observedCacheKeys).toEqual([
-          Option.some("model-context-driver-session"),
-          Option.some("model-context-driver-session"),
-        ])
-      }),
-    ).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
-  })
+          )
+          yield* runAgentLoop(second, { runSpec: { overrides: { model: modelId } } })
+          expect(observedCacheKeys).toEqual([
+            Option.some("model-context-driver-session"),
+            Option.some("model-context-driver-session"),
+            Option.some("model-context-driver-session"),
+          ])
+          // A turn's steps share its key; the next turn takes its own.
+          expect(observedTurnKeys).toEqual([
+            Option.some(first.id),
+            Option.some(first.id),
+            Option.some(second.id),
+          ])
+        }),
+      ).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
+    },
+  )
 })
 
 // ── model-change notice ─────────────────────────────────────────────────────

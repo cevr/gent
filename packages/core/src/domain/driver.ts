@@ -243,6 +243,12 @@ export interface ProviderHints {
    */
   readonly cacheKey?: string
   /**
+   * The turn the request belongs to: the same for every step and retry of
+   * one turn, new for the next (the turn's message id). A provider that
+   * routes a turn's requests to one backend keys its route by it.
+   */
+  readonly turnKey?: string
+  /**
    * The request is a spawned child session's (`isSpawnedSession`) whose
    * agent keeps the child cache (`AgentDefinition.promptCache`). Such a child
    * runs its steps back to back, so a driver may give its prompt cache a

@@ -280,7 +280,13 @@ commit.
     another model never hands off for a cold cache. A model whose catalog entry
     names no lifetime never hands off either, and with no compactor installed
     the window stays whole. The loop sends no keep-alive calls to hold a cache
-    warm. The TUI's cache notice reads the same catalog lifetime and the same
+    warm. Each request names its session as the cache key and its turn (the
+    turn message id) as `ProviderHints.turnKey`. Over ChatGPT sign-in OpenAI
+    sends the key as the `session-id` header and both in `client_metadata`,
+    and sends the route a turn's first answer names (`x-codex-turn-state`)
+    back on that turn's later requests, on the same account only, as Codex
+    does: without it a step can land on a backend that holds none of the
+    turn's prefix. The TUI's cache notice reads the same catalog lifetime and the same
     request-start clock, an interrupted request included. Anthropic gives
     every marker of a request the one lifetime, a marker the SDK rendered from
     a message option too, and prices each model's `cacheWrite` at that

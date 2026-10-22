@@ -1594,6 +1594,103 @@ describe("OpenAI cache routing", () => {
     }),
   )
 
+  // ChatGPT names a turn's route on the turn's first answer; Codex sends it
+  // back on that turn's later requests only (codex-rs `core/src/client.rs`,
+  // `ModelClientSession.turn_state`).
+  it.live("OAuth requests send a turn's route back within the turn, on its account only", () =>
+    Effect.gen(function* () {
+      const { driver } = yield* makeDriver()
+      const fetchState = makeFakeFetchState()
+      const other = { ...makeOAuthInfo(), slot: CredentialSlot.make("other") }
+      const send = (
+        hints: { readonly cacheKey: string; readonly turnKey?: string },
+        route: string,
+        authInfo: ProviderAuthInfo = makeOAuthInfo(),
+      ) =>
+        Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-5.4", authInfo, hints)
+          yield* oneGenerate(model, fetchState, () => ({
+            ...openaiResponsesHappyResponse(),
+            headers: { "content-type": "application/json", "x-codex-turn-state": route },
+          })).pipe(Effect.orDie)
+        })
+      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-1")
+      // The turn's first answer named its route; a later one does not move it.
+      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-later")
+      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-later")
+      yield* send({ cacheKey: "s2", turnKey: "t1" }, "route-s2")
+      yield* send({ cacheKey: "s1", turnKey: "t1" }, "route-other", other)
+      yield* send({ cacheKey: "s1", turnKey: "t2" }, "route-2")
+      yield* send({ cacheKey: "s1", turnKey: "t2" }, "route-later")
+      yield* send({ cacheKey: "s1" }, "route-none")
+      expect(
+        fetchState.captured.map((request) =>
+          Option.fromUndefinedOr(request.headers["x-codex-turn-state"]),
+        ),
+      ).toEqual([
+        Option.none(),
+        Option.some("route-1"),
+        Option.some("route-1"),
+        Option.none(),
+        Option.none(),
+        Option.none(),
+        Option.some("route-2"),
+        Option.none(),
+      ])
+      const codec = Schema.fromJsonString(
+        Schema.Struct({
+          client_metadata: Schema.optional(
+            Schema.Struct({ session_id: Schema.String, turn_id: Schema.String }),
+          ),
+        }),
+      )
+      const metadata = yield* Effect.forEach(fetchState.captured, (request) =>
+        Schema.decodeEffect(codec)(Option.getOrThrow(Option.fromUndefinedOr(request.body))).pipe(
+          Effect.map((body) => Option.fromUndefinedOr(body.client_metadata)),
+        ),
+      )
+      expect(metadata).toEqual([
+        Option.some({ session_id: "s1", turn_id: "t1" }),
+        Option.some({ session_id: "s1", turn_id: "t1" }),
+        Option.some({ session_id: "s1", turn_id: "t1" }),
+        Option.some({ session_id: "s2", turn_id: "t1" }),
+        Option.some({ session_id: "s1", turn_id: "t1" }),
+        Option.some({ session_id: "s1", turn_id: "t2" }),
+        Option.some({ session_id: "s1", turn_id: "t2" }),
+        Option.none(),
+      ])
+    }),
+  )
+
+  it.live("an account keeps the routes of its 256 latest sessions", () =>
+    Effect.gen(function* () {
+      const { driver } = yield* makeDriver()
+      const fetchState = makeFakeFetchState()
+      const send = (session: string) =>
+        Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), {
+            cacheKey: session,
+            turnKey: "t1",
+          })
+          yield* oneGenerate(model, fetchState, () => ({
+            ...openaiResponsesHappyResponse(),
+            headers: { "content-type": "application/json", "x-codex-turn-state": session },
+          })).pipe(Effect.orDie)
+          return Option.fromUndefinedOr(fetchState.captured.at(-1)?.headers["x-codex-turn-state"])
+        })
+      yield* Effect.forEach(
+        Array.from({ length: 257 }, (_, index) => `s${index}`),
+        send,
+        {
+          discard: true,
+        },
+      )
+      // The first session's route went when the 257th came; the second's stays.
+      expect(yield* send("s1")).toEqual(Option.some("s1"))
+      expect(yield* send("s0")).toEqual(Option.none())
+    }),
+  )
+
   it.live("a label that holds another sign-in is never answered by the warm cell of the last", () =>
     Effect.gen(function* () {
       const { driver } = yield* makeDriver()

@@ -1146,6 +1146,7 @@ const splitInstructions = (
  */
 const rewriteCodexBody = (
   req: HttpClientRequest.HttpClientRequest,
+  turn: Option.Option<CodexTurn>,
 ): HttpClientRequest.HttpClientRequest => {
   const parsed = requestJsonObject(req)
   if (Option.isNone(parsed)) return req
@@ -1166,6 +1167,10 @@ const rewriteCodexBody = (
     instructions: joined,
     input,
     store: false,
+    ...Option.match(turn, {
+      onNone: () => ({}),
+      onSome: (value) => ({ client_metadata: { session_id: value.session, turn_id: value.turn } }),
+    }),
   })
 }
 
@@ -1185,6 +1190,60 @@ const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option
     Option.filter(Predicate.isString),
     Option.filter((key) => key.length > 0),
   )
+
+/**
+ * The ChatGPT backend's sticky route for one turn. The first answer of a
+ * turn names it in `x-codex-turn-state`; Codex sends it back on every later
+ * request of that turn, retries included, and on no other turn's (codex-rs
+ * `core/src/client.rs`, `ModelClientSession.turn_state`, openai/codex
+ * `342ed69`, read 2026-10-22). Codex also names the session and the turn in
+ * the body's `client_metadata`. Without the route a step can land on a
+ * backend that holds none of the turn's prefix: a 60-call gamut run
+ * (2026-10-22) missed the cache 4 times inside a turn, 14% of its weighted
+ * tokens.
+ */
+const CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
+/** The sessions one account keeps a route for; past it the oldest goes. */
+const CODEX_TURN_ROUTES_HELD = 256
+
+/** Per account, by session: the turn whose first answer named a route, and the route. */
+type CodexTurnRoutes = Map<string, { readonly turn: string; readonly state: string }>
+
+/** A request's turn: its session (the cache key), the turn's key and its account's routes. */
+interface CodexTurn {
+  readonly routes: CodexTurnRoutes
+  readonly session: string
+  readonly turn: string
+}
+
+/** The turn a request names in its hints; none without both keys. */
+const codexTurnOf = (
+  routes: CodexTurnRoutes,
+  hints: Option.Option<ProviderHints>,
+): Option.Option<CodexTurn> =>
+  Option.all({
+    session: Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.cacheKey)),
+    turn: Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.turnKey)),
+  }).pipe(Option.map(({ session, turn }) => ({ routes, session, turn })))
+
+/** The route this turn's first answer named; none on a new turn. */
+const codexTurnRoute = (turn: CodexTurn): Option.Option<string> =>
+  Option.fromUndefinedOr(turn.routes.get(turn.session)).pipe(
+    Option.filter((held) => held.turn === turn.turn),
+    Option.map((held) => held.state),
+  )
+
+/** Keep the route an answer names, once per turn: the first answer's stands. */
+const noteCodexTurnRoute = (turn: CodexTurn, headers: Headers.Headers) =>
+  Effect.sync(() => {
+    const state = Headers.get(headers, CODEX_TURN_STATE_HEADER)
+    if (Option.isNone(state) || Option.isSome(codexTurnRoute(turn))) return
+    turn.routes.delete(turn.session)
+    turn.routes.set(turn.session, { turn: turn.turn, state: state.value })
+    const oldest = turn.routes.keys().next()
+    if (turn.routes.size > CODEX_TURN_ROUTES_HELD && oldest.done !== true)
+      turn.routes.delete(oldest.value)
+  })
 
 /**
  * Build the OAuth header set for a Codex request: Bearer over the
@@ -1241,6 +1300,7 @@ const buildOauthHeaders = (
  */
 export const buildCodexClient = (
   creds: CredentialCache<OpenAICredentials>,
+  turn: Option.Option<CodexTurn> = Option.none(),
 ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) => {
   const signed = authorizedClient(creds, (req, fresh) => {
     let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
@@ -1253,14 +1313,25 @@ export const buildCodexClient = (
       )
       const sessionId = codexSessionId(req)
       if (Option.isSome(sessionId)) headers = Headers.set(headers, "session-id", sessionId.value)
-      return rewriteCodexBody(withHeaders(req, headers))
+      const route = Option.flatMap(turn, codexTurnRoute)
+      if (Option.isSome(route)) headers = Headers.set(headers, CODEX_TURN_STATE_HEADER, route.value)
+      return rewriteCodexBody(withHeaders(req, headers), turn)
     }
     return withHeaders(req, headers)
   })
   // Each answer the request ends with, a refusal included, names the plan's
-  // quota windows (`codexQuota`).
+  // quota windows (`codexQuota`), and the turn's first names its route.
   return (client) =>
-    HttpClient.tap(signed(client), (response) => reportProviderQuota(codexQuota(response.headers)))
+    HttpClient.tap(signed(client), (response) =>
+      reportProviderQuota(codexQuota(response.headers)).pipe(
+        Effect.andThen(
+          Option.match(turn, {
+            onNone: () => Effect.void,
+            onSome: (value) => noteCodexTurnRoute(value, response.headers),
+          }),
+        ),
+      ),
+    )
 }
 
 // ── quota windows ──
@@ -1941,6 +2012,7 @@ const makeOauthOpenAILayer = (
   creds: CredentialCache<OpenAICredentials>,
   rejectedReasoning: RejectedReasoning,
   body: (body: Schema.JsonObject) => Schema.JsonObject,
+  turn: Option.Option<CodexTurn>,
 ) => {
   const { OpenAiClient: OpenAiResponsesClient, OpenAiLanguageModel: OpenAiResponsesLanguageModel } =
     sdk
@@ -1948,7 +2020,7 @@ const makeOauthOpenAILayer = (
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexClient(creds)(reasoningReplayClient(rejectedReasoning, body)(client))
+      return buildCodexClient(creds, turn)(reasoningReplayClient(rejectedReasoning, body)(client))
     }),
   ).pipe(Layer.provide(ModelHttpClient))
   const clientLayer = OpenAiResponsesClient.layer({
@@ -1996,16 +2068,22 @@ export const buildOpenAIModelDriver = (
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   // The reasoning items the API could not decrypt for this driver's account.
   const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
+  // Each account's turn routes: a route is the account's own (`CodexTurn`).
   const accountStates = new Map<
     CredentialSlot,
-    { readonly refusedKeys: RefusedKeys; readonly rejectedReasoning: RejectedReasoning }
-  >([[DEFAULT_CREDENTIAL_SLOT, { refusedKeys, rejectedReasoning }]])
+    {
+      readonly refusedKeys: RefusedKeys
+      readonly rejectedReasoning: RejectedReasoning
+      readonly turnRoutes: CodexTurnRoutes
+    }
+  >([[DEFAULT_CREDENTIAL_SLOT, { refusedKeys, rejectedReasoning, turnRoutes: new Map() }]])
   const stateFor = (slot: CredentialSlot = DEFAULT_CREDENTIAL_SLOT) => {
     const held = accountStates.get(slot)
     if (Predicate.isNotUndefined(held)) return held
     const state = {
       refusedKeys: Ref.makeUnsafe(HashSet.empty<string>()),
       rejectedReasoning: Ref.makeUnsafe(HashSet.empty<string>()),
+      turnRoutes: new Map(),
     }
     accountStates.set(slot, state)
     return state
@@ -2169,6 +2247,7 @@ export const buildOpenAIModelDriver = (
               creds,
               accountState.rejectedReasoning,
               body,
+              codexTurnOf(accountState.turnRoutes, hints),
             ),
           )
         }

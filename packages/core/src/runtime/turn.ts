@@ -3536,7 +3536,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     const modelRequest: ResolveModelRequest = {
       modelId: resolved.modelId,
       // The session is the cache key: the next step reads this step's prefix.
-      hints: { ...turnHints, cacheKey: params.sessionId },
+      hints: { ...turnHints, cacheKey: params.sessionId, turnKey: params.messageId },
       driverId: Option.getOrUndefined(driverId),
     }
     return {
