@@ -55,6 +55,8 @@ const catalog = {
     "claude-fable-5-1",
     "claude-haiku-4-5-20251001",
     "claude-haiku-4-5",
+    // The newest release's snapshot before its undated entry: only the anchored pattern skips it.
+    "claude-haiku-5-5-20261022",
     "claude-haiku-5-5",
   ],
   openai: ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-luna-pro", "gpt-5.6-sol", "gpt-6-sol"],
