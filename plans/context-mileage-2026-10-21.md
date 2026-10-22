@@ -46,6 +46,14 @@ finished unit. The baseline is the table above.
    W so far) next to `percent`, and the TUI's context line shows the largest.
    Accept: on a replayed transcript, gent's per-item attribution matches
    `burn.ts` within 5%.
+   Merged at 350c4edb4 with its live-check fixes c0a8fd6b1 and c210f13fc and
+   its review fix 7171290b0 (2026-10-22). On 4 real transcripts 292 of 297
+   tool items match `burn.ts` within 5%; the 5 misses are results over
+   `maximumModelToolResultChars`, which gent charges at the bounded size the
+   model sees. Known limits: a forked branch starts its meter fresh; kept
+   turns after a handoff are lumped into the marker; uncached input counts at
+   weight 1; compaction summary calls are not counted; an omission that cuts
+   into a handoff's kept turns only rescales.
 2. **Lean start.** A subagent starts with the tools its role names. Every other
    tool and every MCP server is deferred (named, schema on demand). Accept:
    the start context of a worker is under 35k tokens (F4).
