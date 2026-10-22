@@ -62,9 +62,9 @@ finished unit. The baseline is the table above.
    TTL. Other calls write with the 5 m TTL. The Anthropic extension
    (`packages/extensions/src/anthropic.ts`, the `ttl` marker) takes the choice
    from the turn. Accept: misses under 2% of W (F8).
-6. **Compaction window per role, tuned from the burn.** (Implemented, not
-   merged: rift `window-role`, branch `feat/window-role`, 2026-10-21; see
-   `docs/architecture/context.md`. Re-reads by `context.read` are not seen.)
+6. **Compaction window per role, tuned from the burn.** (Merged at
+   `e26b1525c`, 2026-10-21; see `docs/architecture/context.md`. Re-reads by
+   `context.read` are not seen.)
    Each role compacts
    at its own window. The window comes from a daily replay of the week's
    transcripts at 100k to 350k, with each transcript's own compactions undone.
