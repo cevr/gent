@@ -230,31 +230,50 @@ describe("gamut shell quoting", () => {
 describe("gamut proxy environment", () => {
   // The pane takes no environment from the caller, so a run started under
   // `teamclaude env --mitm` reached Anthropic on the owner's own account.
-  it.effect("each set proxy variable becomes one pane flag; unset and empty ones stay out", () =>
+  const flagsUnder = (env: Record<string, string>) =>
+    proxyEnv.pipe(
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv({ env })),
+    )
+
+  it.effect("each of the seven proxy variables becomes one pane flag, in a fixed order", () =>
     Effect.gen(function* () {
-      const flags = yield* proxyEnv
+      const flags = yield* flagsUnder({
+        no_proxy: "localhost",
+        NODE_EXTRA_CA_CERTS: "/ca.pem",
+        http_proxy: "http://h:2",
+        HTTP_PROXY: "http://H:2",
+        https_proxy: "http://h:1",
+        HTTPS_PROXY: "http://H:1",
+        NO_PROXY: "LOCALHOST",
+        PATH: "/bin",
+      })
       expect(flags).toEqual([
         "--env",
-        "HTTPS_PROXY=http://127.0.0.1:3456",
+        "HTTPS_PROXY=http://H:1",
         "--env",
-        "NO_PROXY=localhost,127.0.0.1",
+        "https_proxy=http://h:1",
+        "--env",
+        "HTTP_PROXY=http://H:2",
+        "--env",
+        "http_proxy=http://h:2",
+        "--env",
+        "NO_PROXY=LOCALHOST",
+        "--env",
+        "no_proxy=localhost",
         "--env",
         "NODE_EXTRA_CA_CERTS=/ca.pem",
       ])
-    }).pipe(
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromEnv({
-          env: {
-            HTTPS_PROXY: "http://127.0.0.1:3456",
-            NO_PROXY: "localhost,127.0.0.1",
-            NODE_EXTRA_CA_CERTS: "/ca.pem",
-            HTTP_PROXY: "",
-            PATH: "/bin",
-          },
-        }),
-      ),
-    ),
+    }),
+  )
+
+  it.effect("an unset or empty proxy variable adds no flag", () =>
+    Effect.gen(function* () {
+      expect(yield* flagsUnder({ HTTPS_PROXY: "http://H:1", HTTP_PROXY: "" })).toEqual([
+        "--env",
+        "HTTPS_PROXY=http://H:1",
+      ])
+      expect(yield* flagsUnder({ PATH: "/bin" })).toEqual([])
+    }),
   )
 })
 

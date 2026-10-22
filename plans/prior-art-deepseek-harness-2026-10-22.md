@@ -39,15 +39,15 @@ Current main (`395904550`), Haiku 5.5 at medium effort, one session in the ledge
 | turn 1 step 1 (cold)          | 9,432  | 0          | 9,428       | 0%           | n/a                   |
 | turn 1 step 2                 | 10,849 | 9,428      | 1,419       | 86.9%        | 99.96%                |
 | turn 1 step 3                 | 12,095 | 10,847     | 1,246       | 89.7%        | 99.98%                |
-| turn 1 step 4                 | 14,016 | 12,093     | 1,921       | 86.3%        | 99.99%                |
+| turn 1 step 4                 | 14,016 | 12,093     | 1,921       | 86.3%        | 99.98%                |
 | turn 1 step 5                 | 15,665 | 14,014     | 1,649       | 89.5%        | 99.99%                |
 | turn 2 step 1                 | 16,275 | 15,663     | 608         | 96.2%        | 99.99%                |
 | turn 2 step 2                 | 17,335 | 16,271     | 1,062       | 93.9%        | 99.98%                |
 | turn 3 step 1 (after handoff) | 10,223 | 9,361      | 858         | 91.6%        | n/a                   |
 
 - Whole session: 87,677 read of 105,890 input, 82.8%; the status row read `cache hit 82%`. Without the cold first step: 90.9%. (measured)
-- Every step after the first reads the previous step's whole input from the cache, less 2 to 4 tokens, within a turn and across turns. The uncached part of a step is only what the last step added: its answer and the tool result. The session ratio climbs toward the high 90s as the session grows, which is the shape of dsh's "99%". (measured: the reuse; inferred: the climb)
-- After the handoff, the first step read 9,361 of 10,223 tokens; its request overhead (system and tools) is 6,324 tokens, so the shared prefix survived the handoff. The summary call cost $0.001016. (measured)
+- Before the handoff, every step after the first reads the previous step's whole input from the cache, less 2 to 4 tokens, within a turn and across turns. The uncached part of a step is only what the last step added: its answer and the tool result. The session ratio climbs toward the high 90s as the session grows, which is the shape of dsh's "99%". (measured: the reuse; inferred: the climb)
+- After the handoff, the first step read 9,361 of 10,223 tokens; its request overhead (system and tools) is 6,324 tokens. The summary call cost $0.001016. (measured) The read covers the system prompt and tools, so the shared prefix survived the handoff. (inferred: the counters give the size of the read, not which bytes it matched; no capture was taken)
 - The handoff turn then failed with `BudgetExceeded projecting the context`: an agent's `contextLength` replaces the model window (turn.ts:3470), and 12,000 − 3,000 output reserve − 6,324 overhead left 2,676 input tokens, which one file read filled. This is the forced window, not a product fault: only the model window fails a step (context.md). (measured: the numbers; inferred: the cause)
 - OpenAI's ratio is 33-43% with `prompt_cache_key`. Its automatic cache matches 128-token prefix blocks; the miss causes there are not studied here. (measured ratio; the rest guess)
 
