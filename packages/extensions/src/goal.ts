@@ -111,6 +111,8 @@ export const GOAL_PAUSED_RESUME_MISSED =
   "the resume came over 10 minutes late; /goal resume continues"
 export const GOAL_PAUSED_RESUME_UNSET =
   "the model's usage limit was reached and no resume could be set; /goal resume continues"
+export const GOAL_PAUSED_UNQUEUED =
+  "the next goal prompt could not be queued; /goal resume continues"
 
 /** The goal resumes this long after its usage limit resets, as wake's auto-resume does. */
 const RESUME_MARGIN_MS = 30_000
@@ -469,19 +471,37 @@ const armResume = (goal: GoalState) =>
     )
   })
 
+/**
+ * Queues the goal's next prompt before the goal is saved, so a saved active
+ * goal always has a prompt that drives it on. A resume during this turn can
+ * already have queued its continuation: that source is replaced first. A
+ * refused queue saves a pause that waits for `/goal resume` instead. A save
+ * that fails after the queue leaves one extra continuation.
+ */
+const admitContinuation = (previous: GoalState, next: GoalState) =>
+  Effect.gen(function* () {
+    yield* dequeueGoalMessage(previous)
+    if (next.status !== "active") return next
+    yield* queueGoalMessage(next, continuationPrompt(next))
+    return next
+  }).pipe(
+    Effect.catchEager((error) =>
+      Effect.logWarning("goal.continue.unqueued").pipe(
+        Effect.annotateLogs({ goalId: next.goalId, error: String(error) }),
+        Effect.as<GoalState>({ ...next, status: "paused", pausedReason: GOAL_PAUSED_UNQUEUED }),
+      ),
+    ),
+  )
+
 export const continueGoal = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     // Clients re-read the goal only when this turn end changed it.
     const unchanged = (current: Option.Option<GoalState>) => ({
       next: current,
-      result: {
-        changed: false,
-        previous: Option.none<GoalState>(),
-        decision: Option.none<GoalState>(),
-      },
+      result: { changed: false, decision: Option.none<GoalState>() },
     })
-    const { changed, previous, decision } = yield* modifyGoal((current) =>
+    const { changed, decision } = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return unchanged(current)
         const goal = current.value
@@ -491,56 +511,36 @@ export const continueGoal = (input: TurnAfterInput) =>
           const finalized: GoalState = { ...chargeTurn(goal, input, yield* now), finalized: true }
           return {
             next: Option.some(finalized),
-            result: {
-              changed: true,
-              previous: Option.none<GoalState>(),
-              decision: Option.none<GoalState>(),
-            },
+            result: { changed: true, decision: Option.none<GoalState>() },
           }
         }
         if (goal.status === "paused" && goal.pausedTurnStartedAtMs === input.startedAtMs) {
           const charged = chargeTurn(goal, input, yield* now)
           return {
             next: Option.some(Struct.omit(charged, ["pausedTurnStartedAtMs"])),
-            result: {
-              changed: true,
-              previous: Option.none<GoalState>(),
-              decision: Option.none<GoalState>(),
-            },
+            result: { changed: true, decision: Option.none<GoalState>() },
           }
         }
         if (goal.status !== "active") return unchanged(current)
         const decided = decideAfterTurn(goal, input, yield* now)
-        const next = yield* armResume(decided.next)
+        const next = yield* admitContinuation(goal, yield* armResume(decided.next))
         return {
           next: Option.some(next),
-          result: {
-            changed: true,
-            previous: Option.some(goal),
-            decision: Option.liftPredicate(next, () => decided.report),
-          },
+          result: { changed: true, decision: Option.liftPredicate(next, () => decided.report) },
         }
       }),
     )
-    // A resume during this turn can already have queued its continuation.
-    // Replace that source before admitting the turn-end continuation.
-    if (Option.isSome(previous)) yield* dequeueGoalMessage(previous.value)
     if (changed) yield* ctx.State.changed()
-    if (Option.isNone(decision)) return
+    if (Option.isNone(decision) || decision.value.status !== "paused") return
     const goal = decision.value
     const annotations = { sessionId: String(input.sessionId), goalId: goal.goalId }
-    if (goal.status === "paused") {
-      if (Predicate.isNotUndefined(goal.resumeAt)) {
-        return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
-          Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
-        )
-      }
-      if (goal.pausedReason !== GOAL_PAUSED_STREAM_FAILED) return
-      return yield* Effect.logWarning("goal.paused.stream-failed").pipe(
-        Effect.annotateLogs(annotations),
+    if (Predicate.isNotUndefined(goal.resumeAt)) {
+      return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
+        Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
       )
     }
-    yield* queueGoalMessage(goal, continuationPrompt(goal))
+    if (goal.pausedReason !== GOAL_PAUSED_STREAM_FAILED) return
+    yield* Effect.logWarning("goal.paused.stream-failed").pipe(Effect.annotateLogs(annotations))
   }).pipe(
     serializeGoal,
     Effect.catchEager((error) =>

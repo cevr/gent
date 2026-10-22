@@ -57,6 +57,7 @@ import {
   GOAL_EXTENSION_ID,
   GOAL_PAUSED_RESUME_MISSED,
   GOAL_PAUSED_RESUME_UNSET,
+  GOAL_PAUSED_UNQUEUED,
   GOAL_PAUSED_STREAM_FAILED,
   GOAL_PAUSED_USAGE_LIMIT,
   goalContinuationSource,
@@ -923,6 +924,36 @@ describe("goal resume fire", () => {
         expect(goal?.resumeAt).toBeUndefined()
         expect(goal?.pausedReason).toBe(GOAL_PAUSED_RESUME_UNSET)
         expect(sends).toBe(0)
+      }),
+  )
+
+  const answeredTurn: TurnAfterInput = {
+    ...limitedTurn,
+    streamFailed: false,
+    retryAt: Option.none(),
+    unanswered: false,
+  }
+
+  it.scopedLive("a turn end queues the next prompt and keeps the goal active", () =>
+    Effect.gen(function* () {
+      const { goal, sends } = yield* onBranch(active, 2_000, continueGoal(answeredTurn))
+      expect(goal?.status).toBe("active")
+      expect(goal?.continuationsUsed).toBe(1)
+      expect(sends).toBe(1)
+    }),
+  )
+
+  it.scopedLive(
+    "a turn end whose next prompt is refused saves a pause that waits for /goal resume",
+    () =>
+      Effect.gen(function* () {
+        const { goal, sends } = yield* onBranch(active, 2_000, continueGoal(answeredTurn), {
+          sends: 1,
+        })
+        expect(sends).toBe(0)
+        expect(goal?.status).toBe("paused")
+        expect(goal?.pausedReason).toBe(GOAL_PAUSED_UNQUEUED)
+        expect(goal?.continuationsUsed).toBe(1)
       }),
   )
 })
