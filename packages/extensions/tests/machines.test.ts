@@ -3323,6 +3323,34 @@ describe("an integrate state", () => {
       }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 
+  it.live("a start whose remote is missing fails before any run exists", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub({ url: Option.none() })
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      const [defined] = yield* call(client, owner, [
+        ["machine.define", "define-ship", { definition: SHIP }],
+      ])
+      expect(defined?.failed).toBe(false)
+      const [started] = yield* call(client, owner, [
+        ["machine.start", "start-ship", { machine: "ship" }],
+      ])
+      expect(started?.failed).toBe(true)
+      expect(encodeJson(started?.result)).toContain(
+        "ship cannot push: No git remote origin: error: No such remote 'origin'",
+      )
+      const runs = yield* home.sql(
+        Effect.flatMap(SqlClient.SqlClient, (sql) => sql`SELECT run FROM machine_runs`),
+      )
+      expect(runs).toEqual([])
+      expect(github.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
+  )
+
   it.live("a push the gate refuses takes red with the reason saved", () =>
     Effect.gen(function* () {
       const home = yield* restartableHome
@@ -3679,7 +3707,15 @@ const unitRun = (verdicts: Readonly<Record<string, string>>, gate = "") =>
       Effect.provide(BunServices.layer),
     )
     const models = yield* makeModels(unitWorker(verdicts))
-    const { client } = yield* createRpcClient(home.layerFor(machineModels(models), unitTiers()))
+    // The merge pushes, so machine.start checks its remote; the unit's gate spawns for real.
+    const github = yield* fakeGitHub()
+    const processes = Layer.provide(github.layerOverReal, BunServices.layer)
+    const { client } = yield* createRpcClient(
+      home.layerFor(machineModels(models), {
+        ...unitTiers(),
+        extensionInputs: [githubBoundary(processes)],
+      }),
+    )
     const owner = ownerOf(yield* client.session.create({}))
     const input = { unit: "u1", goal: "G", dir, gate }
     const run = yield* startRun(client, owner, ORCHESTRATE_MACHINE, "orchestrate", input)

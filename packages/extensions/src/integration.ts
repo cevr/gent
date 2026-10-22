@@ -419,6 +419,28 @@ const githubRepoOf = (url: string): Option.Option<string> => {
   return Option.some(`${match[1]}/${match[2]}`)
 }
 
+/** The GitHub repository a remote of `cwd` names: where a push to it lands. */
+const repoOf = Effect.fn("Integration.repoOf")(function* (input: {
+  readonly cwd: string
+  readonly remote: string
+}) {
+  const url = yield* git(input.cwd, ["remote", "get-url", input.remote]).pipe(
+    Effect.mapError(storageError("git is not available")),
+  )
+  if (url.exitCode !== 0) {
+    return yield* new IntegrationError({
+      message: `No git remote ${input.remote}: ${url.stderr.trim()}`,
+    })
+  }
+  return yield* Effect.fromOption(
+    githubRepoOf(url.stdout),
+    () =>
+      new IntegrationError({
+        message: `Remote ${input.remote} is not a GitHub repository: ${url.stdout.trim()}`,
+      }),
+  )
+})
+
 const HeadReply = Schema.fromJsonString(Schema.Struct({ object: Schema.Struct({ sha: Sha }) }))
 
 /** The remote head of the ref, read from GitHub. */
@@ -1253,20 +1275,7 @@ const makeIntegration = (store: IntegrationStoreService) => {
     yield* ghReady
     const cwd = input.cwd ?? ctx.cwd
     const remote = input.remote ?? "origin"
-    const url = yield* git(cwd, ["remote", "get-url", remote]).pipe(
-      Effect.mapError(storageError("git is not available")),
-    )
-    if (url.exitCode !== 0) {
-      return yield* new IntegrationError({
-        message: `No git remote ${remote}: ${url.stderr.trim()}`,
-      })
-    }
-    const repo = githubRepoOf(url.stdout)
-    if (Option.isNone(repo)) {
-      return yield* new IntegrationError({
-        message: `Remote ${remote} is not a GitHub repository: ${url.stdout.trim()}`,
-      })
-    }
+    const repo = yield* repoOf({ cwd, remote })
     const revision = yield* git(cwd, [
       "rev-parse",
       "--verify",
@@ -1278,7 +1287,7 @@ const makeIntegration = (store: IntegrationStoreService) => {
         message: `Unknown commit ${input.sha ?? "HEAD"}: ${revision.stderr.trim()}`,
       })
     }
-    const key: GateKey = { repo: repo.value, ref: input.ref }
+    const key: GateKey = { repo, ref: input.ref }
     const host: GateHost = {
       sessionId: ctx.sessionId,
       branchId: ctx.branchId,
@@ -1385,7 +1394,7 @@ const makeIntegration = (store: IntegrationStoreService) => {
     return Option.map(yield* store.read(key), (found) => found.record)
   })
 
-  return { push, poll, clear, releaseRequest, read, list: store.list }
+  return { push, poll, clear, releaseRequest, read, list: store.list, repoOf }
 }
 
 /** A caller polls the gate for `requestId`'s push: its claim, or the generation it pushed. */

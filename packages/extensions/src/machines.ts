@@ -1883,6 +1883,33 @@ const integrateStateOf = Effect.fn("Machines.integrateStateOf")(function* (
   return state
 })
 
+/**
+ * Each integrate state's remote names a GitHub repository: a run without
+ * one fails at its start, not at its push after every round.
+ */
+const checkRemotes = Effect.fn("Machines.checkRemotes")(function* (
+  definition: MachineDefinition,
+  cwd: string,
+) {
+  const integrates = Object.entries(definition.states).flatMap(([name, state]) => {
+    if (state.kind !== "integrate") return []
+    return [{ name, remote: state.remote ?? "origin" }]
+  })
+  if (integrates.length === 0) return
+  const integration = yield* integrationOf.pipe(
+    Effect.mapError((error) => new MachineError({ message: error.message })),
+  )
+  for (const { name, remote } of integrates) {
+    yield* integration
+      .repoOf({ cwd, remote })
+      .pipe(
+        Effect.mapError(
+          (error) => new MachineError({ message: `${name} cannot push: ${error.message}` }),
+        ),
+      )
+  }
+})
+
 /** The red generation the state's last visit saved: the next push repairs it. */
 const repairOf = (context: RunContext, name: StateName): Option.Option<number> =>
   decodeGateOutcome(context.last[name]).pipe(
@@ -3398,6 +3425,8 @@ const MachineStartTool = tool({
     const runId = RunId.make(`run-${digest.slice(0, 16)}`)
     const existing = yield* store.read(runId)
     if (Option.isSome(existing)) return { run: runId, state: existing.value.state }
+    const cwd = path.resolve(ctx.cwd, params.cwd ?? ".")
+    yield* checkRemotes(definition, cwd)
     const host = { sessionId: ctx.sessionId, branchId: ctx.branchId }
     const input = params.input ?? {}
     const run: Run = {
@@ -3407,7 +3436,7 @@ const MachineStartTool = tool({
       host,
       ownerThread: yield* callerThread(),
       deliveryPlace: Option.none(),
-      cwd: path.resolve(ctx.cwd, params.cwd ?? "."),
+      cwd,
       input,
       context: { last: {}, all: {} },
       visits: { counts: {}, grants: {} },

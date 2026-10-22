@@ -52,6 +52,8 @@ interface Status {
 }
 
 export interface Remote {
+  /** The URL `git remote get-url` answers; none: the remote does not exist. */
+  url: Option.Option<string>
   head: string
   gh: "ready" | "missing" | "signed-out"
   /** Contexts branch protection requires; none: protection cannot be read. */
@@ -125,6 +127,7 @@ const unexpected = (command: string, args: ReadonlyArray<string>) =>
 export const fakeGitHub = (initial: Partial<Remote> = {}) =>
   Effect.sync(() => {
     const remote: Remote = {
+      url: Option.some(`git@github.com:${REPO}.git`),
       head: BASE,
       gh: "ready",
       required: Option.some([{ context: "test" }]),
@@ -237,7 +240,10 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       const verb = `${args[0] ?? ""} ${args[1] ?? ""}`
       switch (verb) {
         case "remote get-url":
-          return answer(0, `git@github.com:${REPO}.git\n`)
+          return Option.match(remote.url, {
+            onNone: () => answer(2, "", `error: No such remote '${args[2] ?? ""}'\n`),
+            onSome: (url) => answer(0, `${url}\n`),
+          })
         case "rev-parse --verify": {
           const spec = (args[2] ?? "").replace("^{commit}", "")
           if (spec === "HEAD") return answer(0, `${CANDIDATE}\n`)
@@ -263,5 +269,18 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
       addRun,
       addStatus,
       layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      /** The fake for `gh` and `git`; any other command spawns on the spawner it is given. */
+      layerOverReal: Layer.effect(
+        ChildProcessSpawner.ChildProcessSpawner,
+        Effect.map(ChildProcessSpawner.ChildProcessSpawner, (real) =>
+          ChildProcessSpawner.make((command) => {
+            const owned =
+              command._tag === "StandardCommand" &&
+              (command.command === "gh" || command.command === "git")
+            if (owned) return spawner.spawn(command)
+            return real.spawn(command)
+          }),
+        ),
+      ),
     }
   })
