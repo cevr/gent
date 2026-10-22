@@ -257,9 +257,21 @@ const loadCatalog = async (): Promise<Record<string, ReadonlyArray<string>>> => 
 
 // ── Pure transforms ─────────────────────────────────────────────────────
 
-/** `.gent/config.json` for a preset: the orchestrator as agent `main`, the worker as agent `delegate`. */
+/**
+ * `.gent/config.json` for a preset: the orchestrator as agent `main`, the
+ * worker as agent `delegate`. The machine tiers name the reviewer as
+ * `strongest` and the worker as `efficient`; a project list shadows the
+ * owner's, so a run never reaches a model outside its preset.
+ */
 export const presetConfigJson = (preset: Preset): string =>
-  `${JSON.stringify({ agents: { main: agentEntry(preset.orchestrator), delegate: agentEntry(preset.worker) } }, null, 2)}\n`
+  `${JSON.stringify(
+    {
+      agents: { main: agentEntry(preset.orchestrator), delegate: agentEntry(preset.worker) },
+      tiers: { strongest: [preset.reviewer.modelId], efficient: [preset.worker.modelId] },
+    },
+    null,
+    2,
+  )}\n`
 
 /** A slot as a config `agents` entry: its model and effort. */
 const agentEntry = (slot: Slot) => ({ model: slot.modelId, reasoningEffort: slot.reasoningEffort })

@@ -46,8 +46,9 @@ Opus, Sonnet or Fable release needs no edit here.
 
 `up` first checks that herdr has a current pane, and stops with one line if
 not. It then copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
-repo, installs it, writes the preset into `work/.gent/config.json` and the
-roster block in `work/AGENTS.md`, runs the root build of **this** checkout
+repo, installs it, writes the preset into `work/.gent/config.json` (agents `main` and
+`delegate`, and machine `tiers`: the reviewer as `strongest`, the worker as
+`efficient`, which shadow the owner's tiers) and the roster block in `work/AGENTS.md`, runs the root build of **this** checkout
 (turbo: the `gent-cell` worker, then the `gent` binary beside it in
 `apps/tui/`, under `bin/`), and
 launches it in a fresh pane. The run is recorded in

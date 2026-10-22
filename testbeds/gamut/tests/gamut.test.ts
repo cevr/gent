@@ -125,7 +125,7 @@ describe("gamut preset config", () => {
     expect(ordinary.reviewer).toEqual({ modelId: "openai/gpt-6.1-sol", reasoningEffort: "high" })
   })
   // The exact bytes matter: this is the file gent reads from the work dir.
-  test("pins the orchestrator as agent main and the worker as agent delegate", () => {
+  test("pins the orchestrator as agent main, the worker as agent delegate, and the machine tiers to the preset", () => {
     expect(presetConfigJson(preset)).toBe(
       `{
   "agents": {
@@ -137,6 +137,14 @@ describe("gamut preset config", () => {
       "model": "openai/gpt-6-luna",
       "reasoningEffort": "max"
     }
+  },
+  "tiers": {
+    "strongest": [
+      "anthropic/claude-opus-5-5"
+    ],
+    "efficient": [
+      "openai/gpt-6-luna"
+    ]
   }
 }
 `,
