@@ -106,11 +106,15 @@
   instruction text and the profile carries none; an edit to `AGENTS.md` reaches
   the next turn.
 - The system prompt has two parts. Sections below `AGENT_PROMPT_PRIORITY`
-  (`packages/core/src/domain/capability.ts`: persona, boundaries,
-  environment, date, project instructions, skills) are the part a session
-  shares with its children, byte for byte, whatever tools each has; the
+  (`packages/core/src/domain/capability.ts`: persona, boundaries, the host's
+  environment (platform, shell), date, project instructions, skills) are the
+  part a session shares with its children, byte for byte, whatever tools each
+  has and wherever it works: no shared section names the working directory,
+  and the skills listing names a local skills directory relative to it, so a
+  thread in a snapshot or rift copy of the project shares it too. The
   agent's own sections (tool list, tool guidelines, the cell guide, sessions and children
-  guidance, an agent addendum) and what `systemPrompt` hooks append (the host
+  guidance, an agent addendum, then the working directory and its git state,
+  last at `WORKING_DIRECTORY_PRIORITY`) and what `systemPrompt` hooks append (the host
   tool list, session naming) follow. The turn sends the parts as two system
   blocks (`systemPromptBlocks`), and the Anthropic driver marks the end of the
   shared one on the API-key path, so a fresh child with its parent's tool set

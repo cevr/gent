@@ -13,7 +13,7 @@ import {
   SkillsRpc,
 } from "../src/skills.js"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
-import { getToolId, ref } from "@gent/core/extensions/api"
+import { ExtensionContext, getToolId, ref } from "@gent/core/extensions/api"
 import { GentPlatform } from "@gent/core/host"
 import { BuiltinExtensions } from "../src/index.js"
 import {
@@ -21,6 +21,8 @@ import {
   textStep,
   collectTestContributions,
   createRpcHarness,
+  testLeafContext,
+  testToolContext,
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 import { main as builtinAgent } from "../src/agents.js"
@@ -36,14 +38,17 @@ const makeSkill = (
   level,
 })
 
+/** Names a local skills directory as the projection does from a working directory at `/test`. */
+const fromTest = (directory: string) => directory.slice("/test/".length)
+
 describe("formatSkillsForPrompt", () => {
   test("empty array returns empty string", () => {
-    expect(formatSkillsForPrompt([])).toBe("")
+    expect(formatSkillsForPrompt([], fromTest)).toBe("")
   })
 
   test("groups by level", () => {
     const skills = [makeSkill("bun", "local"), makeSkill("react", "global")]
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     expect(result).toContain("## Local")
     expect(result).toContain("## Global")
     expect(result).toContain("- bun (bun.md): bun skill")
@@ -52,16 +57,18 @@ describe("formatSkillsForPrompt", () => {
 
   test("omits empty level sections", () => {
     const skills = [makeSkill("bun", "local")]
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     expect(result).toContain("## Local")
     expect(result).not.toContain("## Global")
   })
 
   test("includes usage instructions", () => {
     const skills = [makeSkill("bun", "local")]
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     expect(result).toContain("read tool")
-    expect(result).toContain('Directory "/test/local":\n- bun (bun.md)')
+    // A local directory is named from the working directory; the read tool resolves it there.
+    expect(result).toContain('Directory "local":\n- bun (bun.md)')
+    expect(result).toContain("A local directory is relative to the working directory.")
     expect(result).toContain("$skill:local")
   })
 })
@@ -82,7 +89,7 @@ describe("formatSkillsForPrompt, directory grouping", () => {
     inDirectory(
       "bun",
       "local",
-      "/repo/.claude/skills",
+      "/test/.claude/skills",
       "Bun runtime guidance for scripts and servers. Use it for any script.",
     ),
     inDirectory(
@@ -101,9 +108,9 @@ describe("formatSkillsForPrompt, directory grouping", () => {
   ]
 
   test("names each directory once and each skill by name and first sentence", () => {
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     expect(result).toContain(
-      '## Local\nDirectory "/repo/.claude/skills":\n- bun: Bun runtime guidance for scripts and servers.\n',
+      '## Local\nDirectory ".claude/skills":\n- bun: Bun runtime guidance for scripts and servers.\n',
     )
     expect(result).toContain(
       '## Global\nDirectory "/home/u/.claude/skills":\n- react: React patterns and more',
@@ -115,18 +122,20 @@ describe("formatSkillsForPrompt, directory grouping", () => {
   })
 
   test("a first sentence too short to say anything brings the next one", () => {
-    expect(formatSkillsForPrompt(skills)).toContain("- wait: Stop. Re-read the task before acting.")
+    expect(formatSkillsForPrompt(skills, fromTest)).toContain(
+      "- wait: Stop. Re-read the task before acting.",
+    )
   })
 
   test("a long first sentence is cut to about 110 characters", () => {
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     const line = result.split("\n").find((text) => text.startsWith("- react: ")) ?? ""
     expect(line.length).toBeLessThanOrEqual("- react: ".length + 110)
     expect(line.endsWith("…")).toBe(true)
   })
 
   test("a skill kept as one file names that file; the rest follow the directory rule", () => {
-    const result = formatSkillsForPrompt(skills)
+    const result = formatSkillsForPrompt(skills, fromTest)
     expect(result).toContain(
       'Directory "/test/global":\n- flat (flat.md): A skill kept as one file, with no directory of its own.',
     )
@@ -136,11 +145,14 @@ describe("formatSkillsForPrompt, directory grouping", () => {
 
   test("a user-invoked-only skill is named without its description, on its directory's own line", () => {
     const userOnly = (skill: SkillEntry): SkillEntry => ({ ...skill, userInvokedOnly: true })
-    const result = formatSkillsForPrompt([
-      inDirectory("bun", "global", "/home/u/.claude/skills", "Bun runtime guidance."),
-      userOnly(inDirectory("handoff", "global", "/home/u/.claude/skills", "Hand off the work.")),
-      userOnly(makeSkill("triage", "global", "Triage the issues.")),
-    ])
+    const result = formatSkillsForPrompt(
+      [
+        inDirectory("bun", "global", "/home/u/.claude/skills", "Bun runtime guidance."),
+        userOnly(inDirectory("handoff", "global", "/home/u/.claude/skills", "Hand off the work.")),
+        userOnly(makeSkill("triage", "global", "Triage the issues.")),
+      ],
+      fromTest,
+    )
     expect(result).toContain(
       'Directory "/home/u/.claude/skills":\n- bun: Bun runtime guidance.\nUser-invoked only, read on `$name` alone: handoff\n',
     )
@@ -333,29 +345,42 @@ describe("SkillsExtension via RPC", () => {
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
     15_000,
   )
-  it.live("turn projection lists loaded skills by directory", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(SkillsExtension.setup)
+  it.live(
+    "turn projection lists loaded skills by directory, local ones from the working directory",
+    () =>
+      Effect.gen(function* () {
+        const contributions = yield* collectTestContributions(SkillsExtension.setup)
 
-      const turnProjection = Option.fromUndefinedOr(
-        contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
-      )
-      if (Option.isNone(turnProjection)) {
-        return yield* Effect.die(new Error("expected skills turn projection"))
-      }
-      const result = yield* turnProjection.value.hook
-        .handler({ agent: builtinAgent })
-        .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie)
+        const turnProjection = Option.fromUndefinedOr(
+          contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
+        )
+        if (Option.isNone(turnProjection)) {
+          return yield* Effect.die(new Error("expected skills turn projection"))
+        }
+        const result = yield* turnProjection.value.hook
+          .handler({ agent: builtinAgent })
+          .pipe(
+            Effect.provide(Skills.Test(testSkills)),
+            Effect.provideService(
+              ExtensionContext,
+              testLeafContext(testToolContext({ cwd: "/work" })),
+            ),
+            Effect.provide(Path.layer),
+            Effect.orDie,
+          )
 
-      const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
-        Option.fromUndefinedOr(sections.find((s) => s.id === "skills")),
-      )
-      if (Option.isNone(section)) {
-        return yield* Effect.die(new Error("expected skills prompt section"))
-      }
-      expect(section.value.content).toBe(formatSkillsForPrompt(testSkills))
-      expect(section.value.content).toContain('Directory "/global":\n- effect-v4 (effect-v4.md)')
-    }),
+        const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
+          Option.fromUndefinedOr(sections.find((s) => s.id === "skills")),
+        )
+        if (Option.isNone(section)) {
+          return yield* Effect.die(new Error("expected skills prompt section"))
+        }
+        expect(section.value.content).toContain('Directory "/global":\n- effect-v4 (effect-v4.md)')
+        // The working directory appears nowhere in the listing: a thread in a
+        // copy of the project lists the same text.
+        expect(section.value.content).toContain('Directory "../local":\n- react (react.md)')
+        expect(section.value.content).not.toContain("/work")
+      }),
   )
 
   it.live(

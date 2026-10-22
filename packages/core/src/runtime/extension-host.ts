@@ -106,6 +106,7 @@ import {
   RequestReply,
   ToolCallVerdict,
   type ToolCapability,
+  workingDirectorySection,
 } from "../domain/capability.js"
 import {
   type AgentDefinition,
@@ -2663,18 +2664,17 @@ export const loadRuntimeProfileDeclarations = (
       active: extensionDeclarations.active,
       failed: [...failedBeforeValidation, ...rejected, ...extensionDeclarations.failed],
     }
-    // 6. Build the base prompt section: core writes the environment
+    // 6. Build the base prompt sections: core writes the host and the working directory
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
     const coreSections = [
       environmentSection({
-        cwd: canonicalCwd,
         platform: inputs.platform,
         shell: inputs.shell,
         osVersion: inputs.osVersion,
-        isGitRepo,
       }),
+      workingDirectorySection({ cwd: canonicalCwd, isGitRepo }),
     ]
 
     return {

@@ -177,7 +177,7 @@ describe("project instructions", () => {
       expect(prompts[0]).toContain("# Project Instructions\n\nAnswer in Latin.")
       expect(prompts[0]).not.toContain("Answer in Greek.")
       expect(prompts[1]).toContain("# Project Instructions\n\nAnswer in Greek.")
-      // The section keeps its place after the environment section.
+      // The section keeps its place after the host's environment section.
       expect(prompts[1]!.indexOf("# Environment")).toBeLessThan(
         prompts[1]!.indexOf("# Project Instructions"),
       )

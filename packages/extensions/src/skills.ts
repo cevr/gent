@@ -19,6 +19,7 @@ import {
   defineRequests,
   BranchAddress,
   defineResource,
+  ExtensionContext,
   ExtensionHost,
   ExtensionId,
   headChars,
@@ -455,9 +456,12 @@ const skillLocation = (skill: SkillEntry) => {
 /**
  * One block per directory: a line per skill the model may read on a match,
  * then one line naming the user-invoked-only skills, with no description,
- * so `$name` still finds their files.
+ * so `$name` still finds their files. `shown` is how a directory is named.
  */
-const formatList = (list: ReadonlyArray<SkillEntry>): string => {
+const formatList = (
+  list: ReadonlyArray<SkillEntry>,
+  shown: (directory: string) => string,
+): string => {
   const byDirectory = new Map<
     string,
     { readonly lines: Array<string>; readonly userOnly: Array<string> }
@@ -476,19 +480,26 @@ const formatList = (list: ReadonlyArray<SkillEntry>): string => {
     if (userOnly.length > 0) {
       all.push(`User-invoked only, read on \`$name\` alone: ${userOnly.join(", ")}`)
     }
-    return `Directory ${quoted(directory)}:\n${all.join("\n")}`
+    return `Directory ${quoted(shown(directory))}:\n${all.join("\n")}`
   }).join("\n")
 }
 
-const READ_RULE = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`
+const READ_RULE = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. A local directory is relative to the working directory. Read it with the read tool or from a cell when its name or description matches the task.`
 
 /**
  * The turn prompt lists skills compactly: each skills directory once, and
  * each skill by name and lead sentence. The file path follows from the
  * directory; the model reads the full text on demand. The listing is sent on
  * every request, so it gives names and paths up front and content on read.
+ *
+ * The listing is part of the prompt every agent of the project shares, so it
+ * names no working directory: `local` names a local skills directory relative
+ * to it. A thread in a copy of the project lists the same local directories.
  */
-export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string => {
+export const formatSkillsForPrompt = (
+  skills: ReadonlyArray<SkillEntry>,
+  local: (directory: string) => string,
+): string => {
   if (skills.length === 0) return ""
 
   const globalSkills = skills.filter((s) => s.level === "global")
@@ -497,10 +508,10 @@ export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string
   const sections: string[] = []
 
   if (localSkills.length > 0) {
-    sections.push(`## Local\n${formatList(localSkills)}`)
+    sections.push(`## Local\n${formatList(localSkills, local)}`)
   }
   if (globalSkills.length > 0) {
-    sections.push(`## Global\n${formatList(globalSkills)}`)
+    sections.push(`## Global\n${formatList(globalSkills, (directory) => directory)}`)
   }
 
   return `<available_skills>
@@ -560,9 +571,13 @@ export const SkillsExtension = defineExtension({
       Effect.gen(function* () {
         const service = yield* Skills
         const skills = yield* service.list
-        return {
-          promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
-        }
+        const { cwd } = yield* ExtensionContext
+        const path = yield* Path.Path
+        const content = formatSkillsForPrompt(
+          skills,
+          (directory) => path.relative(cwd, directory) || ".",
+        )
+        return { promptSections: [{ id: "skills", priority: 80, content }] }
       }),
     )
     yield* host.register("request", SkillsRpc.ListSkills)

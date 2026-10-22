@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Context, DateTime, Effect, Schema } from "effect"
 import * as AiTool from "effect/ai/Tool"
 import {
+  compileSharedSystemPrompt,
   compileSystemPrompt,
   dateSection,
   defineRequests,
@@ -13,6 +14,7 @@ import {
   request,
   tool,
   type ToolCapability,
+  workingDirectorySection,
 } from "../../src/domain/capability"
 import { ExtensionId, type RpcId, ToolId } from "../../src/domain/ids"
 import { buildTurnPromptSections } from "../../src/runtime/turn"
@@ -219,17 +221,48 @@ describe("environment section", () => {
   const newYorkEve = DateTime.makeZonedUnsafe(Date.UTC(2026, 0, 1, 3), {
     timeZone: "America/New_York",
   })
-  const base = {
-    cwd: "/home/user/project",
-    platform: "linux",
-    isGitRepo: true,
-  }
+  const base = { platform: "linux" }
 
-  test("names the working directory, platform, and git state", () => {
+  test("names the platform and the shell, and not where the session works", () => {
     const result = compileSystemPrompt([environmentSection(base)])
-    expect(result).toContain("Working directory: /home/user/project")
-    expect(result).toContain("Platform: linux")
-    expect(result).toContain("Git repository: yes")
+    expect(result).toBe("# Environment\n\nPlatform: linux\nShell: unknown")
+  })
+
+  test("the working directory section names the directory and its git state", () => {
+    const section = workingDirectorySection({ cwd: "/home/user/project", isGitRepo: true })
+    expect(section.content).toContain("Working directory: /home/user/project")
+    expect(section.content).toContain("Git repository: yes")
+    expect(
+      workingDirectorySection({ cwd: "/home/user/project", isGitRepo: false }).content,
+    ).toContain("Git repository: no")
+  })
+
+  // A thread in a copy of the project works elsewhere; its first request
+  // still reads the starter's shared part from the provider's prompt cache.
+  test("the working directory is the agent's own part: last, after the addendum", () => {
+    const agent = AgentDefinition.make({
+      name: AgentName.make("test-agent"),
+      systemPromptAddendum: "Be helpful.",
+    })
+    const sectionsIn = (cwd: string) =>
+      buildTurnPromptSections(
+        [
+          environmentSection(base),
+          workingDirectorySection({ cwd, isGitRepo: true }),
+          { id: "skills", content: "SKILLS", priority: 80 },
+        ],
+        agent,
+        [],
+      )
+    const starter = sectionsIn("/home/user/project")
+    const thread = sectionsIn("/home/user/.copies/project")
+    expect(compileSharedSystemPrompt(thread)).toBe(compileSharedSystemPrompt(starter))
+    expect(compileSharedSystemPrompt(starter)).not.toContain("/home/user/project")
+    const prompt = compileSystemPrompt(thread)
+    expect(prompt).toEndWith("Working directory: /home/user/.copies/project\nGit repository: yes")
+    expect(prompt.indexOf("## Agent: test-agent")).toBeLessThan(
+      prompt.indexOf("# Working Directory"),
+    )
   })
 
   // The model is told the user's date, not UTC's: from 20:00 EDT, UTC is already tomorrow.
@@ -242,9 +275,6 @@ describe("environment section", () => {
     expect(environmentSection({ ...base, shell: "/bin/zsh" }).content).toContain("Shell: /bin/zsh")
     expect(environmentSection({ ...base, osVersion: "24.6.0" }).content).toContain(
       "Platform: linux (24.6.0)",
-    )
-    expect(environmentSection({ ...base, isGitRepo: false }).content).toContain(
-      "Git repository: no",
     )
   })
 

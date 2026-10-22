@@ -169,7 +169,9 @@ Docs against source: I found no direct conflict. One trap: dsh docs say what the
 - Gain if it misses today: the whole copied window at 0.1 instead of 1.25 or 2.0 per token, per fork. (inferred)
 - Effort: one capture probe of a parent step and a fork's first request, diffing the bytes up to the copied tail. A fix may need the fork to keep the starter's agent part and tool list. (inferred)
 
-### G3. Move `Working directory` out of the shared system part (medium gain, low effort)
+### G3. Move `Working directory` out of the shared system part (medium gain, low effort) — DONE
+
+- Done: the `working-directory` section (cwd and git state) is the last section of the agent's own part; the environment section keeps platform and shell; the skills listing names local directories relative to the working directory. "a snapshot thread opens with its starter's shared part, byte for byte, though it works elsewhere" (`delegated-threads.test.ts`) fails with either change undone. (measured)
 
 - Now: cwd is line 1 of the environment section (priority 60), inside the shared part, before project instructions (70) and skills (80). (measured: capability.ts:88-107, agents.ts:64, skills.ts:564)
 - Effect: a thread in a `workspace` (snapshot or rift copy) has another cwd (threads.ts:2556-2562), so its shared prefix differs from the first section after the persona, and it reads nothing from the parent's entry. (measured that cwd differs; the miss inferred, because there is no marker before priority 60)

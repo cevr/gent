@@ -38,9 +38,10 @@ export interface PromptSection {
   readonly id: string
   readonly content: string
   /**
-   * Lower = earlier in the prompt. Sections every agent of a workspace reads
-   * the same (persona, environment, project instructions, skills) sit below
-   * `AGENT_PROMPT_PRIORITY`; a section that differs by agent sits at or above it.
+   * Lower = earlier in the prompt. Sections every agent of a project reads
+   * the same, wherever it works (persona, host, project instructions,
+   * skills), sit below `AGENT_PROMPT_PRIORITY`; a section that differs by
+   * agent or by working directory sits at or above it.
    */
   readonly priority: number
 }
@@ -52,9 +53,14 @@ export interface PromptSection {
  * the provider's prompt cache. A section that one agent has and another lacks
  * goes at or above it: whatever follows the tool set (the tool list, the tool
  * guidelines, the cell guide), the children guidance, an agent addendum; so
- * does anything a `systemPrompt` hook appends.
+ * does anything a `systemPrompt` hook appends. So does the working directory:
+ * a thread in a copy of the project reads the starter's shared part all the
+ * same.
  */
 export const AGENT_PROMPT_PRIORITY = 100
+
+/** The working directory's section: the last of the agent's own part, after the addendum. */
+const WORKING_DIRECTORY_PRIORITY = AGENT_PROMPT_PRIORITY + 100
 
 const PROMPT_SECTION_SEPARATOR = "\n\n"
 
@@ -81,28 +87,45 @@ export const systemPromptBlocks = (prompt: string, shared: string): ReadonlyArra
 }
 
 /**
- * The section core writes once per profile: where the loop is running.
- * Everything an agent *is* comes from extensions. Nothing in it changes while
- * the profile lives; the date is `dateSection`, written per turn.
+ * The host section core writes once per profile: the machine the loop runs
+ * on, the same for every session of the server. Everything an agent *is*
+ * comes from extensions; where it works is `workingDirectorySection`. Nothing
+ * in it changes while the profile lives; the date is `dateSection`, written
+ * per turn.
  */
 export function environmentSection(options: {
-  cwd: string
   platform: string
-  isGitRepo: boolean
   shell?: string
   osVersion?: string
 }): PromptSection {
-  const { cwd, platform, isGitRepo, shell, osVersion } = options
+  const { platform, shell, osVersion } = options
   let platformDisplay = platform
   if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
   let shellDisplay = "unknown"
   if (!Predicate.isUndefined(shell)) shellDisplay = shell
-  let gitRepository = "no"
-  if (isGitRepo) gitRepository = "yes"
   return {
     id: "environment",
-    content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}`,
+    content: `# Environment\n\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}`,
     priority: 60,
+  }
+}
+
+/**
+ * Where the session works, written once per profile. It is the agent's own
+ * part, not the shared one: a thread in a copy of the project (a worktree, a
+ * snapshot) works elsewhere, and its first request still reads the starter's
+ * shared part from the provider's prompt cache.
+ */
+export function workingDirectorySection(options: {
+  cwd: string
+  isGitRepo: boolean
+}): PromptSection {
+  let gitRepository = "no"
+  if (options.isGitRepo) gitRepository = "yes"
+  return {
+    id: "working-directory",
+    content: `# Working Directory\n\nWorking directory: ${options.cwd}\nGit repository: ${gitRepository}`,
+    priority: WORKING_DIRECTORY_PRIORITY,
   }
 }
 

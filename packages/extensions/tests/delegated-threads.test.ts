@@ -2977,6 +2977,94 @@ describe("a snapshot thread", () => {
       }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
     30_000,
   )
+
+  // The copy has the project's files at another path. Its first request reads
+  // the starter's shared part from the provider's prompt cache only when no
+  // shared section names where a session works.
+  it.live(
+    "a snapshot thread opens with its starter's shared part, byte for byte, though it works elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeTempDirectoryScoped("threads-snapshot-shared-")
+        yield* sh(
+          root,
+          [
+            "mkdir origin && cd origin",
+            "git init -q -b main",
+            "git config user.name Test",
+            "git config user.email test@example.com",
+            "printf 'PROJECT-RULE: every agent reads this.\\n' > AGENTS.md",
+            "mkdir -p .claude/skills/probe",
+            "printf -- '---\\nname: probe\\ndescription: PROBE-SKILL checks the copy.\\n---\\nbody\\n' > .claude/skills/probe/SKILL.md",
+            "git add -A",
+            "git commit -qm init",
+          ].join(" && "),
+        )
+        const origin = yield* sh(`${root}/origin`, "pwd -P")
+        const home = yield* makeTempDirectoryScoped("threads-snapshot-shared-home-")
+        const parent: Array<ModelOptions> = []
+        const child: Array<ModelOptions> = []
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const texts = promptTexts(options.prompt)
+          if (texts[0]?.endsWith(childTask) === true) {
+            child.push(options)
+            return Effect.succeed(reply("pong"))
+          }
+          parent.push(options)
+          if (texts.some(isRoundEndText)) return Effect.succeed(reply("read it"))
+          if (!promptToolCallIds(options.prompt).includes("start-1")) {
+            return Effect.succeed(
+              toolStep(
+                "thread.start",
+                delegated(childTask, { workspace: { snapshot: true } }),
+                "start-1",
+              ),
+            )
+          }
+          return Effect.succeed(reply("started"))
+        })
+        const harness = yield* createRpcHarness({
+          ...e2ePreset,
+          extensionInputs: [
+            ...e2ePreset.extensionInputs.filter(
+              (extension) => extension.manifest.id !== WORKSPACES_EXTENSION_ID,
+            ),
+            makeWorkspacesExtension({ rift: "/nonexistent/gent-test/rift" }),
+          ],
+          providerLayer,
+          cwd: origin,
+          home,
+        })
+        yield* harness.client.message.send({
+          sessionId: harness.sessionId,
+          branchId: harness.branchId,
+          content: "delegate it in a copy",
+        })
+        yield* waitFor(
+          Effect.sync(() => child.length),
+          (count) => count > 0,
+          15_000,
+          "the snapshot thread sent its first request",
+        )
+        const thread = (yield* harness.client.session.list()).find(
+          (session) => session.parentSessionId === harness.sessionId,
+        )
+        const copy = thread?.cwd ?? ""
+        expect(copy).not.toBe("")
+        expect(copy).not.toBe(origin)
+        const [parentShared = "", parentOwn = ""] = turnRequestText(parent[0]!.prompt).systemBlocks
+        const [childShared = "", childOwn = ""] = turnRequestText(child[0]!.prompt).systemBlocks
+        // The shared part: persona, host, project instructions, skills.
+        expect(childShared).toBe(parentShared)
+        expect(parentShared).toContain("PROJECT-RULE")
+        expect(parentShared).toContain("- probe: PROBE-SKILL checks the copy.")
+        expect(parentShared).not.toContain(origin)
+        // Each session's own part names where it works.
+        expect(parentOwn).toContain(`Working directory: ${origin}`)
+        expect(childOwn).toContain(`Working directory: ${copy}`)
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("25 seconds")),
+    30_000,
+  )
 })
 
 // ── session.send ────────────────────────────────────────────────────────────
