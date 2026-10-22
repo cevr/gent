@@ -19,7 +19,8 @@ import { makeBranchStateStore } from "./branch-state-store.js"
 // Test seam: only tests read these exports. GoalState, goalContinuationSource,
 // continuationPrompt, formatGoalUsage and the GOAL_PAUSED_* texts are pure
 // values with unit tests; GoalTool is the capability the cell signature tests
-// render; goalResumeDue is the `wakeDue` hook a test fires as a startup pass.
+// render; goalResumeDue and continueGoal are the `wakeDue` and `turnAfter`
+// hooks a test runs over a stub context whose wake or send fails.
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -107,10 +108,15 @@ Do not complete the goal unless it is complete. Do not complete it because you a
 export const GOAL_PAUSED_STREAM_FAILED = "the model stream failed"
 export const GOAL_PAUSED_USAGE_LIMIT = "the model's usage limit was reached"
 export const GOAL_PAUSED_RESUME_MISSED =
-  "the usage limit reset while gent was not running; /goal resume continues"
+  "the resume came over 10 minutes late; /goal resume continues"
+export const GOAL_PAUSED_RESUME_UNSET =
+  "the model's usage limit was reached and no resume could be set; /goal resume continues"
 
 /** The goal resumes this long after its usage limit resets, as wake's auto-resume does. */
 const RESUME_MARGIN_MS = 30_000
+
+/** A resume that fires later than this after its time leaves the goal paused, as wake's does. */
+const PAST_DUE_MS = 10 * 60_000
 
 const isoOf = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis))
 
@@ -439,7 +445,31 @@ const decideAfterTurn = (
   return { next: { ...charged, continuationsUsed: charged.continuationsUsed + 1 }, report: true }
 }
 
-const continueGoal = (input: TurnAfterInput) =>
+/**
+ * Publishes the resume record before the pause that names its time is saved,
+ * so a stored `resumeAt` always has a record to fire it. A failed publish
+ * saves a pause that waits for `/goal resume` instead. A stop between the two
+ * leaves a record over the goal still active, which fires and does nothing.
+ */
+const armResume = (goal: GoalState) =>
+  Effect.gen(function* () {
+    if (Predicate.isUndefined(goal.resumeAt)) return goal
+    const ctx = yield* ExtensionContext
+    return yield* ctx.Session.wakeAt({ sourceId: goalResumeSource(goal), at: goal.resumeAt }).pipe(
+      Effect.as(goal),
+      Effect.catchEager((error) =>
+        Effect.logWarning("goal.resume.unset").pipe(
+          Effect.annotateLogs({ goalId: goal.goalId, error: String(error) }),
+          Effect.as<GoalState>({
+            ...Struct.omit(goal, ["resumeAt"]),
+            pausedReason: GOAL_PAUSED_RESUME_UNSET,
+          }),
+        ),
+      ),
+    )
+  })
+
+export const continueGoal = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     // Clients re-read the goal only when this turn end changed it.
@@ -481,12 +511,13 @@ const continueGoal = (input: TurnAfterInput) =>
         }
         if (goal.status !== "active") return unchanged(current)
         const decided = decideAfterTurn(goal, input, yield* now)
+        const next = yield* armResume(decided.next)
         return {
-          next: Option.some(decided.next),
+          next: Option.some(next),
           result: {
             changed: true,
             previous: Option.some(goal),
-            decision: Option.liftPredicate(decided.next, () => decided.report),
+            decision: Option.liftPredicate(next, () => decided.report),
           },
         }
       }),
@@ -498,13 +529,13 @@ const continueGoal = (input: TurnAfterInput) =>
     if (Option.isNone(decision)) return
     const goal = decision.value
     const annotations = { sessionId: String(input.sessionId), goalId: goal.goalId }
-    if (goal.status === "paused" && Predicate.isNotUndefined(goal.resumeAt)) {
-      yield* ctx.Session.wakeAt({ sourceId: goalResumeSource(goal), at: goal.resumeAt })
-      return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
-        Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
-      )
-    }
     if (goal.status === "paused") {
+      if (Predicate.isNotUndefined(goal.resumeAt)) {
+        return yield* Effect.logInfo("goal.paused.usage-limit").pipe(
+          Effect.annotateLogs({ ...annotations, resumeAt: isoOf(goal.resumeAt) }),
+        )
+      }
+      if (goal.pausedReason !== GOAL_PAUSED_STREAM_FAILED) return
       return yield* Effect.logWarning("goal.paused.stream-failed").pipe(
         Effect.annotateLogs(annotations),
       )
@@ -521,52 +552,65 @@ const continueGoal = (input: TurnAfterInput) =>
 
 /**
  * The `wakeDue` hook: the usage limit that paused a goal has reset. A fire
- * while the server ran resumes the goal, as `/goal resume` does. A fire from
- * the startup pass means the reset passed while gent was not running: the
- * goal stays paused and says so, since a start nobody expected should not
- * spend the model. A record whose goal moved on (resumed, paused by the
- * person, cleared, replaced) does nothing.
+ * within `PAST_DUE_MS` of the resume time resumes the goal, as `/goal resume`
+ * does, whether the server ran or its startup pass fired the record. A later
+ * fire leaves the goal paused and says so, since a resume nobody expects
+ * should not spend the model. A record whose goal moved on (resumed, paused
+ * by the person, cleared, replaced) does nothing. A record core picked before
+ * a later limit moved the resume time waits for the new time.
  */
 export const goalResumeDue = (input: WakeDueInput) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const resumed = yield* modifyGoal((current) =>
+    const firedAt = yield* now
+    const { wake, fired } = yield* modifyGoal((current) =>
       Effect.gen(function* () {
-        const waiting = Option.filter(
-          current,
-          (goal) =>
-            goal.status === "paused" &&
-            Predicate.isNotUndefined(goal.resumeAt) &&
-            goalResumeSource(goal) === input.sourceId,
+        const unchanged = (wake: WakeNext) => ({
+          next: current,
+          result: { wake, fired: Option.none<GoalState>() },
+        })
+        const done = WakeNext.cases.Done.make({})
+        if (Option.isNone(current)) return unchanged(done)
+        const goal = current.value
+        if (
+          goal.status !== "paused" ||
+          goalResumeSource(goal) !== input.sourceId ||
+          Predicate.isUndefined(goal.resumeAt)
         )
-        if (Option.isNone(waiting)) return { next: current, result: Option.none<GoalState>() }
-        const rest = Struct.omit(waiting.value, [
-          "pausedReason",
-          "pausedTurnStartedAtMs",
-          "resumeAt",
-        ])
-        const updatedAt = yield* now
-        if (input.cause === "start") {
-          const missed: GoalState = { ...rest, pausedReason: GOAL_PAUSED_RESUME_MISSED, updatedAt }
-          return { next: Option.some(missed), result: Option.some(missed) }
+          return unchanged(done)
+        if (goal.resumeAt > firedAt) return unchanged(WakeNext.cases.At.make({ at: goal.resumeAt }))
+        const rest = Struct.omit(goal, ["pausedReason", "pausedTurnStartedAtMs", "resumeAt"])
+        if (firedAt - goal.resumeAt > PAST_DUE_MS) {
+          const missed: GoalState = {
+            ...rest,
+            pausedReason: GOAL_PAUSED_RESUME_MISSED,
+            updatedAt: firedAt,
+          }
+          return { next: Option.some(missed), result: { wake: done, fired: Option.some(missed) } }
         }
         const active: GoalState = {
           ...rest,
           status: "active",
           continuationsUsed: rest.continuationsUsed + 1,
-          updatedAt,
+          updatedAt: firedAt,
         }
-        return { next: Option.some(active), result: Option.some(active) }
+        // Queued before the goal is saved active: a refused admission fails
+        // the hook with the goal still waiting, and core fires the record again.
+        yield* queueGoalMessage(active, continuationPrompt(active))
+        return { next: Option.some(active), result: { wake: done, fired: Option.some(active) } }
       }),
     )
-    if (Option.isNone(resumed)) return WakeNext.cases.Done.make({})
-    const goal = resumed.value
-    if (goal.status === "active") yield* queueGoalMessage(goal, continuationPrompt(goal))
-    yield* Effect.logInfo("goal.resume.fired").pipe(
-      Effect.annotateLogs({ goalId: goal.goalId, cause: input.cause, status: goal.status }),
-    )
-    yield* ctx.State.changed()
-    return WakeNext.cases.Done.make({})
+    if (Option.isSome(fired)) {
+      yield* Effect.logInfo("goal.resume.fired").pipe(
+        Effect.annotateLogs({
+          goalId: fired.value.goalId,
+          cause: input.cause,
+          status: fired.value.status,
+        }),
+      )
+      yield* ctx.State.changed()
+    }
+    return wake
   }).pipe(serializeGoal)
 
 // ── Slash command ──

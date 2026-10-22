@@ -5,7 +5,9 @@ import { LanguageModel } from "effect/ai"
 import type * as Response from "effect/ai/Response"
 import { AgentDefinition, AgentName, ModelId } from "../../src/domain/agent"
 import { GentPlatform } from "../../src/runtime/gent-platform"
+import { TestClock } from "effect/testing"
 import {
+  advanceUntil,
   createE2ELayer,
   createRpcClient,
   createRpcHarness,
@@ -465,6 +467,21 @@ describe("LanguageModelLayers.signal", () => {
       expect(collected.length).toBe(2)
       expect(collected[0]?.type).toBe("text-delta")
       expect(collected[1]?.type).toBe("finish")
+    }),
+  )
+})
+
+describe("advanceUntil", () => {
+  it.live("fails at its wall-clock deadline even while a read never returns", () =>
+    Effect.gen(function* () {
+      // A deadline checked only between reads would leave this to the outer timeout.
+      const error = yield* advanceUntil(Effect.never, () => true, {
+        label: "a read that never returns",
+        timeoutMs: 20,
+      }).pipe(Effect.timeout("2 seconds"), Effect.flip, Effect.provide(TestClock.layer()))
+      expect(error).toMatchObject({
+        message: "timed out advancing the clock for a read that never returns",
+      })
     }),
   )
 })

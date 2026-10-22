@@ -6,7 +6,7 @@ import {
   type Crypto,
   DateTime,
   Deferred,
-  type Duration,
+  Duration,
   Effect,
   type Exit,
   Fiber,
@@ -2493,7 +2493,8 @@ const wallClock = Clock.Clock.defaultValue()
  * `TestClock.adjust` that lands between the two leaves the sleep a whole delay
  * past the new time, and it never wakes. Steps reach that timer too. After each
  * step the loop pauses on the wall clock for the real I/O the step released.
- * Wall time bounds the loop: at `timeoutMs` it fails with `WaitForError`.
+ * Wall time bounds the whole wait, a blocked `read` included: at `timeoutMs`
+ * it fails with `WaitForError`.
  */
 export const advanceUntil = <A, E, R>(
   read: Effect.Effect<A, E, R>,
@@ -2504,19 +2505,26 @@ export const advanceUntil = <A, E, R>(
     readonly timeoutMs?: number
   },
 ): Effect.Effect<A, E | WaitForError, R> =>
-  Effect.gen(function* () {
-    const deadline = wallClock.currentTimeMillisUnsafe() + (options.timeoutMs ?? 5_000)
-    while (wallClock.currentTimeMillisUnsafe() < deadline) {
-      const value = yield* read
-      if (done(value)) return value
-      yield* TestClock.adjust(options.step ?? "100 millis")
-      // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
-      yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
-    }
-    return yield* new WaitForError({
-      message: `timed out advancing the clock for ${options.label}`,
-    })
-  })
+  Effect.raceFirst(
+    Effect.gen(function* () {
+      for (;;) {
+        const value = yield* read
+        if (done(value)) return value
+        yield* TestClock.adjust(options.step ?? "100 millis")
+        // oxlint-disable-next-line effect/noFixedWaitInTests -- the work a step released runs on real I/O, which only the wall clock paces
+        yield* Effect.sleep("2 millis").pipe(Effect.provideService(Clock.Clock, wallClock))
+      }
+    }),
+    // The deadline is wall time; the virtual clock is the thing being moved.
+    Effect.sleep(Duration.millis(options.timeoutMs ?? 5_000)).pipe(
+      Effect.provideService(Clock.Clock, wallClock),
+      Effect.andThen(
+        Effect.fail(
+          new WaitForError({ message: `timed out advancing the clock for ${options.label}` }),
+        ),
+      ),
+    ),
+  )
 
 /** One run of `interruptAtEachStep`: what it interrupts and what must hold after. */
 export interface InterruptionTrial<A, E, R, E2, R2> {

@@ -9,11 +9,13 @@ import {
   Exit,
   Fiber,
   FileSystem,
+  Layer,
   Option,
   PlatformError,
   Ref,
   Schema,
   Stream,
+  Struct,
 } from "effect"
 import {
   advanceUntil,
@@ -31,20 +33,30 @@ import {
   testToolContext,
 } from "@gent/core/test-utils"
 import {
+  AgentName,
   BranchId,
+  MessageId,
   SessionId,
   SteerCommand,
   ToolCallId,
   decodeRequestReply,
 } from "@gent/core/protocol"
-import { ExtensionContext, RequestId } from "@gent/core/extensions/api"
+import {
+  ExtensionContext,
+  ExtensionServiceError,
+  RequestId,
+  type TurnAfterInput,
+  WakeNext,
+} from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   continuationPrompt,
+  continueGoal,
   formatGoalUsage,
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
   GOAL_PAUSED_RESUME_MISSED,
+  GOAL_PAUSED_RESUME_UNSET,
   GOAL_PAUSED_STREAM_FAILED,
   GOAL_PAUSED_USAGE_LIMIT,
   goalContinuationSource,
@@ -706,42 +718,115 @@ describe("goal resume fire", () => {
     createdAt: 0,
     updatedAt: 0,
   }
+  const active: GoalState = {
+    ...Struct.omit(waiting, ["pausedReason", "resumeAt"]),
+    status: "active",
+  }
 
-  /** Fires the `wakeDue` hook over a branch whose stored goal is `goal`; returns the goal after and the sends. */
-  const fire = (goal: GoalState, sourceId: string, cause: "due" | "start") =>
+  const refused = (operation: string) =>
+    new ExtensionServiceError({ service: "Session", operation, message: `${operation} refused` })
+
+  /**
+   * A branch whose stored goal is `goal`, over a stub context: `send` and
+   * `wakeAt` fail while their refusal count lasts. Runs `hook` on the virtual
+   * clock set to `at`; returns its answer, the stored goal after and the
+   * accepted sends and wakes.
+   */
+  const onBranch = <A, E, R>(
+    goal: GoalState,
+    at: number,
+    hook: Effect.Effect<A, E, R>,
+    refuse: { readonly sends?: number; readonly wakes?: number } = {},
+  ) =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("goal-resume-")
       const fs = yield* FileSystem.FileSystem
+      const file = `${home}/.gent/goals/${branchId}.json`
       yield* fs.makeDirectory(`${home}/.gent/goals`, { recursive: true })
       yield* fs.writeFileString(
-        `${home}/.gent/goals/${branchId}.json`,
+        file,
         yield* Schema.encodeEffect(Schema.fromJsonString(GoalSnapshot))({ goal }),
       )
-      const sent = yield* Ref.make(0)
+      const sends = yield* Ref.make(0)
+      const wakes = yield* Ref.make<ReadonlyArray<number>>([])
+      const sendRefusals = yield* Ref.make(refuse.sends ?? 0)
+      const wakeRefusals = yield* Ref.make(refuse.wakes ?? 0)
+      /** Fails while `left` is above 0, counting it down; otherwise runs `accept`. */
+      const gated = (left: Ref.Ref<number>, operation: string, accept: Effect.Effect<void>) =>
+        Effect.gen(function* () {
+          if ((yield* Ref.getAndUpdate(left, (n) => Math.max(0, n - 1))) > 0)
+            return yield* refused(operation)
+          yield* accept
+        })
+      const base = testToolContext()
       const ctx = testToolContext({
         sessionId: SessionId.make("goal-session"),
         branchId,
         toolCallId: ToolCallId.make("tc-goal"),
         home,
         Session: {
-          ...testToolContext().Session,
-          send: () => Ref.update(sent, (count) => count + 1),
+          ...base.Session,
+          dequeueFollowUp: () => Effect.succeed(false),
+          send: () =>
+            gated(
+              sendRefusals,
+              "send",
+              Ref.update(sends, (count) => count + 1),
+            ),
         },
+        Wakes: (extensionId) => ({
+          ...base.Wakes(extensionId),
+          wakeAt: (params) =>
+            gated(
+              wakeRefusals,
+              "wakeAt",
+              Ref.update(wakes, (all) => [
+                ...all,
+                ...Option.toArray(Option.fromUndefinedOr(params.at)),
+              ]),
+            ),
+        }),
         State: { changed: () => Effect.void },
       })
-      const leaf = testLeafContext(ctx)
-      yield* goalResumeDue({ sourceId, at: Option.some(90_000), cause }).pipe(
-        Effect.provideService(ExtensionContext, leaf),
-      )
+      yield* TestClock.setTime(at)
+      const answer = yield* hook.pipe(Effect.provideService(ExtensionContext, testLeafContext(ctx)))
       const snapshot = yield* Schema.decodeEffect(Schema.fromJsonString(GoalSnapshot))(
-        yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
+        yield* fs.readFileString(file),
       )
-      return { goal: snapshot.goal, sends: yield* Ref.get(sent) }
-    }).pipe(Effect.provide(BunServices.layer))
+      return {
+        answer,
+        goal: snapshot.goal,
+        sends: yield* Ref.get(sends),
+        wakes: yield* Ref.get(wakes),
+      }
+    }).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, TestClock.layer())))
 
-  it.scopedLive("a fire from the startup pass leaves the goal paused and says why", () =>
+  const fire = (sourceId: string, cause: "due" | "start") =>
+    goalResumeDue({ sourceId, at: Option.some(90_000), cause })
+
+  it.scopedLive("a fire from the startup pass within ten minutes resumes the goal", () =>
     Effect.gen(function* () {
-      const { goal, sends } = yield* fire(waiting, "goal-resume:g1", "start")
+      const { answer, goal, sends } = yield* onBranch(
+        waiting,
+        90_000 + 60_000,
+        fire("goal-resume:g1", "start"),
+      )
+      expect(answer).toEqual(WakeNext.cases.Done.make({}))
+      expect(goal?.status).toBe("active")
+      expect(goal?.resumeAt).toBeUndefined()
+      expect(goal?.continuationsUsed).toBe(1)
+      expect(sends).toBe(1)
+    }),
+  )
+
+  it.scopedLive("a fire over ten minutes late leaves the goal paused and says why", () =>
+    Effect.gen(function* () {
+      const { answer, goal, sends } = yield* onBranch(
+        waiting,
+        90_000 + 10 * 60_000 + 1,
+        fire("goal-resume:g1", "due"),
+      )
+      expect(answer).toEqual(WakeNext.cases.Done.make({}))
       expect(goal?.status).toBe("paused")
       expect(goal?.pausedReason).toBe(GOAL_PAUSED_RESUME_MISSED)
       expect(goal?.resumeAt).toBeUndefined()
@@ -749,12 +834,96 @@ describe("goal resume fire", () => {
     }),
   )
 
-  it.scopedLive("a fire for a goal this branch no longer holds changes nothing", () =>
+  it.scopedLive("a fire before the resume time waits for it and changes nothing", () =>
     Effect.gen(function* () {
-      const { goal, sends } = yield* fire(waiting, "goal-resume:g0", "due")
+      // Core picked the record at its old time; a later limit moved the goal's resume to 90 s.
+      const { answer, goal, sends } = yield* onBranch(
+        waiting,
+        60_000,
+        fire("goal-resume:g1", "due"),
+      )
+      expect(answer).toEqual(WakeNext.cases.At.make({ at: 90_000 }))
       expect(goal).toEqual(waiting)
       expect(sends).toBe(0)
     }),
+  )
+
+  it.scopedLive(
+    "a refused continuation fails the fire and leaves the goal waiting for the retry",
+    () =>
+      Effect.gen(function* () {
+        const hook = Effect.gen(function* () {
+          const first = yield* Effect.exit(fire("goal-resume:g1", "due"))
+          // Core keeps a failed fire's record and fires it again after a backoff.
+          // The retry sends only if the failed fire left the goal waiting.
+          const retry = yield* fire("goal-resume:g1", "due")
+          return { firstFailed: Exit.isFailure(first), retry }
+        })
+        const { answer, goal, sends } = yield* onBranch(waiting, 90_000, hook, { sends: 1 })
+        expect(answer).toEqual({ firstFailed: true, retry: WakeNext.cases.Done.make({}) })
+        expect(goal?.status).toBe("active")
+        expect(goal?.continuationsUsed).toBe(1)
+        expect(sends).toBe(1)
+      }),
+  )
+
+  it.scopedLive("a fire for a goal this branch no longer holds changes nothing", () =>
+    Effect.gen(function* () {
+      const { goal, sends } = yield* onBranch(waiting, 90_000, fire("goal-resume:g0", "due"))
+      expect(goal).toEqual(waiting)
+      expect(sends).toBe(0)
+    }),
+  )
+
+  /** A turn that ended on a usage limit resetting at 60 s. */
+  const limitedTurn: TurnAfterInput = {
+    sessionId: SessionId.make("goal-session"),
+    branchId,
+    messageId: MessageId.make("goal-turn"),
+    joinedMessageIds: new Set(),
+    startedAtMs: 1_000,
+    durationMs: 1_000,
+    agentName: AgentName.make("main"),
+    interrupted: false,
+    streamFailed: true,
+    retryAt: Option.some(60_000),
+    unanswered: true,
+    usage: {
+      known: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: Option.none(),
+      },
+      complete: false,
+    },
+    readNotices: new Set(),
+  }
+
+  it.scopedLive("a usage limit sets the resume before the goal shows its time", () =>
+    Effect.gen(function* () {
+      const { goal, wakes, sends } = yield* onBranch(active, 2_000, continueGoal(limitedTurn))
+      expect(wakes).toEqual([90_000])
+      expect(goal?.resumeAt).toBe(90_000)
+      expect(goal?.pausedReason).toBe(GOAL_PAUSED_USAGE_LIMIT)
+      expect(sends).toBe(0)
+    }),
+  )
+
+  it.scopedLive(
+    "a resume that cannot be set leaves a pause that waits for /goal resume, with no time shown",
+    () =>
+      Effect.gen(function* () {
+        const { goal, wakes, sends } = yield* onBranch(active, 2_000, continueGoal(limitedTurn), {
+          wakes: 1,
+        })
+        expect(wakes).toEqual([])
+        expect(goal?.status).toBe("paused")
+        expect(goal?.resumeAt).toBeUndefined()
+        expect(goal?.pausedReason).toBe(GOAL_PAUSED_RESUME_UNSET)
+        expect(sends).toBe(0)
+      }),
   )
 })
 
