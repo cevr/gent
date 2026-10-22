@@ -163,7 +163,25 @@ once it has passed (B2).
       cached read, and cache write on some models). Go and Go Plus share the
       prices. Some models price by context size (for example GPT 6 Luna above
       272K tokens) or by time of day (DeepSeek peak and off-peak).
-    - **No usage is reported.** The page names no response header and no
+    - **Console API** ([API](https://opencode.ai/v2/docs/console/api/),
+      [Budgets](https://opencode.ai/v2/docs/console/api/budgets/), read
+      2026-10-21). The one usage endpoint is
+      `GET https://opencode.ai/console/api/v1/budgets/members`. It takes a
+      service-account key as a bearer token, with Budgets › Read. Each member
+      row has `spent_micro_cents` for the current UTC calendar month,
+      `limit_micro_cents` (null means unlimited), `exceeded` and `resets_at`.
+      100,000,000 microcents are one dollar. It has no per-model rows and no
+      5-hour or weekly window. A key permission named Usage › Read exists, but
+      no usage endpoint is documented. `/console/api/v1/usage` answers 404
+      without auth, while the budgets path answers 401 (measured, curl). The
+      docs do not say whether `spent` counts Go plan usage, extra usage or
+      both. **Probe before design:** one read with the owner's key, compared
+      with the console's usage page. If `spent` counts only extra usage, a
+      rise while gent sends Go requests means a Go window is spent, from any
+      client, and the adapter marks it `rejected` at once. That closes the
+      gap left by the outside spend. If `spent` counts both, it bounds the
+      monthly window only.
+    - **No usage is reported per request.** The page names no response header and no
       usage endpoint, only the console page. So the OpenCode adapter cannot
       read a reading. It derives one from gent's own priced spend per
       (account, model) over each window, divided by that window's dollar
