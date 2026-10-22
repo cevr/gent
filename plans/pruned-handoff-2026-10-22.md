@@ -1,6 +1,7 @@
 # Pruned handoff (2026-10-22)
 
-Status: design revised after one review round, being built.
+Status: shipped (9978f10fb, review fix 1d24905b9); live check passed on
+the Haiku gamut (see Live check).
 
 Source: the owner's idea of 2026-10-17 ("keep the conversation and stub
 tool results instead of summarizing everything"), the read-cost measurement
@@ -129,3 +130,22 @@ each step for a 2.4% to 5.3% gain (measured on Haiku gamut).
 A Haiku gamut session long enough to hand off (`roleWindow` lowered in the
 run's config so the orchestrator hands off), then compare input tokens and
 cache reads per step before and after the handoff.
+
+Result (2026-10-22, Haiku gamut, `agents.main.contextLength` set in the
+run's config; measured from the run's `data.db` and pane):
+
+- At 48k (message budget about 27k), each `read` step added about 4.2k
+  provider tokens. Five kept steps did not fit half the budget, so all six
+  handoffs fell back to a summary (`⇣ context handoff · 11 messages
+  summarized`). The fit rule held.
+- At 90k (budget about 58k), a 26-file read task pruned twice: step 10
+  (input 68,453 → 32,842 tokens) and step 20 (66,148 → 34,498). The pane
+  drew `⇣ context pruned · older tool results stubbed` both times, and
+  storage holds two `context-prune` lines. No summary call ran.
+- Cache: each prune step read only the system and tools from cache (9,341)
+  and wrote the rest (23,497 and 25,153). The next step read the whole
+  pruned prefix (32,838 of 36,757; 34,494 of 38,647). The prefix rewrites
+  once per prune, as the Cache section expected.
+- The model finished all 26 reads. It noted one missed sentence after the
+  read the prune followed: the prune line reads as a turn break to it
+  (observed once; not a defect).
