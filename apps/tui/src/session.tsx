@@ -184,13 +184,26 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
  * so the gauge reads 100% where the window hands off, also on a model whose
  * input cap is below its window. What the projection dropped is in the
  * thread pane.
+ *
+ * The costliest item still held follows (`ctx 42% · read 12k`): its tool,
+ * or its kind, and the tokens it holds. It is the first part to go on a
+ * narrow row.
  */
 const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
   const pct = Math.min(
     100,
     Math.round((context.estimatedTokens / context.availableInputTokens) * 100),
   )
-  return { text: `ctx ${pct}%`, color: pressureColor(pct, theme) }
+  const gauge = `ctx ${pct}%`
+  const label = { text: gauge, color: pressureColor(pct, theme) }
+  return Option.match(Option.fromUndefinedOr(context.renters?.[0]), {
+    onNone: () => label,
+    onSome: (renter) => ({
+      ...label,
+      text: `${gauge} · ${renter.tool ?? renter.kind} ${formatTokens(renter.tokens)}`,
+      short: { text: gauge, rank: STATUS_YIELD.renter },
+    }),
+  })
 }
 
 /**

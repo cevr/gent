@@ -880,16 +880,18 @@ export type StatusLabelColor = Schema.Schema.Type<typeof StatusLabelColor>
 
 /**
  * When each host label takes its short form on a narrow row: the debug mark
- * first, then the cwd, before the model, the idle phase word, and the
+ * first, then the context gauge's costliest item (`ctx 42% · read 12k` reads
+ * `ctx 42%`), the cwd, before the model, the idle phase word, and the
  * `auto → high` effort last (its short form saves two columns). A plain
- * effort, the context gauge and the cost have none; in the right group the
- * near-limit model-call count (`⧗ 3 left`) is the one that gives way. The
+ * effort and the cost have none; in the right group the near-limit
+ * model-call count (`⧗ 3 left`) gives way last. The
  * values are an order, not widths: an extension label ranks between two host
  * labels with a fraction (`STATUS_YIELD.cwd + 0.5` gives way after the cwd,
  * before the model).
  */
 export const STATUS_YIELD = {
   debug: 0,
+  renter: 0.5,
   cwd: 1,
   model: 2,
   phase: 3,

@@ -150,6 +150,18 @@ const decodeReply = Schema.decodeUnknownSync(
     percent: Schema.optional(Schema.Finite),
     scheduled: Schema.optional(Schema.String),
     total: Schema.optional(Schema.Finite),
+    renters: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          kind: Schema.String,
+          tool: Schema.String,
+          tokens: Schema.Finite,
+          rent: Schema.Finite,
+          calls: Schema.Finite,
+        }),
+      ),
+    ),
     entries: Schema.optional(
       Schema.Array(
         Schema.Struct({
@@ -219,6 +231,7 @@ describe("cell context host", () => {
         availableInputTokens: 84,
         contextLimitTokens: 100,
         omittedMessages: 3,
+        renters: [{ id: "call-1", kind: "tool", tool: "read", tokens: 900, rent: 2_400, calls: 4 }],
       })
       const after = decodeReply(
         yield* handleContextCall({
@@ -230,6 +243,9 @@ describe("cell context host", () => {
       expect(after.projected).toBe(true)
       // The share of the input the messages may take, not of the window.
       expect(after.percent).toBe(50)
+      expect(after.renters).toEqual([
+        { id: "call-1", kind: "tool", tool: "read", tokens: 900, rent: 2_400, calls: 4 },
+      ])
     }).pipe(Effect.provide(layer)),
   )
 

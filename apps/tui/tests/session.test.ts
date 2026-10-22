@@ -864,6 +864,34 @@ describe("buildContextLabels", () => {
     expect(labels[0]!.color).toBe(theme.error)
   })
 
+  test("the costliest held item follows the gauge and gives way first on a narrow row", () => {
+    const labels = contextLabels(0, absent, {
+      estimatedTokens: 84_000,
+      availableInputTokens: 168_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 0,
+      compactions: 0,
+      renters: [
+        { id: "call-1", kind: "tool", tool: "read", tokens: 12_000, rent: 30_000, calls: 6 },
+        { id: "m-1", kind: "reply", tokens: 20_000, rent: 9_000, calls: 2 },
+      ],
+    })
+    expect(labels[0]!.text).toBe("ctx 50% · read 12k")
+    expect(labels[0]!.short).toEqual({ text: "ctx 50%", rank: 0.5 })
+  })
+
+  test("a costliest item that is no tool names its kind", () => {
+    const labels = contextLabels(0, absent, {
+      estimatedTokens: 84_000,
+      availableInputTokens: 168_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 0,
+      compactions: 0,
+      renters: [{ id: "marker", kind: "handoff", tokens: 4_000, rent: 8_000, calls: 3 }],
+    })
+    expect(labels[0]!.text).toBe("ctx 50% · handoff 4.0k")
+  })
+
   test("with no projection the provider's count reads against the input cap", () => {
     const labels = contextLabels(136_000, 400_000, absent, { inputLimit: 272_000 })
     expect(labels[0]!.text).toBe("136k (50%)")

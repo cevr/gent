@@ -27,6 +27,7 @@ import {
   ToolCallId,
 } from "../../src/domain/ids"
 import {
+  assistantMessageIdForTurn,
   Branch,
   dateFromMillis,
   Message,
@@ -38,6 +39,9 @@ import {
   assistantRunEfforts,
   boundToolResultForModel,
   coldHandoffPays,
+  contextRenters,
+  emptyContextRent,
+  foldContextRent,
   hostContextUpdateText,
   isHostContextUpdate,
   promptForModel,
@@ -108,7 +112,14 @@ import {
   testToolContext,
   waitFor,
 } from "../../src/test-utils/harness"
-import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
+import {
+  type AgentEvent,
+  EventEnvelope,
+  EventId,
+  EventStore,
+  MessageReceived,
+  StreamEnded,
+} from "../../src/domain/event"
 import * as Response from "effect/ai/Response"
 
 interface TestMessageOptional {
@@ -2162,12 +2173,14 @@ describe("model context ledger", () => {
         availableInputTokens: 90,
         contextLimitTokens: 100,
         omittedMessages: 0,
+        renters: [],
       })
       yield* ledger.recordProjection({
         estimatedTokens: 20,
         availableInputTokens: 80,
         contextLimitTokens: 100,
         omittedMessages: 2,
+        renters: [],
         handoffMessageId: MessageId.make("context-handoff:b:m"),
       })
       const status = Option.getOrThrow(yield* ledger.status)
@@ -3538,4 +3551,212 @@ describe("later system messages", () => {
       })
     }),
   )
+})
+
+// ── context rent ────────────────────────────────────────────────────────────
+
+const turnId = MessageId.make("u1")
+
+const received = (stored: Message): AgentEvent => MessageReceived.make({ message: stored })
+
+/** A step's receipt: the context it measured, split into cache reads, cache writes and the rest. */
+const stepEnded = (params: {
+  readonly step: number
+  readonly input: number
+  readonly output: number
+  readonly read: number
+  readonly write: number
+  readonly lifetimes?: ReadonlyArray<{ readonly ttlMs: number; readonly tokens: number }>
+}): AgentEvent =>
+  StreamEnded.make({
+    sessionId,
+    branchId,
+    messageId: turnId,
+    step: params.step,
+    usage: {
+      inputTokens: params.input,
+      outputTokens: params.output,
+      cacheReadTokens: params.read,
+      cacheWriteTokens: params.write,
+    },
+    ...omitUndefined({ cacheWritesByLifetime: params.lifetimes }),
+  })
+
+const bigResult = (id: string) =>
+  Prompt.toolResultPart({
+    id: ToolCallId.make(id),
+    name: "read",
+    isFailure: false,
+    providerExecuted: false,
+    result: { content: "x".repeat(10_000) },
+  })
+
+const stepReply = (step: number) =>
+  message(assistantMessageIdForTurn(turnId, step), "assistant", [text("a".repeat(200))])
+
+/**
+ * The first call carries the 1,000-token base; the second grows by 1,050: the
+ * first reply's 50 output tokens and a tool result that takes the rest.
+ */
+const twoCalls = (second: { readonly read: number; readonly write: number }) => [
+  received(message("u1", "user", [text("go")])),
+  stepEnded({ step: 1, input: 1_000, output: 50, read: 0, write: 1_000 }),
+  received(stepReply(1)),
+  received(message("t1", "tool", [bigResult("call-1")])),
+  stepEnded({ step: 2, input: 2_050, output: 30, ...second }),
+]
+
+const rentOf = (events: ReadonlyArray<AgentEvent>) =>
+  contextRenters(events.reduce(foldContextRent, emptyContextRent))
+
+describe("context rent", () => {
+  test("a reply takes its step's output tokens and a tool result the rest of the growth", () => {
+    expect(rentOf(twoCalls({ read: 1_000, write: 1_050 }))).toEqual([
+      // 1.25 × 1,050 written, by size: 1,000 of 1,050 and 50 of 1,050.
+      { id: "call-1", kind: "tool", tool: "read", tokens: 1_000, rent: 1_250, calls: 1 },
+      {
+        id: assistantMessageIdForTurn(turnId, 1),
+        kind: "reply",
+        tokens: 50,
+        rent: 63,
+        calls: 1,
+      },
+    ])
+  })
+
+  test("a held item pays its share of each later call's cache reads", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      stepEnded({ step: 3, input: 2_050, output: 10, read: 2_050, write: 0 }),
+    ])
+    // 0.1 × 2,050 read, 1,000 of 2,050 of it.
+    expect(rent[0]).toEqual({
+      id: "call-1",
+      kind: "tool",
+      tool: "read",
+      tokens: 1_000,
+      rent: 1_350,
+      calls: 2,
+    })
+  })
+
+  test("a cache miss charges the re-written context to what it held", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      stepEnded({ step: 3, input: 2_050, output: 10, read: 0, write: 2_050 }),
+    ])
+    // 1.25 × 2,050 re-written, 1,000 of 2,050 of it.
+    expect(rent[0]?.rent).toBe(2_500)
+  })
+
+  test("uncached input is written at weight 1", () => {
+    const rent = rentOf(twoCalls({ read: 1_000, write: 0 }))
+    expect(rent[0]?.rent).toBe(1_000)
+  })
+
+  test("writes the driver split by an hour's lifetime weigh 2", () => {
+    const rent = rentOf([
+      received(message("u1", "user", [text("go")])),
+      stepEnded({ step: 1, input: 1_000, output: 50, read: 0, write: 1_000 }),
+      received(stepReply(1)),
+      received(message("t1", "tool", [bigResult("call-1")])),
+      stepEnded({
+        step: 2,
+        input: 2_050,
+        output: 30,
+        read: 1_000,
+        write: 1_050,
+        lifetimes: [{ ttlMs: 3_600_000, tokens: 1_050 }],
+      }),
+    ])
+    expect(rent[0]?.rent).toBe(2_000)
+  })
+
+  test("a step's reply joins the call after it, at the step's output tokens", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      // The second step's reply is stored after its receipt, as the turn writes it.
+      received(stepReply(2)),
+      stepEnded({ step: 3, input: 2_080, output: 10, read: 2_050, write: 30 }),
+    ])
+    expect(rent.find((renter) => renter.id === assistantMessageIdForTurn(turnId, 2))).toEqual({
+      id: assistantMessageIdForTurn(turnId, 2),
+      kind: "reply",
+      tokens: 30,
+      rent: 38,
+      calls: 1,
+    })
+  })
+
+  test("a window marker starts a window: the base again, and the marker holding the rest", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      received(
+        windowMarkerMessage({
+          sessionId,
+          branchId,
+          keepFromMessageId: MessageId.make("u2"),
+          notice: "Context handoff.",
+          createdAt,
+        }),
+      ),
+      received(message("u2", "user", [text("next")])),
+      stepEnded({ step: 3, input: 1_500, output: 10, read: 0, write: 1_500 }),
+    ])
+    expect(rent).toHaveLength(1)
+    // 1.25 × 1,500 written, 500 of 1,500 of it.
+    expect(rent[0]).toMatchObject({ kind: "handoff", tokens: 500, rent: 625, calls: 1 })
+  })
+
+  it.live("a turn's projection names the tool result the steps before it paid for", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            parts: [
+              toolCallPart("lookup", {}, { toolCallId: ToolCallId.make("call-rent") }),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 1_000, outputTokens: 20, cacheWriteTokens: 1_000 },
+              }),
+            ],
+          },
+          {
+            parts: [
+              textDeltaPart("first reply"),
+              finishPart({
+                finishReason: "stop",
+                usage: {
+                  inputTokens: 1_400,
+                  outputTokens: 30,
+                  cacheReadTokens: 1_000,
+                  cacheWriteTokens: 400,
+                },
+              }),
+            ],
+          },
+          textStep("second reply"),
+        ],
+        model: wideModel,
+        extraLayers: [],
+        prompts: ["first", "second"],
+      })
+      // The second turn's projection: both steps of the first turn have settled.
+      const renters = result.events.flatMap((event) => {
+        if (event._tag !== "ModelContextProjected") return []
+        return [event.renters ?? []]
+      })
+      expect(renters.at(2)).toContainEqual(
+        expect.objectContaining({ id: "call-rent", kind: "tool", tool: "lookup", calls: 1 }),
+      )
+    }),
+  )
+
+  test("the costliest items come first, up to the limit", () => {
+    const rent = contextRenters(
+      twoCalls({ read: 1_000, write: 1_050 }).reduce(foldContextRent, emptyContextRent),
+      1,
+    )
+    expect(rent.map((renter) => renter.id)).toEqual(["call-1"])
+  })
 })

@@ -1,5 +1,5 @@
 import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effect"
-import type { AgentEvent } from "./event.js"
+import { type AgentEvent, ContextRenter } from "./event.js"
 import {
   Message,
   MessageMetadata,
@@ -125,6 +125,8 @@ export const ModelContextMetrics = Schema.Struct({
   handoffMessageId: Schema.optional(MessageId),
   /** Projections on this branch that compacted history so far. */
   compactions: Schema.Natural,
+  /** The held items that have cost the most so far, the costliest first. */
+  renters: Schema.optional(Schema.Array(ContextRenter)),
 })
 export type ModelContextMetrics = typeof ModelContextMetrics.Type
 
@@ -301,6 +303,7 @@ export const stepSessionMetrics = (
           omittedMessages: event.omittedMessages,
           handoffMessageId: event.handoffMessageId,
           compactions,
+          renters: event.renters,
         },
       }
     }

@@ -40,6 +40,25 @@ export const UsageSchema = Schema.Struct({
 })
 export type Usage = typeof UsageSchema.Type
 
+/**
+ * One item of the model context and the rent it has paid: the weighted
+ * tokens (`W`: input 1, cache read 0.1, cache write 1.25 for 5 minutes or 2
+ * for an hour) of every call that carried it since it joined. `id` is what
+ * `context.read` takes: the message id of a prompt, a reply or a handoff
+ * marker, the tool call id of a tool result.
+ */
+export const ContextRenter = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["prompt", "reply", "tool", "handoff"]),
+  /** The tool's name, for a tool result. */
+  tool: Schema.optional(Schema.String),
+  tokens: Schema.Natural,
+  rent: Schema.Natural,
+  /** The calls that carried it. */
+  calls: Schema.Natural,
+})
+export type ContextRenter = typeof ContextRenter.Type
+
 // ── agent event ─────────────────────────────────────────────────────────────
 
 // The discriminated union of every event the runtime emits.
@@ -315,6 +334,11 @@ export const AgentEvent = Schema.TaggedUnion({
     handoffMessageId: Schema.optional(MessageId),
     /** This projection wrote a handoff. */
     compacted: Schema.Boolean,
+    /**
+     * The items of the context that have cost the most so far, the costliest
+     * first (`contextRenters`). Absent in receipts from before it was recorded.
+     */
+    renters: Schema.optional(Schema.Array(ContextRenter)),
     /**
      * USD of the compaction summary this projection asked for, frozen at emit
      * time as `StreamEnded.costUsd` is. Absent when there was no summary, it

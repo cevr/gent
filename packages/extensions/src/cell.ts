@@ -1871,6 +1871,15 @@ export const handleContextCall = Effect.fn("CellContextHost.call")(function* (pa
           ),
           omittedMessages: value.omittedMessages,
           handoffMessageId: value.handoffMessageId ?? "",
+          // The held items that have cost the most so far, in input-token units.
+          renters: value.renters.map((renter) => ({
+            id: renter.id,
+            kind: renter.kind,
+            tool: renter.tool ?? "",
+            tokens: renter.tokens,
+            rent: renter.rent,
+            calls: renter.calls,
+          })),
         }),
       })
     }
@@ -3236,7 +3245,7 @@ export const CellTool = tool({
     `A tool image (an object tagged ToolImage, such as an entry of an MCP result's images) that the cell returns or logs reaches you as an image after the result, the newest ${maximumCellImages} per cell; one the cell only binds or reads stays text. Show only the images you need to see.`,
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
+    "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId, and renters: the held items that have cost the most so far (id, kind prompt/reply/tool/handoff, tool, tokens, rent in input-token units, calls carried). When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff at the next step of this turn, focused on the instructions (a turn that ends first drops it). context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],

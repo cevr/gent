@@ -127,6 +127,7 @@ import {
 } from "../domain/driver.js"
 import {
   type AgentEvent,
+  type ContextRenter,
   CredentialAssigned,
   ErrorOccurred,
   type EventEnvelope,
@@ -203,8 +204,12 @@ import {
 } from "./provider.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
+  type ContextRent,
+  contextRenters,
   currentHandoffId,
+  emptyContextRent,
   estimateHistoryTokens,
+  foldContextRent,
   estimateTextTokens,
   estimateToolSchemaTokens,
   messagesInCurrentWindow,
@@ -3292,6 +3297,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   activeStream: ActiveStreamHandle
   /** What the provider reported the branch's last settled step took. */
   measure: Option.Option<StepMeasure>
+  /** The context's costliest items so far (`contextRenters`). */
+  renters: ReadonlyArray<ContextRenter>
   /** When the branch's last model request went out, in epoch milliseconds. */
   lastCallAtMillis: Option.Option<number>
   /** The model the branch's last model request ran on. */
@@ -3883,6 +3890,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     contextLimitTokens: stepWindow.contextLimit,
     omittedMessages: projection.omittedMessageIds.length,
     handoffMessageId,
+    renters: params.renters,
   })
   // Acknowledged only after the projection it shaped succeeded, so a failed
   // projection retries it and a successful one applies it exactly once.
@@ -3899,6 +3907,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       omittedMessages: projection.omittedMessageIds.length,
       handoffMessageId,
       compacted,
+      renters: params.renters,
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
@@ -4600,6 +4609,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
       readonly measure: Option.Option<StepMeasure>
+      /** What each item of the context has cost so far (`foldContextRent`). */
+      readonly rent: ContextRent
       readonly lastCallAtMillis: Option.Option<number>
       readonly lastCall: Option.Option<RequestCall>
       readonly lastCallModel: Option.Option<ModelIdType>
@@ -4614,6 +4625,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const unknownSteps = {
       model: Option.none<ModelIdType>(),
       measure: Option.none<StepMeasure>(),
+      rent: emptyContextRent,
       lastCallAtMillis: Option.none<number>(),
       lastCall: Option.none<RequestCall>(),
       lastCallModel: Option.none<ModelIdType>(),
@@ -4651,6 +4663,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
         model: newest(events, knownStepModel, known.model),
         measure: newest(events, knownStepMeasure, known.measure),
+        rent: events.reduce((rent, envelope) => foldContextRent(rent, envelope.event), known.rent),
         lastCallAtMillis: newest(events, knownRequestStart, known.lastCallAtMillis),
         lastCall,
         lastCallModel: Option.map(lastCall, (call) => call.model),
@@ -5263,6 +5276,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
       measure: Option.Option<StepMeasure>
+      renters: ReadonlyArray<ContextRenter>
       lastCallAtMillis: Option.Option<number>
       lastCallModel: Option.Option<ModelIdType>
       stepEfforts: ReadonlyMap<string, StepEffort>
@@ -5317,6 +5331,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
         measure: params.measure,
+        renters: params.renters,
         lastCallAtMillis: params.lastCallAtMillis,
         lastCallModel: params.lastCallModel,
         stepEfforts: params.stepEfforts,
@@ -6514,6 +6529,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             resolved,
             activeStream,
             measure: knownSteps.measure,
+            renters: contextRenters(knownSteps.rent),
             lastCallAtMillis: knownSteps.lastCallAtMillis,
             lastCallModel: knownSteps.lastCallModel,
             stepEfforts: knownSteps.stepEfforts,

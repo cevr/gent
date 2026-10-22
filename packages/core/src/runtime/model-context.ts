@@ -15,6 +15,7 @@ import {
 } from "effect"
 import * as Prompt from "effect/ai/Prompt"
 import {
+  assistantMessageIdForTurn,
   encodeToolOutput,
   headTailChars,
   isRuntimeUserMessage,
@@ -23,7 +24,14 @@ import {
   messageWithParts,
   type RuntimeUserMessageType,
 } from "../domain/message.js"
-import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
+import {
+  type AgentEvent,
+  ContextRenter,
+  ErrorOccurred,
+  EventStore,
+  type EventStoreError,
+  UsageSchema,
+} from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
 import {
   AgentName,
@@ -1084,36 +1092,36 @@ const tokensForChars = (chars: number): number => Math.ceil(chars / 4)
 
 export const estimateTextTokens = (text: string): number => tokensForChars(text.length)
 
+/** The characters one message part takes in a request, as the budget counts them. */
+const partChars = (part: Message["parts"][number], imageCost: Option.Option<ImageCost>): number => {
+  switch (part.type) {
+    case "text":
+      return part.text.length
+    case "tool-call":
+      return encodeToolOutput(part.params).length
+    case "tool-result":
+      // The model sees the bounded result, so the budget counts that, not the
+      // stored one, and each image the result holds at the tokens it costs a model.
+      return (
+        encodeToolOutput(modelToolResult(part).result).length +
+        toolResultImages(part).reduce((sum, image) => sum + imageTokens(imageCost, image) * 4, 0)
+      )
+    case "file":
+      return 1000 // ~250 tokens estimate for image references
+    case "reasoning":
+      return part.text.length
+    default:
+      return 0
+  }
+}
+
 /** Estimate the tokens occupied by a run of messages, at `tokensForChars`. */
 export const estimateTokens = (
   messages: ReadonlyArray<Message>,
   imageCost: Option.Option<ImageCost> = Option.none(),
 ): number => {
   let chars = 0
-  for (const msg of messages) {
-    for (const part of msg.parts) {
-      switch (part.type) {
-        case "text":
-          chars += part.text.length
-          break
-        case "tool-call":
-          chars += encodeToolOutput(part.params).length
-          break
-        case "tool-result":
-          // The model sees the bounded result, so the budget counts that, not the stored one.
-          chars += encodeToolOutput(modelToolResult(part).result).length
-          // And each image the result holds, at the tokens it costs a model.
-          for (const image of toolResultImages(part)) chars += imageTokens(imageCost, image) * 4
-          break
-        case "file":
-          chars += 1000 // ~250 tokens estimate for image references
-          break
-        case "reasoning":
-          chars += part.text.length
-          break
-      }
-    }
-  }
+  for (const msg of messages) for (const part of msg.parts) chars += partChars(part, imageCost)
   return tokensForChars(chars)
 }
 
@@ -2114,6 +2122,8 @@ const ModelContextStatus = Schema.Struct({
   omittedMessages: Schema.Natural,
   /** The handoff marker leading the window; absent when the window carries no summary. */
   handoffMessageId: Schema.optional(MessageId),
+  /** The context's costliest items so far, the costliest first (`contextRenters`). */
+  renters: Schema.Array(ContextRenter),
 })
 type ModelContextStatus = typeof ModelContextStatus.Type
 
@@ -2161,6 +2171,292 @@ export class ModelContextLedger extends Context.Service<
 
   static Branch = Layer.effect(ModelContextLedger, ModelContextLedger.make)
 }
+
+// ── context rent ────────────────────────────────────────────────────────────
+
+/**
+ * The rent meter: what each item of the context has cost so far, folded from
+ * the branch's events, oldest first (`foldContextRent`). It is the
+ * arithmetic of the orchestrate budget's `burnOf`, on gent's events:
+ *
+ * - The first call's context is the base (system prompt, tools, first prompt).
+ * - Each call reads the context the previous call left: its cache reads at
+ *   0.1, and what it wrote past its growth (a cache miss re-writing the
+ *   cache) at the write rate, split across the items held by their tokens.
+ * - The growth is the items that joined since. A reply takes its step's exact
+ *   output tokens; the others share the rest by length, at most one token
+ *   per two characters, and what they cannot hold stays unattributed. Each
+ *   fresh item pays its share of the call's writes.
+ * - The items' sizes are then scaled to the context the call measured.
+ * - A window marker (a handoff or `context.newWindow()`) starts a window at
+ *   the next call: the base again, and the marker holding the rest.
+ *
+ * Uncached input counts as written at weight 1, so a provider that reports no
+ * cache writes still charges its new tokens. The weights are the reference
+ * ones (`W`): input 1, cache read 0.1, cache write 1.25 for 5 minutes and 2
+ * for an hour.
+ */
+
+const READ_WEIGHT = 0.1
+const WRITE_WEIGHT_5M = 1.25
+const WRITE_WEIGHT_1H = 2
+const HOUR_MS = 3_600_000
+/** The renters a projection reports. */
+const RENTERS_REPORTED = 5
+
+type RenterName = Pick<ContextRenter, "id" | "kind" | "tool">
+
+interface RentItem {
+  /** None for the base and for the growth no item holds. */
+  readonly name: Option.Option<RenterName>
+  readonly tokens: number
+  readonly rent: number
+  readonly calls: number
+}
+
+/** An item the next call carries for the first time: a reply's exact tokens, else its length. */
+interface RentPending {
+  readonly name: RenterName
+  readonly chars: number
+  readonly tokens: Option.Option<number>
+}
+
+export interface ContextRent {
+  readonly live: ReadonlyArray<RentItem>
+  readonly pending: ReadonlyArray<RentPending>
+  /** The context the previous call measured. */
+  readonly contextTokens: number
+  /** The first call's context. */
+  readonly baseTokens: Option.Option<number>
+  /** The window marker stored since the last call; the next call starts a window. */
+  readonly marker: Option.Option<MessageId>
+  /** The reply the last call wrote, with its output tokens. */
+  readonly reply: Option.Option<{ readonly id: MessageId; readonly tokens: number }>
+}
+
+export const emptyContextRent: ContextRent = {
+  live: [],
+  pending: [],
+  contextTokens: 0,
+  baseTokens: Option.none(),
+  marker: Option.none(),
+  reply: Option.none(),
+}
+
+/** The items a stored message adds to the context. */
+const pendingOf = (message: Message, rent: ContextRent): ReadonlyArray<RentPending> => {
+  const chars = (parts: Message["parts"]) =>
+    parts.reduce((sum, part) => sum + partChars(part, Option.none()), 0)
+  if (message.role === "tool")
+    return message.parts.flatMap((part) => {
+      if (part.type !== "tool-result") return []
+      return [
+        {
+          name: { id: part.id, kind: "tool", tool: part.name },
+          chars: partChars(part, Option.none()),
+          tokens: Option.none(),
+        },
+      ]
+    })
+  if (message.role === "assistant")
+    return [
+      {
+        name: { id: message.id, kind: "reply" },
+        chars: chars(message.parts),
+        tokens: Option.map(
+          Option.filter(rent.reply, (reply) => reply.id === message.id),
+          (reply) => reply.tokens,
+        ),
+      },
+    ]
+  return [
+    {
+      name: { id: message.id, kind: "prompt" },
+      chars: chars(message.parts),
+      tokens: Option.none(),
+    },
+  ]
+}
+
+const lifetimeWeight = (ttlMs: number): number => {
+  if (ttlMs >= HOUR_MS) return WRITE_WEIGHT_1H
+  return WRITE_WEIGHT_5M
+}
+
+/** The weight of one written token: the lifetimes the driver split, the rest at 5 minutes. */
+const writeWeight = (
+  cacheWrites: number,
+  byLifetime: ReadonlyArray<{ readonly ttlMs: number; readonly tokens: number }>,
+): number => {
+  const split = byLifetime.reduce((sum, entry) => sum + entry.tokens, 0)
+  const weighted = byLifetime.reduce(
+    (sum, entry) => sum + entry.tokens * lifetimeWeight(entry.ttlMs),
+    0,
+  )
+  const total = Math.max(cacheWrites, split)
+  if (total === 0) return WRITE_WEIGHT_5M
+  return (weighted + (total - split) * WRITE_WEIGHT_5M) / total
+}
+
+const sumTokens = (items: ReadonlyArray<{ readonly tokens: number }>) =>
+  items.reduce((sum, item) => sum + item.tokens, 0)
+
+/** The items scaled so their sizes sum to what the call measured. */
+const scaledTo = (items: ReadonlyArray<RentItem>, context: number): ReadonlyArray<RentItem> => {
+  const size = sumTokens(items)
+  if (size === 0) return items
+  return items.map((item) => ({ ...item, tokens: (item.tokens * context) / size }))
+}
+
+/** The growth split across the items that joined, as `burnOf` splits it. */
+const freshItems = (
+  pending: ReadonlyArray<RentPending>,
+  growth: number,
+): ReadonlyArray<Omit<RentItem, "rent" | "calls">> => {
+  if (growth <= 0) return []
+  let left = growth
+  const fresh: Array<Omit<RentItem, "rent" | "calls">> = []
+  for (const item of pending)
+    if (Option.isSome(item.tokens)) {
+      const tokens = Math.min(item.tokens.value, left)
+      left -= tokens
+      fresh.push({ name: Option.some(item.name), tokens })
+    }
+  const sized = pending.filter((item) => Option.isNone(item.tokens))
+  const chars = sized.reduce((sum, item) => sum + item.chars, 0)
+  const room = left
+  for (const item of sized) {
+    const tokens = Math.min(item.chars / 2, (room * item.chars) / Math.max(chars, 1))
+    left -= tokens
+    fresh.push({ name: Option.some(item.name), tokens })
+  }
+  if (left > 1) fresh.push({ name: Option.none(), tokens: left })
+  return fresh
+}
+
+/** One call: the context it carried, what it read and wrote, and the reply it wrote. */
+const settleCall = (
+  rent: ContextRent,
+  call: {
+    readonly context: number
+    readonly read: number
+    readonly written: number
+    readonly rate: number
+    readonly reply: Option.Option<{ readonly id: MessageId; readonly tokens: number }>
+  },
+): ContextRent => {
+  // A step's reply is stored after its receipt (`StreamEnded`), so every
+  // pending item was in this call's input.
+  const settled = {
+    pending: [],
+    contextTokens: call.context,
+    marker: Option.none<MessageId>(),
+    reply: call.reply,
+  }
+  const cost = call.rate * call.written + READ_WEIGHT * call.read
+  if (rent.live.length === 0 || Option.isSome(rent.marker)) {
+    // A window starts: the base, and past it the marker's summary and kept turns.
+    const base = Option.getOrElse(rent.baseTokens, () => call.context)
+    const fixed = Math.min(base, call.context)
+    const marker = Option.match(rent.marker, {
+      onNone: () => [],
+      onSome: (id) => [
+        { name: Option.some<RenterName>({ id, kind: "handoff" }), tokens: call.context - fixed },
+      ],
+    })
+    const opened = [{ name: Option.none<RenterName>(), tokens: fixed }, ...marker].filter(
+      (item) => item.tokens > 0,
+    )
+    return {
+      ...settled,
+      baseTokens: Option.some(base),
+      live: opened.map((item) => ({
+        ...item,
+        rent: (cost * item.tokens) / Math.max(call.context, 1),
+        calls: 1,
+      })),
+    }
+  }
+  const growth = Math.max(0, call.context - rent.contextTokens)
+  // A cache miss: the call wrote more than it added, so it re-wrote what was cached.
+  const rewrite = Math.max(0, call.written - growth)
+  const held = sumTokens(rent.live)
+  const spread = READ_WEIGHT * call.read + call.rate * rewrite
+  const carriedOn = rent.live.map((item) => ({
+    ...item,
+    rent: item.rent + (spread * item.tokens) / Math.max(held, 1),
+    calls: item.calls + 1,
+  }))
+  // With no growth the items that joined take no room, as in `burnOf`.
+  const joined = freshItems(rent.pending, growth).map((item) => ({
+    ...item,
+    rent: (call.rate * (call.written - rewrite) * item.tokens) / Math.max(growth, 1),
+    calls: 1,
+  }))
+  return {
+    ...settled,
+    baseTokens: rent.baseTokens,
+    live: scaledTo([...carriedOn, ...joined], call.context),
+  }
+}
+
+/**
+ * One event of the branch into the meter: a stored message joins the next
+ * call, a step's receipt settles its call, a window marker opens a window.
+ */
+export const foldContextRent = (rent: ContextRent, event: AgentEvent): ContextRent => {
+  if (event._tag === "MessageReceived") {
+    // What came before the marker is summarized or dropped: the marker holds it.
+    if (Option.isSome(contextWindowOf(event.message)))
+      return { ...rent, pending: [], marker: Option.some(event.message.id) }
+    const added = pendingOf(event.message, rent).filter(
+      (item) => item.chars > 0 || Option.isSome(item.tokens),
+    )
+    return { ...rent, pending: [...rent.pending, ...added] }
+  }
+  if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.usage)) return rent
+  const usage = event.usage
+  if (usage.inputTokens <= 0) return rent
+  const read = usage.cacheReadTokens ?? 0
+  const cacheWrites = usage.cacheWriteTokens ?? 0
+  const uncached = Math.max(0, usage.inputTokens - read - cacheWrites)
+  const written = cacheWrites + uncached
+  const rate =
+    (writeWeight(cacheWrites, event.cacheWritesByLifetime ?? []) * cacheWrites + uncached) /
+    Math.max(written, 1)
+  const reply = Option.all([
+    Option.fromUndefinedOr(event.messageId),
+    Option.fromUndefinedOr(event.step),
+  ]).pipe(
+    Option.map(([messageId, step]) => ({
+      id: assistantMessageIdForTurn(messageId, step),
+      tokens: usage.outputTokens,
+    })),
+  )
+  return settleCall(rent, { context: usage.inputTokens, read, written, rate, reply })
+}
+
+/** The items still in the context that have cost the most, the costliest first. */
+export const contextRenters = (
+  rent: ContextRent,
+  limit: number = RENTERS_REPORTED,
+): ReadonlyArray<ContextRenter> =>
+  rent.live
+    .flatMap((item) =>
+      Option.match(item.name, {
+        onNone: () => [],
+        onSome: (name) => [
+          {
+            ...name,
+            tokens: Math.round(item.tokens),
+            rent: Math.round(item.rent),
+            calls: item.calls,
+          },
+        ],
+      }),
+    )
+    .sort((left, right) => right.rent - left.rent)
+    .slice(0, limit)
 
 // ── turn-window ─────────────────────────────────────────────────────────────
 

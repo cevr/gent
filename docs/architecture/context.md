@@ -36,6 +36,18 @@
   the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
+- The rent meter says what each held item has cost. `foldContextRent`
+  (model-context.ts) folds the branch's events, oldest first, with the
+  orchestrate budget's `burnOf` arithmetic: the first call's context is the
+  base, each later call spreads its cache reads (0.1) and a cache miss's
+  re-write over the held items by size, a reply joins at its step's output
+  tokens and the rest of the growth splits by length, and a window marker
+  starts a window with the marker holding what came before. The turn keeps
+  the fold beside its step reads (`KnownSteps.rent`), each projection carries
+  the costliest five (`ModelContextProjected.renters`), `context.status()`
+  returns them, and the TUI's gauge names the costliest (`ctx 42% · read
+  12k`). Gent charges a tool result at its bounded size, the text its model
+  sees. A forked branch starts its meter fresh.
 - The window a role compacts at is a seam too: `ModelContextWindowPolicy`
   (`@gent/core/extensions/branch-tools`) answers `window({ agent, child })`
   with `Option<number>`. The loop reads it with `Effect.serviceOption`, so
