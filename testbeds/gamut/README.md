@@ -24,10 +24,11 @@ bun run gamut down                  # quit, close the pane, remove the scratch d
 The `sol` preset and fixture use `openai/gpt-6.1-sol` at `high` for ordinary
 work and review. Only repetitive mechanical tasks use `openai/gpt-6-luna`
 at `max`, through an explicit child override. Other presets are explicit
-model comparisons.
+model comparisons. The `haiku` preset is the only one a live check may spend
+the owner's Anthropic accounts on.
 
 A comparison preset names model families (`openai/sol`, `openai/luna`, `anthropic/opus`,
-`anthropic/sonnet`, `anthropic/fable`), not releases. `up` and `list` resolve
+`anthropic/sonnet`, `anthropic/fable`, `anthropic/haiku`), not releases. `up` and `list` resolve
 each family to its newest release in the models.dev catalog. Offline, they
 use the chat catalog body (`source = api.json`) in `model_catalog_snapshots`
 from `$GENT_DATA_DIR/data.db`, or the OS home directory's `.gent/data.db` when

@@ -53,6 +53,9 @@ const catalog = {
     "claude-sonnet-5",
     "claude-fable-5",
     "claude-fable-5-1",
+    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",
+    "claude-haiku-5-5",
   ],
   openai: ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-luna-pro", "gpt-5.6-sol", "gpt-6-sol"],
 }
@@ -64,6 +67,7 @@ describe("gamut model families", () => {
     expect(newestInFamily("anthropic/opus", catalog.anthropic)).toBe("anthropic/claude-opus-5-5")
     expect(newestInFamily("anthropic/sonnet", catalog.anthropic)).toBe("anthropic/claude-sonnet-5")
     expect(newestInFamily("anthropic/fable", catalog.anthropic)).toBe("anthropic/claude-fable-5-1")
+    expect(newestInFamily("anthropic/haiku", catalog.anthropic)).toBe("anthropic/claude-haiku-5-5")
     expect(newestInFamily("openai/sol", catalog.openai)).toBe("openai/gpt-6-sol")
     expect(newestInFamily("openai/luna", catalog.openai)).toBe("openai/gpt-6-luna")
   })

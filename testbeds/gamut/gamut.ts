@@ -97,6 +97,10 @@ const FAMILIES: Record<string, { readonly provider: string; readonly pattern: Re
     provider: "anthropic",
     pattern: /^claude-fable-(?<version>\d+(?:-\d{1,2})?)$/,
   },
+  "anthropic/haiku": {
+    provider: "anthropic",
+    pattern: /^claude-haiku-(?<version>\d+(?:-\d{1,2})?)$/,
+  },
 }
 
 export const PRESETS: Record<string, Preset> = {
@@ -134,6 +138,12 @@ export const PRESETS: Record<string, Preset> = {
     orchestrator: slot("anthropic/opus", "low"),
     worker: slot("openai/luna", "max"),
     reviewer: slot("anthropic/opus", "high"),
+  },
+  // The one preset an Anthropic live check may spend the owner's accounts on.
+  haiku: {
+    orchestrator: slot("anthropic/haiku", "medium"),
+    worker: slot("anthropic/haiku", "medium"),
+    reviewer: slot("anthropic/haiku", "high"),
   },
 }
 
