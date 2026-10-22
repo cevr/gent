@@ -1,4 +1,4 @@
-import { Crypto, Effect, Option, Predicate, Schema } from "effect"
+import { Crypto, DateTime, Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import {
   AuthMethod,
@@ -6,6 +6,7 @@ import {
   defineExtension,
   ExtensionHost,
   type ModelDriverContribution,
+  type ModelPricing,
   ProviderAuthError,
   type ProviderAuthInfo,
   omitUndefined,
@@ -147,6 +148,72 @@ const goSpendLimits =
     return GO_WINDOW_SHARES.map(([window, share]) => ({ window, usd: usd * share }))
   }
 
+/**
+ * Go prices some models by the request (the page's price table): above a
+ * number of input tokens a model bills at its long-context price, and the
+ * DeepSeek models bill double in their peak hours, 01:00 to 04:00 and 06:00
+ * to 10:00 UTC, Monday to Friday. models.dev lists the base and off-peak
+ * price, so the driver bills each request at the price that applies to it.
+ * A `K` reads as 1,000 tokens: a request near the line bills high, never
+ * under its quota.
+ */
+const GO_LONG_CONTEXT = new Map<
+  string,
+  { readonly over: number; readonly pricing: Omit<ModelPricing, "cacheWriteByLifetime"> }
+>([
+  [
+    "qwen3.7-plus",
+    { over: 256_000, pricing: { input: 1.2, output: 4.8, cacheRead: 0.12, cacheWrite: 1.5 } },
+  ],
+  ["grok-4.7", { over: 200_000, pricing: { input: 4, output: 12, cacheRead: 1 } }],
+  [
+    "gpt-6-luna",
+    { over: 272_000, pricing: { input: 0.2, output: 0.75, cacheRead: 0.02, cacheWrite: 0.25 } },
+  ],
+  [
+    "gpt-5.6-luna",
+    { over: 272_000, pricing: { input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5 } },
+  ],
+  [
+    "claude-haiku-5-5",
+    { over: 100_000, pricing: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 } },
+  ],
+])
+
+/** The models that bill double in their peak hours. */
+const GO_PEAK_MODELS = new Set(["deepseek-v4.1-flash", "deepseek-v4-pro"])
+
+/** Whether `at` falls in Go's peak hours: [01, 04) and [06, 10) UTC, Monday to Friday. */
+const inGoPeak = (at: number) => {
+  const { weekDay, hour } = DateTime.toPartsUtc(DateTime.makeUnsafe(at))
+  if (weekDay === 0 || weekDay === 6) return false
+  return (hour >= 1 && hour < 4) || (hour >= 6 && hour < 10)
+}
+
+/** The price one Go request bills at: its long-context price, double in its peak hours. */
+const goRequestPricing: NonNullable<ModelDriverContribution["requestPricing"]> = (
+  modelName,
+  listed,
+  request,
+) => {
+  const long = GO_LONG_CONTEXT.get(modelName)
+  if (Predicate.isNotUndefined(long) && request.inputTokens > long.over)
+    return { ...listed, ...long.pricing }
+  if (!GO_PEAK_MODELS.has(modelName) || !inGoPeak(request.at)) return listed
+  return {
+    input: listed.input * 2,
+    output: listed.output * 2,
+    ...omitUndefined({
+      cacheRead: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(listed.cacheRead), (price) => price * 2),
+      ),
+      cacheWrite: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(listed.cacheWrite), (price) => price * 2),
+      ),
+    }),
+  }
+}
+
 // ── headers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -200,7 +267,7 @@ export const buildOpenCodeModelDriver = (
   gateway: Gateway,
   envApiKey: Option.Option<string>,
   crypto: Crypto.Crypto,
-  spendLimits?: ModelDriverContribution["spendLimits"],
+  plan: Pick<ModelDriverContribution, "spendLimits" | "requestPricing"> = {},
 ): ModelDriverContribution => ({
   id: gateway.id,
   name: gateway.signInName,
@@ -208,7 +275,7 @@ export const buildOpenCodeModelDriver = (
     onNone: () => ({}),
     onSome: (credentialFrom) => ({ credentialFrom }),
   }),
-  ...omitUndefined({ spendLimits }),
+  ...plan,
   envCredential: ENV_CREDENTIAL,
   retry: {
     ...DEFAULT_RETRY_POLICY,
@@ -263,7 +330,10 @@ export const openCodeModelDrivers = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
   return [
     buildOpenCodeModelDriver(OPENCODE_GATEWAYS.zen, envApiKey, crypto),
-    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto, goSpendLimits(goPlan)),
+    buildOpenCodeModelDriver(OPENCODE_GATEWAYS.go, envApiKey, crypto, {
+      spendLimits: goSpendLimits(goPlan),
+      requestPricing: goRequestPricing,
+    }),
   ] as const
 })
 

@@ -2504,6 +2504,8 @@ describe("credential order", () => {
     readonly subscriptionCacheTtlMs?: number
     /** The spend windows the driver sets on the model; default none. */
     readonly spendLimits?: ReadonlyArray<SpendLimit>
+    /** The price the driver bills each request at; default the listed price. */
+    readonly requestPricing?: ModelDriverContribution["requestPricing"]
     /** Answers every request by its credential and prompt, in place of `replies`. */
     readonly respond?: (
       credential: string,
@@ -2539,6 +2541,7 @@ describe("credential order", () => {
         spendLimits: Option.getOrUndefined(
           Option.map(Option.fromUndefinedOr(limits), (found) => () => found),
         ),
+        requestPricing: params.requestPricing,
       }),
       // Same-credential retries end at once, so a rate limit moves on quickly.
       retry: {
@@ -3879,6 +3882,7 @@ describe("credential order", () => {
         readonly windowless?: boolean
         readonly compactor?: ModelContextCompactor["Service"]
         readonly spendLimits?: ReadonlyArray<SpendLimit>
+        readonly requestPricing?: ModelDriverContribution["requestPricing"]
       } = {},
     ) => {
       const pool = options.pool ?? [a, b]
@@ -3899,6 +3903,7 @@ describe("credential order", () => {
           windowless: options.windowless,
           compactor: options.compactor,
           spendLimits: options.spendLimits,
+          requestPricing: options.requestPricing,
         }),
       })
     }
@@ -5946,6 +5951,30 @@ describe("credential order", () => {
           .filter((bucket) => bucket.slot === a)
           .reduce((sum, bucket) => sum + bucket.costUsd, 0)
         expect(onA).toBeCloseTo(3 * request, 12)
+      }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live("a step bills at the price its driver names for that request", () =>
+      Effect.gen(function* () {
+        const ledger = yield* recordedLedger
+        const world = { ...(yield* spreadWorld), placement: ledger.placement }
+        const asked: Array<readonly [string, number]> = []
+        const root = spreadRoot(world, "request-price", {
+          // A long request bills double: the driver sees its input tokens.
+          requestPricing: (modelName, listed, request) => {
+            asked.push([modelName, request.inputTokens])
+            return { ...listed, input: listed.input * 2, output: listed.output * 2 }
+          },
+        })
+        yield* runOn(root, "first")
+        expect(asked).toEqual([["model", 10]])
+        yield* ledger.placement.flush
+        const written = (yield* Ref.get(ledger.saved)).at(-1) ?? []
+        const request = (10 * apiPricing.input + 5 * apiPricing.output) / 1_000_000
+        const onA = written
+          .filter((bucket) => bucket.slot === a)
+          .reduce((sum, bucket) => sum + bucket.costUsd, 0)
+        expect(onA).toBeCloseTo(2 * request, 12)
       }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
     )
 

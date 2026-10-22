@@ -29,6 +29,7 @@ import {
   type ImageLimit,
   type ImagePartOptions,
   Model,
+  type ModelPricing,
   type PromptOptions,
   ModelId,
   ProviderId,
@@ -1183,6 +1184,17 @@ export interface ModelDriverContribution {
    * plan bills as extra usage counts as past the limit: it is never quota.
    */
   readonly spendLimits?: (modelName: string) => ReadonlyArray<SpendLimit>
+  /**
+   * The price one request of `modelName` bills at, from the price the
+   * catalog lists: a plan that prices a model by the request's input tokens
+   * or by the hour it ran in (OpenCode Go) bills above the listed price.
+   * Absent, every request bills at the listed price.
+   */
+  readonly requestPricing?: (
+    modelName: string,
+    listed: ModelPricing,
+    request: { readonly inputTokens: number; readonly at: number },
+  ) => ModelPricing
   /**
    * A response's cache writes split by the lifetime of the entries they wrote,
    * read from its finish part's provider metadata. A driver whose request

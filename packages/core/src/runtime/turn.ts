@@ -5,7 +5,7 @@ import {
   bindSessionAgent,
   noRunBound,
   resolveSessionAgent,
-  calculateCost,
+  type calculateCost,
   DEFAULT_AGENT_NAME,
   type DriverRef,
   effectiveEffort,
@@ -193,6 +193,7 @@ import {
   credentialRefusal,
   refusalHoldsModel,
   retryReason,
+  requestCost,
   spendLimitsOf,
   spreadsRuns,
   servedEffortRouter,
@@ -4126,15 +4127,22 @@ const listedModel = Effect.fn("TurnHelpers.listedModel")(function* (
     .pipe(Effect.catchEager(() => Effect.succeed(Option.none<Model>())))
 })
 
-/** `usage` at the listed model's price; none with no usage or no price. */
-const priceUsage = (
+/**
+ * `usage` at the price the listed model's driver bills it at now
+ * (`requestCost`); none with no usage or no price.
+ */
+const priceUsage = Effect.fn("TurnHelpers.priceUsage")(function* (
   usage: Option.Option<Parameters<typeof calculateCost>[0]>,
   listed: Option.Option<Model>,
-): Option.Option<number> => {
-  const pricing = Option.flatMap(listed, (model) => Option.fromUndefinedOr(model.pricing))
-  if (Option.isNone(pricing)) return Option.none()
-  return Option.map(usage, (counts) => calculateCost(counts, pricing))
-}
+) {
+  const priced = Option.flatMap(listed, (model) =>
+    Option.map(Option.fromUndefinedOr(model.pricing), (pricing) => ({ id: model.id, pricing })),
+  )
+  if (Option.isNone(priced) || Option.isNone(usage)) return Option.none<number>()
+  const registry = yield* ExtensionRegistry
+  const at = yield* Clock.currentTimeMillis
+  return Option.some(requestCost(registry, priced.value.id, usage.value, priced.value.pricing, at))
+})
 
 // Freeze pricing into the StreamEnded event at emit time. Returns None
 // when usage is absent or pricing is missing; the reducer treats that as a
@@ -4151,7 +4159,7 @@ const computeStreamEndedCost: (params: {
   "TurnHelpers.computeStreamEndedCost",
 )(function* (params) {
   if (Option.isNone(params.usage)) return Option.none()
-  return priceUsage(params.usage, yield* listedModel(params.modelId, params.credential))
+  return yield* priceUsage(params.usage, yield* listedModel(params.modelId, params.credential))
 })
 
 // ── turn-execution ──────────────────────────────────────────────────────────
@@ -5413,7 +5421,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           listedModel(pricedModel, credential),
           Effect.succeed(Option.isSome(usage) || Option.isSome(credential)),
         ).pipe(Effect.map(Option.flatten))
-        const streamEndedCost = priceUsage(
+        const streamEndedCost = yield* priceUsage(
           Option.map(usage, (counts) => ({ ...counts, cacheWritesByLifetime })),
           listed,
         )

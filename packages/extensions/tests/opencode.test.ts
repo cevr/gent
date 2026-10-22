@@ -1276,4 +1276,40 @@ describe("OpenCode Go usage limits", () => {
         expect((yield* limitsWith({}, "beam-free")).go).toEqual([])
       }).pipe(Effect.timeout("5 seconds")),
   )
+
+  it.live(
+    "a Go request bills at its long-context price past its line, and a DeepSeek one double in peak hours",
+    () =>
+      Effect.gen(function* () {
+        const [zen, go] = yield* openCodeModelDrivers.pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+          Effect.provideServiceEffect(Crypto.Crypto, hostCrypto),
+        )
+        expect(zen.requestPricing).toBeUndefined()
+        const price = go.requestPricing
+        if (Predicate.isUndefined(price)) return yield* Effect.die("Go names no request price")
+        const listed = { input: 0.4, output: 1.6, cacheRead: 0.04, cacheWrite: 0.5 }
+        // 2026-10-19 is a Monday.
+        const offPeak = Date.UTC(2026, 9, 19, 5)
+        expect(price("qwen3.7-plus", listed, { inputTokens: 256_000, at: offPeak })).toEqual(listed)
+        expect(price("qwen3.7-plus", listed, { inputTokens: 256_001, at: offPeak })).toEqual({
+          input: 1.2,
+          output: 4.8,
+          cacheRead: 0.12,
+          cacheWrite: 1.5,
+        })
+        const deepseek = { input: 0.66, output: 1.98, cacheRead: 0.022 }
+        const doubled = { input: 1.32, output: 3.96, cacheRead: 0.044 }
+        const at = (day: number, hour: number, minute = 0) =>
+          ({ inputTokens: 10, at: Date.UTC(2026, 9, day, hour, minute) }) as const
+        expect(price("deepseek-v4-pro", deepseek, at(19, 1))).toEqual(doubled)
+        expect(price("deepseek-v4-pro", deepseek, at(19, 4))).toEqual(deepseek)
+        expect(price("deepseek-v4-pro", deepseek, at(23, 9, 59))).toEqual(doubled)
+        expect(price("deepseek-v4-pro", deepseek, at(23, 10))).toEqual(deepseek)
+        // A Saturday is off-peak all day.
+        expect(price("deepseek-v4-pro", deepseek, at(24, 2))).toEqual(deepseek)
+        // A model priced one way bills at its listed price.
+        expect(price("glm-5.3", deepseek, at(19, 2))).toEqual(deepseek)
+      }).pipe(Effect.timeout("5 seconds")),
+  )
 })

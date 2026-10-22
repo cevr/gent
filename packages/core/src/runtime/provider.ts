@@ -3257,6 +3257,29 @@ export const spendLimitsOf = (
   })
 
 /**
+ * The USD cost of one request of `modelId` at `at`: its usage at the price
+ * its driver bills that request at (`requestPricing`), the listed price
+ * for a driver that names none.
+ */
+export const requestCost = (
+  registry: ExtensionRegistryService,
+  modelId: ModelId,
+  usage: Parameters<typeof calculateCost>[0],
+  listed: ModelPricing,
+  at: number,
+): number => {
+  let pricing = listed
+  const parsed = parseModelId(modelId)
+  if (Option.isSome(parsed)) {
+    const [driverId, modelName] = parsed.value
+    const priced = registry.getResolved().modelDrivers.get(driverId)?.requestPricing
+    if (Predicate.isNotUndefined(priced))
+      pricing = priced(modelName, listed, { inputTokens: usage.inputTokens, at })
+  }
+  return calculateCost(usage, Option.some(pricing))
+}
+
+/**
  * Whether `provider`'s sign-in spreads its unpinned runs over a pool
  * (`authSpread`). A sign-in whose order cannot be read does not.
  */
@@ -4712,7 +4735,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * its trailing span over its limit; hours older than the longest limit
    * go, and a meter with none left goes with its windows. A window spent to
    * its limit is rejected until enough of its oldest spend leaves it; one
-   * over an unpriced hour reads nothing, as its spend is unknown. Whether a
+   * over an unpriced hour reads nothing, as its spend is unknown, unless
+   * its known spend alone fills it. Whether a
    * value the ledger keeps changed. Under the lock.
    */
   const meterReadings = (key: string, now: number) => {
@@ -4737,13 +4761,16 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       const readingKey = windowKey(provider, slot, { window: limit.window, model })
       const inSpan = hours.filter((entry) => entry.hour >= spanStart(length))
       const last = Option.fromUndefinedOr(readings.get(readingKey))
-      if (inSpan.some((entry) => entry.unpriced === true) || !(limit.usd > 0)) {
+      const spent = inSpan.reduce((sum, entry) => sum + entry.usd, 0)
+      const rejected = spent >= limit.usd
+      // Unknown spend is never zero: the known spend is a floor, so a window
+      // it fills stays rejected, and one it does not reads nothing.
+      const unpriced = inSpan.some((entry) => entry.unpriced === true)
+      if ((unpriced && !rejected) || !(limit.usd > 0)) {
         if (Option.isSome(last)) changed = true
         readings.delete(readingKey)
         continue
       }
-      const spent = inSpan.reduce((sum, entry) => sum + entry.usd, 0)
-      const rejected = spent >= limit.usd
       let resetAt = now + length
       if (rejected) {
         // The hour whose leaving brings the span back under its limit.
@@ -4896,23 +4923,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     version += 1
   }
   /**
-   * The quota state a ledger kept: readings, segments and burns, and each
-   * label's sign-in, the one its newest stamped reading names.
+   * The quota state a ledger kept: readings, segments, burns and meters,
+   * and each label's sign-in, the one its newest stamped reading or meter
+   * names.
    */
   const loadQuotaState = (stored: PlacementLedgerValue) => {
-    // Oldest reading first: a later reading of a label names its sign-in now.
-    const storedReadings = [...(stored.readings ?? [])].sort(
-      (left, right) => left.readAt - right.readAt,
-    )
-    for (const reading of storedReadings) {
+    for (const reading of stored.readings ?? [])
       readings.set(windowKey(reading.provider, reading.slot, reading), reading)
-      if (Predicate.isNotUndefined(reading.signedInAt))
-        signIns.set(placementKey(reading.provider, reading.slot), {
-          provider: reading.provider,
-          slot: reading.slot,
-          signedInAt: reading.signedInAt,
+    // Oldest first: a later reading or meter hour of a label names its sign-in now.
+    const stamped = [
+      ...(stored.readings ?? []).map((reading) => ({ ...reading, at: reading.readAt })),
+      ...(stored.meters ?? []).map((meter) => ({
+        ...meter,
+        at: ((meter.hours.at(-1)?.hour ?? 0) + 1) * PLACEMENT_BUCKET_MS,
+      })),
+    ].sort((left, right) => left.at - right.at)
+    for (const entry of stamped)
+      if (Predicate.isNotUndefined(entry.signedInAt))
+        signIns.set(placementKey(entry.provider, entry.slot), {
+          provider: entry.provider,
+          slot: entry.slot,
+          signedInAt: entry.signedInAt,
         })
-    }
     for (const segment of stored.segments ?? []) {
       const key = windowKey(segment.provider, segment.slot, segment)
       segments.set(key, [...(segments.get(key) ?? []), segment])
@@ -6191,13 +6223,22 @@ export const makeExtensionModels: Effect.Effect<ExtensionModelsService> = Effect
         // The call is priced as the credential that answered lists the model:
         // a subscription sign-in's subset can price it apart from an API key.
         const entry = yield* resolved.entryFor(answered)
+        const registry = yield* Effect.serviceOption(ExtensionRegistry)
+        const at = yield* Clock.currentTimeMillis
         // A price needs both billable counts: a count the reply leaves out, or
         // one no provider bills, leaves the price unknown, never a partial sum.
         const costUsd = Option.all({
           pricing: Option.fromUndefinedOr(entry.pricing),
           inputTokens: billableCount(Option.fromUndefinedOr(usage.inputTokens)),
           outputTokens: billableCount(Option.fromUndefinedOr(usage.outputTokens)),
-        }).pipe(Option.map(({ pricing, ...counts }) => calculateCost(counts, Option.some(pricing))))
+        }).pipe(
+          Option.map(({ pricing, ...counts }) =>
+            Option.match(registry, {
+              onNone: () => calculateCost(counts, Option.some(pricing)),
+              onSome: (found) => requestCost(found, resolved.modelId, counts, pricing, at),
+            }),
+          ),
+        )
         return {
           model: resolved.modelId,
           answers: response.answers,

@@ -6634,6 +6634,41 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("an unpriced request never reopens a window its known spend filled", () =>
+    Effect.gen(function* () {
+      const { spend, admit, lanes } = yield* accounts()
+      const limits = [{ window: "5h", usd: 2 }]
+      yield* TestClock.adjust("1 hour")
+      yield* spend(a, Option.some(2.5), usage, runner, glm, limits)
+      yield* spend(a, Option.none(), usage, runner, glm, limits)
+      // The known $2.50 is a floor on the spend: the window stays spent.
+      expect(yield* admit([a], "glm-start", glm)).toBe("Spent")
+      expect(windowsOfA(yield* lanes([a]))).toEqual([["5h", glm, 1.25, true]])
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a restart binds each label to the sign-in its meter names, so a new sign-in starts with no spend",
+    () =>
+      Effect.gen(function* () {
+        const { file, store } = yield* ledgerRef
+        const limits = [{ window: "5h", usd: 2 }]
+        const before = yield* accounts(store)
+        yield* TestClock.adjust("1 hour")
+        const first = { slot: a, signedInAt: 1 }
+        yield* before.spend(first, Option.some(1), usage, runner, glm, limits)
+        // An unpriced request leaves the window unread: only the meter is saved.
+        yield* before.spend(first, Option.none(), usage, runner, glm, limits)
+        yield* before.placement.flush
+        expect((yield* Ref.get(file)).readings).toBeUndefined()
+        const after = yield* accounts(store)
+        const signedIn = { slot: a, signedInAt: 2 }
+        expect(yield* after.admit([signedIn], "glm-new", glm)).toBe("admitted")
+        yield* after.spend(signedIn, Option.some(0.5), usage, runner, glm, limits)
+        expect((yield* after.windowOf([signedIn], a, "5h")).utilization).toBe(0.25)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect(
     "a run of a metered model burns at that model's price: the prior at its price, then its own lanes' measured burn",
     () =>
@@ -6695,6 +6730,20 @@ describe("account lanes", () => {
       // The new sign-in's spend counts alone: the old one's $2 is not its quota.
       yield* spend(signedIn, Option.some(0.5), usage, runner, glm, limits)
       expect((yield* windowOf([signedIn], a, "5h")).utilization).toBe(0.25)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a renamed sign-in keeps its metered spend under its new label", () =>
+    Effect.gen(function* () {
+      const { placement, spend, admit, windowOf } = yield* accounts()
+      const limits = [{ window: "5h", usd: 2 }]
+      yield* TestClock.adjust("1 hour")
+      yield* spend({ slot: a, signedInAt: 7 }, Option.some(1.5), usage, runner, glm, limits)
+      yield* placement.renameLabel({ provider: "plan", from: a, to: c })
+      const renamed = { slot: c, signedInAt: 7 }
+      expect((yield* windowOf([renamed], c, "5h")).utilization).toBe(0.75)
+      yield* spend(renamed, Option.some(0.5), usage, runner, glm, limits)
+      expect(yield* admit([renamed], "glm-renamed", glm)).toBe("Spent")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
