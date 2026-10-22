@@ -84,6 +84,7 @@ import {
   LaneUnavailable,
   type LaneWindow,
   type ProviderLanes,
+  roundLanes,
   type QuotaReading,
   SpendLimit,
   type RetryPolicy,
@@ -4862,8 +4863,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const reserving = (entry: { readonly until: number; readonly holders: number }, now: number) =>
     entry.holders > 0 || entry.until > now
   /**
-   * The runs holding a lane on `provider` that `counts`; `asker`'s own open
-   * turn is left out.
+   * The runs holding a lane on `provider` that `counts`, each at its `size`
+   * (one by default); `asker`'s own open turn is left out.
    */
   const lanesHeld = (
     provider: string,
@@ -4874,24 +4875,45 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly model: Option.Option<ModelId>
       readonly project: Option.Option<string>
     }) => boolean,
+    size: (model: Option.Option<ModelId>) => number = () => 1,
   ) => {
     let load = 0
     for (const [sessionId, held] of running)
       if (held.provider === provider && !Option.contains(asker, sessionId) && counts(held))
-        load += 1
+        load += size(held.model)
     for (const held of reserved.values())
-      if (held.provider === provider && reserving(held, now) && counts(held)) load += 1
+      if (held.provider === provider && reserving(held, now) && counts(held))
+        load += size(held.model)
     return load
   }
   /**
+   * A run's share of a lane on the account's windows: its model's fuel per
+   * hour at the model's quota weight (`models`), over the provider's mean
+   * run. The weights are scaled so the mix they were fitted on weighs one,
+   * so a mean run counts as one. A run of no named model counts as one.
+   */
+  const runShare = (
+    provider: string,
+    models: ReadonlyArray<LaneModel>,
+    model: Option.Option<ModelId>,
+  ) =>
+    Option.match(model, {
+      onNone: () => 1,
+      onSome: (named) =>
+        (modelFuelPerHourOf(provider, named) / fuelPerHourOf(provider)) *
+        (models.find((entry) => entry.model === named)?.weight ?? 1),
+    })
+  /**
    * The runs holding a lane on `provider` that share an account with
    * `scope`, of `model` alone when one is named; `asker`'s own open turn is
-   * left out.
+   * left out. A model's window counts its runs whole; the account's windows
+   * count each run at its share (`runShare`).
    */
   const laneLoad = (
     provider: string,
     scope: ReadonlyArray<CredentialSlot>,
     model: Option.Option<ModelId>,
+    models: ReadonlyArray<LaneModel>,
     asker: Option.Option<SessionId>,
     now: number,
   ) =>
@@ -4904,6 +4926,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         Option.match(model, {
           onNone: () => true,
           onSome: (named) => Option.contains(held.model, named),
+        }),
+      (run) =>
+        Option.match(model, {
+          onNone: () => runShare(provider, models, run),
+          onSome: () => 1,
         }),
     )
   /**
@@ -5584,8 +5611,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
    * capped before each weekly and 5h refill, then floors once in lane units.
    * A window with no rate of its own reads the provider's over every account.
    * The lanes are those of a run of `model`: its own windows and the
-   * account's count (`meters`). With no model, the report lists every
-   * window and counts the account's alone.
+   * account's count (`meters`), the account's in runs of that model
+   * (`runShare`). With no model, the report lists every window and counts
+   * the account's alone, in mean runs.
    */
   const providerLanes = (
     provider: string,
@@ -5601,6 +5629,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     const { fits: own, models } = fitProviderWindows(
       [...segments].filter(([, list]) => list[0]?.provider === provider),
     )
+    // The account's windows carry runs of `model` at its share of a mean run.
+    const accountRunRate = fuelPerHour * runShare(provider, models, model)
     const pooled = new Map<string, Array<FuelSegment>>()
     for (const fit of own.values()) {
       const first = fit.kept[0]
@@ -5653,7 +5683,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           }
           // A model's window bounds that model's runs: they burn at its rate.
           const runRate = Option.match(Option.fromUndefinedOr(reading.model), {
-            onNone: () => fuelPerHour,
+            onNone: () => accountRunRate,
             onSome: (windowModel) => modelFuelPerHourOf(provider, windowModel),
           })
           // A rejected window carries no run until it resets, rate or not.
@@ -5758,9 +5788,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         Math.max(
           0,
           Math.min(
-            weekly.sustainable / fuelPerHour,
-            weekly.ceiling / fuelPerHour,
-            short.value / fuelPerHour,
+            weekly.sustainable / accountRunRate,
+            weekly.ceiling / accountRunRate,
+            short.value / accountRunRate,
             ...otherWindows.values(),
           ),
         ),
@@ -5775,7 +5805,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       provider,
       scope: [...scope],
       accounts,
-      load: laneLoad(provider, scope, Option.none(), Option.none(), now),
+      load: laneLoad(provider, scope, Option.none(), models, Option.none(), now),
       fuelPerHour,
       laneHours: burns.get(provider)?.seen ?? 0,
       models,
@@ -5834,7 +5864,12 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
       (model) => {
         const lanes = providerLanes(request.provider, scope, model, now)
-        const load = laneLoad(request.provider, scope, model, request.asker, now)
+        const load = laneLoad(request.provider, scope, model, lanes.models, request.asker, now)
+        // The account's windows count the run at its share; a model's own, whole.
+        const size = Option.match(model, {
+          onNone: () => runShare(request.provider, lanes.models, request.model),
+          onSome: () => 1,
+        })
         const allHeld = lanes.accounts
           .filter((account) => scope.includes(account.slot))
           .every((account) => account.held)
@@ -5846,7 +5881,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           })),
           (check) => {
             if (underHold) return check.capacity === 0 && allHeld
-            return check.load + unused >= check.capacity
+            return check.load + unused + size > check.capacity + 1e-9
           },
         )
       },
@@ -5856,7 +5891,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       let retryAt = now + LANE_BUSY_RETRY_MS
       let heldText = ""
       if (unused > 0) heldText = `, and ${unused} held for other projects`
-      let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running${heldText}; one frees when a run ends`
+      let message = `No lane on ${request.provider}: ${roundLanes(load)} of ${capacity} lanes are running${heldText}; one frees when a run ends`
       if (capacity === 0) {
         reason = "Spent"
         retryAt = Math.max(spentUntil(lanes, now), retryAt)

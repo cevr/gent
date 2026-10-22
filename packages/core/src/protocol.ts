@@ -6,6 +6,7 @@ export {
   authMethodAppliesTo,
   type CredentialReceipt,
   LaneReport,
+  roundLanes,
   type LaneWindow,
   ProviderLanes,
   sameCredential,

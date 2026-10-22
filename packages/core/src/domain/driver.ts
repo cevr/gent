@@ -765,9 +765,11 @@ export const ProviderLanes = Schema.Struct({
   capacity: Schema.optionalKey(Schema.Int),
   /**
    * The runs that hold a lane on the scope's accounts now: turns open on
-   * them, and starts admitted whose turn has not opened yet.
+   * them, and starts admitted whose turn has not opened yet. Each counts at
+   * its model's share of a mean run (its fuel per hour at its quota weight),
+   * so a cheap model's run holds part of a lane.
    */
-  load: Schema.Int,
+  load: Schema.Finite,
   /**
    * The fuel one run burns in an hour: measured over the provider's ended
    * lanes once they ran a lane-hour, else the bridge prior (3.4 M).
@@ -785,6 +787,9 @@ export type LaneReport = typeof LaneReport.Type
 export type LaneAccount = typeof LaneAccount.Type
 export type LaneWindow = typeof LaneWindow.Type
 export type LaneModel = typeof LaneModel.Type
+
+/** A lane count as it reads: to one decimal place, so a sum of run shares lands on whole runs. */
+export const roundLanes = (lanes: number) => Math.round(lanes * 10) / 10
 export type ProviderLanes = typeof ProviderLanes.Type
 
 /**
@@ -802,7 +807,7 @@ export class LaneUnavailable extends Schema.TaggedError<
   provider: Schema.String,
   reason: Schema.Literals(["Busy", "Spent"]),
   capacity: Schema.Int,
-  load: Schema.Int,
+  load: Schema.Finite,
   retryAt: Schema.Finite,
 }) {}
 

@@ -21,6 +21,7 @@ import {
   lineCount,
   type Model,
   type ProviderLanes,
+  roundLanes,
   type Session,
   splitLines,
   type GentClientRpcError,
@@ -481,6 +482,9 @@ const windowWords = (window: LaneWindow): ReadonlyArray<string> => {
   return [`${band} · out ${percent(window.outsideShare)}`, band, rate]
 }
 
+/** The lanes free of `capacity` under `load`, as the row reads them: shares round to a tenth. */
+const freeLanes = (capacity: number, load: number) => Math.max(0, roundLanes(capacity - load))
+
 /**
  * One provider's band row, longest form that fits `width` first: the free
  * lanes over the capacity, the binding window's rate and the outside share.
@@ -502,7 +506,7 @@ const providerLaneRow = (
   if (Predicate.isUndefined(capacity)) {
     return fit([`lanes ${lanes.provider} unknown`, "lanes unknown"])
   }
-  const free = Math.max(0, capacity - lanes.load)
+  const free = freeLanes(capacity, lanes.load)
   if (free === 0) {
     return Option.match(lanesRetryAt(lanes, now), {
       onNone: () => {
@@ -511,7 +515,7 @@ const providerLaneRow = (
           Option.liftPredicate(lanes.load, (load) => load > 0),
           {
             onNone: () => "held",
-            onSome: (load) => `${load} running`,
+            onSome: (load) => `${roundLanes(load)} running`,
           },
         )
         return fit([
@@ -567,7 +571,7 @@ export const laneRows = (
   return report.providers.map((lanes): LaneRow => {
     const text = providerLaneRow(lanes, now, width, zone)
     if (Predicate.isUndefined(lanes.capacity)) return { text, state: "unknown" }
-    if (lanes.capacity - lanes.load <= 0) return { text, state: "none" }
+    if (freeLanes(lanes.capacity, lanes.load) === 0) return { text, state: "none" }
     return { text, state: "free" }
   })
 }

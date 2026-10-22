@@ -6579,6 +6579,40 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "the account's window counts each run at its model's price: a cheap run holds part of a lane",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const { placement, admit, lanes, spend } = fixture
+        yield* TestClock.adjust("1 hour")
+        // A metered model's price over the reference model's: mini's tokens cost half, big's twice.
+        const mini = ModelId.make("plan/mini")
+        const big = ModelId.make("plan/big")
+        const million = Option.some({ inputTokens: 1_000_000, outputTokens: 0 })
+        // Their own windows meter a large limit, so they bound no run here.
+        const limits = [{ window: "31d", usd: 1_000_000 }]
+        yield* spend(a, Option.some(2.5), million, SessionId.make("mini-run"), mini, limits)
+        yield* spend(a, Option.some(10), million, SessionId.make("big-run"), big, limits)
+        // Two hours to the reset at the prior burn: the account's window carries 2 runs.
+        yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+        for (const key of ["mini-1", "mini-2", "mini-3", "mini-4"])
+          expect(yield* admit([a], key, mini)).toBe("admitted")
+        expect(yield* admit([a], "mini-5", mini)).toBe("Busy")
+        expect(yield* admit([a], "plan-1")).toBe("Busy")
+        expect((yield* lanes([a])).load).toBeCloseTo(2)
+        for (const key of ["mini-1", "mini-2", "mini-3"]) yield* placement.freeReservation(key)
+        expect((yield* lanes([a])).load).toBeCloseTo(0.5)
+        // Half a lane is free: a big run needs two, a plan run one.
+        expect(yield* admit([a], "big-1", big)).toBe("Busy")
+        expect(yield* admit([a], "plan-1")).toBe("admitted")
+        yield* placement.freeReservation("mini-4")
+        yield* placement.freeReservation("plan-1")
+        expect(yield* admit([a], "big-1", big)).toBe("admitted")
+        expect(yield* admit([a], "mini-6", mini)).toBe("Busy")
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   /** Admit a run of the plan model in `project` under `key` on `scope`, with `holds`: "admitted", else the refusal's reason. */
   const startIn = (
     placement: Effect.Success<ReturnType<typeof makeCredentialPlacement>>,

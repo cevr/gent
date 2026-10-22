@@ -212,6 +212,19 @@ describe("the lanes band rows", () => {
     ])
   })
 
+  test("runs of cheap models hold part of a lane: the free count reads their shares", () => {
+    const shared = (load: number): LaneReport => ({
+      providers: measured.providers.map((lanes) => ({ ...lanes, load })),
+    })
+    expect(laneRows(shared(2.5), NOW, 30, utc)).toEqual([
+      { text: "lanes anthropic 2.5/5 free", state: "free" },
+    ])
+    // Shares that sum to all but a rounding of the lanes leave none free.
+    expect(laneRows(shared(4.98), NOW, 120, utc)).toEqual([
+      { text: "lanes anthropic 0/5 free · 5 running", state: "none" },
+    ])
+  })
+
   test("a window with no rate, or no reading at all, is unknown", () => {
     expect(laneRows(unrated, NOW, 120, utc)).toEqual([
       { text: "lanes anthropic unknown", state: "unknown" },
