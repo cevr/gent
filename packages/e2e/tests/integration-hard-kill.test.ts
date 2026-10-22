@@ -27,7 +27,8 @@ const CANDIDATE = "b".repeat(40)
 
 /**
  * `gh`: signed in; the head of `main` from `remote/head`; `test` required;
- * the check runs from `remote/runs.json` for any commit.
+ * the check runs from `remote/runs.json` for any commit. A list answers
+ * as `--paginate --slurp` does: one array of its one page.
  */
 const ghScript = (remote: string) => `#!/bin/sh
 case "$1" in
@@ -39,8 +40,8 @@ case "$2" in
   repos/cevr/gent/git/ref/heads/main) printf '{"object":{"sha":"%s"}}' "$(cat '${remote}/head')" ;;
   repos/cevr/gent/branches/main/protection/required_status_checks) echo '{"contexts":["test"],"checks":[]}' ;;
   repos/cevr/gent/rules/branches/main) echo '[]' ;;
-  repos/cevr/gent/commits/*/check-runs*) cat '${remote}/runs.json' ;;
-  repos/cevr/gent/commits/*/status) printf '{"sha":"%s","statuses":[]}' "$(echo "$2" | cut -d/ -f5)" ;;
+  repos/cevr/gent/commits/*/check-runs*) printf '['; cat '${remote}/runs.json'; printf ']' ;;
+  repos/cevr/gent/commits/*/status*) printf '[{"sha":"%s","statuses":[]}]' "$(echo "$2" | cut -d/ -f5)" ;;
   *) echo "HTTP 404: $2" >&2; exit 1 ;;
 esac
 `

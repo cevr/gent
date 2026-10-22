@@ -21,6 +21,7 @@ import {
   adoptGates,
   type Check,
   gateDue,
+  type GateRecord,
   GateState,
   Integration,
   IntegrationPushTool,
@@ -28,6 +29,7 @@ import {
   verdictOf,
 } from "../src/integration.js"
 import {
+  ACTIONS_APP,
   BASE,
   CANDIDATE,
   fakeGitHub,
@@ -35,6 +37,7 @@ import {
   KEY,
   OUTSIDE,
   type Remote,
+  type Required,
   type Run,
 } from "./helpers/fake-github"
 
@@ -126,6 +129,24 @@ const green = (name: string, sha: string): Run => ({
   status: "completed",
   conclusion: "success",
 })
+
+const tagOf = (record: Option.Option<{ readonly state: GateState }>) =>
+  Option.map(record, (found) => found.state._tag)
+
+/** A write to the gate's row that no admission saw: the row's version moves on. */
+const moveRecord = (
+  gate: Effect.Success<ReturnType<typeof harness>>,
+  change: (record: GateRecord) => GateRecord,
+) =>
+  gate
+    .asLeaf(
+      Effect.gen(function* () {
+        const store = yield* IntegrationStore
+        const stored = Option.getOrThrow(yield* store.read(KEY))
+        expect(yield* store.write(Option.some(stored.version), change(stored.record))).toBe(true)
+      }),
+    )
+    .pipe(Effect.orDie)
 
 // ── the gate ────────────────────────────────────────────────────────────────
 
@@ -246,6 +267,18 @@ describe("integration.push", () => {
     )
   }
 
+  it.live("a server error on the protection read refuses the claim, not the fallback", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness()
+      gate.remote.protectionFails = true
+      const refused = yield* gate.push({ ref: "main" }).pipe(Effect.exit)
+      expect(Exit.isFailure(refused) && String(refused.cause)).toContain("503")
+      const record = Option.getOrThrow(yield* gate.record)
+      expect([record.state._tag, record.generation]).toEqual(["Clear", 0])
+      expect(gate.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
   it.live("a gh error while awaiting CI keeps the gate, records it, and backs off", () =>
     Effect.gen(function* () {
       const gate = yield* harness()
@@ -335,6 +368,141 @@ describe("integration.push", () => {
       expect(stateOf(yield* gate.record)).toEqual(Option.some(GateState.cases.Clear.make({})))
     }).pipe(Effect.scoped, Effect.provide(Platform)),
   )
+
+  it.live(
+    "a record that moves after admission read it loses the claim, and nothing is pushed",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* harness()
+        // Between the admission read and the claim, another writer turns the gate red.
+        gate.remote.onAncestry = Option.some(
+          Effect.suspend(() => {
+            gate.remote.onAncestry = Option.none()
+            return moveRecord(gate, (record) => ({
+              ...record,
+              generation: 1,
+              state: GateState.cases.Red.make({ generation: 1, sha: BASE, failing: [] }),
+            }))
+          }),
+        )
+        const blocked = yield* gate.push({ ref: "main" }).pipe(Effect.exit)
+        expect(Exit.isFailure(blocked) && String(blocked.cause)).toContain("is red")
+        expect(gate.remote.pushes).toEqual([])
+        expect(tagOf(yield* gate.record)).toEqual(Option.some("Red"))
+      }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("a record that moves under every claim is blocked after three tries, with no push", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness()
+      gate.remote.onAncestry = Option.some(
+        Effect.suspend(() => moveRecord(gate, (record) => record)),
+      )
+      const blocked = yield* gate.push({ ref: "main" }).pipe(Effect.exit)
+      expect(Exit.isFailure(blocked) && String(blocked.cause)).toContain(
+        "changed under 3 claims in a row",
+      )
+      expect(gate.remote.pushes).toEqual([])
+      expect(stateOf(yield* gate.record)).toEqual(Option.some(GateState.cases.Clear.make({})))
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("a fire while a push is in flight leaves the claim to the push", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      const started = yield* Deferred.make<void>()
+      const gate = yield* harness({
+        pushGate: Option.some(held),
+        pushStarted: Option.some(started),
+      })
+      const pushing = yield* gate.push({ ref: "main" }).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      // The remote is still at the base: a reconcile now would call the push crashed.
+      const fire = yield* gate.fire.pipe(Effect.forkChild)
+      // oxlint-disable-next-line effect/noFixedWaitInTests -- an absence has no event: the fire must not move the claim while the push holds it
+      yield* Effect.sleep("200 millis")
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("Integrating"))
+      yield* Deferred.succeed(held, void 0)
+      expect(yield* Fiber.join(pushing)).toMatchObject({ generation: 1, state: "AwaitingCi" })
+      yield* Fiber.join(fire)
+      const after = Option.getOrThrow(yield* gate.record)
+      expect(after.state).toEqual(
+        GateState.cases.AwaitingCi.make({ generation: 1, sha: CANDIDATE, adopted: false }),
+      )
+      expect(after.lastPush?.outcome).toBeUndefined()
+      expect(gate.remote.pushes).toEqual([CANDIDATE])
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("a required context reported only on a later page decides the gate", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness({ pageSize: 2 })
+      yield* gate.push({ ref: "main" })
+      gate.addRun(green("lint", CANDIDATE))
+      gate.addRun(green("build", CANDIDATE))
+      gate.addRun({ name: "test", head_sha: CANDIDATE, status: "in_progress" })
+      yield* gate.fire
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("AwaitingCi"))
+      gate.remote.runs[2] = { ...green("test", CANDIDATE), id: 3 }
+      yield* gate.fire
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("Clear"))
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("with no readable protection, a failure on a later page is not green", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness({ required: Option.none(), pageSize: 2 })
+      yield* gate.push({ ref: "main" })
+      gate.addRun(green("lint", CANDIDATE))
+      gate.addRun(green("test", CANDIDATE))
+      gate.addRun({ name: "e2e", head_sha: CANDIDATE, status: "completed", conclusion: "failure" })
+      yield* gate.fire
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("Red"))
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("a passing check run does not hide a failing status of the same name", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness()
+      yield* gate.push({ ref: "main" })
+      gate.addRun(green("test", CANDIDATE))
+      gate.addStatus({ context: "test", sha: CANDIDATE, state: "failure" })
+      yield* gate.fire
+      const red = Option.getOrThrow(yield* gate.record).state
+      expect(red._tag).toBe("Red")
+      expect(red._tag === "Red" && red.failing).toEqual([
+        { context: "test", source: "status", conclusion: "failure" },
+      ])
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  it.live("a requirement pinned to an app is not met by another app's run", () =>
+    Effect.gen(function* () {
+      const pinned: ReadonlyArray<Required> = [{ context: "test", appId: ACTIONS_APP }]
+      const gate = yield* harness({ required: Option.some(pinned) })
+      yield* gate.push({ ref: "main" })
+      gate.addRun({ ...green("test", CANDIDATE), appId: 99 })
+      gate.addStatus({ context: "test", sha: CANDIDATE, state: "success" })
+      yield* gate.fire
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("AwaitingCi"))
+      gate.addRun(green("test", CANDIDATE))
+      yield* gate.fire
+      expect(tagOf(yield* gate.record)).toEqual(Option.some("Clear"))
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
+  for (const conclusion of ["skipped", "neutral"] as const) {
+    it.live(`with no readable protection, a ${conclusion} run keeps the gate awaiting CI`, () =>
+      Effect.gen(function* () {
+        const gate = yield* harness({ required: Option.none() })
+        yield* gate.push({ ref: "main" })
+        gate.addRun(green("lint", CANDIDATE))
+        gate.addRun({ name: "test", head_sha: CANDIDATE, status: "completed", conclusion })
+        yield* gate.fire
+        expect(tagOf(yield* gate.record)).toEqual(Option.some("AwaitingCi"))
+      }).pipe(Effect.scoped, Effect.provide(Platform)),
+    )
+  }
 })
 
 describe("integration recovery", () => {
@@ -353,7 +521,7 @@ describe("integration recovery", () => {
             prior: GateState.cases.Clear.make({}),
           }),
           host: { ...HOST, poller: "integration", notify: true },
-          required: ["test"],
+          required: [{ context: "test" }],
         })
       }),
     )
@@ -411,6 +579,26 @@ describe("integration recovery", () => {
     }).pipe(Effect.scoped, Effect.provide(Platform)),
   )
 
+  it.live("a push that never landed is not pushed again under its request id", () =>
+    Effect.gen(function* () {
+      const gate = yield* harness({ head: BASE })
+      yield* plantIntegrating(gate)
+      const again = yield* gate.push({ ref: "main", requestId: "call-1" }).pipe(Effect.exit)
+      expect(Exit.isFailure(again) && String(again.cause)).toContain("PushInterrupted")
+      expect(gate.remote.pushes).toEqual([])
+      expect(Option.getOrThrow(yield* gate.record).lastPush).toEqual({
+        requestId: "call-1",
+        generation: 1,
+        sha: CANDIDATE,
+        outcome: "Interrupted",
+      })
+      // A new request pushes on purpose.
+      const fresh = yield* gate.push({ ref: "main", requestId: "call-2" })
+      expect(fresh).toMatchObject({ generation: 2, sha: CANDIDATE, replayed: false })
+      expect(gate.remote.pushes).toEqual([CANDIDATE])
+    }).pipe(Effect.scoped, Effect.provide(Platform)),
+  )
+
   it.live("a loop open adopts a gate no branch waits for and arms its fire", () =>
     Effect.gen(function* () {
       const gate = yield* harness({ head: CANDIDATE })
@@ -464,12 +652,22 @@ describe("integration.clear", () => {
 describe("verdictOf", () => {
   const check = (context: string, conclusion: Check["conclusion"]): Check => ({
     context,
+    source: "check-run",
+    appId: ACTIONS_APP,
     conclusion,
   })
+  const required = (...contexts: ReadonlyArray<string>) =>
+    Option.some(contexts.map((context) => ({ context })))
   test("a neutral required context is not green", () => {
-    expect(verdictOf(Option.some(["test"]), [check("test", "neutral")])._tag).toBe("Pending")
+    expect(verdictOf(required("test"), [check("test", "neutral")])._tag).toBe("Pending")
   })
   test("a missing required context is not green", () => {
-    expect(verdictOf(Option.some(["test", "e2e"]), [check("test", "success")])._tag).toBe("Pending")
+    expect(verdictOf(required("test", "e2e"), [check("test", "success")])._tag).toBe("Pending")
+  })
+  test("a status satisfies an unpinned requirement but never a pinned one", () => {
+    const status: Check = { context: "test", source: "status", conclusion: "success" }
+    expect(verdictOf(required("test"), [status])._tag).toBe("Green")
+    const pinned = Option.some([{ context: "test", appId: ACTIONS_APP }])
+    expect(verdictOf(pinned, [status])._tag).toBe("Pending")
   })
 })

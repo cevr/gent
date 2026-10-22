@@ -2,7 +2,8 @@
  * A fake GitHub and git on the process boundary, for the integration gate:
  * `gh auth status`, the `gh api` reads the gate makes, and the `git` verbs
  * it runs. Every run is returned for any commit, so the gate must filter
- * by `head_sha`.
+ * by `head_sha`. A list answers in pages of `pageSize`: page 1 alone, or,
+ * with `--paginate --slurp`, one array of every page.
  */
 import {
   Deferred,
@@ -24,6 +25,14 @@ export const BASE = shaOf("a")
 export const CANDIDATE = shaOf("b")
 export const FIX = shaOf("c")
 export const OUTSIDE = shaOf("d")
+/** The GitHub Actions app: the source of a run that names no other. */
+export const ACTIONS_APP = 15368
+
+/** A context branch protection requires, pinned to an app when `appId` is set. */
+export interface Required {
+  readonly context: string
+  readonly appId?: number
+}
 
 export interface Run {
   readonly name: string
@@ -31,22 +40,38 @@ export interface Run {
   readonly status: "queued" | "in_progress" | "completed"
   /** None while the run is not completed. */
   readonly conclusion?: string
+  /** The app that reported the run; the Actions app when absent. */
+  readonly appId?: number
+}
+
+/** A commit status: it names no app. */
+interface Status {
+  readonly context: string
+  readonly sha: string
+  readonly state: "pending" | "success" | "failure" | "error"
 }
 
 export interface Remote {
   head: string
   gh: "ready" | "missing" | "signed-out"
   /** Contexts branch protection requires; none: protection cannot be read. */
-  required: Option.Option<ReadonlyArray<string>>
+  required: Option.Option<ReadonlyArray<Required>>
   /** Every run the fake knows, returned for any commit: the gate must filter by `head_sha`. */
   runs: Array<Run & { readonly id: number }>
+  statuses: Array<Status>
+  /** The entries of one page of a list. */
+  pageSize: number
   apiFails: boolean
+  /** The protection read alone answers a server error. */
+  protectionFails: boolean
   /** Every head that does not descend from the remote head. */
   diverged: Set<string>
   pushes: Array<string>
   /** Held while set: the push waits for it. */
   pushGate: Option.Option<Deferred.Deferred<void>>
   pushStarted: Option.Option<Deferred.Deferred<void>>
+  /** Runs as the gate asks whether the commit fast-forwards: after admission read the record. */
+  onAncestry: Option.Option<Effect.Effect<void>>
 }
 
 // ── the wire ────────────────────────────────────────────────────────────────
@@ -60,10 +85,11 @@ const CheckRunWire = Schema.Struct({
   head_sha: Schema.String,
   status: Schema.String,
   conclusion: Schema.OptionFromNullOr(Schema.String),
+  app: Schema.Struct({ id: Schema.Finite }),
 })
-const encodeCheckRuns = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ check_runs: Schema.Array(CheckRunWire) })),
-)
+const CheckRunsPage = Schema.Struct({ check_runs: Schema.Array(CheckRunWire) })
+const encodeCheckRuns = Schema.encodeSync(Schema.fromJsonString(CheckRunsPage))
+const encodeCheckRunPages = Schema.encodeSync(Schema.fromJsonString(Schema.Array(CheckRunsPage)))
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 /** The text as one chunk, or no chunk for none. */
@@ -101,41 +127,81 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
     const remote: Remote = {
       head: BASE,
       gh: "ready",
-      required: Option.some(["test"]),
+      required: Option.some([{ context: "test" }]),
       runs: [],
+      statuses: [],
+      pageSize: 100,
       apiFails: false,
+      protectionFails: false,
       diverged: new Set(),
       pushes: [],
       pushGate: Option.none(),
       pushStarted: Option.none(),
+      onAncestry: Option.none(),
       ...initial,
     }
     let nextId = 1
     const addRun = (run: Run) => {
       remote.runs.push({ ...run, id: nextId++ })
     }
-    const api = (path: string) => {
+    const addStatus = (status: Status) => {
+      remote.statuses.push(status)
+    }
+    /** The pages of a list: at least one, so an empty list answers one empty page. */
+    const pagesOf = <A>(entries: ReadonlyArray<A>): Array<ReadonlyArray<A>> => {
+      const pages: Array<ReadonlyArray<A>> = []
+      for (let start = 0; start < entries.length; start += remote.pageSize) {
+        pages.push(entries.slice(start, start + remote.pageSize))
+      }
+      if (pages.length === 0) return [[]]
+      return pages
+    }
+    const api = (path: string, slurp: boolean) => {
       if (remote.apiFails) return answer(1, "", "HTTP 502: Bad Gateway")
       if (path === `repos/${REPO}/git/ref/heads/main`) {
         return answer(0, encodeJson({ object: { sha: remote.head } }))
       }
       if (path === `repos/${REPO}/branches/main/protection/required_status_checks`) {
+        if (remote.protectionFails) return answer(1, "", "HTTP 503: Service Unavailable")
         return Option.match(remote.required, {
           onNone: () => answer(1, "", "HTTP 404: Branch not protected"),
-          onSome: (contexts) => answer(0, encodeJson({ contexts, checks: [] })),
+          onSome: (required) =>
+            answer(
+              0,
+              encodeJson({
+                contexts: required.map((check) => check.context),
+                checks: required.map((check) => ({
+                  context: check.context,
+                  // oxlint-disable-next-line effect/noNullish -- GitHub's wire shape: a null app_id accepts any source
+                  app_id: check.appId ?? null,
+                })),
+              }),
+            ),
         })
       }
       if (path === `repos/${REPO}/rules/branches/main`) return answer(0, "[]")
       if (/^repos\/cevr\/gent\/commits\/[0-9a-f]{40}\/check-runs/.test(path)) {
         const runs = remote.runs.map((run) => ({
-          ...run,
+          id: run.id,
+          name: run.name,
+          head_sha: run.head_sha,
+          status: run.status,
           conclusion: Option.fromUndefinedOr(run.conclusion),
+          app: { id: run.appId ?? ACTIONS_APP },
         }))
-        return answer(0, encodeCheckRuns({ check_runs: runs }))
+        const pages = pagesOf(runs).map((page) => ({ check_runs: page }))
+        if (slurp) return answer(0, encodeCheckRunPages(pages))
+        return answer(0, encodeCheckRuns(pages[0] ?? { check_runs: [] }))
       }
-      const status = /^repos\/cevr\/gent\/commits\/([0-9a-f]{40})\/status$/.exec(path)
+      const status = /^repos\/cevr\/gent\/commits\/([0-9a-f]{40})\/status(?:\?|$)/.exec(path)
       if (Predicate.isNotNull(status)) {
-        return answer(0, encodeJson({ sha: status[1], statuses: [] }))
+        const sha = status[1]
+        const statuses = remote.statuses
+          .filter((entry) => entry.sha === sha)
+          .map((entry) => ({ context: entry.context, state: entry.state }))
+        const pages = pagesOf(statuses).map((page) => ({ sha, statuses: page }))
+        if (slurp) return answer(0, encodeJson(pages))
+        return answer(0, encodeJson(pages[0]))
       }
       return answer(1, "", `HTTP 404: ${path}`)
     }
@@ -146,7 +212,9 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn" }),
         )
       }
-      if (args[0] !== "auth") return api(args[1] ?? "")
+      if (args[0] !== "auth") {
+        return api(args[1] ?? "", args.includes("--paginate") && args.includes("--slurp"))
+      }
       if (remote.gh === "ready") return answer(0, "Logged in to github.com")
       return answer(1, "", "You are not logged into any GitHub hosts")
     }
@@ -175,9 +243,11 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
           if (spec === "HEAD") return answer(0, `${CANDIDATE}\n`)
           return answer(0, `${spec}\n`)
         }
-        case "merge-base --is-ancestor":
-          if (remote.diverged.has(args[3] ?? "")) return answer(1)
-          return answer(0)
+        case "merge-base --is-ancestor": {
+          const hook = Option.getOrElse(remote.onAncestry, () => Effect.void)
+          if (remote.diverged.has(args[3] ?? "")) return Effect.andThen(hook, answer(1))
+          return Effect.andThen(hook, answer(0))
+        }
       }
       if (args[0] === "push") return push(args)
       return unexpected("git", args)
@@ -191,6 +261,7 @@ export const fakeGitHub = (initial: Partial<Remote> = {}) =>
     return {
       remote,
       addRun,
+      addStatus,
       layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     }
   })

@@ -41,6 +41,7 @@ import {
   Layer,
   Match,
   Option,
+  Order,
   Predicate,
   Schema,
 } from "effect"
@@ -100,13 +101,30 @@ export const GateKey = Schema.Struct({
 })
 export type GateKey = typeof GateKey.Type
 
-/** A check run or commit status of the gate's commit, as the gate reads it. */
+/**
+ * A check run or commit status of the gate's commit, as the gate reads it.
+ * `appId`: the GitHub App that reported a check run; a commit status names
+ * no app.
+ */
 export const Check = Schema.Struct({
   context: Schema.String,
+  source: Schema.Literals(["check-run", "status"]),
+  appId: Schema.optionalKey(Schema.Int),
   conclusion: Schema.Literals(["success", "failure", "pending", "skipped", "neutral"]),
   url: Schema.optionalKey(Schema.String),
 })
 export type Check = typeof Check.Type
+
+/**
+ * A context the ref requires. `appId`: the GitHub App that must report it
+ * (classic protection's `app_id`, a ruleset's `integration_id`); absent:
+ * any source.
+ */
+const RequiredCheck = Schema.Struct({
+  context: Schema.String,
+  appId: Schema.optionalKey(Schema.Int),
+})
+type RequiredCheck = typeof RequiredCheck.Type
 
 /**
  * Who polls the gate's CI. `integration`: this extension's wake record on
@@ -146,7 +164,6 @@ export const GateState = Schema.Union([
   RedState,
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type GateState = typeof GateState.Type
-type Prior = Extract<GateState, { readonly _tag: "Integrating" }>["prior"]
 
 /**
  * One gate. `generation` is the last generation assigned. `required`: the
@@ -159,10 +176,20 @@ export const GateRecord = Schema.Struct({
   ref: Schema.String,
   generation: Generation,
   state: GateState,
-  required: Schema.optionalKey(Schema.Array(Schema.String)),
+  required: Schema.optionalKey(Schema.Array(RequiredCheck)),
   host: Schema.optionalKey(GateHost),
+  /**
+   * The last request the gate took. `Interrupted`: its push never landed
+   * (a crash or a refusal before the remote moved), so the same request id
+   * pushes nothing again; a new request id pushes on purpose.
+   */
   lastPush: Schema.optionalKey(
-    Schema.Struct({ requestId: Schema.String, generation: Generation, sha: Sha }),
+    Schema.Struct({
+      requestId: Schema.String,
+      generation: Generation,
+      sha: Sha,
+      outcome: Schema.optionalKey(Schema.Literal("Interrupted")),
+    }),
   ),
   lastCheck: Schema.optionalKey(
     Schema.Struct({
@@ -222,6 +249,20 @@ class PushRefused extends Schema.TaggedError<PushRefused, { readonly brand: uniq
   "PushRefused",
   { message: Schema.String },
 ) {}
+
+/**
+ * The request's push never landed and the gate keeps that: a repeat of the
+ * same request id pushes nothing. A new request pushes again on purpose.
+ */
+class PushInterrupted extends Schema.TaggedError<
+  PushInterrupted,
+  { readonly brand: unique symbol }
+>()("PushInterrupted", {
+  requestId: Schema.String,
+  generation: Generation,
+  sha: Sha,
+  message: Schema.String,
+}) {}
 
 /** A local fault: the remote is not GitHub, the commit is unknown, the store failed. */
 class IntegrationError extends Schema.TaggedError<
@@ -331,6 +372,17 @@ export class IntegrationStore extends Context.Service<IntegrationStore, Integrat
 const ghApi = (path: string) =>
   runProcess("gh", ["api", path], { env: PROCESS_ENV, extendEnv: true, timeout: READ_TIMEOUT })
 
+/** Every page of a list: `--slurp` answers one JSON array of the pages; a failed page fails it. */
+const ghPages = (path: string) =>
+  runProcess("gh", ["api", path, "--paginate", "--slurp"], {
+    env: PROCESS_ENV,
+    extendEnv: true,
+    timeout: READ_TIMEOUT,
+  })
+
+/** GitHub's answer for a protection the token may not read, or none. */
+const UNREADABLE = /HTTP 40[34]/
+
 const apiError = (what: string, detail: string) =>
   new GhUnavailable({ reason: "api", message: `gh could not read ${what}: ${detail.trim()}` })
 
@@ -377,10 +429,14 @@ const readHead = Effect.fn("Integration.readHead")(function* (key: GateKey) {
   return decoded.value.object.sha
 })
 
+/** An app id that pins a source; GitHub's `-1` and null allow any source. */
+const AppId = Schema.optionalKey(Schema.NullOr(Schema.Int))
 const ProtectionReply = Schema.fromJsonString(
   Schema.Struct({
     contexts: Schema.optionalKey(Schema.Array(Schema.String)),
-    checks: Schema.optionalKey(Schema.Array(Schema.Struct({ context: Schema.String }))),
+    checks: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ context: Schema.String, app_id: AppId })),
+    ),
   }),
 )
 const RulesReply = Schema.fromJsonString(
@@ -390,7 +446,7 @@ const RulesReply = Schema.fromJsonString(
       parameters: Schema.optionalKey(
         Schema.Struct({
           required_status_checks: Schema.optionalKey(
-            Schema.Array(Schema.Struct({ context: Schema.String })),
+            Schema.Array(Schema.Struct({ context: Schema.String, integration_id: AppId })),
           ),
         }),
       ),
@@ -398,20 +454,47 @@ const RulesReply = Schema.fromJsonString(
   ),
 )
 
+/** A required context; a positive app id pins it to that app. */
+const requiredOf = (context: string, appId: Option.Option<number>): RequiredCheck =>
+  Option.match(
+    Option.filter(appId, (id) => id > 0),
+    {
+      onNone: () => ({ context }),
+      onSome: (pinned) => ({ context, appId: pinned }),
+    },
+  )
+
+/** Required contexts by name, then app: the order the record stores them in. */
+const RequiredOrder = Order.combine(
+  Order.mapInput(Order.String, (check: RequiredCheck) => check.context),
+  Order.mapInput(Order.Number, (check: RequiredCheck) => check.appId ?? 0),
+)
+
 /**
- * The required contexts of the ref, from branch protection and rulesets.
- * None when neither can be read or neither names a context: green then reads
- * every reported run.
+ * The required contexts of the ref, each with the app it is pinned to, from
+ * branch protection and rulesets. None when neither can be read or neither
+ * names a context: green then reads every reported run. Only a 403 or 404
+ * means unreadable; any other error fails, so a GitHub outage never hands
+ * the decision to the reported runs.
  */
 const readRequired = Effect.fn("Integration.readRequired")(function* (key: GateKey) {
-  const read = <A>(path: string, decode: (stdout: string) => Option.Option<A>) =>
-    ghApi(path).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) return Option.none<A>()
-        return decode(result.stdout)
-      }),
-      Effect.orElseSucceed(() => Option.none<A>()),
+  const read = Effect.fnUntraced(function* <A>(
+    path: string,
+    decode: (stdout: string) => Option.Option<A>,
+  ) {
+    const result = yield* ghApi(path).pipe(
+      Effect.mapError((error) => apiError("branch protection", error.message)),
     )
+    if (result.exitCode !== 0) {
+      if (UNREADABLE.test(result.stderr)) return Option.none<A>()
+      return yield* apiError("branch protection", result.stderr)
+    }
+    const decoded = decode(result.stdout)
+    if (Option.isNone(decoded)) {
+      return yield* apiError("branch protection", `a reply that does not decode from ${path}`)
+    }
+    return decoded
+  })
   const [protection, rules] = yield* Effect.all(
     [
       read(
@@ -422,19 +505,30 @@ const readRequired = Effect.fn("Integration.readRequired")(function* (key: GateK
     ],
     { concurrency: "unbounded" },
   )
-  const contexts = new Set<string>()
+  const required = new Map<string, RequiredCheck>()
+  const add = (check: RequiredCheck) =>
+    required.set(`${check.context}\u0000${check.appId ?? ""}`, check)
   Option.map(protection, (found) => {
-    for (const context of found.contexts ?? []) contexts.add(context)
-    for (const check of found.checks ?? []) contexts.add(check.context)
+    const checks = found.checks ?? []
+    for (const check of checks) {
+      add(requiredOf(check.context, Option.fromNullishOr(check.app_id)))
+    }
+    // `contexts` is the legacy mirror of `checks`, with no app: only a
+    // context `checks` does not name adds a requirement of any source.
+    for (const context of found.contexts ?? []) {
+      if (!checks.some((check) => check.context === context)) add({ context })
+    }
   })
   Option.map(rules, (found) => {
     for (const rule of found) {
       if (rule.type !== "required_status_checks") continue
-      for (const check of rule.parameters?.required_status_checks ?? []) contexts.add(check.context)
+      for (const check of rule.parameters?.required_status_checks ?? []) {
+        add(requiredOf(check.context, Option.fromNullishOr(check.integration_id)))
+      }
     }
   })
-  if (contexts.size === 0) return Option.none<ReadonlyArray<string>>()
-  return Option.some<ReadonlyArray<string>>([...contexts].sort())
+  if (required.size === 0) return Option.none<ReadonlyArray<RequiredCheck>>()
+  return Option.some<ReadonlyArray<RequiredCheck>>([...required.values()].sort(RequiredOrder))
 })
 
 const CheckRun = Schema.Struct({
@@ -444,19 +538,25 @@ const CheckRun = Schema.Struct({
   status: Schema.String,
   conclusion: Schema.NullOr(Schema.String),
   html_url: Schema.OptionFromOptionalNullOr(Schema.String),
+  app: Schema.optionalKey(Schema.NullOr(Schema.Struct({ id: Schema.Int }))),
 })
-const CheckRunsReply = Schema.fromJsonString(Schema.Struct({ check_runs: Schema.Array(CheckRun) }))
-const StatusReply = Schema.fromJsonString(
-  Schema.Struct({
-    sha: Schema.String,
-    statuses: Schema.Array(
-      Schema.Struct({
-        context: Schema.String,
-        state: Schema.String,
-        target_url: Schema.OptionFromOptionalNullOr(Schema.String),
-      }),
-    ),
-  }),
+/** The pages `--slurp` answers, each one page of the reply. */
+const CheckRunsPages = Schema.fromJsonString(
+  Schema.Array(Schema.Struct({ check_runs: Schema.Array(CheckRun) })),
+)
+const StatusPages = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      sha: Schema.String,
+      statuses: Schema.Array(
+        Schema.Struct({
+          context: Schema.String,
+          state: Schema.String,
+          target_url: Schema.OptionFromOptionalNullOr(Schema.String),
+        }),
+      ),
+    }),
+  ),
 )
 
 const conclusionOf = (
@@ -488,39 +588,46 @@ const statusConclusionOf = (state: string): Check["conclusion"] => {
   return "pending"
 }
 
-/** The check runs (latest per name) and statuses of exactly `sha`. */
+/**
+ * The check runs (the latest per name and app) and statuses of exactly
+ * `sha`, every page of both. A page that fails fails the read.
+ */
 const readChecks = Effect.fn("Integration.readChecks")(function* (key: GateKey, sha: string) {
   const what = `the checks of ${sha.slice(0, 12)}`
   const [runs, statuses] = yield* Effect.all(
     [
-      ghApi(`repos/${key.repo}/commits/${sha}/check-runs?per_page=100`),
-      ghApi(`repos/${key.repo}/commits/${sha}/status`),
+      ghPages(`repos/${key.repo}/commits/${sha}/check-runs?per_page=100`),
+      ghPages(`repos/${key.repo}/commits/${sha}/status?per_page=100`),
     ],
     { concurrency: "unbounded" },
   ).pipe(Effect.mapError((error) => apiError(what, error.message)))
   if (runs.exitCode !== 0) return yield* apiError(what, runs.stderr)
   if (statuses.exitCode !== 0) return yield* apiError(what, statuses.stderr)
-  const decodedRuns = Schema.decodeOption(CheckRunsReply)(runs.stdout)
-  const decodedStatuses = Schema.decodeOption(StatusReply)(statuses.stdout)
-  if (Option.isNone(decodedRuns) || Option.isNone(decodedStatuses)) {
+  const runPages = Schema.decodeOption(CheckRunsPages)(runs.stdout)
+  const statusPages = Schema.decodeOption(StatusPages)(statuses.stdout)
+  if (Option.isNone(runPages) || Option.isNone(statusPages)) {
     return yield* apiError(what, "unexpected reply")
   }
-  // A re-run adds a run under the same name: the newest one counts.
-  const latest = new Map<string, (typeof decodedRuns.value.check_runs)[number]>()
-  for (const run of decodedRuns.value.check_runs) {
+  // A re-run adds a run under the same name and app: the newest one counts.
+  const latest = new Map<string, typeof CheckRun.Type>()
+  for (const run of runPages.value.flatMap((page) => page.check_runs)) {
     if (run.head_sha !== sha) continue
-    const before = latest.get(run.name)
-    if (Predicate.isUndefined(before) || run.id > before.id) latest.set(run.name, run)
+    const source = `${run.name}\u0000${run.app?.id ?? ""}`
+    const before = latest.get(source)
+    if (Predicate.isUndefined(before) || run.id > before.id) latest.set(source, run)
   }
   const checks: Array<Check> = [...latest.values()].map((run) => ({
     context: run.name,
+    source: "check-run",
     conclusion: conclusionOf(run.status, run.conclusion),
-    ...omitUndefined({ url: Option.getOrUndefined(run.html_url) }),
+    ...omitUndefined({ appId: run.app?.id, url: Option.getOrUndefined(run.html_url) }),
   }))
-  if (decodedStatuses.value.sha === sha) {
-    for (const status of decodedStatuses.value.statuses) {
+  for (const page of statusPages.value) {
+    if (page.sha !== sha) continue
+    for (const status of page.statuses) {
       checks.push({
         context: status.context,
+        source: "status",
         conclusion: statusConclusionOf(status.state),
         ...omitUndefined({ url: Option.getOrUndefined(status.target_url) }),
       })
@@ -539,34 +646,58 @@ const Verdict = Schema.TaggedUnion({
 type Verdict = typeof Verdict.Type
 
 /**
+ * The results that decide a required context: every check run and status
+ * with its name, or, when it is pinned to an app, only that app's check
+ * runs (a status cannot show which app reported it).
+ */
+const applicable = (required: RequiredCheck, checks: ReadonlyArray<Check>) =>
+  checks.filter(
+    (check) =>
+      check.context === required.context &&
+      (Predicate.isUndefined(required.appId) ||
+        (check.source === "check-run" && check.appId === required.appId)),
+  )
+
+/**
  * Green, red or pending for one commit's checks. With required contexts:
- * each must succeed (skipped and neutral never satisfy one), and a failure
- * of one is red. Without: at least one success, no failure, nothing
- * pending; skipped and neutral runs report no outcome.
+ * each needs at least one applicable result, and every one of them must
+ * succeed (skipped and neutral never satisfy one); a failure of any is red.
+ * Without: at least one result, and every result a success; a failure is
+ * red, and anything else (pending, skipped, neutral) waits.
  */
 export const verdictOf = (
-  required: Option.Option<ReadonlyArray<string>>,
+  required: Option.Option<ReadonlyArray<RequiredCheck>>,
   checks: ReadonlyArray<Check>,
 ): Verdict => {
-  if (Option.isSome(required)) {
-    const named = required.value.map((context) => checks.find((check) => check.context === context))
-    const failing = named.filter(
-      (check): check is Check => Predicate.isNotUndefined(check) && check.conclusion === "failure",
-    )
+  const decide = (results: ReadonlyArray<ReadonlyArray<Check>>): Verdict => {
+    const failing = [...new Set(results.flat())].filter((check) => check.conclusion === "failure")
     if (failing.length > 0) return Verdict.cases.Red.make({ failing })
-    if (named.every((check) => check?.conclusion === "success")) return Verdict.cases.Green.make({})
+    const green = results.every(
+      (named) => named.length > 0 && named.every((check) => check.conclusion === "success"),
+    )
+    if (green) return Verdict.cases.Green.make({})
     return Verdict.cases.Pending.make({})
   }
-  const failing = checks.filter((check) => check.conclusion === "failure")
-  if (failing.length > 0) return Verdict.cases.Red.make({ failing })
-  if (checks.some((check) => check.conclusion === "pending")) return Verdict.cases.Pending.make({})
-  if (checks.some((check) => check.conclusion === "success")) return Verdict.cases.Green.make({})
-  return Verdict.cases.Pending.make({})
+  return Option.match(required, {
+    onSome: (contexts) => decide(contexts.map((context) => applicable(context, checks))),
+    onNone: () => decide([checks]),
+  })
 }
 
 // ── the gate ────────────────────────────────────────────────────────────────
 
+/**
+ * The gate's permit. `ExtensionContext.Permits` is per server, and one
+ * server owns a database: the kernel lock `server.lock.db` beside `data.db`
+ * (docs/architecture/server.md, Shared Server Discovery). So this permit
+ * locks the gate across the database. A push holds it from its claim to its
+ * second write, and every reconcile of `Integrating` takes it, so a
+ * reconcile never meets a live push.
+ */
 const permitNameOf = (key: GateKey) => `integration:${key.repo}:${key.ref}`.slice(0, 256)
+
+/** How many times a write that lost to another writer starts again from a fresh read. */
+const WRITE_TRIES = 3
 
 /** The gate's wake record: derived from its key, so a repeat arm writes the same record. */
 const gateSourceOf = Effect.fn("Integration.sourceOf")(function* (key: GateKey) {
@@ -627,17 +758,30 @@ const adopt = (record: GateRecord, head: string, now: number): GateRecord => {
   }
 }
 
+type Integrating = Extract<GateState, { readonly _tag: "Integrating" }>
+
+/** The claim's push never landed: its request keeps that, so a repeat of it pushes nothing. */
+const interrupted = (record: GateRecord, claim: Integrating): GateRecord => ({
+  ...record,
+  lastPush: {
+    requestId: claim.requestId,
+    generation: claim.generation,
+    sha: claim.candidate,
+    outcome: "Interrupted",
+  },
+})
+
 /**
- * A refused or rolled-back push: the state before it, the generation kept.
- * Nothing settled, so a clear prior counts as told: the host hears of no
- * outcome for a push that never landed.
+ * A refused or rolled-back push: the state before it, the generation kept,
+ * the request kept as interrupted. Nothing settled, so a clear prior counts
+ * as told: the host hears of no outcome for a push that never landed.
  */
-const restore = (record: GateRecord, prior: Prior): GateRecord => {
-  const { lastPush: _lastPush, nextPollAt: _nextPollAt, ...rest } = record
-  if (Predicate.isTagged(prior, "Clear")) {
-    return { ...rest, state: prior, toldGeneration: record.generation }
+const restore = (record: GateRecord, claim: Integrating): GateRecord => {
+  const { nextPollAt: _nextPollAt, ...rest } = interrupted(record, claim)
+  if (Predicate.isTagged(claim.prior, "Clear")) {
+    return { ...rest, state: claim.prior, toldGeneration: record.generation }
   }
-  return { ...rest, state: prior }
+  return { ...rest, state: claim.prior }
 }
 
 /**
@@ -661,8 +805,8 @@ const reconciled = (record: GateRecord, head: string, now: number): GateRecord =
           nextPollAt: now,
         }
       }
-      if (head === state.expectedBase) return restore(record, state.prior)
-      return adopt(record, head, now)
+      if (head === state.expectedBase) return restore(record, state)
+      return adopt(interrupted(record, state), head, now)
     case "Clear":
       if (Predicate.isUndefined(state.sha) || state.sha === head) return record
       return adopt(record, head, now)
@@ -703,25 +847,100 @@ const isSameHost = (
   host.sessionId === place.sessionId &&
   host.branchId === place.branchId
 
+/** One push as admission sees it: the gate, the request, and the commit it pushes. */
+interface Pushing {
+  readonly key: GateKey
+  readonly input: PushInput
+  readonly cwd: string
+  readonly remote: string
+  readonly sha: string
+  readonly host: GateHost
+}
+
+type Admitted = Extract<GateState, { readonly _tag: "Clear" | "Red" }>
+
+/**
+ * A repeat of the request the gate took last: what the first one did,
+ * pushed once. A request whose push never landed fails, and pushes nothing.
+ */
+const replayOf = Effect.fn("Integration.replay")(function* (pushing: Pushing, record: GateRecord) {
+  const last = record.lastPush
+  if (Predicate.isUndefined(last) || last.requestId !== pushing.input.requestId) {
+    return Option.none<PushResult>()
+  }
+  if (last.outcome === "Interrupted") {
+    return yield* new PushInterrupted({
+      requestId: last.requestId,
+      generation: last.generation,
+      sha: last.sha,
+      message: `The push of ${last.sha} to ${pushing.key.ref} under request ${last.requestId} never landed; a new request pushes again`,
+    })
+  }
+  return Option.some(resultOf(record, true))
+})
+
+/** The state a push is admitted from: clear, or red with a repair of its generation. */
+const admittedFrom = Effect.fn("Integration.admit")(function* (pushing: Pushing, state: GateState) {
+  if (state._tag === "Clear") return state
+  if (state._tag === "Red" && pushing.input.repairOf === state.generation) return state
+  return yield* new IntegrationBlocked({
+    repo: pushing.key.repo,
+    ref: pushing.key.ref,
+    state,
+    message: blockedMessage(pushing.key, state),
+  })
+})
+
+/** The commit fast-forwards the remote head, and the checkout has that head. */
+const fastForwards = Effect.fn("Integration.fastForwards")(function* (
+  pushing: Pushing,
+  head: string,
+) {
+  const { key, sha } = pushing
+  if (head === sha) {
+    return yield* new PushRefused({ message: `${sha} is already the head of ${key.ref}` })
+  }
+  const ancestry = yield* git(pushing.cwd, ["merge-base", "--is-ancestor", head, sha]).pipe(
+    Effect.mapError(storageError("git is not available")),
+  )
+  if (ancestry.exitCode === 1) {
+    return yield* new PushRefused({
+      message: `${sha} does not fast-forward ${key.ref} at ${head}: rebase it onto the remote head`,
+    })
+  }
+  if (ancestry.exitCode !== 0) {
+    return yield* new PushRefused({
+      message: `The remote head ${head} is not in the local repository: fetch ${pushing.remote} and rebase`,
+    })
+  }
+})
+
 const makeIntegration = (store: IntegrationStoreService) => {
-  /** Writes `next` over `stored`; a lost race fails, so the caller reads again. */
-  const commit = Effect.fn("Integration.commit")(function* (
+  const changedUnder = (key: GateKey) =>
+    new IntegrationError({
+      message: `The integration record of ${key.repo}:${key.ref} kept changing under this write`,
+    })
+
+  /**
+   * Writes `next` over the row `stored` names (none: no row yet), by its
+   * version: the row after it, or none when another write came first.
+   */
+  const tryCommit = Effect.fn("Integration.commit")(function* (
     stored: Option.Option<Stored>,
     next: GateRecord,
   ) {
-    const won = yield* store.write(
-      Option.map(stored, (found) => found.version),
-      next,
-    )
-    if (!won) {
-      return yield* new IntegrationError({
-        message: `The integration record of ${next.repo}:${next.ref} changed under this write`,
-      })
-    }
-    return next
+    const expected = Option.map(stored, (found) => found.version)
+    if (!(yield* store.write(expected, next))) return Option.none<Stored>()
+    return Option.some<Stored>({
+      record: next,
+      version: Option.match(expected, { onNone: () => 1, onSome: (version) => version + 1 }),
+    })
   })
 
-  /** The stored record read with the remote head, written when it moved on. */
+  /**
+   * The stored row moved on to the remote head, written over the version it
+   * was read at: the row after it, or none when another write came first.
+   */
   const reconcileStored = Effect.fn("Integration.reconcile")(function* (
     key: GateKey,
     stored: Option.Option<Stored>,
@@ -733,8 +952,20 @@ const makeIntegration = (store: IntegrationStoreService) => {
       onSome: (found) => found.record,
     })
     const next = reconciled(record, head, now)
-    if (next === record && Option.isSome(stored)) return record
-    return yield* commit(stored, next)
+    if (next === record && Option.isSome(stored)) return stored
+    return yield* tryCommit(stored, next)
+  })
+
+  /** `reconcileStored` on a fresh read, again after a lost race, `WRITE_TRIES` times at most. */
+  const reconcileFresh = Effect.fn("Integration.reconcileFresh")(function* (
+    key: GateKey,
+    head: string,
+  ) {
+    for (let attempt = 0; attempt < WRITE_TRIES; attempt++) {
+      const settled = yield* reconcileStored(key, yield* store.read(key), head)
+      if (Option.isSome(settled)) return settled.value.record
+    }
+    return yield* changedUnder(key)
   })
 
   /** Tells the host a generation went green or red, once. */
@@ -770,31 +1001,50 @@ const makeIntegration = (store: IntegrationStoreService) => {
     })
   })
 
+  /** A failed read keeps the gate, records the error, and backs off. */
+  const noteError = Effect.fn("Integration.noteError")(function* (key: GateKey, error: string) {
+    const stored = yield* store.read(key)
+    if (Option.isNone(stored)) return
+    const now = yield* Clock.currentTimeMillis
+    const failures = (stored.value.record.lastCheck?.failures ?? 0) + 1
+    yield* Effect.logWarning("integration.poll.failed").pipe(
+      Effect.annotateLogs({ repo: key.repo, ref: key.ref, error, failures }),
+    )
+    yield* store.write(Option.some(stored.value.version), {
+      ...stored.value.record,
+      lastCheck: { at: now, error, failures },
+      nextPollAt: now + backoffAfter(failures),
+    })
+  })
+
   /**
-   * One poll of the gate: an `Integrating` record is reconciled under the
-   * permit (a push in flight keeps it), an `AwaitingCi` record reads the head
-   * and its commit's checks, and a settled record tells its host if it has
-   * not yet. Returns the record after it.
+   * An `Integrating` record moved on from the remote head, under the gate's
+   * permit (`permitNameOf`). A push in flight holds the permit to its second
+   * write: past `RECONCILE_PERMIT_WAIT` the record stays as it is, for the
+   * next read. A lost race also leaves it to the next read.
    */
-  const poll = Effect.fn("Integration.poll")(function* (key: GateKey) {
+  const settleInFlight = Effect.fn("Integration.settleInFlight")(function* (key: GateKey) {
     const ctx = yield* ExtensionContext
-    const first = yield* store.read(key)
-    if (Option.isNone(first)) return Option.none<GateRecord>()
-    if (first.value.record.state._tag === "Integrating") {
-      yield* ctx.Permits.with(
-        permitNameOf(key),
-        1,
-        Effect.gen(function* () {
-          const stored = yield* store.read(key)
-          if (Option.isNone(stored) || stored.value.record.state._tag !== "Integrating") return
-          const head = yield* readHead(key)
-          yield* reconcileStored(key, stored, head)
-        }),
-      ).pipe(
-        Effect.timeoutOption(RECONCILE_PERMIT_WAIT),
-        Effect.catchTag("GhUnavailable", (error) => noteError(key, error.message)),
-      )
-    }
+    yield* ctx.Permits.with(
+      permitNameOf(key),
+      1,
+      Effect.gen(function* () {
+        const stored = yield* store.read(key)
+        if (Option.isNone(stored) || stored.value.record.state._tag !== "Integrating") return
+        yield* reconcileStored(key, stored, yield* readHead(key))
+      }),
+    ).pipe(
+      Effect.timeoutOption(RECONCILE_PERMIT_WAIT),
+      Effect.catchTag("GhUnavailable", (error) => noteError(key, error.message)),
+    )
+  })
+
+  /**
+   * One read of an `AwaitingCi` gate: its head and its commit's checks. A
+   * settled record tells its host if it has not yet. Returns the record
+   * after it.
+   */
+  const pollAwaiting = Effect.fn("Integration.pollAwaiting")(function* (key: GateKey) {
     const stored = yield* store.read(key)
     if (Option.isNone(stored)) return Option.none<GateRecord>()
     const record = stored.value.record
@@ -847,24 +1097,150 @@ const makeIntegration = (store: IntegrationStoreService) => {
           break
       }
     }
+    // A lost race leaves the gate to the next read.
     yield* store.write(Option.some(stored.value.version), next)
     yield* tell(key)
     return Option.map(yield* store.read(key), (found) => found.record)
   })
 
-  /** A failed read keeps the gate, records the error, and backs off. */
-  const noteError = Effect.fn("Integration.noteError")(function* (key: GateKey, error: string) {
-    const stored = yield* store.read(key)
-    if (Option.isNone(stored)) return
+  /**
+   * One poll of the gate: an `Integrating` record is reconciled under the
+   * permit (a push in flight keeps it), an `AwaitingCi` record reads the head
+   * and its commit's checks, and a settled record tells its host if it has
+   * not yet. Returns the record after it.
+   */
+  const poll = Effect.fn("Integration.poll")(function* (key: GateKey) {
+    const first = yield* store.read(key)
+    if (Option.isNone(first)) return Option.none<GateRecord>()
+    if (first.value.record.state._tag === "Integrating") yield* settleInFlight(key)
+    return yield* pollAwaiting(key)
+  })
+
+  /**
+   * The second write: the claim becomes `AwaitingCi`, only over the claim
+   * itself (its generation and request id). A record that moved off the
+   * claim is reconciled from the remote head, never overwritten.
+   */
+  const recordPushed = Effect.fn("Integration.recordPushed")(function* (
+    key: GateKey,
+    claimed: Stored,
+    claim: Integrating,
+  ) {
+    let stored = Option.some(claimed)
+    for (let attempt = 0; attempt < WRITE_TRIES; attempt++) {
+      if (Option.isNone(stored)) break
+      const record = stored.value.record
+      const state = record.state
+      const isClaim =
+        state._tag === "Integrating" &&
+        state.generation === claim.generation &&
+        state.requestId === claim.requestId
+      if (isClaim) {
+        const written = yield* tryCommit(stored, {
+          ...record,
+          state: GateState.cases.AwaitingCi.make({
+            generation: claim.generation,
+            sha: claim.candidate,
+            adopted: false,
+          }),
+        })
+        if (Option.isSome(written)) return written.value.record
+      } else {
+        const moved = yield* reconcileStored(key, stored, yield* readHead(key))
+        if (Option.isSome(moved)) return moved.value.record
+      }
+      stored = yield* store.read(key)
+    }
+    return yield* changedUnder(key)
+  })
+
+  /**
+   * A gate that waits for CI is read once more at admission, so a pusher
+   * that retries moves a gate nobody polls (an adopted head, a stopped run).
+   * None: the row is gone.
+   */
+  const polledOnce = Effect.fn("Integration.polledOnce")(function* (key: GateKey, current: Stored) {
+    if (current.record.state._tag !== "AwaitingCi") return Option.some(current)
+    yield* pollAwaiting(key)
+    return yield* store.read(key)
+  })
+
+  /**
+   * The first write: the claim, over the version admission read. The fire
+   * is armed before it, so a crash after it is reconciled by the next fire
+   * with no turn. None: another write came first.
+   */
+  const writeClaim = Effect.fn("Integration.claim")(function* (
+    pushing: Pushing,
+    current: Stored,
+    prior: Admitted,
+    head: string,
+  ) {
+    const ctx = yield* ExtensionContext
+    const { key, input, sha } = pushing
+    const required = yield* readRequired(key)
     const now = yield* Clock.currentTimeMillis
-    const failures = (stored.value.record.lastCheck?.failures ?? 0) + 1
-    yield* Effect.logWarning("integration.poll.failed").pipe(
-      Effect.annotateLogs({ repo: key.repo, ref: key.ref, error, failures }),
+    const record = current.record
+    const generation = record.generation + 1
+    if (input.poller === "integration") {
+      yield* ctx.Session.wakeAt({
+        sourceId: yield* gateSourceOf(key),
+        at: now + Duration.toMillis(POLL_INTERVAL),
+      })
+    }
+    const claim = GateState.cases.Integrating.make({
+      generation,
+      candidate: sha,
+      expectedBase: head,
+      requestId: input.requestId,
+      prior,
+    })
+    const { required: _required, cleared: _cleared, ...base } = record
+    const written = yield* tryCommit(Option.some(current), {
+      ...base,
+      ...omitUndefined({ required: Option.getOrUndefined(required) }),
+      generation,
+      state: claim,
+      host: pushing.host,
+      lastPush: { requestId: input.requestId, generation, sha },
+      nextPollAt: now + Duration.toMillis(POLL_INTERVAL),
+    })
+    return Option.map(written, (row) => [row, claim] as const)
+  })
+
+  /**
+   * The push under the claim. Accepted: the second write. Refused, or an
+   * outcome unknown: the remote head decides what the claim became.
+   */
+  const landPush = Effect.fn("Integration.landPush")(function* (
+    pushing: Pushing,
+    row: Stored,
+    claim: Integrating,
+  ) {
+    const { key, sha } = pushing
+    const pushed = yield* git(
+      pushing.cwd,
+      ["push", pushing.remote, `${sha}:refs/heads/${key.ref}`],
+      PUSH_TIMEOUT,
+    ).pipe(
+      Effect.map((result) => ({ accepted: result.exitCode === 0, detail: result.stderr })),
+      Effect.catchTag("ProcessError", (error: ProcessError) =>
+        Effect.succeed({ accepted: false, detail: error.message }),
+      ),
     )
-    yield* store.write(Option.some(stored.value.version), {
-      ...stored.value.record,
-      lastCheck: { at: now, error, failures },
-      nextPollAt: now + backoffAfter(failures),
+    if (pushed.accepted) return resultOf(yield* recordPushed(key, row, claim), false)
+    const after = yield* readHead(key).pipe(Effect.option)
+    if (Option.isNone(after)) {
+      return yield* new PushRefused({
+        message: `The push of ${sha} to ${key.ref} has no known outcome (${pushed.detail.trim()}); the gate reconciles it from the remote head`,
+      })
+    }
+    const settled = yield* reconcileFresh(key, after.value)
+    if (settled.state._tag === "AwaitingCi" && settled.state.sha === sha) {
+      return resultOf(settled, false)
+    }
+    return yield* new PushRefused({
+      message: `The remote refused ${sha} on ${key.ref}: ${pushed.detail.trim()}`,
     })
   })
 
@@ -900,118 +1276,44 @@ const makeIntegration = (store: IntegrationStoreService) => {
       })
     }
     const key: GateKey = { repo: repo.value, ref: input.ref }
+    const host: GateHost = {
+      sessionId: ctx.sessionId,
+      branchId: ctx.branchId,
+      poller: input.poller,
+      notify: input.notify,
+    }
+    const pushing: Pushing = { key, input, cwd, remote, sha, host }
     return yield* ctx.Permits.with(
       permitNameOf(key),
       1,
       Effect.gen(function* () {
-        const head = yield* readHead(key)
-        let record = yield* reconcileStored(key, yield* store.read(key), head)
-        // The same request again: what the first one did, pushed once.
-        if (record.lastPush?.requestId === input.requestId) return resultOf(record, true)
-        // A gate that waits for CI is read once more here, so a pusher that
-        // retries moves a gate nobody polls (an adopted head, a stopped run).
-        if (record.state._tag === "AwaitingCi") {
-          record = Option.getOrElse(yield* poll(key), () => record)
+        // Admission decides on one read and writes the claim over that
+        // read's version; a write that came first starts it again.
+        let claimed = Option.none<readonly [Stored, Integrating]>()
+        let seen: GateState = GateState.cases.Clear.make({})
+        for (let attempt = 0; attempt < WRITE_TRIES && Option.isNone(claimed); attempt++) {
+          const head = yield* readHead(key)
+          const reconciledRow = yield* reconcileStored(key, yield* store.read(key), head)
+          if (Option.isNone(reconciledRow)) continue
+          const replay = yield* replayOf(pushing, reconciledRow.value.record)
+          if (Option.isSome(replay)) return replay.value
+          const current = yield* polledOnce(key, reconciledRow.value)
+          if (Option.isNone(current)) continue
+          seen = current.value.record.state
+          const prior = yield* admittedFrom(pushing, current.value.record.state)
+          yield* fastForwards(pushing, head)
+          claimed = yield* writeClaim(pushing, current.value, prior, head)
         }
-        const state = record.state
-        const admitted =
-          state._tag === "Clear" ||
-          (state._tag === "Red" &&
-            Predicate.isNotUndefined(input.repairOf) &&
-            input.repairOf === state.generation)
-        if (!admitted || (state._tag !== "Clear" && state._tag !== "Red")) {
+        if (Option.isNone(claimed)) {
           return yield* new IntegrationBlocked({
             repo: key.repo,
             ref: key.ref,
-            state,
-            message: blockedMessage(key, state),
+            state: seen,
+            message: `${key.repo}:${key.ref} changed under ${WRITE_TRIES} claims in a row; try again`,
           })
         }
-        if (head === sha) {
-          return yield* new PushRefused({ message: `${sha} is already the head of ${key.ref}` })
-        }
-        const ancestry = yield* git(cwd, ["merge-base", "--is-ancestor", head, sha]).pipe(
-          Effect.mapError(storageError("git is not available")),
-        )
-        if (ancestry.exitCode === 1) {
-          return yield* new PushRefused({
-            message: `${sha} does not fast-forward ${key.ref} at ${head}: rebase it onto the remote head`,
-          })
-        }
-        if (ancestry.exitCode !== 0) {
-          return yield* new PushRefused({
-            message: `The remote head ${head} is not in the local repository: fetch ${remote} and rebase`,
-          })
-        }
-        const required = yield* readRequired(key)
-        const now = yield* Clock.currentTimeMillis
-        const generation = record.generation + 1
-        const host: GateHost = {
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          poller: input.poller,
-          notify: input.notify,
-        }
-        // The fire is armed before the first write, so a crash after it is
-        // reconciled by the next fire with no turn.
-        if (input.poller === "integration") {
-          yield* ctx.Session.wakeAt({
-            sourceId: yield* gateSourceOf(key),
-            at: now + Duration.toMillis(POLL_INTERVAL),
-          })
-        }
-        const { required: _required, cleared: _cleared, ...base } = record
-        const integrating: GateRecord = {
-          ...base,
-          ...omitUndefined({ required: Option.getOrUndefined(required) }),
-          generation,
-          state: GateState.cases.Integrating.make({
-            generation,
-            candidate: sha,
-            expectedBase: head,
-            requestId: input.requestId,
-            prior: state,
-          }),
-          host,
-          lastPush: { requestId: input.requestId, generation, sha },
-          nextPollAt: now + Duration.toMillis(POLL_INTERVAL),
-        }
-        const stored = yield* store.read(key)
-        record = yield* commit(stored, integrating)
-        const pushed = yield* git(
-          cwd,
-          ["push", remote, `${sha}:refs/heads/${key.ref}`],
-          PUSH_TIMEOUT,
-        ).pipe(
-          Effect.map((result) => ({ accepted: result.exitCode === 0, detail: result.stderr })),
-          Effect.catchTag("ProcessError", (error: ProcessError) =>
-            Effect.succeed({ accepted: false, detail: error.message }),
-          ),
-        )
-        if (pushed.accepted) {
-          const current = yield* store.read(key)
-          return resultOf(
-            yield* commit(current, {
-              ...record,
-              state: GateState.cases.AwaitingCi.make({ generation, sha, adopted: false }),
-            }),
-            false,
-          )
-        }
-        // The push said no, or its outcome is unknown: the remote head decides.
-        const after = yield* readHead(key).pipe(Effect.option)
-        if (Option.isNone(after)) {
-          return yield* new PushRefused({
-            message: `The push of ${sha} to ${key.ref} has no known outcome (${pushed.detail.trim()}); the gate reconciles it from the remote head`,
-          })
-        }
-        const settled = yield* reconcileStored(key, yield* store.read(key), after.value)
-        if (settled.state._tag === "AwaitingCi" && settled.state.sha === sha) {
-          return resultOf(settled, false)
-        }
-        return yield* new PushRefused({
-          message: `The remote refused ${sha} on ${key.ref}: ${pushed.detail.trim()}`,
-        })
+        const [row, claim] = claimed.value
+        return yield* landPush(pushing, row, claim)
       }),
     )
   })
@@ -1047,7 +1349,7 @@ const makeIntegration = (store: IntegrationStoreService) => {
           toldGeneration: generationOf(record),
           cleared: { at: now, reason, sessionId: ctx.sessionId, branchId: ctx.branchId },
         }
-        yield* commit(stored, next)
+        if (Option.isNone(yield* tryCommit(stored, next))) return yield* changedUnder(key)
         const host = record.host
         if (Predicate.isNotUndefined(host) && host.poller === "integration") {
           yield* ctx.Session.cancelWake({
@@ -1061,20 +1363,36 @@ const makeIntegration = (store: IntegrationStoreService) => {
     )
   })
 
-  /** The pusher stopped waiting (a stopped run): a later loop open adopts the gate. */
-  const release = Effect.fn("Integration.release")(function* (key: GateKey) {
-    const ctx = yield* ExtensionContext
-    const stored = yield* store.read(key)
-    if (Option.isNone(stored) || !isSameHost(stored.value.record.host, ctx)) return
-    const { host: _host, ...rest } = stored.value.record
-    yield* store.write(Option.some(stored.value.version), rest)
+  /**
+   * The caller that pushed under `requestId` stopped waiting (a stopped or
+   * failed run): its gate loses its host, and a later loop open adopts it.
+   * Found by the request id alone, so a pusher that never saved the gate's
+   * repo still releases it.
+   */
+  const releaseRequest = Effect.fn("Integration.releaseRequest")(function* (requestId: string) {
+    for (let attempt = 0; attempt < WRITE_TRIES; attempt++) {
+      const found = (yield* store.list).find((stored) => holdsRequest(stored.record, requestId))
+      if (Predicate.isUndefined(found)) return
+      const { host: _host, ...rest } = found.record
+      if (yield* store.write(Option.some(found.version), rest)) return
+    }
   })
 
   const read = Effect.fn("Integration.read")(function* (key: GateKey) {
     return Option.map(yield* store.read(key), (found) => found.record)
   })
 
-  return { push, poll, clear, release, read, list: store.list, tell }
+  return { push, poll, clear, releaseRequest, read, list: store.list }
+}
+
+/** A caller polls the gate for `requestId`'s push: its claim, or the generation it pushed. */
+const holdsRequest = (record: GateRecord, requestId: string) => {
+  if (record.host?.poller !== "caller") return false
+  const state = record.state
+  if (state._tag === "Integrating") return state.requestId === requestId
+  return (
+    record.lastPush?.requestId === requestId && record.lastPush.generation === generationOf(record)
+  )
 }
 
 const blockedMessage = (key: GateKey, state: GateState) =>

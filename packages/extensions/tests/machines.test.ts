@@ -2684,3 +2684,284 @@ describe("an integrate state", () => {
     }).pipe(Effect.scoped, Effect.timeout("20 seconds")),
   )
 })
+
+const GateRowView = Schema.Struct({
+  state: Schema.String,
+  host: Schema.OptionFromNullOr(Schema.String),
+  poller: Schema.OptionFromNullOr(Schema.String),
+})
+const decodeGateRows = Schema.decodeUnknownSync(Schema.Array(GateRowView))
+/** The gate's state, and the session and poller that host it, if any. */
+const gateRow = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql`SELECT json_extract(record_json, '$.state._tag') AS state,
+    json_extract(record_json, '$.host.sessionId') AS host,
+    json_extract(record_json, '$.host.poller') AS poller
+    FROM integration_gates`
+  return Option.fromUndefinedOr(decodeGateRows(rows)[0])
+})
+
+const isClaimed = (row: Option.Option<typeof GateRowView.Type>) =>
+  Option.exists(row, (found) => found.state === "Integrating")
+
+/** The shipped extensions with `machines` in place of the shipped machines, beside the fake GitHub. */
+const layerWithMachines = (
+  home: Effect.Success<typeof restartableHome>,
+  models: MachineModels,
+  boundary: ReturnType<typeof githubBoundary>,
+  machines: ReturnType<typeof machinesWithContext>,
+) =>
+  createE2ELayer({
+    ...e2ePreset,
+    extensionInputs: [
+      ...e2ePreset.extensionInputs.map((extension) => {
+        if (extension.manifest.id === machines.manifest.id) return machines
+        return extension
+      }),
+      boundary,
+    ],
+    providerLayer: machineModels(models),
+    storagePath: `${home.home}/gent.db`,
+    cwd: home.cwd,
+    home: home.home,
+  })
+
+/**
+ * A run whose server stopped after the gate wrote its claim and before the
+ * push landed: the push is held, the claim is written, the server goes.
+ */
+const claimThenCrash = (
+  home: Effect.Success<typeof restartableHome>,
+  github: Effect.Success<ReturnType<typeof fakeGitHub>>,
+  models: MachineModels,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>()
+      github.remote.pushGate = Option.some(held)
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRun(client, owner, SHIP, "ship")
+      yield* waitFor(home.sql(gateRow), isClaimed, 8_000, "the gate wrote the claim")
+      return { owner, run }
+    }),
+  ).pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        github.remote.pushGate = Option.none()
+      }),
+    ),
+  )
+
+describe("an integrate state across a crash", () => {
+  it.live("a push a crash cut off before it landed takes red as interrupted, pushing nothing", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const models = yield* makeModels(trackWorker)
+      const first = yield* claimThenCrash(home, github, models)
+      expect(github.remote.pushes).toEqual([])
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      // The loop open gives the run its driver again.
+      yield* client.session.getSnapshot(first.owner)
+      yield* waitFor(
+        home.sql(runRow(first.run)),
+        (row) => Option.exists(row, (found) => found.status === "final"),
+        15_000,
+        "the run took red",
+      )
+      expect(Option.map(yield* home.sql(runRow(first.run)), (row) => row.state)).toEqual(
+        Option.some("broken"),
+      )
+      expect(yield* home.sql(savedValue(first.run, "ship"))).toMatchObject({
+        outcome: "interrupted",
+      })
+      expect(moves(yield* home.sql(stepsOf(first.run)))).toEqual(["ship→broken"])
+      expect(github.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a stop after a crash between the claim and the run's record releases the gate", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const models = yield* makeModels(trackWorker)
+      const first = yield* claimThenCrash(home, github, models)
+      // gh is signed out after the restart: the run cannot reach the gate, and waits.
+      github.remote.gh = "signed-out"
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      yield* client.session.getSnapshot(first.owner)
+      yield* waitFor(
+        home.sql(stepsOf(first.run)),
+        (steps) => steps.some((step) => step._tag === "Waiting"),
+        8_000,
+        "the run waits for the gate",
+      )
+      expect(yield* home.sql(gateRow)).toEqual(
+        Option.some({
+          state: "Integrating",
+          host: Option.some(first.owner.sessionId),
+          poller: Option.some("caller"),
+        }),
+      )
+      const [stopped] = yield* call(client, first.owner, [
+        ["machine.stop", "stop-ship", { run: first.run }],
+      ])
+      expect(stopped?.failed).toBe(false)
+      // The gate lost its host: the next loop open of any branch adopts it.
+      expect(yield* home.sql(gateRow)).toEqual(
+        Option.some({ state: "Integrating", host: Option.none(), poller: Option.none() }),
+      )
+      const other = ownerOf(yield* client.session.create({}))
+      yield* client.session.getSnapshot(other)
+      yield* waitFor(
+        home.sql(gateRow),
+        (row) => Option.exists(row, (found) => Option.contains(found.host, other.sessionId)),
+        8_000,
+        "another branch adopted the gate",
+      )
+      expect(github.remote.pushes).toEqual([])
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a gate write that fails after the push fails the run and releases the gate", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      // The gate's second write, the claim to awaiting CI, fails.
+      yield* home.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`CREATE TRIGGER fail_awaiting BEFORE UPDATE ON integration_gates
+            WHEN json_extract(NEW.record_json, '$.state._tag') = 'AwaitingCi'
+            BEGIN SELECT RAISE(ABORT, 'injected write failure'); END`
+        }),
+      )
+      const run = yield* startRun(client, owner, SHIP, "ship")
+      yield* waitFor(
+        home.sql(runRow(run)),
+        (row) => Option.exists(row, (found) => found.status === "failed"),
+        15_000,
+        "the run failed",
+      )
+      expect(github.remote.pushes).toEqual([CANDIDATE])
+      expect(yield* home.sql(gateRow)).toEqual(
+        Option.some({ state: "Integrating", host: Option.none(), poller: Option.none() }),
+      )
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+})
+
+describe("an integrate state while CI runs", () => {
+  it.live("a run that waits for CI holds its branch resident no longer and holds no permit", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub()
+      const boundary = githubBoundary(github.layer)
+      const models = yield* makeModels(trackWorker)
+      const first = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(
+            home.layerFor(machineModels(models), { extensionInputs: [boundary] }),
+          )
+          const owner = ownerOf(yield* client.session.create({}))
+          const run = yield* startRun(client, owner, SHIP, "ship")
+          yield* waitFor(
+            home.sql(runRow(run)),
+            (row) =>
+              Option.exists(row, (found) => (found.pending_json ?? "").includes('"generation":1')),
+            8_000,
+            "the gate admitted the push",
+          )
+          return { owner, run }
+        }),
+      )
+      // The next server's machines count the holds on the branch and the run's waits.
+      const holds = yield* Ref.make({ now: 0, most: 0 })
+      const arms = yield* Ref.make<ReadonlyArray<number>>([])
+      const counting = machinesWithContext((ctx) => ({
+        ...ctx,
+        Session: {
+          ...ctx.Session,
+          holdResident: Effect.acquireRelease(
+            Ref.update(holds, (count) => ({
+              now: count.now + 1,
+              most: Math.max(count.most, count.now + 1),
+            })),
+            () => Ref.update(holds, (count) => ({ ...count, now: count.now - 1 })),
+          ).pipe(Effect.andThen(ctx.Session.holdResident)),
+          wakeAt: (input) =>
+            Effect.gen(function* () {
+              if (input.sourceId === `machine-run:${first.run}` && Predicate.isNumber(input.at)) {
+                const at = input.at
+                yield* Ref.update(arms, (all) => [...all, at])
+              }
+              yield* ctx.Session.wakeAt(input)
+            }),
+        },
+      }))
+      const { client } = yield* createRpcClient(layerWithMachines(home, models, boundary, counting))
+      // The loop open gives the run its driver, on the counting facade.
+      yield* client.session.getSnapshot(first.owner)
+      const next = (yield* home.sql(gateTimes(first.run)))?.next
+      yield* waitFor(
+        Ref.get(arms),
+        (all) => all.some((at) => at === next),
+        8_000,
+        "the run sleeps until the gate's next poll",
+      )
+      expect(yield* Ref.get(holds)).toEqual({ now: 0, most: 0 })
+      expect(yield* client.permits.list()).toEqual([])
+      expect(Option.map(yield* home.sql(runRow(first.run)), (row) => row.status)).toEqual(
+        Option.some("running"),
+      )
+    }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+  )
+
+  it.live("a gate it could not reach is tried again after the retry wait", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const github = yield* fakeGitHub({ gh: "signed-out" })
+      const models = yield* makeModels(trackWorker)
+      const { client } = yield* createRpcClient(
+        home.layerFor(machineModels(models), { extensionInputs: [githubBoundary(github.layer)] }),
+      )
+      const owner = ownerOf(yield* client.session.create({}))
+      const run = yield* startRunOn(client, owner, SHIP, "ship")
+      const steps = yield* eventually(
+        home.sql(stepsOf(run)),
+        (found) => waitsOf(found).length === 1,
+        "the run waits for the gate",
+      )
+      const until = waitsOf(steps)[0]?.until ?? 0
+      expect(until - (yield* Clock.currentTimeMillis)).toBe(Duration.toMillis(Duration.minutes(1)))
+      github.remote.gh = "ready"
+      yield* TestClock.adjust(until - (yield* Clock.currentTimeMillis) - 10_000)
+      yield* settle
+      expect(github.remote.pushes).toEqual([])
+      yield* advanceUntil(
+        Effect.sync(() => github.remote.pushes.length),
+        (count) => count > 0,
+        "the retry pushed",
+      )
+      expect(github.remote.pushes).toEqual([CANDIDATE])
+      yield* eventually(
+        home.sql(runRow(run)),
+        (row) =>
+          Option.exists(row, (found) => (found.pending_json ?? "").includes('"generation":1')),
+        "the run recorded the push",
+      )
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+})

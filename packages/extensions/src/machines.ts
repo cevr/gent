@@ -175,8 +175,9 @@ type RunState = typeof RunState.Type
 /**
  * Pushes the run's head (`HEAD` of its cwd) to `ref` through the integration
  * gate, then moves by the CI verdict for that push. A gate that is not clear
- * makes the run wait; a push the gate refuses (not a fast-forward) takes
- * `red`. A visit after a red one passes that red generation as its repair.
+ * makes the run wait; a push the gate refuses (not a fast-forward) or one a
+ * crash cut off before it landed takes `red`. A visit after a red one
+ * passes that red generation as its repair.
  */
 const IntegrateState = Schema.Struct({
   kind: Schema.Literal("integrate"),
@@ -275,8 +276,9 @@ const PendingAction = Schema.TaggedUnion({
     process: Schema.optionalKey(ProcessRecord),
   },
   /**
-   * `requestId` is the gate's idempotency key: a push again after a crash
-   * pushes nothing new. `repo`, `generation` and `sha` are set once the gate
+   * `requestId` is the gate's idempotency key, derived from the run and its
+   * seq and saved before the push: a push again after a crash pushes nothing
+   * new, and a stop or a failure releases the gate by it. `repo`, `generation` and `sha` are set once the gate
    * admitted the push; the run then waits for that generation's verdict.
    * `notBefore` (epoch ms): the gate was not clear, the push is tried again then.
    */
@@ -1583,12 +1585,20 @@ const armDriver = Effect.fn("Machines.arm")(function* (run: RunId) {
 const commitMove = (before: Run, after: Run, steps: ReadonlyArray<MachineStep>) =>
   Effect.flatMap(MachineStore, (store) => store.commit(before, after, steps))
 
-/** A fault the run cannot ask about: it fails, and its end is told to the owner. */
+/**
+ * A fault the run cannot ask about: it fails, and its end is told to the
+ * owner. A pending push loses its gate first, so a failure that cannot
+ * release it fails again on the next try instead of leaving the gate held.
+ */
 const failRun = Effect.fn("Machines.fail")(function* (run: RunId, error: string) {
   const store = yield* MachineStore
   const found = yield* store.read(run)
   if (Option.isNone(found) || isTerminal(found.value.status)) return
   const current = found.value
+  const pending = current.pending
+  if (Option.isSome(pending) && pending.value._tag === "Integrate") {
+    yield* releaseGate(pending.value)
+  }
   yield* Effect.logWarning("machines.run.failed").pipe(Effect.annotateLogs({ run, error }))
   yield* store.commit(
     current,
@@ -1764,22 +1774,22 @@ const integrateStateOf = Effect.fn("Machines.integrateStateOf")(function* (
 })
 
 /** The red generation the state's last visit saved: the next push repairs it. */
-const repairOf = (context: RunContext, name: StateName): Option.Option<number> => {
-  const last = context.last[name]
-  if (!Predicate.isObject(last) || Array.isArray(last)) return Option.none()
-  if (last["outcome"] !== "red") return Option.none()
-  const generation = last["generation"]
-  return Option.liftPredicate(generation, Predicate.isNumber)
-}
+const repairOf = (context: RunContext, name: StateName): Option.Option<number> =>
+  decodeGateOutcome(context.last[name]).pipe(
+    Option.filter(GateOutcome.guards.red),
+    Option.map((outcome) => outcome.generation),
+  )
 
-/** The pusher stops waiting on the gate: a stopped or failed run. */
-const releaseGate = (run: Run, action: IntegrateAction) =>
+/**
+ * The pusher stops waiting on the gate: a stopped or failed run. The gate
+ * is found by the action's request id, so a run that crashed before it
+ * saved the gate's repo releases it too.
+ */
+const releaseGate = (action: IntegrateAction) =>
   Effect.gen(function* () {
-    if (Predicate.isUndefined(action.repo)) return
     const integration = yield* Effect.serviceOption(Integration)
     if (Option.isNone(integration)) return
-    const state = yield* integrateStateOf(run, action.state)
-    yield* integration.value.release({ repo: action.repo, ref: state.ref })
+    yield* integration.value.releaseRequest(action.requestId)
   })
 
 /** Moves the run out of its integrate state by `by`, the gate's outcome saved as the state's value. */
@@ -1806,7 +1816,7 @@ const leaveIntegrate = (
  * as the caller that polls its own gate (`poller: "caller"`), since a wake
  * record fires for the extension that armed it. A gate that is not clear, or
  * gh that is not ready, waits `GATE_RETRY_WAIT` under the run's own record; a
- * refused push takes `red`. After: the verdict for its generation or a later
+ * refused push, or one a crash cut off before it landed, takes `red`. After: the verdict for its generation or a later
  * one moves the run; until then the driver polls the gate when its record
  * names the next poll due, and sleeps under the run's own record between.
  */
@@ -1865,10 +1875,23 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
         return
       }
       case "PushRefused":
-        yield* leaveIntegrate(run, action, state.on.red, "red", {
-          outcome: "refused",
-          message: error.message,
-        })
+        yield* leaveIntegrate(
+          run,
+          action,
+          state.on.red,
+          "red",
+          GateOutcome.cases.refused.make({ message: error.message }),
+        )
+        return
+      // The push never landed, and its request id never pushes again.
+      case "PushInterrupted":
+        yield* leaveIntegrate(
+          run,
+          action,
+          state.on.red,
+          "red",
+          GateOutcome.cases.interrupted.make({ message: error.message }),
+        )
         return
       case "IntegrationError":
         return yield* new MachineFault({ message: error.message })
@@ -1897,36 +1920,54 @@ const advanceIntegrate = Effect.fn("Machines.integrate")(function* (
   yield* waitOut(run, due, signals)
 })
 
-/** The gate's outcome for an integrate, saved as the state's value. */
-type GateOutcome =
-  | { readonly outcome: "green"; readonly generation: number; readonly sha?: string }
-  | {
-      readonly outcome: "red"
-      readonly generation: number
-      readonly sha: string
-      readonly failing: ReadonlyArray<string>
-    }
+/**
+ * The gate's outcome for an integrate, saved as the state's value: green or
+ * red from CI, `refused` (not a fast-forward, or the remote said no) or
+ * `interrupted` (a push a crash cut off, which never landed). The last two
+ * take `on.red`.
+ */
+const GateOutcome = Schema.Union([
+  Schema.Struct({
+    outcome: Schema.tag("green"),
+    generation: Schema.Int,
+    sha: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    outcome: Schema.tag("red"),
+    generation: Schema.Int,
+    sha: Schema.String,
+    failing: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({ outcome: Schema.tag("refused"), message: Schema.String }),
+  Schema.Struct({ outcome: Schema.tag("interrupted"), message: Schema.String }),
+]).pipe(Schema.toTaggedUnion("outcome"))
+type GateOutcome = typeof GateOutcome.Type
+const decodeGateOutcome = Schema.decodeUnknownOption(GateOutcome)
 
 /**
  * The gate's outcome; none while CI runs. A gate's generation only grows, so
  * a record read after the run's push is at its generation or a later one.
  */
-const settledVerdict = (record: GateRecord): Option.Option<GateOutcome> => {
+const settledVerdict = (
+  record: GateRecord,
+): Option.Option<Extract<GateOutcome, { readonly outcome: "green" | "red" }>> => {
   const state = record.state
   switch (state._tag) {
     case "Clear":
-      return Option.some({
-        outcome: "green",
-        generation: generationOf(record),
-        ...omitUndefined({ sha: state.sha }),
-      })
+      return Option.some(
+        GateOutcome.cases.green.make({
+          generation: generationOf(record),
+          ...omitUndefined({ sha: state.sha }),
+        }),
+      )
     case "Red":
-      return Option.some({
-        outcome: "red",
-        generation: state.generation,
-        sha: state.sha,
-        failing: state.failing.map((check) => check.context),
-      })
+      return Option.some(
+        GateOutcome.cases.red.make({
+          generation: state.generation,
+          sha: state.sha,
+          failing: state.failing.map((check) => check.context),
+        }),
+      )
     case "Integrating":
     case "AwaitingCi":
       return Option.none()
@@ -2547,7 +2588,7 @@ const stopPending = (run: Run, action: PendingAction) =>
         }),
       // The push itself is never undone; the gate loses its waiter, and a
       // later loop open adopts it.
-      Integrate: (integrate) => Effect.as(releaseGate(run, integrate), false),
+      Integrate: (integrate) => Effect.as(releaseGate(integrate), false),
     }),
   )
 
