@@ -7,8 +7,10 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
+  References,
   Schedule,
   Schema,
   Semaphore,
@@ -1601,8 +1603,18 @@ describe("OpenAI cache routing", () => {
   // `ModelClientSession.turn_state`).
   it.live(
     "OAuth requests send a turn's route back within the turn, for the account that answered",
-    () =>
-      Effect.gen(function* () {
+    () => {
+      const routeLogs: Array<{
+        readonly status: unknown
+        readonly named: unknown
+        readonly sent: unknown
+      }> = []
+      const capture = Logger.make(({ message, fiber }) => {
+        if (String(message) !== "codex turn route") return
+        const { status, named, sent } = fiber.getRef(References.CurrentLogAnnotations)
+        routeLogs.push({ status, named, sent })
+      })
+      return Effect.gen(function* () {
         const { driver } = yield* makeDriver()
         const fetchState = makeFakeFetchState()
         const signIn = (access: string, signedInAt: number): ProviderAuthInfo =>
@@ -1701,6 +1713,12 @@ describe("OpenAI cache routing", () => {
           send({ cacheKey: "s4", turnKey: "t1" }, answer("route-later")),
           Option.some("route-4"),
         )
+        // An answer that names no route leaves the turn without one.
+        yield* step(
+          send({ cacheKey: "s5", turnKey: "t1" }, openaiResponsesHappyResponse),
+          Option.none(),
+        )
+        yield* step(send({ cacheKey: "s5", turnKey: "t1" }, answer("route-5")), Option.none())
         yield* step(send({ cacheKey: "s1" }, answer("route-none")), Option.none())
         expect(
           fetchState.captured.map((request) =>
@@ -1722,7 +1740,24 @@ describe("OpenAI cache routing", () => {
         expect(metadata.at(0)).toEqual(Option.some({ session_id: "s1", turn_id: "t1" }))
         expect(metadata.at(5)).toEqual(Option.some({ session_id: "s1", turn_id: "t2" }))
         expect(metadata.at(-1)).toEqual(Option.none())
-      }),
+        // The debug log tells a named route from one ChatGPT never sent.
+        expect(routeLogs.slice(0, 2)).toEqual([
+          { status: 200, named: true, sent: false },
+          { status: 200, named: true, sent: true },
+        ])
+        expect(routeLogs.at(8)).toEqual({ status: 400, named: true, sent: false })
+        // A request outside a turn has no route to log.
+        expect(routeLogs).toHaveLength(fetchState.captured.length - 1)
+        expect(routeLogs.slice(-2)).toEqual([
+          { status: 200, named: false, sent: false },
+          { status: 200, named: true, sent: false },
+        ])
+      }).pipe(
+        Effect.provide(Logger.layer([capture])),
+        // The test preload turns logs off; this test reads the route log.
+        Effect.provideService(References.MinimumLogLevel, "Debug"),
+      )
+    },
   )
 
   it.live("a driver keeps its 256 latest turn routes", () =>

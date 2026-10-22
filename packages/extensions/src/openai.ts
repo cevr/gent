@@ -1237,16 +1237,28 @@ const codexTurnRouteKey = (turn: CodexTurn, headers: Headers.Headers): string =>
   return `${account}\n${turn.session}\n${turn.turn}`
 }
 
-/** Keep the route a successful answer names, once per turn: the first answer's stands. */
+/**
+ * Keep the route a successful answer names, once per turn: the first
+ * answer's stands. The debug log says whether the answer named a route and
+ * whether the request sent one, the measure of a miss the route did not stop.
+ */
 const noteCodexTurnRoute = (turn: CodexTurn, response: HttpClientResponse.HttpClientResponse) =>
-  Effect.sync(() => {
+  Effect.suspend(() => {
     const state = Headers.get(response.headers, CODEX_TURN_STATE_HEADER)
     const key = codexTurnRouteKey(turn, response.request.headers)
-    if (response.status >= 300 || Option.isNone(state) || turn.routes.has(key)) return
-    turn.routes.set(key, state.value)
-    const oldest = turn.routes.keys().next()
-    if (turn.routes.size > CODEX_TURN_ROUTES_HELD && oldest.done !== true)
-      turn.routes.delete(oldest.value)
+    if (response.status < 300 && Option.isSome(state) && !turn.routes.has(key)) {
+      turn.routes.set(key, state.value)
+      const oldest = turn.routes.keys().next()
+      if (turn.routes.size > CODEX_TURN_ROUTES_HELD && oldest.done !== true)
+        turn.routes.delete(oldest.value)
+    }
+    return Effect.logDebug("codex turn route").pipe(
+      Effect.annotateLogs({
+        status: response.status,
+        named: Option.isSome(state),
+        sent: Option.isSome(Headers.get(response.request.headers, CODEX_TURN_STATE_HEADER)),
+      }),
+    )
   })
 
 /**
