@@ -1259,6 +1259,7 @@ describe("round ends while the starter runs", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
+          const answering = yield* Deferred.make<void>()
           const delivered = yield* Deferred.make<void>()
           const starterRequests: Array<ReadonlyArray<string>> = []
           const tasks = [
@@ -1268,8 +1269,10 @@ describe("round ends while the starter runs", () => {
           ]
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
+            // A thread answers once the starter is at its answer step: an end
+            // that landed during the starts would join before that request.
             if (tasks.some((task) => texts[0]?.endsWith(task) === true)) {
-              return Effect.succeed(reply("pong"))
+              return Deferred.await(answering).pipe(Effect.as(reply("pong")))
             }
             starterRequests.push(texts)
             if (starterRequests.length === 1) {
@@ -1286,7 +1289,10 @@ describe("round ends while the starter runs", () => {
             }
             // The answer step waits until every round's end is in the starter's queue.
             if (starterRequests.length === 2) {
-              return Deferred.await(delivered).pipe(Effect.as(reply("started three")))
+              return Deferred.succeed(answering, void 0).pipe(
+                Effect.andThen(Deferred.await(delivered)),
+                Effect.as(reply("started three")),
+              )
             }
             return Effect.succeed(reply("read the three ends"))
           })
