@@ -815,15 +815,17 @@ describe("ClientProvider session lifecycle", () => {
         initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
       })
       const model = ModelId.make("openai/gpt-5.6-luna")
-      client.applySessionSnapshot({
-        ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
-        modelId: model,
-        reasoningLevel: "high",
-        runtime: SessionRuntimeStateSchema.cases.Running.make({
-          queue: emptyQueueSnapshot(),
-          startedAtMs: 0,
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
+          modelId: model,
+          reasoningLevel: "high",
+          runtime: SessionRuntimeStateSchema.cases.Running.make({
+            queue: emptyQueueSnapshot(),
+            startedAtMs: 0,
+          }),
         }),
-      })
+      )
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       const session = client.session()
       expect(session).toMatchObject({ modelId: model, reasoningLevel: "high" })
@@ -841,13 +843,15 @@ describe("ClientProvider session lifecycle", () => {
         const { client } = yield* mountClient({
           initialSession: sessionFixture(FIRST.sessionId, FIRST.branchId, "First"),
         })
-        client.applySessionSnapshot({
-          ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
-          runtime: SessionRuntimeStateSchema.cases.Running.make({
-            queue: emptyQueueSnapshot(),
-            startedAtMs: 0,
+        client.applySessionSnapshot(
+          SessionSnapshot.make({
+            ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
+            runtime: SessionRuntimeStateSchema.cases.Running.make({
+              queue: emptyQueueSnapshot(),
+              startedAtMs: 0,
+            }),
           }),
-        })
+        )
         const nextBranch = BranchId.make("branch-metrics-next")
         // The feed's order: the event goes to the client, then the feed routes.
         client.applySessionEvent(
@@ -1739,7 +1743,7 @@ describe("ClientProvider errors", () => {
         queue: emptyQueueSnapshot(),
         startedAtMs: 0,
       })
-      client.applySessionSnapshot({ ...idle, runtime: running })
+      client.applySessionSnapshot(SessionSnapshot.make({ ...idle, runtime: running }))
       expect(client.isStreaming()).toBe(true)
       expect(client.error()).toEqual(Option.none())
     }),
@@ -1761,11 +1765,13 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(midTurn)
       expect(client.error()).toEqual(Option.some("interject refused"))
       // It ends while the connection is down; no new turn starts.
-      client.applySessionSnapshot({
-        ...midTurn,
-        runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
-        metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
-      })
+      client.applySessionSnapshot(
+        SessionSnapshot.make({
+          ...midTurn,
+          runtime: SessionRuntimeStateSchema.cases.Idle.make({ queue: emptyQueueSnapshot() }),
+          metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
+        }),
+      )
       expect(client.error()).toEqual(Option.some("interject refused"))
     }),
   )

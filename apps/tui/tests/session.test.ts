@@ -2488,7 +2488,7 @@ describe("useSessionFeed", () => {
           OutputCut.cases.Text.make({ field: "stdout", lines: 3000, tailLine: 3000, chars: 9 }),
         ],
       }
-      const snapshot: SessionSnapshot = {
+      const snapshot: SessionSnapshot = SessionSnapshot.make({
         ...snapshotFor(sessionId, branchId, 1),
         messages: [
           projectMessage(
@@ -2523,7 +2523,7 @@ describe("useSessionFeed", () => {
             ],
           ),
         ],
-      }
+      })
       const wholeOutput = '{"stdout":"done","stderr":"","exitCode":0}'
       const { cellOf, dispose } = openFeed({
         snapshot,
@@ -2742,7 +2742,7 @@ describe("useSessionFeed", () => {
               calls,
             )
           })
-          snapshot = { ...snapshot, lastEventId: events.length, messages }
+          snapshot = SessionSnapshot.make({ ...snapshot, lastEventId: events.length, messages })
         }
         let applied = 0
         const { feed, dispose } = openFeed({
@@ -3141,10 +3141,10 @@ describe("useSessionFeed", () => {
       // The handoff marker is a durable user message, so a reload reads it
       // from the snapshot, not from the buffered event stream.
       const { feed, dispose } = openFeed({
-        snapshot: {
+        snapshot: SessionSnapshot.make({
           ...snapshotFor(sessionId, branchId, 3),
           messages: [projectMessage(makeCompactionMessage(sessionId, branchId), [])],
-        },
+        }),
         events: [retryEnvelope, interruptedEnvelope],
       })
 
