@@ -187,7 +187,7 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: MessageId,
     provider: ProviderId,
     slot: CredentialSlot,
-    /** The slot the run preferred (its cache's, its parent's, its predecessor's), the one that refused it, or the one outside the pool it returned from. */
+    /** The slot the run preferred (its cache's, its parent's, its predecessor's), the one that refused it or filled its quota window, or the one outside the pool it returned from. */
     from: Schema.optional(CredentialSlot),
     reason: Schema.Literals([
       "new",
@@ -197,6 +197,7 @@ export const AgentEvent = Schema.TaggedUnion({
       "compacted",
       "cold",
       "refused",
+      "filled",
       "returned",
     ]),
   },

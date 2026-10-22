@@ -1317,10 +1317,17 @@ const HOUR = 3_600_000
 
 const work = CredentialSlot.make("work")
 
-/** One account, `work`, that every turn of the test's sessions spends from. */
+/**
+ * One account, `work`, that every turn of the test's sessions spends from.
+ * The owner's own turn reports the readings that refuse the rounds, and
+ * goes on past them on extra usage; a round's lane does not read it.
+ */
 const oneAccount = {
   configServiceLayer: ConfigService.Test(
-    new UserConfig({ model: TEST_MODEL_ID, providers: { anthropic: { authOrder: [work] } } }),
+    new UserConfig({
+      model: TEST_MODEL_ID,
+      providers: { anthropic: { authOrder: [work], extraUsage: true } },
+    }),
   ),
 }
 
@@ -1881,6 +1888,56 @@ describe("a machine waits out its account", () => {
   )
 
   it.live(
+    "a worker whose step fills its only account stops before its next request and waits for the window's reset",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const reset = (yield* Clock.currentTimeMillis) + HOUR
+        const filled = yield* Ref.make(false)
+        // The first worker's tool step fills the window; every later call has room.
+        const models = yield* makeModels((round) =>
+          Effect.gen(function* () {
+            if (acted(round.prompt)) return billed("replied")
+            if (!(yield* Ref.getAndSet(filled, true))) {
+              yield* reportProviderQuota(rejectedUntil(reset))
+              return toolCalls([{ tool: "thread.reply", id: "reply-filled", input: { value: {} } }])
+            }
+            return replyWith(round, { next: "pass" })
+          }),
+        )
+        // The account has no extra usage: the worker stops at the full window.
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), {
+            configServiceLayer: ConfigService.Test(
+              new UserConfig({
+                model: TEST_MODEL_ID,
+                providers: { anthropic: { authOrder: [work] } },
+              }),
+            ),
+          }),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, ONE_JUDGE, "one-judge")
+        const steps = yield* eventually(
+          home.sql(stepsOf(run)),
+          (found) => waitsOf(found).length === 1,
+          "the round waits for the window's reset",
+        )
+        expect(waitsOf(steps)).toEqual([{ reason: "quota", until: reset }])
+        yield* TestClock.adjust(reset - (yield* Clock.currentTimeMillis) - 60_000)
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual(["judge:1"])
+        yield* advanceUntil(
+          Ref.get(models.calls),
+          (calls) => calls.length >= 2,
+          "the rerun ran at the reset",
+        )
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        expect(moves(yield* home.sql(stepsOf(run)))).toEqual(["judge→done"])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+  )
+
+  it.live(
     "rounds that wait for the account hold no step permit: a command runs beside four of them",
     () =>
       Effect.gen(function* () {
@@ -2134,7 +2191,8 @@ const tieredAccount = (
   configServiceLayer: ConfigService.Test(
     new UserConfig({
       model: TEST_MODEL_ID,
-      providers: { anthropic: { authOrder: [work] } },
+      // As `oneAccount`: the owner's turn goes on past the readings it reports.
+      providers: { anthropic: { authOrder: [work], extraUsage: true } },
       tiers,
     }),
   ),

@@ -2753,6 +2753,21 @@ export const coldHandoffPays = (params: {
 }
 
 /**
+ * Whether the step's request finds no cache of the branch to read: the
+ * turn's first call once the lifetime lapsed, or a step moved to another
+ * account (`accountMoved`), where nothing the branch wrote is cached. A
+ * later step on the same account reads what the step before it wrote.
+ */
+const cacheMissed = (params: {
+  readonly turnStart: boolean
+  readonly accountMoved: boolean
+  readonly cache: PromptCache
+  readonly nowMillis: number
+}): boolean =>
+  params.accountMoved ||
+  (params.turnStart && params.nowMillis - params.cache.lastCallAtMillis >= params.cache.ttlMs)
+
+/**
  * The window the model sees this step. A fresh window puts the issuer's notice
  * at the head; a handoff moves the history before the newest user message
  * behind one marker that summarizes it and names the ids it replaced. The
@@ -2796,6 +2811,11 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   readonly roleWindowBinds: boolean
   /** The branch's last model call and its provider's cache lifetime; none when either is unknown. */
   readonly promptCache: Option.Option<PromptCache>
+  /**
+   * The step left the account the branch's last call ran on (a full quota
+   * window): the cache there does not serve it, whatever its age.
+   */
+  readonly accountMoved: boolean
   readonly persist: (
     message: Message,
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
@@ -2910,20 +2930,25 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // whole window as a cache write. When the history before the new prompt is
   // past the floor, and a summary call plus a marker cost at most half its
   // resend (`coldHandoffPays`), the window hands off first, anchored at the
-  // new prompt. The prompt is sent either way. Only the turn's first call
-  // hands off: a later step continues the work of the step before it,
-  // whatever its tools took. The first projection holds no directive, since
-  // the loop discards what an earlier turn left. Keeping the cache warm with
+  // new prompt. The prompt is sent either way. Only a step that misses the
+  // cache hands off (`cacheMissed`): a later step on the same account
+  // continues the work of the step before it, whatever its tools took. The
+  // first projection holds no directive, since the loop discards what an
+  // earlier turn left. Keeping the cache warm with
   // idle pings is not done: each costs a cache read per lifetime with no
   // knowledge the user returns, and a cache already cold cannot be warmed
   // for less than one resend.
   const cold =
-    params.turnStart &&
     Result.isSuccess(fit) &&
     Option.exists(
       params.promptCache,
       (cache) =>
-        now.getTime() - cache.lastCallAtMillis >= cache.ttlMs &&
+        cacheMissed({
+          turnStart: params.turnStart,
+          accountMoved: params.accountMoved,
+          cache,
+          nowMillis: now.getTime(),
+        }) &&
         coldHandoffPays({
           historyTokens: fit.success.historyTokens,
           availableInputTokens: fit.success.availableInputTokens,

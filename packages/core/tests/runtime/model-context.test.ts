@@ -2607,6 +2607,111 @@ const summaryModel: CompactionRequest["summaryModel"] = () =>
 const leafContext = Layer.succeed(ExtensionContext, testLeafContext(testToolContext()))
 
 describe("turn window projection", () => {
+  it.scopedLive(
+    "a step moved to another account hands a large history off while its cache is warm; a small history, or the same account, sends it whole",
+    () =>
+      Effect.gen(function* () {
+        /** A step of a turn whose history before its prompt holds `historyTokens`. */
+        const moveStep = (name: string, historyTokens: number, accountMoved: boolean) =>
+          Effect.gen(function* () {
+            const sessionId = SessionId.make(`${name}-session`)
+            const branchId = BranchId.make(`${name}-branch`)
+            const at = (ordinal: number) => dateFromMillis(createdAt.getTime() + ordinal)
+            const message = (
+              id: string,
+              role: "user" | "assistant",
+              text: string,
+              ordinal: number,
+            ) =>
+              Message.cases.regular.make({
+                id: MessageId.make(`${name}-${id}`),
+                sessionId,
+                branchId,
+                role,
+                parts: [Prompt.textPart({ text })],
+                createdAt: at(ordinal),
+              })
+            const history = [
+              message("old-prompt", "user", "old prompt", 1),
+              message("old-reply", "assistant", "x".repeat(historyTokens * 4), 2),
+            ]
+            const turn = [
+              message("prompt", "user", "the turn's prompt", 3),
+              message("step-1", "assistant", "the turn's first step", 4),
+            ]
+            const requests: Array<CompactionRequest> = []
+            const compactor = Layer.succeed(
+              ModelContextCompactor,
+              ModelContextCompactor.of({
+                compact: (request) => {
+                  requests.push(request)
+                  return Effect.succeed({ notice: "moved summary", modelId: modelIdTurnWindow })
+                },
+              }),
+            )
+            const publisher = yield* recordingPublisher
+            const { compacted } = yield* projectContextWindow({
+              sessionId,
+              branchId,
+              modelId: modelIdTurnWindow,
+              agentName: agent.name,
+              messages: [...history, ...turn],
+              budget: ModelContextBudget.make({
+                contextLimitTokens: 1_000_000,
+                reservedSystemTokens: 0,
+                reservedToolTokens: 0,
+                reservedOutputTokens: 4_096,
+              }),
+              directive: Option.none(),
+              measure: Option.none(),
+              overflowed: false,
+              turnStart: false,
+              roleWindowTokens: Option.none(),
+              roleWindowBinds: false,
+              // The branch's last call started now: its cache is warm on the account it ran on.
+              promptCache: Option.some({
+                lastCallAtMillis: yield* Clock.currentTimeMillis,
+                ttlMs: 3_600_000,
+                pricing: Option.some(OPUS_PRICING),
+              }),
+              accountMoved,
+              persist: Effect.succeed,
+              summaryModel,
+              walkCredentials: (compact) => compact,
+              stop: yield* Deferred.make<void>(),
+            }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
+            return {
+              compacted,
+              summarized: requests.flatMap((request) => request.history.map((found) => found.id)),
+              kept: requests.flatMap((request) => request.kept.map((found) => found.id)),
+            }
+          })
+        // Moved, past the floor: the history before the turn's prompt hands
+        // off, and the turn's own work stays.
+        const moved = yield* moveStep("moved-large", LARGE_WINDOW_TOKENS, true)
+        expect(moved).toEqual({
+          compacted: true,
+          summarized: [
+            MessageId.make("moved-large-old-prompt"),
+            MessageId.make("moved-large-old-reply"),
+          ],
+          kept: [MessageId.make("moved-large-prompt"), MessageId.make("moved-large-step-1")],
+        })
+        // Moved, under the floor: the resend costs less than a handoff.
+        expect(yield* moveStep("moved-mid", MID_WINDOW_TOKENS, true)).toEqual({
+          compacted: false,
+          summarized: [],
+          kept: [],
+        })
+        // Not moved: a later step reads the warm cache, whatever the history.
+        expect(yield* moveStep("stayed-large", LARGE_WINDOW_TOKENS, false)).toEqual({
+          compacted: false,
+          summarized: [],
+          kept: [],
+        })
+      }),
+  )
+
   it.scopedLive("a turn whose own steps overflow hands off at a step boundary", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("mid-turn-session")
@@ -2692,6 +2797,7 @@ describe("turn window projection", () => {
         roleWindowTokens: Option.none(),
         roleWindowBinds: false,
         promptCache: Option.none(),
+        accountMoved: false,
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)
@@ -2824,6 +2930,7 @@ describe("turn window projection", () => {
         roleWindowTokens: Option.none(),
         roleWindowBinds: false,
         promptCache: Option.none(),
+        accountMoved: false,
         persist: (message) => Effect.succeed(message),
         summaryModel,
         walkCredentials: (compact) => compact,
@@ -2892,6 +2999,7 @@ describe("turn window projection", () => {
             roleWindowTokens: Option.none(),
             roleWindowBinds: false,
             promptCache: Option.none(),
+            accountMoved: false,
             persist: (message) => Effect.succeed(message),
             summaryModel,
             walkCredentials: (compact) => compact,
@@ -2976,6 +3084,7 @@ describe("turn window projection", () => {
         roleWindowTokens: Option.none(),
         roleWindowBinds: false,
         promptCache: Option.none(),
+        accountMoved: false,
         persist: (message) => {
           persisted.push(message)
           return Effect.succeed(message)
@@ -3060,6 +3169,7 @@ describe("turn window projection", () => {
           roleWindowTokens: Option.none(),
           roleWindowBinds: false,
           promptCache: Option.none(),
+          accountMoved: false,
           persist: Effect.succeed,
           summaryModel,
           walkCredentials: (compact) => compact,

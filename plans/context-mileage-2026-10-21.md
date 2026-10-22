@@ -246,8 +246,10 @@ once it has passed (B2).
     plan's 5-hour, weekly and monthly dollar limits, rejects a window at its
     limit (extra usage never counts), bills a request at its long-context or
     DeepSeek peak price, and keeps each meter's sign-in across a restart.
-    Open: a turn that fills its window mid-turn still finishes on extra
-    usage.) The seam is already
+    A turn that fills its window mid-turn moves to an account that has
+    not, goes on past full windows only when the user file sets
+    `providers.<id>.extraUsage`, and else stops naming the first reset; a
+    moved step hands a large history off (2026-10-22).) The seam is already
     normal: a driver reports `QuotaReading` (`window`, `utilization` as a
     fraction, `resetAt`, `rejected`; `packages/core/src/domain/driver.ts:618`),
     and lanes fit fuel per percent for each window. Only the Anthropic

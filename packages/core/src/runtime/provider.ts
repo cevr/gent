@@ -3800,6 +3800,17 @@ interface CredentialPlacementService {
     readonly model: ModelId
     readonly left: ReadonlySet<CredentialSlot>
   }) => Effect.Effect<boolean>
+  /**
+   * When the quota windows of `slot` that bound a run of `model` all reset:
+   * the latest reset among those read rejected and not reset yet; none when
+   * none is. A refusal's hold is not a full window: it says nothing of how
+   * a served answer would be billed.
+   */
+  readonly filledUntil: (params: {
+    readonly provider: string
+    readonly slot: CredentialSlot
+    readonly model: ModelId
+  }) => Effect.Effect<Option.Option<number>>
   /** The session's turn ended: its lane and a warming guard it holds are released. */
   readonly release: (sessionId: SessionId) => Effect.Effect<void>
   /**
@@ -6039,6 +6050,29 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         return params.pool.some(
           (slot) => !params.left.has(slot) && !isHeld(params.provider, slot, params.model, now),
         )
+      })
+    }),
+    filledUntil: Effect.fn("CredentialPlacement.filledUntil")(function* (params: {
+      readonly provider: string
+      readonly slot: CredentialSlot
+      readonly model: ModelId
+    }) {
+      const now = yield* Clock.currentTimeMillis
+      return yield* locked(() => {
+        trim(now)
+        const resets = readings
+          .values()
+          .filter(
+            (reading) =>
+              reading.provider === params.provider &&
+              reading.slot === params.slot &&
+              reading.rejected &&
+              reading.resetAt > now &&
+              meters(reading, Option.some(params.model)),
+          )
+          .map((reading) => reading.resetAt)
+          .toArray()
+        return Option.liftPredicate(Math.max(...resets), () => resets.length > 0)
       })
     }),
     release: Effect.fn("CredentialPlacement.release")(function* (sessionId: SessionId) {

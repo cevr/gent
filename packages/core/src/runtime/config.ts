@@ -135,6 +135,10 @@ export const readDisabledExtensions = (params: { home: string; cwd: string }) =>
  * holds lanes of the sign-in for projects, by repository path: a project
  * runs that many at once whatever the pace, and other work leaves room for
  * them (`ConfigService.laneHolds`). Only the user file's holds count.
+ * `extraUsage` lets a turn whose accounts all filled their windows go on
+ * past them, on the plan's extra usage, instead of stopping until the
+ * first reset (`ConfigService.extraUsage`). It is off by default, and only
+ * the user file's counts: a project file never spends the owner's money.
  */
 const ProviderConfigEntry = Schema.Struct({
   authOrder: Schema.optional(CredentialOrder.check(Schema.isMinLength(1))),
@@ -142,6 +146,7 @@ const ProviderConfigEntry = Schema.Struct({
   authHold: Schema.optional(
     Schema.Record(Schema.String, Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   ),
+  extraUsage: Schema.optional(Schema.Boolean),
   name: Schema.optional(Schema.String),
   class: Schema.optional(Schema.String),
   api: Schema.optional(Schema.String),
@@ -684,6 +689,11 @@ interface ConfigServiceService {
    * the larger.
    */
   readonly laneHolds: (owner: string) => Effect.Effect<ReadonlyMap<string, number>>
+  /**
+   * Whether a turn on `owner`'s sign-in goes on past every account's full
+   * window (`providers.<owner>.extraUsage`). Only the user file counts.
+   */
+  readonly extraUsage: (owner: string) => Effect.Effect<boolean>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
    *  The write starts from the user config on disk now, so a hand edit
    *  made while gent runs survives. Fails with
@@ -1274,6 +1284,11 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return holds
         }),
 
+        extraUsage: Effect.fn("ConfigService.extraUsage")(function* (owner) {
+          const { user } = yield* readUser
+          return user.providers?.[owner]?.extraUsage ?? false
+        }),
+
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({
             updated: configUpdates.setDriverOverride(current, agent, driver),
@@ -1377,6 +1392,11 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             Effect.map(
               SynchronizedRef.get(userConfigRef),
               (user) => new Map(Object.entries(user.providers?.[owner]?.authHold ?? {})),
+            ),
+          extraUsage: (owner) =>
+            Effect.map(
+              SynchronizedRef.get(userConfigRef),
+              (user) => user.providers?.[owner]?.extraUsage ?? false,
             ),
           setDriverOverride: (agent, driver) =>
             SynchronizedRef.update(userConfigRef, (current) =>

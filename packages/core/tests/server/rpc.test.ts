@@ -4934,7 +4934,8 @@ describe("AccountsRpcs", () => {
             configServiceLayer: ConfigService.Test(
               new UserConfig({
                 model: TEST_MODEL_ID,
-                providers: { anthropic: { authOrder: [work] } },
+                // The first step fills the week: the second goes on past it.
+                providers: { anthropic: { authOrder: [work], extraUsage: true } },
               }),
             ),
           })

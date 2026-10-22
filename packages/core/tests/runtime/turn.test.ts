@@ -196,7 +196,12 @@ import {
   type VirtualModel,
   type VirtualModelChoice,
 } from "../../src/domain/driver"
-import { type ProviderConfig, RuntimeEnvironment } from "../../src/runtime/config"
+import {
+  ConfigService,
+  type ProviderConfig,
+  RuntimeEnvironment,
+  UserConfig,
+} from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -2496,6 +2501,8 @@ describe("credential order", () => {
     readonly spread?: ReadonlyArray<CredentialSlot>
     /** The server's placement the root's sessions share; default: one in memory per root. */
     readonly placement?: CredentialPlacement["Service"]
+    /** The user file lets the sign-in go on past full quota windows (`extraUsage`); default off. */
+    readonly extraUsage?: boolean
     /** The model's cache lifetime; default: the catalog names none. */
     readonly cacheTtlMs?: number
     /** The catalog lists the model with no context window: each step fails before its request. */
@@ -2654,6 +2661,11 @@ describe("credential order", () => {
           Option.map(Option.fromUndefinedOr(params.placement), (placement) =>
             Layer.succeed(CredentialPlacement, placement),
           ),
+        ),
+        ConfigService.Test(
+          new UserConfig({
+            providers: { [FALLBACK]: { extraUsage: params.extraUsage === true } },
+          }),
         ),
       ),
     }).pipe(
@@ -3884,6 +3896,7 @@ describe("credential order", () => {
         readonly compactor?: ModelContextCompactor["Service"]
         readonly spendLimits?: ReadonlyArray<SpendLimit>
         readonly requestPricing?: ModelDriverContribution["requestPricing"]
+        readonly extraUsage?: boolean
       } = {},
     ) => {
       const pool = options.pool ?? [a, b]
@@ -3905,6 +3918,7 @@ describe("credential order", () => {
           compactor: options.compactor,
           spendLimits: options.spendLimits,
           requestPricing: options.requestPricing,
+          extraUsage: options.extraUsage,
         }),
       })
     }
@@ -4377,6 +4391,151 @@ describe("credential order", () => {
         ).pipe(Effect.provide(next.layer))
         return yield* eventsOf(world, first)
       })
+
+    /** `slot`'s five-hour window is full until `resetAt`, as a served response's headers say. */
+    const fill = (
+      placement: CredentialPlacement["Service"],
+      slot: CredentialSlot,
+      resetAt: number,
+    ) =>
+      placement.noteQuota({
+        provider: FALLBACK,
+        slot,
+        signedInAt: Option.none(),
+        readings: [{ window: "5h", utilization: 1, resetAt, rejected: true }],
+      })
+    /** A tool step whose response fills its account's window, then `then` on each later request. */
+    const fillingToolStep =
+      (fills: Effect.Effect<void>, then: Reply): Reply =>
+      (call) => {
+        if (call > 0) return then(call)
+        return Stream.fromEffect(fills).pipe(
+          Stream.drain,
+          Stream.concat(
+            Stream.fromIterable([
+              toolCallPart("echo", { text: "hi" }),
+              finishPart({ finishReason: "tool-calls" }),
+            ]),
+          ),
+        )
+      }
+    /** The run's errors that are not notices, with the reset each names. */
+    const failuresOf = (events: ReadonlyArray<AgentEvent>) =>
+      events.flatMap((event) => {
+        if (event._tag !== "ErrorOccurred" || event.notice === true) return []
+        return [{ error: event.error, retryAt: event.retryAt }]
+      })
+
+    it.live(
+      "a step whose account filled its quota window mid-turn moves to one that has not, with a notice",
+      () =>
+        Effect.gen(function* () {
+          const world = yield* spreadWorld
+          const resetAt = (yield* Clock.currentTimeMillis) + HOUR_MS
+          const root = spreadRoot(world, "filled-moves", {
+            replies: {
+              "sk-a": fillingToolStep(fill(world.placement, a, resetAt), answer("from a")),
+              "sk-b": answer("from b"),
+            },
+          })
+          yield* runOn(root, "first")
+          const events = yield* eventsOf(world, root)
+          expect(root.sent).toEqual(["sk-a", "sk-b"])
+          expect(slotsOf(events)).toEqual([a, b])
+          expect(placementsOf(events)).toEqual([
+            { slot: a, reason: "new", from: "none" },
+            { slot: b, reason: "filled", from: a },
+          ])
+          expect(credentialReport(events).errors).toEqual([
+            {
+              error: `Credential "a" of ${FALLBACK} filled its quota window; continuing with "b"`,
+              notice: true,
+            },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a step whose every account filled its quota window stops before its request, naming the first reset, unless the sign-in allows extra usage",
+      () =>
+        Effect.gen(function* () {
+          const run = (name: string, extraUsage: boolean) =>
+            Effect.gen(function* () {
+              const world = yield* spreadWorld
+              const now = yield* Clock.currentTimeMillis
+              yield* fill(world.placement, b, now + 2 * HOUR_MS)
+              // Two tool steps on a, then an answer: the notice shows once a turn.
+              const twoSteps = fillingToolStep(fill(world.placement, a, now + HOUR_MS), (call) => {
+                if (call > 1) return answer("from a")(call)
+                return Stream.fromIterable([
+                  toolCallPart("echo", { text: "again" }),
+                  finishPart({ finishReason: "tool-calls" }),
+                ])
+              })
+              const root = spreadRoot(world, name, {
+                extraUsage,
+                replies: { "sk-a": twoSteps, "sk-b": answer("from b") },
+              })
+              yield* runOn(root, "first")
+              const events = yield* eventsOf(world, root)
+              return { now, root, events }
+            })
+          const stopped = yield* run("filled-stops", false)
+          expect(stopped.root.sent).toEqual(["sk-a"])
+          expect(slotsOf(stopped.events)).toEqual([a])
+          expect(failuresOf(stopped.events)).toEqual([
+            {
+              error: `Every credential of ${FALLBACK} filled its quota window; set providers.${FALLBACK}.extraUsage to go on past it`,
+              retryAt: stopped.now + HOUR_MS,
+            },
+          ])
+          expect(stopped.events.filter((event) => event._tag === "StreamStarted")).toHaveLength(1)
+          expect(stopped.events.filter((event) => event._tag === "TurnCompleted")).toHaveLength(1)
+
+          const extra = yield* run("filled-extra-usage", true)
+          expect(extra.root.sent).toEqual(["sk-a", "sk-a", "sk-a"])
+          expect(slotsOf(extra.events)).toEqual([a, a, a])
+          expect(failuresOf(extra.events)).toEqual([])
+          expect(credentialReport(extra.events).errors).toEqual([
+            {
+              error: `Every credential of ${FALLBACK} filled its quota window; continuing on extra usage`,
+              notice: true,
+            },
+          ])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
+
+    it.live(
+      "a refused run skips an account that filled its quota window, and takes one only when every other filled and the sign-in allows extra usage",
+      () =>
+        Effect.gen(function* () {
+          const run = (name: string, filled: ReadonlyArray<CredentialSlot>, extraUsage: boolean) =>
+            Effect.gen(function* () {
+              const placement = yield* makeCredentialPlacement(Option.none())
+              const resetAt = (yield* Clock.currentTimeMillis) + HOUR_MS
+              yield* Effect.forEach(filled, (slot) => fill(placement, slot, resetAt), {
+                discard: true,
+              })
+              // An order, not a pool: the walk is the order itself.
+              const root = credentialRoot({
+                name,
+                order: [a, b, c],
+                stored: keysOf([a, b, c]),
+                replies: { "sk-a": refusal, "sk-b": answer("from b"), "sk-c": answer("from c") },
+                placement,
+                extraUsage,
+              })
+              yield* runOn(root, "first")
+              return root.sent
+            })
+          // An account not filled comes first, extra usage or not.
+          expect(yield* run("refused-skips-filled", [b], false)).toEqual(["sk-a", "sk-c"])
+          expect(yield* run("refused-skips-filled-extra", [b], true)).toEqual(["sk-a", "sk-c"])
+          // Every other filled: the refusal ends the turn, or the next goes on extra usage.
+          expect(yield* run("refused-all-filled", [b, c], false)).toEqual(["sk-a"])
+          expect(yield* run("refused-takes-filled", [b, c], true)).toEqual(["sk-a", "sk-b"])
+        }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+    )
 
     it.live(
       "a turn recovered after a refusal moved it, before the new account's first receipt, resumes on its newest receipt's account and records only a move that has a receipt",

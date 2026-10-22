@@ -434,6 +434,7 @@ interface RigAccounts {
   readonly order?: {
     readonly authOrder: ReadonlyArray<CredentialSlot>
     readonly authSpread?: ReadonlyArray<CredentialSlot>
+    readonly extraUsage?: boolean
   }
   readonly pricing?: ModelPricing
   readonly usage?: StepUsage
@@ -795,9 +796,11 @@ describe("threads", () => {
   describe("account lanes", () => {
     const work = CredentialSlot.make("work")
     // A thousand input tokens at $5,000 per million: $5, one million fuel,
-    // a step small enough that the window never fills.
+    // a step small enough that the window never fills. The starter's own
+    // turn goes on past the readings it reports; a thread's lane does not
+    // read extra usage.
     const metered = {
-      order: { authOrder: [work] },
+      order: { authOrder: [work], extraUsage: true },
       pricing: { input: 5_000, output: 5_000 },
       usage: { inputTokens: 1_000, outputTokens: 0 },
     }

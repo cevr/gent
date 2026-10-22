@@ -5859,6 +5859,38 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect(
+    "an account is filled for a model until the last of its rejected windows that meter the model resets",
+    () =>
+      Effect.gen(function* () {
+        const { read, placement } = yield* accounts()
+        const now = yield* Clock.currentTimeMillis
+        const otherModel = ModelId.make("plan/other")
+        const filled = (slot: CredentialSlot, model = planModel) =>
+          placement.filledUntil({ provider: "plan", slot, model })
+        // Two full windows: filled until the later reset.
+        yield* read(a, [
+          { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true },
+          { window: "5h", utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+        ])
+        // Spent but not refused: not filled.
+        yield* read(b, [{ window: "7d", utilization: 1, resetAt: now + HOUR }])
+        // A window of another model alone fills the account for that model only.
+        yield* read(c, [
+          { window: "7d", utilization: 1, resetAt: now + HOUR, rejected: true, model: otherModel },
+        ])
+        expect(yield* filled(a)).toEqual(Option.some(now + 2 * HOUR))
+        expect(yield* filled(b)).toEqual(Option.none())
+        expect(yield* filled(c)).toEqual(Option.none())
+        expect(yield* filled(c, otherModel)).toEqual(Option.some(now + HOUR))
+        // Past the first reset only the later window is full; past both, none.
+        yield* TestClock.adjust("90 minutes")
+        expect(yield* filled(a)).toEqual(Option.some(now + 2 * HOUR))
+        yield* TestClock.adjust("1 hour")
+        expect(yield* filled(a)).toEqual(Option.none())
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("the weekly ceiling caps rolling pace before the first refill", () =>
     Effect.gen(function* () {
       const { read, lanes, now } = yield* pacedAccounts(21_000_000, 2_000_000)

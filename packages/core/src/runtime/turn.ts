@@ -915,6 +915,11 @@ interface TurnLedger {
   /** This turn leaves `slot` of `provider`'s order for the rest of the turn. */
   readonly passCredential: (provider: string, slot: CredentialSlot) => Effect.Effect<void>
   /**
+   * This turn goes on past the full windows of `provider`'s accounts, on
+   * the plan's extra usage: true the first time, so its notice shows once.
+   */
+  readonly noteExtraUsage: (provider: string) => Effect.Effect<boolean>
+  /**
    * The turn's steps before a restart last ran on `slot` of `provider`, by
    * their receipts: the turn goes on from that slot, not from the first. A
    * spread walk is settled there, so the turn is not placed again at its
@@ -971,7 +976,7 @@ interface TurnLedger {
  */
 interface CredentialDecision {
   readonly slot: CredentialSlot
-  /** The slot it preferred, the one that refused it, or the one outside the pool it returned from. */
+  /** The slot it preferred, the one that refused it or filled its window, or the one outside the pool it returned from. */
   readonly from: Option.Option<CredentialSlot>
   readonly reason: CredentialAssigned["reason"]
 }
@@ -1035,6 +1040,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
   const joined = yield* Ref.make<ReadonlySet<MessageId>>(new Set())
   const lastRetryAt = yield* Ref.make(Option.none<number>())
   const cursors = yield* Ref.make<ReadonlyMap<string, CredentialCursor>>(new Map())
+  const extraUsage = yield* Ref.make<ReadonlySet<string>>(new Set())
   return {
     beginTurn: (messageId) =>
       Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
@@ -1047,6 +1053,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
             Effect.andThen(Ref.set(joined, new Set())),
             Effect.andThen(Ref.set(lastRetryAt, Option.none())),
             Effect.andThen(Ref.set(cursors, new Map())),
+            Effect.andThen(Ref.set(extraUsage, new Set())),
           )
         }),
       ),
@@ -1155,6 +1162,11 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           ...cursor,
           passed: new Set([...cursor.passed, slot]),
         })
+      }),
+    noteExtraUsage: (provider) =>
+      Ref.modify(extraUsage, (current): readonly [boolean, ReadonlySet<string>] => {
+        if (current.has(provider)) return [false, current]
+        return [true, new Set([...current, provider])]
       }),
     resumeCredential: (provider, slot) =>
       Ref.update(cursors, (current) =>
@@ -3281,6 +3293,21 @@ const noteSummarySpend = Effect.fn("TurnHelpers.noteSummarySpend")(function* (
   })
 })
 
+/**
+ * Every account a step may take filled a quota window of its model, and its
+ * sign-in does not go on past them (`extraUsage` off): the turn stops before
+ * any request, until `retryAt`, the first of the order's full windows to
+ * reset.
+ */
+class QuotaWindowsFull extends Schema.TaggedError<
+  QuotaWindowsFull,
+  { readonly brand: unique symbol }
+>()("QuotaWindowsFull", {
+  message: Schema.String,
+  provider: Schema.String,
+  retryAt: Schema.Finite,
+}) {}
+
 const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
@@ -3385,8 +3412,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // back to a slot it left: a slot that answers serves the rest of the turn.
   // A conflicting order fails here as it fails the request's resolution. A
   // pinned run walks its pin alone.
+  const orderRequest: ResolveModelRequest = {
+    modelId: resolved.modelId,
+    driverId: Option.getOrUndefined(driverId),
+  }
   const selectCredential = nextRequestCredential({
-    request: { modelId: resolved.modelId, driverId: Option.getOrUndefined(driverId) },
+    request: orderRequest,
     pin: resolved.credentialPin,
     turnLedger: params.turnLedger,
     extensionRegistry,
@@ -3396,26 +3427,31 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // chooses it now: its catalog view sets the window and the prices, and its
   // cache is the one the step can read. None when the order fails; the
   // request's resolution then reports why.
-  const nextCredential = yield* selectCredential.pipe(
+  const firstCredential = selectCredential.pipe(
     Effect.orElseSucceed(() => Option.none<CredentialReceipt>()),
   )
-  // A credential whose view does not list the model leaves the sign-in's own.
-  const pinnedModel = yield* Option.match(nextCredential, {
-    onNone: () => Effect.succeedNone,
-    onSome: (credential) =>
-      modelRegistry
-        .get(contextModelId, credential)
-        .pipe(Effect.orElseSucceed(() => Option.none<Model>())),
-  })
-  let modelOption = pinnedModel
-  if (Option.isNone(modelOption)) modelOption = yield* modelRegistry.get(contextModelId)
-  if (Option.isNone(modelOption)) {
-    return yield* new ModelContextCapabilityError({
-      failure: ModelContextCapabilityFailure.cases.UnknownModel.make({
-        modelId: contextModelId,
-      }),
+  // The model as `credential`'s view lists it: a view that does not list it
+  // leaves the sign-in's own.
+  const listedModel = Effect.fn("TurnHelpers.listedModel")(function* (
+    credential: Option.Option<CredentialReceipt>,
+  ) {
+    let modelOption = yield* Option.match(credential, {
+      onNone: () => Effect.succeedNone,
+      onSome: (receipt) =>
+        modelRegistry
+          .get(contextModelId, receipt)
+          .pipe(Effect.orElseSucceed(() => Option.none<Model>())),
     })
-  }
+    if (Option.isNone(modelOption)) modelOption = yield* modelRegistry.get(contextModelId)
+    if (Option.isNone(modelOption)) {
+      return yield* new ModelContextCapabilityError({
+        failure: ModelContextCapabilityFailure.cases.UnknownModel.make({
+          modelId: contextModelId,
+        }),
+      })
+    }
+    return modelOption.value
+  })
   /**
    * The step's window as one credential's catalog entry (`model`) reads it:
    * its limit, its budget, its request hints and its cache lifetime. A spread
@@ -3551,7 +3587,171 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       modelRequest,
     }
   })
-  const opening = yield* modelWindow(modelOption.value)
+  const first = yield* firstCredential
+  let opening = yield* modelWindow(yield* listedModel(first))
+  const eventStore = yield* EventStore
+  const configService = yield* ConfigService
+  /**
+   * Leave `from`, the account the turn is on, for the next one of its order
+   * that has not filled a quota window of the step's model: a spread run for
+   * the least-used pool account it has not left, any other run for the next
+   * slot. A filled one is taken only when `mayTakeFilled`, first in the same
+   * walk. A refusal (`refusal`, its failure) holds a spread run's account
+   * until its reset. The turn never comes back to `from`, and the user reads
+   * a notice naming `why`. None when the order names no slot to take.
+   */
+  const leaveCredential = Effect.fn("TurnHelpers.leaveCredential")(
+    function* (leave: {
+      readonly from: CredentialReceipt
+      readonly why: string
+      readonly refusal: Option.Option<unknown>
+      readonly mayTakeFilled: boolean
+    }) {
+      const { provider, slot } = leave.from
+      const order = yield* requestCredentialOrder(
+        orderRequest,
+        extensionRegistry,
+        resolved.credentialPin,
+      ).pipe(Effect.orElseSucceed(Option.none))
+      if (Option.isNone(order) || order.value.provider !== provider) {
+        return Option.none<CredentialSlot>()
+      }
+      const walk = placementWalk(
+        order.value,
+        (yield* params.turnLedger.credentialPlacement(provider)).at,
+      )
+      const left = yield* params.turnLedger.passedCredentials(provider, walk)
+      const leaving: ReadonlySet<CredentialSlot> = new Set([...left, slot])
+      const candidates = yield* Option.match(order.value.pool, {
+        onNone: () => Effect.succeed(walk),
+        onSome: (pool) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            // A refusal of this model alone (a per-model rate limit, a model
+            // the credential does not serve) holds the account for it alone.
+            for (const cause of Option.toArray(leave.refusal))
+              yield* placement.refuse({
+                provider,
+                slot,
+                signedInAt: Option.fromUndefinedOr(leave.from.signedInAt),
+                model: Option.liftPredicate(resolved.modelId, () => refusalHoldsModel(cause)),
+                retryAt: retryPolicy.retryAt(cause, now),
+              })
+            const placed = yield* placement.place({
+              provider,
+              pool,
+              model: resolved.modelId,
+              sessionId: params.sessionId,
+              preferred: Option.none(),
+              starter: Option.none(),
+              left: leaving,
+              ttlMs: opening.cacheLifetimeMs,
+            })
+            return [...placed, ...walk]
+          }),
+      })
+      const open = candidates.filter((candidate) => !leaving.has(candidate))
+      const unfilled = yield* Effect.findFirst(open, (candidate) =>
+        Effect.map(
+          placement.filledUntil({ provider, slot: candidate, model: resolved.modelId }),
+          Option.isNone,
+        ),
+      )
+      const next = Option.orElse(unfilled, () =>
+        Option.fromUndefinedOr(open[0]).pipe(Option.filter(() => leave.mayTakeFilled)),
+      )
+      if (Option.isNone(next)) return next
+      yield* params.turnLedger.passCredential(provider, slot)
+      yield* Effect.logInfo("turn.credential-moved").pipe(
+        Effect.annotateLogs({ provider, slot, next: next.value, reason: leave.why }),
+      )
+      yield* publishEventOrDie(
+        ErrorOccurred.make({
+          sessionId: params.sessionId,
+          branchId: params.branchId,
+          error: `Credential "${slot}" of ${provider} ${leave.why}; continuing with "${next.value}"`,
+          notice: true,
+        }),
+      )
+      // An order walks as it reads: the turn leaves the filled slots it skipped.
+      if (Option.isNone(order.value.pool)) {
+        yield* Effect.forEach(
+          open.slice(0, open.indexOf(next.value)),
+          (skipped) => params.turnLedger.passCredential(provider, skipped),
+          { discard: true },
+        )
+        return next
+      }
+      // Past every pool account, the turn walks the rest of the order: no
+      // placement, and the next turn returns to the pool once one is not held.
+      if (order.value.pool.value.includes(next.value)) {
+        yield* params.turnLedger.placeCredential(provider, {
+          slot: next.value,
+          from: Option.some(slot),
+          reason: Option.match(leave.refusal, {
+            onNone: () => "filled" as const,
+            onSome: () => "refused" as const,
+          }),
+        })
+      } else {
+        yield* params.turnLedger.settleCredential(provider, next)
+      }
+      return next
+    },
+    Effect.provideService(EventStore, eventStore),
+  )
+  // An account that filled a quota window of the step's model serves it
+  // only on the plan's extra usage. The step leaves it for one that has
+  // not; with none, the turn goes on there only when the sign-in allows
+  // extra usage (`extraUsage`), and else stops until the first of the
+  // order's full windows resets. A moved step's cache is cold on the new
+  // account, so its window may hand off first (`accountMoved`).
+  const meetFullWindow = Effect.fn("TurnHelpers.meetFullWindow")(function* (on: CredentialReceipt) {
+    const filled = yield* placement.filledUntil({
+      provider: on.provider,
+      slot: on.slot,
+      model: resolved.modelId,
+    })
+    if (Option.isNone(filled)) return false
+    const moved = yield* leaveCredential({
+      from: on,
+      why: "filled its quota window",
+      refusal: Option.none(),
+      mayTakeFilled: false,
+    })
+    if (Option.isSome(moved)) return true
+    if (yield* configService.extraUsage(on.provider)) {
+      if (yield* params.turnLedger.noteExtraUsage(on.provider))
+        yield* publishEventOrDie(
+          ErrorOccurred.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            error: `Every credential of ${on.provider} filled its quota window; continuing on extra usage`,
+            notice: true,
+          }),
+        ).pipe(Effect.provideService(EventStore, eventStore))
+      return false
+    }
+    const order = yield* requestCredentialOrder(
+      orderRequest,
+      extensionRegistry,
+      resolved.credentialPin,
+    ).pipe(Effect.orElseSucceed(Option.none))
+    const resets = yield* Effect.forEach(
+      Option.match(order, { onNone: () => [on.slot], onSome: (found) => found.slots }),
+      (slot) => placement.filledUntil({ provider: on.provider, slot, model: resolved.modelId }),
+    )
+    return yield* new QuotaWindowsFull({
+      message: `Every credential of ${on.provider} filled its quota window; set providers.${on.provider}.extraUsage to go on past it`,
+      provider: on.provider,
+      retryAt: Math.min(filled.value, ...resets.flatMap(Option.toArray)),
+    })
+  })
+  const accountMoved = yield* Option.match(first, {
+    onNone: () => Effect.succeed(false),
+    onSome: meetFullWindow,
+  })
+  if (accountMoved) opening = yield* modelWindow(yield* listedModel(yield* firstCredential))
   const { budget, promptCache, turnHints, modelRequest, cacheLifetimeMs } = opening
   // The slot the last request went out with, set as it is chosen: the
   // receipt, the price and a move name that slot, not the one the order
@@ -3570,14 +3770,14 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         }),
       ),
     )
-  const eventStore = yield* EventStore
   /**
    * Leave the credential the failed request used (`used`), when its failure
    * (`cause`) proved it cannot serve and the order as it reads now names
-   * another slot the turn has not left: a refusal, an exhausted quota, a
-   * rate limit past its retries, or a failure the driver proved. Any other
-   * failure, a cancelled step, or the last slot stays where it is. The user
-   * reads a notice. A pinned run's order is its pin alone: it never moves.
+   * another slot the turn has not left (`leaveCredential`): a refusal, an
+   * exhausted quota, a rate limit past its retries, or a failure the driver
+   * proved. Any other failure, a cancelled step, or the last slot stays
+   * where it is. The user reads a notice. A pinned run's order is its pin
+   * alone: it never moves.
    */
   const moveCredential = (cause: unknown) =>
     Effect.gen(function* () {
@@ -3586,75 +3786,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       if (Option.isNone(refusal)) return false
       const failed = yield* Ref.get(used)
       if (Option.isNone(failed)) return false
-      const { provider, slot } = failed.value
-      const order = yield* requestCredentialOrder(
-        modelRequest,
-        extensionRegistry,
-        resolved.credentialPin,
-      ).pipe(Effect.orElseSucceed(Option.none))
-      if (Option.isNone(order) || order.value.provider !== provider) return false
-      const walk = placementWalk(
-        order.value,
-        (yield* params.turnLedger.credentialPlacement(provider)).at,
-      )
-      const left = yield* params.turnLedger.passedCredentials(provider, walk)
-      const leaving: ReadonlySet<CredentialSlot> = new Set([...left, slot])
-      // A spread run holds the refused account until its reset and goes to
-      // the least-used one it has not left; any other run takes the next slot.
-      const next = yield* Option.match(order.value.pool, {
-        onNone: () => Effect.succeed(walk.find((candidate) => !leaving.has(candidate))),
-        onSome: (pool) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
-            // A refusal of this model alone (a per-model rate limit, a model
-            // the credential does not serve) holds the account for it alone.
-            yield* placement.refuse({
-              provider,
-              slot,
-              signedInAt: Option.fromUndefinedOr(failed.value.signedInAt),
-              model: Option.liftPredicate(resolved.modelId, () => refusalHoldsModel(cause)),
-              retryAt: retryPolicy.retryAt(cause, now),
-            })
-            const placed = yield* placement.place({
-              provider,
-              pool,
-              model: resolved.modelId,
-              sessionId: params.sessionId,
-              preferred: Option.none(),
-              starter: Option.none(),
-              left: leaving,
-              ttlMs: cacheLifetimeMs,
-            })
-            return [...placed, ...walk].find((candidate) => !leaving.has(candidate))
-          }),
+      // A refused step takes an account that filled its window only when its
+      // sign-in allows extra usage: it would be billed past the plan there.
+      const moved = yield* leaveCredential({
+        from: failed.value,
+        why: refusal.value,
+        refusal: Option.some(cause),
+        mayTakeFilled: yield* configService.extraUsage(failed.value.provider),
       })
-      if (Predicate.isUndefined(next)) return false
-      yield* params.turnLedger.passCredential(provider, slot)
-      yield* Effect.logInfo("turn.credential-moved").pipe(
-        Effect.annotateLogs({ provider, slot, next, reason: refusal.value }),
-      )
-      yield* publishEventOrDie(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `Credential "${slot}" of ${provider} ${refusal.value}; continuing with "${next}"`,
-          notice: true,
-        }),
-      )
-      if (Option.isNone(order.value.pool)) return true
-      // Past every pool account, the turn walks the rest of the order: no
-      // placement, and the next turn returns to the pool once one is not held.
-      if (order.value.pool.value.includes(next)) {
-        yield* params.turnLedger.placeCredential(provider, {
-          slot: next,
-          from: Option.some(slot),
-          reason: "refused",
-        })
-      } else {
-        yield* params.turnLedger.settleCredential(provider, Option.some(next))
-      }
-      return true
-    }).pipe(Effect.provideService(EventStore, eventStore))
+      return Option.isSome(moved)
+    })
   /**
    * Run `attempt`, and run it again each time its failure moves the turn to
    * the next credential of its order (`moveCredential`). The step's request
@@ -3752,6 +3893,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     roleWindowTokens: opening.roleWindow,
     roleWindowBinds: resolved.spawned || params.step <= 1,
     promptCache,
+    accountMoved,
     persist: persistDurableMessage,
     // The summary is plain text under a small output cap. Reasoning tokens
     // count against that cap on some providers, so the summary asks for none
@@ -5345,22 +5487,48 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         placed: params.placed,
         publishReceipt,
       }).pipe(
-        Effect.asSome,
-        Effect.catchTag("CompactionStopped", () => Effect.succeedNone),
+        Effect.map(Result.succeed),
+        // The turn stopped while its window was compacted: the step never
+        // starts, so it writes nothing and asks no model.
+        Effect.catchTags({
+          CompactionStopped: () =>
+            Effect.succeed(
+              Result.fail({
+                collected: collectNormalizedResponse({
+                  responseParts: [],
+                  streamFailed: false,
+                  interrupted: true,
+                }),
+                outcome: StepOutcome.cases.Interrupted.make({}),
+              }),
+            ),
+          // Every account the step may take filled its window: the step fails
+          // before any request went out, and the turn ends naming the reset.
+          QuotaWindowsFull: (full) =>
+            Effect.gen(function* () {
+              const collected = yield* collectFailedModelTurnResponse({
+                messageId: params.messageId,
+                step: params.step,
+                streamError: new ProviderError({
+                  message: full.message,
+                  model: params.resolved.modelId,
+                  cause: full,
+                }),
+                sessionId: scope.sessionId,
+                branchId: scope.branchId,
+                modelId: params.resolved.modelId,
+                activeStream: params.activeStream,
+                contextOverflow: false,
+                retryAt: Option.some(full.retryAt),
+                publishReceipt,
+              })
+              yield* scope.turnLedger.noteStepEnd(collected.retryAt)
+              return Result.fail({ collected, outcome: classifyStep(collected) })
+            }),
+        }),
       )
-      // The turn stopped while its window was compacted: the step never
-      // starts, so it writes nothing and asks no model.
-      if (Option.isNone(resolvedSource)) {
-        return {
-          collected: collectNormalizedResponse({
-            responseParts: [],
-            streamFailed: false,
-            interrupted: true,
-          }),
-          outcome: StepOutcome.cases.Interrupted.make({}),
-        }
-      }
-      const source = resolvedSource.value
+      if (Result.isFailure(resolvedSource)) return resolvedSource.failure
+      const source = resolvedSource.success
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
       yield* scope.turnLedger.noteNotices(params.resolved.notices)
