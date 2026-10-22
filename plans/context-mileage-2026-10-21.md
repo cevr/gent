@@ -142,7 +142,11 @@ once it has passed (B2).
     merged at 415a2b09c (2026-10-22): the Codex client reads the
     `x-codex-primary-*` and `x-codex-secondary-*` headers on each answer,
     and a test shows both providers' lanes, with a spent ChatGPT window
-    refusing only openai. OpenCode Go is open.) The seam is already
+    refusing only openai. Per-model readings merged at 0ae779bd8 with its
+    review fix 33cce355c (2026-10-22): a reading may name a model, its
+    window holds, fits and admits that model's runs alone, and admission
+    counts the account's load and the model's load apart. OpenCode Go is
+    open.) The seam is already
     normal: a driver reports `QuotaReading` (`window`, `utilization` as a
     fraction, `resetAt`, `rejected`; `packages/core/src/domain/driver.ts:618`),
     and lanes fit fuel per percent for each window. Only the Anthropic
