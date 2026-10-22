@@ -3591,6 +3591,19 @@ const MODEL_WEIGHT_PRIOR_POINTS = 1
 /** A model's quota weight stays within this factor of its list price either way. */
 const MODEL_WEIGHT_BOUND = 8
 /**
+ * The largest standard error, as a share of the weight, a fitted weight may
+ * keep: the segments alone (the prior left out) must tell the model's price
+ * apart from the whole-percent rounding of their edges. A guess.
+ */
+const MODEL_WEIGHT_MAX_ERROR = 0.1
+/**
+ * The smallest edge a segment's rounding is read at, in points: a step that
+ * spent nothing still leaves its reading's own precision. A guess.
+ */
+const MODEL_FIT_MIN_EDGE_POINTS = 0.01
+/** The passes the fit takes between the windows' kept sets and the weights at most. */
+const MODEL_FIT_PASSES = 20
+/**
  * How long an admitted start holds its lane before its turn opens. Its turn
  * opening, a turn it joins, or its caller's refusal frees it first; past it,
  * a start whose send was lost frees the lane. A guess.
@@ -3986,6 +3999,14 @@ const FuelSegment = Schema.Struct({
   tokens: FuelTokens,
   /** The fuel by the model each request of it ran (`PlacementFuel.model`); absent on an older ledger. */
   models: Schema.optionalKey(Schema.Array(Schema.Struct({ model: ModelId, fuel: Schema.Finite }))),
+  /**
+   * The fuel of the step that opened it (absent when a fresh reading opened
+   * it: up to a whole point) and of the one that closed it: how far its true
+   * move may lie from the whole percents read at its edges.
+   */
+  edges: Schema.optionalKey(
+    Schema.Struct({ open: Schema.optionalKey(Schema.Finite), close: Schema.Finite }),
+  ),
 })
 type FuelSegment = typeof FuelSegment.Type
 
@@ -4193,18 +4214,36 @@ interface WindowFit {
   /** The segments the rate reads: those spend outside gent did not move. */
   readonly kept: ReadonlyArray<FuelSegment>
   readonly outsideShare: number
+  /** The rate of the kept segments' fuel at the models' quota weights (`weightedFuel`). */
+  readonly mixFuelPerPct: Option.Option<number>
+}
+
+/**
+ * A segment's fuel at the models' quota weights: each model's fuel times its
+ * weight, and fuel of no recorded model (an older ledger's) at 1.
+ */
+const weightedFuel = (segment: FuelSegment, weights: ReadonlyMap<ModelId, number>) => {
+  const models = segment.models ?? []
+  const named = models.reduce((sum, { fuel }) => sum + fuel, 0)
+  return models.reduce(
+    (sum, { model, fuel }) => sum + (weights.get(model) ?? 1) * fuel,
+    segment.fuel - named,
+  )
 }
 
 /**
  * `Σ fuel / Σ points` over the segments, each weighted by half for every
  * 24 active hours (hours with a segment) after it; none with no points.
  */
-const weightedRate = (segments: ReadonlyArray<FuelSegment>): Option.Option<number> => {
+const weightedRate = (
+  segments: ReadonlyArray<FuelSegment>,
+  fuelOf: (segment: FuelSegment) => number = (segment) => segment.fuel,
+): Option.Option<number> => {
   const weightOf = activeHourWeights(segments)
   let fuel = 0
   let points = 0
   for (const segment of segments) {
-    fuel += weightOf(segment) * segment.fuel
+    fuel += weightOf(segment) * fuelOf(segment)
     points += weightOf(segment) * segment.deltaPct
   }
   return Option.liftPredicate(fuel / points, (rate) => points > 0 && Number.isFinite(rate))
@@ -4267,19 +4306,26 @@ const solveLinear = (
   return Option.liftPredicate(solution, (found) => found.every(Number.isFinite))
 }
 
-/** One kept segment as the model fit reads it: its move at its window's rate (`y`) and its fuel by model. */
+/** One kept segment of an account window as the model fit reads it. */
 interface ModelFitRow {
   readonly endedAt: number
   readonly deltaPct: number
+  /** Its move at its window's rate of fuel at the weights: the fuel the move says it spent. */
   readonly y: number
+  /** The variance of that fuel from the whole percents read at its two edges. */
+  readonly variance: number
+  /** The windows of its account that feed the fit: each counts the same fuel. */
+  readonly share: number
   readonly models: ReadonlyArray<{ readonly model: ModelId; readonly fuel: number }>
+  /** Fuel of no recorded model (an older ledger's): it counts at 1. */
+  readonly unnamed: number
 }
 
 /** The hours from each model's first segment to its last. */
-const modelSpanHours = (rows: ReadonlyArray<ModelFitRow>): ReadonlyMap<ModelId, number> => {
+const modelSpanHours = (segments: ReadonlyArray<FuelSegment>): ReadonlyMap<ModelId, number> => {
   const spans = new Map<ModelId, { readonly first: number; readonly last: number }>()
-  for (const { endedAt, models } of rows)
-    for (const { model } of models.filter(({ fuel }) => fuel > 0)) {
+  for (const { endedAt, models } of segments)
+    for (const { model } of (models ?? []).filter(({ fuel }) => fuel > 0)) {
       const known = spans.get(model)
       spans.set(model, {
         first: Math.min(known?.first ?? endedAt, endedAt),
@@ -4290,112 +4336,296 @@ const modelSpanHours = (rows: ReadonlyArray<ModelFitRow>): ReadonlyMap<ModelId, 
 }
 
 /**
- * Adds one segment to the normal equations. A model that keeps its list
- * price explains its part of the move at weight 1.
+ * The fit's rows: each kept segment of an account window that names its
+ * models and its edges, its move read at its window's rate of fuel at the
+ * weights (`Σ weighted fuel / Σ points` over the window, undecayed: one
+ * model's price against another's holds still while a plan's pace drifts).
+ * Its variance is each edge's step read as an even spread across its fuel
+ * (`fuel² / 12`), a fresh reading's edge as a whole point.
  */
-const addFitRow = (
-  equations: { readonly matrix: Array<Array<number>>; readonly vector: Array<number> },
-  index: ReadonlyMap<ModelId, number>,
-  { models, y }: ModelFitRow,
-) => {
-  const scale = 1 / y
-  let rest = y
-  for (const { model, fuel } of models) if (!index.has(model)) rest -= fuel
-  const fitted = models.flatMap(({ model, fuel }) =>
-    Option.toArray(Option.map(Option.fromUndefinedOr(index.get(model)), (at) => ({ at, fuel }))),
+const modelFitRows = (
+  windows: ReadonlyArray<ReadonlyArray<FuelSegment>>,
+  weights: ReadonlyMap<ModelId, number>,
+): ReadonlyArray<ModelFitRow> => {
+  const accountOf = (segment: FuelSegment) =>
+    placementKey(segment.provider, segment.slot, segment.signedInAt ?? "")
+  const shares = new Map<string, number>()
+  for (const first of windows.flatMap((kept) => kept.slice(0, 1)))
+    shares.set(accountOf(first), (shares.get(accountOf(first)) ?? 0) + 1)
+  return windows.flatMap((kept) => {
+    const points = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
+    const rate = kept.reduce((sum, segment) => sum + weightedFuel(segment, weights), 0) / points
+    if (!(rate > 0) || !Number.isFinite(rate)) return []
+    const edge = (fuel: number) => Math.max(fuel, MODEL_FIT_MIN_EDGE_POINTS * rate) ** 2
+    return kept.flatMap((segment): Array<ModelFitRow> => {
+      const models = segment.models ?? []
+      const { edges, endedAt, deltaPct } = segment
+      if (models.length === 0 || Predicate.isUndefined(edges) || !(deltaPct > 0)) return []
+      const named = models.reduce((sum, { fuel }) => sum + fuel, 0)
+      return [
+        {
+          endedAt,
+          deltaPct,
+          y: deltaPct * rate,
+          variance: (edge(edges.open ?? rate) + edge(edges.close)) / 12,
+          share: shares.get(accountOf(segment)) ?? 1,
+          models,
+          unnamed: Math.max(0, segment.fuel - named),
+        },
+      ]
+    })
+  })
+}
+
+/**
+ * The weight of each model's prior: a segment of `MODEL_WEIGHT_PRIOR_POINTS`
+ * of the model alone at its list price, as precise as the median row.
+ */
+const modelPrior = (rows: ReadonlyArray<ModelFitRow>): Option.Option<number> => {
+  const points = rows.reduce((sum, row) => sum + row.deltaPct, 0)
+  const rate = rows.reduce((sum, row) => sum + row.y, 0) / points
+  const variances = rows.map((row) => row.variance).sort((left, right) => left - right)
+  const median =
+    ((variances[Math.floor((variances.length - 1) / 2)] ?? Number.NaN) +
+      (variances[Math.floor(variances.length / 2)] ?? Number.NaN)) /
+    2
+  return Option.liftPredicate(
+    (MODEL_WEIGHT_PRIOR_POINTS * rate) ** 2 / median,
+    (prior) => prior > 0 && Number.isFinite(prior),
   )
-  for (const left of fitted) {
-    equations.vector[left.at] = (equations.vector[left.at] ?? 0) + scale * left.fuel * rest
-    const line = equations.matrix[left.at] ?? []
-    for (const right of fitted)
-      line[right.at] = (line[right.at] ?? 0) + scale * left.fuel * right.fuel
+}
+
+/**
+ * The rows' normal equations over the models in `index`, each row weighted
+ * by 1 over its variance and its share. A model out of the fit explains its
+ * part of the move at weight 1, as does fuel of no recorded model.
+ */
+const modelNormalEquations = (
+  rows: ReadonlyArray<ModelFitRow>,
+  index: ReadonlyMap<ModelId, number>,
+) => {
+  const matrix = Array.from({ length: index.size }, () =>
+    Array.from({ length: index.size }, () => 0),
+  )
+  const vector = Array.from({ length: index.size }, () => 0)
+  for (const row of rows) {
+    const scale = 1 / (row.variance * row.share)
+    let rest = row.y - row.unnamed
+    for (const { model, fuel } of row.models) if (!index.has(model)) rest -= fuel
+    const fitted = row.models.flatMap(({ model, fuel }) =>
+      Option.toArray(Option.map(Option.fromUndefinedOr(index.get(model)), (at) => ({ at, fuel }))),
+    )
+    for (const left of fitted) {
+      vector[left.at] = (vector[left.at] ?? 0) + scale * left.fuel * rest
+      const line = matrix[left.at] ?? []
+      for (const right of fitted)
+        line[right.at] = (line[right.at] ?? 0) + scale * left.fuel * right.fuel
+    }
   }
+  return { matrix, vector }
+}
+
+/** One fit of the models in `fitted`: their weights, and each one's standard error from the rows alone. */
+interface ModelSolve {
+  readonly weights: Option.Option<ReadonlyArray<number>>
+  readonly errors: ReadonlyArray<Option.Option<number>>
+}
+
+/**
+ * Solves the fit with each model's prior at weight 1; the standard errors
+ * leave the prior out, so a weight the rows cannot price on their own reads
+ * as imprecise however firm its prior holds it.
+ */
+const solveModelFit = (
+  rows: ReadonlyArray<ModelFitRow>,
+  fitted: ReadonlyArray<ModelId>,
+  prior: Option.Option<number>,
+): ModelSolve => {
+  const { matrix, vector } = modelNormalEquations(
+    rows,
+    new Map(fitted.map((model, at) => [model, at] as const)),
+  )
+  const weights = Option.flatMap(prior, (strength) =>
+    solveLinear(
+      matrix.map((line, row) =>
+        line.map((entry, column) => entry + Number(row === column) * strength),
+      ),
+      vector.map((entry) => entry + strength),
+    ),
+  )
+  const errors = fitted.map((_, at) =>
+    Option.flatMap(
+      solveLinear(
+        matrix,
+        fitted.map((_, row) => Number(row === at)),
+      ),
+      (column) => Option.liftPredicate(Math.sqrt(column[at] ?? Number.NaN), Number.isFinite),
+    ),
+  )
+  return { weights, errors }
+}
+
+/** Whether the fit priced the model at `at`: positive, and its standard error within `MODEL_WEIGHT_MAX_ERROR` of it. */
+const pricedApart = (solved: ModelSolve, at: number) =>
+  Option.exists(
+    Option.all([
+      Option.flatMap(solved.weights, (weights) => Option.fromUndefinedOr(weights[at])),
+      solved.errors[at] ?? Option.none(),
+    ]),
+    ([weight, error]) => weight > 0 && error <= MODEL_WEIGHT_MAX_ERROR * weight,
+  )
+
+/**
+ * The factor that brings the weights to the rows' list-price fuel: only
+ * when every model in the rows was fitted, and no fuel of no recorded model
+ * fell in them. A model left at its list price fixes the scale otherwise.
+ */
+const modelFitScale = (
+  rows: ReadonlyArray<ModelFitRow>,
+  weightOf: (model: ModelId) => Option.Option<number>,
+) => {
+  let fuel = 0
+  let weighed = 0
+  let unnamed = 0
+  for (const row of rows) {
+    unnamed += row.unnamed
+    for (const { model, fuel: modelFuel } of row.models) {
+      const weight = weightOf(model)
+      if (Option.isNone(weight)) return 1
+      fuel += modelFuel
+      weighed += weight.value * modelFuel
+    }
+  }
+  if (unnamed > 1e-9 * fuel || !(weighed > 0)) return 1
+  return fuel / weighed
 }
 
 /**
  * Fits each model's quota weight on one provider from its account windows'
- * kept segments: the points one fuel of the model moves, over what its
- * window's rate says one fuel of the mix moves. A segment's move, at its
- * window's rate, is fuel of the mix (`y`); its fuel by model (`x`) explains it
- * as `Σ weight × x`. The weights solve that by least squares, each segment
- * weighted by 1 over its `y` (a move's error grows with its size), with each
- * model starting from weight 1 as if the fit had seen one 1% step of it alone
- * at its list price. Every kept segment counts alike, unlike a window's rate:
- * one model's price against another's holds still while a plan's pace drifts.
- * A model whose segments span under 24 hours keeps weight 1, and a weight
- * stays within 8 times either way of it.
+ * kept segments: the points one fuel of the model moves, over what one fuel
+ * at the weights moves (`modelFitRows`). The weights solve
+ * `Σ weight × fuel ≈ the move's fuel` by least squares, each row weighted by
+ * 1 over the variance its edges' whole percents leave and over the windows
+ * of its account (a 5h and a 7d window count the same fuel), with each model
+ * starting from weight 1 as if the fit had seen one 1% step of it alone at
+ * its list price. A model is fitted when its segments span a day and the
+ * rows alone price it within 10%; the rest keep weight 1, and the fit solves
+ * again without them. A weight stays within 8 times either way of 1.
  */
 const fitModelWeights = (
-  windows: ReadonlyArray<{
-    readonly kept: ReadonlyArray<FuelSegment>
-    readonly fuelPerPct: number
-  }>,
+  windows: ReadonlyArray<ReadonlyArray<FuelSegment>>,
+  weights: ReadonlyMap<ModelId, number>,
 ): ReadonlyArray<LaneModel> => {
-  const rows = windows.flatMap((window) =>
-    window.kept.flatMap((segment): Array<ModelFitRow> => {
-      const models = segment.models ?? []
-      if (models.length === 0 || !(segment.deltaPct > 0) || !(segment.fuel > 0)) return []
-      const { endedAt, deltaPct } = segment
-      return [{ endedAt, deltaPct, models, y: deltaPct * window.fuelPerPct }]
-    }),
-  )
-  const spans = modelSpanHours(rows)
+  const rows = modelFitRows(windows, weights)
+  const spans = modelSpanHours(windows.flat())
   const spanHours = (model: ModelId) => spans.get(model) ?? 0
   const all = [...spans.keys()].sort()
-  const fitted = all.filter((model) => spanHours(model) >= MODEL_WEIGHT_MIN_SPAN_HOURS)
-  const weighed = rows.reduce((sum, row) => sum + row.y, 0)
-  const points = rows.reduce((sum, row) => sum + row.deltaPct, 0)
-  const prior = (MODEL_WEIGHT_PRIOR_POINTS * weighed) / points
-  const index = new Map(fitted.map((model, at) => [model, at] as const))
-  // Each model's prior: a segment of its fuel alone, at weight 1.
-  const equations = {
-    matrix: fitted.map((_, row) => fitted.map((_, column) => Number(row === column) * prior)),
-    vector: fitted.map(() => prior),
+  const prior = modelPrior(rows)
+  let fitted = all.filter((model) => spanHours(model) >= MODEL_WEIGHT_MIN_SPAN_HOURS)
+  let solved = solveModelFit(rows, fitted, prior)
+  // Each pass drops a model the rows cannot price apart from rounding, or holds still.
+  for (let pass = 0; pass < all.length; pass += 1) {
+    const priced = fitted.filter((_, at) => pricedApart(solved, at))
+    if (priced.length === fitted.length) break
+    fitted = priced
+    solved = solveModelFit(rows, fitted, prior)
   }
-  for (const row of rows) addFitRow(equations, index, row)
-  const solved = Option.liftPredicate(prior, (value) => value > 0 && Number.isFinite(value)).pipe(
-    Option.flatMap(() => solveLinear(equations.matrix, equations.vector)),
-  )
-  return all.map((model) => {
-    const found = Option.flatMap(Option.fromUndefinedOr(index.get(model)), (at) =>
-      Option.flatMap(solved, (weights) => Option.fromUndefinedOr(weights[at])),
+  const weightOf = (model: ModelId) =>
+    Option.flatMap(
+      Option.liftPredicate(fitted.indexOf(model), (at) => at >= 0),
+      (at) => Option.flatMap(solved.weights, (found) => Option.fromUndefinedOr(found[at])),
     )
+  const scale = modelFitScale(rows, weightOf)
+  return all.map((model) => {
+    const found = weightOf(model)
     const weight = Option.match(found, {
       onNone: () => 1,
-      onSome: (value) => Math.min(MODEL_WEIGHT_BOUND, Math.max(1 / MODEL_WEIGHT_BOUND, value)),
+      onSome: (value) =>
+        Math.min(MODEL_WEIGHT_BOUND, Math.max(1 / MODEL_WEIGHT_BOUND, value * scale)),
     })
     return { model, weight, fitted: Option.isSome(found), spanHours: spanHours(model) }
   })
 }
 
+/** Whether two fits of the same windows keep the same segments. */
+const sameKept = (left: ReadonlyMap<string, WindowFit>, right: ReadonlyMap<string, WindowFit>) =>
+  [...left].every(([key, fit]) => {
+    const other = right.get(key)?.kept ?? []
+    return (
+      other.length === fit.kept.length && other.every((segment, at) => segment === fit.kept[at])
+    )
+  })
+
+/**
+ * Fits one provider's windows and its models' weights together: a window
+ * judges spend outside gent at the weights, and the weights read the
+ * segments the windows keep. Each pass fits both again from the last, until
+ * the kept segments and the weights hold still, `MODEL_FIT_PASSES` at most.
+ */
+const fitProviderWindows = (
+  listed: ReadonlyArray<readonly [string, ReadonlyArray<FuelSegment>]>,
+) => {
+  const fitAll = (weights: ReadonlyMap<ModelId, number>) =>
+    new Map(listed.map(([key, list]) => [key, fitWindow(list, weights)] as const))
+  // A model's window meters its fuel alone: only account windows weigh one model against another.
+  const accountKept = (fits: ReadonlyMap<string, WindowFit>) =>
+    [...fits.values()].flatMap(({ kept }) => {
+      const first = kept[0]
+      if (Predicate.isUndefined(first) || Predicate.isNotUndefined(first.model)) return []
+      return [kept]
+    })
+  let weights: ReadonlyMap<ModelId, number> = new Map()
+  let fits = fitAll(weights)
+  let models: ReadonlyArray<LaneModel> = []
+  for (let pass = 0; pass < MODEL_FIT_PASSES; pass += 1) {
+    models = fitModelWeights(accountKept(fits), weights)
+    const next = new Map(models.map(({ model, weight }) => [model, weight] as const))
+    const nextFits = fitAll(next)
+    const settled =
+      sameKept(fits, nextFits) &&
+      models.every(
+        ({ model, weight }) => Math.abs(weight - (weights.get(model) ?? 1)) <= 1e-6 * weight,
+      )
+    weights = next
+    fits = nextFits
+    if (settled) break
+  }
+  return { fits, models }
+}
+
 /**
  * Fits one window. A segment that spent no fuel, or whose move passes what
  * its fuel explains by more than three 1% steps, is spend outside gent; the
- * rate reads the rest. Each segment is judged against the plain rate of the
- * other kept segments, never one it is part of: outside spend in a segment
- * lowers the rate it would be judged by. The judging repeats until the kept
+ * rate reads the rest. Each segment is judged against the rate of the other
+ * kept segments, never one it is part of (outside spend in a segment lowers
+ * the rate it would be judged by), with every fuel at the models' quota
+ * weights: a dearer model's step is its price, not spend outside gent. The judging repeats until the kept
  * set holds still. A segment with no other kept segment to judge it by is
  * kept. The band is `±0.5 / Σ points` of the kept segments (lanes r3): the
  * half-step of the 1% quantization over the move they span.
  */
-const fitWindow = (segments: ReadonlyArray<FuelSegment>): WindowFit => {
+const fitWindow = (
+  segments: ReadonlyArray<FuelSegment>,
+  weights: ReadonlyMap<ModelId, number>,
+): WindowFit => {
+  const fuelOf = (segment: FuelSegment) => weightedFuel(segment, weights)
   const totalPoints = segments.reduce((sum, segment) => sum + segment.deltaPct, 0)
   let kept: ReadonlyArray<FuelSegment> = segments.filter((segment) => segment.fuel > 0)
   // Each pass drops or restores at least one segment, or holds still.
   for (let pass = 0; pass <= segments.length; pass += 1) {
-    const keptFuel = kept.reduce((sum, segment) => sum + segment.fuel, 0)
+    const keptFuel = kept.reduce((sum, segment) => sum + fuelOf(segment), 0)
     const keptPointsNow = kept.reduce((sum, segment) => sum + segment.deltaPct, 0)
     const keptNow = new Set(kept)
     const outside = (segment: FuelSegment) => {
       if (segment.fuel <= 0) return true
       // The rate of the other kept segments: this one left out.
       const own = Option.liftPredicate(segment, (candidate) => keptNow.has(candidate))
-      const otherFuel = keptFuel - Option.match(own, { onNone: () => 0, onSome: (it) => it.fuel })
+      const otherFuel = keptFuel - Option.match(own, { onNone: () => 0, onSome: fuelOf })
       const otherPoints =
         keptPointsNow - Option.match(own, { onNone: () => 0, onSome: (it) => it.deltaPct })
       const others = otherFuel / otherPoints
       if (!(otherPoints > 0) || !(others > 0) || !Number.isFinite(others)) return false
-      return segment.deltaPct - segment.fuel / others > QUOTA_OUTSIDE_POINTS
+      return segment.deltaPct - fuelOf(segment) / others > QUOTA_OUTSIDE_POINTS
     }
     const next = segments.filter((segment) => !outside(segment))
     const same = next.length === kept.length && next.every((segment) => keptNow.has(segment))
@@ -4410,6 +4640,7 @@ const fitWindow = (segments: ReadonlyArray<FuelSegment>): WindowFit => {
     band: Option.liftPredicate(0.5 / keptPoints, () => keptPoints > 0),
     kept,
     outsideShare,
+    mixFuelPerPct: weightedRate(kept, fuelOf),
   }
 }
 
@@ -4538,6 +4769,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly fuel: Option.Option<number>
       readonly tokens: FuelTokens
       readonly models: ReadonlyMap<ModelId, number>
+      /** The fuel since the last reading of the window: the step under way. */
+      readonly step: Option.Option<number>
+      /** The fuel of the step that opened it; none when a fresh reading did. */
+      readonly opened: Option.Option<number>
     }
   >()
   /** provider, slot, window (`windowKey`) → its closed segments, oldest first. */
@@ -5240,6 +5475,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       fuel: Option.some(0),
       tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       models: new Map<ModelId, number>(),
+      step: Option.some(0),
+      opened: Option.none<number>(),
     }
     const open = Option.fromUndefinedOr(openSegments.get(key))
     const continues = Option.exists(
@@ -5257,9 +5494,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     }
     const moved = reading.utilization - open.value.from
     // A move under 1%: the segment stays open from where it opened, and the
-    // gap counts from now.
-    if (moved < QUOTA_STEP - 1e-9) return
-    openSegments.set(key, fresh)
+    // gap and the next step count from now.
+    if (moved < QUOTA_STEP - 1e-9) {
+      openSegments.set(key, { ...open.value, step: Option.some(0) })
+      return
+    }
+    // The step that closed this segment opens the next one.
+    openSegments.set(key, { ...fresh, opened: open.value.step })
     if (Option.isNone(open.value.fuel)) return
     segments.set(key, [
       ...(segments.get(key) ?? []),
@@ -5273,6 +5514,10 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         deltaPct: moved * 100,
         tokens: open.value.tokens,
         models: [...open.value.models].map(([model, fuel]) => ({ model, fuel })),
+        edges: {
+          close: Option.getOrElse(open.value.step, () => 0),
+          ...omitUndefined({ open: Option.getOrUndefined(open.value.opened) }),
+        },
       },
     ])
   }
@@ -5316,29 +5561,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
     /** A window's name across accounts: each model's windows pool apart. */
     const poolKey = (name: WindowName) =>
       placementKey(name.window, ...Option.toArray(Option.fromUndefinedOr(name.model)))
-    const own = new Map<string, WindowFit>()
+    const { fits: own, models } = fitProviderWindows(
+      [...segments].filter(([, list]) => list[0]?.provider === provider),
+    )
     const pooled = new Map<string, Array<FuelSegment>>()
-    for (const [key, list] of segments) {
-      const first = list[0]
-      if (Predicate.isUndefined(first) || first.provider !== provider) continue
-      const fit = fitWindow(list)
-      own.set(key, fit)
+    for (const fit of own.values()) {
+      const first = fit.kept[0]
+      if (Predicate.isUndefined(first)) continue
       pooled.set(poolKey(first), [...(pooled.get(poolKey(first)) ?? []), ...fit.kept])
     }
     const poolRate = new Map(
       [...pooled].map(([window, kept]) => [window, weightedRate(kept)] as const),
     )
-    // A model's window meters its fuel alone: only account windows weigh one model against another.
-    const models = fitModelWeights(
-      [...own.values()].flatMap((fit) => {
-        const first = fit.kept[0]
-        if (Predicate.isUndefined(first) || Predicate.isNotUndefined(first.model)) return []
-        return Option.match(fit.fuelPerPct, {
-          onNone: () => [],
-          onSome: (fuelPerPct) => [{ kept: fit.kept, fuelPerPct }],
-        })
-      }),
-    )
+    /** Each model's fuel per point of an account window, from its mix's rate at the weights. */
+    const modelRates = (reading: WindowName, fit: Option.Option<WindowFit>) =>
+      Option.filter(
+        Option.flatMap(fit, (found) => found.mixFuelPerPct),
+        () => Predicate.isUndefined(reading.model) && models.length > 0,
+      ).pipe(
+        Option.map((mix) =>
+          models.map(({ model, weight }) => ({ model, fuelPerPct: mix / weight })),
+        ),
+      )
     const slots = new Set<CredentialSlot>(scope)
     for (const reading of readings.values())
       if (reading.provider === provider) slots.add(reading.slot)
@@ -5405,6 +5649,7 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
               fuelPerPct: Option.getOrUndefined(fuelPerPct),
               band: Option.getOrUndefined(Option.flatMap(fit, (found) => found.band)),
               sustainable: Option.getOrUndefined(sustainable),
+              models: Option.getOrUndefined(modelRates(reading, fit)),
             }),
           }
         })
@@ -5793,10 +6038,11 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
             key,
             Option.match(priced, {
               // An unpriced request drops the segment it falls in.
-              onNone: () => ({ ...open, fuel: Option.none() }),
+              onNone: () => ({ ...open, fuel: Option.none(), step: Option.none() }),
               onSome: (cost) => ({
                 ...open,
                 fuel: Option.map(open.fuel, (fuel) => fuel + cost.fuel),
+                step: Option.map(open.step, (fuel) => fuel + cost.fuel),
                 tokens: {
                   input: open.tokens.input + cost.tokens.input,
                   output: open.tokens.output + cost.tokens.output,

@@ -704,6 +704,14 @@ export const LaneWindow = Schema.Struct({
   outsideShare: Schema.Finite,
   /** The runs the window can carry until its reset; none without a rate. */
   sustainable: Schema.optionalKey(Schema.Finite),
+  /**
+   * Each model's fuel per percentage point of this account window: its own
+   * mix's rate at the models' quota weights, over the model's weight. Absent
+   * on a model's window, and on a window with no rate of its own.
+   */
+  models: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ model: ModelId, fuelPerPct: Schema.Finite })),
+  ),
 })
 
 /** One account of a provider. */
@@ -722,14 +730,15 @@ export const LaneAccount = Schema.Struct({
 
 /**
  * One model's quota weight on a provider: the points one fuel of it moves,
- * over what its account window's rate says one fuel of the provider's mix
- * moves. A window's cost of the model is its `fuelPerPct / weight`.
+ * relative to the provider's other models, scaled so the fitted fuel counts
+ * at its list price in all. A window's cost of the model is its
+ * `LaneWindow.models` entry: its mix's rate at the weights, over the weight.
  */
 export const LaneModel = Schema.Struct({
   model: ModelId,
   /** 1 until fitted: the model costs its list price. */
   weight: Schema.Finite,
-  /** Whether the weight was fitted: its segments span a day, and the fit solved. */
+  /** Whether the weight was fitted: its segments span a day, and they alone price it within 10%. */
   fitted: Schema.Boolean,
   /** The hours between the first and the last segment its fuel fell in. */
   spanHours: Schema.Finite,

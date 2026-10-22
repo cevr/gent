@@ -6719,49 +6719,67 @@ describe("account lanes", () => {
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
-  /**
-   * `hours` of runs on a's 7d window, read every 10 minutes in whole percent:
-   * Opus alone for four hours, Haiku alone the next four, both the four after.
-   * A 1% step of the week spans over two hours, so a shorter stretch of one
-   * mix leaves every segment the same mix, and no fit can tell the models
-   * apart. The plan counts
-   * one Haiku fuel at twice what its list price says, and an account week is
-   * 930 M fuel of Opus (context-mileage B4). The ledger is saved to `file`.
-   */
   const opus = ModelId.make("plan/opus")
   const haiku = ModelId.make("plan/haiku")
   const weekOfOpus = 930_000_000
+  /** Each phase's share of a step's points: Opus's, Haiku's. */
+  type Phases = ReadonlyArray<readonly [number, number]>
+  /** Opus alone for four hours, Haiku alone the next four, both the four after. */
+  const opusThenHaiku: Phases = [
+    [1, 0],
+    [0, 1],
+    [0.5, 0.5],
+  ]
+  /**
+   * `hours` of runs on each account's 7d window, read every 10 minutes in
+   * whole percent, each phase four hours. A 1% step of the week spans hours,
+   * so a shorter stretch of one mix leaves every segment the same mix, and
+   * no fit can tell the models apart. The plan counts one Haiku fuel at
+   * twice what its list price says, and an account week is 930 M fuel of
+   * Opus (context-mileage B4). Each account's true points are returned.
+   */
+  const runWeek = (
+    fixture: Effect.Success<ReturnType<typeof accounts>>,
+    runs: ReadonlyArray<{
+      readonly slot: CredentialSlot
+      readonly phases: Phases
+      /** The windows read each step, all at the same utilization; the 7d alone by default. */
+      readonly windows?: ReadonlyArray<string>
+    }>,
+    hours: number,
+    stepPoints = 0.07,
+  ) =>
+    Effect.gen(function* () {
+      const resetAt = (yield* Clock.currentTimeMillis) + 200 * HOUR
+      const stepFuel = (stepPoints / 100) * weekOfOpus
+      const points = runs.map(() => 0)
+      const readAll = (windows: ReadonlyArray<string>, utilization: number) =>
+        windows.map((window) => ({ window, utilization, resetAt }))
+      for (const { slot, windows } of runs) yield* fixture.read(slot, readAll(windows ?? ["7d"], 0))
+      for (let step = 0; step < hours * 6; step += 1) {
+        yield* TestClock.adjust("10 minutes")
+        for (const [at, { slot, phases, windows }] of runs.entries()) {
+          const [opusShare, haikuShare] = phases[Math.floor(step / 24) % phases.length] ?? [0, 0]
+          const opusFuel = opusShare * stepFuel
+          const haikuFuel = (haikuShare * stepFuel) / 2
+          // $1 of list price is 200,000 fuel.
+          if (opusFuel > 0)
+            yield* fixture.spend(slot, Option.some(opusFuel / 200_000), usage, runner, opus)
+          if (haikuFuel > 0)
+            yield* fixture.spend(slot, Option.some(haikuFuel / 200_000), usage, runner, haiku)
+          points[at] = (points[at] ?? 0) + ((opusFuel + 2 * haikuFuel) / weekOfOpus) * 100
+          const utilization = Math.floor((points[at] ?? 0) + 1e-9) / 100
+          yield* fixture.read(slot, readAll(windows ?? ["7d"], utilization))
+        }
+      }
+      return { resetAt, points }
+    })
+  /** `hours` of Opus, then Haiku, then both on a. */
   const mixedWeek = (hours: number, ledger: Parameters<typeof accounts>[0] = Option.none()) =>
     Effect.gen(function* () {
       const fixture = yield* accounts(ledger)
-      const start = yield* Clock.currentTimeMillis
-      const resetAt = start + 200 * HOUR
-      // About 70 points over a week: 0.07 a step at Opus's rate.
-      const stepFuel = (0.07 / 100) * weekOfOpus
-      let points = 0
-      yield* fixture.read(a, [{ window: "7d", utilization: 0, resetAt }])
-      for (let step = 0; step < hours * 6; step += 1) {
-        yield* TestClock.adjust("10 minutes")
-        const phase = Math.floor(step / 24) % 3
-        let opusFuel = 0
-        let haikuFuel = 0
-        if (phase === 0) opusFuel = stepFuel
-        if (phase === 1) haikuFuel = stepFuel / 2
-        if (phase === 2) {
-          opusFuel = stepFuel / 2
-          haikuFuel = stepFuel / 4
-        }
-        // $1 of list price is 200,000 fuel.
-        if (opusFuel > 0)
-          yield* fixture.spend(a, Option.some(opusFuel / 200_000), usage, runner, opus)
-        if (haikuFuel > 0)
-          yield* fixture.spend(a, Option.some(haikuFuel / 200_000), usage, runner, haiku)
-        points += ((opusFuel + 2 * haikuFuel) / weekOfOpus) * 100
-        yield* fixture.read(a, [
-          { window: "7d", utilization: Math.floor(points + 1e-9) / 100, resetAt },
-        ])
-      }
-      return fixture
+      const week = yield* runWeek(fixture, [{ slot: a, phases: opusThenHaiku }], hours)
+      return { ...fixture, ...week }
     })
   /** A model's weight on `plan`, as `accounts.lanes` reports it. */
   const weightOf = (report: ProviderLanes, model: ModelId) =>
@@ -6799,6 +6817,110 @@ describe("account lanes", () => {
       const after = yield* accounts(store)
       expect((yield* after.lanes([a])).models).toEqual(weights)
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a dearer model's large step is its price, not spend outside gent, once its weight is fitted",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* mixedWeek(7 * 24)
+        let points = fixture.points[0] ?? 0
+        // Two steps of Haiku alone, each 12 points: at the mix's list-price rate they read as 4 points over.
+        for (let step = 0; step < 2; step += 1) {
+          yield* TestClock.adjust("10 minutes")
+          const haikuFuel = (6 * weekOfOpus) / 100
+          yield* fixture.spend(a, Option.some(haikuFuel / 200_000), usage, runner, haiku)
+          points += ((2 * haikuFuel) / weekOfOpus) * 100
+          yield* fixture.read(a, [
+            {
+              window: "7d",
+              utilization: Math.floor(points + 1e-9) / 100,
+              resetAt: fixture.resetAt,
+            },
+          ])
+        }
+        expect(weightOf(yield* fixture.lanes([a]), haiku)?.fitted).toBe(true)
+        expect((yield* fixture.windowOf([a], a, "7d")).outsideShare).toBe(0)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "each account window costs each model at its own mix's rate, whatever the other account runs",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const haikuHeavy: Phases = [
+          [0, 1],
+          [0.2, 0.8],
+          [0, 1],
+          [0.6, 0.4],
+        ]
+        const runs = [
+          { slot: a, phases: opusThenHaiku },
+          { slot: b, phases: haikuHeavy },
+        ]
+        yield* runWeek(fixture, runs, 7 * 24, 0.05)
+        const truth = new Map([
+          [opus, weekOfOpus / 100],
+          [haiku, weekOfOpus / 200],
+        ])
+        for (const slot of [a, b]) {
+          const week = yield* fixture.windowOf([a, b], slot, "7d")
+          expect(week.models?.length).toBe(2)
+          for (const { model, fuelPerPct } of week.models ?? [])
+            expect(Math.abs(fuelPerPct / (truth.get(model) ?? Number.NaN) - 1)).toBeLessThan(0.1)
+        }
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a second window of the same account adds no evidence: its fuel is the same fuel", () =>
+    Effect.gen(function* () {
+      const weightsOf = (windows: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          const fixture = yield* accounts()
+          yield* runWeek(fixture, [{ slot: a, phases: opusThenHaiku, windows }], 2 * 24)
+          return (yield* fixture.lanes([a])).models
+        })
+      const alone = yield* weightsOf(["7d"])
+      const both = yield* weightsOf(["5h", "7d"])
+      expect(both.map(({ model, fitted }) => [model, fitted])).toEqual(
+        alone.map(({ model, fitted }) => [model, fitted]),
+      )
+      for (const [at, { weight }] of alone.entries())
+        expect(both[at]?.weight ?? Number.NaN).toBeCloseTo(weight, 9)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "models of one price stay at their list price when whole-percent rounding is all that sets them apart",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* accounts()
+        const resetAt = (yield* Clock.currentTimeMillis) + 200 * HOUR
+        // 1.333 M fuel per point for both. Once an hour: 1 M of Opus, and 0.8 M or 1.2 M of Haiku,
+        // so the moves alternate 1.35 and 1.65 points and read as 1 and 2.
+        const perPoint = 4_000_000 / 3
+        let points = 0
+        yield* fixture.read(a, [{ window: "7d", utilization: 0, resetAt }])
+        for (let step = 0; step < 60 * 6; step += 1) {
+          yield* TestClock.adjust("10 minutes")
+          const hour = Math.floor(step / 6)
+          if (step % 6 === 0) {
+            let haikuFuel = 1_200_000
+            if (hour % 2 === 0) haikuFuel = 800_000
+            yield* fixture.spend(a, Option.some(1_000_000 / 200_000), usage, runner, opus)
+            yield* fixture.spend(a, Option.some(haikuFuel / 200_000), usage, runner, haiku)
+            points += (1_000_000 + haikuFuel) / perPoint
+          }
+          yield* fixture.read(a, [
+            { window: "7d", utilization: Math.floor(points + 1e-9) / 100, resetAt },
+          ])
+        }
+        const report = yield* fixture.lanes([a])
+        expect(weightOf(report, opus)).toMatchObject({ weight: 1, fitted: false })
+        expect(weightOf(report, haiku)).toMatchObject({ weight: 1, fitted: false })
+        expect(weightOf(report, haiku)?.spanHours).toBeGreaterThan(24)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
   it.effect("a model's quota weight stays at its list price until its segments span a day", () =>
