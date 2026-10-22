@@ -112,8 +112,10 @@ Shape:
   answered question (`incompleteUserTurn`, a fold over the branch log). After
   `TURN_RESUME_LIMIT` (5), the next promotion writes an `ErrorOccurred` and
   starts the turn with its stop latch set, so it ends interrupted through
-  `finalizeTurn` and calls no model. A turn parked on an open question is not
-  bounded: a restart while it waits for its user is not a crash loop.
+  `finalizeTurn` and calls no model. A turn parked on an unanswered question
+  is not bounded: a restart while it waits for its user is not a crash loop.
+  The stored request row says whether it waits, not the log: the server
+  publishes `InteractionResolved` after it stores the answer, best effort.
 - Runtime commands resolve an existing `(sessionId, branchId)` target before loop dispatch.
 
 - A session takes its name from its first user message: at a turn end,

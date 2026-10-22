@@ -66,7 +66,7 @@ import {
   BranchStorage,
   EventStorage,
   type EventStorageError,
-  type InteractionStorage,
+  InteractionStorage,
   MessageStorage,
   type RelationshipStorage,
   SessionOperationStorage,
@@ -2066,6 +2066,7 @@ const makeAgentLoopBehavior = (
     const messageStorage = yield* MessageStorage
     const operations = yield* SessionOperationStorage
     const recoveryEvents = yield* EventStorage
+    const interactions = yield* InteractionStorage
     const host = yield* makeExtensionHostPlatform
     const runtimeContext = yield* captureAgentLoopRuntimeContext
     // A turn holds the entity resident from its hand-over to the worker until
@@ -2533,22 +2534,26 @@ const makeAgentLoopBehavior = (
       })
       const message = incomplete.at(-1)
       if (Predicate.isUndefined(message)) return Option.none<RecoveredTurn>()
-      // The resumes since the turn's last answer: a turn parked on a question
-      // waits for its user, not a restart, and an answer starts the count over.
+      // The resumes since the turn's last answer: an answer starts the count over.
       let resumes = 0
-      const open = new Set<string>()
       for (const { event } of envelopes.slice(lastCompletion + 1)) {
         if (event._tag === "TurnResumed" && event.messageId === message.id) resumes += 1
-        if (event._tag === "InteractionPresented") open.add(event.requestId)
-        if (event._tag === "InteractionResolved") {
-          open.delete(event.requestId)
-          resumes = 0
-        }
+        if (event._tag === "InteractionResolved") resumes = 0
       }
+      // A turn parked on a question waits for its user, not a restart. The
+      // stored request says so: its resolution event is published after the
+      // answer, best effort, so the log can show a question the call has
+      // already answered.
+      const waiting = yield* interactions.listOpen({ sessionId, branchId }).pipe(
+        Effect.catchEager(recoveryReadFailed("interactions")),
+        Effect.map((rows) =>
+          rows.some((row) => row.status === "pending" && Predicate.isUndefined(row.decisionJson)),
+        ),
+      )
       // The session names the agent the resumed turn runs as.
       return Option.some<RecoveredTurn>({
         item: { message },
-        exhausted: open.size === 0 && resumes >= TURN_RESUME_LIMIT,
+        exhausted: !waiting && resumes >= TURN_RESUME_LIMIT,
       })
     })
 

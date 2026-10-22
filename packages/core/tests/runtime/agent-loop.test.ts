@@ -140,6 +140,7 @@ import {
   AgentLoopQueueStorage,
   BranchStorage,
   EventStorage,
+  InteractionStorage,
   MessageStorage,
   SessionOperationStorage,
   SessionStorage,
@@ -220,7 +221,10 @@ import { SingleRunner } from "effect/cluster"
 import { SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
 import { SqlClient } from "effect/sql"
-import { InteractionPendingError } from "../../src/domain/interaction"
+import {
+  InteractionPendingError,
+  type InteractionRequestRecord,
+} from "../../src/domain/interaction"
 import * as Response from "effect/ai/Response"
 import {
   type AnyResourceContribution,
@@ -4528,18 +4532,22 @@ describe("startup recovery", () => {
     15000,
   )
 
+  interface CutShortIds {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly messageId: MessageId
+  }
+
   /**
    * Open a loop over a user turn a restart cut short, after the stored
-   * events `history` makes for it; answer the model calls and the events
-   * the open wrote, once its turn completed.
+   * events `history` makes for it and the question rows `requests` stores;
+   * answer the model calls and the events the open wrote, once its turn
+   * completed.
    */
   const openCutShortTurn = (
     name: string,
-    history: (ids: {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly messageId: MessageId
-    }) => ReadonlyArray<AgentEvent>,
+    history: (ids: CutShortIds) => ReadonlyArray<AgentEvent>,
+    requests: (ids: CutShortIds) => ReadonlyArray<InteractionRequestRecord> = () => [],
   ) =>
     Effect.gen(function* () {
       const sessionId = SessionId.make(`session-${name}`)
@@ -4572,6 +4580,10 @@ describe("startup recovery", () => {
           for (const event of history({ sessionId, branchId, messageId })) {
             yield* eventStorage.appendEvent(event)
           }
+          const interactions = yield* InteractionStorage
+          for (const request of requests({ sessionId, branchId, messageId })) {
+            yield* interactions.persist(request)
+          }
           // What the open writes, up to and with the turn's end.
           const opened = yield* (yield* EventStore).subscribe({ sessionId, branchId }).pipe(
             Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
@@ -4589,14 +4601,8 @@ describe("startup recovery", () => {
       )
     })
 
-  const resumes = (
-    ids: {
-      readonly sessionId: SessionId
-      readonly branchId: BranchId
-      readonly messageId: MessageId
-    },
-    count: number,
-  ) => Array.from({ length: count }, () => TurnResumed.make(ids))
+  const resumes = (ids: CutShortIds, count: number) =>
+    Array.from({ length: count }, () => TurnResumed.make(ids))
 
   it.live(
     "a turn cut short on each of its resumes ends interrupted at the next open, with no model call",
@@ -4627,31 +4633,67 @@ describe("startup recovery", () => {
     }),
   )
 
-  for (const question of ["open", "answered"] as const) {
-    it.live(`resumes while the turn waits on an ${question} question do not count`, () =>
+  const questionId = InteractionRequestId.make("question")
+  const asked = (ids: CutShortIds) =>
+    InteractionPresented.make({
+      sessionId: ids.sessionId,
+      branchId: ids.branchId,
+      requestId: questionId,
+      text: "go on?",
+    })
+  const questionRow = (
+    ids: CutShortIds,
+    row: Pick<InteractionRequestRecord, "status" | "decisionJson">,
+  ): InteractionRequestRecord => ({
+    requestId: questionId,
+    sessionId: ids.sessionId,
+    branchId: ids.branchId,
+    paramsJson: '{"text":"go on?"}',
+    createdAt: 0,
+    ...row,
+  })
+
+  it.live("resumes while the turn waits on its unanswered question do not count", () =>
+    Effect.gen(function* () {
+      const { calls } = yield* openCutShortTurn(
+        "resumes-open-question",
+        (ids) => [asked(ids), ...resumes(ids, TURN_RESUME_LIMIT)],
+        (ids) => [questionRow(ids, { status: "pending" })],
+      )
+      expect(calls).toBe(1)
+    }),
+  )
+
+  it.live("an answer starts the resume count over", () =>
+    Effect.gen(function* () {
+      const { calls } = yield* openCutShortTurn("resumes-answered-question", (ids) => [
+        ...resumes(ids, TURN_RESUME_LIMIT),
+        asked(ids),
+        InteractionResolved.make({
+          sessionId: ids.sessionId,
+          branchId: ids.branchId,
+          requestId: questionId,
+          approved: true,
+        }),
+      ])
+      expect(calls).toBe(1)
+    }),
+  )
+
+  it.live(
+    "a question its call answered still counts its resumes when the log missed the answer",
+    () =>
       Effect.gen(function* () {
-        const { calls } = yield* openCutShortTurn(`resumes-${question}-question`, (ids) => {
-          const asked = InteractionPresented.make({
-            sessionId: ids.sessionId,
-            branchId: ids.branchId,
-            requestId: InteractionRequestId.make("question"),
-            text: "go on?",
-          })
-          const answered = InteractionResolved.make({
-            sessionId: ids.sessionId,
-            branchId: ids.branchId,
-            requestId: InteractionRequestId.make("question"),
-            approved: true,
-          })
-          // A turn parked on its question, restarted while it waited.
-          const parked = [asked, ...resumes(ids, TURN_RESUME_LIMIT)]
-          if (question === "open") return parked
-          return [...parked, answered]
-        })
-        expect(calls).toBe(1)
+        // The answer is stored and taken; its resolution event never landed.
+        const { calls } = yield* openCutShortTurn(
+          "resumes-unlogged-answer",
+          (ids) => [asked(ids), ...resumes(ids, TURN_RESUME_LIMIT)],
+          (ids) => [questionRow(ids, { status: "taken", decisionJson: '{"approved":true}' })],
+        )
+        expect(calls).toBe(0)
       }),
-    )
-  }
+    15000,
+  )
 
   const userMessage = (
     sessionId: SessionId,
