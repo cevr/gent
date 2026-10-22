@@ -52,6 +52,7 @@ import { e2ePreset } from "./helpers/test-preset"
 import {
   continuationPrompt,
   continueGoal,
+  goalCommand,
   formatGoalUsage,
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
@@ -728,8 +729,8 @@ describe("goal resume fire", () => {
     new ExtensionServiceError({ service: "Session", operation, message: `${operation} refused` })
 
   /**
-   * A branch whose stored goal is `goal`, over a stub context: `send` and
-   * `wakeAt` fail while their refusal count lasts. Runs `hook` on the virtual
+   * A branch whose stored goal is `goal`, over a stub context: `send`,
+   * `dequeueFollowUp` and `wakeAt` fail while their refusal count lasts. Runs `hook` on the virtual
    * clock set to `at`; returns its answer, the stored goal after and the
    * accepted sends and wakes.
    */
@@ -737,7 +738,7 @@ describe("goal resume fire", () => {
     goal: GoalState,
     at: number,
     hook: Effect.Effect<A, E, R>,
-    refuse: { readonly sends?: number; readonly wakes?: number } = {},
+    refuse: { readonly sends?: number; readonly dequeues?: number; readonly wakes?: number } = {},
   ) =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("goal-resume-")
@@ -752,6 +753,7 @@ describe("goal resume fire", () => {
       const wakes = yield* Ref.make<ReadonlyArray<number>>([])
       const sendRefusals = yield* Ref.make(refuse.sends ?? 0)
       const wakeRefusals = yield* Ref.make(refuse.wakes ?? 0)
+      const dequeueRefusals = yield* Ref.make(refuse.dequeues ?? 0)
       /** Fails while `left` is above 0, counting it down; otherwise runs `accept`. */
       const gated = (left: Ref.Ref<number>, operation: string, accept: Effect.Effect<void>) =>
         Effect.gen(function* () {
@@ -767,7 +769,8 @@ describe("goal resume fire", () => {
         home,
         Session: {
           ...base.Session,
-          dequeueFollowUp: () => Effect.succeed(false),
+          dequeueFollowUp: () =>
+            gated(dequeueRefusals, "dequeueFollowUp", Effect.void).pipe(Effect.as(false)),
           send: () =>
             gated(
               sendRefusals,
@@ -787,6 +790,7 @@ describe("goal resume fire", () => {
               ]),
             ),
         }),
+        Interaction: { ...base.Interaction, present: () => Effect.void },
         State: { changed: () => Effect.void },
       })
       yield* TestClock.setTime(at)
@@ -955,6 +959,87 @@ describe("goal resume fire", () => {
         expect(goal?.pausedReason).toBe(GOAL_PAUSED_UNQUEUED)
         expect(goal?.continuationsUsed).toBe(1)
       }),
+  )
+
+  it.scopedLive(
+    "a turn end whose last prompt cannot be pulled saves a pause that waits for /goal resume",
+    () =>
+      Effect.gen(function* () {
+        const { goal, sends } = yield* onBranch(active, 2_000, continueGoal(answeredTurn), {
+          dequeues: 1,
+        })
+        expect(sends).toBe(0)
+        expect(goal?.status).toBe("paused")
+        expect(goal?.pausedReason).toBe(GOAL_PAUSED_UNQUEUED)
+      }),
+  )
+
+  const unqueued: GoalState = {
+    ...active,
+    status: "paused",
+    pausedReason: GOAL_PAUSED_UNQUEUED,
+    continuationsUsed: 1,
+  }
+
+  it.scopedLive("a refused /goal resume keeps the pause, and the next resume queues", () =>
+    Effect.gen(function* () {
+      const hook = Effect.gen(function* () {
+        const first = yield* Effect.exit(goalCommand("resume"))
+        yield* goalCommand("resume")
+        return Exit.isFailure(first)
+      })
+      const { answer, goal, sends } = yield* onBranch(unqueued, 2_000, hook, { sends: 1 })
+      expect(answer).toBe(true)
+      expect(goal?.status).toBe("active")
+      expect(goal?.pausedReason).toBeUndefined()
+      expect(goal?.continuationsUsed).toBe(2)
+      expect(sends).toBe(1)
+    }),
+  )
+
+  it.scopedLive("a refused /goal resume leaves the goal as it was", () =>
+    Effect.gen(function* () {
+      const { answer, goal, sends } = yield* onBranch(
+        unqueued,
+        2_000,
+        Effect.exit(goalCommand("resume")),
+        { sends: 1 },
+      )
+      expect(Exit.isFailure(answer)).toBe(true)
+      expect(goal).toEqual(unqueued)
+      expect(sends).toBe(0)
+    }),
+  )
+
+  const done: GoalState = { ...active, status: "complete" }
+
+  it.scopedLive("a /goal whose first prompt is refused saves no goal", () =>
+    Effect.gen(function* () {
+      const { answer, goal, sends } = yield* onBranch(
+        done,
+        2_000,
+        Effect.exit(goalCommand("Write the heron poem")),
+        { sends: 1 },
+      )
+      expect(Exit.isFailure(answer)).toBe(true)
+      expect(goal).toEqual(done)
+      expect(sends).toBe(0)
+    }),
+  )
+
+  it.scopedLive("a /goal retried after a refused first prompt starts the goal", () =>
+    Effect.gen(function* () {
+      const hook = Effect.gen(function* () {
+        const first = yield* Effect.exit(goalCommand("Write the heron poem"))
+        yield* goalCommand("Write the heron poem")
+        return Exit.isFailure(first)
+      })
+      const { answer, goal, sends } = yield* onBranch(done, 2_000, hook, { sends: 1 })
+      expect(answer).toBe(true)
+      expect(goal?.status).toBe("active")
+      expect(goal?.objective).toBe("Write the heron poem")
+      expect(sends).toBe(1)
+    }),
   )
 })
 

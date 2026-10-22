@@ -284,7 +284,12 @@ const dequeueGoalMessage = (goal: GoalState) =>
     return yield* ctx.Session.dequeueFollowUp({ sourceId: goalContinuationSource(goal) })
   })
 
-const createGoal = (input: string) =>
+/**
+ * `start` queues the first continuation before the goal is saved, as the
+ * command does: a refused admission fails the command and saves no goal. The
+ * model's own `create` runs inside its turn, whose end queues it.
+ */
+const createGoal = (input: string, start: boolean) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const crypto = yield* Crypto.Crypto
@@ -308,6 +313,7 @@ const createGoal = (input: string) =>
           createdAt: time,
           updatedAt: time,
         }
+        if (start) yield* queueGoalMessage(created, continuationPrompt(created))
         return { next: Option.some(created), result: created }
       }),
     )
@@ -357,6 +363,10 @@ const setStatus = (change: StatusChange) =>
           }),
           updatedAt: yield* now,
         }
+        // A resume queues before it is saved: a refused admission fails the
+        // command over the goal still paused, with its reason.
+        if (change.status === "active")
+          yield* queueGoalMessage(updated, continuationPrompt(updated))
         return { next: Option.some(updated), result: { goal: updated, previous: current.value } }
       }),
     )
@@ -615,6 +625,52 @@ export const goalResumeDue = (input: WakeDueInput) =>
 
 // ── Slash command ──
 
+/** The `/goal` command: set, read or change this branch's goal. */
+export const goalCommand = (input: string) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const args = input.trim()
+    const present = (content: string) => ctx.Interaction.present({ title: "Goal", content })
+    switch (args) {
+      case "":
+      case "status":
+        return yield* present(formatGoalStatus(yield* readGoal()))
+      case "resume": {
+        const goal = yield* setStatus({
+          status: "active",
+          verb: "resume",
+          allowed: (current) => current.status === "paused",
+        })
+        return yield* present(`Resumed.\n\n${formatGoalUsage(goal)}`)
+      }
+      case "pause": {
+        // A goal waiting on a usage limit can be paused too: it then stays paused past the reset.
+        const goal = yield* setStatus({
+          status: "paused",
+          verb: "pause",
+          allowed: (current) =>
+            current.status === "active" || Predicate.isNotUndefined(current.resumeAt),
+        })
+        return yield* present(`Paused.\n\n${formatGoalUsage(goal)}`)
+      }
+      case "clear":
+      case "cancel":
+      case "stop": {
+        const goal = yield* clearGoal
+        return yield* present(
+          Option.match(goal, {
+            onNone: () => "No goal on this branch.",
+            onSome: (value) => `Cleared.\n\n${formatGoalUsage(value)}`,
+          }),
+        )
+      }
+      default: {
+        // The first continuation starts the work at once when the loop is idle.
+        yield* createGoal(args, true)
+      }
+    }
+  }).pipe(serializeGoal)
+
 const GoalCommand = request({
   id: "goal-command",
   description:
@@ -628,52 +684,7 @@ const GoalCommand = request({
   },
   input: Schema.String,
   output: Schema.Void,
-  execute: (input: string) =>
-    Effect.gen(function* () {
-      const ctx = yield* ExtensionContext
-      const args = input.trim()
-      const present = (content: string) => ctx.Interaction.present({ title: "Goal", content })
-      switch (args) {
-        case "":
-        case "status":
-          return yield* present(formatGoalStatus(yield* readGoal()))
-        case "resume": {
-          const goal = yield* setStatus({
-            status: "active",
-            verb: "resume",
-            allowed: (current) => current.status === "paused",
-          })
-          yield* queueGoalMessage(goal, continuationPrompt(goal))
-          return yield* present(`Resumed.\n\n${formatGoalUsage(goal)}`)
-        }
-        case "pause": {
-          // A goal waiting on a usage limit can be paused too: it then stays paused past the reset.
-          const goal = yield* setStatus({
-            status: "paused",
-            verb: "pause",
-            allowed: (current) =>
-              current.status === "active" || Predicate.isNotUndefined(current.resumeAt),
-          })
-          return yield* present(`Paused.\n\n${formatGoalUsage(goal)}`)
-        }
-        case "clear":
-        case "cancel":
-        case "stop": {
-          const goal = yield* clearGoal
-          return yield* present(
-            Option.match(goal, {
-              onNone: () => "No goal on this branch.",
-              onSome: (value) => `Cleared.\n\n${formatGoalUsage(value)}`,
-            }),
-          )
-        }
-        default: {
-          const goal = yield* createGoal(args)
-          // The first continuation starts the work at once when the loop is idle.
-          yield* queueGoalMessage(goal, continuationPrompt(goal))
-        }
-      }
-    }).pipe(serializeGoal),
+  execute: goalCommand,
 })
 
 // ── Model-facing tool ──
@@ -719,6 +730,7 @@ export const GoalTool = tool({
       case "create": {
         const goal = yield* createGoal(
           Option.getOrElse(Option.fromUndefinedOr(params.objective), () => ""),
+          false,
         )
         return toolResult(Option.some(goal))
       }
