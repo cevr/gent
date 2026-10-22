@@ -51,6 +51,7 @@ import {
   PubSub,
   Queue,
   Ref,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -68,6 +69,8 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  type LaneUnavailable,
+  ModelId,
   omitUndefined,
   request,
   resolveDataDir,
@@ -128,15 +131,29 @@ const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const Template = Schema.String.check(Schema.isMaxLength(16_000))
 
-/** One role: a thread's spec, as `thread.start` takes it. Default agent: `worker`, which keeps the session cache. */
+/**
+ * A role's model tier, read from config `tiers`: `strongest` takes the first
+ * model of its list with a free lane, `efficient` the one of its list with
+ * the least cost per finished round, at the model's quota weight. With no
+ * model free, the round waits; it never runs the other tier.
+ */
+const Tier = Schema.Literals(["strongest", "efficient"])
+type Tier = typeof Tier.Type
+
+/**
+ * One role: a thread's spec, as `thread.start` takes it. Default agent:
+ * `worker`, which keeps the session cache. A `model` wins over a `tier`.
+ */
 const ThreadRole = Schema.Struct({
   agent: StartParams.fields.agent,
   model: StartParams.fields.model,
+  tier: Schema.optionalKey(Tier),
   effort: StartParams.fields.effort,
   account: StartParams.fields.account,
   instructions: Schema.optionalKey(Template),
   tools: StartParams.fields.tools,
 })
+type ThreadRole = typeof ThreadRole.Type
 
 /** A loop cap: past `maxVisits` entries (default 10) the run goes to `exhausted`, else asks. */
 const VisitCap = {
@@ -251,7 +268,8 @@ const PendingAction = Schema.TaggedUnion({
    * admitted. `notBefore` (epoch ms): the round waits for the account until
    * then, holding nothing. The marker stays after its deadline until a
    * permit is acquired and the dispatch commits. `fresh`: the round runs on
-   * a new thread, as a usage limit's rerun does.
+   * a new thread, as a usage limit's rerun does. `model`: the model the
+   * thread's session runs, read when it is admitted.
    */
   Round: {
     state: StateName,
@@ -260,6 +278,7 @@ const PendingAction = Schema.TaggedUnion({
     attempt: PositiveInt,
     thread: Schema.optionalKey(SessionId),
     round: Schema.optionalKey(Schema.String),
+    model: Schema.optionalKey(ModelId),
     notBefore: Schema.optionalKey(Schema.Finite),
     fresh: Schema.optionalKey(Schema.Boolean),
   },
@@ -334,11 +353,14 @@ const MachineStep = Schema.TaggedUnion({
   Recorded: { action: PendingAction },
   /** Where the next owner message lands, saved before it is sent. */
   PlaceSaved: { place: PlaceRecord },
+  /** `model` and `costUsd`: the round's model and its turn's priced cost, when known. */
   RoundEnded: {
     state: StateName,
     round: Schema.String,
     verdict: Schema.optionalKey(Verdict),
     dead: Schema.Boolean,
+    model: Schema.optionalKey(ModelId),
+    costUsd: Schema.optionalKey(Schema.Finite),
   },
   CommandEnded: {
     state: StateName,
@@ -369,6 +391,7 @@ const MachineStep = Schema.TaggedUnion({
   Notified: {},
 })
 type MachineStep = typeof MachineStep.Type
+type RoundEnded = Extract<MachineStep, { readonly _tag: "RoundEnded" }>
 
 // ── errors ──────────────────────────────────────────────────────────────────
 
@@ -916,6 +939,11 @@ interface MachineStoreService {
     Option.Option<Extract<MachineStep, { readonly _tag: "Answered" }>>,
     MachineStorageError
   >
+  /** Every ended round of `state` that names its model, in every run of `machine`, oldest first. */
+  readonly roundsOf: (
+    machine: MachineName,
+    state: StateName,
+  ) => Effect.Effect<ReadonlyArray<RoundEnded>, MachineStorageError>
   readonly ownedBy: (thread: SessionId) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
   /** The runs a branch hosts that have work left. */
   readonly activeOn: (host: PlaceRecord) => Effect.Effect<ReadonlyArray<Run>, MachineStorageError>
@@ -1130,6 +1158,24 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
             })
           },
           Effect.mapError(storageError("Failed to read an answer")),
+        ),
+        roundsOf: Effect.fn("MachineStore.roundsOf")(
+          function* (machine, state) {
+            const rows = yield* sql`SELECT s.seq, s.at, s.step_json FROM machine_steps s
+              JOIN machine_runs r ON r.run = s.run
+              WHERE r.machine = ${machine}
+                AND json_extract(s.step_json, '$._tag') = 'RoundEnded'
+                AND json_extract(s.step_json, '$.state') = ${state}
+                AND json_extract(s.step_json, '$.model') IS NOT NULL
+              ORDER BY s.at ASC, s.seq ASC`
+            const decoded = yield* decodeStepRows(rows)
+            return decoded.flatMap((row) => {
+              const step = row.step_json
+              if (step._tag !== "RoundEnded") return []
+              return [step]
+            })
+          },
+          Effect.mapError(storageError("Failed to read a machine's rounds")),
         ),
         ownedBy: Effect.fn("MachineStore.ownedBy")(
           function* (thread) {
@@ -2136,8 +2182,12 @@ const ownThread = (state: ThreadState, action: RoundAction) =>
 
 /**
  * Starts the round's thread (a fresh one is the round's own, a role's is the
- * run's, kept across visits) and commits it with the round's id: the run and
- * the round as committed, or none when another writer moved the row first.
+ * run's, kept across visits) and commits it with the round's id and the
+ * thread's model: the run and the round as committed, or none when another
+ * writer moved the row first. A tier role's round runs the model its tier
+ * picks: on the role's thread while that thread's model is the pick, else
+ * on a new thread that becomes the role's. With no model of the tier free,
+ * the round waits for the earliest to free, and none is returned.
  */
 const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   run: Run,
@@ -2148,46 +2198,63 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   const definition = yield* definitionOf(run)
   const role = definition.threads[state.thread] ?? {}
   const fresh = ownThread(state, action)
+  const known = Option.liftPredicate(
+    Option.fromUndefinedOr(run.roles[state.thread]),
+    () => !fresh,
+  ).pipe(Option.flatten)
+  const kept = Option.orElse(Option.fromUndefinedOr(action.thread), () => known)
+  const tiered = yield* tierPick(run, action.state, role, kept)
+  if (Result.isFailure(tiered)) {
+    yield* waitForAccount(run, action, { until: tiered.failure, reason: "lane" })
+    return Option.none()
+  }
+  const pick = tiered.success
+  const model = Option.getOrUndefined(Option.map(pick, (chosen) => chosen.model)) ?? role.model
   const spec: Omit<ThreadStartInput, "key" | "name"> = {
     agent: role.agent ?? WORKER_AGENT,
     cwd: run.cwd,
     notify: "none",
     ...omitUndefined({
-      model: role.model,
+      model,
       effort: role.effort,
       account: role.account,
       instructions: role.instructions,
       tools: role.tools,
     }),
   }
-  const known = Option.liftPredicate(
-    Option.fromUndefinedOr(run.roles[state.thread]),
-    () => !fresh,
-  ).pipe(Option.flatten)
-  const thread = yield* Option.match(
-    Option.orElse(Option.fromUndefinedOr(action.thread), () => known),
-    {
-      onSome: Effect.succeed,
-      onNone: () => {
-        let start = {
-          key: `machine:${run.run}:role:${state.thread}`,
-          name: `${run.machine}-${state.thread}`,
+  const reused = Option.match(pick, {
+    onNone: () => kept,
+    onSome: (chosen) => Option.filter(kept, () => chosen.keep),
+  })
+  const thread = yield* Option.match(reused, {
+    onSome: Effect.succeed,
+    onNone: () => {
+      let start = {
+        key: `machine:${run.run}:role:${state.thread}`,
+        name: `${run.machine}-${state.thread}`,
+      }
+      // A fresh round's thread is its own; a role's new model takes a new thread.
+      if (fresh || Option.isSome(kept)) {
+        start = {
+          key: `${action.key}:thread`,
+          name: `${run.machine}-${action.state}-${action.visit}`,
         }
-        if (fresh) {
-          start = {
-            key: `${action.key}:thread`,
-            name: `${run.machine}-${action.state}-${action.visit}`,
-          }
-        }
-        return threads.start({ ...spec, ...start }).pipe(
-          Effect.mapError(threadFault),
-          Effect.map((started) => started.thread),
-        )
-      },
+      }
+      return threads.start({ ...spec, ...start }).pipe(
+        Effect.mapError(threadFault),
+        Effect.map((started) => started.thread),
+      )
     },
-  )
+  })
+  // Read back: a start again under its key finds the thread the first start made.
+  const ran = yield* threads.model(thread).pipe(Effect.mapError(threadFault))
   const round = yield* threads.sendRound(action.key)
-  const recorded = PendingAction.cases.Round.make({ ...action, thread, round })
+  const recorded = PendingAction.cases.Round.make({
+    ...action,
+    thread,
+    round,
+    ...omitUndefined({ model: Option.getOrUndefined(ran) }),
+  })
   let roles = run.roles
   if (!fresh) roles = { ...run.roles, [state.thread]: thread }
   const committed = yield* commitMove(run, { ...run, roles, pending: Option.some(recorded) }, [
@@ -2195,6 +2262,151 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
   ])
   return Option.map(committed, (next) => ({ run: next, action: recorded, thread, round }))
 })
+
+// ── model tiers ─────────────────────────────────────────────────────────────
+
+/** One model's ended rounds of a state: their priced cost, and how many finished with a verdict. */
+interface ModelRounds {
+  readonly costUsd: number
+  readonly priced: number
+  readonly finished: number
+}
+
+const modelRounds = (ended: ReadonlyArray<RoundEnded>): ReadonlyMap<ModelId, ModelRounds> => {
+  const byModel = new Map<ModelId, ModelRounds>()
+  for (const round of ended) {
+    if (Predicate.isUndefined(round.model)) continue
+    const before = byModel.get(round.model) ?? { costUsd: 0, priced: 0, finished: 0 }
+    byModel.set(round.model, {
+      costUsd: before.costUsd + (round.costUsd ?? 0),
+      priced: before.priced + Number(Predicate.isNotUndefined(round.costUsd)),
+      finished: before.finished + Number(!round.dead),
+    })
+  }
+  return byModel
+}
+
+/**
+ * Where an efficient model stands, lowest first: a model with no round of
+ * the state yet, so each gets measured; then the measured ones by cost per
+ * finished round at their quota weight, a model that finished none last of
+ * them; then the ones whose rounds carried no price.
+ */
+const efficientRank = (
+  rounds: Option.Option<ModelRounds>,
+  weight: number,
+): readonly [number, number] =>
+  Option.match(rounds, {
+    onNone: () => [0, 0] as const,
+    onSome: (found) => {
+      if (found.priced === 0) return [2, 0] as const
+      if (found.finished === 0) return [1, Number.POSITIVE_INFINITY] as const
+      return [1, (found.costUsd * weight) / found.finished] as const
+    },
+  })
+
+/**
+ * The models of a tier, in the order a round tries them: `strongest` in the
+ * list's order; `efficient` by `efficientRank` over every run of the
+ * machine, ties in the list's order. A weight is the provider's fitted one
+ * (`accounts.lanes`), 1 until fitted.
+ */
+const tierOrder = Effect.fn("Machines.tierOrder")(function* (
+  run: Run,
+  state: StateName,
+  tier: Tier,
+) {
+  const ctx = yield* ExtensionContext
+  const listed = (yield* ctx.Accounts.tiers(run.cwd))[tier]
+  if (listed.length === 0) {
+    return yield* new MachineFault({
+      message: `A ${tier} role needs config tiers.${tier} to name a model`,
+    })
+  }
+  if (tier === "strongest") return listed
+  const store = yield* MachineStore
+  const byModel = modelRounds(yield* store.roundsOf(run.machine, state))
+  const report = yield* ctx.Accounts.lanes
+  const weights = new Map(
+    report.providers.flatMap((lanes) => lanes.models).map((entry) => [entry.model, entry.weight]),
+  )
+  return listed
+    .map((model, index) => ({
+      model,
+      index,
+      rank: efficientRank(Option.fromUndefinedOr(byModel.get(model)), weights.get(model) ?? 1),
+    }))
+    .toSorted(
+      (left, right) =>
+        left.rank[0] - right.rank[0] || left.rank[1] - right.rank[1] || left.index - right.index,
+    )
+    .map((entry) => entry.model)
+})
+
+/**
+ * The first of `models` whose lane is free now, as the round's start would
+ * be admitted; fails with the earliest time any of them frees.
+ */
+const freeModel = Effect.fn("Machines.freeModel")(function* (
+  run: Run,
+  role: ThreadRole,
+  models: ReadonlyArray<ModelId>,
+) {
+  const ctx = yield* ExtensionContext
+  const admission = {
+    agent: role.agent ?? WORKER_AGENT,
+    ...omitUndefined({
+      runSpec: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(role.account), (credentialSlot) => ({ credentialSlot })),
+      ),
+    }),
+  }
+  const retries: Array<number> = []
+  for (const modelId of models) {
+    const refused = yield* ctx.Accounts.probe({ cwd: run.cwd, modelId, admission }).pipe(
+      Effect.as(Option.none<LaneUnavailable>()),
+      Effect.catchTag("LaneUnavailable", (lane) => Effect.succeedSome(lane)),
+    )
+    if (Option.isNone(refused)) return Result.succeed(modelId)
+    retries.push(refused.value.retryAt)
+  }
+  return Result.fail(Math.min(...retries))
+})
+
+/**
+ * The model a tier role's round runs, and whether it keeps `kept`, the
+ * role's thread: that thread's model is tried first while the tier lists
+ * it, so the role keeps its thread and cache while that model has a lane.
+ * None for a role that names a `model` or no tier. Fails with the time the
+ * first model of the tier frees when none has a lane.
+ */
+const tierPick = Effect.fn("Machines.tierPick")(function* (
+  run: Run,
+  state: StateName,
+  role: ThreadRole,
+  kept: Option.Option<SessionId>,
+) {
+  if (Predicate.isNotUndefined(role.model) || Predicate.isUndefined(role.tier)) {
+    return Result.succeed(Option.none<{ readonly model: ModelId; readonly keep: boolean }>())
+  }
+  const threads = yield* threadsOf
+  const order = yield* tierOrder(run, state, role.tier)
+  const keptModel = yield* Option.match(kept, {
+    onNone: () => Effect.succeedNone,
+    onSome: (thread) => threads.model(thread).pipe(Effect.mapError(threadFault)),
+  })
+  const first = Option.filter(keptModel, (model) => order.includes(model))
+  const tried = [
+    ...Option.toArray(first),
+    ...order.filter((model) => !Option.contains(first, model)),
+  ]
+  const free = yield* freeModel(run, role, tried)
+  return Result.map(free, (model) => Option.some({ model, keep: Option.contains(first, model) }))
+})
+
+/** The round's model and its turn's priced cost, as its `RoundEnded` step keeps them. */
+const roundBill = (action: RoundAction, view: { readonly usage?: { readonly costUsd?: number } }) =>
+  omitUndefined({ model: action.model, costUsd: view.usage?.costUsd })
 
 /**
  * Waits for the pending round's end, then takes its receipt: a verdict moves
@@ -2238,7 +2450,12 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       visit: action.visit,
       reason: "interrupted",
       lead: [
-        MachineStep.cases.RoundEnded.make({ state: name, round: roundId, dead: true }),
+        MachineStep.cases.RoundEnded.make({
+          state: name,
+          round: roundId,
+          dead: true,
+          ...roundBill(action, view),
+        }),
         MachineStep.cases.Interrupted.make({ state: name }),
       ],
     })
@@ -2255,7 +2472,12 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
       fresh: true,
     })
     yield* waitForAccount(run, rerun, { until: view.retryAt, reason: "quota" }, [
-      MachineStep.cases.RoundEnded.make({ state: name, round: roundId, dead: true }),
+      MachineStep.cases.RoundEnded.make({
+        state: name,
+        round: roundId,
+        dead: true,
+        ...roundBill(action, view),
+      }),
     ])
     return
   }
@@ -2276,6 +2498,7 @@ const awaitRound = Effect.fn("Machines.awaitRound")(function* (
     state: name,
     round: roundId,
     dead,
+    ...roundBill(action, view),
     ...omitUndefined({
       verdict: Option.getOrUndefined(Option.flatten(verdict)),
     }),

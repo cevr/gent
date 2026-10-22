@@ -277,7 +277,20 @@
     visit or the dead-worker retry, and a second refusal moves the time. A
     server start gives a waiting round no crash-debt ticket, even past its
     deadline. The driver removes `notBefore` only after taking a permit and
-    committing the resumed dispatch. The owner is woken only by an ask (`machine-ask`), a final
+    committing the resumed dispatch.
+  - A role names a `model`, or a `tier`: `strongest` or `efficient`, each a
+    list of models in config `tiers` (`Accounts.tiers`; a project list
+    shadows the user's). A role with neither runs the agent's model; `model`
+    wins over `tier`. A tier role's round runs the first model of its order
+    that `Accounts.probe` admits now: `strongest` in the list's order;
+    `efficient` a model with no round of the state yet first (list order),
+    then by priced cost per finished round at the provider's fitted quota
+    weight (`accounts.lanes`), over every run of the machine. The role's
+    thread is tried first while its model is in the tier, so the role keeps
+    its thread and cache; another pick starts a new thread that becomes the
+    role's. With no model of the tier free, the round waits (`lane`) until
+    the first frees; another tier is never a fallback. Every `RoundEnded`
+    step keeps the thread's model and the turn's `costUsd`. The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
   - Answers check in one order: an answered ask is decided by its answer

@@ -149,11 +149,13 @@ export const restartableHome = Effect.gen(function* () {
       readonly configServiceLayer?: Parameters<typeof createE2ELayer>[0]["configServiceLayer"]
       /** Test extensions beside the shipped ones. */
       readonly extensionInputs?: typeof e2ePreset.extensionInputs
+      /** `"catalog"`: the models.dev fixture's models and prices. */
+      readonly models?: Parameters<typeof createE2ELayer>[0]["models"]
     } = {},
   ) =>
     createE2ELayer({
       ...e2ePreset,
-      ...omitUndefined({ configServiceLayer: config.configServiceLayer }),
+      ...omitUndefined({ configServiceLayer: config.configServiceLayer, models: config.models }),
       extensionInputs: [...e2ePreset.extensionInputs, ...(config.extensionInputs ?? [])],
       providerLayer,
       storagePath,

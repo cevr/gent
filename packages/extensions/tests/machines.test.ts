@@ -36,6 +36,7 @@ import {
   type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
+  ModelId,
   omitUndefined,
   type QuotaReading,
   ref,
@@ -322,7 +323,15 @@ const StepView = Schema.Struct({
   from: Schema.optionalKey(Schema.String),
   to: Schema.optionalKey(Schema.String),
   askId: Schema.optionalKey(Schema.String),
-  action: Schema.optionalKey(Schema.Struct({ _tag: Schema.String, state: Schema.String })),
+  model: Schema.optionalKey(Schema.String),
+  costUsd: Schema.optionalKey(Schema.Finite),
+  action: Schema.optionalKey(
+    Schema.Struct({
+      _tag: Schema.String,
+      state: Schema.String,
+      thread: Schema.optionalKey(Schema.String),
+    }),
+  ),
 })
 const decodeStep = Schema.decodeUnknownSync(Schema.fromJsonString(StepView))
 const decodeStepJson = Schema.decodeUnknownSync(
@@ -2102,6 +2111,211 @@ const bootGated = (
     )
     return yield* Ref.get(most)
   })
+
+// ── model tiers ─────────────────────────────────────────────────────────────
+
+const OPUS = ModelId.make("anthropic/claude-opus-5")
+const HAIKU = ModelId.make("anthropic/claude-haiku-4-5")
+const SONNET = TEST_MODEL_ID
+
+/** The `work` account, with the owner's tiers, over the catalog's models and prices. */
+const tieredAccount = (tiers: {
+  strongest?: ReadonlyArray<ModelId>
+  efficient?: ReadonlyArray<ModelId>
+}) => ({
+  configServiceLayer: ConfigService.Test(
+    new UserConfig({
+      model: TEST_MODEL_ID,
+      providers: { anthropic: { authOrder: [work] } },
+      tiers,
+    }),
+  ),
+  models: "catalog" as const,
+})
+
+/** `model`'s own 5-hour window, refusing its runs until `resetAt`. */
+const modelSpentUntil = (model: ModelId, resetAt: number): QuotaReading => ({
+  window: "5h",
+  model,
+  utilization: 1,
+  resetAt,
+  rejected: true,
+})
+
+/** One strongest round, then an ask: `again` runs the role's next round. */
+const STRONG_AGAIN = {
+  name: "strong-again",
+  threads: { worker: { tier: "strongest" } },
+  start: "work",
+  states: {
+    work: { kind: "thread", thread: "worker", say: "STATE work {{visit}}", next: "gate" },
+    gate: { kind: "ask", ask: "Again?", on: { again: "work", end: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+/** Three efficient rounds, each on a thread of its own. */
+const EFFICIENT_THRICE = {
+  name: "efficient-thrice",
+  threads: { worker: { tier: "efficient" } },
+  start: "work",
+  states: {
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}",
+      next: "work",
+      fresh: true,
+      maxVisits: 3,
+      exhausted: "done",
+    },
+    done: { kind: "final" },
+  },
+}
+
+/** The run's ended rounds: each one's model and whether it was priced. */
+const roundsRan = (steps: ReadonlyArray<typeof StepView.Type>) =>
+  steps.flatMap((step) => {
+    if (step._tag !== "RoundEnded") return []
+    return [{ model: step.model, priced: Predicate.isNotUndefined(step.costUsd) }]
+  })
+
+/** The thread each recorded round ran on, in order. */
+const roundThreads = (steps: ReadonlyArray<typeof StepView.Type>) =>
+  steps.flatMap((step) => {
+    if (step._tag !== "Recorded" || step.action?._tag !== "Round") return []
+    return [step.action.thread]
+  })
+
+/** The `count`th ask the owner got, read under the test clock. */
+const askAt = (client: Client, owner: SessionKey, count: number) =>
+  Effect.map(
+    eventually(
+      client.session.getSnapshot(owner),
+      (current) =>
+        current.runtime._tag === "Idle" &&
+        ofType(current.messages, MACHINE_ASK_TYPE).length >= count,
+      `ask ${count} reached the owner`,
+    ),
+    (snapshot) =>
+      decodeAsk(ofType(snapshot.messages, MACHINE_ASK_TYPE)[count - 1]?.metadata?.details),
+  )
+
+describe("a tier role's round", () => {
+  it.live(
+    "runs the first strongest model with a lane, keeps its thread while that model has one, and moves when it has none",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+        const models = yield* makeModels(
+          (round) => Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+          quotaOwner(readings),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), tieredAccount({ strongest: [OPUS, SONNET] })),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const now = yield* Clock.currentTimeMillis
+        // Opus has no lane for an hour: the first round runs Sonnet.
+        yield* Ref.set(readings, [modelSpentUntil(OPUS, now + HOUR)])
+        const run = yield* startRunOn(client, owner, STRONG_AGAIN, "strong-again")
+        const first = yield* askAt(client, owner, 1)
+        // Opus frees; the role's thread runs Sonnet, which still has a lane: it stays there.
+        yield* TestClock.adjust(HOUR + 60_000)
+        yield* callOn(client, owner, [
+          ["machine.answer", "again-1", { run, askId: first.askId, choice: "again" }],
+        ])
+        const second = yield* askAt(client, owner, 2)
+        // Sonnet has no lane now: the role moves to Opus, on a new thread.
+        yield* Ref.set(readings, [modelSpentUntil(SONNET, (yield* Clock.currentTimeMillis) + HOUR)])
+        yield* callOn(client, owner, [
+          ["machine.answer", "again-2", { run, askId: second.askId, choice: "again" }],
+        ])
+        const third = yield* askAt(client, owner, 3)
+        yield* callOn(client, owner, [
+          ["machine.answer", "end-3", { run, askId: third.askId, choice: "end" }],
+        ])
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        const steps = yield* home.sql(stepsOf(run))
+        expect(roundsRan(steps)).toEqual([
+          { model: SONNET, priced: true },
+          { model: SONNET, priced: true },
+          { model: OPUS, priced: true },
+        ])
+        const [t1, t2, t3] = roundThreads(steps)
+        expect(t1).toBe(t2)
+        expect(t3).not.toBe(t1)
+        expect(waitsOf(steps)).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "waits for the first of its tier to free when none has a lane, and starts nothing",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const readings = yield* Ref.make<ReadonlyArray<QuotaReading>>([])
+        const models = yield* makeModels(
+          (round) => Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+          quotaOwner(readings),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ strongest: [OPUS, SONNET], efficient: [HAIKU] }),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const now = yield* Clock.currentTimeMillis
+        // Both strongest models are spent; the efficient one is free and is never a fallback.
+        yield* Ref.set(readings, [
+          modelSpentUntil(OPUS, now + 2 * HOUR),
+          modelSpentUntil(SONNET, now + HOUR),
+        ])
+        const run = yield* startRunOn(client, owner, STRONG_AGAIN, "strong-again")
+        yield* eventually(
+          home.sql(pendingWait(run)),
+          (until) => Option.contains(until, now + HOUR),
+          "the round waits for the first model to free",
+        )
+        yield* settle
+        expect(yield* Ref.get(models.calls)).toEqual([])
+        expect(roundThreads(yield* home.sql(stepsOf(run)))).toEqual([])
+        yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
+        yield* askAt(client, owner, 1)
+        const steps = yield* home.sql(stepsOf(run))
+        expect(waitsOf(steps)).toEqual([{ reason: "lane", until: now + HOUR }])
+        expect(roundsRan(steps)).toEqual([{ model: SONNET, priced: true }])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "measures each efficient model once, then runs the one with the least cost per finished round",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), tieredAccount({ efficient: [OPUS, HAIKU] })),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        // Opus first, as listed; Haiku once to measure it; then Haiku, a fifth of Opus's price.
+        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
+          { model: OPUS, priced: true },
+          { model: HAIKU, priced: true },
+          { model: HAIKU, priced: true },
+        ])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+})
 
 describe("the machine boot budget", () => {
   it.live(
