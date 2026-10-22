@@ -2086,6 +2086,7 @@ const PlantedStarted = Schema.TaggedStruct("Started", {
   input: Schema.Json,
 })
 const PlantedDispatched = Schema.TaggedStruct("Dispatched", { action: Schema.Json })
+const PlantedSaved = Schema.TaggedStruct("Saved", { state: Schema.String, value: Schema.Json })
 
 interface PlantedRun {
   readonly run: string
@@ -2153,6 +2154,38 @@ const plantRuns = (
   )
 
 const runIdAt = (index: number) => `run-${index.toString(16).padStart(16, "0")}`
+
+describe("a run read while another server commits", () => {
+  it.live("folds only the steps its row names, never a later commit's", () =>
+    Effect.gen(function* () {
+      const home = yield* restartableHome
+      const [host] = yield* makeHosts(home, 1)
+      if (Predicate.isUndefined(host)) return yield* Effect.die("missing host")
+      const run = runIdAt(1)
+      yield* plantRuns(home, BUDGET_JSON, [{ run, host, debt: true, createdAt: 0, wakeAt: 0 }])
+      // As a commit lands between the read of the row (seq 2) and of its steps.
+      yield* home.sql(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const later = [
+            PlantedSaved.make({ state: "work", value: "later" }),
+            PlantedDispatched.make({
+              action: PlantedRound.make({ state: "work", visit: 2, key: "later", attempt: 1 }),
+            }),
+          ]
+          for (const [index, step] of later.entries()) {
+            yield* sql`INSERT INTO machine_steps (run, seq, at, state, step_json)
+              VALUES (${run}, ${index + 3}, 0, 'work', ${encodeJson(step)})`
+          }
+        }),
+      )
+      const stored = yield* home.sql(storedRun(run))
+      expect(stored.seq).toBe(2)
+      expect(stored.visits.counts).toEqual({ work: 1 })
+      expect(stored.context).toEqual({ last: {}, all: {} })
+    }).pipe(Effect.scoped, Effect.timeout("30 seconds")),
+  )
+})
 
 /** Hosts for `count` runs, made by a first root that runs no machine. */
 const makeHosts = (home: Effect.Success<typeof restartableHome>, count: number) =>

@@ -1075,10 +1075,11 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
       const sql = yield* SqlClient.SqlClient
       yield* ensureMachineTables
 
-      // A run is its row and the fold of its steps: the row keeps no memo.
-      const memoOf = Effect.fn("MachineStore.memoOf")(function* (run: RunId) {
+      // A run is its row and the fold of its steps up to the row's seq: a
+      // commit between the two reads adds steps the row does not name yet.
+      const memoOf = Effect.fn("MachineStore.memoOf")(function* (record: RunRecord) {
         const rows = yield* sql`SELECT seq, at, step_json FROM machine_steps
-          WHERE run = ${run}
+          WHERE run = ${record.run} AND seq <= ${record.seq}
             AND json_extract(step_json, '$._tag') IN (${sql.literal(
               MEMO_TAGS.map((tag) => `'${tag}'`).join(", "),
             )})
@@ -1099,7 +1100,7 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
                 Effect.mapError(storageError("A machine run row does not decode")),
               ),
             )
-            return { ...record, ...(yield* memoOf(record.run)) } satisfies Run
+            return { ...record, ...(yield* memoOf(record)) } satisfies Run
           }),
         )
 
