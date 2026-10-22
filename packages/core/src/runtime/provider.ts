@@ -42,6 +42,7 @@ import { CredentialSlot, DEFAULT_CREDENTIAL_SLOT, SessionId, ToolCallId } from "
 import { ExtensionRegistry, type ExtensionRegistryService } from "./extension-host.js"
 import { causeMessage, type JsonRecord, omitUndefined } from "../domain/guards.js"
 import { wireToolName } from "../domain/capability.js"
+import { encodeToolOutput } from "../domain/message.js"
 import {
   AuthAuthorizationMethod,
   AuthMetadata,
@@ -7618,19 +7619,58 @@ const paced = <A, E>(stream: Stream.Stream<A, E>, delayMs: number): Stream.Strea
   )
 }
 
-/** The plain reply, sentence by sentence; its request writes its prompt to the cache. */
-const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
+/** A prompt's input tokens, about four characters each: it grows as the context does. */
+const promptTokens = (content: ReadonlyArray<Prompt.Message>): number => {
+  let chars = 0
+  for (const message of content) {
+    if (message.role === "system") {
+      chars += message.content.length
+      continue
+    }
+    for (const part of message.content) {
+      switch (part.type) {
+        case "text":
+        case "reasoning":
+          chars += part.text.length
+          break
+        case "tool-call":
+          chars += encodeToolOutput(part.params).length
+          break
+        case "tool-result":
+          chars += encodeToolOutput(part.result).length
+          break
+        default:
+          break
+      }
+    }
+  }
+  return Math.max(1, Math.ceil(chars / 4))
+}
+
+/**
+ * A request's input, as a provider that caches explicitly reports it: it reads
+ * the prompt the call before it sent (everything up to the newest reply) and
+ * writes what was added since; a first call writes it all. The cache timer
+ * counts from a request that reported cache activity.
+ */
+const cachedInput = (prompt: Prompt.RawInput) => {
+  const content = Prompt.make(prompt).content
+  const inputTokens = promptTokens(content)
+  const previous = content.findLastIndex((message) => message.role === "assistant")
+  let cacheReadTokens = 0
+  if (previous >= 0)
+    cacheReadTokens = Math.min(inputTokens, promptTokens(content.slice(0, previous)))
+  return { inputTokens, cacheReadTokens, cacheWriteTokens: inputTokens - cacheReadTokens }
+}
+
+/** The plain reply, sentence by sentence. */
+const makeReplyStream = (prompt: Prompt.RawInput, reply: string, delayMs = 0) => {
   const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
-  const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
   const stream = Stream.fromIterable([
     ...parts.map((text) => textDeltaPart(`${text} `)),
     finishPart({
       finishReason: "stop",
-      usage: {
-        inputTokens,
-        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
-        cacheWriteTokens: inputTokens,
-      },
+      usage: { ...cachedInput(prompt), outputTokens: Math.max(1, Math.ceil(reply.length / 4)) },
     }),
   ])
   return paced(stream, delayMs)
@@ -8005,28 +8045,13 @@ const stepsSinceLatestUser = (promptInput: Prompt.RawInput): number => {
   return count
 }
 
-/**
- * The step's usage, as a provider that caches explicitly reports it: the
- * first step writes the prompt to the cache, a later one reads it. The cache
- * timer counts from a request that reported cache activity.
- */
-const withCacheUsage = (step: ScriptedStep, index: number, inputTokens: number): ScriptedStep => ({
+/** The step's usage: its scripted output, its input as `cachedInput` reports it. */
+const withCacheUsage = (step: ScriptedStep, prompt: Prompt.RawInput): ScriptedStep => ({
   parts: step.parts.map((part) => {
     if (part.type !== "finish") return part
-    let cacheWriteTokens = inputTokens
-    let cacheReadTokens = 0
-    if (index > 0) {
-      cacheWriteTokens = 0
-      cacheReadTokens = inputTokens
-    }
     return finishPart({
       finishReason: part.reason,
-      usage: {
-        inputTokens,
-        outputTokens: part.usage.outputTokens.total ?? 1,
-        cacheWriteTokens,
-        cacheReadTokens,
-      },
+      usage: { ...cachedInput(prompt), outputTokens: part.usage.outputTokens.total ?? 1 },
     })
   }),
 })
@@ -8046,16 +8071,15 @@ const scenarioStream = (
     const step = scenarioStep(scenario, index, viaCell, (call) =>
       ToolCallId.make(`debug-${run}-${index}-${call}`),
     )
-    const inputTokens = Math.max(1, Math.ceil(latestUserText.length / 4))
     const thinkMs = scenario.steps[index]?.thinkMs ?? 0
     return Option.match(step, {
       // Past the last step the turn is over; answer as the plain debug reply does.
-      onNone: () => makeReplyStream(latestUserText, buildReply(latestUserText), delayMs),
+      onNone: () => makeReplyStream(options.prompt, buildReply(latestUserText), delayMs),
       onSome: (scripted) =>
         Stream.fromEffect(Effect.sleep(Duration.millis(thinkMs))).pipe(
           Stream.drain,
           Stream.concat(
-            paced(Stream.fromIterable(withCacheUsage(scripted, index, inputTokens).parts), delayMs),
+            paced(Stream.fromIterable(withCacheUsage(scripted, options.prompt).parts), delayMs),
           ),
         ),
     })
@@ -8090,7 +8114,9 @@ const debug = (options?: { delayMs?: number; retries?: boolean }) => {
         }
 
         attempts.delete(latestUserText)
-        return Effect.succeed(makeReplyStream(latestUserText, buildReply(latestUserText), delayMs))
+        return Effect.succeed(
+          makeReplyStream(modelOptions.prompt, buildReply(latestUserText), delayMs),
+        )
       }).pipe(Stream.unwrap),
     generateText: () => Effect.succeed("debug scenario"),
   })

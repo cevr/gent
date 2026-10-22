@@ -3561,18 +3561,24 @@ describe("Scripted debug model tool scenario", () => {
     }).pipe(Effect.timeout("4 seconds")),
   )
 
-  it.live("the first step writes the prompt cache and a later one reads it", () =>
-    Effect.gen(function* () {
-      const usage = (parts: ReadonlyArray<Part>) =>
-        parts.flatMap((part) => {
-          if (part.type !== "finish") return []
-          return [part.usage]
-        })[0]
-      const first = usage(yield* step(0, ["bash"]))
-      const later = usage(yield* step(2, ["grep"]))
-      expect(first?.inputTokens.cacheWrite).toBeGreaterThan(0)
-      expect(later?.inputTokens.cacheRead).toBeGreaterThan(0)
-    }).pipe(Effect.timeout("4 seconds")),
+  it.live(
+    "the first step writes the prompt cache, a later one reads what the step before sent and writes the rest",
+    () =>
+      Effect.gen(function* () {
+        const usage = (parts: ReadonlyArray<Part>) =>
+          parts.flatMap((part) => {
+            if (part.type !== "finish") return []
+            return [part.usage.inputTokens]
+          })[0]
+        const first = usage(yield* step(0, ["bash"]))
+        const second = usage(yield* step(1, ["read"]))
+        const third = usage(yield* step(2, ["grep"]))
+        expect(first).toMatchObject({ cacheRead: 0, cacheWrite: first?.total })
+        // The input grows with the prompt, as a provider counts it.
+        expect(third?.total).toBeGreaterThan(second?.total ?? Number.POSITIVE_INFINITY)
+        expect(third?.cacheRead).toBe(second?.total)
+        expect(third?.cacheWrite).toBe((third?.total ?? 0) - (second?.total ?? 0))
+      }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
