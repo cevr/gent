@@ -2413,7 +2413,10 @@ const bulkToolsFixture = {
   artifactIdentity: LoadedArtifactIdentity.make("bulk-tools-fixture-source"),
 }
 
-/** What a request sends: every message's text and each declared tool's name, description and schema. */
+/**
+ * A request's content in characters, not the provider payload: every message's
+ * text and each declared tool's name, description and schema, without framing.
+ */
 const requestChars = (options: ModelOptions): number => {
   const messages = options.prompt.content.reduce((sum, message) => {
     if (message.role === "system") return sum + message.content.length
@@ -2666,6 +2669,24 @@ describe("thread guidance", () => {
           const system = systemTextOf(first.prompt)
           expect(system).toContain("- tools.bulk.*: 200 tools (")
           expect(system).not.toContain("tools.bulk.op-0(")
+        }).pipe(Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+
+  // The cell is the deferral: a role that denies it names its tools natively,
+  // each with its schema, and no catalog cap applies.
+  it.live(
+    "a thread that denies the cell declares each admitted host tool natively",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { child } = yield* shippedThreadRequests(["*", "!cell"], [bulkToolsFixture])
+          const first = child[0]
+          if (Predicate.isUndefined(first)) return yield* Effect.die("no thread request")
+          const names = first.tools.map((declared) => declared.name)
+          expect(names).not.toContain("cell")
+          expect(names.filter((name) => name.startsWith("bulk"))).toHaveLength(200)
         }).pipe(Effect.timeout("14 seconds")),
       ),
     16_000,

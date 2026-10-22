@@ -364,7 +364,9 @@ never exceeds it. Ids order by UTF-16 code unit (`compareIds` in
 the cached prompt prefix stays byte-stable while the set does. A thread therefore starts with the `cell`
 declaration and this bounded listing, whatever host tools and MCP servers the
 session has: with 200 more host tools its first request stays under 24,000
-characters (`delegated-threads.test.ts`). The section is rebuilt each turn, so live composition changes reach
+characters (`delegated-threads.test.ts`). The cell is the only deferral: a role
+that denies `cell`, or a later `modelSet`, declares its admitted tools natively,
+each with its schema, and no catalog cap applies. The section is rebuilt each turn, so live composition changes reach
 the model as ordinary instruction changes. `cell.ts` builds the data half from
 the same selected map: name, description, guidelines, the actual Effect AI
 input schema (derived once with the signature; a schema that cannot be
