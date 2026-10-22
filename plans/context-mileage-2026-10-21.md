@@ -352,6 +352,70 @@ once it has passed (B2).
     spent, it waits and no `efficient` model runs it; an implement state
     takes the cheaper of two `efficient` models by measured fuel per unit.
 
+## Read cost (2026-10-22)
+
+The owner's report: the worst cost is reading many tokens (histories,
+Markdown, big files). Measured on a read-only copy of the owner's `data.db`
+(2026-05-07 to 2026-09-23, 555 branches with assistant messages, 3,786
+assistant messages). "Resident" weighs a result's bytes by the assistant
+messages after it on its branch, which is the share of later cache reads it
+holds (an upper bound: it ignores handoffs).
+
+| What the cell did     | Results | Stored MB | Resident share |
+| --------------------- | ------- | --------- | -------------- |
+| File read             | 830     | 2.58      | 26.2%          |
+| Child or session read | 260     | 1.32      | 18.0%          |
+| Markdown read         | 289     | 1.37      | 17.7%          |
+| Search or listing     | 160     | 0.86      | 10.9%          |
+| Other                 | 997     | 0.99      | 10.8%          |
+| Git history or diff   | 381     | 1.15      | 10.5%          |
+| Test or check         | 339     | 0.94      | 6.0%           |
+
+- Tool results are 9.2 of 12.0 MB of stored conversation parts; 99.8% of
+  them are `cell` results, and 1,802 of 3,247 cells read through Bun
+  directly (`Bun.$`, `node:fs`), not through a host tool. (measured)
+- Size: results of 4k to 16k characters hold 46% of the resident bytes,
+  results over 16k hold 18.5%. Five results reached the 64 KiB cell display
+  cap: three unscoped `grep -R`, one `ls -R`, one `ps`. (measured) So
+  requirement 3's 8k bound reaches under a fifth of the resident bytes.
+  (inferred)
+- Age: results more than 5 assistant messages old hold 50.3% of the
+  resident bytes, more than 10 hold 25.9%, more than 20 hold 11.8%. These
+  sessions are short; a long session moves more of the share to old
+  results. (measured; the last sentence inferred)
+
+### Prior art: OptMem
+
+OptMem (`VictorTaelin/OptMem` `1fb164c`) is an append-only memory log read
+through a fixed reading budget. `memo wake` prints at most `WAKE_LINES` (96,
+about 8k tokens) lines: recent memories verbatim, older ones as one-line
+summaries of aligned power-of-two blocks, coarser with age (`cover`, memo
+82-133). `zoom <a-b>` opens a block into its two halves; `recall <regex>`
+searches every memory word for word. The agent writes each block summary
+itself, in its own turn, when `note` prints a due merge (`nap_prompt`, memo
+463-486): no separate summary call. The reading budget is separate from the
+storage budget. (measured)
+
+What gent takes from it, folded into the pruned handoff (memory note
+"handoff pruning ideas"):
+
+- **Age decay at a cold point.** When the prefix must be rewritten anyway (a
+  handoff, or a step after the cache lapsed), old tool results go into the
+  new window as one-line stubs with their `context.read` id, and recent ones
+  stay verbatim. The rewrite pays nothing extra for the cache. (inferred)
+- **A reading budget, not a storage budget.** The window keeps a fixed
+  allowance for results by age; the session keeps every result. `recall`
+  is `context.read` plus a search over the session's results (devsql's
+  gather, rebuilt over `data.db` with FTS5). (inferred)
+- **The working model writes the summary inside its warm turn**, which is
+  G1's gain (`plans/prior-art-deepseek-harness-2026-10-22.md`) by another
+  route. (inferred)
+- Not taken: fixed-width records and the file store (gent has SQLite), the
+  "run memo first" prompt contract (gent owns the window).
+
+Next: measure on Haiku gamut runs how much of a step's input is tool
+results older than 5 steps, then decide the stub rule.
+
 ## Order
 
 The cost order is 2 (31% base), 3 (12%), 4 (about 9%), 6 (about 12%), 5 (6%),
