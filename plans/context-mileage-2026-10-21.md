@@ -145,8 +145,14 @@ once it has passed (B2).
     refusing only openai. Per-model readings merged at 0ae779bd8 with its
     review fix 33cce355c (2026-10-22): a reading may name a model, its
     window holds, fits and admits that model's runs alone, and admission
-    counts the account's load and the model's load apart. OpenCode Go is
-    open.) The seam is already
+    counts the account's load and the model's load apart. OpenCode Go
+    merged at 1490c2119 with its review fix ee9521391 (2026-10-22): gent
+    meters each account's own priced spend per model per hour against the
+    plan's 5-hour, weekly and monthly dollar limits, rejects a window at its
+    limit (extra usage never counts), bills a request at its long-context or
+    DeepSeek peak price, and keeps each meter's sign-in across a restart.
+    Open: a turn that fills its window mid-turn still finishes on extra
+    usage.) The seam is already
     normal: a driver reports `QuotaReading` (`window`, `utilization` as a
     fraction, `resetAt`, `rejected`; `packages/core/src/domain/driver.ts:618`),
     and lanes fit fuel per percent for each window. Only the Anthropic
