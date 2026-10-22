@@ -256,10 +256,17 @@ describe("user configuration", () => {
             yield* fs.writeFileString(path.join(dir, ".git", "config"), config)
             return dir
           })
-        // Each global file holds a rule; the longest prefix wins.
+        // Each global file holds a rule; the longest prefix wins, and of two
+        // as long, the one in the XDG file, which git reads first.
         yield* fs.writeFileString(
           path.join(home, ".gitconfig"),
-          '[url "git@github.com:"]\n\tinsteadOf = gh:\n',
+          [
+            '[url "git@github.com:"]',
+            "\tinsteadOf = gh:",
+            '[url "https://late.example/"]',
+            "\tinsteadOf = gh:mirrored/",
+            "",
+          ].join("\n"),
         )
         yield* fs.makeDirectory(path.join(home, ".config", "git"), { recursive: true })
         yield* fs.writeFileString(
@@ -271,12 +278,12 @@ describe("user configuration", () => {
           "mirrored",
           '[remote "origin"]\n\turl = gh:mirrored/repo\n',
         )
-        // The repository's own rule counts too.
+        // The repository's own rule counts too, comments and all.
         const own = yield* repository(
           "own",
           [
-            '[url "ssh://git@example.com:2222/"]',
-            "\tinsteadOf = work:",
+            '[url "ssh://git@example.com:2222/"] # the work mirror',
+            '\tinsteadOf = "work:" ; short alias',
             '[remote "origin"]',
             "\turl = work:team/app.git",
             "",
@@ -303,14 +310,20 @@ describe("user configuration", () => {
         const home = yield* fs.makeTempDirectoryScoped()
         const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
         yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
-        yield* fs.writeFileString(
-          projectConfigPath,
+        const writeProject = (content: string) => fs.writeFileString(projectConfigPath, content)
+        yield* writeProject(
           encodeJson({
             providers: {
               anthropic: { authHold: { [cwd]: 3 }, extraUsage: true },
-              openai: { authOrder: ["default"] },
+              openai: { extraUsage: true },
             },
           }),
+        )
+        // The user file's own fields count and say nothing.
+        yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(home, ConfigService.CONFIG_RELATIVE),
+          encodeJson({ providers: { openai: { extraUsage: true } } }),
         )
         const warnings: Array<string> = []
         const captureLogger = Logger.make(({ message, fiber }) => {
@@ -330,9 +343,25 @@ describe("user configuration", () => {
           yield* cfg.get(cwd)
           yield* cfg.get(cwd)
           expect(yield* cfg.extraUsage("anthropic")).toBe(false)
+          expect(yield* cfg.extraUsage("openai")).toBe(true)
           expect(yield* cfg.laneHolds("anthropic")).toEqual(new Map())
+          // The same fields in another order are the same set.
+          yield* writeProject(
+            encodeJson({
+              providers: {
+                openai: { extraUsage: true, authOrder: ["default"] },
+                anthropic: { authHold: { [cwd]: 3 }, extraUsage: true },
+              },
+            }),
+          )
+          yield* cfg.get(cwd)
+          // Another set warns again.
+          yield* writeProject(encodeJson({ providers: { anthropic: { extraUsage: true } } }))
+          yield* cfg.get(cwd)
+          const prefix = "Project config sets fields only the user config counts; they are ignored"
           expect(warnings).toEqual([
-            "Project config sets fields only the user config counts; they are ignored providers.anthropic.authHold, providers.anthropic.extraUsage",
+            `${prefix} providers.anthropic.authHold, providers.anthropic.extraUsage, providers.openai.extraUsage`,
+            `${prefix} providers.anthropic.extraUsage`,
           ])
         }).pipe(
           Effect.provide(

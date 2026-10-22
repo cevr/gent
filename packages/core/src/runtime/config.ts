@@ -7,6 +7,7 @@ import {
   Function,
   Layer,
   Option,
+  Order,
   Path,
   PlatformError,
   Predicate,
@@ -576,8 +577,49 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
         .map(([agent]) => agent),
   })
 
-/** A git config value without its surrounding quotes. */
-const configValue = (value: string) => value.trim().replace(/^"(.*)"$/, "$1")
+const configEscapes = new Map([
+  ["n", "\n"],
+  ["t", "\t"],
+  ["b", "\b"],
+])
+
+/**
+ * A git config value as git reads it: quotes removed, `\` escapes read, a
+ * `#` or `;` comment outside quotes dropped, and the whitespace around it
+ * outside quotes dropped.
+ */
+const configValue = (raw: string) => {
+  let value = ""
+  let kept = 0
+  let quoted = false
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw.charAt(index)
+    if (char === '"') {
+      quoted = !quoted
+      kept = value.length
+    } else if (char === "\\") {
+      index++
+      const escaped = raw.charAt(index)
+      value += configEscapes.get(escaped) ?? escaped
+      kept = value.length
+    } else if (!quoted && (char === "#" || char === ";")) break
+    else if (quoted || !/\s/.test(char)) {
+      value += char
+      kept = value.length
+    } else if (value.length > 0) value += char
+  }
+  return value.slice(0, kept)
+}
+
+/**
+ * The subsection of a `[<section> "<name>"]` header line, its escapes read;
+ * none for a header of another section. Section names ignore case.
+ */
+const subsectionOf = (line: string, section: string) => {
+  const match = /^\[([a-z0-9.-]+)\s+"((?:[^"\\]|\\.)*)"\]\s*(?:[#;].*)?$/i.exec(line)
+  if (match?.[1]?.toLowerCase() !== section) return Option.none<string>()
+  return Option.map(Option.fromUndefinedOr(match[2]), (name) => name.replace(/\\(.)/g, "$1"))
+}
 
 /**
  * A remote url without its scheme, user and `.git`: `git@host:owner/repo.git`
@@ -597,7 +639,7 @@ const originUrl = (config: string): Option.Option<string> => {
   let inOrigin = false
   for (const raw of config.split("\n")) {
     const line = raw.trim()
-    if (line.startsWith("[")) inOrigin = /^\[remote\s+"origin"\]$/.test(line)
+    if (line.startsWith("[")) inOrigin = Option.contains(subsectionOf(line, "remote"), "origin")
     else if (inOrigin) {
       const url = /^url\s*=\s*(.+)$/.exec(line)?.[1]
       if (Predicate.isNotUndefined(url)) return Option.some(configValue(url))
@@ -609,7 +651,8 @@ const originUrl = (config: string): Option.Option<string> => {
 /**
  * `url` as git fetches it: a `[url "<base>"]` section's `insteadOf = <prefix>`
  * in any of `configs` puts `<base>` in place of the prefix. The longest
- * prefix wins.
+ * prefix wins; of two as long, the one git reads first (`configs` is in
+ * git's read order).
  */
 const rewrittenUrl = (url: string, configs: ReadonlyArray<string>) => {
   let match = { prefix: "", base: "" }
@@ -617,7 +660,7 @@ const rewrittenUrl = (url: string, configs: ReadonlyArray<string>) => {
     let base = Option.none<string>()
     for (const raw of config.split("\n")) {
       const line = raw.trim()
-      if (line.startsWith("[")) base = Option.fromUndefinedOr(/^\[url\s+"(.+)"\]$/i.exec(line)?.[1])
+      if (line.startsWith("[")) base = subsectionOf(line, "url")
       else if (Option.isSome(base)) {
         const prefix = /^insteadof\s*=\s*(.+)$/i.exec(line)?.[1]
         if (Predicate.isUndefined(prefix)) continue
@@ -635,7 +678,7 @@ const rewrittenUrl = (url: string, configs: ReadonlyArray<string>) => {
  * is `dotGit`: a directory, or a file (`linked`, a worktree) naming its git
  * directory, whose `commondir` names the one that holds the config. The url
  * is rewritten as git rewrites it (`rewrittenUrl`) by that config and the
- * user's global ones (`~/.gitconfig`, `~/.config/git/config`); the system
+ * user's global ones (`~/.config/git/config`, `~/.gitconfig`); the system
  * config, `XDG_CONFIG_HOME` and `include` are not read.
  */
 const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
@@ -663,7 +706,8 @@ const repositoryOrigin = Effect.fn("Config.repositoryOrigin")(function* (
   const origin = Option.flatMap(config, originUrl)
   if (Option.isNone(origin)) return Option.none<string>()
   const globals = yield* Effect.forEach(
-    [path.join(home, ".gitconfig"), path.join(home, ".config", "git", "config")],
+    // Git reads the XDG file before `~/.gitconfig`.
+    [path.join(home, ".config", "git", "config"), path.join(home, ".gitconfig")],
     read,
   )
   const configs = [...globals, config].flatMap((text) => Option.toArray(text))
@@ -1069,6 +1113,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             for (const field of ["authHold", "extraUsage"] as const)
               if (Predicate.isNotUndefined(entry[field])) fields.push(`providers.${owner}.${field}`)
           if (fields.length === 0) return
+          // The key is the set: a file that reorders its providers warns no more.
+          fields.sort(Order.String)
           yield* warnOnce(
             `user-only\0${filePath}\0${fields.join(",")}`,
             Effect.logWarning(
