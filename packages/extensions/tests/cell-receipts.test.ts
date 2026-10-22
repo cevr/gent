@@ -1808,7 +1808,7 @@ describe("recorded host operations", () => {
               const tool = yield* waitingOn(Option.some(guard))
               yield* Fiber.interrupt(asking)
               yield* approvals.storeResolution(judgedHost, tool, { approved: true })
-              expect((yield* operation(judgedHost)).gate).toBe("passed")
+              expect((yield* operation(judgedHost)).kept?.gate).toBe("passed")
               return tool
             }).pipe(Effect.provideContext(context))
           }),

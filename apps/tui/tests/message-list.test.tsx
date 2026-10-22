@@ -451,6 +451,7 @@ const userMessage = (
       reasoning: "",
       images: [...images],
       createdAt: 0,
+      metadata: { fromClient: true },
     }
   }
   return {
@@ -461,6 +462,7 @@ const userMessage = (
     reasoning: "",
     images: [...images],
     createdAt: 0,
+    metadata: { fromClient: true },
   }
 }
 
@@ -558,6 +560,7 @@ const cellMessage = (id: string, display = "hello from a.txt"): ListMessage =>
     output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
       display,
       bindings: ["note"],
+      bindingCount: 1,
       truncated: false,
       operations: [
         { toolCallId: `${id}-op`, tool: "read", outcome: "succeeded", summary: "12 lines" },
@@ -983,7 +986,12 @@ describe("transcript message rows", () => {
         metadata: {
           customType: "session-message",
           details: {
-            from: { sessionId: "0199aabbccdd", name: "auth\n\nrefactor", relation: "parent" },
+            from: {
+              sessionId: "0199aabbccdd",
+              name: "auth\n\nrefactor",
+              relation: "parent",
+              branchId: BranchId.make("parent-branch"),
+            },
           },
         },
       }
@@ -1079,6 +1087,7 @@ describe("transcript message rows", () => {
     Effect.gen(function* () {
       const from = {
         sessionId: SessionId.make("01a0ca0cb3e7"),
+        branchId: BranchId.make("child-branch"),
         name: "delegate: Use session.send with to: parent and the message hello",
         relation: "child",
       } satisfies SessionMessageDetails["from"]
@@ -1102,10 +1111,11 @@ describe("transcript message rows", () => {
     }),
   )
 
-  it.scopedLive("a child row stored before the status line still shows only its text", () =>
+  it.scopedLive("a child row with a long wide name keeps its id on the line", () =>
     Effect.gen(function* () {
       const from = {
         sessionId: SessionId.make("01a0ca0cb3e7"),
+        branchId: BranchId.make("child-branch"),
         name: "日本語のタスク名がとても長い子エージェントの名前です、さらに続く",
         relation: "child",
       } satisfies SessionMessageDetails["from"]
@@ -1113,8 +1123,7 @@ describe("transcript message rows", () => {
         ...userMessage(
           "interjection-message",
           "sent-3",
-          // The header as it was written before the child status line existed.
-          `Message from your child "${from.name}" (session ${from.sessionId}):\n\nold question`,
+          sessionMessageText({ from, message: "old question" }),
         ),
         metadata: {
           customType: "session-message",
@@ -1359,8 +1368,8 @@ describe("rows that fold until full detail is on", () => {
 
 /**
  * Speaker lanes: column 0 and the `┃` rail mean the reader. Whose message it
- * is comes from typed metadata (the server's client origin, or an older row
- * with no custom type and no author), never from its text. Everything gent or
+ * is comes from typed metadata (the server's client origin), never from its
+ * text. Everything gent or
  * another agent wrote starts at column 2 behind its own glyph.
  */
 describe("speaker lanes", () => {
@@ -1375,6 +1384,7 @@ describe("speaker lanes", () => {
   })
   const childFrom = {
     sessionId: SessionId.make("01a0ca0cb3e7"),
+    branchId: BranchId.make("child-branch"),
     name: "explore",
     relation: "child",
   } satisfies SessionMessageDetails["from"]
@@ -1390,7 +1400,6 @@ describe("speaker lanes", () => {
   )
   const items: SessionItem[] = [
     row("typed", "PROMPT-TYPED", { fromClient: true }),
-    row("legacy", "PROMPT-LEGACY"),
     row("steer", "PROMPT-STEER", { fromClient: true }, "interjection-message"),
     childMessage,
     row(
@@ -1467,7 +1476,6 @@ describe("speaker lanes", () => {
   /** Each kind's first row: its glyph and the column it starts in. */
   const firstRows = [
     "┃ PROMPT-TYPED",
-    "┃ PROMPT-LEGACY",
     "┃ PROMPT-STEER",
     "  » child explore · ca0cb3e7",
     "  ◆ csv fix · completed",
@@ -1504,7 +1512,6 @@ describe("speaker lanes", () => {
         // Only the reader's own messages hold column 0.
         expect(lines.filter((line) => /^\S/.test(line))).toEqual([
           "┃ PROMPT-TYPED",
-          "┃ PROMPT-LEGACY",
           "┃ PROMPT-STEER",
         ])
         // A child's message is muted text, not the reader's bold prompt.
@@ -1543,11 +1550,8 @@ describe("speaker lanes", () => {
       expect(lines).toContain("  » @gent/session-tools · session-message")
       expect(lines).toContain('    Message from your child "explore" (session 01a0ca0cb3e7):')
       expect(lines).toContain("    CHILD-SAYS the loader is fine")
-      // An older row with no client origin, no custom type and no author is the reader's.
-      expect(lines).toContain("┃ PROMPT-LEGACY")
       expect(lines.filter((line) => /^\S/.test(line))).toEqual([
         "┃ PROMPT-TYPED",
-        "┃ PROMPT-LEGACY",
         "┃ PROMPT-STEER",
         "┃ MERGE-BODY",
       ])
@@ -2179,9 +2183,7 @@ describe("cell rows", () => {
       expect(frame).toContain("✕ write denied")
       expect(frame).toContain("hello from a.txt")
       expect(frame).toContain("note.content")
-      // A result stored before counts existed listed the whole namespace.
-      expect(frame).toContain("bindings: note")
-      expect(frame).not.toContain("in all")
+      expect(frame).toContain("bound: note · 1 binding in all")
     }),
   )
 
@@ -2206,7 +2208,6 @@ describe("cell rows", () => {
       )
       expect(frame).toContain("bound: note · 3 bindings in all")
       expect(frame).toContain("bound: none · 1 binding in all")
-      expect(frame).not.toContain("bindings: note")
     }),
   )
 
@@ -6535,7 +6536,7 @@ describe("readerPrompt", () => {
   })
 
   test("a message another agent or an extension sent is not the reader's prompt", () => {
-    // A parent's `session.send`, a thread's round, a wake, a legacy row with no origin.
+    // A parent's `session.send`, a thread's round, a wake, a message with no origin.
     expect(read(user({ extensionId: "@gent/session-tools" }))).toBeUndefined()
     expect(read(user({ extensionId: "@gent/wake", customType: "wake" }))).toBeUndefined()
     expect(read(user(absent))).toBeUndefined()

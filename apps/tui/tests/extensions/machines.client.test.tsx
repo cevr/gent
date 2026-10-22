@@ -393,7 +393,9 @@ describe("the lanes band reads", () => {
         ...measured,
         providers: measured.providers.map((provider) => ({ ...provider, load: 3 })),
       })
-      deliver(AgentEvent.cases.TurnCompleted.make({ ...session, durationMs: 10 }))
+      deliver(
+        AgentEvent.cases.TurnCompleted.make({ streamFailed: false, ...session, durationMs: 10 }),
+      )
       expect(yield* Queue.take(reads)).toBe("run-list")
       yield* shows("≡ lanes anthropic 2/5 free")
       // One read for the turn; the other event read nothing.

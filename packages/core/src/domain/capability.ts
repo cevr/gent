@@ -833,17 +833,18 @@ export type ToolCallVerdict = typeof ToolCallVerdict.Type
  * call has not passed it (an `Ask` not yet approved). `passed`: the user
  * approved the `Ask`, so a later run of the call does not ask again.
  */
-export const ToolCallGateState = Schema.Literals(["pending", "passed"])
-export type ToolCallGateState = typeof ToolCallGateState.Type
+const ToolCallGateState = Schema.Literals(["pending", "passed"])
 
 /**
  * The verdict a call keeps across its runs (a parked call, a cell operation
  * resumed after a restart): the hooks judge a call once.
  */
-export interface KeptToolCallVerdict {
-  readonly verdict: ToolCallVerdict
-  readonly gate: ToolCallGateState
-}
+export const KeptToolCallVerdict = Schema.Struct({
+  verdict: ToolCallVerdict,
+  /** `passed` once the user approved the verdict's `Ask`, so a later run does not ask again. */
+  gate: ToolCallGateState,
+})
+export type KeptToolCallVerdict = typeof KeptToolCallVerdict.Type
 
 // ── tool-wire-name ──────────────────────────────────────────────────────────
 

@@ -7105,7 +7105,15 @@ describe("TUI renderer surfaces", () => {
         yield* clock.adjust(Duration.seconds(2))
         yield* waitForFrame(setup, (next) => next.includes("✻ Retrying in 1s · 1/3"), "1s left")
         // The retry ran: the model answers, and the settled retry waits for the preview.
-        yield* event(2, AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+        yield* event(
+          2,
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        )
         yield* event(3, AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "ANSWER" }))
         const answering = yield* waitForFrame(
           setup,
@@ -7305,6 +7313,8 @@ describe("TUI renderer surfaces", () => {
           // The retry's request goes out: the step thinks again under the same heading.
           yield* view.event(
             AgentEvent.cases.StreamStarted.make({
+              messageId: MessageId.make("msg"),
+              step: 1,
               sessionId: view.sessionId,
               branchId: view.branchId,
             }),
@@ -8013,7 +8023,12 @@ export default defineClientExtension("@test/hello", {
           EventEnvelope.make({
             id: EventId.make(1),
             createdAt: 1,
-            event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+            event: AgentEvent.cases.TurnCompleted.make({
+              streamFailed: false,
+              sessionId,
+              branchId,
+              durationMs: 10,
+            }),
           }),
         )
         yield* waitUntil(() => commandIds().includes("hello-v1"), "the new file after the turn")
@@ -8161,7 +8176,12 @@ export default defineClientExtension("@test/there", {
         EventEnvelope.make({
           id: EventId.make(1),
           createdAt: 1,
-          event: AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }),
+          event: AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
+            sessionId,
+            branchId,
+            durationMs: 10,
+          }),
         }),
       )
       yield* waitUntil(() => healthReads === before + 1, "the turn's health read")
@@ -8233,7 +8253,14 @@ describe("native history across a turn", () => {
         }),
       )
       push(message("ask", "user", "LONG-ASK"))
-      push(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+      push(
+        AgentEvent.cases.StreamStarted.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
+      )
       push(
         message(
           "long",
@@ -8241,7 +8268,14 @@ describe("native history across a turn", () => {
           Array.from({ length: 30 }, (_, index) => `LONG line ${index + 1}`).join("\n\n"),
         ),
       )
-      push(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 2_000 }))
+      push(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 2_000,
+        }),
+      )
       const { setup } = yield* mountApp({
         client: { session: { events: () => Stream.fromQueue(feed) } },
         width: 60,
@@ -8265,11 +8299,25 @@ describe("native history across a turn", () => {
         reset(options)
       }
       push(message("probe", "user", "PROBE-ASK"))
-      push(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+      push(
+        AgentEvent.cases.StreamStarted.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
+      )
       yield* waitForFrame(setup, (frame) => frame.includes("esc cancel"), "the activity row")
       push(message("probe-answer", "assistant", "PROBE-ANSWER"))
       yield* waitForFrame(setup, (frame) => frame.includes("PROBE-ANSWER"), "the answer")
-      push(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 40 }))
+      push(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 40,
+        }),
+      )
       yield* waitForFrame(setup, (frame) => !frame.includes("esc cancel"), "the turn's end")
       // Blank rows inside an item replay history once they stand 300 ms.
       yield* waitForFrame(setup, () => resets.length > 0, "a replay", 1_000).pipe(Effect.ignore)

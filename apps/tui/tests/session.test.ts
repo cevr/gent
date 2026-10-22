@@ -834,6 +834,7 @@ describe("buildContextLabels", () => {
       contextLimitTokens: 400_000,
       omittedMessages: 3,
       compactions: 2,
+      renters: [],
       handoffMessageId: MessageId.make("context-handoff:b:m"),
     })
     expect(labels.length).toBe(1)
@@ -848,6 +849,7 @@ describe("buildContextLabels", () => {
       contextLimitTokens: 200_000,
       omittedMessages: 3,
       compactions: 2,
+      renters: [],
     })
     expect(labels[0]!.text).toBe("ctx 50%")
   })
@@ -859,6 +861,7 @@ describe("buildContextLabels", () => {
       contextLimitTokens: 200_000,
       omittedMessages: 0,
       compactions: 0,
+      renters: [],
     })
     expect(labels[0]!.text).toBe("ctx 90%")
     expect(labels[0]!.color).toBe(theme.error)
@@ -904,6 +907,7 @@ describe("buildContextLabels", () => {
       contextLimitTokens: 200000,
       omittedMessages: 0,
       compactions: 2,
+      renters: [],
     })
     expect(labels[0]?.text).toBe("ctx 1%")
   })
@@ -1498,7 +1502,15 @@ const stepEndEnvelopes = (
   callId: ToolCallId,
   firstId: number,
 ): EventEnvelope[] => [
-  makeEnvelope(firstId, AgentEvent.cases.StreamEnded.make({ sessionId, branchId })),
+  makeEnvelope(
+    firstId,
+    AgentEvent.cases.StreamEnded.make({
+      messageId: MessageId.make("msg"),
+      step: 1,
+      sessionId,
+      branchId,
+    }),
+  ),
   makeEnvelope(
     firstId + 1,
     AgentEvent.cases.MessageReceived.make({
@@ -1840,7 +1852,12 @@ describe("useSessionFeed", () => {
       )
       const streamStartedEnvelope = makeEnvelope(
         2,
-        AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+        AgentEvent.cases.StreamStarted.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
       )
       const streamChunkEnvelope = makeEnvelope(
         3,
@@ -1876,6 +1893,8 @@ describe("useSessionFeed", () => {
       const streamEndedEnvelope = makeEnvelope(
         7,
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId,
           branchId,
           outcome: "ToolCalls",
@@ -1885,6 +1904,7 @@ describe("useSessionFeed", () => {
       const turnCompletedEnvelope = makeEnvelope(
         8,
         AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
           sessionId,
           branchId,
           durationMs: 1_000,
@@ -2068,7 +2088,15 @@ describe("useSessionFeed", () => {
       const branchId = BranchId.make("retry-order-branch")
       // The step opens its answer, the first attempt fails, and the retry answers.
       const envelopes = [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          1,
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        ),
         makeEnvelope(
           2,
           AgentEvent.cases.ProviderRetrying.make({
@@ -2128,6 +2156,8 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           id,
           AgentEvent.cases.StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
             sessionId,
             branchId,
             outcome: "Answered",
@@ -2136,14 +2166,27 @@ describe("useSessionFeed", () => {
           }),
         )
       const envelopes = [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          1,
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        ),
         retry(2, 1),
         retry(3, 2),
         stepEnded(4, 30_000, 1_500),
         stepEnded(5, 8_000, 600),
         makeEnvelope(
           6,
-          AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 108_000 }),
+          AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
+            sessionId,
+            branchId,
+            durationMs: 108_000,
+          }),
         ),
       ]
       const { feed, dispose } = openFeed({
@@ -2173,10 +2216,23 @@ describe("useSessionFeed", () => {
       const sessionId = SessionId.make("short-turn-session")
       const branchId = BranchId.make("short-turn-branch")
       const envelopes = [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          1,
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        ),
         makeEnvelope(
           2,
-          AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 40 }),
+          AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
+            sessionId,
+            branchId,
+            durationMs: 40,
+          }),
         ),
       ]
       const { feed, dispose } = openFeed({
@@ -2202,7 +2258,15 @@ describe("useSessionFeed", () => {
       const branchId = BranchId.make("retry-cancel-branch")
       // Core ends the cut stream before it completes the turn.
       const envelopes = [
-        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          1,
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        ),
         makeEnvelope(
           2,
           AgentEvent.cases.ProviderRetrying.make({
@@ -2217,6 +2281,8 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           3,
           AgentEvent.cases.StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
             sessionId,
             branchId,
             interrupted: true,
@@ -2226,6 +2292,7 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           4,
           AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
             sessionId,
             branchId,
             durationMs: 1_000,
@@ -2285,7 +2352,15 @@ describe("useSessionFeed", () => {
     cellId: ToolCallId,
     innerId: ToolCallId,
   ): EventEnvelope[] => [
-    makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+    makeEnvelope(
+      1,
+      AgentEvent.cases.StreamStarted.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
+        sessionId,
+        branchId,
+      }),
+    ),
     ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
     makeEnvelope(
       4,
@@ -2330,7 +2405,15 @@ describe("useSessionFeed", () => {
         output: "{}",
       }),
     ),
-    makeEnvelope(8, AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 })),
+    makeEnvelope(
+      8,
+      AgentEvent.cases.TurnCompleted.make({
+        streamFailed: false,
+        sessionId,
+        branchId,
+        durationMs: 1,
+      }),
+    ),
   ]
 
   it.live("nests cell-admitted tool calls under their cell with final status", () =>
@@ -2379,7 +2462,15 @@ describe("useSessionFeed", () => {
       const { activeTool, dispose } = openFeed({
         snapshot: snapshotFor(sessionId, branchId),
         events: [
-          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          makeEnvelope(
+            1,
+            AgentEvent.cases.StreamStarted.make({
+              messageId: MessageId.make("msg"),
+              step: 1,
+              sessionId,
+              branchId,
+            }),
+          ),
           makeEnvelope(
             2,
             AgentEvent.cases.ToolCallStarted.make({
@@ -2418,7 +2509,15 @@ describe("useSessionFeed", () => {
       const { activeTool, dispose } = openFeed({
         snapshot: snapshotFor(sessionId, branchId),
         events: [
-          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          makeEnvelope(
+            1,
+            AgentEvent.cases.StreamStarted.make({
+              messageId: MessageId.make("msg"),
+              step: 1,
+              sessionId,
+              branchId,
+            }),
+          ),
           makeEnvelope(
             2,
             AgentEvent.cases.ToolCallStarted.make({
@@ -2451,7 +2550,15 @@ describe("useSessionFeed", () => {
       const { cellOf, dispose } = openFeed({
         snapshot: snapshotFor(sessionId, branchId),
         events: [
-          makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+          makeEnvelope(
+            1,
+            AgentEvent.cases.StreamStarted.make({
+              messageId: MessageId.make("msg"),
+              step: 1,
+              sessionId,
+              branchId,
+            }),
+          ),
           ...stepEndEnvelopes(sessionId, branchId, cellId, 2),
           makeEnvelope(
             4,
@@ -2614,7 +2721,12 @@ describe("useSessionFeed", () => {
       )
       const liveEvent = makeEnvelope(
         4,
-        AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 1,
+        }),
       )
       const interactionSeen = yield* Deferred.make<InteractionPresented>()
       const liveSeen = yield* Deferred.make<void>()
@@ -2684,7 +2796,12 @@ describe("useSessionFeed", () => {
             toolName: "cell",
             input: {},
           }),
-          AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+          AgentEvent.cases.StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
           AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Next step" }),
           AgentEvent.cases.ToolCallSucceeded.make({
@@ -2696,6 +2813,7 @@ describe("useSessionFeed", () => {
             output: "result",
           }),
           AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
             sessionId,
             branchId,
             messageId: inputId,
@@ -2710,6 +2828,7 @@ describe("useSessionFeed", () => {
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Follow-up " }),
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "answer" }),
           AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
             sessionId,
             branchId,
             messageId: nextInputId,
@@ -2901,7 +3020,15 @@ describe("useSessionFeed", () => {
         createdAt: dateFromMillis(0),
       })
       yield* Queue.offerAll(later, [
-        makeEnvelope(4, AgentEvent.cases.StreamEnded.make({ sessionId, branchId })),
+        makeEnvelope(
+          4,
+          AgentEvent.cases.StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
+        ),
         makeEnvelope(5, AgentEvent.cases.MessageReceived.make({ message: stored })),
       ])
       yield* waitUntil(() =>
@@ -2993,6 +3120,7 @@ describe("useSessionFeed", () => {
           makeEnvelope(
             3,
             AgentEvent.cases.TurnCompleted.make({
+              streamFailed: false,
               sessionId,
               branchId,
               durationMs: 1_000,
@@ -3025,7 +3153,12 @@ describe("useSessionFeed", () => {
       const events = [
         AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
         AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "First answer" }),
-        AgentEvent.cases.StreamEnded.make({ sessionId, branchId }),
+        AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
         AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
         AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: "Second answer" }),
         // The first step's tool receipt arrives after the second step began.
@@ -3103,7 +3236,12 @@ describe("useSessionFeed", () => {
         )
         const streamStartedEnvelope = makeEnvelope(
           2,
-          AgentEvent.cases.StreamStarted.make({ sessionId, branchId }),
+          AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+          }),
         )
         const streamChunkEnvelope = makeEnvelope(
           3,
@@ -3160,6 +3298,7 @@ describe("useSessionFeed", () => {
       const interruptedEnvelope = makeEnvelope(
         2,
         AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
           sessionId,
           branchId,
           durationMs: 1_000,

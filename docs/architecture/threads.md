@@ -62,7 +62,7 @@
   thread's answer arrives as its own round-end message and this is not one. The TUI draws the row as a
   muted sender line (`» from your parent "name" · <id>`, the name cut at 32
   terminal columns on a grapheme) over the text; `sessionMessageBody` removes
-  the header, with or without the child line, so older rows render the same.
+  the header, with the child line when there is one.
   Full detail shows the header the model reads.
 - A thread is the sessions that share one thread key (`sessionThread`:
   `sessions.thread_id`, else the session's own id), in creation order; its

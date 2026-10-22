@@ -18,9 +18,9 @@ import {
   StreamEnded,
   TurnCompleted,
 } from "../../src/domain/event"
-import { ProviderId } from "../../src/domain/agent"
+import { ModelId, ProviderId } from "../../src/domain/agent"
 import { sameCredential } from "../../src/domain/driver"
-import { BranchId, CredentialSlot, SessionId, ToolCallId } from "../../src/domain/ids"
+import { BranchId, CredentialSlot, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Branch, dateFromMillis, Session } from "../../src/domain/message"
 import { EventStoreLive } from "../../src/runtime/session"
@@ -30,45 +30,50 @@ import { testSqliteStorage } from "../../src/test-utils/harness"
 const session = SessionId.make("session-1")
 const branch = BranchId.make("branch-1")
 
-test("turn receipts preserve model failure and leave historical outcomes unspecified", () => {
+test("a turn receipt keeps whether its stream failed", () => {
   const decode = Schema.decodeUnknownSync(Schema.fromJsonString(TurnCompleted))
   const encode = Schema.encodeSync(Schema.fromJsonString(TurnCompleted))
-  const historical = TurnCompleted.make({ sessionId: session, branchId: branch, durationMs: 1 })
-  expect(decode(encode(historical)).streamFailed).toBeUndefined()
   for (const streamFailed of [true, false]) {
-    const receipt = TurnCompleted.make({ ...historical, streamFailed })
+    const receipt = TurnCompleted.make({
+      streamFailed,
+      sessionId: session,
+      branchId: branch,
+      durationMs: 1,
+    })
     expect(decode(encode(receipt)).streamFailed).toBe(streamFailed)
   }
 })
 
-test("an error row from before reset times decodes, and a reset time survives the store", () => {
+test("a reset time survives the store, and an error without one stays without", () => {
   const decode = Schema.decodeUnknownSync(Schema.fromJsonString(ErrorOccurred))
   const encode = Schema.encodeSync(Schema.fromJsonString(ErrorOccurred))
-  const historical = decode(
-    '{"_tag":"ErrorOccurred","sessionId":"session-1","branchId":"branch-1","error":"Rate limit"}',
-  )
-  expect(historical.retryAt).toBeUndefined()
-  const limited = ErrorOccurred.make({ ...historical, retryAt: 1_800_000_000_000 })
+  const plain = ErrorOccurred.make({ sessionId: session, branchId: branch, error: "Rate limit" })
+  expect(decode(encode(plain)).retryAt).toBeUndefined()
+  const limited = ErrorOccurred.make({ ...plain, retryAt: 1_800_000_000_000 })
   expect(decode(encode(limited)).retryAt).toBe(1_800_000_000_000)
 })
 
-test("a step end from before credential receipts decodes, and a receipt survives the store", () => {
+test("a step end's credential receipt survives the store, with its sign-in stamp", () => {
   const decode = Schema.decodeUnknownSync(Schema.fromJsonString(StreamEnded))
   const encode = Schema.encodeSync(Schema.fromJsonString(StreamEnded))
-  const historical = decode(
-    '{"_tag":"StreamEnded","sessionId":"session-1","branchId":"branch-1","model":"anthropic/claude-opus-5-5","outcome":"Answered"}',
-  )
-  expect(historical.credential).toBeUndefined()
+  const ended = StreamEnded.make({
+    sessionId: session,
+    branchId: branch,
+    messageId: MessageId.make("turn-1"),
+    step: 1,
+    model: ModelId.make("anthropic/claude-opus-5-5"),
+    outcome: "Answered",
+  })
+  expect(decode(encode(ended)).credential).toBeUndefined()
   const credential = {
     provider: ProviderId.make("anthropic"),
     slot: CredentialSlot.make("personal"),
   }
-  const received = StreamEnded.make({ ...historical, credential })
-  expect(decode(encode(received)).credential).toEqual(credential)
+  expect(decode(encode(StreamEnded.make({ ...ended, credential }))).credential).toEqual(credential)
   const stamped = { ...credential, signedInAt: 1_000 }
-  expect(
-    decode(encode(StreamEnded.make({ ...historical, credential: stamped }))).credential,
-  ).toEqual(stamped)
+  expect(decode(encode(StreamEnded.make({ ...ended, credential: stamped }))).credential).toEqual(
+    stamped,
+  )
 })
 
 test("one credential is the same sign-in: a rename keeps it, a new sign-in on the slot does not", () => {

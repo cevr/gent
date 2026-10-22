@@ -4638,7 +4638,13 @@ describe("startup recovery", () => {
                 yield* eventStorage.appendEvent(MessageReceived.make({ message }))
               }
               yield* eventStorage.appendEvent(
-                TurnCompleted.make({ sessionId, branchId, messageId: completedId, durationMs: 1 }),
+                TurnCompleted.make({
+                  streamFailed: false,
+                  sessionId,
+                  branchId,
+                  messageId: completedId,
+                  durationMs: 1,
+                }),
               )
 
               const agentLoop = yield* makeAgentLoopService

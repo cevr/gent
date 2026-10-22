@@ -145,9 +145,10 @@ const makeHistory = () => {
           role: "user",
           parts: [],
           createdAt: dateFromMillis(createdAt),
-          metadata: Option.getOrUndefined(
-            Option.map(Option.fromUndefinedOr(customType), (type) => ({ customType: type })),
-          ),
+          metadata: Option.match(Option.fromUndefinedOr(customType), {
+            onNone: () => ({ fromClient: true }),
+            onSome: (type) => ({ customType: type }),
+          }),
         }),
       }),
     )
@@ -284,6 +285,8 @@ const makeHistory = () => {
         availableInputTokens: 100_000,
         contextLimitTokens: 200_000,
         omittedMessages: 12,
+        reservedOutputTokens: 0,
+        renters: [],
         compacted: true,
       }),
     )
@@ -298,6 +301,8 @@ const makeHistory = () => {
         availableInputTokens: WIDE_BUDGET_TOKENS,
         contextLimitTokens: 1_000_000,
         omittedMessages: 0,
+        reservedOutputTokens: 0,
+        renters: [],
         compacted: false,
       }),
     )
@@ -1358,6 +1363,7 @@ const renderResumed = (opts: {
                 contextLimitTokens: 200_000,
                 omittedMessages: 0,
                 compactions: 0,
+                renters: [],
               },
             },
           }),

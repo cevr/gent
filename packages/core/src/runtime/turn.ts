@@ -4543,9 +4543,7 @@ export const TurnOutcome = Schema.TaggedUnion({
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
 
 /**
- * A flag a receipt carries only when it happened. A present `false` would read
- * as a receipt that the turn was not interrupted, which historical receipts
- * cannot make, so `false` becomes absent instead.
+ * A flag a receipt carries only when it happened, so `false` is absent.
  */
 const flagWhenTrue = (value: boolean): Option.Option<true> => {
   if (value) return Option.some(true)
@@ -4667,13 +4665,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const knownStepMeasure = ({ event }: EventEnvelope): Option.Option<StepMeasure> => {
       if (event._tag !== "StreamEnded") return Option.none()
       return Option.all([
-        Option.fromUndefinedOr(event.messageId),
-        Option.fromUndefinedOr(event.step),
         Option.fromUndefinedOr(event.usage),
         Option.fromUndefinedOr(event.requestOverheadTokens),
       ]).pipe(
-        Option.map(([messageId, step, usage, overheadTokens]) => ({
-          replyId: stepAddress(messageId, step).assistant,
+        Option.map(([usage, overheadTokens]) => ({
+          replyId: stepAddress(event.messageId, event.step).assistant,
           inputTokens: usage.inputTokens,
           overheadTokens,
         })),
@@ -4697,15 +4693,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       event,
     }: EventEnvelope): Option.Option<readonly [string, StepEffort]> => {
       if (event._tag !== "StreamEnded") return Option.none()
-      return Option.all([
-        Option.fromUndefinedOr(event.messageId),
-        Option.fromUndefinedOr(event.step),
-        Option.fromUndefinedOr(event.model),
-      ]).pipe(
+      return Option.fromUndefinedOr(event.model).pipe(
         Option.map(
-          ([messageId, step, model]) =>
+          (model) =>
             [
-              stepAddress(messageId, step).assistant,
+              stepAddress(event.messageId, event.step).assistant,
               {
                 model,
                 level: Option.orElse(Option.fromUndefinedOr(event.reasoningLevel), () =>
@@ -4754,15 +4746,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const added = events.flatMap(({ event }) => {
         if (event._tag !== "StreamEnded") return []
         return Option.toArray(
-          Option.all([
-            Option.fromUndefinedOr(event.messageId),
-            Option.fromUndefinedOr(event.credential),
-          ]).pipe(
+          Option.fromUndefinedOr(event.credential).pipe(
             Option.map(
-              ([messageId, receipt]) =>
+              (receipt) =>
                 [
                   receipt.provider,
-                  { messageId, receipt, model: Option.fromUndefinedOr(event.model) },
+                  {
+                    messageId: event.messageId,
+                    receipt,
+                    model: Option.fromUndefinedOr(event.model),
+                  },
                 ] as const,
             ),
           ),
@@ -4876,7 +4869,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         events,
         ({ event }) => {
           if (event._tag !== "StreamEnded") return Option.none()
-          return Option.fromUndefinedOr(event.messageId)
+          return Option.some(event.messageId)
         },
         Option.none(),
       )
@@ -5243,7 +5236,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           parked: true,
           ...Option.match(mark, {
             onNone: () => ({}),
-            onSome: ({ verdict, gate }) => ({ verdict, gate }),
+            onSome: (kept) => ({ kept }),
           }),
         }
       })
@@ -6105,13 +6098,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
             parkedVerdicts: new Map(
               record.pendingToolCalls.flatMap((call) => {
-                if (call.parked !== true || Predicate.isUndefined(call.verdict)) return []
-                // A row from before the gate state asks again.
-                const kept: KeptToolCallVerdict = {
-                  verdict: call.verdict,
-                  gate: call.gate ?? "pending",
-                }
-                return [[call.id, kept] as const]
+                if (call.parked !== true || Predicate.isUndefined(call.kept)) return []
+                return [[call.id, call.kept] as const]
               }),
             ),
           }

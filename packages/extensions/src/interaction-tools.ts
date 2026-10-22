@@ -33,9 +33,9 @@ import { makeBranchStateStore } from "./branch-state-store.js"
 
 // The ask-user wire, which the TUI's client extension reads through
 // `@gent/extensions/client`. The interaction metadata carries the questions;
-// the answer's notes carry one array of picks per question, as JSON. A
-// question stored in an interaction before a limit was added must still
-// decode, so these schemas check shape only; the tool's params add the limits.
+// the answer's notes carry one array of picks per question, as JSON. Two
+// tools with different caps write it, so these schemas check shape only; each
+// tool's params add its own limits.
 
 const AskUserOption = Schema.Struct({
   label: Schema.String,

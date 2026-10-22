@@ -252,15 +252,16 @@ const TURN_END_MESSAGE = {
 /**
  * The receipt decides. An interrupted turn and a failed stream did not
  * answer, whatever text came before the end: that text is a truncated answer,
- * and it has printed already. A receipt without either flag (a historical one)
- * falls back to the transcript: an error with no answer text is no answer.
+ * and it has printed already. A receipt without either flag falls back to the
+ * transcript: an error that is not a notice, with no answer text, is no
+ * answer.
  */
 const turnEnd = (
   event: Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>,
   transcript: { readonly wroteText: boolean; readonly failed: boolean },
 ): TurnEnd => {
   if (event.interrupted === true) return "interrupted"
-  if (event.streamFailed === true || event.unanswered === true) return "unanswered"
+  if (event.streamFailed || event.unanswered === true) return "unanswered"
   if (transcript.failed && !transcript.wroteText) return "unanswered"
   return "answered"
 }

@@ -99,6 +99,8 @@ const textMessage = (id: string, role: "user" | "assistant", text: string, ordin
     role,
     parts: [Prompt.textPart({ text })],
     createdAt: dateFromMillis(1_000 + ordinal),
+    // A user message comes from a client, which the server stamps.
+    ...(role === "user" && { metadata: { fromClient: true } }),
   })
 
 const history = (): ReadonlyArray<Message> => [
@@ -438,8 +440,8 @@ describe("context handoff", () => {
               extensionId: "@gent/wake",
             }),
             typedMessage("step", "Continue.", 7, { customType: "continuation" }),
-            // A background job's completion, as stored before it had a custom type.
             typedMessage("job", "Background command completed (exit code 0).", 8, {
+              customType: "background-bash",
               extensionId: "@gent/exec-tools",
             }),
             // Another session's message, a child's question among them.
@@ -1256,6 +1258,7 @@ describe("role windows", () => {
         contextLimitTokens: 200_000,
         reservedOutputTokens: 32_000,
         omittedMessages: 0,
+        renters: [],
         compacted,
       })
     const events = [
@@ -1339,6 +1342,7 @@ describe("role windows", () => {
         contextLimitTokens: 200_000,
         reservedOutputTokens: 8_000,
         omittedMessages: 0,
+        renters: [],
         compacted: false,
       }),
       AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step }),

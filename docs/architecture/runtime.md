@@ -175,7 +175,7 @@ Shape:
   backoff; one more than the policy's
   `maxDelay` away (a usage limit that resets in hours) fails the step without
   a retry, and the turn reports it (`limitResetAt`): `ErrorOccurred.retryAt`
-  (optional, so an older row decodes) and `TurnAfterInput.retryAt` (in
+  (absent when the error names no reset time) and `TurnAfterInput.retryAt` (in
   memory, for a turn that failed and was not interrupted; a turn that fails
   before it runs begins its own ledger, so it never names the turn before
   it). The TUI error row
@@ -223,11 +223,10 @@ Shape:
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
 - the tool runner (`runtime/tools.ts`) is the one place that checks a tool call. The turn asks for deferred tool call validation (`toolCallValidation: "deferred"` with `disableToolCallResolution: true`), so the drivers pass each call on as the model wrote it and the reply decodes its parameters as opaque (`patches/README.md`: Effect SDKs). A call whose input the tool's parameters refuse (a wrong type, a missing key) fails as its own result (`Tool '<id>' input failed: …`), and a call to a name no extension registers as `Unknown tool: <id>`. The model reads the result on the next step; the stream does not fail and the step is not retried. A turn that advertises no tool sends no toolkit and no `tools` or `tool_choice`, and a call in its reply fails as `Unknown tool: <id>` too (`a turn that advertises no tool`). The request's tool declarations do not change (`tool declarations on the wire` pins each driver's bytes, and `final step declarations on the wire` the last step's).
 - `convertTools` (`runtime/tools.ts`) declares a tool whose parameters encode to an object with no keys (`Schema.Struct({})`, as `mcp.status`) with the object root `{"type":"object","properties":{},"required":[],"additionalProperties":false}`, for every driver and for every extension's tool. Effect's JSON Schema reads such a schema as any value but `null`: the OpenAI codecs refuse it, so each request that advertised the tool failed, and the Anthropic codec declared `{}`. A tool whose parameters encode to an object that takes keys it does not name (an index signature: a `Schema.Record`, a struct with rest, an MCP input schema without `additionalProperties: false`, or the MCP `AnyInput` fallback) declares its own JSON Schema as an open object (`additionalProperties` holds the value schema) with `strict: false`, for every driver and every extension's tool. The codecs encode such an object as an array of `[key, value]` pairs: the OpenAI codecs refused it, so each request that advertised the tool failed before it was sent, and the Anthropic codec declared an array root. Strict mode needs `additionalProperties: false` on each object, so a strict declaration would tell the model that the tool takes no other key. Effect's `Tool.EmptyParams` form (string keys with `never` values) stays on the codec. Each other tool's declaration is the codec's, as before (`tools that take any key on the wire`). The tool runner decodes a call with the tool's own schema.
-- New `TurnCompleted` receipts include `streamFailed`, including explicit false.
-  Historical receipts can omit it; absence does not prove model success. The
-  receipt commits with turn duration. This flag reports a failed turn only (a
-  broken model stream or a failed turn phase), not task success or a complete
-  child outcome. Actor Idle is not completion proof.
+- Every `TurnCompleted` receipt carries `streamFailed`. The receipt commits
+  with turn duration. This flag reports a failed turn only (a broken model
+  stream or a failed turn phase), not task success or a complete child
+  outcome. Actor Idle is not completion proof.
 - Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
   fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
   `completeFailedTurn` appends the receipt with `streamFailed: true`, and the
@@ -240,10 +239,8 @@ Shape:
   so a hook may stop its own branch and a Cancel meanwhile stops this turn. `ErrorOccurred` with `notice: true` is a notice the
   turn goes on past (a compaction that fell back to truncation); a client ends
   the turn on `TurnCompleted`, never on `ErrorOccurred`.
-- New turn-stream start/end receipts include the user-message ID and model-step
-  number. Model, failure, and interruption paths keep that identity.
-  Historical receipts can omit it and must not be treated
-  as exact per-turn budget evidence. Token-budget enforcement remains unfinished;
+- Turn-stream start/end receipts carry the user-message ID and model-step
+  number. Model, failure, and interruption paths keep that identity. Token-budget enforcement remains unfinished;
   compaction invokes a separate model and needs accounting within the same policy.
 
 - Response projection treats token usage as known only when both totals are
@@ -259,7 +256,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 
 - `TurnCompleted` carries the turn's token totals, summed over its model
   steps. It is absent when any step reported no usage or an unusable count,
-  when the turn had no step, and on historical receipts. Explicit zero is
+  and when the turn had no step. Explicit zero is
   retained. Run results and child completions read usage from that receipt
   and the answer from the branch's last assistant message; nothing scans the
   event log. These are reported stream totals, not model-attempt accounting.

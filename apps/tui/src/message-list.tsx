@@ -664,13 +664,10 @@ const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
 
 /**
  * Whether a user-role message is the reader's own, from its metadata alone:
- * the server's client origin (typed, or a steer that joined the turn), or a
- * row stored before that origin existed, which no extension or runtime wrote
- * (no custom type, no author). Never from its text.
+ * the server's client origin (typed, or a steer that joined the turn). Never
+ * from its text.
  */
-const fromReader = (metadata: MessageMetadataInfo = {}): boolean =>
-  metadata.fromClient === true ||
-  (Predicate.isUndefined(metadata.customType) && Predicate.isUndefined(metadata.extensionId))
+const fromReader = (metadata: MessageMetadataInfo = {}): boolean => metadata.fromClient === true
 
 /**
  * A user-role message. An extension's renderer draws its custom type, then
@@ -1956,8 +1953,7 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
  * - The reader's own: a user message the server stamped as a client's
  *   (`fromClient`), typed or a steer that joined the running turn.
  * - Nothing else: a message another agent or an extension sent (a parent's
- *   `Session.send`, a wake, a thread's round) carries no client origin, and a
- *   row stored before the origin existed carries none either.
+ *   `Session.send`, a wake, a thread's round) carries no client origin.
  *
  * A queued follow-up has not run yet, and a hidden message is not drawn.
  */

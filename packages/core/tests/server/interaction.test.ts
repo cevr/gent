@@ -16,7 +16,6 @@ import { type GentNamespacedClient } from "../../src/server/rpc"
 import { workspaceIdForCwd } from "../../src/server/workspace-rpc"
 import {
   CurrentWorkspaceId,
-  WorkspaceId,
   BranchId,
   ExtensionId,
   InteractionRequestId,
@@ -24,7 +23,6 @@ import {
   SessionId,
 } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
-import { SqlClient } from "effect/sql"
 import { multiToolCallStep, textStep, toolCallStep } from "../../src/runtime/provider"
 import {
   createE2ELayer,
@@ -43,11 +41,11 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { ApprovalService } from "../../src/runtime/extension-host"
-import { InteractionStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
+import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunSqlite, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
-import { Message, SteerCommand } from "../../src/domain/message"
+import { type Message, SteerCommand } from "../../src/domain/message"
 
 // ── interaction commands ────────────────────────────────────────────────────
 
@@ -1071,78 +1069,6 @@ describe("interaction.respondInteraction", () => {
           yield* origin.call("nudge", top, { label: "a custom nudge", customType: "probe-row" })
           yield* waitForReply({ client, ...top, reply: "custom nudge answered" })
           expect((yield* stored("a custom nudge"))?.metadata?.customType).toBe("probe-row")
-        }).pipe(Effect.timeout("8 seconds")),
-      ),
-    10_000,
-  )
-
-  it.live(
-    "a child turn stored before the client origin existed declines its approval on recovery",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("approval_probe", { text: "approve after the upgrade?" }),
-            textStep("recovered child done"),
-          ])
-          const context = yield* Layer.build(
-            createE2ELayer({
-              agents: e2ePreset.agents,
-              providerLayer,
-              extensions: [InteractionProbeExtension],
-              approvalLayer: ApprovalService.Live,
-            }),
-          )
-          const { client } = yield* createRpcClient(Layer.succeedContext(context))
-          const top = yield* client.session.create({})
-          const child = yield* client.session.create({
-            parentSessionId: top.sessionId,
-            parentBranchId: top.branchId,
-          })
-          // What an older build left for the child: its prompt stored with no
-          // origin, and the queue row holding it in flight beside the retired
-          // `interactive: false`.
-          // oxlint-disable-next-line effect/preferTaggedConstructors -- the legacy stored row an older build wrote, which this test decodes
-          const legacyMessage = {
-            _tag: "regular",
-            id: "legacy-in-flight",
-            sessionId: child.sessionId,
-            branchId: child.branchId,
-            role: "user",
-            parts: [{ options: {}, type: "text", text: "run the probe" }],
-            createdAt: 1767225600000,
-          }
-          const legacyQueueJson = encodeJson({
-            steering: [],
-            followUp: [],
-            inFlight: { message: legacyMessage, interactive: false },
-          })
-          yield* Effect.gen(function* () {
-            const sql = yield* SqlClient.SqlClient
-            const rows = yield* sql<{
-              readonly workspace_id: string
-            }>`SELECT workspace_id FROM sessions WHERE id = ${child.sessionId}`
-            const workspaceId = WorkspaceId.make(rows[0]?.workspace_id ?? "")
-            yield* (yield* MessageStorage)
-              .createMessage(yield* Schema.decodeUnknownEffect(Message)(legacyMessage))
-              .pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
-            yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at) VALUES (${workspaceId}, ${child.sessionId}, ${child.branchId}, ${legacyQueueJson}, ${1767225600000})`
-          }).pipe(Effect.provideContext(context))
-          // Opening the loop recovers the turn; its approval declines at once.
-          const recovered = yield* waitFor(
-            client.session.getSnapshot(child),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              current.messages.some((message) =>
-                message.parts.some(
-                  (part) => part.type === "text" && part.text === "recovered child done",
-                ),
-              ),
-            5_000,
-            "the recovered child turn ended without a dialog",
-          )
-          const [declined] = toolResultTexts(recovered.messages)
-          expect(declined).toContain('"approved":false')
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

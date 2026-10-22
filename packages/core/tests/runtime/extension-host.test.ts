@@ -399,7 +399,14 @@ describe("ambient extension host context", () => {
       const publish = (event: AgentEvent) =>
         publisher.publish(event).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
       yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
-      yield* publish(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+      yield* publish(
+        AgentEvent.cases.StreamStarted.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
+      )
       const ctx = yield* ambientContext.pipe(Effect.provideService(CurrentWorkspaceId, workspace))
       const events = ctx.Session.events({ sessionId, branchId, from: "now" })
       // Nothing before the marker: the history stays unread.
@@ -420,7 +427,14 @@ describe("ambient extension host context", () => {
         Effect.forkScoped,
       )
       yield* Deferred.await(open)
-      yield* publish(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }))
+      yield* publish(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 1,
+        }),
+      )
       const [delivered] = yield* Fiber.join(next).pipe(Effect.timeout("4 seconds"))
       expect(delivered?._tag).toBe("TurnCompleted")
     }).pipe(Effect.provide(Layer.provideMerge(EventStoreLive, testSqliteStorage))),

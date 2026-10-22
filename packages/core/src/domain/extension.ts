@@ -449,7 +449,7 @@ export const ExtensionStatus = Schema.TaggedUnion({
   Active: {
     ...ExtensionStatusIdentity,
     version: Schema.optional(Schema.String),
-    // Optional, so a status written before the field decodes as it did.
+    // Absent while the last reload succeeded.
     reloadFailed: Schema.optional(
       Schema.Struct({ phase: ExtensionStatusPhase, error: Schema.String }),
     ),

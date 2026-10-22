@@ -357,8 +357,7 @@ export const extensionMetadata = (
  * watching, so its wake, monitor, thread round-end and slash-command turns
  * ask too. A spawned session's turn (`isSpawnedSession`) asks only when a
  * client opened it: no one watches a turn its parent, a wake or a monitor
- * opened, so an approval there declines at once. A spawned row stored before
- * the client origin existed has no stamp, so it declines. The answer comes
+ * opened, so an approval there declines at once. The answer comes
  * from the turn's opening message and the stored session, so it holds for
  * the turn's whole life, a restart included.
  */
@@ -566,12 +565,10 @@ export const projectMessage = (
  * It is fixed when the session is created, so a later turn -- a wake, a
  * completed background job, a parent's message -- runs as the session's
  * agent, never as the default one. Every field is optional: a plain session
- * and a row stored before this existed run as the default agent.
+ * runs as the default agent.
  *
  * Whether a turn can ask its user is not stored here: it comes from the
- * turn's origin (`turnCanAsk`). A row stored while this carried
- * `interactive` still decodes: the struct ignores keys it does not declare,
- * and the next write drops the key.
+ * turn's origin (`turnCanAsk`).
  */
 export const SessionAdmission = Schema.Struct({
   agent: Schema.optional(AgentName),
@@ -2127,7 +2124,7 @@ const responsePartToAssistantMessagePart = (
   switch (part.type) {
     // Provider metadata becomes the part's options, which the SDK reads when
     // it sends the part back: an OpenAI item id and encrypted reasoning, an
-    // Anthropic thinking signature. Stored rows written before this carry `{}`.
+    // Anthropic thinking signature.
     case "text":
       return Option.some(Prompt.textPart({ text: part.text, options: part.metadata }))
     case "reasoning":

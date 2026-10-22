@@ -88,13 +88,13 @@ export const AgentEvent = Schema.TaggedUnion({
   StreamStarted: {
     sessionId: SessionId,
     branchId: BranchId,
-    messageId: Schema.optional(MessageId),
-    step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    messageId: MessageId,
+    step: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
     /**
      * The effort the step's request goes out at, as its `StreamEnded`
      * receipt will name it: a client shows the running turn's level before
      * the step ends. Absent when the request names no level (see
-     * `reasoningDefault`), and on rows written before the field.
+     * `reasoningDefault`).
      */
     reasoningLevel: Schema.optional(ReasoningEffort),
     /** True when the step's request names no level to a model that reasons. */
@@ -106,8 +106,7 @@ export const AgentEvent = Schema.TaggedUnion({
      * computes per turn. Two requests with different revisions showed
      * the model different extensions, so a client tells a prefix an
      * extension change rewrote from a regression; a body edit or a reload
-     * keeps the revision.
-     * Absent on rows written before the field.
+     * keeps the revision. Absent when the turn's profile has no revision.
      */
     profileRevision: Schema.optional(Schema.String),
   },
@@ -194,14 +193,14 @@ export const AgentEvent = Schema.TaggedUnion({
   StreamEnded: {
     sessionId: SessionId,
     branchId: BranchId,
-    messageId: Schema.optional(MessageId),
-    step: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    messageId: MessageId,
+    step: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
     usage: Schema.optional(UsageSchema),
     /**
      * The chars/4 estimate of the system prompt, notices and tool definitions
      * this step's request carried. The next projection subtracts it from
-     * `usage.inputTokens` to learn what the messages took. Absent on rows
-     * written before it existed; such a step measures nothing.
+     * `usage.inputTokens` to learn what the messages took. Absent on a failed
+     * or interrupted step; such a step measures nothing.
      */
     requestOverheadTokens: Schema.optional(Schema.Natural),
     // `model` identifies which model produced the stream that just ended.
@@ -223,8 +222,7 @@ export const AgentEvent = Schema.TaggedUnion({
      * cache (`AgentDefinition.promptCache`). A client reads the step's
      * lifetime with `promptCacheTtlMsFor(model, child)`. A step that ends
      * with its stream always carries it, `false` for a root session and for
-     * a child on the session cache. Absent
-     * on a failed or interrupted step, and on rows written before the field;
+     * a child on the session cache. Absent on a failed or interrupted step;
      * such a step reads as a root session's.
      */
     child: Schema.optional(Schema.Boolean),
@@ -232,8 +230,8 @@ export const AgentEvent = Schema.TaggedUnion({
      * The part of `usage.cacheWriteTokens` the driver split by the lifetime
      * of the entry it wrote (`ModelDriverContribution.cacheWritesByLifetime`):
      * a child's shared prefix writes at the root lifetime although the child
-     * asks for its own. Absent when the driver splits nothing, and on rows
-     * written before the field; the writes then take the step's lifetime.
+     * asks for its own. Absent when the driver splits nothing; the writes
+     * then take the step's lifetime.
      */
     cacheWritesByLifetime: Schema.optional(
       Schema.Array(Schema.Struct({ ttlMs: Schema.Finite, tokens: Schema.Natural })),
@@ -246,28 +244,26 @@ export const AgentEvent = Schema.TaggedUnion({
      * levels the model accepts (`effectiveEffort`). A driver rebuilds the
      * effort history of a conversation from these, so a change keeps the
      * cached prefix. Absent when the request named no level (see
-     * `reasoningDefault`), and on rows written before the field.
+     * `reasoningDefault`).
      */
     reasoningLevel: Schema.optional(ReasoningEffort),
     /**
      * True when the step's request named no level to a model that reasons:
      * the step ran at the model's own default. A step with neither field (a
-     * model that does not reason, a row written before the fields) reads as
-     * one at an unknown level.
+     * model that does not reason) reads as one at an unknown level.
      */
     reasoningDefault: Schema.optional(Schema.Literal(true)),
     /**
      * The credential the step's last request went out with: the sign-in's
-     * provider and slot, after any move down its `authOrder`. Absent on rows
-     * written before the field and for a model no provider credential serves;
-     * such a step's credential is unknown.
+     * provider and slot, after any move down its `authOrder`. Absent for a
+     * model no provider credential serves; such a step's credential is
+     * unknown.
      */
     credential: Schema.optional(CredentialReceipt),
     /**
      * The turn's model-call budget as the step ended: the calls its durable
      * reservation counted so far, retries and summaries included, and the
-     * run's `maxModelAttempts`. Absent for a turn with no budget, and on rows
-     * written before the field.
+     * run's `maxModelAttempts`. Absent for a turn with no budget.
      */
     modelAttempts: Schema.optional(ModelAttempts),
   },
@@ -279,21 +275,20 @@ export const AgentEvent = Schema.TaggedUnion({
     interrupted: Schema.optional(Schema.Boolean),
     /**
      * The turn ended on a failure: its model stream broke, or a turn phase
-     * failed. The `ErrorOccurred` before this receipt names the cause. Absent
-     * in historical receipts; absence does not prove model success.
+     * failed. The `ErrorOccurred` before this receipt names the cause.
      */
-    streamFailed: Schema.optional(Schema.Boolean),
+    streamFailed: Schema.Boolean,
     /**
      * True when the turn ended without the model ever producing an answer —
      * every continuation was spent and the last step still yielded nothing.
      * Distinguishes "gave up" from "replied": without it a caller sees a
      * successful turn and an empty transcript, and cannot tell them apart.
-     * Absent on historical receipts and on every turn that did reply.
+     * Absent on every turn that did reply.
      */
     unanswered: Schema.optional(Schema.Boolean),
     /**
      * Token totals over every model step of this turn. Absent when any step
-     * reported no usage or an unusable count, and on historical receipts.
+     * reported no usage or an unusable count.
      */
     usage: Schema.optional(UsageSchema),
     /**
@@ -314,16 +309,15 @@ export const AgentEvent = Schema.TaggedUnion({
     contextLimitTokens: Schema.Natural,
     /**
      * The output the step kept free of its window (`maxTokens`), so a reader
-     * can price the step at the input ceiling it had. Absent in receipts from
-     * before it was recorded.
+     * can price the step at the input ceiling it had.
      */
-    reservedOutputTokens: Schema.optional(Schema.Natural),
+    reservedOutputTokens: Schema.Natural,
     /** The model's input cap the step ran under; absent when its catalog names none. */
     inputLimitTokens: Schema.optional(Schema.Natural),
     omittedMessages: Schema.Natural,
     /**
      * The first message the projection sent past the ones it omitted. Absent
-     * when it omitted none, and in receipts from before it was recorded.
+     * when it omitted none.
      */
     keptFromMessageId: Schema.optional(MessageId),
     /** The handoff marker leading this window, when it carries a summary. */
@@ -332,9 +326,9 @@ export const AgentEvent = Schema.TaggedUnion({
     compacted: Schema.Boolean,
     /**
      * The items of the context that have cost the most so far, the costliest
-     * first (`contextRenters`). Absent in receipts from before it was recorded.
+     * first (`contextRenters`).
      */
-    renters: Schema.optional(Schema.Array(ContextRenter)),
+    renters: Schema.Array(ContextRenter),
     /**
      * USD of the compaction summary this projection asked for, frozen at emit
      * time as `StreamEnded.costUsd` is. Absent when there was no summary, it
@@ -350,7 +344,7 @@ export const AgentEvent = Schema.TaggedUnion({
     input: Schema.optional(Schema.Unknown),
     /** Set when a cell admitted this call. Absent for direct model calls. */
     parentToolCallId: Schema.optional(ToolCallId),
-    /** The assistant message that holds the tool-call part. Absent in historical receipts. */
+    /** The assistant message that holds the tool-call part. Absent for a call no model step made. */
     assistantMessageId: Schema.optional(MessageId),
   },
   ToolCallSucceeded: {
@@ -400,15 +394,15 @@ export const AgentEvent = Schema.TaggedUnion({
     error: Schema.String,
     /**
      * The turn goes on past this error: it is a notice, such as a compaction
-     * that fell back to truncation. Absent on an error the turn may end on and
-     * on historical events. A turn always ends with its `TurnCompleted`.
+     * that fell back to truncation. Absent on an error the turn may end on. A
+     * turn always ends with its `TurnCompleted`.
      */
     notice: Schema.optional(Schema.Literal(true)),
     /**
      * When the provider says the failure resets, in epoch milliseconds: a
      * usage limit whose reset the driver read past its retry cap
      * (`RetryPolicy.retryAt`), so the step failed without a retry. Absent on
-     * any other error and on historical events.
+     * any other error.
      */
     retryAt: Schema.optional(Schema.Finite),
   },

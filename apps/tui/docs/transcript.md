@@ -241,8 +241,7 @@ it is, from the metadata alone: a custom type whose
 the reader sent but whose text the model reads is ids), or else a user message
 with the server's client origin (`fromClient`: typed, or a steer that joined
 the running turn). A message another agent or an extension sent (a parent's
-`Session.send`, a wake, a thread's round), a hidden message
-and a row stored before the client origin existed are not. It is the first row a
+`Session.send`, a wake, a thread's round) and a hidden message are not. It is the first row a
 short terminal gives up: it shows only while the live tail keeps a row beside
 it. The expanded transcript and overlays pin nothing, and the terminal owns
 scrollback, so there is no jump back to the original. The prompt is a memo of

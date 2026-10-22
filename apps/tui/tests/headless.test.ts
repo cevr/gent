@@ -127,7 +127,15 @@ const completed = (
     readonly streamFailed?: boolean
     readonly messageId?: MessageId
   } = {},
-) => TurnCompleted.make({ sessionId, branchId, durationMs: 1, messageId: OWN_TURN, ...fields })
+) =>
+  TurnCompleted.make({
+    sessionId,
+    branchId,
+    durationMs: 1,
+    messageId: OWN_TURN,
+    streamFailed: false,
+    ...fields,
+  })
 const errorOccurred = (error: string) => ErrorOccurred.make({ sessionId, branchId, error })
 /** An error the turn continues past, such as a compaction fallback. */
 const errorNotice = (error: string) =>
@@ -283,7 +291,13 @@ describe("runHeadless", () => {
     Effect.gen(function* () {
       const client = branchClient({
         ownTurn: [
-          StreamEnded.make({ sessionId, branchId, outcome: "Failed" }),
+          StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId,
+            branchId,
+            outcome: "Failed",
+          }),
           errorOccurred("provider unavailable:\n  rate limited"),
           completed(),
         ],

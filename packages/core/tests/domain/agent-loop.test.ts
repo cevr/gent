@@ -101,6 +101,8 @@ describe("session metrics fold", () => {
     const metrics = foldSessionMetrics([
       wrap(
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId,
           branchId,
           usage: { inputTokens: 100, outputTokens: 10 },
@@ -117,12 +119,16 @@ describe("session metrics fold", () => {
           availableInputTokens: 1_000,
           contextLimitTokens: 1_100,
           omittedMessages: 0,
+          reservedOutputTokens: 0,
+          renters: [],
           compacted: true,
           handoffMessageId: MessageId.make("context-handoff:b:m"),
         }),
       ),
       wrap(
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId,
           branchId,
           usage: { inputTokens: 40, outputTokens: 4 },
@@ -130,7 +136,14 @@ describe("session metrics fold", () => {
           outcome: "Answered",
         }),
       ),
-      wrap(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1_500 })),
+      wrap(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 1_500,
+        }),
+      ),
     ])
     expect(metrics).toEqual({
       turns: 1,
@@ -145,13 +158,16 @@ describe("session metrics fold", () => {
         omittedMessages: 0,
         handoffMessageId: MessageId.make("context-handoff:b:m"),
         compactions: 1,
+        renters: [],
       },
     })
   })
 
-  test("the newest ended step's credential is the last one used; an old row's reads as unknown", () => {
+  test("the newest ended step's credential is the last one used; a step with none reads as unknown", () => {
     const unknown = wrap(
       AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
         sessionId,
         branchId,
         model: ModelId.make("anthropic/claude-sonnet-5-5"),
@@ -160,6 +176,8 @@ describe("session metrics fold", () => {
     )
     const personal = wrap(
       AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
         sessionId,
         branchId,
         model: ModelId.make("anthropic/claude-sonnet-5-5"),
@@ -175,13 +193,19 @@ describe("session metrics fold", () => {
       model: ModelId.make("anthropic/claude-sonnet-5-5"),
       receipt: { provider: ProviderId.make("anthropic"), slot: CredentialSlot.make("personal") },
     })
-    // A row written before receipts names its model, not its credential.
+    // A step no provider credential served names its model, not a credential.
     expect(foldSessionMetrics([personal, unknown]).lastCredential).toEqual({
       model: ModelId.make("anthropic/claude-sonnet-5-5"),
     })
     // A step that ended with no model (a failed request) leaves the last one.
     const failed = wrap(
-      AgentEvent.cases.StreamEnded.make({ sessionId, branchId, interrupted: true }),
+      AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
+        sessionId,
+        branchId,
+        interrupted: true,
+      }),
     )
     expect(foldSessionMetrics([personal, failed]).lastCredential?.receipt?.slot).toBe(
       CredentialSlot.make("personal"),
@@ -196,6 +220,8 @@ describe("session metrics fold", () => {
     const stepOn = (slot: CredentialSlot) =>
       wrap(
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId,
           branchId,
           model,
@@ -234,7 +260,14 @@ describe("session metrics fold", () => {
     // and a last step whose selection failed (no credential) leaves the
     // account unknown, never the older placement's.
     const selectionFailed = wrap(
-      AgentEvent.cases.StreamEnded.make({ sessionId, branchId, model, outcome: "Failed" }),
+      AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
+        sessionId,
+        branchId,
+        model,
+        outcome: "Failed",
+      }),
     )
     expect(foldSessionMetrics([placedOn(a)]).placement).toEqual({ provider: anthropic, slot: a })
     expect(accountOf(unpinned, [placedOn(a)])).toBeUndefined()
@@ -266,12 +299,16 @@ describe("session metrics fold", () => {
           availableInputTokens: contextLimitTokens - 5_000,
           contextLimitTokens,
           omittedMessages: 0,
+          reservedOutputTokens: 0,
+          renters: [],
           compacted: false,
         }),
       )
     const ended = (inputTokens: number) =>
       wrap(
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId,
           branchId,
           usage: { inputTokens, outputTokens: 1 },
@@ -299,12 +336,16 @@ describe("session metrics fold", () => {
           availableInputTokens: 95_000,
           contextLimitTokens: 100_000,
           omittedMessages: 0,
+          reservedOutputTokens: 0,
+          renters: [],
           compacted,
           costUsd: 0.125,
         }),
       )
     const ended = wrap(
       AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
         sessionId,
         branchId,
         usage: { inputTokens: 7_000, outputTokens: 1 },
@@ -312,7 +353,14 @@ describe("session metrics fold", () => {
         outcome: "Answered",
       }),
     )
-    const done = wrap(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+    const done = wrap(
+      AgentEvent.cases.TurnCompleted.make({
+        streamFailed: false,
+        sessionId,
+        branchId,
+        durationMs: 10,
+      }),
+    )
     const log = [projected(true), ended, done, projected(true), ended, projected(false)]
     for (let cut = 0; cut <= log.length; cut++) {
       const hydrated = foldSessionMetrics(log.slice(0, cut))
@@ -343,13 +391,22 @@ describe("session metrics fold", () => {
     const low = { reasoningLevel: "low" } as const
     const ended = wrap(
       AgentEvent.cases.StreamEnded.make({
+        messageId: MessageId.make("msg"),
+        step: 1,
         sessionId,
         branchId,
         reasoningLevel: "low",
         outcome: "ToolCalls",
       }),
     )
-    const done = wrap(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+    const done = wrap(
+      AgentEvent.cases.TurnCompleted.make({
+        streamFailed: false,
+        sessionId,
+        branchId,
+        durationMs: 10,
+      }),
+    )
     // The step's end and the next step keep the level; only the turn's end clears it.
     expect(foldSessionMetrics([started(1, low)]).turnEffort).toEqual({ level: "low" })
     expect(foldSessionMetrics([started(1, low), ended, started(2, low)]).turnEffort).toEqual({

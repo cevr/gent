@@ -97,14 +97,14 @@ describe("cell process protocol", () => {
       }),
   )
 
-  test("a cell result stored before images decodes, and one with images keeps them", () => {
+  test("a cell result with no image decodes with none, and one with images keeps them", () => {
     const decode = Schema.decodeUnknownSync(CellEvaluation)
-    const older = { display: "42", bindings: ["a"], bindingCount: 1, truncated: false }
-    expect(decode(older)).toEqual(older)
-    expect(decode(older).images).toBeUndefined()
+    const plain = { display: "42", bindings: ["a"], bindingCount: 1, truncated: false }
+    expect(decode(plain)).toEqual(plain)
+    expect(decode(plain).images).toBeUndefined()
     // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded stored image this test decodes
     const image = { _tag: "ToolImage", sha256: "a".repeat(64), mediaType: "image/png" }
-    expect(decode({ ...older, images: [image] }).images).toEqual([image])
+    expect(decode({ ...plain, images: [image] }).images).toEqual([image])
   })
 
   it.live("stray record separators in cell output stay text", () =>

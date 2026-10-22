@@ -732,9 +732,9 @@ describe("tool image store", () => {
     25_000,
   )
 
-  it.live("a ToolImage stored before scaling, with no original size, still decodes", () =>
+  it.live("an unscaled ToolImage, with no original size, decodes as stored", () =>
     Effect.gen(function* () {
-      // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded image row an older binary stored, which this test decodes
+      // oxlint-disable-next-line effect/preferTaggedConstructors -- the encoded image row this test decodes
       const stored = {
         _tag: "ToolImage",
         sha256: "a".repeat(64),

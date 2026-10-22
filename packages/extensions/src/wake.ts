@@ -994,7 +994,7 @@ const limitedSinceAnswer = Effect.fn("Wake.limitedSinceAnswer")(function* (messa
         ) {
           return { limited: false, count: 0 }
         }
-        if (event.streamFailed === true && state.limited) {
+        if (event.streamFailed && state.limited) {
           return { limited: false, count: state.count + 1 }
         }
         return { ...state, limited: false }

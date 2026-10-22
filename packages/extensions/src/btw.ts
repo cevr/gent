@@ -433,9 +433,7 @@ export const foldForkEvent = <
       return {
         ...current,
         partial: "",
-        partialMessage: Option.fromUndefinedOr(event.messageId).pipe(
-          Option.map((turn) => assistantMessageIdForTurn(turn, event.step)),
-        ),
+        partialMessage: Option.some(assistantMessageIdForTurn(event.messageId, event.step)),
         replying: true,
         error: Option.none(),
       }

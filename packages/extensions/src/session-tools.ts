@@ -303,8 +303,8 @@ type Relation = typeof Relation.Type
 export const SessionMessageDetails = Schema.Struct({
   from: Schema.Struct({
     sessionId: SessionId,
-    /** The branch that sent it. Rows stored before the field have none. */
-    branchId: Schema.optional(BranchId),
+    /** The branch that sent it. */
+    branchId: BranchId,
     name: Schema.optional(Schema.String),
     /** How the sender stands to the receiver. */
     relation: Relation,
@@ -381,9 +381,8 @@ export const sessionMessageText = (input: {
 /**
  * The text of a stored message without its header. The header is the sender
  * line, at most one status line, then a blank line, so any line between the
- * sender line and the blank line is a status line, whatever words the binary
- * that stored the row wrote there. Rows written before the status line
- * existed have none; a row whose header does not match is returned whole.
+ * sender line and the blank line is a status line. Only a child's message
+ * has one; a row whose header does not match is returned whole.
  */
 export const sessionMessageBody = (from: SessionMessageSender, content: string): string => {
   const afterSender = (text: string) =>

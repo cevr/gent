@@ -218,9 +218,9 @@ const accountMoveCause = (
 interface CachedRequest {
   readonly promptTokens: number
   readonly model: string
-  /** The credential it went out with; none on a row written before receipts. */
+  /** The credential it went out with; none for a model no provider credential serves. */
   readonly credential: Option.Option<CredentialReceipt>
-  /** The extension profile it ran on; none on a row written before the field. */
+  /** The extension profile it ran on; none when the profile has no revision. */
   readonly profileRevision: Option.Option<string>
   /**
    * Some request since the last reset reported cache activity. A later step
@@ -459,7 +459,7 @@ export const makeCacheScan = (): CacheScan => {
   ): Option.Option<ScannedMiss> => {
     const begun = Option.getOrElse(started, (): Begun => ({
       at: envelope.createdAt,
-      input: Option.fromUndefinedOr(event.messageId),
+      input: Option.some(event.messageId),
       profileRevision: Option.none(),
     }))
     started = Option.none()
@@ -517,7 +517,7 @@ export const makeCacheScan = (): CacheScan => {
         compactedSince = false
         started = Option.some({
           at: envelope.createdAt,
-          input: Option.fromUndefinedOr(event.messageId),
+          input: Option.some(event.messageId),
           profileRevision: Option.fromUndefinedOr(event.profileRevision),
         })
         return Option.none()

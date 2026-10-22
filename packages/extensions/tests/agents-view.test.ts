@@ -681,7 +681,12 @@ describe("agents view live activity", () => {
     const state = fold([
       chunk("done"),
       started("tc-read", "read"),
-      AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+      AgentEvent.cases.TurnCompleted.make({
+        streamFailed: false,
+        sessionId,
+        branchId,
+        durationMs: 1,
+      }),
     ])
     expect(Option.isNone(activityOf(state))).toBe(true)
   })
@@ -788,7 +793,7 @@ const scriptedLoop = Effect.gen(function* () {
     Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, chunk: text }))
   const turnCompleted = Queue.offer(
     events,
-    AgentEvent.cases.TurnCompleted.make({ ...loop, durationMs: 1 }),
+    AgentEvent.cases.TurnCompleted.make({ streamFailed: false, ...loop, durationMs: 1 }),
   )
   return { loop, status, activity, follow, followWith, chunk, turnCompleted }
 })

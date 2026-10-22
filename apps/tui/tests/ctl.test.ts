@@ -553,13 +553,22 @@ describe("compact event records", () => {
     const chunk = (chunk: string) =>
       AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk })
     const records = compactEvents([
-      envelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+      envelope(
+        1,
+        AgentEvent.cases.StreamStarted.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
+          sessionId,
+          branchId,
+        }),
+      ),
       envelope(2, chunk("Hel")),
       envelope(3, chunk("lo, ")),
       envelope(4, chunk("world")),
       envelope(
         5,
         AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
           sessionId,
           branchId,
           messageId: MessageId.make("m-1"),
@@ -569,7 +578,7 @@ describe("compact event records", () => {
       ),
     ])
     expect(records).toEqual([
-      { id: 1, tag: "StreamStarted" },
+      { id: 1, tag: "StreamStarted", step: 1 },
       { id: 4, tag: "StreamChunk", n: 3, text: "Hello, world" },
       { id: 5, tag: "TurnCompleted", message: "m-1", ms: 12, flags: ["interrupted"] },
     ])

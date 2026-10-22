@@ -342,14 +342,12 @@ const previewOf = (message: Message): string => {
  * (`extensionId`: a wake, a goal continuation, a child's completion, a
  * background job, another session's message or a child's question) is not,
  * and neither is a runtime notice (continuation, max-steps, model-change),
- * which carries a custom type and no origin. A message with neither origin
- * is the user's when it has no custom type.
+ * which carries a custom type and no origin.
  */
 const askedByUser = (message: Message): boolean => {
   if (message.metadata?.fromClient === true) return true
   if (Predicate.isNotUndefined(message.metadata?.userText)) return true
-  if (Predicate.isNotUndefined(message.metadata?.extensionId)) return false
-  return Predicate.isUndefined(message.metadata?.customType)
+  return false
 }
 
 /**
@@ -607,7 +605,7 @@ type EventOf<Tag extends AgentEvent["_tag"]> = Extract<AgentEvent, { readonly _t
 const makeWindowFold = (turn: WindowTurn) => {
   let projection = Option.none<{
     readonly ceiling: number
-    readonly reservedOutputTokens: Option.Option<number>
+    readonly reservedOutputTokens: number
     readonly inputLimitTokens: Option.Option<number>
     readonly compacted: boolean
   }>()
@@ -624,7 +622,7 @@ const makeWindowFold = (turn: WindowTurn) => {
   const projected = (event: EventOf<"ModelContextProjected">) => {
     projection = Option.some({
       ceiling: event.contextLimitTokens,
-      reservedOutputTokens: Option.fromUndefinedOr(event.reservedOutputTokens),
+      reservedOutputTokens: event.reservedOutputTokens,
       inputLimitTokens: Option.fromUndefinedOr(event.inputLimitTokens),
       compacted: event.compacted,
     })
@@ -641,21 +639,17 @@ const makeWindowFold = (turn: WindowTurn) => {
     if (!inTurn) return
     child = event.child ?? child
     const usage = Option.fromUndefinedOr(event.usage)
-    const step = Option.fromUndefinedOr(event.step)
-    if (Option.isNone(stepProjection) || Option.isNone(step) || Option.isNone(usage)) return
-    // A step replays at the limits it ran under; a receipt without them is not replayed.
-    const reserve = stepProjection.value.reservedOutputTokens
-    if (Option.isNone(reserve)) return
+    if (Option.isNone(stepProjection) || Option.isNone(usage)) return
     steps.push({
       sessionId: turn.sessionId,
       branchId: turn.branchId,
       messageId: turn.messageId,
-      step: step.value,
+      step: event.step,
       agent: turn.agent,
       child: event.child ?? false,
       spawned: turn.spawned,
       ceilingTokens: stepProjection.value.ceiling,
-      reservedOutputTokens: reserve.value,
+      reservedOutputTokens: stepProjection.value.reservedOutputTokens,
       inputLimitTokens: stepProjection.value.inputLimitTokens,
       inputTokens: usage.value.inputTokens,
       compacted: stepProjection.value.compacted,

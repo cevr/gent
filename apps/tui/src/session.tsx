@@ -196,7 +196,7 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Stat
   )
   const gauge = `ctx ${pct}%`
   const label = { text: gauge, color: pressureColor(pct, theme) }
-  return Option.match(Option.fromUndefinedOr(context.renters?.[0]), {
+  return Option.match(Option.fromUndefinedOr(context.renters[0]), {
     onNone: () => label,
     onSome: (renter) => ({
       ...label,
@@ -2561,9 +2561,7 @@ export function useSessionFeed(
     live: boolean,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const durable = Option.map(Option.fromUndefinedOr(event.messageId), (inputId) =>
-        String(assistantMessageIdForTurn(inputId, event.step)),
-      )
+      const durable = Option.some(String(assistantMessageIdForTurn(event.messageId, event.step)))
       answerStartedAt = stampedAt
       if (!live) {
         setOpenAnswer(Option.filter(durable, (id) => !snapshotAnswers.has(id)))

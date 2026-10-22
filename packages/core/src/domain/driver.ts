@@ -60,8 +60,8 @@ export const CredentialOrder = Schema.Array(CredentialSlot).check(
  * The credential a model request used: the provider that owns the sign-in
  * and the slot. Labels only, never a secret or an account. `signedInAt` is
  * when the stored credential was signed in or replaced (a refresh keeps
- * it), in epoch milliseconds; absent for a credential from the environment,
- * one stored before the stamp, and a receipt written before the field.
+ * it), in epoch milliseconds; absent for a credential from the environment
+ * and one the auth store kept before the stamp.
  */
 export const CredentialReceipt = Schema.Struct({
   provider: ProviderId,
@@ -266,7 +266,7 @@ export interface ProviderHints {
    * at, in prompt order: one entry per run of consecutive assistant
    * messages, from the steps' receipts (`StreamEnded.reasoningLevel`, or
    * `default` by `StreamEnded.reasoningDefault`). None where no receipt says:
-   * a step on another model, a step stored before receipts, a forked branch.
+   * a step on another model, a forked branch.
    * A driver whose wire carries an effort change
    * inside the conversation rebuilds the changes from it, so the request's
    * earlier bytes stay the same. Absent on a request with no conversation

@@ -371,7 +371,14 @@ describe("git refresh", () => {
       const { texts, emit } = yield* mountLabels(repo)
       yield* waitUntil(() => texts().join("|") === "trunk", "the clean checkout")
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\n")
-      emit(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+      emit(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 10,
+        }),
+      )
       // Inside the tool settle time: the turn's end does not wait for it.
       yield* waitUntil(() => texts().join("|") === "trunk|1 file +0 -1", "the edited file", 700)
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
@@ -513,7 +520,14 @@ describe("git pull request", () => {
       yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓", "the commit", 1_500)
       // An edit changes no branch fact: the labels move, gh is not asked.
       yield* fs.writeFileString(`${repo}/kept.txt`, "one\ntwo\n")
-      emit(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 10 }))
+      emit(
+        AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
+          sessionId,
+          branchId,
+          durationMs: 10,
+        }),
+      )
       yield* waitUntil(() => texts().join("|") === "trunk ↑1|#2 ✓|1 file +1 -0", "the edit")
       // The next commit is the third ask; an ask for the edit would make it the fourth.
       yield* git(repo, "commit", "-q", "-am", "ahead again")

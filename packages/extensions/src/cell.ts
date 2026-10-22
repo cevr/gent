@@ -44,7 +44,7 @@ import {
   SessionId,
   tool,
   ToolCallId,
-  ToolCallVerdict,
+  type ToolCallVerdict,
   type ToolCapability,
   ToolImage,
   ToolResultFailure,
@@ -82,8 +82,7 @@ import {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   type ToolCallGate,
-  ToolCallGateState,
-  type KeptToolCallVerdict,
+  KeptToolCallVerdict,
   type ToolRecoveryCall,
   ToolRunner,
   toolResultSummary,
@@ -155,18 +154,12 @@ const Operation = Schema.Struct({
   input: Schema.Json,
   state: CellToolOperationState,
   /**
-   * The verdict the `toolCall` hooks gave the operation. An operation resumed
-   * after a restart applies it and is not judged again. Absent when no hook
-   * judged it, and on records written before the verdict existed.
+   * The verdict the `toolCall` hooks gave the operation, and its gate's
+   * state. An operation resumed after a restart applies it and is not judged
+   * again; a passed gate does not ask that question again, and its own
+   * approval takes the answer the record keeps. Absent when no hook judged it.
    */
-  verdict: Schema.optional(ToolCallVerdict),
-  /**
-   * Whether the operation passed its gate: `passed` once the user approved
-   * its `Ask`, so a resumed operation does not ask that question again and
-   * its own approval takes the answer the record keeps. Absent reads as
-   * `pending`.
-   */
-  gate: Schema.optional(ToolCallGateState),
+  kept: Schema.optional(KeptToolCallVerdict),
 })
 type CellToolOperation = typeof Operation.Type
 const OperationJson = Schema.fromJsonString(Operation)
@@ -536,8 +529,8 @@ const makeToolOperationStorage = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       yield* own(key)
       const operation = yield* read(key)
-      if (Predicate.isNotUndefined(operation.verdict)) return
-      yield* write(key, { ...operation, verdict, gate: "pending" })
+      if (Predicate.isNotUndefined(operation.kept)) return
+      yield* write(key, { ...operation, kept: { verdict, gate: "pending" } })
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
   const pass = Effect.fn("CellToolOperationStorage.pass")(function* (key: CellToolOperationKey) {
@@ -545,9 +538,9 @@ const makeToolOperationStorage = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       yield* own(key)
       const operation = yield* read(key)
-      if (Predicate.isUndefined(operation.verdict))
+      if (Predicate.isUndefined(operation.kept))
         return yield* new StorageError({ message: "A cell operation with no verdict cannot pass" })
-      yield* write(key, { ...operation, gate: "passed" })
+      yield* write(key, { ...operation, kept: { ...operation.kept, gate: "passed" } })
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
   return {
@@ -2359,17 +2352,7 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
           // A resumed operation keeps the verdict its first run applied and
           // its gate's state: a passed gate does not ask again.
           gate: {
-            ...omitUndefined({
-              kept: Option.getOrUndefined(
-                Option.map(
-                  Option.fromUndefinedOr(admitted.verdict),
-                  (verdict): KeptToolCallVerdict => ({
-                    verdict,
-                    gate: admitted.gate ?? "pending",
-                  }),
-                ),
-              ),
-            }),
+            ...omitUndefined({ kept: admitted.kept }),
             onPassed: storage.pass(key),
           },
         }).pipe(

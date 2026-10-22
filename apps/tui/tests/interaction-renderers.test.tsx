@@ -65,47 +65,6 @@ describe("AskUserRenderer", () => {
     }),
   )
 
-  // The ask_user params cap a header at 30 characters and a question at four
-  // options. An interaction stored before those caps still shows its choices.
-  it.scopedLive("a stored question past the new call limits still shows its choices", () =>
-    Effect.gen(function* () {
-      const results: ApprovalResult[] = []
-      const header = "Which of these deployment targets first?"
-      const labels = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
-      const setup = yield* renderScoped(
-        () => (
-          <AskUserRenderer
-            event={
-              {
-                ...interaction("fallback question"),
-                metadata: {
-                  type: "ask-user",
-                  questions: [
-                    {
-                      header,
-                      question: "Pick one",
-                      options: labels.map((label) => ({ label, description: `${label} site` })),
-                    },
-                  ],
-                },
-              } satisfies InteractionPresented
-            }
-            resolve={(r) => results.push(r)}
-          />
-        ),
-        { width: 80, height: 30 },
-      )
-      const frame = yield* waitForFrame(setup, (f) => f.includes("Echo"), "the stored choices")
-      expect(frame).toContain(header)
-      expect(frame).not.toContain("fallback question")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressArrow("up")
-      setup.mockInput.pressEnter()
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(results).toEqual([{ approved: true, notes: '[["Echo"]]' }])
-    }).pipe(Effect.timeout("10 seconds")),
-  )
-
   // The scroll keys are hints of the one footer row, in the style of the
   // other hints, not free sentences under it.
   it.scopedLive(
@@ -325,6 +284,18 @@ describe("AskUserRenderer answers", () => {
       yield* Effect.promise(() => setup.renderOnce())
       expect(results).toEqual([])
       // The question stays open: a choice still answers it.
+      setup.mockInput.pressArrow("up")
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(results).toEqual([{ approved: true, notes: '[["Blue"]]' }])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("up from the first choice wraps past Other to the last choice", () =>
+    Effect.gen(function* () {
+      const { setup, results } = yield* ask([color])
+      setup.mockInput.pressArrow("up")
+      yield* waitForFrame(setup, (f) => f.includes("> Other:"), "the Other row in focus")
       setup.mockInput.pressArrow("up")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())

@@ -126,7 +126,7 @@ export const ModelContextMetrics = Schema.Struct({
   /** Projections on this branch that compacted history so far. */
   compactions: Schema.Natural,
   /** The held items that have cost the most so far, the costliest first. */
-  renters: Schema.optional(Schema.Array(ContextRenter)),
+  renters: Schema.Array(ContextRenter),
 })
 export type ModelContextMetrics = typeof ModelContextMetrics.Type
 
@@ -186,9 +186,9 @@ export const SessionRuntimeMetrics = Schema.Struct({
   /**
    * The credential of the newest step that ended on a model
    * (`StreamEnded.credential`): what the status row names when a sign-in has
-   * more than one. `receipt` is absent for a row written before receipts and
-   * for a model no provider credential serves; that step's credential is
-   * unknown. Absent until a step ends on a model.
+   * more than one. `receipt` is absent for a model no provider credential
+   * serves; that step's credential is unknown. Absent until a step ends on a
+   * model.
    */
   lastCredential: Schema.optional(
     Schema.Struct({ model: ModelId, receipt: Schema.optional(CredentialReceipt) }),
@@ -606,13 +606,13 @@ const QueueFollowUpFields = {
   wake: Schema.optional(Schema.Boolean),
   /**
    * Admit the item only while this is the branch's newest step, and start it
-   * at once (`SessionSendParams`). Optional: a stored command written before
-   * it decodes.
+   * at once (`SessionSendParams`). Absent: the item is admitted whatever
+   * the branch's newest step.
    */
   ifLatest: Schema.optional(MessageId),
 }
 
-/** `sender` is optional: a stored command written before it decodes. */
+/** `sender` is absent on a steer a client sent. */
 const SteerFields = {
   ...WorkspaceFields,
   commandId: ActorCommandId,
@@ -642,7 +642,7 @@ const MessageCommandFields = {
   messageId: MessageId,
 }
 
-/** `requester` is optional: a stored command written before it decodes. */
+/** `requester` is absent on a stop a client asked for. */
 const StopMessageFields = {
   ...MessageCommandFields,
   requester: Schema.optional(RequesterBranch),

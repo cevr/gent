@@ -383,54 +383,6 @@ describe("Sessions", () => {
       expect(operationRows[0]?.count).toBe(0)
     }).pipe(Effect.provide(testSqliteStorage)),
   )
-  /**
-   * `session.create` receipts once carried an `agentOverride` the input no
-   * longer has. Those rows are still on disk, so the receipt must decode with
-   * the stale key present: a retry that fails to read its own receipt would
-   * create a second session.
-   */
-  it.live("a stored session.create receipt decodes with a retired key present", () =>
-    Effect.gen(function* () {
-      const operations = yield* SessionOperationStorage
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const sql = yield* SqlClient.SqlClient
-      const sessionId = SessionId.make("stale-receipt-session")
-      const branchId = BranchId.make("stale-receipt-branch")
-      const requestId = RequestId.make("stale-receipt-request")
-
-      yield* sessions.createSession(
-        new Session({ id: sessionId, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
-      )
-      yield* branches.createBranch(
-        new Branch({ id: branchId, sessionId, name: "main", createdAt: FIXED_NOW }),
-      )
-
-      // The shape an earlier build wrote, including the retired key.
-      const StaleReceipt = Schema.fromJsonString(
-        Schema.Struct({
-          sessionId: Schema.String,
-          branchId: Schema.String,
-          name: Schema.String,
-          initialPrompt: Schema.String,
-          agentOverride: Schema.String,
-        }),
-      )
-      const staleJson = yield* Schema.encodeEffect(StaleReceipt)({
-        sessionId,
-        branchId,
-        name: "Stale receipt",
-        initialPrompt: "seed",
-        agentOverride: "memory:reflect",
-      })
-      yield* sql`INSERT INTO durable_operations (workspace_id, operation, request_id, result_json, subject_session_id, subject_branch_id, created_at) VALUES (${"0".repeat(64)}, ${"session.create"}, ${requestId}, ${staleJson}, ${sessionId}, ${branchId}, ${FIXED_NOW_MILLIS})`
-
-      const receipt = yield* operations.getReceipt(DurableOperations.createSession, requestId)
-      expect(receipt?.sessionId).toBe(sessionId)
-      expect(receipt?.name).toBe("Stale receipt")
-      expect(receipt?.initialPrompt).toBe("seed")
-    }).pipe(Effect.provide(testSqliteStorage)),
-  )
   it.live("rejects invalid session parent and active branch relationships", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
@@ -2590,14 +2542,14 @@ describe("InteractionStorage", () => {
       ])
     }).pipe(Effect.provide(interactionStorageLive)),
   )
-  it.live("a stored owner loads back, and a row stored without one still loads", () =>
+  it.live("a stored owner loads back, and an ask with no owning call loads with none", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
       const sessionId = SessionId.make("s-owner")
       const owned = { sessionId, branchId: BranchId.make("b-owned") }
-      const legacy = { sessionId, branchId: BranchId.make("b-legacy") }
+      const ownerless = { sessionId, branchId: BranchId.make("b-ownerless") }
       yield* ensureStorageParents(owned)
-      yield* ensureStorageParents(legacy)
+      yield* ensureStorageParents(ownerless)
       const owner = { toolCallId: ToolCallId.make("call-1"), occurrence: 2 }
       yield* is.persist({
         requestId: InteractionRequestId.make("req-owned"),
@@ -2608,17 +2560,17 @@ describe("InteractionStorage", () => {
         owner,
       })
       yield* is.persist({
-        requestId: InteractionRequestId.make("req-legacy"),
-        ...legacy,
+        requestId: InteractionRequestId.make("req-ownerless"),
+        ...ownerless,
         paramsJson: "{}",
         status: "pending",
         createdAt: 2,
       })
       const [ownedRow] = yield* is.listOpen(owned)
-      const [legacyRow] = yield* is.listOpen(legacy)
+      const [ownerlessRow] = yield* is.listOpen(ownerless)
       expect(ownedRow?.owner).toEqual(owner)
-      expect(legacyRow?.requestId).toBe(InteractionRequestId.make("req-legacy"))
-      expect(legacyRow?.owner).toBeUndefined()
+      expect(ownerlessRow?.requestId).toBe(InteractionRequestId.make("req-ownerless"))
+      expect(ownerlessRow?.owner).toBeUndefined()
     }).pipe(Effect.provide(interactionStorageLive)),
   )
 })

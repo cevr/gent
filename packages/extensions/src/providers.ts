@@ -973,8 +973,8 @@ export interface EffortCarrier {
  * of the same level (the default against that level named), the carrier keeps
  * the first run's top level.
  *
- * A run with no receipt (a step on another model, a step stored before
- * receipts, a forked branch), or one at a default the driver does not know,
+ * A run with no receipt (a step on another model, a forked branch), or one
+ * at a default the driver does not know,
  * takes the next known effort, else `current`. The last marker so always
  * equals `current`: a request whose history disagrees with the receipts (a
  * revert, a fork) gets no stale marker at its tail.

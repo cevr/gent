@@ -184,7 +184,7 @@ export const InteractionRequestRecord = Schema.Struct({
   decisionJson: Schema.optional(Schema.String),
   status: InteractionRequestStatus,
   createdAt: Schema.Finite,
-  /** Absent on a row stored before owners were recorded, or asked outside a step. */
+  /** Absent for an ask outside a tool call. */
   owner: Schema.optional(InteractionOwner),
 })
 export type InteractionRequestRecord = typeof InteractionRequestRecord.Type
@@ -381,7 +381,7 @@ type OpenPhase = "admitting" | "shown" | "closing" | "unsettled"
 /** The request in a branch's slot. */
 interface OpenRequest {
   readonly requestId: InteractionRequestId
-  /** None: a row stored before owners were recorded. The first call to ask takes its answer. */
+  /** None: an ask outside a tool call. The first ask of its question takes its answer. */
   readonly owner: Option.Option<InteractionOwner>
   /** The question asked; an answer goes only to an ask of the same question. */
   readonly paramsJson: string
@@ -870,7 +870,7 @@ export const makeInteractionService = (
           return parkBehind(current, branch, open, mine)
         }
         if (Option.isNone(open.owner) || mine) {
-          // A row stored before owners were recorded goes to the first ask of its question.
+          // A request with no owner goes to the first ask of its question.
           if (!sameQuestion) return drop(current, branch, open)
           const taken = putBranch(dropDecision(current, open.requestId), key, {
             ...branch,

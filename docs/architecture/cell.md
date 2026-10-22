@@ -135,8 +135,7 @@ worker finds each where the display reads (`shownToolImages` in
 `cell-value.ts`): a plain object or an array, own data properties only, at a
 depth and position the display shows, so the search runs no cell code. It
 sends each image's data fields on the `Evaluated` frame
-(`CellEvaluation.images`, additive and optional; a result stored before it
-decodes as it was). The host keeps those that decode as a `ToolImage`, with
+(`CellEvaluation.images`, absent on a result with no image). The host keeps those that decode as a `ToolImage`, with
 only the schema's fields, and stores them in the result, so the request
 projection sends them as it sends a native tool's image, and the blob store
 keeps their files; there is no second image path. An image the cell only
@@ -162,7 +161,7 @@ tool's optional `summary(input, output)` over wire values when the tool has one
 (read, write, edit, grep and bash do); otherwise, or when it throws, the head of
 the output. A failed call's summary is the head of its error text
 (`summarizeToolResult` in `domain/message.ts`), not of the JSON that carries
-it; rows stored before keep their clipped JSON, and the TUI still reads them. Recovery resolves each completed operation's recorded binding the
+it. Recovery resolves each completed operation's recorded binding the
 way a resume does; a binding that no longer resolves keeps the head of the
 output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
@@ -259,10 +258,9 @@ encoded size, a string longer than the budget is refused uncounted, and the
 exact size comes from `Buffer.byteLength` saved at load, so a 5 MB string or
 a 100 000-item array is omitted as `too-large` without being read to its end.
 A result's `bindings` names only the bindings its cell added or bound to
-another value (compared by `Object.is`), and `bindingCount` (additive,
-optional) counts the whole namespace: every result stays in the history, so a
-full list on each would grow with cells times bindings. A result stored before
-`bindingCount` lists every binding. A thrown value renders through the same
+another value (compared by `Object.is`), and `bindingCount` counts the whole
+namespace: every result stays in the history, so a full list on each would
+grow with cells times bindings. A thrown value renders through the same
 reader, one part at a time: its name and message, its detail (each inner
 `BuildMessage` of a split syntax error keeps its position), and its cause. A
 part that cannot be read gives a fixed text in its place and the other parts

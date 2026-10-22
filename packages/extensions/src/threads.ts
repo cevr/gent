@@ -1690,10 +1690,10 @@ const recordedOutcome = Effect.fn("Threads.recordedOutcome")(function* (round: R
   // the hook ran reads it from the error the turn ended on.
   return Option.map(end, ({ receipt, error, retryAt }): TurnOutcome => ({
     interrupted: receipt.interrupted === true,
-    streamFailed: receipt.streamFailed === true,
+    streamFailed: receipt.streamFailed,
     unanswered: receipt.unanswered === true,
     error,
-    retryAt: Option.filter(retryAt, () => receipt.streamFailed === true),
+    retryAt: Option.filter(retryAt, () => receipt.streamFailed),
     usage: usageOf(receiptTotal(receipt)),
   }))
 })

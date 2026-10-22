@@ -77,8 +77,7 @@ export const turnEnd = (target: TurnTarget) =>
   })
 
 /**
- * A child turn's bill. The cache counts and the cost came later: older rows
- * carry only the tokens. A zero cache count and an unpriced model are left out.
+ * A child turn's bill. A zero cache count and an unpriced model are left out.
  */
 export const ChildUsage = Schema.Struct({
   input: Schema.Finite,

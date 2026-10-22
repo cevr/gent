@@ -887,7 +887,7 @@ export const modelChangeNotice = (params: {
     },
   })
 
-/** The model a notice announced. Notices written before this detail existed announce nothing. */
+/** The model a model-change notice announced. Any other message announces nothing. */
 export const announcedModel = (message: Message): Option.Option<ModelId> => {
   if (message.metadata?.customType !== MODEL_CHANGE_MESSAGE_TYPE) return Option.none()
   const details = message.metadata.details
@@ -2481,15 +2481,10 @@ export const foldContextRent = (rent: ContextRent, event: AgentEvent): ContextRe
   const rate =
     (writeWeight(cacheWrites, event.cacheWritesByLifetime ?? []) * cacheWrites + uncached) /
     Math.max(written, 1)
-  const reply = Option.all([
-    Option.fromUndefinedOr(event.messageId),
-    Option.fromUndefinedOr(event.step),
-  ]).pipe(
-    Option.map(([messageId, step]) => ({
-      id: assistantMessageIdForTurn(messageId, step),
-      tokens: usage.outputTokens,
-    })),
-  )
+  const reply = Option.some({
+    id: assistantMessageIdForTurn(event.messageId, event.step),
+    tokens: usage.outputTokens,
+  })
   return settleCall(rent, { context: usage.inputTokens, read, written, rate, reply })
 }
 

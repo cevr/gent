@@ -689,23 +689,14 @@ const CellOutputSchema = Schema.Struct({
 })
 
 /**
- * The bindings line of a cell result. A result with `bindingCount` names the
- * bindings its cell added or rebound, then counts the whole namespace. A
- * result stored before the count existed lists the whole namespace, so it
- * reads as such. None when there is nothing to show.
+ * The bindings line of a cell result: the bindings its cell added or
+ * rebound, then the count of the whole namespace. None when there is nothing
+ * to show.
  */
 const cellBindingsLine = (value: typeof CellOutputSchema.Type) => {
   const names = value.bindings ?? []
   return Option.match(Option.fromUndefinedOr(value.bindingCount), {
-    onNone: () =>
-      Option.map(
-        Option.liftPredicate(names, (list) => list.length > 0),
-        (list) => ({
-          label: "bindings",
-          names: list.join(", "),
-          count: "",
-        }),
-      ),
+    onNone: () => Option.none(),
     onSome: (count) =>
       Option.map(
         Option.liftPredicate(count, (total) => total > 0),

@@ -407,6 +407,7 @@ describe("Session tools via model turn", () => {
 describe("session message header", () => {
   const from = {
     sessionId: SessionId.make("child-1"),
+    branchId: BranchId.make("child-branch"),
     relation: "child",
   } satisfies SessionMessageDetails["from"]
 

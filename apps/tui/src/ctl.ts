@@ -225,7 +225,7 @@ const TEXT_CLIP = 120
 
 const turnFlags = (event: typeof AgentEvent.cases.TurnCompleted.Type): ReadonlyArray<string> => [
   ...Option.toArray(Option.liftPredicate("interrupted", () => event.interrupted === true)),
-  ...Option.toArray(Option.liftPredicate("streamFailed", () => event.streamFailed === true)),
+  ...Option.toArray(Option.liftPredicate("streamFailed", () => event.streamFailed)),
   ...Option.toArray(Option.liftPredicate("unanswered", () => event.unanswered === true)),
 ]
 
@@ -238,18 +238,12 @@ const eventFields = (event: AgentEvent): Omit<CompactEvent, "id" | "tag"> =>
       message: message.id,
       text: clip(messagePartsText(message.parts), TEXT_CLIP),
     }),
-    StreamStarted: (e) =>
-      Object.fromEntries(
-        Option.toArray(Option.map(Option.fromUndefinedOr(e.step), (step) => ["step", step])),
-      ),
+    StreamStarted: ({ step }) => ({ step }),
     StreamChunk: ({ chunk }) => ({ n: 1, text: chunk }),
     ModelRouted: ({ model }) => ({ model }),
     CredentialAssigned: () => ({}),
     StreamEnded: (e) => ({
-      ...Option.match(Option.fromUndefinedOr(e.step), {
-        onNone: () => ({}),
-        onSome: (step) => ({ step }),
-      }),
+      step: e.step,
       ...Option.match(Option.fromUndefinedOr(e.outcome), {
         onNone: () => ({}),
         onSome: (outcome) => ({ outcome }),

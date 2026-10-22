@@ -3826,6 +3826,8 @@ describe("context rent", () => {
       availableInputTokens: 2_000,
       contextLimitTokens: 4_000,
       omittedMessages: 2,
+      reservedOutputTokens: 0,
+      renters: [],
       keptFromMessageId: MessageId.make(keptFrom),
       compacted: false,
     })

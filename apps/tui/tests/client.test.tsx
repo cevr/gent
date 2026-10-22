@@ -74,6 +74,8 @@ const makeMessage = (role: "user" | "assistant") =>
 describe("reduceAgentLifecycle", () => {
   test("a stream start says a turn runs", () => {
     const event = StreamStarted.make({
+      messageId: MessageId.make("msg"),
+      step: 1,
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
     })
@@ -84,6 +86,8 @@ describe("reduceAgentLifecycle", () => {
 
   test("the turn runs until TurnCompleted", () => {
     const streamEnded = StreamEnded.make({
+      messageId: MessageId.make("msg"),
+      step: 1,
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
     })
@@ -91,6 +95,7 @@ describe("reduceAgentLifecycle", () => {
       message: makeMessage("assistant"),
     })
     const turnCompleted = TurnCompleted.make({
+      streamFailed: false,
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
       durationMs: 42,
@@ -228,6 +233,8 @@ describe("ClientProvider contract", () => {
           id: EventId.make(id),
           createdAt: id,
           event: AgentEvent.cases.StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
             sessionId: SessionId.make("late-session"),
             branchId: BranchId.make("late-branch"),
           }),
@@ -282,6 +289,7 @@ const busyContext = {
   contextLimitTokens: 100_000,
   omittedMessages: 0,
   compactions: 1,
+  renters: [],
 }
 
 const snapshotOf = (
@@ -495,6 +503,8 @@ describe("ClientProvider session metrics", () => {
           availableInputTokens: 5_000,
           contextLimitTokens: 100_000,
           omittedMessages: 0,
+          reservedOutputTokens: 0,
+          renters: [],
           compacted: false,
         }),
       )
@@ -507,6 +517,8 @@ describe("ClientProvider session metrics", () => {
       live(
         11,
         AgentEvent.cases.StreamEnded.make({
+          messageId: MessageId.make("msg"),
+          step: 1,
           sessionId: FIRST.sessionId,
           branchId: FIRST.branchId,
           usage: { inputTokens: 96_000, outputTokens: 10 },
@@ -569,6 +581,8 @@ describe("ClientProvider session metrics", () => {
         live(
           id,
           AgentEvent.cases.StreamEnded.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
             sessionId: FIRST.sessionId,
             branchId: FIRST.branchId,
           }),
@@ -578,6 +592,7 @@ describe("ClientProvider session metrics", () => {
       live(
         12,
         AgentEvent.cases.TurnCompleted.make({
+          streamFailed: false,
           sessionId: FIRST.sessionId,
           branchId: FIRST.branchId,
           durationMs: 10,
@@ -1672,7 +1687,12 @@ describe("ClientProvider errors", () => {
         client.applySessionEvent(
           makeEnvelope(
             1,
-            StreamStarted.make({ sessionId: FIRST.sessionId, branchId: FIRST.branchId }),
+            StreamStarted.make({
+              messageId: MessageId.make("msg"),
+              step: 1,
+              sessionId: FIRST.sessionId,
+              branchId: FIRST.branchId,
+            }),
           ),
         )
         expect(client.isStreaming()).toBe(true)
@@ -1708,7 +1728,12 @@ describe("ClientProvider errors", () => {
       client.applySessionEvent(
         makeEnvelope(
           1,
-          StreamStarted.make({ sessionId: SECOND.sessionId, branchId: SECOND.branchId }),
+          StreamStarted.make({
+            messageId: MessageId.make("msg"),
+            step: 1,
+            sessionId: SECOND.sessionId,
+            branchId: SECOND.branchId,
+          }),
         ),
       )
       client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
@@ -1796,6 +1821,7 @@ describe("ClientProvider errors", () => {
         makeEnvelope(
           1,
           TurnCompleted.make({
+            streamFailed: false,
             sessionId: FIRST.sessionId,
             branchId: FIRST.branchId,
             durationMs: 1,
@@ -1830,6 +1856,7 @@ describe("ClientProvider errors", () => {
         makeEnvelope(
           1,
           TurnCompleted.make({
+            streamFailed: false,
             sessionId: FIRST.sessionId,
             branchId: FIRST.branchId,
             durationMs: 60,
