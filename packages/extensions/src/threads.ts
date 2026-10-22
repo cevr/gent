@@ -2175,12 +2175,25 @@ type StoredAdmission = NonNullable<StoredSession["admission"]>
  * narrow its tools, keeping `thread.reply`. `account` pins the run to that
  * credential (`RunSpec.credentialSlot`); a named agent runs on none unless
  * the call names one, and a thread with no agent keeps the starter's pin.
- * A handoff keeps its parent's admission, so the pin outlives it.
+ * A named agent inherits the starter's model (`RunSpec.inheritedModel`),
+ * which it runs when neither it nor the call names one: a headless
+ * `--model` run sets only the starter's. A handoff keeps its parent's
+ * admission, so the pin and the inherited model outlive it.
  */
 const threadAdmission = (starter: StoredSession, input: ThreadStartInput): StoredAdmission => {
   const base: StoredAdmission = Option.match(Option.fromUndefinedOr(input.agent), {
     onNone: () => ({ ...starter.admission }),
-    onSome: (agent) => ({ agent }),
+    onSome: (agent) => ({
+      agent,
+      ...omitUndefined({
+        runSpec: Option.getOrUndefined(
+          Option.map(
+            Option.fromUndefinedOr(starter.modelId ?? starter.admission?.runSpec?.inheritedModel),
+            (inheritedModel) => ({ inheritedModel }),
+          ),
+        ),
+      }),
+    }),
   })
   const overrides = base.runSpec?.overrides
   const addenda = [overrides?.systemPromptAddendum, input.instructions].filter(Predicate.isString)
@@ -2375,7 +2388,8 @@ const admitRound = Effect.fn("Threads.admitRound")(function* <E, R>(
  * The model and reasoning a thread's session keeps. A session's own model
  * wins over its agent's, so a named agent gets only what the call names:
  * otherwise the agent's own (its definition, reshaped by config
- * `agents.<name>`), else config `model`. A thread with no agent is its
+ * `agents.<name>`), else the starter's (`threadAdmission`), else config
+ * `model`. A thread with no agent is its
  * starter's run, model and reasoning included.
  */
 const threadRoute = (starter: StoredSession, input: ThreadStartInput) =>

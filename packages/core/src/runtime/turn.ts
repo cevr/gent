@@ -1659,8 +1659,9 @@ interface SessionRoute {
  * dispatches through the agent's own driver; when it names none, through
  * config `driverOverrides[name]`; else through the model id's provider. The
  * session's own model and reasoning win over the agent's. An agent that
- * names no model runs the user's (config `model`, which the first `/model`
- * pick writes), so a child runs the model its user chose. With none of them
+ * names no model runs the one its starter chose (the admission's
+ * `inheritedModel`), else the user's (config `model`, which the first
+ * `/model` pick writes), so a child runs the model its user chose. With none of them
  * the route has no model, and a send is refused (`NoModelError`). The turn, the snapshot footer and
  * the auth gate all read it here, so a child session is its agent everywhere
  * and the three cannot disagree on a model or driver.
@@ -1685,6 +1686,11 @@ export const resolveSessionRoute = (params: {
   })
   const modelId = Option.fromUndefinedOr(params.session.modelId).pipe(
     Option.orElse(() => Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.model))),
+    Option.orElse(() =>
+      Option.flatMap(params.admission, (admission) =>
+        Option.fromUndefinedOr(admission.runSpec?.inheritedModel),
+      ),
+    ),
     Option.orElse(() => Option.fromUndefinedOr(params.config.model)),
   )
   const defaultReasoningLevel = Option.flatMap(definition, (agent) =>

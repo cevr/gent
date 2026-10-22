@@ -1098,8 +1098,9 @@ export const effectiveModelDriver = (
 // Per-run dispatch configuration.
 //
 // Separates per-run concerns from agent identity: `overrides` reshape the
-// agent's model, tools and prompt for every turn of the session, and
-// `credentialSlot` names who pays for them.
+// agent's model, tools and prompt for every turn of the session,
+// `credentialSlot` names who pays for them, and `inheritedModel` is the
+// model its starter ran.
 //
 // Every child is a durable session driven by the same loop as its parent.
 
@@ -1113,6 +1114,13 @@ export const effectiveModelDriver = (
 export const RunSpecSchema = Schema.Struct({
   overrides: Schema.optional(RunOverrides),
   credentialSlot: Schema.optional(CredentialSlot),
+  /**
+   * The model the run's starter chose (its session's own, as `--model` or
+   * `/model` set it). A run whose session and agent name no model runs it
+   * before config `model`, so a worker started from a headless `--model`
+   * run needs no config model.
+   */
+  inheritedModel: Schema.optional(ModelId),
 })
 
 // Model-call budget

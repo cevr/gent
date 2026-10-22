@@ -61,7 +61,7 @@ import {
   UserConfig,
   waitFor,
 } from "@gent/core/test-utils"
-import { BranchId, type EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
+import { BranchId, type EventEnvelope, ModelId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { AgentsExtension } from "../src/agents.js"
 import { SESSION_TOOLS_EXTENSION_ID, SessionToolsExtension } from "../src/session-tools.js"
 import {
@@ -1513,6 +1513,8 @@ const roundHarness = (
     readonly extensions?: ReadonlyArray<(typeof e2ePreset.extensionInputs)[number]>
     /** The user's own `~/.gent/config.json`. */
     readonly userConfig?: string
+    /** The config the server reads, in place of the test model's. */
+    readonly config?: UserConfig
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -1532,6 +1534,13 @@ const roundHarness = (
       providerLayer: workerModels(options.hang),
       cwd,
       home,
+      ...omitUndefined({
+        configServiceLayer: Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(options.config), (config) =>
+            ConfigService.Test(config),
+          ),
+        ),
+      }),
     })
   })
 
@@ -2263,6 +2272,34 @@ describe("thread round ownership", () => {
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.live(
+    "a worker thread that names no model runs on its starter's when neither its agent nor the config names one",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // A headless run: `--model` sets the starter session's model, and the config names none.
+          const { client } = yield* roundHarness({ config: new UserConfig({}) })
+          const created = yield* client.session.create({ modelId: ModelId.make("test/impl-model") })
+          const starter = { sessionId: created.sessionId, branchId: created.branchId }
+          const [started] = yield* call(client, starter, [
+            [
+              "thread.start",
+              "start-inherit",
+              { name: "impl", agent: "worker", task: "ECHO run", notify: "starter" },
+            ],
+          ])
+          expect(started?.failed).toBe(false)
+          const impl = decodeThread(started?.result)
+          const thread = yield* client.session.get({ sessionId: impl.sessionId })
+          expect(thread?.resolvedModelId).toBe(ModelId.make("test/impl-model"))
+          const snapshot = yield* waitForWakes(client, starter, 1)
+          expect(wakeTexts(snapshot.messages)[0]).not.toContain("No model is set")
+          expect(wakeTexts(snapshot.messages)[0]).toContain("run")
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
   )
 
   it.effect(

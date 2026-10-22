@@ -76,8 +76,11 @@
   starter (so spawn depth applies) with its own key and fresh context, or the
   starter's current context window with `fork` (the create's
   `historyBranchId`). A named agent is that agent wholly, with its own model
-  and effort from its definition and config; with none, the thread runs the
-  starter's agent and admission, model and reasoning. `model` and `effort`
+  and effort from its definition and config; an agent that names no model
+  runs the starter's session model (`RunSpec.inheritedModel`, so a worker
+  from a headless `--model` run needs no config model), else config
+  `model`. With no agent, the thread runs the starter's agent and
+  admission, model and reasoning. `model` and `effort`
   win over either; the run spec holds at most 32 model attempts;
   `instructions` add to the run's `systemPromptAddendum` and `tools` narrow
   it, keeping `thread.reply`. `account` (a credential label from /auth) pins
