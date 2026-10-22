@@ -146,7 +146,7 @@ A machine avoids each of them:
 - **Tools**: `machine.define`, `machine.start({ machine, input })` (returns `{ run }` at admission), `machine.answer`, `machine.status({ run })`, `machine.list`, `machine.stop`. The owner is woken only by an `ask`, a run reaching `final`, or a run failing.
 - **Status without asking.** The owner asked for status 13 times in one bible-tools run, and the Claude Code orchestrate runs got a status mod for the same reason (dotfiles `claude/mods/status`: the pool and each run's active units on the status line). gent shows it as data, not a model turn: a TUI band with the pool's free lanes (P5b) and each active run's state, round and age, from `machine.list`; and a control CLI, `gent ctl status|runs|stop|answer`, over the same RPC, so a script or another host reads a run with no session open.
 - **A quota death is a wait.** A worker that dies at a usage limit gives no verdict (the skill's `stuck(quota)`). The run keeps its state and moves to a wait until the account's reset (`retryAt` from P5b), then reruns the step fresh. It never counts toward `maxVisits`.
-- **Natural `await` code**: deferred. If the owner wants it later, it compiles to these persisted states, since a snapshot cannot hold an async stack (`cell-value.ts:845`).
+- **Natural `await` code**: rejected at stage 5 (2026-10-22). The shipped `orchestrate` machine, the hardest loop gent runs, fits the data states with no gap, so a compiler from `await` code to states has no consumer. A machine as data is a fold over its `machine_steps` log, which a snapshot of an async stack cannot be (`cell-value.ts:845`).
 
 ### P4. Named permits
 
