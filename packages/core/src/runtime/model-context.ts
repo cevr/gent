@@ -16,12 +16,14 @@ import {
 import * as Prompt from "effect/ai/Prompt"
 import {
   assistantMessageIdForTurn,
+  copyMessageToBranch,
   encodeToolOutput,
   headTailChars,
   isRuntimeUserMessage,
   Message,
   MessageRole,
   messageWithParts,
+  partToText,
   type RuntimeUserMessageType,
 } from "../domain/message.js"
 import {
@@ -1017,6 +1019,168 @@ export const messagesInCurrentWindow = (
   return messages
 }
 
+/** Custom type of the durable line that stubs a window's older tool results. */
+export const CONTEXT_PRUNE_MESSAGE_TYPE = "context-prune" satisfies RuntimeUserMessageType
+
+const ContextPruneDetails = Schema.TaggedStruct(CONTEXT_PRUNE_MESSAGE_TYPE, {
+  /** Every tool result in a message before this one reaches the model as a stub. */
+  stubResultsBefore: MessageId,
+})
+const isPruneDetails = Schema.is(ContextPruneDetails)
+
+const pruneLineId = (branchId: BranchId, cutoff: MessageId) =>
+  MessageId.make(`context-prune:${branchId}:${cutoff}`)
+
+/**
+ * The line a pruned handoff writes. It opens no window: the window and its
+ * head stay, and the model reads each tool result stored before the cutoff
+ * as a stub (`modelVisibleWindow`). The id names the branch and the cutoff,
+ * so a later prune with a later cutoff writes a line of its own.
+ */
+export const pruneLineMessage = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly stubResultsBefore: MessageId
+  readonly notice: string
+  readonly createdAt: Date
+}) =>
+  Message.cases.regular.make({
+    id: pruneLineId(params.branchId, params.stubResultsBefore),
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: params.notice })],
+    metadata: {
+      customType: CONTEXT_PRUNE_MESSAGE_TYPE,
+      details: ContextPruneDetails.make({ stubResultsBefore: params.stubResultsBefore }),
+    },
+    createdAt: params.createdAt,
+  })
+
+/** The cutoff `message` sets, when it is a prune line the runtime wrote (`pruneLineMessage`). */
+export const pruneCutoffOf = (message: Message): Option.Option<MessageId> => {
+  if (message.metadata?.customType !== CONTEXT_PRUNE_MESSAGE_TYPE) return Option.none()
+  const details = message.metadata.details
+  if (!isPruneDetails(details)) return Option.none()
+  return Option.some(details.stubResultsBefore)
+}
+
+/**
+ * `messages` copied to another branch, the copy of `messages[i]` stored as
+ * `ids[i]`. Results stay whole: the copy reads them by call id. A prune
+ * line's cutoff moves to the copy of its row, so the copy stubs what the
+ * source stubs; a line whose row was not copied is left out, since it would
+ * stub nothing.
+ */
+export const copyMessagesToBranch = (
+  messages: ReadonlyArray<Message>,
+  ids: ReadonlyArray<MessageId>,
+  target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+): ReadonlyArray<Message> => {
+  const copiedAs = new Map<MessageId, MessageId>()
+  const copies: Array<Message> = []
+  for (const [index, message] of messages.entries()) {
+    const id = ids[index]
+    if (Predicate.isUndefined(id)) continue
+    copiedAs.set(message.id, id)
+    const cutoff = pruneCutoffOf(message)
+    if (Option.isNone(cutoff)) {
+      copies.push(copyMessageToBranch(message, { ...target, id }))
+      continue
+    }
+    const movedCutoff = copiedAs.get(cutoff.value)
+    if (Predicate.isUndefined(movedCutoff)) continue
+    copies.push(
+      pruneLineMessage({
+        ...target,
+        stubResultsBefore: movedCutoff,
+        notice: message.parts.map(partToText).join(""),
+        createdAt: message.createdAt,
+      }),
+    )
+  }
+  return copies
+}
+
+/** Whether `message` rewrites the window's prefix: a window marker or a prune line. */
+const rewritesWindow = (message: Message): boolean =>
+  Option.isSome(contextWindowOf(message)) || Option.isSome(pruneCutoffOf(message))
+
+/** Each part's stub, by the part object, so the stub is built once. */
+const stubbedToolResults = new WeakMap<Prompt.ToolResultPart, Prompt.ToolResultPart>()
+
+/** The stubs built, so a stub is not stubbed again. */
+const toolResultStubs = new WeakSet<Prompt.ToolResultPart>()
+
+/**
+ * A tool result as the model reads it behind a prune line: the call id, the
+ * tool, the failure flag and the provider options stay, the value becomes
+ * its size and how to page it. A result that holds images keeps its value:
+ * `context.read` returns no pixels, so a stubbed image could not come back.
+ */
+const stubToolResult = (part: Prompt.ToolResultPart): Prompt.ToolResultPart => {
+  if (toolResultStubs.has(part)) return part
+  const known = stubbedToolResults.get(part)
+  if (Predicate.isNotUndefined(known)) return known
+  let stub = part
+  if (toolResultImages(part).length === 0) {
+    stub = Prompt.toolResultPart({
+      id: part.id,
+      name: part.name,
+      isFailure: part.isFailure,
+      providerExecuted: part.providerExecuted,
+      options: part.options,
+      result: {
+        stubbed: true,
+        totalChars: Option.getOrElse(
+          Option.map(encodeToolResultJson(part.result), (encoded) => encoded.length),
+          () => 0,
+        ),
+        read: `context.read("${part.id}", { offset, limit })`,
+      },
+    })
+  }
+  stubbedToolResults.set(part, stub)
+  toolResultStubs.add(stub)
+  return stub
+}
+
+/**
+ * `messages` with each tool result stored before `cutoff` stubbed; a cutoff
+ * not among them stubs nothing. A message whose results are all stubs
+ * already, or hold images, comes back as the same object.
+ */
+export const stubResultsBefore = (
+  messages: ReadonlyArray<Message>,
+  cutoff: MessageId,
+): ReadonlyArray<Message> => {
+  const at = messages.findIndex((message) => message.id === cutoff)
+  if (at < 0) return messages
+  return messages.map((message, index) => {
+    if (index >= at) return message
+    const parts = message.parts.map((part) => {
+      if (part.type !== "tool-result") return part
+      return stubToolResult(part)
+    })
+    if (parts.every((part, partIndex) => part === message.parts[partIndex])) return message
+    return messageWithParts(message, parts)
+  })
+}
+
+/**
+ * The current window as the model reads it: `messagesInCurrentWindow`, with
+ * the newest prune line of the window applied. Storage keeps every result
+ * whole, so `context.read` pages a stubbed one.
+ */
+export const modelVisibleWindow = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
+  const window = messagesInCurrentWindow(messages)
+  const cutoff = Option.fromUndefinedOr(
+    window.findLast((message) => Option.isSome(pruneCutoffOf(message))),
+  ).pipe(Option.flatMap(pruneCutoffOf))
+  if (Option.isNone(cutoff)) return window
+  return stubResultsBefore(window, cutoff.value)
+}
+
 /**
  * Drops every tool call that has no result in the run, every result whose
  * call is not in the run, and any message left with no parts. A copy taken
@@ -1222,8 +1386,9 @@ export interface StepMeasure {
 
 /**
  * The measure, when the window it measured is still the current one: its
- * reply is stored after every window marker. A marker stored later replaced
- * the history the measure counted, so the estimate falls back to chars/4.
+ * reply is stored after every window marker and prune line. One stored later
+ * replaced or stubbed the history the measure counted, so the estimate falls
+ * back to chars/4.
  */
 const measureInCurrentWindow = (
   messages: ReadonlyArray<Message>,
@@ -1232,7 +1397,7 @@ const measureInCurrentWindow = (
   Option.filter(measure, (value) => {
     const at = messages.findIndex((message) => message.id === value.replyId)
     if (at < 0) return false
-    return messages.slice(at + 1).every((message) => Option.isNone(contextWindowOf(message)))
+    return messages.slice(at + 1).every((message) => !rewritesWindow(message))
   })
 
 /** Schema-backed failures found before a prompt projection is returned. */
@@ -1850,7 +2015,7 @@ export const estimateHistoryTokens = (
   measure: Option.Option<StepMeasure>,
   model: Pick<Model, "imageCost">,
 ): number => {
-  const window = messagesInCurrentWindow(messages)
+  const window = modelVisibleWindow(messages)
   const imageCost = Option.fromUndefinedOr(model.imageCost)
   const units = measuredUnits(window, measureInCurrentWindow(window, measure), imageCost)
   if (Result.isFailure(units)) return estimateTokens(window, imageCost)
@@ -1950,13 +2115,43 @@ class CompactionStopped extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("CompactionStopped", {}) {}
 
-/** What the handoff marker carries: the notice the model reads, and the receipt of producing it. */
-export const CompactionSummary = Schema.Struct({
-  notice: Schema.NonEmptyString,
-  modelId: ModelId,
-  usage: Schema.optional(UsageSchema),
+/**
+ * What a compactor gives the loop. `Summarized`: the notice the handoff
+ * marker carries, and the receipt of producing it. `Pruned`: the window stays,
+ * a prune line (`pruneLineMessage`) carries the notice, and the model reads
+ * each tool result stored before `stubResultsBefore` as a stub; it costs no
+ * model call, so it carries no receipt.
+ */
+export const CompactionOutcome = Schema.TaggedUnion({
+  Summarized: {
+    notice: Schema.NonEmptyString,
+    modelId: ModelId,
+    usage: Schema.optional(UsageSchema),
+  },
+  Pruned: {
+    notice: Schema.NonEmptyString,
+    stubResultsBefore: MessageId,
+  },
 })
-export type CompactionSummary = typeof CompactionSummary.Type
+export type CompactionOutcome = typeof CompactionOutcome.Type
+type CompactionSummary = typeof CompactionOutcome.cases.Summarized.Type
+
+/**
+ * Why the loop hands the window off. `Requested`: the model asked
+ * (`context.compact`). `Refused`: the provider refused the last request as
+ * too long. `Overflow`: the estimate passes the model's budget.
+ * `RoleWindow`: it passes the role's window at a step where that binds.
+ * `Cold`: a turn starts on a lapsed cache and a handoff pays
+ * (`coldHandoffPays`).
+ */
+export const CompactionTrigger = Schema.Literals([
+  "Requested",
+  "Refused",
+  "Overflow",
+  "RoleWindow",
+  "Cold",
+])
+export type CompactionTrigger = typeof CompactionTrigger.Type
 
 export interface CompactionRequest {
   readonly modelId: ModelId
@@ -1976,6 +2171,17 @@ export interface CompactionRequest {
   readonly budget: ModelContextBudget
   /** What the model asked the summary to focus on, when it asked. */
   readonly instructions?: string
+  readonly trigger: CompactionTrigger
+  /**
+   * The message tokens (`estimateTokens`) the window, `history` then `kept`,
+   * may hold after a handoff that keeps it: the model's message budget on
+   * `Overflow`, the role window's on `RoleWindow`, and on `Cold` the window
+   * less the share of its history a handoff must save (`coldHandoffPays`).
+   * None on `Requested` and `Refused`: those want the history gone.
+   */
+  readonly targetTokens: Option.Option<number>
+  /** The projection's estimate of `messages` in tokens, raised by the window's last measure. */
+  readonly estimateTokens: (messages: ReadonlyArray<Message>) => number
   /**
    * The admitted model for a summary bounded to `maxOutputTokens`, on the
    * credential the turn's order chooses now. A compactor that fails with
@@ -1991,7 +2197,7 @@ interface ModelContextCompactorService {
   /** Runs with the compacted branch's `ExtensionContext`. */
   readonly compact: (
     request: CompactionRequest,
-  ) => Effect.Effect<CompactionSummary, ModelCompactionError, Scope.Scope | ExtensionContext>
+  ) => Effect.Effect<CompactionOutcome, ModelCompactionError, Scope.Scope | ExtensionContext>
 }
 
 /** Installed by an extension as a process resource; absent when nothing summarises. */
@@ -2082,8 +2288,8 @@ export const planWindow = (step: {
 }
 
 type CompactionRun = <R>(
-  compact: Effect.Effect<CompactionSummary, ModelCompactionError, R>,
-) => Effect.Effect<CompactionSummary, ModelCompactionError, R>
+  compact: Effect.Effect<CompactionOutcome, ModelCompactionError, R>,
+) => Effect.Effect<CompactionOutcome, ModelCompactionError, R>
 
 /**
  * How a projection runs each compactor of the chain: the turn's credential
@@ -2454,8 +2660,9 @@ export const foldContextRent = (rent: ContextRent, event: AgentEvent): ContextRe
   if (event._tag === "MessageReceived") {
     // The model is never sent a hidden message (`runTurn`).
     if (event.message.metadata?.hidden === true) return rent
-    // What came before the marker is summarized or dropped: the marker holds it.
-    if (Option.isSome(contextWindowOf(event.message)))
+    // What came before the marker is summarized or dropped: the marker holds
+    // it. A prune line rewrites the prefix as a marker does.
+    if (rewritesWindow(event.message))
       return { ...rent, pending: [], marker: Option.some(event.message.id), window: [] }
     const added = pendingOf(event.message, rent).filter(
       (item) => item.chars > 0 || Option.isSome(item.tokens),
@@ -2624,7 +2831,7 @@ export const projectCurrentWindow = (params: {
   readonly measure: Option.Option<StepMeasure>
 }): Effect.Effect<ModelContextProjection, ModelContextProjectionError> => {
   const projection = projectModelContext(
-    messagesInCurrentWindow(params.messages),
+    modelVisibleWindow(params.messages),
     params.budget,
     measureInCurrentWindow(params.messages, params.measure),
   )
@@ -2762,6 +2969,80 @@ const cacheMissed = (params: {
   params.accountMoved ||
   (params.turnStart && params.nowMillis - params.cache.lastCallAtMillis >= params.cache.ttlMs)
 
+/** Why the loop hands off, the first that holds: the model asked, the provider refused, the window overflows, the role window binds, else a cold start. */
+const compactionTriggerOf = (facts: {
+  readonly requested: boolean
+  readonly refused: boolean
+  readonly overflowing: boolean
+  readonly roleWindow: boolean
+}): CompactionTrigger => {
+  if (facts.requested) return "Requested"
+  if (facts.refused) return "Refused"
+  if (facts.overflowing) return "Overflow"
+  if (facts.roleWindow) return "RoleWindow"
+  return "Cold"
+}
+
+/**
+ * The projection's estimate of a copy of `window`: chars/4 raised by the
+ * ratio the window's last measure sets, so a stubbed copy is priced as the
+ * projection will price it.
+ */
+const measuredEstimate = (
+  window: ReadonlyArray<Message>,
+  measure: Option.Option<StepMeasure>,
+  imageCost: Option.Option<ImageCost>,
+) => {
+  const plainTokens = estimateTokens(window, imageCost)
+  const measuredTokens = Result.match(measuredUnits(window, measure, imageCost), {
+    onFailure: () => plainTokens,
+    onSuccess: (units) => units.reduce((sum, unit) => sum + unit.estimatedTokens, 0),
+  })
+  const ratio = Math.max(1, measuredTokens / Math.max(1, plainTokens))
+  return (messages: ReadonlyArray<Message>) =>
+    Math.ceil(estimateTokens(messages, imageCost) * ratio)
+}
+
+/** The message tokens a kept window may hold for `trigger` (`CompactionRequest.targetTokens`). */
+const compactionTarget = (params: {
+  readonly trigger: CompactionTrigger
+  readonly budget: ModelContextBudget
+  readonly roleWindow: Option.Option<number>
+  readonly windowTokens: number
+  /** The history a handoff at the anchor replaces, when the window projects. */
+  readonly historyTokens: Option.Option<number>
+}): Option.Option<number> => {
+  if (params.trigger === "Overflow") return Option.some(messageBudget(params.budget))
+  if (params.trigger === "RoleWindow")
+    return Option.map(params.roleWindow, (tokens) =>
+      messageBudget({ ...params.budget, contextLimitTokens: tokens }),
+    )
+  if (params.trigger === "Cold")
+    return Option.map(params.historyTokens, (history) =>
+      Math.max(0, params.windowTokens - Math.ceil(COLD_HANDOFF_MARGIN * history)),
+    )
+  return Option.none()
+}
+
+/**
+ * Whether `outcome` changes what the model reads. A summary always does. A
+ * prune must move the cutoff inside the window; one that names a row outside
+ * it, or the cutoff a stored line already set, changes nothing.
+ */
+const outcomeChangesWindow = (
+  outcome: CompactionOutcome,
+  window: ReadonlyArray<Message>,
+  stored: ReadonlyArray<Message>,
+  branchId: BranchId,
+): boolean => {
+  if (outcome._tag === "Summarized") return true
+  const line = pruneLineId(branchId, outcome.stubResultsBefore)
+  return (
+    window.some((message) => message.id === outcome.stubResultsBefore) &&
+    !stored.some((message) => message.id === line)
+  )
+}
+
 /**
  * The window the model sees this step. A fresh window puts the issuer's notice
  * at the head; a handoff moves the history before the newest user message
@@ -2848,7 +3129,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     durableMessages = [...durableMessages, marker]
   }
 
-  const window = messagesInCurrentWindow(durableMessages)
+  const window = modelVisibleWindow(durableMessages)
   const measure = measureInCurrentWindow(durableMessages, params.measure)
   const fit = yield* Effect.result(
     projectCurrentWindow({
@@ -3019,6 +3300,25 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         return new ModelCompactionError({ modelId: error.modelId, reason: error.reason })
       }),
     )
+  // The facts a compactor needs to keep the window instead of summarizing
+  // it: why it hands off, and the size the kept window must get under.
+  const trigger = compactionTriggerOf({
+    requested,
+    refused: params.overflowed,
+    overflowing,
+    roleWindow: Option.isSome(roleWindow),
+  })
+  const estimate = measuredEstimate(window, measure, imageCostOf(params.budget))
+  const targetTokens = compactionTarget({
+    trigger,
+    budget: params.budget,
+    roleWindow,
+    windowTokens: estimate(window),
+    historyTokens: Result.match(fit, {
+      onFailure: () => Option.none<number>(),
+      onSuccess: (plain) => Option.some(plain.historyTokens),
+    }),
+  })
   const compacted = run(
     compactor.value.compact({
       modelId: params.modelId,
@@ -3029,9 +3329,21 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
       kept,
       budget: params.budget,
       instructions: Option.getOrUndefined(compactionInstructions(params.directive)),
+      trigger,
+      targetTokens,
+      estimateTokens: estimate,
       summaryModel: params.summaryModel,
     }),
-  ).pipe(Effect.provideService(CompactionAttempt, { run }), Effect.result)
+  ).pipe(
+    // A prune must move the cutoff inside the window; one that names a row
+    // outside it, or the cutoff a stored line already set, changes nothing.
+    Effect.filterOrFail(
+      (outcome) => outcomeChangesWindow(outcome, window, durableMessages, params.branchId),
+      () => new ModelCompactionError({ modelId: params.modelId, reason: "PruneChangedNothing" }),
+    ),
+    Effect.provideService(CompactionAttempt, { run }),
+    Effect.result,
+  )
   // A stop ends the compaction where it is: a backoff, a summary stream, or
   // the next compactor of the chain. A compaction that ends after the stop
   // stopped too, so its refusal never reads as a reason to truncate.
@@ -3040,7 +3352,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     Deferred.await(params.stop).pipe(Effect.andThen(Effect.fail(new CompactionStopped()))),
   )
   if (yield* Deferred.isDone(params.stop)) return yield* new CompactionStopped()
-  const summary = yield* Result.match(result, {
+  const outcome = yield* Result.match(result, {
     onSuccess: Effect.succeedSome,
     onFailure: (error) =>
       // Every compactor of the chain refused. A summary that cannot be
@@ -3063,9 +3375,33 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
             notice: true,
           }),
         )
-        return Option.none<CompactionSummary>()
+        return Option.none<CompactionOutcome>()
       }),
   })
+  const pruned = Option.filter(
+    outcome,
+    (value): value is typeof CompactionOutcome.cases.Pruned.Type => value._tag === "Pruned",
+  )
+  if (Option.isSome(pruned)) {
+    const line = yield* params.persist(
+      pruneLineMessage({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        stubResultsBefore: pruned.value.stubResultsBefore,
+        notice: pruned.value.notice,
+        createdAt: now,
+      }),
+    )
+    return {
+      durableMessages: [...durableMessages, line],
+      compacted: true,
+      summary: Option.none(),
+    } satisfies WindowProjection
+  }
+  const summary = Option.filter(
+    outcome,
+    (value): value is CompactionSummary => value._tag === "Summarized",
+  )
   const handoff = Option.all([summary, anchor]).pipe(
     Option.flatMap(([value, anchorMessage]) =>
       summarizedRange(history, value).pipe(

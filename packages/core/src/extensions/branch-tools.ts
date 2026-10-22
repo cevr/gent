@@ -67,11 +67,16 @@ export {
   type CompactionRequest,
   COMPACTION_SUMMARY_INPUT_TOKENS,
   COMPACTION_SUMMARY_OUTPUT_TOKENS,
-  CompactionSummary,
+  CompactionOutcome,
+  type CompactionTrigger,
   ModelCompactionError,
   ModelContextCompactor,
 } from "../runtime/model-context.js"
-export { estimateTextTokens, ModelContextBudget } from "../runtime/model-context.js"
+export {
+  estimateTextTokens,
+  ModelContextBudget,
+  stubResultsBefore,
+} from "../runtime/model-context.js"
 
 // Setting the window each role compacts at.
 export { ContextRole, ModelContextWindowPolicy, planWindow } from "../runtime/model-context.js"

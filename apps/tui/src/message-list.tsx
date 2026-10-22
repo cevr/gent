@@ -111,6 +111,7 @@ import {
   StatusLabelColor,
 } from "./extensions/client-facets"
 import {
+  CONTEXT_PRUNE_MESSAGE_TYPE,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
   lineCount,
@@ -593,6 +594,9 @@ export const isMessageItem = Predicate.or(
 const runtimeRows = {
   [CONTEXT_WINDOW_MESSAGE_TYPE]: (props) => (
     <CollapsedRow glyph="⇣" label={windowLabel(decodeHandoffDetails(props.details))} />
+  ),
+  [CONTEXT_PRUNE_MESSAGE_TYPE]: () => (
+    <CollapsedRow glyph="⇣" label="context pruned · older tool results stubbed" />
   ),
   [MODEL_CHANGE_MESSAGE_TYPE]: () => <CollapsedRow glyph="⇄" label="model changed" />,
   [MODEL_ATTEMPTS_MESSAGE_TYPE]: (props) => (

@@ -40,6 +40,7 @@ import {
   boundToolResultForModel,
   coldHandoffPays,
   contextRenters,
+  copyMessagesToBranch,
   emptyContextRent,
   foldContextRent,
   projectionRenters,
@@ -53,10 +54,14 @@ import {
   maximumModelToolResultChars,
   messagesInCurrentWindow,
   modelChangeNotice,
+  modelVisibleWindow,
+  pruneCutoffOf,
+  pruneLineMessage,
   modelInputCeilingTokens,
   outputReserveTokens,
   ModelCompactionError,
   ModelContextBudget,
+  CompactionOutcome,
   ModelContextCompactor,
   ModelContextError,
   type ModelContextError as ModelContextErrorValue,
@@ -928,10 +933,12 @@ const stubCompactor = Layer.succeed(
   ModelContextCompactor,
   ModelContextCompactor.of({
     compact: (request) =>
-      Effect.succeed({
-        notice: "summary of the earlier work",
-        modelId: request.modelId,
-      }),
+      Effect.succeed(
+        CompactionOutcome.cases.Summarized.make({
+          notice: "summary of the earlier work",
+          modelId: request.modelId,
+        }),
+      ),
   }),
 )
 
@@ -1343,7 +1350,10 @@ const contextReadingCompactorExtension = (params: {
                       reason: "NotMine",
                     })
                   }
-                  return { notice: "summary of the earlier work", modelId: request.modelId }
+                  return CompactionOutcome.cases.Summarized.make({
+                    notice: "summary of the earlier work",
+                    modelId: request.modelId,
+                  })
                 }),
             }),
           ),
@@ -2565,6 +2575,102 @@ describe("message token estimate", () => {
   })
 })
 
+describe("model view behind a prune line", () => {
+  /** The result part with call id `id`, as `messages` hold it. */
+  const resultOf = (messages: ReadonlyArray<Message>, id: string) =>
+    messages
+      .flatMap((item) => item.parts)
+      .find((part) => part.type === "tool-result" && part.id === ToolCallId.make(id))
+  const line = (cutoff: string) =>
+    pruneLineMessage({
+      sessionId,
+      branchId,
+      stubResultsBefore: MessageId.make(cutoff),
+      notice: `pruned before ${cutoff}`,
+      createdAt,
+    })
+  const stored = [
+    message("u1", "user", [text("go")]),
+    message("a1", "assistant", [call("c1")]),
+    message("t1", "tool", [result("c1")]),
+    message("a2", "assistant", [call("c2", "screenshot")]),
+    message("t2", "tool", [imageResult("c2", "ToolImage", 100, 100, "a")]),
+    message("a3", "assistant", [call("c3")]),
+    message("t3", "tool", [result("c3")]),
+    message("a4", "assistant", [call("c4")]),
+    message("t4", "tool", [result("c4")]),
+  ]
+
+  test("results before the cutoff are stubs; an image result, later results and storage stay whole", () => {
+    const messages = [...stored, line("a4")]
+    const view = modelVisibleWindow(messages)
+    expect(view.map((item) => item.id)).toEqual(messages.map((item) => item.id))
+    for (const id of ["c1", "c3"]) {
+      const stub = resultOf(view, id)
+      expect(stub?.type === "tool-result" && stub.name).toBe("read")
+      // The stored value `{"value":"c1"}` is 14 characters.
+      expect(stub?.type === "tool-result" && stub.result).toEqual({
+        stubbed: true,
+        totalChars: 14,
+        read: `context.read("${id}", { offset, limit })`,
+      })
+    }
+    expect(resultOf(view, "c2")).toBe(resultOf(stored, "c2"))
+    expect(resultOf(view, "c4")).toBe(resultOf(stored, "c4"))
+    const kept = resultOf(messages, "c1")
+    expect(kept?.type === "tool-result" && kept.result).toEqual({ value: "c1" })
+  })
+
+  test("a copy moves a prune line's cutoff to the copied row and leaves out a line whose row was not copied", () => {
+    const target = { sessionId, branchId: BranchId.make("copy") }
+    const copies = copyMessagesToBranch(
+      [...stored, line("a4")],
+      stored.map((item) => MessageId.make(`copy-${item.id}`)).concat(MessageId.make("copy-line")),
+      target,
+    )
+    expect(copies.map((item) => pruneCutoffOf(item))).toContainEqual(
+      Option.some(MessageId.make("copy-a4")),
+    )
+    const lost = copyMessagesToBranch(
+      [stored[0], line("a4")].filter(Predicate.isNotUndefined),
+      [MessageId.make("copy-u1"), MessageId.make("copy-line")],
+      target,
+    )
+    expect(lost.map((item) => item.id)).toEqual([MessageId.make("copy-u1")])
+  })
+
+  it.effect("a step measured before a prune line no longer sizes the window", () =>
+    Effect.gen(function* () {
+      const messages = [
+        ...stored.slice(0, 3),
+        message("reply", "assistant", [text("read it")]),
+        line("reply"),
+      ]
+      const projection = yield* projectCurrentWindow({
+        modelId: "test/prune",
+        messages,
+        budget: budget(100_000),
+        // The step before the line sent 50,000 tokens: the stubs no longer hold them.
+        measure: Option.some({
+          replyId: MessageId.make("reply"),
+          inputTokens: 50_000,
+          overheadTokens: 0,
+        }),
+      })
+      // chars/4 of the stubbed window, about 30 tokens.
+      expect(projection.estimatedTokens).toBeLessThan(100)
+    }),
+  )
+
+  test("the newest prune line sets the cutoff", () => {
+    const view = modelVisibleWindow([...stored, line("a3"), line("a4")])
+    expect(resultOf(view, "c3")).not.toBe(resultOf(stored, "c3"))
+    const earlier = modelVisibleWindow([...stored, line("a3")])
+    expect(resultOf(earlier, "c1")).not.toBe(resultOf(stored, "c1"))
+    expect(resultOf(earlier, "c3")).toBe(resultOf(stored, "c3"))
+  })
+})
+
 // ── turn window ─────────────────────────────────────────────────────────────
 
 const modelIdTurnWindow = ModelId.make("test/window-model")
@@ -2644,7 +2750,12 @@ describe("turn window projection", () => {
               ModelContextCompactor.of({
                 compact: (request) => {
                   requests.push(request)
-                  return Effect.succeed({ notice: "moved summary", modelId: modelIdTurnWindow })
+                  return Effect.succeed(
+                    CompactionOutcome.cases.Summarized.make({
+                      notice: "moved summary",
+                      modelId: modelIdTurnWindow,
+                    }),
+                  )
                 },
               }),
             )
@@ -2772,10 +2883,12 @@ describe("turn window projection", () => {
         ModelContextCompactor.of({
           compact: (request) => {
             requests.push(request)
-            return Effect.succeed({
-              notice: "mid-turn bounded summary",
-              modelId: modelIdTurnWindow,
-            })
+            return Effect.succeed(
+              CompactionOutcome.cases.Summarized.make({
+                notice: "mid-turn bounded summary",
+                modelId: modelIdTurnWindow,
+              }),
+            )
           },
         }),
       )
@@ -2910,7 +3023,13 @@ describe("turn window projection", () => {
       const compactor = Layer.succeed(
         ModelContextCompactor,
         ModelContextCompactor.of({
-          compact: () => Effect.succeed({ notice: "steered summary", modelId: modelIdTurnWindow }),
+          compact: () =>
+            Effect.succeed(
+              CompactionOutcome.cases.Summarized.make({
+                notice: "steered summary",
+                modelId: modelIdTurnWindow,
+              }),
+            ),
         }),
       )
       const publisher = yield* recordingPublisher
@@ -2976,7 +3095,12 @@ describe("turn window projection", () => {
           ModelContextCompactor.of({
             compact: (request) => {
               requests.push(request)
-              return Effect.succeed({ notice: "summary", modelId: modelIdTurnWindow })
+              return Effect.succeed(
+                CompactionOutcome.cases.Summarized.make({
+                  notice: "summary",
+                  modelId: modelIdTurnWindow,
+                }),
+              )
             },
           }),
         )
@@ -3223,6 +3347,180 @@ const baseInterjectionMessage = (
     ...message,
     createdAt: dateFromMillis(0),
   })
+
+describe("pruned handoff", () => {
+  const sessionId = SessionId.make("prune-session")
+  const branchId = BranchId.make("prune-branch")
+  const prompt = Message.cases.regular.make({
+    id: MessageId.make("prune-prompt"),
+    sessionId,
+    branchId,
+    role: "user",
+    parts: [Prompt.textPart({ text: "prune prompt" })],
+    createdAt,
+  })
+  /** Step `index`: a call and a ~700-token result. */
+  const step = (index: number) => {
+    const id = ToolCallId.make(`prune-call-${index}`)
+    return [
+      Message.cases.regular.make({
+        id: MessageId.make(`prune-call-${index}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false })],
+        createdAt: dateFromMillis(createdAt.getTime() + index * 2 + 1),
+      }),
+      Message.cases.regular.make({
+        id: MessageId.make(`prune-result-${index}`),
+        sessionId,
+        branchId,
+        role: "tool",
+        parts: [
+          Prompt.toolResultPart({
+            id,
+            name: "read",
+            isFailure: false,
+            providerExecuted: false,
+            result: { value: `prune-result-${index} ${"x".repeat(2_800)}` },
+          }),
+        ],
+        createdAt: dateFromMillis(createdAt.getTime() + index * 2 + 2),
+      }),
+    ]
+  }
+  // A 6k window minus the output reserve: two steps fit, four do not.
+  const budget = ModelContextBudget.make({
+    contextLimitTokens: 6_000,
+    reservedSystemTokens: 0,
+    reservedToolTokens: 0,
+    reservedOutputTokens: 4_096,
+  })
+  /** One overflowing projection whose compactor prunes before `cutoff`. */
+  const pruneAt = (messages: ReadonlyArray<Message>, cutoff: string) =>
+    Effect.gen(function* () {
+      const requests: Array<CompactionRequest> = []
+      const persisted: Array<Message> = []
+      const publisher = yield* recordingPublisher
+      const compactor = Layer.succeed(
+        ModelContextCompactor,
+        ModelContextCompactor.of({
+          compact: (request) => {
+            requests.push(request)
+            return Effect.succeed(
+              CompactionOutcome.cases.Pruned.make({
+                notice: `stubbed before ${cutoff}`,
+                stubResultsBefore: MessageId.make(cutoff),
+              }),
+            )
+          },
+        }),
+      )
+      const projected = yield* projectContextWindow({
+        sessionId,
+        branchId,
+        modelId: modelIdTurnWindow,
+        agentName: agent.name,
+        messages,
+        budget,
+        directive: Option.none(),
+        measure: Option.none(),
+        overflowed: false,
+        turnStart: false,
+        roleWindowTokens: Option.none(),
+        roleWindowBinds: false,
+        promptCache: Option.none(),
+        accountMoved: false,
+        persist: (message) => {
+          persisted.push(message)
+          return Effect.succeed(message)
+        },
+        summaryModel,
+        walkCredentials: (compact) => compact,
+        stop: yield* Deferred.make<void>(),
+      }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer, leafContext)))
+      const notices = (yield* Ref.get(publisher.published)).filter(
+        (event) => event._tag === "ErrorOccurred",
+      )
+      return { ...projected, requests, persisted, notices }
+    })
+  /** The call ids whose results reach the model whole. */
+  const wholeResults = (messages: ReadonlyArray<Message>) =>
+    Effect.map(
+      projectCurrentWindow({
+        modelId: modelIdTurnWindow,
+        messages,
+        budget,
+        measure: Option.none(),
+      }),
+      (view) =>
+        view.messages.flatMap((message) =>
+          message.parts.flatMap((part) => {
+            if (part.type !== "tool-result" || !Predicate.hasProperty(part.result, "value"))
+              return []
+            return [part.id]
+          }),
+        ),
+    )
+
+  it.scopedLive("an overflow that prunes keeps the window, writes a line and sends stubs", () =>
+    Effect.gen(function* () {
+      const first = yield* pruneAt(
+        [prompt, ...step(1), ...step(2), ...step(3), ...step(4)],
+        "prune-call-3",
+      )
+      expect(first.compacted).toBe(true)
+      expect(Option.isNone(first.summary)).toBe(true)
+      expect(first.requests.map((request) => request.trigger)).toEqual(["Overflow"])
+      expect(first.requests[0]?.targetTokens).toEqual(Option.some(6_000 - 4_096))
+      expect(first.persisted).toHaveLength(1)
+      const line = first.persisted[0]
+      if (Predicate.isUndefined(line)) return yield* Effect.die("prune line missing")
+      expect(line.id).toBe(MessageId.make("context-prune:prune-branch:prune-call-3"))
+      expect(pruneCutoffOf(line)).toEqual(Option.some(MessageId.make("prune-call-3")))
+      expect(first.durableMessages.at(-1)).toBe(line)
+      expect(first.notices).toEqual([])
+      expect(yield* wholeResults(first.durableMessages)).toEqual([
+        ToolCallId.make("prune-call-3"),
+        ToolCallId.make("prune-call-4"),
+      ])
+
+      // Two more steps overflow again: a later cutoff writes a second line.
+      const second = yield* pruneAt(
+        [...first.durableMessages, ...step(5), ...step(6)],
+        "prune-call-5",
+      )
+      expect(second.persisted.map((message) => message.id)).toEqual([
+        MessageId.make("context-prune:prune-branch:prune-call-5"),
+      ])
+      expect(yield* wholeResults(second.durableMessages)).toEqual([
+        ToolCallId.make("prune-call-5"),
+        ToolCallId.make("prune-call-6"),
+      ])
+    }),
+  )
+
+  it.scopedLive(
+    "a prune that repeats a stored cutoff, or names a row outside the window, changes nothing",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* pruneAt(
+          [prompt, ...step(1), ...step(2), ...step(3), ...step(4)],
+          "prune-call-3",
+        )
+        const grown = [...first.durableMessages, ...step(5), ...step(6)]
+        for (const cutoff of ["prune-call-3", "nowhere"]) {
+          const refused = yield* pruneAt(grown, cutoff)
+          expect(
+            refused.persisted.filter((message) => Option.isSome(pruneCutoffOf(message))),
+          ).toEqual([])
+          expect(
+            refused.notices.map((event) => event._tag === "ErrorOccurred" && event.error),
+          ).toEqual([expect.stringContaining("PruneChangedNothing")])
+        }
+      }),
+  )
+})
 
 describe("AI transcript projection", () => {
   test("oversized tool results reach the model as head-plus-tail strings while the message keeps the full result", () => {
@@ -3884,6 +4182,24 @@ describe("context rent", () => {
     expect(rent).toHaveLength(1)
     // 1.25 × 1,500 written, 500 of 1,500 of it.
     expect(rent[0]).toMatchObject({ kind: "handoff", tokens: 500, rent: 625, calls: 1 })
+  })
+
+  test("a prune line starts a window as a marker does", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      received(
+        pruneLineMessage({
+          sessionId,
+          branchId,
+          stubResultsBefore: MessageId.make("t1"),
+          notice: "Context pruned.",
+          createdAt,
+        }),
+      ),
+      stepEnded({ step: 3, input: 1_200, output: 10, read: 0, write: 1_200 }),
+    ])
+    expect(rent).toHaveLength(1)
+    expect(rent[0]).toMatchObject({ kind: "handoff", calls: 1 })
   })
 
   it.live("a turn's projection names the tool result the steps before it paid for", () =>

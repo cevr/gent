@@ -174,6 +174,7 @@ import {
   type ContextRole,
   contextWindowOf,
   ModelCompactionError,
+  CompactionOutcome,
   ModelContextCompactor,
   ModelContextWindowPolicy,
 } from "../../src/runtime/model-context"
@@ -5075,7 +5076,12 @@ describe("credential order", () => {
           // Later processes summarize with no model request.
           const localCompactor = ModelContextCompactor.of({
             compact: (request) =>
-              Effect.succeed({ notice: "Summary: local", modelId: request.modelId }),
+              Effect.succeed(
+                CompactionOutcome.cases.Summarized.make({
+                  notice: "Summary: local",
+                  modelId: request.modelId,
+                }),
+              ),
           })
           const base = {
             name: "outside-recovered-local-handoff",
@@ -6220,11 +6226,11 @@ describe("credential order", () => {
               if (part.type === "finish") usage = responseUsage(part.usage)
             }),
           ).pipe(Effect.mapError(failed))
-          return {
+          return CompactionOutcome.cases.Summarized.make({
             notice: `Summary:\n${text.join("")}`,
             modelId: request.modelId,
             ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
-          }
+          })
         }),
     })
 

@@ -132,18 +132,24 @@ import {
   ProcessGenerationId,
   RequestId,
   SessionId,
+  ToolCallId,
 } from "../../src/domain/ids"
 import {
   dateFromMillis,
   Session,
   Branch,
-  type Message,
+  Message,
   type MessageMetadata,
   messagePartsDisplayText,
   QueueSnapshot,
   SteerCommand,
 } from "../../src/domain/message"
 import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
+import {
+  modelVisibleWindow,
+  pruneCutoffOf,
+  pruneLineMessage,
+} from "../../src/runtime/model-context"
 import { omitUndefined } from "../../src/domain/guards"
 import {
   type ModelDriverContribution,
@@ -6875,6 +6881,103 @@ describe("session agent", () => {
         Effect.scoped,
       )
     }).pipe(Effect.provide(BunCrypto.layer)),
+  )
+  it.scopedLive(
+    "a child session and a fork of a pruned branch keep whole results and stub the same ones",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        yield* Effect.gen(function* () {
+          const mutations = yield* SessionMutations
+          const messageStorage = yield* MessageStorage
+          const source = yield* mutations.createSession({ name: "Pruned Source" })
+          const row = (
+            id: string,
+            role: "user" | "assistant" | "tool",
+            parts: Message["parts"],
+            ordinal: number,
+          ) =>
+            Message.cases.regular.make({
+              id: MessageId.make(id),
+              ...source,
+              role,
+              parts: [...parts],
+              createdAt: dateFromMillis(1_000 + ordinal),
+            })
+          const step = (index: number) => {
+            const id = ToolCallId.make(`inherit-call-${index}`)
+            return [
+              row(
+                `inherit-a${index}`,
+                "assistant",
+                [Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false })],
+                index * 2,
+              ),
+              row(
+                `inherit-t${index}`,
+                "tool",
+                [
+                  Prompt.toolResultPart({
+                    id,
+                    name: "read",
+                    isFailure: false,
+                    providerExecuted: false,
+                    result: { value: `whole ${index}` },
+                  }),
+                ],
+                index * 2 + 1,
+              ),
+            ]
+          }
+          const line = pruneLineMessage({
+            ...source,
+            stubResultsBefore: MessageId.make("inherit-a2"),
+            notice: "pruned before inherit-a2",
+            createdAt: dateFromMillis(1_100),
+          })
+          const stored = [
+            row("inherit-u", "user", [Prompt.textPart({ text: "go" })], 1),
+            ...step(1),
+            ...step(2),
+            line,
+          ]
+          for (const message of stored) yield* messageStorage.createMessage(message)
+          /** Each result value the copy stores, and each one its model view reads whole. */
+          const valuesOf = (messages: ReadonlyArray<Message>) =>
+            messages.flatMap((message) =>
+              message.parts.flatMap((part) => {
+                if (part.type !== "tool-result" || !Predicate.hasProperty(part.result, "value"))
+                  return []
+                return [part.result.value]
+              }),
+            )
+
+          const child = yield* mutations.createSession({
+            name: "Pruned Child",
+            historyBranchId: source.branchId,
+          })
+          const fork = yield* mutations.forkSessionBranch({
+            sessionId: source.sessionId,
+            fromBranchId: source.branchId,
+            atMessageId: line.id,
+          })
+          for (const branchId of [child.branchId, fork.branchId]) {
+            const copies = yield* messageStorage.listMessages(branchId)
+            expect(copies).toHaveLength(stored.length)
+            expect(valuesOf(copies)).toEqual(["whole 1", "whole 2"])
+            expect(valuesOf(modelVisibleWindow(copies))).toEqual(["whole 2"])
+            const copiedLine = copies.at(-1)
+            if (Predicate.isUndefined(copiedLine)) return yield* Effect.die("prune line missing")
+            const cutoff = copies[3]
+            if (Predicate.isUndefined(cutoff)) return yield* Effect.die("cutoff copy missing")
+            expect(pruneCutoffOf(copiedLine)).toEqual(Option.some(cutoff.id))
+            expect(cutoff.id).not.toBe(MessageId.make("inherit-a2"))
+          }
+        }).pipe(
+          Effect.provide(makeMutationsLayer(providerLayer, yield* Ref.make<AgentEvent[]>([]))),
+          Effect.scoped,
+        )
+      }).pipe(Effect.provide(BunCrypto.layer)),
   )
 })
 

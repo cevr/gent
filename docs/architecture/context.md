@@ -36,6 +36,27 @@
   the request carries no cwd. The marker's notice
   names the session id, the branch id, and the replaced id range so the model
   can page the replaced history from the cell.
+- A compactor answers a `CompactionOutcome`: `Summarized` (the marker above)
+  or `Pruned`. A prune keeps the window: the loop persists a `context-prune`
+  runtime line (`pruneLineMessage`, id `context-prune:<branch>:<cutoff>`)
+  that opens no window, and `modelVisibleWindow` reads each tool result
+  stored before the newest line's cutoff as a stub (call id, tool, failure
+  flag, options and size; a result with images stays whole). Storage keeps
+  every result, so `context.read(callId)` pages one back. The estimate, the
+  projection and the handoff plan read that view; a step measured before the
+  line no longer measures the window, and the rent meter treats the line as a
+  window start. The request carries why the window hands off (`trigger`:
+  `Requested`, `Refused`, `Overflow`, `RoleWindow`, `Cold`), the message
+  tokens a kept window must get under (`targetTokens`) and the projection's
+  estimate (`estimateTokens`). The loop refuses a prune whose cutoff is not
+  in the window or already has a line (`PruneChangedNothing`). The shipped
+  compactor stubs the results before the window's fifth-newest assistant
+  step and prunes on `Overflow` and `RoleWindow` when that fits half the
+  target, on `Cold` when it fits the target; otherwise it summarizes the
+  history with those stubs applied. A copy of a branch (`copyMessagesToBranch`,
+  a session's `historyBranchId` and a fork) keeps every result whole and moves
+  a prune line's cutoff to the copied row. Design:
+  `plans/pruned-handoff-2026-10-22.md`.
 - The rent meter says what each held item has cost. `foldContextRent`
   (model-context.ts) folds the branch's events, oldest first, with the
   orchestrate budget's `burnOf` arithmetic: the first call's context is the
@@ -52,7 +73,7 @@
   returns them, and the TUI's gauge names the costliest (`ctx 42% · read
   12k`). Gent charges a tool result at its bounded size, the text its model
   sees. The meter reads the turn's calls only: a compaction summary's call
-  reports its usage on `CompactionSummary`, not on a step. A forked branch
+  reports its usage on `CompactionOutcome.cases.Summarized`, not on a step. A forked branch
   starts its meter fresh.
 - The window a role compacts at is a seam too: `ModelContextWindowPolicy`
   (`@gent/core/extensions/branch-tools`) answers `window({ agent, child })`

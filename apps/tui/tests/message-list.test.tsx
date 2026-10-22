@@ -1339,6 +1339,7 @@ describe("rows that fold until full detail is on", () => {
   // Each runtime kind states its row: a notice folds to its line, the rest
   // draw by lane as the `»` row headed by the kind.
   const runtimeFirstRows = {
+    "context-prune": "  ⇣ context pruned · older tool results stubbed",
     "context-window": "  ⇣ new context window",
     "model-change": "  ⇄ model changed",
     "model-attempts": "  ⧗ model-call budget near its limit",

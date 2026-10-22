@@ -87,6 +87,7 @@ export {
 } from "./domain/agent-loop.js"
 export {
   coldHandoffPays,
+  CONTEXT_PRUNE_MESSAGE_TYPE,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   contextWindowOf,
   MODEL_CHANGE_MESSAGE_TYPE,

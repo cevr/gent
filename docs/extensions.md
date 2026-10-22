@@ -867,8 +867,18 @@ When a window hands off (it overflows, the model asks, or a turn starts on a
 large window whose prompt cache went cold), the loop asks a
 `ModelContextCompactor` for the summary the handoff marker carries. An
 extension installs one as a `process` Resource; the Tag, `CompactionRequest`,
-`CompactionSummary` and `ModelCompactionError` come from
-`@gent/core/extensions/branch-tools`. The installed compactors form one
+`CompactionOutcome` and `ModelCompactionError` come from
+`@gent/core/extensions/branch-tools`. A compactor answers
+`CompactionOutcome.cases.Summarized` (the marker's notice and the summary
+call's receipt) or `CompactionOutcome.cases.Pruned` (the window stays; a
+prune line carries the notice, and each tool result stored before
+`stubResultsBefore`, a message in the window, reaches the model as a stub
+that `context.read(callId)` pages back). The request says why the window
+hands off (`trigger`), the message tokens a kept window must get under
+(`targetTokens`, none on `Requested` and `Refused`) and the loop's estimate
+(`estimateTokens`); `stubResultsBefore(messages, cutoff)` prices a stubbed
+copy. The shipped compactor prunes when the stubbed window fits half the
+target (the whole target on `Cold`) and summarizes otherwise. The installed compactors form one
 chain: project, then user, then builtin. The first summary wins. A compactor
 that fails with `ModelCompactionError` passes the window to the next one, and
 the loop truncates the window, with a visible notice, only when no compactor
@@ -900,7 +910,7 @@ import {
   ExtensionHost,
 } from "@gent/core/extensions/api"
 import {
-  CompactionSummary,
+  CompactionOutcome,
   ModelCompactionError,
   ModelContextCompactor,
 } from "@gent/core/extensions/branch-tools"
@@ -916,7 +926,7 @@ const ReviewCompactor = Layer.succeed(
           return yield* new ModelCompactionError({ modelId: request.modelId, reason: "NotReview" })
         }
         const ctx = yield* ExtensionContext
-        return CompactionSummary.make({
+        return CompactionOutcome.cases.Summarized.make({
           notice: `${request.history.length} earlier messages of the review of ${ctx.cwd} left the window.`,
           modelId: request.modelId,
         })

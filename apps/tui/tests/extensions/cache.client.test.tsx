@@ -25,7 +25,7 @@ import {
 } from "@gent/core/protocol"
 import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api"
 import {
-  CompactionSummary,
+  CompactionOutcome,
   InteractionRequestId,
   ModelContextCompactor,
 } from "@gent/core/extensions/branch-tools"
@@ -1527,7 +1527,10 @@ const fixedSummaryCompactor = defineExtension({
           ModelContextCompactor.of({
             compact: (request) =>
               Effect.succeed(
-                CompactionSummary.make({ notice: "Summary.", modelId: request.modelId }),
+                CompactionOutcome.cases.Summarized.make({
+                  notice: "Summary.",
+                  modelId: request.modelId,
+                }),
               ),
           }),
         ),

@@ -49,10 +49,12 @@ import {
   SqliteStorage,
 } from "@gent/core/test-utils"
 import {
+  type CompactionTrigger,
   estimateTextTokens,
   ModelCompactionError,
   ModelContextBudget,
   ModelContextCompactor,
+  partToText,
   planWindow,
 } from "@gent/core/extensions/branch-tools"
 import { BunPlatformLive, BunSqlite } from "@gent/core/host-bun"
@@ -61,6 +63,7 @@ import {
   ContextWindows,
   MODEL_COMPACTION_OUTPUT_TOKENS,
   ModelContextCompactorLive,
+  prunePlan,
   referencedBindings,
   replayWindow,
   RetainedBindings,
@@ -250,6 +253,9 @@ describe("context handoff", () => {
           history: history(),
           kept: [textMessage("new-1", "user", "count rows and print index", 5)],
           budget: budget(),
+          trigger: "Requested",
+          targetTokens: Option.none(),
+          estimateTokens: () => 0,
           summaryModel: () => Effect.succeed(model),
         })
         expect(user).toContain("Names retained on this branch: rows, index.")
@@ -620,6 +626,9 @@ describe("context handoff", () => {
         history: history(),
         kept: [],
         budget: budget(),
+        trigger: "Requested",
+        targetTokens: Option.none(),
+        estimateTokens: () => 0,
         summaryModel: (maxTokens) => {
           requested = Option.some(maxTokens)
           return Effect.succeed(model)
@@ -684,6 +693,9 @@ describe("context handoff", () => {
           history: history(),
           kept: [],
           budget: budget(),
+          trigger: "Requested",
+          targetTokens: Option.none(),
+          estimateTokens: () => 0,
           summaryModel: () => summaryModel,
         })
       }).pipe(Effect.exit, Effect.map(failureOf))
@@ -713,6 +725,118 @@ describe("context handoff", () => {
       Effect.timeout("10 seconds"),
     )
   })
+})
+
+// ── pruned handoff ──────────────────────────────────────────────────────────
+
+describe("pruned handoff", () => {
+  /** Step `index`: a call and a 400-character result. */
+  const step = (index: number): ReadonlyArray<Message> => {
+    const id = ToolCallId.make(`step-call-${index}`)
+    return [
+      Message.cases.regular.make({
+        id: MessageId.make(`step-${index}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.toolCallPart({ id, name: "read", params: {}, providerExecuted: false })],
+        createdAt: dateFromMillis(2_000 + index * 2),
+      }),
+      Message.cases.regular.make({
+        id: MessageId.make(`step-${index}-result`),
+        sessionId,
+        branchId,
+        role: "tool",
+        parts: [
+          Prompt.toolResultPart({
+            id,
+            name: "read",
+            isFailure: false,
+            providerExecuted: false,
+            result: { value: "r".repeat(400) },
+          }),
+        ],
+        createdAt: dateFromMillis(2_001 + index * 2),
+      }),
+    ]
+  }
+  const steps = (count: number) =>
+    Array.from({ length: count }, (_, index) => step(index + 1)).flat()
+  const prompt = textMessage("prompt", "user", "read the files", 1)
+  /** chars/4 over every part's text, as the projection's estimate is. */
+  const estimate = (messages: ReadonlyArray<Message>) =>
+    Math.ceil(messages.flatMap((message) => message.parts.map(partToText)).join("").length / 4)
+  /** Seven steps, the newest in `kept`; the fifth-newest step is step 3. */
+  const request = (trigger: CompactionTrigger, target: Option.Option<number>) => ({
+    history: [prompt, ...steps(6)],
+    kept: step(7),
+    trigger,
+    targetTokens: target,
+    estimateTokens: estimate,
+  })
+  const stubbedResults = (messages: ReadonlyArray<Message>) =>
+    messages.flatMap((message) =>
+      message.parts.flatMap((part) => {
+        if (part.type !== "tool-result" || !Predicate.hasProperty(part.result, "stubbed")) return []
+        return [part.id]
+      }),
+    )
+
+  test("an overflow keeps the window and stubs the results before the fifth-newest step", () => {
+    const plan = prunePlan(request("Overflow", Option.some(2_000)))
+    const pruned = Option.getOrThrow(plan.pruned)
+    expect(pruned.stubResultsBefore).toBe(MessageId.make("step-3"))
+    expect(pruned.notice).toContain("2 older tool results")
+    expect(pruned.notice).toContain("context.read")
+    expect(stubbedResults(plan.summaryHistory)).toEqual([
+      ToolCallId.make("step-call-1"),
+      ToolCallId.make("step-call-2"),
+    ])
+  })
+
+  test("an explicit compact or a provider refusal summarizes the stubbed history", () => {
+    for (const trigger of ["Requested", "Refused"] as const) {
+      const plan = prunePlan(request(trigger, Option.some(2_000)))
+      expect(Option.isNone(plan.pruned)).toBe(true)
+      expect(stubbedResults(plan.summaryHistory)).toEqual([
+        ToolCallId.make("step-call-1"),
+        ToolCallId.make("step-call-2"),
+      ])
+    }
+  })
+
+  test("a pruned window over half the target summarizes; a cold start may fill the whole target", () => {
+    // The stubbed window and its notice take about 700 tokens.
+    expect(Option.isNone(prunePlan(request("Overflow", Option.some(1_000))).pruned)).toBe(true)
+    expect(Option.isNone(prunePlan(request("RoleWindow", Option.some(1_000))).pruned)).toBe(true)
+    expect(Option.isSome(prunePlan(request("Cold", Option.some(1_000))).pruned)).toBe(true)
+    expect(Option.isNone(prunePlan(request("Overflow", Option.none())).pruned)).toBe(true)
+  })
+
+  test("a window with no result before its fifth-newest step summarizes", () => {
+    const plan = prunePlan({
+      ...request("Overflow", Option.some(2_000)),
+      history: [prompt, ...steps(4)],
+      kept: [],
+    })
+    expect(Option.isNone(plan.pruned)).toBe(true)
+  })
+
+  it.scopedLive("the shipped compactor prunes an overflow without a summary model", () =>
+    Effect.gen(function* () {
+      const compactor = yield* ModelContextCompactor
+      const outcome = yield* compactor.compact({
+        ...request("Overflow", Option.some(2_000)),
+        modelId,
+        agentName: DEFAULT_AGENT_NAME,
+        sessionId,
+        branchId,
+        budget: budget(),
+        summaryModel: () => Effect.die("a prune asks no summary model"),
+      })
+      expect(outcome._tag).toBe("Pruned")
+    }).pipe(Effect.provide(Layer.mergeAll(ModelContextCompactorLive, leafContext))),
+  )
 })
 
 // ── model compaction rpc ────────────────────────────────────────────────────

@@ -229,7 +229,7 @@ export type MessageRole = typeof MessageRole.Type
 /**
  * Custom types of the user-role messages the runtime writes for the model:
  * a continuation prompt inside a turn, a context-window handoff marker, the
- * model-change notice, and steering that joined a turn already running. None
+ * prune line that stubs a window's older tool results, the model-change notice, and steering that joined a turn already running. None
  * of them is a turn a person asked for on its own, so recovery never answers
  * one by itself.
  *
@@ -246,6 +246,7 @@ export type MessageRole = typeof MessageRole.Type
  */
 export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
+  "context-prune",
   "context-window",
   "max-steps",
   "model-attempts",

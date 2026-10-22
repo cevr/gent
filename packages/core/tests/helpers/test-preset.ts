@@ -6,7 +6,11 @@
 import { Effect, Layer, Stream } from "effect"
 import type { AgentDefinition } from "../../src/domain/agent"
 import { defineExtension, defineResource, ExtensionHost } from "../../src/extensions/api"
-import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
+import {
+  CompactionOutcome,
+  ModelCompactionError,
+  ModelContextCompactor,
+} from "../../src/runtime/model-context"
 import { type E2ELayerConfig, testAgent, testTurnExtension } from "../../src/test-utils/harness"
 
 export { testAgent }
@@ -36,10 +40,10 @@ export const rangeCompactor = ModelContextCompactor.of({
       ).pipe(Effect.mapError(failed))
       const first = request.history.at(0)?.id ?? "none"
       const last = request.history.at(-1)?.id ?? "none"
-      return {
+      return CompactionOutcome.cases.Summarized.make({
         notice: `Summary:\n${text.join("")}\n(${first} … ${last})`,
         modelId: request.modelId,
-      }
+      })
     }),
 })
 

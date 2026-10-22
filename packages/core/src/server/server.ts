@@ -24,7 +24,6 @@ import {
 import {
   Branch,
   type BranchTreeNode,
-  copyMessageToBranch,
   DEFAULT_SESSION_NAME,
   headChars,
   projectMessagesWithToolInteractions,
@@ -216,7 +215,11 @@ import {
   HttpServerResponse,
 } from "effect/http"
 import { ToolRunner } from "../runtime/tools.js"
-import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
+import {
+  copyMessagesToBranch,
+  messagesInCurrentWindow,
+  settledMessages,
+} from "../runtime/model-context.js"
 import { sweepToolImages } from "../runtime/tool-image.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/rpc"
 
@@ -911,15 +914,12 @@ const makeSessionMutationsService: Effect.Effect<
           const history = settledMessages(
             messagesInCurrentWindow(yield* messageStorage.listMessages(input.historyBranchId)),
           )
-          for (const message of history) {
-            if (message.metadata?.hidden === true) continue
-            yield* messageStorage.createMessage(
-              copyMessageToBranch(message, {
-                id: MessageId.make(yield* platform.randomId),
-                sessionId,
-                branchId,
-              }),
-            )
+          const shown = history.filter((message) => message.metadata?.hidden !== true)
+          const ids = yield* Effect.forEach(shown, () =>
+            Effect.map(platform.randomId, (id) => MessageId.make(id)),
+          )
+          for (const copy of copyMessagesToBranch(shown, ids, { sessionId, branchId })) {
+            yield* messageStorage.createMessage(copy)
           }
         }
         const envelope = yield* eventStore.append(SessionStarted.make({ sessionId, branchId }))
@@ -1008,14 +1008,15 @@ const makeSessionMutationsService: Effect.Effect<
         yield* branchStorage.createBranch(branch)
         // A fork point inside a tool step would copy a call without its
         // result, and the new branch could never project a turn.
-        for (const message of settledMessages(messages.slice(0, targetIndex + 1))) {
-          yield* messageStorage.createMessage(
-            copyMessageToBranch(message, {
-              id: MessageId.make(yield* platform.randomId),
-              branchId: branch.id,
-            }),
-          )
-        }
+        const kept = settledMessages(messages.slice(0, targetIndex + 1))
+        const ids = yield* Effect.forEach(kept, () =>
+          Effect.map(platform.randomId, (id) => MessageId.make(id)),
+        )
+        const copies = copyMessagesToBranch(kept, ids, {
+          sessionId: input.sessionId,
+          branchId: branch.id,
+        })
+        for (const copy of copies) yield* messageStorage.createMessage(copy)
         const envelope = yield* eventStore.append(
           BranchCreated.make({
             sessionId: branch.sessionId,

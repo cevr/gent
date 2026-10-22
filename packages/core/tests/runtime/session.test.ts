@@ -116,6 +116,7 @@ import {
 import {
   isHostContextUpdate,
   ModelCompactionError,
+  CompactionOutcome,
   ModelContextCompactor,
 } from "../../src/runtime/model-context"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
@@ -1120,11 +1121,13 @@ describe("session metrics", () => {
   const stubSummary =
     (summaryModelId: ModelId): ModelContextCompactor["Service"]["compact"] =>
     () =>
-      Effect.succeed({
-        notice: "stub summary",
-        modelId: summaryModelId,
-        usage: { inputTokens: 1_000_000, outputTokens: 0 },
-      })
+      Effect.succeed(
+        CompactionOutcome.cases.Summarized.make({
+          notice: "stub summary",
+          modelId: summaryModelId,
+          usage: { inputTokens: 1_000_000, outputTokens: 0 },
+        }),
+      )
 
   /**
    * Two turns of `agentName` on a small window, so the second turn's
@@ -1290,7 +1293,12 @@ describe("session metrics", () => {
             new ModelCompactionError({ modelId: request.modelId, reason: "NotFilmAgent" }),
           )
         }
-        return Effect.succeed({ notice: "film summary", modelId: request.modelId })
+        return Effect.succeed(
+          CompactionOutcome.cases.Summarized.make({
+            notice: "film summary",
+            modelId: request.modelId,
+          }),
+        )
       }
       const filmEvents = yield* runCompactingTurns(filmOnly, [], film)
       expect(compactedBy(filmEvents)).toBe(true)
@@ -1332,7 +1340,7 @@ describe("session metrics", () => {
           [
             'import { Effect, Layer } from "effect";',
             'import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";',
-            'import { ModelCompactionError, ModelContextCompactor } from "@gent/core/extensions/branch-tools";',
+            'import { CompactionOutcome, ModelCompactionError, ModelContextCompactor } from "@gent/core/extensions/branch-tools";',
             "export default defineExtension({",
             '  id: "@test/film-compactor",',
             "  setup: Effect.gen(function* () {",
@@ -1342,7 +1350,7 @@ describe("session metrics", () => {
             '      scope: "process",',
             "      layer: Layer.succeed(ModelContextCompactor, ModelContextCompactor.of({",
             "        compact: (request) => {",
-            '          if (request.agentName === "film") return Effect.succeed({ notice: "film summary", modelId: request.modelId });',
+            '          if (request.agentName === "film") return Effect.succeed(CompactionOutcome.cases.Summarized.make({ notice: "film summary", modelId: request.modelId }));',
             '          return Effect.fail(new ModelCompactionError({ modelId: request.modelId, reason: "NotFilmAgent" }));',
             "        },",
             "      })),",
@@ -1356,7 +1364,12 @@ describe("session metrics", () => {
         const askedBuiltin: Array<AgentName> = []
         const builtin: ModelContextCompactor["Service"]["compact"] = (request) => {
           askedBuiltin.push(request.agentName)
-          return Effect.succeed({ notice: "builtin summary", modelId: request.modelId })
+          return Effect.succeed(
+            CompactionOutcome.cases.Summarized.make({
+              notice: "builtin summary",
+              modelId: request.modelId,
+            }),
+          )
         }
         const place = { home, cwd: project }
 
