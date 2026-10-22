@@ -238,7 +238,15 @@ once it has passed (B2).
       per model, so the reading gains an optional `model`, and a lane for
       that account counts only requests for that model.
 
-12. **Model tier per role.** Intelligence is hard to measure, so gent does
+12. **Model tier per role.** (Merged at aa6eac4f4 (2026-10-22), in three
+    commits, each with its review fix: the lane probe and the `tiers`
+    config (8e57018a3, 129421c9b); tier role rounds (9370052e9, 90e4a7e97);
+    quality per model and state in `machine.status`, `MachinesRpc.Quality`
+    and a round thread's details in the sessions pane (ba7725417,
+    aa6eac4f4). Open: a send-time `LaneUnavailable` after a passing probe
+    waits on the picked model; stats are keyed by machine name; a
+    subscription-only tier ranks by list order; quality shows from 100
+    columns only.) Intelligence is hard to measure, so gent does
     not score it. The owner names two ordered model lists beside the account
     order: `strongest` and `efficient`. Plan and review states take the first
     `strongest` model with a free lane. Implement and verify states take the
