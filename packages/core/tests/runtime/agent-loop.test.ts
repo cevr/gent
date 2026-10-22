@@ -4523,8 +4523,9 @@ describe("startup recovery", () => {
     15000,
   )
 
-  // Each seed is a branch whose last user-role message is already answered or
-  // is history. Reopening the loop must not take it for an unanswered turn.
+  // Each seed is a branch's event log, in order, whose last user-role message
+  // is already answered or is history. Reopening the loop must not take it for
+  // an unanswered turn.
   const userMessage = (
     sessionId: SessionId,
     branchId: BranchId,
@@ -4540,18 +4541,18 @@ describe("startup recovery", () => {
       parts: [Prompt.textPart({ text })],
       createdAt: dateFromMillis(1_767_225_600_000 + at),
     })
+  const receipt = (sessionId: SessionId, branchId: BranchId, messageId: MessageId) =>
+    TurnCompleted.make({ streamFailed: false, sessionId, branchId, messageId, durationMs: 1 })
   const answeredSeeds: ReadonlyArray<{
     readonly name: string
-    readonly seed: (
-      sessionId: SessionId,
-      branchId: BranchId,
-    ) => { readonly messages: ReadonlyArray<Message>; readonly completedId: MessageId }
+    readonly seed: (sessionId: SessionId, branchId: BranchId) => ReadonlyArray<AgentEvent>
   }> = [
     {
       // A continuation prompt is persisted as a user message inside a turn
       // and never gets a TurnCompleted of its own. Seen in the gamut testbed:
       // startup took it for an unanswered turn and sent a transcript that
-      // ended with the assistant reply, which the provider rejected.
+      // ended with the assistant reply, which the provider rejected. It lands
+      // after the last receipt, where only the runtime-line filter skips it.
       name: "startup does not replay a continuation prompt as a user turn",
       seed: (sessionId, branchId) => {
         const message = userMessage(sessionId, branchId, "msg-continuation", "answer me", 0)
@@ -4565,14 +4566,19 @@ describe("startup recovery", () => {
           ),
           metadata: { customType: "continuation", details: { step: 2 } },
         })
-        return { messages: [message, continuation], completedId: message.id }
+        return [
+          MessageReceived.make({ message }),
+          receipt(sessionId, branchId, message.id),
+          MessageReceived.make({ message: continuation }),
+        ]
       },
     },
     {
       // A handoff marker is a user-role message the loop persists mid-turn.
       // Seen on the gamut at a 20k window: reopening a finished child took
       // the marker for an unanswered turn and the provider rejected the
-      // transcript, which ended with the assistant reply.
+      // transcript, which ended with the assistant reply. It lands after the
+      // last receipt, where only the runtime-line filter skips it.
       name: "startup does not answer a context handoff marker as a user turn",
       seed: (sessionId, branchId) => {
         const message = userMessage(sessionId, branchId, "msg-marker", "answer me", 0)
@@ -4591,7 +4597,12 @@ describe("startup recovery", () => {
           notice: "Context handoff.",
           createdAt: dateFromMillis(1_767_225_600_002),
         })
-        return { messages: [message, reply, marker], completedId: message.id }
+        return [
+          MessageReceived.make({ message }),
+          MessageReceived.make({ message: reply }),
+          receipt(sessionId, branchId, message.id),
+          MessageReceived.make({ message: marker }),
+        ]
       },
     },
     {
@@ -4607,7 +4618,11 @@ describe("startup recovery", () => {
           "the turn that answered",
           10,
         )
-        return { messages: [failed, answered], completedId: answered.id }
+        return [
+          MessageReceived.make({ message: failed }),
+          MessageReceived.make({ message: answered }),
+          receipt(sessionId, branchId, answered.id),
+        ]
       },
     },
   ]
@@ -4629,23 +4644,12 @@ describe("startup recovery", () => {
               ] satisfies LanguageModelStreamPart[])
             }),
           )
-          const { messages, completedId } = seed(sessionId, branchId)
+          const events = seed(sessionId, branchId)
           yield* Effect.scoped(
             Effect.gen(function* () {
               yield* ensureStorageParents({ sessionId, branchId })
               const eventStorage = yield* EventStorage
-              for (const message of messages) {
-                yield* eventStorage.appendEvent(MessageReceived.make({ message }))
-              }
-              yield* eventStorage.appendEvent(
-                TurnCompleted.make({
-                  streamFailed: false,
-                  sessionId,
-                  branchId,
-                  messageId: completedId,
-                  durationMs: 1,
-                }),
-              )
+              for (const event of events) yield* eventStorage.appendEvent(event)
 
               const agentLoop = yield* makeAgentLoopService
               const state = yield* agentLoop.getState({ sessionId, branchId })
