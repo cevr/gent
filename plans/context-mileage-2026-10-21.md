@@ -168,13 +168,21 @@ once it has passed (B2).
       read a reading. It derives one from gent's own priced spend per
       (account, model) over each window, divided by that window's dollar
       limit. It sees no spend outside gent, so its utilization is a lower
-      bound. A limit error marks the window `rejected` until its reset.
+      bound.
     - The page does not say whether the windows roll or reset at a fixed
-      time. Guess: rolling, as Anthropic's are. Confirm with one live limit
-      error before the adapter trusts a reset time.
+      time. The adapter sums spend over the trailing 5 hours, 7 days and 31
+      days. That sum is never below the spend since a fixed reset inside the
+      same length, so it is safe for both kinds.
     - At the limit, Go blocks requests, or bills the pay-as-you-go balance if
-      the owner turned on Extra usage. With Extra usage on, a spent window
-      costs money and is not a lane.
+      Extra usage is on. **Extra usage is on for the owner's account, and it
+      is never quota** (owner, 2026-10-21). So no limit error arrives: Go
+      bills quietly. The adapter itself marks a window `rejected` when gent's
+      own spend reaches that window's dollar limit, and placement sends no
+      request for that model on that account until the trailing sum drops
+      below the limit. Extra-usage spend never counts toward a lane. Accept:
+      with a model's 5-hour spend at its limit, a thread start for that
+      model on that account is refused with `LaneUnavailable`, and no request
+      for it leaves gent.
     - **Seam change:** `QuotaReading` is per account today. Go's limits are
       per model, so the reading gains an optional `model`, and a lane for
       that account counts only requests for that model.
