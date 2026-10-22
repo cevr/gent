@@ -2540,6 +2540,14 @@ describe("a model's quality in a machine's state", () => {
               verdict: "revise",
               costUsd: 0.1,
             }),
+            // A verdict is the model's own word, an object's own key among them.
+            SeededRound.make({
+              state: "review",
+              round: "r2",
+              dead: false,
+              model: HAIKU,
+              verdict: "constructor",
+            }),
             SeededMove.make({ from: "check", to: "work", by: "fail" }),
             SeededRound.make({ state: "work", round: "w2", dead: true, model: SONNET }),
             SeededRound.make({
@@ -2565,14 +2573,14 @@ describe("a model's quality in a machine's state", () => {
           {
             state: "review",
             model: HAIKU,
-            rounds: 1,
+            rounds: 2,
             dead: 0,
             priced: 1,
-            verdicts: { revise: 1 },
-            // The failed check judged its round; the passing one, only Sonnet's after it.
+            verdicts: { revise: 1, constructor: 1 },
+            // The failed check judged its rounds; the passing one, only Sonnet's after it.
             checks: { pass: 0, fail: 1 },
             gates: { green: 1, red: 0 },
-            accepted: { runs: 1, rounds: 1 },
+            accepted: { runs: 1, rounds: 2 },
           },
           // This run's own rounds: Opus once to measure it, then Haiku twice.
           {

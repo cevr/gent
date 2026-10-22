@@ -334,7 +334,14 @@ interface AgentsController {
    * stay cheap by carrying identity and liveness only; this is the second
    * read, made for one row at a time.
    */
-  readonly detail: () => Option.Option<AgentDetail>
+  readonly detail: () => Option.Option<ExtensionAgentDetail>
+  /**
+   * How each model fared in the machine state the selected row works rounds
+   * of: none for a session that is no round thread. A durable read, so a
+   * stored row has it too, read again on each listing reply: a check or a
+   * gate after the row's rounds moves it while the row stays the same.
+   */
+  readonly quality: () => ReadonlyArray<ModelQuality>
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
   /** Whether the pane is showing: the host's pane slot names it. */
@@ -363,14 +370,6 @@ const AGENTS_PANE = "agents.pane"
 
 type RowKey = Pick<AgentRowEntry, "sessionId" | "branchId">
 
-/**
- * A row's detail: its loop's, and how each model fared in the machine state
- * the row works rounds of (none for a session that is not a round thread).
- */
-export type AgentDetail = ExtensionAgentDetail & {
-  readonly quality: ReadonlyArray<ModelQuality>
-}
-
 const sameKey = (left: RowKey, right: RowKey): boolean =>
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
@@ -395,7 +394,8 @@ export const makeAgentsController = (
   fetchRows: (
     input: ListAgentsInput,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
-  fetchDetail: (key: RowKey) => Effect.Effect<AgentDetail, { readonly message: string }>,
+  fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
+  fetchQuality: (key: RowKey) => Effect.Effect<ReadonlyArray<ModelQuality>>,
 ): Effect.Effect<AgentsSource, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle, activity } = yield* ClientContext
@@ -406,11 +406,26 @@ export const makeAgentsController = (
     let query = ""
     const open = () => shell.pane.isOpen(AGENTS_PANE)
 
-    const [detail, setDetail] = createSignal<Option.Option<AgentDetail>>(Option.none())
+    const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
     // The row the cursor is on, while it has a loop to ask.
     let selected = Option.none<RowKey>()
     // The selected row's progress as the listing showed it at the last detail read.
     let readStamp = ""
+    // The row the cursor is on, live or stored: its quality is no actor read.
+    let pointed = Option.none<RowKey>()
+    const [quality, setQuality] = createSignal<ReadonlyArray<ModelQuality>>([])
+    // As with the detail, a reply writes only while its row is still the one pointed at.
+    const readQuality = coalescedRead(shell.cast, () =>
+      Option.match(pointed, {
+        onNone: () => Effect.void,
+        onSome: (key) =>
+          fetchQuality(key).pipe(
+            Effect.map((next) => {
+              if (Option.exists(pointed, (current) => sameKey(current, key))) setQuality(next)
+            }),
+          ),
+      }),
+    )
     // One detail read runs at a time, for the row the cursor is on when it
     // starts. Arrow keys move faster than a round trip, so a reply writes only
     // while its row is still selected; otherwise it would show one row's cost
@@ -556,6 +571,8 @@ export const makeAgentsController = (
       accepted: (reply) => {
         noteFinished(reply)
         detailAfterListing(reply.rows)
+        // Only the open pane draws quality: the tray's reads ask none.
+        if (open() && Option.isSome(pointed)) readQuality()
       },
     })
     const rows = () => listing.value().rows
@@ -609,6 +626,16 @@ export const makeAgentsController = (
     }
 
     const select = (row: Option.Option<AgentRowEntry>) => {
+      const next = Option.map(row, (value) => ({
+        sessionId: value.sessionId,
+        branchId: value.branchId,
+      }))
+      const moved = !Option.makeEquivalence(sameKey)(pointed, next)
+      pointed = next
+      if (moved) {
+        setQuality([])
+        readQuality()
+      }
       // A detail read goes through the loop actor, and an actor read spawns the
       // entity: asking a stored session what it is doing would make it live.
       // Only rows that already have a loop are asked.
@@ -694,6 +721,7 @@ export const makeAgentsController = (
       refresh,
       reload: listing.refresh,
       detail,
+      quality,
       select,
       open,
       done,
@@ -1053,7 +1081,8 @@ const detailLines = (
   row: AgentRowEntry,
   section: AgentRowEntry["section"],
   glyph: string,
-  detail: Option.Option<AgentDetail>,
+  detail: Option.Option<ExtensionAgentDetail>,
+  quality: ReadonlyArray<ModelQuality>,
   place: PathPlace,
   answerLines: number,
   models: ReadonlyArray<Model>,
@@ -1078,9 +1107,9 @@ const detailLines = (
     ].join(" · ")
     if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
     lines.push([{ text: progressLabel(detail.value), tone: "muted" }])
-    for (const row of detail.value.quality) {
-      for (const text of qualityLines(row, models, width)) lines.push([{ text, tone: "quality" }])
-    }
+  }
+  for (const entry of quality) {
+    for (const text of qualityLines(entry, models, width)) lines.push([{ text, tone: "quality" }])
   }
   if (Predicate.isNotUndefined(row.cwd)) {
     lines.push([{ text: homePath(row.cwd, place.home), tone: "path" }])
@@ -1324,6 +1353,7 @@ export function AgentsPane(props: {
           cursorSection(),
           glyphFor(cursorSection()),
           cursorDetail(row),
+          props.controller.quality(),
           props.place,
           answerLines,
           props.models(),
@@ -1463,20 +1493,13 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           Effect.mapError((error) => ({ message: String(error) })),
         ),
       (key) =>
-        Effect.all(
-          {
-            detail: transport.agentDetail(key),
-            // A session that is no round thread, or a run the caller does
-            // not own, has no quality to show.
-            quality: transport
-              .request(ref(MachinesRpc.Quality), { session: key.sessionId })
-              .pipe(Effect.orElseSucceed((): ReadonlyArray<ModelQuality> => [])),
-          },
-          { concurrency: 2 },
-        ).pipe(
-          Effect.map(({ detail, quality }) => ({ ...detail, quality })),
-          Effect.mapError((error) => ({ message: String(error) })),
-        ),
+        transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
+      // A session that is no round thread, or a run the caller does not
+      // own, has no quality to show.
+      (key) =>
+        transport
+          .request(ref(MachinesRpc.Quality), { session: key.sessionId })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<ModelQuality> => [])),
     )
     const openPane = () => {
       shell.pane.open(AGENTS_PANE)

@@ -296,7 +296,8 @@
     session of a round thread) count per state and model, over the
     machine's runs, the rounds, dead ones, priced cost, verdicts, the
     check (`pass`/`fail`) and gate (`green`/`red`) moves after each round,
-    and the rounds a finished run took. The owner is woken only by an ask (`machine-ask`), a final
+    and the rounds a finished run took. A verdict is the model's own word,
+    counted as itself (`constructor` included). The owner is woken only by an ask (`machine-ask`), a final
     state or a failure (`machine-end`), each a queued message under a
     source id the queue drops a repeat of, at a delivery place saved first.
   - Answers check in one order: an answered ask is decided by its answer
@@ -440,7 +441,10 @@
   lines up to half the terminal), cwd, what it does now or the head
   of its last answer, and its task. The detail is the per-row snapshot
   read (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and
-  `lastAnswer`) beside the quality read;
+  `lastAnswer`), asked of live rows only; the quality read is durable, so
+  a stored row shows it too, and the open pane reads it again on each
+  listing reply, so a check after an idle row's rounds shows on the next
+  poll (the tray's reads ask none);
   under 100 columns the one-line detail stays. While the session in view
   is a child (its row names a parent), the extension's status label reads
   `↳ child <name> · ← sessions`, derived from the latest listing. The

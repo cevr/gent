@@ -3435,7 +3435,8 @@ interface QualityTally {
   dead: number
   priced: number
   costUsd: number
-  readonly verdicts: Record<string, number>
+  // A verdict is the model's own word: a Map, so `constructor` counts as itself.
+  readonly verdicts: Map<string, number>
   readonly checks: { pass: number; fail: number }
   readonly gates: { green: number; red: number }
   readonly accepted: { runs: number; rounds: number }
@@ -3460,7 +3461,7 @@ const tallyRound = (row: QualityTally, step: RoundEnded, run: RunTally): void =>
     row.costUsd += step.costUsd
   }
   if (Predicate.isNotUndefined(step.verdict)) {
-    row.verdicts[step.verdict] = (row.verdicts[step.verdict] ?? 0) + 1
+    row.verdicts.set(step.verdict, (row.verdicts.get(step.verdict) ?? 0) + 1)
   }
   run.rounds.set(row, (run.rounds.get(row) ?? 0) + 1)
   run.sinceCheck.add(row)
@@ -3514,7 +3515,7 @@ const qualityOf = (outcomes: ReadonlyArray<RunOutcome>): ReadonlyArray<ModelQual
       dead: 0,
       priced: 0,
       costUsd: 0,
-      verdicts: {},
+      verdicts: new Map(),
       checks: { pass: 0, fail: 0 },
       gates: { green: 0, red: 0 },
       accepted: { runs: 0, rounds: 0 },
@@ -3529,9 +3530,12 @@ const qualityOf = (outcomes: ReadonlyArray<RunOutcome>): ReadonlyArray<ModelQual
     byRun.set(outcome.run, steps)
   }
   for (const steps of byRun.values()) tallyRun(steps, tallyOf)
-  return [...rows.values()].toSorted(
-    (left, right) => Order.String(left.state, right.state) || Order.String(left.model, right.model),
-  )
+  return [...rows.values()]
+    .toSorted(
+      (left, right) =>
+        Order.String(left.state, right.state) || Order.String(left.model, right.model),
+    )
+    .map((row) => ({ ...row, verdicts: Object.fromEntries(row.verdicts) }))
 }
 
 /** The steps `machine.status` shows, newest last. */

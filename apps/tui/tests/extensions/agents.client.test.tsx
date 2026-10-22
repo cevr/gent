@@ -23,7 +23,6 @@ import {
   threadRoundText,
 } from "@gent/extensions/client"
 import {
-  type AgentDetail,
   default as agentsExtension,
   AgentsPane,
   detailLabel,
@@ -34,6 +33,7 @@ import {
 import {
   ClientContext,
   makeClientContextLayer,
+  type ExtensionAgentDetail,
   STATUS_YIELD,
   type StatusLabelItem,
 } from "../../src/extensions/client-facets"
@@ -86,26 +86,28 @@ const row = (id: string, live = true): AgentRowEntry => ({
   sideThread: false,
 })
 
-const detail = (turns: number): AgentDetail => ({
+const detail = (turns: number): ExtensionAgentDetail => ({
   status: "Idle",
   model: Option.some("anthropic/claude-sonnet-5"),
   turns,
   costUsd: 0,
   durationMs: 0,
   omittedMessages: 0,
-  quality: [],
   effort: Option.none(),
   firstPrompt: Option.none(),
   lastAnswer: Option.none(),
 })
+
+/** A server with no round threads: each quality read finds none. */
+const noQuality = () => Effect.succeed([])
 
 describe("Agents controller detail", () => {
   it.scopedLive("ignores a reply for a row the reader already moved off", () =>
     Effect.gen(function* () {
       // Stands in for the client's `cast`, which runs effects on the shell's
       // own runtime; here that is the surrounding test context.
-      const slow = yield* Deferred.make<AgentDetail>()
-      const fast = yield* Deferred.make<AgentDetail>()
+      const slow = yield* Deferred.make<ExtensionAgentDetail>()
+      const fast = yield* Deferred.make<ExtensionAgentDetail>()
       const gates = new Map([
         ["first", slow],
         ["second", fast],
@@ -119,6 +121,7 @@ describe("Agents controller detail", () => {
               onNone: () => Effect.never,
               onSome: (gate) => Deferred.await(gate),
             }),
+          noQuality,
         ),
       )
 
@@ -140,12 +143,13 @@ describe("Agents controller detail", () => {
 
   it.scopedLive("clears detail when the selection goes away", () =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<AgentDetail>()
+      const gate = yield* Deferred.make<ExtensionAgentDetail>()
 
       const controller = yield* provideClientServices(
         makeAgentsController(
           () => Effect.succeed([]),
           () => Deferred.await(gate),
+          noQuality,
         ),
       )
 
@@ -172,6 +176,7 @@ describe("Agents controller reload", () => {
             return Effect.succeed([])
           },
           () => Effect.never,
+          noQuality,
         ),
         {
           currentSession: () => ({
@@ -206,6 +211,7 @@ describe("Agents controller listing scope", () => {
               return Effect.succeed([])
             },
             () => Effect.never,
+            noQuality,
           ),
           {
             currentSession: () => ({
@@ -240,6 +246,7 @@ describe("Agents controller stored rows", () => {
             asked.push(key.sessionId)
             return Effect.succeed(detail(1))
           },
+          noQuality,
         ),
       )
       controller.select(Option.some(row("stored", false)))
@@ -279,6 +286,7 @@ describe("Agents pane refresh while open", () => {
         makeAgentsController(
           () => Effect.sync(listed),
           () => Effect.sync(() => ({ ...detail(turns), status })),
+          noQuality,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -327,6 +335,7 @@ describe("Agents pane refresh while open", () => {
               return listed()
             }),
           () => Effect.succeed(detail(1)),
+          noQuality,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey },
       )
@@ -369,6 +378,7 @@ describe("Agents pane refresh while open", () => {
               detailReads += 1
               return detail(detailReads)
             }),
+          noQuality,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -421,6 +431,7 @@ describe("Agents pane refresh while open", () => {
                 detailReads += 1
                 return { ...detail(1), status: "Running", costUsd: detailReads / 100 }
               }),
+            noQuality,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           { currentSession: () => parentKey, shell: { pane } },
         )
@@ -483,6 +494,7 @@ describe("Agents pane refresh while open", () => {
                 return detailInFlight
               },
             ),
+          noQuality,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => parentKey, shell: { pane } },
       )
@@ -527,6 +539,7 @@ describe("Agents pane refresh while open", () => {
               return Effect.succeed([])
             },
             () => Effect.never,
+            noQuality,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
             currentSession: () => parentKey,
@@ -615,6 +628,7 @@ describe("Agents pane navigation", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -656,6 +670,7 @@ describe("Agents pane navigation", () => {
             loading: () => false,
             refresh: (query) => queries.push(query),
             reload: () => {},
+            quality: () => [],
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -708,6 +723,7 @@ describe("Agents pane navigation", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -747,7 +763,7 @@ describe("Agents pane navigation", () => {
       const parent = rowPane("detail-root", "Alpha", 0)
       const child = rowPane("detail-child", "Beta", 1)
       const asked: Array<string> = []
-      const [detail, setDetail] = createSignal(Option.none<AgentDetail>())
+      const [detail, setDetail] = createSignal(Option.none<ExtensionAgentDetail>())
 
       const setup = yield* renderScoped(() => (
         <AgentsPane
@@ -762,6 +778,7 @@ describe("Agents pane navigation", () => {
             refresh: () => {},
             reload: () => {},
             detail,
+            quality: () => [],
             done: () => [],
             select: (selection) => {
               Option.match(selection, {
@@ -776,7 +793,6 @@ describe("Agents pane navigation", () => {
                       costUsd: 0.125,
                       durationMs: 93_000,
                       omittedMessages: 0,
-                      quality: [],
                       effort: Option.none(),
                       firstPrompt: Option.none(),
                       lastAnswer: Option.none(),
@@ -827,6 +843,7 @@ describe("Agents pane navigation", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () =>
               Option.some({
                 status: "Running",
@@ -835,7 +852,6 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
-                quality: [],
                 effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
@@ -873,6 +889,7 @@ describe("Agents pane navigation", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () =>
               Option.some({
                 status: "WaitingForInteraction",
@@ -881,7 +898,6 @@ describe("Agents pane navigation", () => {
                 costUsd: 0,
                 durationMs: 0,
                 omittedMessages: 0,
-                quality: [],
                 effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
@@ -914,6 +930,7 @@ describe("Agents pane navigation", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () => Option.some(detail(1)),
             select: () => {},
             done: () => [],
@@ -980,6 +997,7 @@ describe("Agents pane delete", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -1034,12 +1052,12 @@ describe("Agents pane reopen", () => {
               costUsd: 0,
               durationMs: 0,
               omittedMessages: 0,
-              quality: [],
               effort: Option.none(),
               firstPrompt: Option.none(),
               lastAnswer: Option.none(),
             })
           },
+          noQuality,
         ),
         {
           currentSession: () => ({ sessionId: live.sessionId, branchId: live.branchId }),
@@ -1102,6 +1120,7 @@ describe("Agents pane framing", () => {
                 loading: () => false,
                 refresh: () => {},
                 reload: () => {},
+                quality: () => [],
                 detail: () =>
                   Option.some({
                     status: "Idle",
@@ -1110,7 +1129,6 @@ describe("Agents pane framing", () => {
                     costUsd: 0.125,
                     durationMs: 93_000,
                     omittedMessages: 0,
-                    quality: [],
                     effort: Option.none(),
                     firstPrompt: Option.none(),
                     lastAnswer: Option.none(),
@@ -1176,6 +1194,7 @@ describe("Agents pane framing", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1228,6 +1247,7 @@ describe("Agents pane framing", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1286,6 +1306,7 @@ describe("Agents pane framing", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -1363,6 +1384,7 @@ describe("agents pane rows", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -1512,7 +1534,7 @@ describe("agents pane command center", () => {
    * The selected row's live detail: a delegate thread parked on an ask, three
    * turns in. Its first prompt is its task under the starter's round frame.
    */
-  const asking: AgentDetail = {
+  const asking: ExtensionAgentDetail = {
     status: "WaitingForInteraction",
     model: Option.some("anthropic/claude-sonnet-5-5"),
     effort: Option.some("high"),
@@ -1520,7 +1542,6 @@ describe("agents pane command center", () => {
     costUsd: 0.012,
     durationMs: 72_000,
     omittedMessages: 0,
-    quality: [],
     firstPrompt: Option.some(
       threadRoundText({
         number: 1,
@@ -1538,7 +1559,8 @@ describe("agents pane command center", () => {
   const paneAt = (
     listed: ReadonlyArray<AgentRowEntry>,
     width: number,
-    detail: Option.Option<AgentDetail> = Option.some(asking),
+    detail: Option.Option<ExtensionAgentDetail> = Option.some(asking),
+    quality: ReadonlyArray<ModelQuality> = [],
   ) =>
     Effect.gen(function* () {
       let colors = Option.none<ReturnType<typeof useTheme>["theme"]>()
@@ -1557,6 +1579,7 @@ describe("agents pane command center", () => {
                 loading: () => false,
                 refresh: () => {},
                 reload: () => {},
+                quality: () => quality,
                 detail: () => detail,
                 select: () => {},
                 done: () => [],
@@ -1737,7 +1760,7 @@ describe("agents pane command center", () => {
             accepted: { runs: 0, rounds: 0 },
           },
         ]).pipe(Effect.orDie)
-        const { lines } = yield* paneAt(waiting(now), 140, Option.some({ ...asking, quality }))
+        const { lines } = yield* paneAt(waiting(now), 140, Option.some(asking), quality)
         const column = (text: string) => {
           const line = lines.find((candidate) => candidate.includes(text)) ?? ""
           return line.slice(line.lastIndexOf("│") + 1).trim()
@@ -1756,7 +1779,7 @@ describe("agents pane command center", () => {
           expect(column(text)).toContain(text)
         }
         // A narrower column wraps a line between its parts, so none is cut.
-        const narrow = yield* paneAt(waiting(now), 104, Option.some({ ...asking, quality }))
+        const narrow = yield* paneAt(waiting(now), 104, Option.some(asking), quality)
         const narrowColumn = (text: string) => {
           const line = narrow.lines.find((candidate) => candidate.includes(text)) ?? ""
           return line.slice(line.lastIndexOf("│") + 1).trim()
@@ -1953,14 +1976,16 @@ describe("the status row names the child the reader watches", () => {
 describe("agents pane counts and detail", () => {
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
-      const detail = (status: AgentDetail["status"], turns: number): AgentDetail => ({
+      const detail = (
+        status: ExtensionAgentDetail["status"],
+        turns: number,
+      ): ExtensionAgentDetail => ({
         status,
         model: Option.some("anthropic/claude-sonnet-5"),
         turns,
         costUsd: 0.028,
         durationMs: 0,
         omittedMessages: 0,
-        quality: [],
         effort: Option.none(),
         firstPrompt: Option.none(),
         lastAnswer: Option.none(),
@@ -1988,6 +2013,7 @@ describe("idle middle parent", () => {
     loading: () => false,
     refresh: () => {},
     reload: () => {},
+    quality: () => [],
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -2050,6 +2076,7 @@ describe("thread rows", () => {
     loading: () => false,
     refresh: () => {},
     reload: () => {},
+    quality: () => [],
     detail: () => Option.none(),
     select: () => {},
     done: () => [],
@@ -2209,17 +2236,25 @@ describe("agents pane quality read", () => {
     gates: { green: 0, red: 0 },
     accepted: { runs: 0, rounds: 0 },
   }
-  /** The agents extension over a server that lists `worker` and answers its quality read with `quality`. */
-  const paneOver = (asked: Array<unknown>, quality: Effect.Effect<unknown, GentRpcError>) =>
+  /**
+   * The agents extension over a server that lists `row` and answers each of
+   * its quality reads with `quality`. `snapshots` counts the detail reads.
+   */
+  const paneOver = (
+    asked: Array<unknown>,
+    quality: Effect.Effect<unknown, GentRpcError>,
+    row: AgentRowEntry = worker,
+    snapshots: { count: number } = { count: 0 },
+  ) =>
     Effect.gen(function* () {
       const runtime = makeClientExtensionRuntime({
         transport: {
-          ...makeClientTestTransport({ requestReply: { rows: [worker] } }),
+          ...makeClientTestTransport({ requestReply: { rows: [row] } }),
           client: createMockClient({
             extension: {
               request: (request: { readonly capabilityId: string; readonly input: unknown }) => {
                 if (request.capabilityId !== "thread-quality") {
-                  return Effect.succeed({ rows: [worker] })
+                  return Effect.succeed({ rows: [row] })
                 }
                 asked.push(request.input)
                 return quality
@@ -2227,18 +2262,22 @@ describe("agents pane quality read", () => {
             },
             session: {
               getSnapshot: () =>
-                Effect.succeed({
-                  sessionId: worker.sessionId,
-                  branchId: worker.branchId,
-                  messages: [],
-                  lastEventId: 0,
-                  resolvedModelId: "anthropic/claude-sonnet-5-5",
-                  agent: AgentName.make("main"),
-                  runtime: SessionRuntimeStateSchema.cases.Idle.make({
-                    queue: emptyQueueSnapshot(),
+                Effect.sync(() => {
+                  snapshots.count += 1
+                }).pipe(
+                  Effect.as({
+                    sessionId: worker.sessionId,
+                    branchId: worker.branchId,
+                    messages: [],
+                    lastEventId: 0,
+                    resolvedModelId: "anthropic/claude-sonnet-5-5",
+                    agent: AgentName.make("main"),
+                    runtime: SessionRuntimeStateSchema.cases.Idle.make({
+                      queue: emptyQueueSnapshot(),
+                    }),
+                    metrics: { turns: 2, durationMs: 4_000, costUsd: 0.08 },
                   }),
-                  metrics: { turns: 2, durationMs: 4_000, costUsd: 0.08 },
-                }),
+                ),
             },
           }),
         },
@@ -2268,9 +2307,93 @@ describe("agents pane quality read", () => {
         "the quality line",
       )
       expect(frame).toContain("pass 1/2")
-      expect(asked).toEqual([{ session: worker.sessionId }])
+      expect(asked.length).toBeGreaterThan(0)
+      expect(asked).toEqual(asked.map(() => ({ session: worker.sessionId })))
       yield* Effect.promise(() => runtime.dispose())
     }),
+  )
+
+  it.scopedLive(
+    "a check after an idle row's rounds shows in its details on the next poll",
+    () =>
+      Effect.gen(function* () {
+        const asked: Array<unknown> = []
+        // The row stays the same: only the server's tally moves.
+        let tally = [sonnet]
+        const { setup, runtime } = yield* paneOver(
+          asked,
+          Effect.sync(() => tally),
+        )
+        yield* waitForFrame(setup, (next) => next.includes("pass 1/2"), "the first tally")
+        tally = [{ ...sonnet, checks: { pass: 2, fail: 1 } }]
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("pass 2/3"),
+          "the tally after the check",
+          6_000,
+        )
+        expect(frame).not.toContain("pass 1/2")
+        yield* Effect.promise(() => runtime.dispose())
+      }),
+    // The pane polls every 2 seconds: the moved tally waits for one poll.
+    10_000,
+  )
+
+  it.scopedLive("a stored row shows its quality and asks no detail", () =>
+    Effect.gen(function* () {
+      const asked: Array<unknown> = []
+      const snapshots = { count: 0 }
+      const stored = { ...root("stored", "inactive"), name: "draft the notes" }
+      const { setup, runtime } = yield* paneOver(asked, Effect.succeed([sonnet]), stored, snapshots)
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("2 rounds · $0.04/round"),
+        "the stored row's quality line",
+      )
+      expect(frame).toContain("pass 1/2")
+      expect(asked).toEqual(asked.map(() => ({ session: stored.sessionId })))
+      // Asking a stored session's loop would make it live.
+      expect(snapshots.count).toBe(0)
+      expect(frame).not.toContain("2 turns")
+      yield* Effect.promise(() => runtime.dispose())
+    }),
+  )
+
+  it.scopedLive("the closed pane's tray reads ask no quality", () =>
+    Effect.gen(function* () {
+      const asked: Array<SessionId> = []
+      let listings = 0
+      const here = { sessionId: worker.sessionId, branchId: worker.branchId }
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () =>
+            Effect.sync(() => {
+              listings += 1
+              return [worker]
+            }),
+          () => Effect.succeed(detail(1)),
+          (key) =>
+            Effect.sync(() => {
+              asked.push(key.sessionId)
+              return []
+            }),
+        ),
+        {
+          currentSession: () => here,
+          transport: makeClientTestTransport({ currentSession: () => here }),
+        },
+      )
+      // The row the pane last pointed at stays pointed at once it closes.
+      controller.select(Option.some(worker))
+      yield* waitUntil(() => asked.length === 1, "the selection's quality read")
+      expect(controller.open()).toBe(false)
+      for (const label of ["a tray read", "another tray read"]) {
+        const before = listings
+        controller.refresh("")
+        yield* waitUntil(() => listings > before && !controller.loading(), label)
+      }
+      expect(asked).toEqual([worker.sessionId])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   it.scopedLive("a refused quality read leaves the row's details whole", () =>
@@ -2289,7 +2412,8 @@ describe("agents pane quality read", () => {
         (next) => next.includes("2 turns · $0.08"),
         "the progress line",
       )
-      expect(asked).toEqual([{ session: worker.sessionId }])
+      expect(asked.length).toBeGreaterThan(0)
+      expect(asked).toEqual(asked.map(() => ({ session: worker.sessionId })))
       expect(frame).not.toContain("rounds")
       yield* Effect.promise(() => runtime.dispose())
     }),
@@ -2339,6 +2463,7 @@ describe("done threads", () => {
               Effect.map(() => listed(input)),
             ),
           () => Effect.succeed(detail(1)),
+          noQuality,
         ).pipe(Effect.provideService(Clock.Clock, clock)),
         {
           currentSession: here,
@@ -2601,6 +2726,7 @@ describe("done threads", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [finished],
@@ -2725,6 +2851,7 @@ describe("Subagent tray", () => {
                 refreshes.push(query)
               },
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -2784,6 +2911,7 @@ describe("Subagent tray", () => {
                   loading: () => false,
                   refresh: () => {},
                   reload: () => {},
+                  quality: () => [],
                   detail: () => Option.none(),
                   select: () => {},
                   done: () => [],
@@ -2840,6 +2968,7 @@ describe("Subagent tray", () => {
                 loading: () => false,
                 refresh: () => {},
                 reload: () => {},
+                quality: () => [],
                 detail: () => Option.none(),
                 select: () => {},
                 done: () => done,
@@ -2891,6 +3020,7 @@ describe("Subagent tray", () => {
               loading: () => false,
               refresh: () => {},
               reload: () => {},
+              quality: () => [],
               detail: () => Option.none(),
               select: () => {},
               done: () => [],
@@ -2918,6 +3048,7 @@ describe("Subagent tray", () => {
             loading: () => false,
             refresh: () => {},
             reload: () => {},
+            quality: () => [],
             detail: () => Option.none(),
             select: () => {},
             done: () => [],
@@ -2964,6 +3095,7 @@ describe("Agents controller across a session switch", () => {
         makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
+          noQuality,
         ),
         { currentSession: () => active },
       )
@@ -2997,6 +3129,7 @@ describe("Agents controller across a session switch", () => {
               onSome: (gate) => Deferred.await(gate),
             }),
           () => Effect.never,
+          noQuality,
         ),
         { currentSession: () => active },
       )
@@ -3024,6 +3157,7 @@ describe("Agents controller across a session switch", () => {
         makeAgentsController(
           () => Deferred.await(gate),
           () => Effect.never,
+          noQuality,
         ),
         { currentSession: () => active },
       )
@@ -3088,7 +3222,11 @@ describe("Descendant activity", () => {
       )
       return yield* Effect.gen(function* () {
         const { activity } = yield* ClientContext
-        const controller = yield* makeAgentsController(fetch, () => Effect.succeed(detail(0))).pipe(
+        const controller = yield* makeAgentsController(
+          fetch,
+          () => Effect.succeed(detail(0)),
+          noQuality,
+        ).pipe(
           Effect.provideService(
             Clock.Clock,
             Option.getOrElse(Option.fromUndefinedOr(clock), () => controllerClock),
@@ -3384,6 +3522,7 @@ describe("Descendant activity", () => {
               return Deferred.await(complete)
             },
             () => Effect.never,
+            noQuality,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
             currentSession: () => parent,
