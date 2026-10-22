@@ -1,4 +1,15 @@
-import { Context, Effect, FiberMap, Layer, Option, Order, Ref, Schema, Stream } from "effect"
+import {
+  Context,
+  Effect,
+  FiberMap,
+  Layer,
+  Option,
+  Order,
+  Predicate,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import {
   type AgentEvent,
   BranchId,
@@ -10,8 +21,11 @@ import {
   ExtensionId,
   headChars,
   isSpawnedSession,
+  ModelId,
+  ReasoningEffort,
   request,
   SessionId,
+  type SessionRuntimeMetrics,
   sessionThread,
   tailChars,
   unseenText,
@@ -673,8 +687,43 @@ export const AgentRowEntry = Schema.Struct({
    * which the client words as its live line does. Wire only, never stored.
    */
   runningCall: Schema.optional(RunningCall),
+  /** Finished turns, their cost and their run time, over every session of the row's thread. */
+  turns: Schema.Finite,
+  costUsd: Schema.Finite,
+  durationMs: Schema.Finite,
+  /**
+   * The model and effort of the newest step of the row's newest session
+   * that ran one. Absent before any step; `effort` is absent when the
+   * step's request named no level.
+   */
+  model: Schema.optional(ModelId),
+  effort: Schema.optional(ReasoningEffort),
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
+
+/**
+ * A row's totals from its members' metrics: turns, cost and time add up
+ * over the thread's sessions, and the newest session that ran a step names
+ * the model.
+ */
+export const rowTotals = (
+  row: AgentRow,
+  metrics: ReadonlyMap<string, SessionRuntimeMetrics>,
+): Pick<AgentRowEntry, "turns" | "costUsd" | "durationMs" | "model" | "effort"> => {
+  const members = row.members.flatMap((member) =>
+    Option.toArray(Option.fromUndefinedOr(metrics.get(rowKey(member)))),
+  )
+  const lastStep = Option.fromUndefinedOr(
+    members.findLast((member) => Predicate.isNotUndefined(member.lastStep))?.lastStep,
+  )
+  return {
+    turns: members.reduce((sum, member) => sum + member.turns, 0),
+    costUsd: members.reduce((sum, member) => sum + member.costUsd, 0),
+    durationMs: members.reduce((sum, member) => sum + member.durationMs, 0),
+    model: Option.getOrUndefined(Option.map(lastStep, (step) => step.model)),
+    effort: Option.getOrUndefined(Option.flatMapNullishOr(lastStep, (step) => step.effort)),
+  }
+}
 
 export const ListAgentsInput = Schema.Struct({
   /** Case-insensitive substring filter over name, cwd, and ids. */
@@ -817,6 +866,13 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
         watch: loops.filter((row) => row.live && Option.isSome(row.parent)),
       })
       const rows = filterRows(buildRowTree(loops), input.query ?? "")
+      // One read for every shown row's sessions, of their metric events only.
+      // A read that fails is a host defect, as in `collectRows`.
+      const ctx = yield* ExtensionContext
+      const read = yield* ctx.Session.branchMetrics(rows.flatMap((row) => row.members)).pipe(
+        Effect.orDie,
+      )
+      const metrics = new Map(read.map((branch) => [rowKey(branch), branch.metrics]))
       const now = new Map<string, Activity>()
       for (const row of rows) {
         // A thread's row says what its newest working session does.
@@ -859,6 +915,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           ),
           activity: now.get(rowKey(row))?.line,
           runningCall: now.get(rowKey(row))?.call,
+          ...rowTotals(row, metrics),
         })),
       }
     }),

@@ -74,6 +74,7 @@ const makeMessage = (role: "user" | "assistant") =>
 describe("reduceAgentLifecycle", () => {
   test("a stream start says a turn runs", () => {
     const event = StreamStarted.make({
+      model: ModelId.make("anthropic/claude-sonnet-5"),
       messageId: MessageId.make("msg"),
       step: 1,
       sessionId: SessionId.make("s1"),
@@ -233,6 +234,7 @@ describe("ClientProvider contract", () => {
           id: EventId.make(id),
           createdAt: id,
           event: AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId: SessionId.make("late-session"),
@@ -1688,6 +1690,7 @@ describe("ClientProvider errors", () => {
           makeEnvelope(
             1,
             StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
               messageId: MessageId.make("msg"),
               step: 1,
               sessionId: FIRST.sessionId,
@@ -1729,6 +1732,7 @@ describe("ClientProvider errors", () => {
         makeEnvelope(
           1,
           StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId: SECOND.sessionId,

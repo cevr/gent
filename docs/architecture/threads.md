@@ -408,6 +408,23 @@
   first), marks the row current when the shell is on any of its sessions,
   and a second Ctrl+X deletes each session of the thread, newest first, since
   a session delete keeps a same-thread handoff.
+- Each row carries its thread's totals: `turns`, `costUsd` and `durationMs`
+  summed over the thread's sessions, and the `model` and `effort` of the
+  newest step of its newest session that ran one (`rowTotals`). The model is
+  the step's as it went out (`StreamStarted.model`, kept in
+  `SessionRuntimeMetrics.lastStep`), so a running child names its model
+  before its first step ends; it is not the next turn's route. The listing
+  reads every shown row's sessions in one query of their metric events only
+  (`ExtensionContext.Session.branchMetrics` over
+  `EventStorage.listBranchEvents` and `SESSION_METRIC_TAGS`), never each
+  branch's log: on the owner's store (12,023 metric events on 564 branches,
+  2026-10-22) the whole-workspace read took 18–19 ms of SQL and 31–59 ms to
+  decode and fold (measured), and the tray reads only its subtree. A wide
+  row (80 columns and up) draws `Model effort` and the cost before its time;
+  a narrower one keeps only the session count and the time, so the name
+  keeps its room. A section heading sums its rows' cost (`Idle (2) ·
+  $0.13`), and the tray's first line puts its rows' cost before its key
+  hints.
 - The tray draws one row per running child, its glyph the state: the
   `◇◈◆` pulse, then `<name> · <doing>` (the name in the info colour), with no state word. `<doing>` is the
   child's newest running call in the live line's words (`Reading src/loader.ts`,
@@ -441,16 +458,18 @@
   question`). The title counts each state there is (`Sessions · 1 needs you
   · 2 running`). From 100 terminal columns a details column (40% of the
   width, ruled off in `border`) shows the selected row: name, state, `model ·
-  effort`, turns · cost · time, each model's quality in a round thread's
+  effort`, turns · cost · time (all from the row), each model's quality in a round thread's
   state (wrapped between its parts to the column; the pane grows by those
   lines up to half the terminal), cwd, what it does now or the head
-  of its last answer, and its task. The detail is the per-row snapshot
-  read (`ExtensionAgentDetail` gains `effort`, `firstPrompt` and
+  of its last answer, and its task. The rest is the per-row snapshot read
+  (`ExtensionAgentDetail`: status, omitted messages, `firstPrompt` and
   `lastAnswer`), asked of live rows only; the quality read is durable, so
   a stored row shows it too, and the open pane reads it again on each
   listing reply, so a check after an idle row's rounds shows on the next
   poll (the tray's reads ask none);
-  under 100 columns the one-line detail stays. While the session in view
+  under 100 columns the one-line detail stays, read off the row, so it shows
+  with the row and takes one of the six lines the frame body keeps; it is
+  blank for a row with no finished turn and not in one. While the session in view
   is a child (its row names a parent), the extension's status label reads
   `↳ child <name> · ← sessions`, derived from the latest listing. The
   name is cut at a whole word to 16 columns (what a 100-column row leaves

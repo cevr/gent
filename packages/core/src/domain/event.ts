@@ -91,6 +91,12 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: MessageId,
     step: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
     /**
+     * The model the step's request goes out to, as its `StreamEnded` receipt
+     * will name it: a listing names what a running agent runs on before its
+     * first step ends.
+     */
+    model: ModelId,
+    /**
      * The effort the step's request goes out at, as its `StreamEnded`
      * receipt will name it: a client shows the running turn's level before
      * the step ends. Absent when the request names no level (see

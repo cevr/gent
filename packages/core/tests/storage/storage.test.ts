@@ -1382,6 +1382,54 @@ describe("Event decoding", () => {
   )
 })
 
+describe("branch event listing", () => {
+  it.live(
+    "reads only the named branches' events of the named tags, in log order, in the workspace",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* EventStorage
+        const branch = (session: string, id: string) => ({
+          sessionId: SessionId.make(session),
+          branchId: BranchId.make(id),
+        })
+        const one = branch("listing-one", "listing-one-main")
+        const sibling = branch("listing-one", "listing-one-side")
+        const two = branch("listing-two", "listing-two-main")
+        const elsewhere = branch("listing-elsewhere", "listing-elsewhere-main")
+        const write = (at: { sessionId: SessionId; branchId: BranchId }, workspace: WorkspaceId) =>
+          Effect.gen(function* () {
+            yield* ensureStorageParents(at)
+            yield* events.appendEvent(SessionStarted.make(at))
+            yield* events.appendEvent(
+              ToolCallStarted.make({
+                ...at,
+                toolCallId: ToolCallId.make(`call-${at.branchId}`),
+                toolName: "bash",
+              }),
+            )
+          }).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+        yield* write(two, WORKSPACE_A)
+        yield* write(one, WORKSPACE_A)
+        yield* write(sibling, WORKSPACE_A)
+        yield* write(elsewhere, WORKSPACE_B)
+
+        const listed = yield* events
+          .listBranchEvents({ branches: [one, two, elsewhere], tags: ["SessionStarted"] })
+          .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A))
+        // Log order, not the order named; no sibling branch, other tag or other workspace.
+        expect(listed.map((envelope) => envelope.event)).toEqual([
+          SessionStarted.make(two),
+          SessionStarted.make(one),
+        ])
+        expect(
+          yield* events
+            .listBranchEvents({ branches: [], tags: ["SessionStarted"] })
+            .pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE_A)),
+        ).toEqual([])
+      }).pipe(Effect.provide(testSqliteStorage)),
+  )
+})
+
 describe("tool result window", () => {
   const layer = testSqliteStorage
   const sessionId = SessionId.make("window-session")

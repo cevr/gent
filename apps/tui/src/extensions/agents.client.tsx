@@ -249,6 +249,20 @@ export const trayLines = (
 }
 
 /**
+ * What the tray's children have spent, each counted once, with two columns
+ * after it before the key hints: `$0.12  `. Blank while they have spent
+ * nothing, so the hints keep their place.
+ */
+const trayCost = (
+  running: ReadonlyArray<AgentRowEntry>,
+  done: ReadonlyArray<AgentRowEntry>,
+): string => {
+  const total = rowsCost([...running, ...done])
+  if (total.length === 0) return ""
+  return `${total}  `
+}
+
+/**
  * A finished side thread reports to no one: its starter is not woken, so the
  * tray says it is done. A thread that reports to its starter (`notify:
  * "starter"`) lands its round's end in the starter's transcript, so it gets
@@ -266,8 +280,11 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
   // A done thread the shell is on is shown, so it leaves the tray at once.
   const finished = () =>
     props.controller.done().filter((row) => !holds(row, props.controller.current().sessionId))
-  // Two columns of padding, the glyph and its space, and the hint on the first line.
-  const rowWidth = () => Math.max(8, dimensions().width - 4 - keyHintsWidth(TRAY_HINTS) - 2)
+  // What every child in the tray has spent, before the hints on the first line.
+  const cost = () => trayCost(running(), finished())
+  // Two columns of padding, the glyph and its space, and the cost and hint on the first line.
+  const rowWidth = () =>
+    Math.max(8, dimensions().width - 4 - textWidth(cost()) - keyHintsWidth(TRAY_HINTS) - 2)
   const lines = () => trayLines(running(), rowWidth(), finished(), props.place)
   const glyph = (mark: TrayMark) => {
     if (mark === "running") return { text: workingIconFrame(tick()), color: theme.success }
@@ -285,7 +302,7 @@ export function SubagentTray(props: { controller: AgentsController; place: PathP
               <span style={{ fg: theme.textMuted }}>{line.text.slice(line.name.length)}</span>
               <Show when={index() === 0}>
                 <span style={{ fg: theme.textMuted }}>
-                  {" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}
+                  {`${" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}${cost()}`}
                 </span>
                 <KeyHintsText hints={TRAY_HINTS} />
               </Show>
@@ -737,6 +754,16 @@ const SECTION_TITLE = {
   inactive: "Inactive",
 } satisfies Record<AgentRowEntry["section"], string>
 
+/** `Idle (3) · $0.12`: the heading, its row count, and what its rows spent, when they spent any. */
+export const sectionHeading = (
+  section: AgentRowEntry["section"],
+  count: number,
+  rows: ReadonlyArray<AgentRowEntry>,
+): string =>
+  [`${SECTION_TITLE[section]} (${count})`, rowsCost(rows)]
+    .filter((part) => part.length > 0)
+    .join(" · ")
+
 /** The state word the details column leads with. */
 const SECTION_WORD = {
   needs: "needs you",
@@ -886,18 +913,57 @@ const sessionsMark = (row: AgentRowEntry): string => {
   return `${count} sessions`
 }
 
-/** Rows narrower than this drop the side-thread mark. */
+/**
+ * The model the row's newest step ran on, by the name the status row gives
+ * it, with that step's effort beside it as the status row puts it: `Sonnet
+ * 5 high`. Blank before the row's first step.
+ */
+const modelLabel = (row: AgentRowEntry, models: ReadonlyArray<Model>, gap: string): string =>
+  [
+    ...Option.toArray(
+      Option.map(Option.fromUndefinedOr(row.model), (id) => modelIdName(id, models)),
+    ),
+    ...Option.toArray(Option.fromUndefinedOr(row.effort)),
+  ].join(gap)
+
+/** What the row has spent; blank for a row that has spent nothing, so a never-run row stays quiet. */
+const costMark = (row: AgentRowEntry): string => {
+  if (row.costUsd <= 0) return ""
+  return formatCost(row.costUsd)
+}
+
+/** The rows' summed cost, `$0.12`; blank when they have spent nothing. */
+const rowsCost = (rows: ReadonlyArray<AgentRowEntry>): string => {
+  const total = rows.reduce((sum, row) => sum + row.costUsd, 0)
+  if (total <= 0) return ""
+  return formatCost(total)
+}
+
+/** Rows narrower than this drop the side-thread mark, the model and the cost. */
 const NARROW_ROW = 80
 
 /**
- * The right column: the side-thread mark, the session count, the time. In
- * a narrow pane the side-thread mark goes first, so the name keeps its
- * room; the tree shape still shows the nesting.
+ * The right column: the side-thread mark, the session count, the model and
+ * effort, the cost, the time. In a narrow pane the side-thread mark, the
+ * model and the cost go first, so the name keeps its room; the tree shape
+ * still shows the nesting, the details say the model and the cost, and the
+ * section heading sums the cost.
  */
-const rightColumn = (row: AgentRowEntry, now: number, rowWidth: number): string => {
+export const rightColumn = (
+  row: AgentRowEntry,
+  now: number,
+  rowWidth: number,
+  models: ReadonlyArray<Model>,
+): string => {
   const join = (parts: ReadonlyArray<string>) => parts.filter((part) => part.length > 0).join("  ")
   if (rowWidth < NARROW_ROW) return join([sessionsMark(row), timeFor(row, now)])
-  return join([sideThreadMark(row), sessionsMark(row), timeFor(row, now)])
+  return join([
+    sideThreadMark(row),
+    sessionsMark(row),
+    modelLabel(row, models, " "),
+    costMark(row),
+    timeFor(row, now),
+  ])
 }
 
 /**
@@ -990,9 +1056,22 @@ const qualityLines = (
 }
 
 /**
- * The detail line for the selected row. Absent fields are dropped rather than
+ * Whether the row's loop is in a turn: the selected row's live detail says
+ * so when it has one, since a listing read between two steps can lag the
+ * loop; otherwise the listing does.
+ */
+const inTurn = (row: AgentRowEntry, detail: Option.Option<ExtensionAgentDetail>): boolean =>
+  Option.match(detail, {
+    onNone: () => working(row),
+    onSome: (value) => value.status !== "Idle",
+  })
+
+/**
+ * The detail line for the selected row, from the row's own totals, so a
+ * stored session reads them too. Absent fields are dropped rather than
  * shown as placeholders — a session that never streamed has no model, and a
- * row of dashes reads as broken rather than as empty.
+ * row of dashes reads as broken rather than as empty. A row with no turn
+ * finished or running has nothing to say, so its line is blank.
  *
  * Turns and time count finished turns. A working loop names the turn it is
  * on instead and leaves the time out, so a child a minute into its first
@@ -1000,27 +1079,24 @@ const qualityLines = (
  * row gives it (`modelIdName` over `models`, the catalog).
  */
 export const detailLabel = (
+  row: AgentRowEntry,
   detail: Option.Option<ExtensionAgentDetail>,
   models: ReadonlyArray<Model>,
-): string =>
-  Option.match(detail, {
-    onNone: () => "",
-    onSome: (value) => {
-      if (value.status === "Idle") {
-        return [
-          ...Option.toArray(Option.map(value.model, (id) => modelIdName(id, models))),
-          formatTurns(value.turns),
-          formatCost(value.costUsd),
-          formatDuration(value.durationMs, "padded"),
-        ].join("  ·  ")
-      }
-      return [
-        ...Option.toArray(Option.map(value.model, (id) => modelIdName(id, models))),
-        `turn ${value.turns + 1} running`,
-        formatCost(value.costUsd),
-      ].join("  ·  ")
-    },
-  })
+): string => {
+  const model = Option.toArray(
+    Option.map(Option.fromUndefinedOr(row.model), (id) => modelIdName(id, models)),
+  )
+  if (!inTurn(row, detail)) {
+    if (row.turns === 0) return ""
+    return [
+      ...model,
+      formatTurns(row.turns),
+      formatCost(row.costUsd),
+      formatDuration(row.durationMs, "padded"),
+    ].join("  ·  ")
+  }
+  return [...model, `turn ${row.turns + 1} running`, formatCost(row.costUsd)].join("  ·  ")
+}
 
 // ── details column ──────────────────────────────────────────────────────────
 
@@ -1048,16 +1124,20 @@ const headLines = (text: string, count: number): ReadonlyArray<string> => {
   return [...kept.slice(0, -1), `${kept.at(-1) ?? ""}…`]
 }
 
-/** `3 turns · $0.01 · 1m 12s` once idle; `turn 4 running · $0.01` while the loop is in a turn. */
-const progressLabel = (value: ExtensionAgentDetail): string => {
-  if (value.status === "Idle") {
+/**
+ * `3 turns · $0.01 · 1m 12s` once idle; `turn 4 running · $0.01` while the
+ * loop is in a turn; blank before its first turn.
+ */
+const progressLabel = (row: AgentRowEntry, running: boolean): string => {
+  if (!running) {
+    if (row.turns === 0) return ""
     return [
-      formatTurns(value.turns),
-      formatCost(value.costUsd),
-      formatDuration(value.durationMs, "compact"),
+      formatTurns(row.turns),
+      formatCost(row.costUsd),
+      formatDuration(row.durationMs, "compact"),
     ].join(" · ")
   }
-  return [`turn ${value.turns + 1} running`, formatCost(value.costUsd)].join(" · ")
+  return [`turn ${row.turns + 1} running`, formatCost(row.costUsd)].join(" · ")
 }
 
 /**
@@ -1074,8 +1154,9 @@ type DetailRun = TextRun<DetailTone>
  * glyph and state word (and why it needs the reader); `model · effort`;
  * turns, cost and time; how each model fared in a round thread's state; its
  * cwd; what it does now, else the head of its last answer; and its task. A
- * line with nothing to say is left out, so a stored session (no live
- * detail) shows its name, state and cwd.
+ * line with nothing to say is left out. The model and the totals are the
+ * row's, so a stored session (no live detail) shows them beside its name,
+ * state and cwd.
  */
 const detailLines = (
   row: AgentRowEntry,
@@ -1100,14 +1181,10 @@ const detailLines = (
       { text: ` ${state.join(" · ")}`, tone: "plain" },
     ],
   ]
-  if (Option.isSome(detail)) {
-    const model = [
-      ...Option.toArray(Option.map(detail.value.model, (id) => modelIdName(id, models))),
-      ...Option.toArray(detail.value.effort),
-    ].join(" · ")
-    if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
-    lines.push([{ text: progressLabel(detail.value), tone: "muted" }])
-  }
+  const model = modelLabel(row, models, " · ")
+  if (model.length > 0) lines.push([{ text: model, tone: "muted" }])
+  const progress = progressLabel(row, inTurn(row, detail))
+  if (progress.length > 0) lines.push([{ text: progress, tone: "muted" }])
   for (const entry of quality) {
     for (const text of qualityLines(entry, models, width)) lines.push([{ text, tone: "quality" }])
   }
@@ -1257,7 +1334,12 @@ export function AgentsPane(props: {
    */
   const rowRuns = (row: AgentRowEntry, selected: boolean): ReadonlyArray<TextRun<RowTone>> => {
     if (Option.contains(armed(), row.sessionId)) return [{ text: deletePrompt(row), tone: "muted" }]
-    const right = rightColumn(row, DateTime.toEpochMillis(DateTime.nowUnsafe()), listWidth())
+    const right = rightColumn(
+      row,
+      DateTime.toEpochMillis(DateTime.nowUnsafe()),
+      listWidth(),
+      props.models(),
+    )
     const width = Math.max(0, listWidth() - textWidth(right) - 2)
     const lead = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}`
     const glyph = `${glyphFor(glyphSection(row, selected, props.controller.detail()))} `
@@ -1293,7 +1375,11 @@ export function AgentsPane(props: {
         decoration<AgentRowEntry>(() => (
           <box paddingLeft={1}>
             <text style={{ fg: theme.textMuted }}>
-              {`${SECTION_TITLE[first.section]} (${count})`}
+              {sectionHeading(
+                first.section,
+                count,
+                visible().filter((row) => row.section === first.section),
+              )}
             </text>
           </box>
         )),
@@ -1405,7 +1491,10 @@ export function AgentsPane(props: {
         detail={Option.getOrUndefined(
           Option.liftPredicate(
             Option.liftPredicate(
-              detailLabel(props.controller.detail(), props.models()),
+              Option.match(cursorRow(), {
+                onNone: () => "",
+                onSome: (row) => detailLabel(row, cursorDetail(row), props.models()),
+              }),
               () => visible().length > 0,
             ),
             () => !wide(),

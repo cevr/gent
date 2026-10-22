@@ -236,6 +236,7 @@ const defaultSession = (): ExtensionSessionService => ({
   cancelWake: () => die("Session.cancelWake"),
   listBranches: die("Session.listBranches"),
   listSessions: () => die("Session.listSessions"),
+  branchMetrics: () => die("Session.branchMetrics"),
   listActiveLoops: die("Session.listActiveLoops"),
 })
 

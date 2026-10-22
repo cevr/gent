@@ -106,20 +106,13 @@ export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly b
  * Per-loop detail, for one loop at a time.
  *
  * Enumerating every loop must not fan out into N snapshot reads, so listings
- * carry identity and liveness only and a client asks for this separately —
- * for the row a reader is actually looking at. A session that has never
- * streamed reads zero turns, zero cost and its resolved model.
+ * carry identity, liveness and each row's metric totals, and a client asks
+ * for this separately, for the row a reader is actually looking at: its live
+ * state and its prompt and answer text.
  */
 export interface ExtensionAgentDetail {
   /** What the loop is doing: its runtime state tag. */
   readonly status: SessionSnapshot["runtime"]["_tag"]
-  /** None when nobody named the session a model. */
-  readonly model: Option.Option<string>
-  /** The reasoning effort the next turn uses; None when the model takes none. */
-  readonly effort: Option.Option<string>
-  readonly turns: number
-  readonly costUsd: number
-  readonly durationMs: number
   /** Messages the last projection left out of the model's view; 0 before a turn has run. */
   readonly omittedMessages: number
   /**
@@ -402,11 +395,6 @@ const agentDetailAt = (
           .filter((text) => text.length > 0)
       return {
         status: snapshot.runtime._tag,
-        model: Option.fromUndefinedOr(snapshot.resolvedModelId),
-        effort: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
-        turns: snapshot.metrics.turns,
-        costUsd: snapshot.metrics.costUsd,
-        durationMs: snapshot.metrics.durationMs,
         omittedMessages: Option.fromUndefinedOr(snapshot.metrics.context).pipe(
           Option.map((context) => context.omittedMessages),
           Option.getOrElse(() => 0),

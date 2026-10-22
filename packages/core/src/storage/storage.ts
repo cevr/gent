@@ -704,7 +704,7 @@ export class EventDecodeError extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("EventDecodeError", {
   eventId: EventId,
-  operation: Schema.Literals(["listEvents", "listToolResultWindow"]),
+  operation: Schema.Literals(["listEvents", "listBranchEvents", "listToolResultWindow"]),
   error: Schema.String,
 }) {}
 
@@ -777,6 +777,16 @@ interface EventStorageService {
     sessionId: SessionId
     branchId?: BranchId
     afterId?: number
+  }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
+  /**
+   * The events of `tags` on the named branches, in log order, in one read:
+   * a fold that reads a few kinds (`SESSION_METRIC_TAGS`) over many
+   * branches without each branch's whole log. Only events that name their
+   * branch match; a session-level event is on no branch.
+   */
+  readonly listBranchEvents: (params: {
+    branches: ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>
+    tags: ReadonlyArray<AgentEvent["_tag"]>
   }) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStorageError>
   readonly getLatestEventId: (params: {
     sessionId: SessionId
@@ -867,6 +877,29 @@ export class EventStorage extends Context.Service<EventStorage, EventStorageServ
             return yield* rowsToEnvelopes(rawRows, "listEvents")
           },
           Effect.mapError(mapEventStorageError("Failed to list events")),
+        ),
+
+        listBranchEvents: Effect.fn("EventStorage.listBranchEvents")(
+          function* ({ branches, tags }) {
+            if (branches.length === 0 || tags.length === 0) return []
+            const workspaceId = yield* CurrentWorkspaceId
+            // The session list lets each probe ride idx_events_session_tag;
+            // the branch list then keeps only the named branches.
+            const sessionIds = [...new Set(branches.map((branch) => branch.sessionId))]
+            const rawRows = yield* sql`SELECT e.id, e.event_json, e.created_at, e.trace_id
+              FROM events e
+              JOIN sessions s ON s.id = e.session_id
+              WHERE e.session_id IN ${sqlInList(sql, sessionIds)}
+                AND s.workspace_id = ${workspaceId}
+                AND e.branch_id IN ${sqlInList(
+                  sql,
+                  branches.map((branch) => branch.branchId),
+                )}
+                AND e.event_tag IN ${sqlInList(sql, tags)}
+              ORDER BY e.id ASC`
+            return yield* rowsToEnvelopes(rawRows, "listBranchEvents")
+          },
+          Effect.mapError(mapEventStorageError("Failed to list branch events")),
         ),
 
         getLatestEventId: Effect.fn("EventStorage.getLatestEventId")(

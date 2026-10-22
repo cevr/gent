@@ -26,6 +26,8 @@ import {
   default as agentsExtension,
   AgentsPane,
   detailLabel,
+  rightColumn,
+  sectionHeading,
   makeAgentsController,
   SubagentTray,
   trayLines,
@@ -84,16 +86,15 @@ const row = (id: string, live = true): AgentRowEntry => ({
   live,
   depth: 0,
   sideThread: false,
-})
-
-const detail = (turns: number): ExtensionAgentDetail => ({
-  status: "Idle",
-  model: Option.some("anthropic/claude-sonnet-5"),
-  turns,
+  turns: 0,
   costUsd: 0,
   durationMs: 0,
-  omittedMessages: 0,
-  effort: Option.none(),
+})
+
+/** A detail told apart from another by `omittedMessages`, which the reply carries through. */
+const detail = (omittedMessages: number): ExtensionAgentDetail => ({
+  status: "Idle",
+  omittedMessages,
   firstPrompt: Option.none(),
   lastAnswer: Option.none(),
 })
@@ -137,7 +138,9 @@ describe("Agents controller detail", () => {
       // The reply for the row still selected is the one that wins.
       yield* Deferred.succeed(fast, detail(222))
       yield* Effect.yieldNow
-      expect(Option.map(controller.detail(), (value) => value.turns)).toEqual(Option.some(222))
+      expect(Option.map(controller.detail(), (value) => value.omittedMessages)).toEqual(
+        Option.some(222),
+      )
     }),
   )
 
@@ -309,7 +312,7 @@ describe("Agents pane refresh while open", () => {
         () =>
           Option.exists(
             controller.detail(),
-            (value) => value.status === "Idle" && value.turns === 1,
+            (value) => value.status === "Idle" && value.omittedMessages === 1,
           ),
         "selected detail after the child finished",
       )
@@ -429,7 +432,11 @@ describe("Agents pane refresh while open", () => {
             () =>
               Effect.sync(() => {
                 detailReads += 1
-                return { ...detail(1), status: "Running", costUsd: detailReads / 100 }
+                return {
+                  ...detail(1),
+                  status: "Running",
+                  lastAnswer: Option.some(`step ${detailReads}`),
+                }
               }),
             noQuality,
           ).pipe(Effect.provideService(Clock.Clock, clock)),
@@ -441,15 +448,18 @@ describe("Agents pane refresh while open", () => {
         yield* waitUntil(() => Option.isSome(controller.detail()), "first detail")
         const firstReads = detailReads
 
-        // Each poll reads the detail again; the cost the pane shows follows it.
+        // Each poll reads the detail again; the answer the pane shows follows it.
         yield* waitUntilAdvancing(
           clock.adjust(POLL),
           () => detailReads >= firstReads + 3,
           "a detail read per poll",
         )
         yield* waitUntil(
-          () => Option.exists(controller.detail(), (shown) => shown.costUsd === detailReads / 100),
-          "the latest cost",
+          () =>
+            Option.exists(controller.detail(), (shown) =>
+              Option.contains(shown.lastAnswer, `step ${detailReads}`),
+            ),
+          "the latest answer",
         )
         expect(listings).toBeGreaterThanOrEqual(4)
       }).pipe(Effect.timeout("10 seconds")),
@@ -588,6 +598,9 @@ const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
   live: false,
   depth,
   sideThread: false,
+  turns: 0,
+  costUsd: 0,
+  durationMs: 0,
 })
 
 /**
@@ -761,7 +774,13 @@ describe("Agents pane navigation", () => {
   it.scopedLive("asks for detail about the row under the cursor and renders it", () =>
     Effect.gen(function* () {
       const parent = rowPane("detail-root", "Alpha", 0)
-      const child = rowPane("detail-child", "Beta", 1)
+      const child: AgentRowEntry = {
+        ...rowPane("detail-child", "Beta", 1),
+        model: ModelId.make("anthropic/claude-sonnet-5"),
+        turns: 7,
+        costUsd: 0.125,
+        durationMs: 93_000,
+      }
       const asked: Array<string> = []
       const [detail, setDetail] = createSignal(Option.none<ExtensionAgentDetail>())
 
@@ -788,12 +807,7 @@ describe("Agents pane navigation", () => {
                   setDetail(
                     Option.some({
                       status: "Idle",
-                      model: Option.some("anthropic/claude-sonnet-5"),
-                      turns: 7,
-                      costUsd: 0.125,
-                      durationMs: 93_000,
                       omittedMessages: 0,
-                      effort: Option.none(),
                       firstPrompt: Option.none(),
                       lastAnswer: Option.none(),
                     }),
@@ -847,12 +861,7 @@ describe("Agents pane navigation", () => {
             detail: () =>
               Option.some({
                 status: "Running",
-                model: Option.some("anthropic/claude-sonnet-5"),
-                turns: 1,
-                costUsd: 0,
-                durationMs: 0,
                 omittedMessages: 0,
-                effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
               }),
@@ -893,12 +902,7 @@ describe("Agents pane navigation", () => {
             detail: () =>
               Option.some({
                 status: "WaitingForInteraction",
-                model: Option.none(),
-                turns: 1,
-                costUsd: 0,
-                durationMs: 0,
                 omittedMessages: 0,
-                effort: Option.none(),
                 firstPrompt: Option.none(),
                 lastAnswer: Option.none(),
               }),
@@ -1045,17 +1049,7 @@ describe("Agents pane reopen", () => {
           () => Effect.succeed([live]),
           (key) => {
             asked.push(key.sessionId)
-            return Effect.succeed({
-              status: "Idle",
-              model: Option.some("anthropic/claude-sonnet-5"),
-              turns: turns(),
-              costUsd: 0,
-              durationMs: 0,
-              omittedMessages: 0,
-              effort: Option.none(),
-              firstPrompt: Option.none(),
-              lastAnswer: Option.none(),
-            })
+            return Effect.succeed({ ...detail(turns()), status: "Idle" })
           },
           noQuality,
         ),
@@ -1090,7 +1084,9 @@ describe("Agents pane reopen", () => {
       yield* Effect.promise(() => setup.renderOnce())
       yield* Effect.promise(() => setup.renderOnce())
       expect(asked).toEqual(["reopened", "reopened"])
-      expect(Option.map(controller.detail(), (value) => value.turns)).toEqual(Option.some(9))
+      expect(Option.map(controller.detail(), (value) => value.omittedMessages)).toEqual(
+        Option.some(9),
+      )
     }),
   )
 })
@@ -1106,6 +1102,10 @@ describe("Agents pane framing", () => {
           ...rowPane("framed", "Alpha", 0),
           section: "idle",
           live: true,
+          model: ModelId.make("anthropic/claude-sonnet-5"),
+          turns: 7,
+          costUsd: 0.125,
+          durationMs: 93_000,
         }
         const setup = yield* renderScoped(
           () => (
@@ -1124,12 +1124,7 @@ describe("Agents pane framing", () => {
                 detail: () =>
                   Option.some({
                     status: "Idle",
-                    model: Option.some("anthropic/claude-sonnet-5"),
-                    turns: 7,
-                    costUsd: 0.125,
-                    durationMs: 93_000,
                     omittedMessages: 0,
-                    effort: Option.none(),
                     firstPrompt: Option.none(),
                     lastAnswer: Option.none(),
                   }),
@@ -1347,6 +1342,9 @@ const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => {
     live: section !== "inactive",
     depth: 0,
     sideThread: false,
+    turns: 0,
+    costUsd: 0,
+    durationMs: 0,
   }
   if (section === "running") return { ...entry, status: "Running" }
   if (section === "idle") return { ...entry, status: "Idle" }
@@ -1414,31 +1412,46 @@ describe("agents pane rows", () => {
           { ...child("waiting", "idle", "root"), updatedAt: now - 180_000 },
           { ...child("stored", "inactive", "root"), updatedAt: now - 2 * 3_600_000 },
         ]
-        const setup = yield* paneOver(listed, 43)
-        const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
-        const lines = frame.split("\n")
-        const rule = lines.find((line) => line.startsWith("────")) ?? ""
-        const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+        const framed = (rows: ReadonlyArray<AgentRowEntry>) =>
+          Effect.gen(function* () {
+            const setup = yield* paneOver(rows, 43)
+            const frame = yield* waitForFrame(setup, (next) => next.includes("Sessions ·"), "pane")
+            const lines = frame.split("\n")
+            const rule = lines.find((line) => line.startsWith("────")) ?? ""
+            const lineOf = (text: string) => lines.findIndex((line) => line.includes(text))
+            // Each row fits inside the rule, with nothing wrapped onto a line of its own.
+            const fits = (text: string) => {
+              expect(lines.filter((line) => line.includes(text))).toHaveLength(1)
+              expect(lines[lineOf(text)]?.trimEnd().length ?? 0).toBeLessThanOrEqual(
+                rule.trimEnd().length,
+              )
+            }
+            return { lines, lineOf, fits }
+          })
 
         // The running agent: spinner, task, its current activity and how long it has run.
-        const worker = lines[lineOf("· Running")] ?? ""
+        const all = yield* framed(listed)
+        const worker = all.lines[all.lineOf("· Running")] ?? ""
         expect(worker).toMatch(/[◇◈◆] delegate.* · Running/)
         expect(worker.trimEnd()).toMatch(/1m 1\ds$/)
+        // Its detail line names the turn it is on and takes a row of the six
+        // the body keeps, so the stored row scrolls below it.
+        expect(all.lineOf("turn 1 running")).toBeGreaterThan(all.lineOf("· Running"))
         // The others: a ring for idle, a dot for stored, and the age of their last step.
-        expect(lines[lineOf("waiting task")]).toContain("○ delegate: waiting task")
-        expect(lines[lineOf("stored task")]).toContain("· delegate: stored task")
-        expect(lines[lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
-        expect(lines[lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
+        expect(all.lines[all.lineOf("waiting task")]).toContain("○ delegate: waiting task")
+        expect(all.lines[all.lineOf("waiting task")]?.trimEnd()).toMatch(/3m$/)
         // Running first, in the order the server sent.
-        expect(lineOf("· Running")).toBeLessThan(lineOf("waiting task"))
-        expect(lineOf("waiting task")).toBeLessThan(lineOf("stored task"))
-        // Each row fits inside the rule, with nothing wrapped onto a line of its own.
-        for (const text of ["· Running", "waiting task", "stored task"]) {
-          expect(lines.filter((line) => line.includes(text))).toHaveLength(1)
-          expect(lines[lineOf(text)]?.trimEnd().length ?? 0).toBeLessThanOrEqual(
-            rule.trimEnd().length,
-          )
-        }
+        expect(all.lineOf("· Running")).toBeLessThan(all.lineOf("waiting task"))
+        all.fits("· Running")
+        all.fits("waiting task")
+
+        // Under a never-run idle cursor row the detail line is blank, and the
+        // list keeps the row.
+        const rest = yield* framed(listed.slice(1))
+        expect(rest.lines[rest.lineOf("stored task")]).toContain("· delegate: stored task")
+        expect(rest.lines[rest.lineOf("stored task")]?.trimEnd()).toMatch(/2h$/)
+        expect(rest.lineOf("waiting task")).toBeLessThan(rest.lineOf("stored task"))
+        rest.fits("stored task")
       }),
   )
 
@@ -1531,16 +1544,11 @@ describe("agents pane command center", () => {
     provider: ProviderId.make("anthropic"),
   })
   /**
-   * The selected row's live detail: a delegate thread parked on an ask, three
-   * turns in. Its first prompt is its task under the starter's round frame.
+   * The selected row's live detail: a delegate thread parked on an ask. Its
+   * first prompt is its task under the starter's round frame.
    */
   const asking: ExtensionAgentDetail = {
     status: "WaitingForInteraction",
-    model: Option.some("anthropic/claude-sonnet-5-5"),
-    effort: Option.some("high"),
-    turns: 3,
-    costUsd: 0.012,
-    durationMs: 72_000,
     omittedMessages: 0,
     firstPrompt: Option.some(
       threadRoundText({
@@ -1614,6 +1622,12 @@ describe("agents pane command center", () => {
       status: "WaitingForInteraction",
       cwd: "/home/me/work/docs",
       updatedAt: now - 12_000,
+      // Three turns in, its newest step on Sonnet at high effort.
+      model: SONNET.id,
+      effort: "high",
+      turns: 3,
+      costUsd: 0.012,
+      durationMs: 72_000,
     },
     {
       ...root("questions", "needs"),
@@ -1974,26 +1988,107 @@ describe("the status row names the child the reader watches", () => {
 })
 
 describe("agents pane counts and detail", () => {
+  const SONNET = new Model({
+    id: ModelId.make("anthropic/claude-sonnet-5"),
+    name: "Claude Sonnet 5",
+    provider: ProviderId.make("anthropic"),
+  })
+  /** A row three turns and $0.03 in, its newest step on Sonnet at high effort. */
+  const spent = (section: AgentRowEntry["section"], turns: number): AgentRowEntry => ({
+    ...root("spent", section),
+    model: SONNET.id,
+    effort: "high",
+    turns,
+    costUsd: 0.028,
+    durationMs: 72_000,
+  })
+  const live = (status: ExtensionAgentDetail["status"]): ExtensionAgentDetail => ({
+    status,
+    omittedMessages: 0,
+    firstPrompt: Option.none(),
+    lastAnswer: Option.none(),
+  })
+
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
-      const detail = (
-        status: ExtensionAgentDetail["status"],
-        turns: number,
-      ): ExtensionAgentDetail => ({
-        status,
-        model: Option.some("anthropic/claude-sonnet-5"),
-        turns,
-        costUsd: 0.028,
-        durationMs: 0,
-        omittedMessages: 0,
-        effort: Option.none(),
-        firstPrompt: Option.none(),
-        lastAnswer: Option.none(),
-      })
-      expect(detailLabel(Option.some(detail("Running", 0)), [])).toBe(
+      expect(detailLabel(spent("running", 0), Option.some(live("Running")), [])).toBe(
         "claude-sonnet-5  ·  turn 1 running  ·  $0.03",
       )
-      expect(detailLabel(Option.some(detail("Idle", 2)), [])).toContain("2 turns  ·  $0.03")
+      expect(detailLabel(spent("idle", 2), Option.some(live("Idle")), [SONNET])).toBe(
+        "Claude Sonnet 5  ·  2 turns  ·  $0.03  ·  1m12s",
+      )
+      // A listing read between two steps lags the loop: the live detail wins.
+      expect(detailLabel(spent("idle", 2), Option.some(live("Running")), [])).toContain(
+        "turn 3 running",
+      )
+    }),
+  )
+
+  it.live("a stored session's detail line reads its own totals, with no live detail", () =>
+    Effect.sync(() => {
+      expect(detailLabel(spent("inactive", 4), Option.none(), [SONNET])).toBe(
+        "Claude Sonnet 5  ·  4 turns  ·  $0.03  ·  1m12s",
+      )
+      // A session that never finished a turn has nothing to total: no line.
+      expect(detailLabel(root("new", "idle"), Option.none(), [SONNET])).toBe("")
+    }),
+  )
+
+  it.live(
+    "a wide row names its model and effort and what it spent; a narrow one only its time",
+    () =>
+      Effect.sync(() => {
+        const row = { ...spent("inactive", 4), updatedAt: 0 }
+        expect(rightColumn(row, 180_000, 100, [SONNET])).toBe("Claude Sonnet 5 high  $0.03  3m")
+        expect(rightColumn(row, 180_000, 60, [SONNET])).toBe("3m")
+        // A row that never ran names no model and spent nothing: only its age.
+        expect(rightColumn({ ...root("new", "idle"), updatedAt: 0 }, 180_000, 100, [])).toBe("3m")
+      }),
+  )
+
+  it.live("a section heading adds up what its rows spent", () =>
+    Effect.sync(() => {
+      const rows = [spent("idle", 1), { ...spent("idle", 1), costUsd: 0.1 }]
+      expect(sectionHeading("idle", 2, rows)).toBe("Idle (2) · $0.13")
+      expect(sectionHeading("idle", 1, [root("new", "idle")])).toBe("Idle (1)")
+    }),
+  )
+
+  it.scopedLive("the tray's first line says what its children spent, before the hints", () =>
+    Effect.gen(function* () {
+      const busy = (id: string, costUsd: number): AgentRowEntry => ({
+        ...child(id, "running", "root"),
+        costUsd,
+      })
+      const setup = yield* renderScoped(
+        () => (
+          <SubagentTray
+            place={PLACE}
+            controller={{
+              rows: () => [root("root", "idle"), busy("a", 0.02), busy("b", 0.03)],
+              current: () => ({
+                sessionId: SessionId.make("root"),
+                branchId: BranchId.make("root-branch"),
+              }),
+              error: () => Option.none(),
+              loading: () => false,
+              refresh: () => {},
+              reload: () => {},
+              quality: () => [],
+              detail: () => Option.none(),
+              select: () => {},
+              done: () => [],
+              open: () => false,
+            }}
+          />
+        ),
+        { width: 100, height: 10 },
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("a task"), "tray")
+      const lines = renderFrame(setup).split("\n")
+      const first = lines.find((line) => line.includes("← sessions")) ?? ""
+      expect(first).toMatch(/\$0\.05 +← sessions/)
+      expect(lines.filter((line) => line.includes("$"))).toHaveLength(1)
     }),
   )
 })
@@ -2223,7 +2318,13 @@ describe("thread rows", () => {
 })
 
 describe("agents pane quality read", () => {
-  const worker = { ...root("worker", "idle"), name: "implement the parser" }
+  const worker: AgentRowEntry = {
+    ...root("worker", "idle"),
+    name: "implement the parser",
+    turns: 2,
+    durationMs: 4_000,
+    costUsd: 0.08,
+  }
   const sonnet = {
     state: "work",
     model: "anthropic/claude-sonnet-5-5",

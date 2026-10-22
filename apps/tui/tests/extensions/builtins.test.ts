@@ -968,6 +968,9 @@ describe("Herdr integration", () => {
         live: true,
         depth: 1,
         sideThread: false,
+        turns: 0,
+        costUsd: 0,
+        durationMs: 0,
       }
       let children: ReadonlyArray<AgentRowEntry> = [child]
       const [focused, setFocused] = createSignal<ClientActivitySnapshot["state"]>("idle")
@@ -1109,6 +1112,9 @@ describe("Herdr integration", () => {
           live: true,
           depth: 1,
           sideThread: false,
+          turns: 0,
+          costUsd: 0,
+          durationMs: 0,
         }
         const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
           Scope.close(scope, Exit.void),

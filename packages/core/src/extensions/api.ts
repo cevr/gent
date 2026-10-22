@@ -128,11 +128,13 @@ export {
 export { FollowUpQueueFull, interjectionMessageId } from "../domain/agent-loop.js"
 // The account a session runs on, folded from its events (`Session.events`)
 // one at a time: `stepSessionMetrics` from `initialSessionMetrics`, then
-// `sessionAccount` with its admission.
+// `sessionAccount` with its admission. `Session.branchMetrics` reads the
+// same totals for many branches at once.
 export {
   initialSessionMetrics,
   SessionAccount,
   sessionAccount,
+  type SessionRuntimeMetrics,
   stepSessionMetrics,
 } from "../domain/agent-loop.js"
 export {

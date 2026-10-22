@@ -12,7 +12,15 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { BranchId, ExtensionContext, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
+import {
+  BranchId,
+  ExtensionContext,
+  initialSessionMetrics,
+  ModelId,
+  ref,
+  SessionId,
+  ToolCallId,
+} from "@gent/core/extensions/api"
 import { AgentEvent, decodeRequestReply } from "@gent/core/protocol"
 import {
   activityOf,
@@ -30,6 +38,7 @@ import {
   projectAgentRows,
   reconcileAgentRows,
   rowKey,
+  rowTotals,
   sectionOf,
 } from "../src/agents-view.js"
 import {
@@ -41,6 +50,7 @@ import {
   testAgent,
   testLeafContext,
   testToolContext,
+  TEST_MODEL_ID,
   waitFor,
 } from "@gent/core/test-utils"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
@@ -375,6 +385,45 @@ describe("agents view projection", () => {
         thread: "first",
       }),
     ]
+
+    test("a thread's row adds up its sessions' turns, cost and time, and names its newest step's model", () => {
+      const [row] = buildRowTree(reconcileAgentRows({ live: [], durable: chain(Option.none()) }))
+      const opus = ModelId.make("anthropic/claude-opus-5")
+      const sonnet = ModelId.make("anthropic/claude-sonnet-5")
+      const metrics = new Map([
+        [
+          rowKey({ sessionId: sid("first"), branchId: bid("b") }),
+          {
+            ...initialSessionMetrics,
+            turns: 2,
+            costUsd: 0.5,
+            durationMs: 2_000,
+            lastStep: { model: opus, effort: "high" as const },
+          },
+        ],
+        [
+          rowKey({ sessionId: sid("second"), branchId: bid("b") }),
+          {
+            ...initialSessionMetrics,
+            turns: 1,
+            costUsd: 0.25,
+            durationMs: 1_000,
+            lastStep: { model: sonnet },
+          },
+        ],
+        // The newest session has not run a step: the model is the one before it.
+        [rowKey({ sessionId: sid("third"), branchId: bid("b") }), initialSessionMetrics],
+      ])
+      expect(row?.members).toHaveLength(3)
+      expect(rowTotals(row!, metrics)).toEqual({
+        turns: 3,
+        costUsd: 0.75,
+        durationMs: 3_000,
+        model: sonnet,
+      })
+      // The newest step named no level, so the row names none.
+      expect(rowTotals(row!, metrics).effort).toBeUndefined()
+    })
 
     test("a handoff thread preserves a pending ask over working members in either age order", () => {
       for (const statuses of [
@@ -919,6 +968,46 @@ describe("AgentsViewExtension via RPC", () => {
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("18 seconds")),
       ),
     20_000,
+  )
+
+  it.live(
+    "a session's row counts its finished turn and names the model its step ran on",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: "hello",
+          })
+          const Totals = Schema.Struct({
+            rows: Schema.Array(
+              Schema.Struct({
+                sessionId: Schema.String,
+                turns: Schema.Finite,
+                costUsd: Schema.Finite,
+                model: Schema.optional(Schema.String),
+              }),
+            ),
+          })
+          const row = yield* waitFor(
+            requestRows(harness, {}).pipe(
+              Effect.flatMap(({ raw }) => Schema.decodeUnknownEffect(Totals)(raw)),
+              Effect.map((reply) =>
+                Option.fromUndefinedOr(
+                  reply.rows.find((candidate) => candidate.sessionId === harness.sessionId),
+                ),
+              ),
+            ),
+            (found) => Option.exists(found, (value) => value.turns === 1),
+            8_000,
+            "the session's finished turn",
+          )
+          expect(Option.getOrUndefined(row)?.model).toBe(TEST_MODEL_ID)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 
   it.live(

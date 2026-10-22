@@ -398,6 +398,7 @@ const stubCtx = testToolContext({
     events: () => Stream.die("events not wired in test"),
     listSessions: dieStub("listSessions"),
     listActiveLoops: Effect.die("listActiveLoops not wired in test"),
+    branchMetrics: () => Effect.die("branchMetrics not wired in test"),
   },
   Interaction: {
     approve: dieStub("approve"),

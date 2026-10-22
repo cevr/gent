@@ -173,6 +173,9 @@ const storedRows: ReadonlyArray<AgentRowEntry> = [
     live: false,
     depth: 0,
     sideThread: false,
+    turns: 0,
+    costUsd: 0,
+    durationMs: 0,
   },
   {
     sessionId: SessionId.make("session-handoff"),
@@ -183,6 +186,9 @@ const storedRows: ReadonlyArray<AgentRowEntry> = [
     depth: 1,
     parentSessionId: rootId,
     sideThread: false,
+    turns: 0,
+    costUsd: 0,
+    durationMs: 0,
   },
   {
     sessionId: delegateId,
@@ -193,6 +199,9 @@ const storedRows: ReadonlyArray<AgentRowEntry> = [
     depth: 1,
     parentSessionId: rootId,
     sideThread: true,
+    turns: 0,
+    costUsd: 0,
+    durationMs: 0,
   },
 ]
 

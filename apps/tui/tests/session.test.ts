@@ -1853,6 +1853,7 @@ describe("useSessionFeed", () => {
       const streamStartedEnvelope = makeEnvelope(
         2,
         AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
           messageId: MessageId.make("msg"),
           step: 1,
           sessionId,
@@ -2097,6 +2098,7 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           1,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,
@@ -2180,6 +2182,7 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           1,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,
@@ -2230,6 +2233,7 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           1,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,
@@ -2272,6 +2276,7 @@ describe("useSessionFeed", () => {
         makeEnvelope(
           1,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,
@@ -2366,6 +2371,7 @@ describe("useSessionFeed", () => {
     makeEnvelope(
       1,
       AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
         messageId: MessageId.make("msg"),
         step: 1,
         sessionId,
@@ -2476,6 +2482,7 @@ describe("useSessionFeed", () => {
           makeEnvelope(
             1,
             AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
               messageId: MessageId.make("msg"),
               step: 1,
               sessionId,
@@ -2523,6 +2530,7 @@ describe("useSessionFeed", () => {
           makeEnvelope(
             1,
             AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
               messageId: MessageId.make("msg"),
               step: 1,
               sessionId,
@@ -2564,6 +2572,7 @@ describe("useSessionFeed", () => {
           makeEnvelope(
             1,
             AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
               messageId: MessageId.make("msg"),
               step: 1,
               sessionId,
@@ -2797,7 +2806,13 @@ describe("useSessionFeed", () => {
         const nextInputId = MessageId.make("follow-up-input")
         const toolCallId = ToolCallId.make("first-stream-tool")
         const events = [
-          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+          AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
+            sessionId,
+            branchId,
+            messageId: inputId,
+            step: 1,
+          }),
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "First " }),
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 6, chunk: "answer" }),
           AgentEvent.cases.ToolCallStarted.make({
@@ -2813,7 +2828,13 @@ describe("useSessionFeed", () => {
             sessionId,
             branchId,
           }),
-          AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+          AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
+            sessionId,
+            branchId,
+            messageId: inputId,
+            step: 2,
+          }),
           AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "Next step" }),
           AgentEvent.cases.ToolCallSucceeded.make({
             sessionId,
@@ -2831,6 +2852,7 @@ describe("useSessionFeed", () => {
             durationMs: 0,
           }),
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             sessionId,
             branchId,
             messageId: nextInputId,
@@ -2973,6 +2995,7 @@ describe("useSessionFeed", () => {
     const inputId = MessageId.make(`${name}-input`)
     const answerId = assistantMessageIdForTurn(inputId, 1)
     const started = AgentEvent.cases.StreamStarted.make({
+      model: ModelId.make("anthropic/claude-sonnet-5"),
       sessionId,
       branchId,
       messageId: inputId,
@@ -3170,7 +3193,13 @@ describe("useSessionFeed", () => {
       const secondAnswerId = assistantMessageIdForTurn(inputId, 2)
       const lateToolCallId = ToolCallId.make("late-tool-call")
       const events = [
-        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 1 }),
+        AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
+          sessionId,
+          branchId,
+          messageId: inputId,
+          step: 1,
+        }),
         AgentEvent.cases.StreamChunk.make({
           sessionId,
           branchId,
@@ -3183,7 +3212,13 @@ describe("useSessionFeed", () => {
           sessionId,
           branchId,
         }),
-        AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: inputId, step: 2 }),
+        AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
+          sessionId,
+          branchId,
+          messageId: inputId,
+          step: 2,
+        }),
         AgentEvent.cases.StreamChunk.make({
           sessionId,
           branchId,
@@ -3266,6 +3301,7 @@ describe("useSessionFeed", () => {
         const streamStartedEnvelope = makeEnvelope(
           2,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,

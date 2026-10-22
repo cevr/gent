@@ -149,8 +149,8 @@ they are then, so an edit reaches the next turn without a restart.
   `session.get`), so an override does not hide it. The status row shows the effort the model is
   sent, after the clamp to the levels it accepts (`effectiveEffort`,
   `@gent/core/protocol`). While a turn runs it shows the turn's own level:
-  each `StreamStarted` names the level its step goes out at (the fields of
-  the `StreamEnded` receipt), the metrics fold keeps it as `turnEffort` until
+  each `StreamStarted` names the model and the level its step goes out at
+  (the fields of the `StreamEnded` receipt), the metrics fold keeps it as `turnEffort` until
   `TurnCompleted`, and a level set meanwhile shows once the turn completes.
   On auto the row reads `auto → <level>` with the newest effort route's
   level, and `auto` before the first route.

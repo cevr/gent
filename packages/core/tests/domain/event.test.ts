@@ -337,7 +337,8 @@ const streamStep = (branch: BranchId) => ({
   messageId: MessageId.make(`turn-${branch}`),
   step: 1,
 })
-const started = (branch: BranchId = branchId) => StreamStarted.make(streamStep(branch))
+const started = (branch: BranchId = branchId) =>
+  StreamStarted.make({ ...streamStep(branch), model: ModelId.make("anthropic/claude-sonnet-5") })
 const ended = (branch: BranchId = branchId) => StreamEnded.make(streamStep(branch))
 
 const chunk = (offset: number, text: string, branch: BranchId = branchId) =>

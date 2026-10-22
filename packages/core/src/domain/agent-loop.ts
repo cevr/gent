@@ -1,4 +1,4 @@
-import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effect"
+import { type Context, DateTime, Effect, Match, Option, Predicate, Schema } from "effect"
 import { type AgentEvent, ContextRenter } from "./event.js"
 import {
   Message,
@@ -198,6 +198,15 @@ export const SessionRuntimeMetrics = Schema.Struct({
    * the account its turns walk from. Absent for a run never placed.
    */
   placement: Schema.optional(Schema.Struct({ provider: ProviderId, slot: CredentialSlot })),
+  /**
+   * The model and effort of the branch's newest step, from its
+   * `StreamStarted`: what an agents listing names a row by, set while the
+   * step runs. `effort` is absent when the request named no level. Absent
+   * until a step starts.
+   */
+  lastStep: Schema.optional(
+    Schema.Struct({ model: ModelId, effort: Schema.optional(ReasoningEffort) }),
+  ),
 })
 export type SessionRuntimeMetrics = typeof SessionRuntimeMetrics.Type
 
@@ -263,6 +272,30 @@ export const initialSessionMetrics: SessionRuntimeMetrics = {
 }
 
 /**
+ * The events the metrics read; every other event leaves them as they were.
+ * Folding only these gives the totals the whole log gives, so a listing of
+ * many branches reads these and not each branch's log
+ * (`EventStorage.listBranchEvents`). `stepSessionMetrics` switches over
+ * exactly this list: a case outside it, or a tag here without a case, does
+ * not compile.
+ */
+export const SESSION_METRIC_TAGS = [
+  "StreamStarted",
+  "TurnCompleted",
+  "ModelContextProjected",
+  "ModelRouted",
+  "StreamEnded",
+  "CredentialAssigned",
+] as const satisfies ReadonlyArray<AgentEvent["_tag"]>
+type SessionMetricEvent = Extract<
+  AgentEvent,
+  { readonly _tag: (typeof SESSION_METRIC_TAGS)[number] }
+>
+const sessionMetricTags: ReadonlySet<string> = new Set(SESSION_METRIC_TAGS)
+const isSessionMetricEvent = (event: AgentEvent): event is SessionMetricEvent =>
+  sessionMetricTags.has(event._tag)
+
+/**
  * The totals after one more event. The server folds a branch's stored log
  * with it (`foldSessionMetrics`); a client applies it to each live event on
  * top of the snapshot it hydrated, so both read one fold (decided by
@@ -272,84 +305,79 @@ export const stepSessionMetrics = (
   metrics: SessionRuntimeMetrics,
   event: AgentEvent,
 ): SessionRuntimeMetrics => {
+  if (!isSessionMetricEvent(event)) return metrics
   const addCost = (costUsd: Option.Option<number>) =>
     metrics.costUsd + Option.getOrElse(costUsd, () => 0)
-  switch (event._tag) {
-    case "StreamStarted":
-      return { ...metrics, turnEffort: omitUndefined({ level: event.reasoningLevel }) }
-    case "TurnCompleted": {
-      const { turnEffort: _ended, turnModelAttempts: _spent, ...idle } = metrics
-      return {
-        ...idle,
-        turns: metrics.turns + 1,
-        durationMs: metrics.durationMs + event.durationMs,
-      }
-    }
-    case "ModelContextProjected": {
-      let compactions = Option.getOrElse(
-        Option.map(Option.fromUndefinedOr(metrics.context), (context) => context.compactions),
-        () => 0,
-      )
-      if (event.compacted) compactions += 1
-      return {
+  return Match.type<SessionMetricEvent>().pipe(
+    Match.tagsExhaustive({
+      StreamStarted: (started): SessionRuntimeMetrics => ({
         ...metrics,
-        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
-        // A new step's projection: the last count belongs to the step before it.
-        lastInputTokens: 0,
-        context: {
-          estimatedTokens: event.estimatedTokens,
-          availableInputTokens: event.availableInputTokens,
-          contextLimitTokens: event.contextLimitTokens,
-          omittedMessages: event.omittedMessages,
-          handoffMessageId: event.handoffMessageId,
-          compactions,
-          renters: event.renters,
-        },
-      }
-    }
-    case "ModelRouted":
-      if (event.effortOnly === true)
+        turnEffort: omitUndefined({ level: started.reasoningLevel }),
+        lastStep: { model: started.model, ...omitUndefined({ effort: started.reasoningLevel }) },
+      }),
+      TurnCompleted: (completed): SessionRuntimeMetrics => {
+        const { turnEffort: _ended, turnModelAttempts: _spent, ...idle } = metrics
+        return {
+          ...idle,
+          turns: metrics.turns + 1,
+          durationMs: metrics.durationMs + completed.durationMs,
+        }
+      },
+      ModelContextProjected: (projected): SessionRuntimeMetrics => {
+        let compactions = Option.getOrElse(
+          Option.map(Option.fromUndefinedOr(metrics.context), (context) => context.compactions),
+          () => 0,
+        )
+        if (projected.compacted) compactions += 1
         return {
           ...metrics,
-          costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
-          effortRouted: {
-            model: event.model,
-            reason: event.reason,
-            ...omitUndefined({ effort: event.effort, fallback: event.fallback }),
+          costUsd: addCost(Option.fromUndefinedOr(projected.costUsd)),
+          // A new step's projection: the last count belongs to the step before it.
+          lastInputTokens: 0,
+          context: {
+            estimatedTokens: projected.estimatedTokens,
+            availableInputTokens: projected.availableInputTokens,
+            contextLimitTokens: projected.contextLimitTokens,
+            omittedMessages: projected.omittedMessages,
+            handoffMessageId: projected.handoffMessageId,
+            compactions,
+            renters: projected.renters,
           },
         }
-      return {
+      },
+      ModelRouted: (routed): SessionRuntimeMetrics => {
+        const route = {
+          model: routed.model,
+          reason: routed.reason,
+          ...omitUndefined({ effort: routed.effort, fallback: routed.fallback }),
+        }
+        const costUsd = addCost(Option.fromUndefinedOr(routed.costUsd))
+        if (routed.effortOnly === true) return { ...metrics, costUsd, effortRouted: route }
+        return { ...metrics, costUsd, routed: { selected: routed.selected, ...route } }
+      },
+      StreamEnded: (ended): SessionRuntimeMetrics => {
+        const next = {
+          ...metrics,
+          costUsd: addCost(Option.fromUndefinedOr(ended.costUsd)),
+          lastInputTokens: Option.match(Option.fromUndefinedOr(ended.usage), {
+            onNone: () => metrics.lastInputTokens,
+            onSome: (usage) => usage.inputTokens,
+          }),
+          ...omitUndefined({ turnModelAttempts: ended.modelAttempts }),
+        }
+        // A step that ended on no model (a failed request) leaves the last one.
+        if (Predicate.isUndefined(ended.model)) return next
+        return {
+          ...next,
+          lastCredential: { model: ended.model, ...omitUndefined({ receipt: ended.credential }) },
+        }
+      },
+      CredentialAssigned: (assigned): SessionRuntimeMetrics => ({
         ...metrics,
-        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
-        routed: {
-          selected: event.selected,
-          model: event.model,
-          reason: event.reason,
-          ...omitUndefined({ effort: event.effort, fallback: event.fallback }),
-        },
-      }
-    case "StreamEnded": {
-      const ended = {
-        ...metrics,
-        costUsd: addCost(Option.fromUndefinedOr(event.costUsd)),
-        lastInputTokens: Option.match(Option.fromUndefinedOr(event.usage), {
-          onNone: () => metrics.lastInputTokens,
-          onSome: (usage) => usage.inputTokens,
-        }),
-        ...omitUndefined({ turnModelAttempts: event.modelAttempts }),
-      }
-      // A step that ended on no model (a failed request) leaves the last one.
-      if (Predicate.isUndefined(event.model)) return ended
-      return {
-        ...ended,
-        lastCredential: { model: event.model, ...omitUndefined({ receipt: event.credential }) },
-      }
-    }
-    case "CredentialAssigned":
-      return { ...metrics, placement: { provider: event.provider, slot: event.slot } }
-    default:
-      return metrics
-  }
+        placement: { provider: assigned.provider, slot: assigned.slot },
+      }),
+    }),
+  )(event)
 }
 
 /** Session totals read off the branch's event log; one pass, no storage. */

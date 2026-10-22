@@ -122,7 +122,13 @@ const opening = (id: MessageId, text: string) =>
 const chunk = (text: string, offset = 0) =>
   AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
 const stepStarted = (step: number) =>
-  AgentEvent.cases.StreamStarted.make({ sessionId, branchId, messageId: OWN_TURN, step })
+  AgentEvent.cases.StreamStarted.make({
+    sessionId,
+    branchId,
+    messageId: OWN_TURN,
+    step,
+    model: TEST_MODEL_ID,
+  })
 const stepEnded = (step: number) =>
   AgentEvent.cases.StreamEnded.make({ sessionId, branchId, messageId: OWN_TURN, step })
 /** The step's stored answer, as its `MessageReceived` carries it. */

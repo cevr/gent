@@ -147,10 +147,12 @@ import {
   type UserConfig,
 } from "./config.js"
 import {
+  type EventEnvelope,
   EventId,
   EventStore,
   EventStoreError,
   ExtensionStateChanged,
+  getEventBranchId,
   InteractionPresented,
   InteractionResolved,
   MessageReceived,
@@ -164,6 +166,7 @@ import {
 } from "../domain/interaction.js"
 import {
   BranchStorage,
+  EventStorage,
   InteractionStorage,
   MessageStorage,
   RelationshipStorage,
@@ -198,8 +201,10 @@ import {
 import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
+  foldSessionMetrics,
   FollowUpQueueFull,
   listWorkspaceLoops,
+  SESSION_METRIC_TAGS,
   type SendUserMessagePayload,
   type SessionRuntimeState,
 } from "../domain/agent-loop.js"
@@ -4160,6 +4165,7 @@ export const makeExtensionHostContextProvider = (
     const relationships = yield* facet(RelationshipStorage, "RelationshipStorage")
     const mutations = yield* facet(SessionMutations, "SessionMutations")
     const eventStore = yield* facet(EventStore, "EventStore")
+    const events = yield* facet(EventStorage, "EventStorage")
     // Enumerating a workspace's loops needs only the actor state registry,
     // which exists only where an actor layer is in scope.
     const registry = yield* facet(ActorStateRegistry, "ActorStateRegistry")
@@ -4711,6 +4717,27 @@ export const makeExtensionHostContextProvider = (
             )
           }),
         ).pipe(Effect.mapError(sessionError("listActiveLoops")), inWorkspace),
+        branchMetrics: (named) =>
+          events((storage) =>
+            storage.listBranchEvents({ branches: named, tags: SESSION_METRIC_TAGS }),
+          ).pipe(
+            Effect.map((envelopes) => {
+              const byBranch = new Map<string, Array<EventEnvelope>>()
+              for (const envelope of envelopes) {
+                const branchId = getEventBranchId(envelope.event)
+                if (Predicate.isUndefined(branchId)) continue
+                const found = byBranch.get(branchId) ?? []
+                found.push(envelope)
+                byBranch.set(branchId, found)
+              }
+              return named.map((branch) => ({
+                ...branch,
+                metrics: foldSessionMetrics(byBranch.get(branch.branchId) ?? []),
+              }))
+            }),
+            Effect.mapError(sessionError("branchMetrics")),
+            inWorkspace,
+          ),
       },
 
       Interaction: {

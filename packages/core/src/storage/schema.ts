@@ -269,7 +269,7 @@ const assertForeignKeyIntegrity = Effect.fn("Storage.assertForeignKeyIntegrity")
  * a stored shape bumps this, and a database at another version is wiped and
  * built again when it opens.
  */
-export const KERNEL_SCHEMA_VERSION = 2
+export const KERNEL_SCHEMA_VERSION = 3
 
 /** The schema owner the kernel's row names; an extension's row names its id. */
 export const KERNEL_SCHEMA_OWNER = "kernel"

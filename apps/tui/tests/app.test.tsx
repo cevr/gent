@@ -877,6 +877,9 @@ const mountShortTerminalWithTrays = (
         depth: 1,
         parentSessionId: sessionId,
         sideThread: false,
+        turns: 0,
+        costUsd: 0,
+        durationMs: 0,
       }
       // Tasks 3 and 4 report no activity line: their rows hold only their
       // names. A short pane keeps one row, the cursor row, so the one task
@@ -7111,6 +7114,7 @@ describe("TUI renderer surfaces", () => {
         yield* event(
           2,
           AgentEvent.cases.StreamStarted.make({
+            model: ModelId.make("anthropic/claude-sonnet-5"),
             messageId: MessageId.make("msg"),
             step: 1,
             sessionId,
@@ -7319,6 +7323,7 @@ describe("TUI renderer surfaces", () => {
           // The retry's request goes out: the step thinks again under the same heading.
           yield* view.event(
             AgentEvent.cases.StreamStarted.make({
+              model: ModelId.make("anthropic/claude-sonnet-5"),
               messageId: MessageId.make("msg"),
               step: 1,
               sessionId: view.sessionId,
@@ -8261,6 +8266,7 @@ describe("native history across a turn", () => {
       push(message("ask", "user", "LONG-ASK"))
       push(
         AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
           messageId: MessageId.make("msg"),
           step: 1,
           sessionId,
@@ -8307,6 +8313,7 @@ describe("native history across a turn", () => {
       push(message("probe", "user", "PROBE-ASK"))
       push(
         AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
           messageId: MessageId.make("msg"),
           step: 1,
           sessionId,

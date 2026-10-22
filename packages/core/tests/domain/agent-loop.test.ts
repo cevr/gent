@@ -385,6 +385,7 @@ describe("session metrics fold", () => {
           branchId,
           messageId: MessageId.make("m"),
           step,
+          model: ModelId.make("anthropic/claude-sonnet-5"),
           ...receipt,
         }),
       )
@@ -415,6 +416,45 @@ describe("session metrics fold", () => {
     expect(foldSessionMetrics([started(1, low), ended, done]).turnEffort).toBeUndefined()
     // A request that names no level runs at the model's default: no level to show.
     expect(foldSessionMetrics([started(1, { reasoningDefault: true })]).turnEffort).toEqual({})
+  })
+
+  test("the newest step names the branch's model and effort, past its turn's end", () => {
+    const started = (
+      model: string,
+      receipt: { readonly reasoningLevel: "high" } | { readonly reasoningDefault: true },
+    ) =>
+      wrap(
+        AgentEvent.cases.StreamStarted.make({
+          sessionId,
+          branchId,
+          messageId: MessageId.make("m"),
+          step: 1,
+          model: ModelId.make(model),
+          ...receipt,
+        }),
+      )
+    const done = wrap(
+      AgentEvent.cases.TurnCompleted.make({
+        streamFailed: false,
+        sessionId,
+        branchId,
+        durationMs: 10,
+      }),
+    )
+    const high = { reasoningLevel: "high" } as const
+    expect(foldSessionMetrics([]).lastStep).toBeUndefined()
+    expect(foldSessionMetrics([started("anthropic/claude-opus-5", high), done]).lastStep).toEqual({
+      model: ModelId.make("anthropic/claude-opus-5"),
+      effort: "high",
+    })
+    // A request that names no level shows only its model.
+    expect(
+      foldSessionMetrics([
+        started("anthropic/claude-opus-5", high),
+        done,
+        started("openai/gpt-5.6-luna", { reasoningDefault: true }),
+      ]).lastStep,
+    ).toEqual({ model: ModelId.make("openai/gpt-5.6-luna") })
   })
 
   test("an effort route is held apart from the model route, and both are charged", () => {

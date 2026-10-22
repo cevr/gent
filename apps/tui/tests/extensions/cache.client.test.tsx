@@ -177,6 +177,7 @@ const makeHistory = () => {
     at(
       opts.start,
       AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
         sessionId,
         branchId,
         messageId: MessageId.make(opts.turn),
@@ -244,6 +245,7 @@ const makeHistory = () => {
     at(
       start,
       AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
         sessionId,
         branchId,
         messageId: MessageId.make(turn),

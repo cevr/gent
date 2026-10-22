@@ -58,7 +58,7 @@ import {
   SessionId,
   type ToolCallId,
 } from "./ids.js"
-import type { FollowUpQueueFull } from "./agent-loop.js"
+import type { FollowUpQueueFull, SessionRuntimeMetrics } from "./agent-loop.js"
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
@@ -1318,6 +1318,23 @@ export interface ExtensionSessionService {
       readonly status: Option.Option<string>
       /** When the current turn began (epoch ms); `None` when no turn runs or the read failed. */
       readonly runningSince: Option.Option<number>
+    }>,
+    ExtensionServiceError
+  >
+  /**
+   * Each named branch's metrics, in the order named: the totals a session
+   * snapshot gives for one branch (turns, cost, the newest step's model and
+   * effort), read for many branches at once from their metric events only
+   * (`SESSION_METRIC_TAGS`), never their whole logs. A branch with no events
+   * reads the initial metrics.
+   */
+  readonly branchMetrics: (
+    branches: ReadonlyArray<{ readonly sessionId: SessionId; readonly branchId: BranchId }>,
+  ) => Effect.Effect<
+    ReadonlyArray<{
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
+      readonly metrics: SessionRuntimeMetrics
     }>,
     ExtensionServiceError
   >

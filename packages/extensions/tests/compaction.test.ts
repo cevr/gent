@@ -1264,13 +1264,23 @@ describe("role windows", () => {
     const events = [
       // An earlier turn reads the plan.
       projected(false),
-      AgentEvent.cases.StreamStarted.make({ ...base, messageId: earlier, step: 1 }),
+      AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
+        ...base,
+        messageId: earlier,
+        step: 1,
+      }),
       AgentEvent.cases.StreamEnded.make({ ...base, messageId: earlier, step: 1, usage: usage(5) }),
       read("plan-1", "plans/a.md"),
       done("plan-1", "p".repeat(400)),
       // This turn hands off, then reads the plan again, twice, and a new file.
       projected(true),
-      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step: 1 }),
+      AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
+        ...base,
+        messageId: turnId,
+        step: 1,
+      }),
       AgentEvent.cases.StreamEnded.make({
         ...base,
         messageId: turnId,
@@ -1297,7 +1307,12 @@ describe("role windows", () => {
         output: "p".repeat(400),
       }),
       projected(false),
-      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step: 2 }),
+      AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
+        ...base,
+        messageId: turnId,
+        step: 2,
+      }),
       AgentEvent.cases.StreamEnded.make({
         ...base,
         messageId: turnId,
@@ -1345,7 +1360,12 @@ describe("role windows", () => {
         renters: [],
         compacted: false,
       }),
-      AgentEvent.cases.StreamStarted.make({ ...base, messageId: turnId, step }),
+      AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
+        ...base,
+        messageId: turnId,
+        step,
+      }),
       AgentEvent.cases.StreamEnded.make({
         ...base,
         messageId: turnId,

@@ -211,6 +211,7 @@ describe("btw forks", () => {
       AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset, chunk: text })
     const step = (step: number) =>
       AgentEvent.cases.StreamStarted.make({
+        model: ModelId.make("anthropic/claude-sonnet-5"),
         sessionId,
         branchId,
         messageId: MessageId.make("btw-fold-turn"),

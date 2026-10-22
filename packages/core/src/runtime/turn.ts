@@ -5556,6 +5556,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           messageId: params.messageId,
           step: params.step,
+          model: params.resolved.modelId,
           ...effortReceipt(source.reasoningLevel),
           ...omitUndefined({ profileRevision: Option.getOrUndefined(params.profileRevision) }),
         }),

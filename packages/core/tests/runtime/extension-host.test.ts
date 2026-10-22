@@ -112,6 +112,7 @@ import {
   RuntimeEnvironment,
 } from "../../src/runtime/config"
 import {
+  EventStorage,
   MessageStorage,
   SessionStorage,
   type SessionStorageService,
@@ -200,6 +201,7 @@ import {
 import { attachToolBindingIdentity, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
+import { foldSessionMetrics, initialSessionMetrics } from "../../src/domain/agent-loop"
 import { SessionMutationsLive } from "../../src/server/server"
 import { ExtensionStatusScope } from "../../src/server/rpc"
 import {
@@ -401,6 +403,7 @@ describe("ambient extension host context", () => {
       yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
       yield* publish(
         AgentEvent.cases.StreamStarted.make({
+          model: ModelId.make("anthropic/claude-sonnet-5"),
           messageId: MessageId.make("msg"),
           step: 1,
           sessionId,
@@ -437,6 +440,69 @@ describe("ambient extension host context", () => {
       )
       const [delivered] = yield* Fiber.join(next).pipe(Effect.timeout("4 seconds"))
       expect(delivered?._tag).toBe("TurnCompleted")
+    }).pipe(Effect.provide(Layer.provideMerge(EventStoreLive, testSqliteStorage))),
+  )
+
+  it.scopedLive("branch metrics fold each named branch's metric events, in the order named", () =>
+    Effect.gen(function* () {
+      const workspace = workspaceIdForCwd("/nonexistent/run-workspace")
+      const quiet = BranchId.make("ambient-host-quiet-branch")
+      yield* ensureStorageParents({ sessionId, branchId }).pipe(
+        Effect.provideService(CurrentWorkspaceId, workspace),
+      )
+      yield* ensureStorageParents({ sessionId, branchId: quiet }).pipe(
+        Effect.provideService(CurrentWorkspaceId, workspace),
+      )
+      const publisher = yield* EventStore
+      const publish = (event: AgentEvent) =>
+        publisher.publish(event).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+      const messageId = MessageId.make("msg")
+      const model = ModelId.make("anthropic/claude-opus-5")
+      const step = { sessionId, branchId, messageId, step: 1 }
+      yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
+      for (const costUsd of [0.5, 0.25]) {
+        yield* publish(
+          AgentEvent.cases.StreamStarted.make({ ...step, model, reasoningLevel: "high" }),
+        )
+        yield* publish(
+          AgentEvent.cases.StreamChunk.make({ sessionId, branchId, offset: 0, chunk: "a" }),
+        )
+        yield* publish(
+          AgentEvent.cases.StreamEnded.make({
+            ...step,
+            model,
+            costUsd,
+            usage: { inputTokens: 100, outputTokens: 10 },
+            outcome: "Answered",
+          }),
+        )
+        yield* publish(
+          AgentEvent.cases.TurnCompleted.make({
+            streamFailed: false,
+            sessionId,
+            branchId,
+            durationMs: 5,
+          }),
+        )
+      }
+      const ctx = yield* ambientContext.pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+      const read = yield* ctx.Session.branchMetrics([
+        { sessionId, branchId: quiet },
+        { sessionId, branchId },
+      ])
+      // The few kinds read for many branches give what the whole log gives.
+      const log = yield* EventStorage.use((storage) =>
+        storage.listEvents({ sessionId, branchId }),
+      ).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+      expect(read).toEqual([
+        { sessionId, branchId: quiet, metrics: initialSessionMetrics },
+        { sessionId, branchId, metrics: foldSessionMetrics(log) },
+      ])
+      expect(read[1]?.metrics).toMatchObject({
+        turns: 2,
+        costUsd: 0.75,
+        lastStep: { model, effort: "high" },
+      })
     }).pipe(Effect.provide(Layer.provideMerge(EventStoreLive, testSqliteStorage))),
   )
 })
