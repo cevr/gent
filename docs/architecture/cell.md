@@ -407,7 +407,7 @@ local, and their results arrive as cell output, so discovery
 never changes the prompt. An id whose first segment is `search`
 renders and is reached as `tools("search.x")`. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
-`{}`. Enums past eight literals, and input or result types past 300 characters,
+`{}`. Enums past eight literals, and input or result types past 320 characters,
 render as their outer shape; a test holds every shipped tool's result under
 that bound, so the cell code reads each result whole. The RPC lifetime test
 checks the namespace keys and a host schema through the compiled worker, and

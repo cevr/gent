@@ -1199,30 +1199,46 @@ where `path` is `path.resolve(cwd, params.path)`, absolute, with `..` resolved
 lexically and links not followed. That shape is stable; the input's `path` is
 what the model wrote, relative or not.
 
-### Snapshot threads
+### Thread workspaces
 
-`thread.start` takes `workspace`. Without it the thread runs in your working
-tree. `workspace: { snapshot: true }` runs the thread in its own copy of your
-git working tree: the `@gent/workspaces` extension makes the copy, and the
-thread's session is created with the copy as its cwd
-(`Session.create({ cwd })`), so every tool of the thread works there.
+`thread.start` takes `workspace`, in place of `cwd`. Without it the thread
+runs in your working tree. A start that names both `workspace` and `cwd` is
+refused, and no thread starts. `workspace` names one of three places; the
+`@gent/workspaces` extension makes or names it, and the thread's session is
+created with it as its cwd (`Session.create({ cwd })`), so every tool of the
+thread works there.
 
-- The copy holds your working tree as the thread starts: your commits, your
+- `{ snapshot: true }`: the thread's own copy of your git working tree. The
+  copy holds your working tree as the thread starts: your commits, your
   uncommitted changes and your untracked files that git does not ignore.
-- On btrfs, when your repository is a rift workspace, `rift` makes the copy
-  (`rift rpc`, one whole-tree snapshot, dependencies and build included).
-  Everywhere else gent makes a detached `git worktree` under
-  `<data dir>/workspaces/worktrees/` and puts your uncommitted state in it.
-  gent never makes a filtered copy. The start result says why a copy is a
-  worktree, in `workspace.note`.
-- gent runs the `postcreate` steps of your `.rift.toml` in the copy, for both
-  kinds, with the `RIFT_*` variables. rift runs no hook of its own for these
+- `{ rift: { name, from? } }`: a rift copy named `name` of the rift
+  workspace `from`. Without `from`, the source is the warm source of your
+  repository: the workspace your rift workspace is a copy of, or your own
+  when it is no copy. The source must be a rift workspace (it has a `.rift`
+  file) with a commit, and no copy itself. Rift only: when rift is missing,
+  your file system is not one rift copies on, or something is at the target
+  already, the start is refused and gent makes nothing. gent never adopts a
+  target it did not make. When a `postcreate` step fails, the start fails
+  with `WorkspaceHookFailed`, and gent keeps the copy at the path it names.
+- `{ path: "<dir>" }`: an existing directory in a git repository, as it is.
+  gent makes no copy, runs no hook, collects no work and makes no branch; the
+  start result has no `workspace.branch`. A session delete forgets the
+  directory and deletes nothing in it.
+- For a snapshot, when your repository is a rift workspace on a file system
+  rift copies on (APFS on macOS, btrfs or XFS on Linux), `rift` makes the
+  copy (`rift rpc`, one whole-tree copy, dependencies and build included).
+  On a Mac, rift is the default. Everywhere else gent makes a detached
+  `git worktree` under `<data dir>/workspaces/worktrees/` and puts your
+  uncommitted state in it. gent never makes a filtered copy. The start result
+  says why a copy is a worktree, in `workspace.note`.
+- gent runs the `postcreate` steps of your `.rift.toml` in a copy, for both
+  backends, with the `RIFT_*` variables. rift runs no hook of its own for these
   copies, so no `precreate` runs in your repository. A `.rift.toml` that rift
   would refuse runs no step, and the note says why: `version` must be the
   TOML integer `1` (`1.0`, `1e0` and `"1"` are refused, as rift refuses
   them). gent's own git commands run no hook of your repository, and write no
   ref of it but `gent/<name>` and gent's own `refs/gent/base/<name>`.
-- When each of the thread's rounds ends, its work goes back as one commit
+- When each of a copy thread's rounds ends, its work goes back as one commit
   over the copy as it started (after its hooks), on the branch `gent/<name>`
   of your repository. The round end names the branch and its diffstat.
   Nothing merges it: read it with `git show gent/<name>`, and merge,
@@ -1237,8 +1253,9 @@ thread's session is created with the copy as its cwd
   copy stays, and its record says `retained` and why. Remove it yourself with
   `rift remove` once you know nothing was made from it; removal from gent
   comes with the copy list. gent removes no copy by age. A repeated start of
-  the same call from the same session uses the copy the first one made; a
-  retained copy is never used again. A start whose session was never stored
+  the same call from the same session uses the place the first one made, and
+  one that asks for another place is refused; a retained copy is never used
+  again. A start whose session was never stored
   removes its worktree copy; one whose session was stored (even when the
   start was interrupted before it heard so) leaves the copy to that session.
 - gent touches a copy only when it can prove the copy is the one it made: the
@@ -1246,17 +1263,17 @@ thread's session is created with the copy as its cwd
   the kind of copy and its rift id, and the copy lies where gent or rift puts
   copies. Anything else (a copy of a copy, a moved record, a link where the
   marker goes) is kept, and gent says why.
-- A start is refused outside a git repository, and when less than 2 GB is
-  free where the copy goes or `df` cannot say; start the thread without
+- A start is refused outside a git repository, and a copy when less than
+  2 GB is free where it goes or `df` cannot say; start the thread without
   `workspace` then.
-- A starter run with `paths` bounds its snapshot thread by those paths as
+- A starter run with `paths` bounds its workspace thread by those paths as
   they resolve in the starter's cwd, not in the copy: the copy lies outside
   them, so the thread's file tools refuse every path in its copy. gent does
   not move the starter's paths into the copy, since core cannot tell a copy
   from any other cwd a create names. Start such a thread from a run with no
   `paths`, or without `workspace`.
 
-A copy is not a sandbox. The thread's `bash`, the cell and every other tool
+A workspace is not a sandbox. The thread's `bash`, the cell and every other tool
 can still reach your repository and every other path, as with `paths`. A
 snapshot keeps the thread's ordinary edits out of your working tree; it does
 not keep a command out. The copy is a new directory, so a project trust you

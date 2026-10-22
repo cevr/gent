@@ -25,6 +25,7 @@ import {
   CredentialSlot,
   ExtensionContext,
   getToolId,
+  omitUndefined,
   type QuotaReading,
   reportProviderQuota,
   RequestId,
@@ -56,6 +57,8 @@ import { THREAD_ROUND_END_TYPE } from "../src/threads.js"
 import {
   makeWorkspacesExtension,
   WORKSPACES_EXTENSION_ID,
+  WorkspaceKind,
+  type WorkspacePlace,
   Workspaces,
   type WorkspacesOptions,
 } from "../src/workspaces.js"
@@ -64,7 +67,9 @@ import { isToolResultFor } from "./helpers/tool-event.js"
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
-/** A rift program that does not exist: a copy on btrfs falls back to a worktree. */
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+
+/** A rift program that does not exist: a snapshot falls back to a worktree, an explicit rift is refused. */
 const NO_RIFT = "/nonexistent/gent-test/rift"
 
 /** One shell command; its trimmed stdout, or a defect that names it. */
@@ -132,7 +137,10 @@ const worktreeCount = (origin: string) =>
  * The stub's program: it reads its mode from `mode` beside it, copies under
  * `into` (or `copies/` beside it) and gives the copy its own `.rift` id, as
  * rift does, and appends each request to `requests.log`. A copy without
- * `copyAll` drops `build` and `node_modules`, as rift's filter does.
+ * `copyAll` drops `build` and `node_modules`, as rift's filter does. A
+ * destination that is there already is refused with `already_exists` and
+ * left, as rift does; mode `taken` makes it first, as a racing start would.
+ * `ancestors.json` beside it, when there, maps a path to its ancestors.
  */
 const RIFT_STUB = [
   "#!/usr/bin/env bun",
@@ -144,13 +152,20 @@ const RIFT_STUB = [
   'fs.appendFileSync(dir + "/requests.log", input + "\\n")',
   "const request = JSON.parse(input)",
   "const answer = (value) => process.stdout.write(JSON.stringify(value))",
-  'if (request.command === "ancestors") answer({ status: "ok", value: [] })',
+  'const chains = fs.existsSync(dir + "/ancestors.json") ? JSON.parse(fs.readFileSync(dir + "/ancestors.json", "utf8")) : {}',
+  'if (request.command === "ancestors") answer({ status: "ok", value: chains[request.of] ?? [] })',
   'else if (request.command === "create") {',
+  '  const into = request.into ?? dir + "/copies"',
+  '  const dest = into + "/" + request.name',
+  '  if (mode === "taken") {',
+  "    fs.mkdirSync(dest, { recursive: true })",
+  '    fs.writeFileSync(dest + "/theirs.txt", "theirs\\n")',
+  "  }",
   '  if (mode === "cow") {',
   '    answer({ status: "error", error: { code: "cow_unavailable", message: "copy-on-write is not available here" } })',
+  "  } else if (fs.existsSync(dest)) {",
+  '    answer({ status: "error", error: { code: "already_exists", message: dest + " already exists" } })',
   "  } else {",
-  '    const into = request.into ?? dir + "/copies"',
-  '    const dest = into + "/" + request.name',
   "    fs.mkdirSync(into, { recursive: true })",
   '    execFileSync("cp", ["-a", request.from, dest])',
   '    if (request.copyAll !== true) for (const name of ["build", "node_modules"]) fs.rmSync(dest + "/" + name, { recursive: true, force: true })',
@@ -164,15 +179,21 @@ const RIFT_STUB = [
 
 /**
  * A stand-in `rift` that answers `rpc` as rift does, with `cp -a` for a
- * copy. `mode` is `ok`, or `cow` (no copy-on-write here).
+ * copy. `mode` is `ok`, `cow` (no copy-on-write here), or `taken` (another
+ * start makes the destination first). `ancestors` maps a path to the rift
+ * workspaces it is a copy of; every other path is a source.
  */
-const riftStub = (mode: "ok" | "cow") =>
+const riftStub = (
+  mode: "ok" | "cow" | "taken",
+  ancestors: Readonly<Record<string, ReadonlyArray<string>>> = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const dir = yield* makeTempDirectoryScoped("ws-rift-")
     const log = `${dir}/requests.log`
     const program = `${dir}/rift`
     yield* fs.writeFileString(`${dir}/mode`, mode)
+    yield* fs.writeFileString(`${dir}/ancestors.json`, encodeJson(ancestors))
     yield* fs.writeFileString(program, RIFT_STUB)
     yield* fs.chmod(program, 0o755)
     const requests = fs.readFileString(log).pipe(
@@ -189,20 +210,48 @@ const riftStub = (mode: "ok" | "cow") =>
   })
 
 /**
- * The platform with `stat -f` and `df` answered, where a test needs a file
- * system this machine may not have: btrfs, or one whose free space is
- * unknown. Every other process runs.
+ * How a system names the file system type: GNU `stat -f -c %T` prints it;
+ * BSD `stat` (macOS) has no `-c`, prints the device for `-f %Sd`, and the
+ * device's `mount` line names the type.
  */
-const platformWith = (answers: { readonly btrfs?: boolean; readonly noFreeSpace?: boolean }) =>
+type FileSystemAnswer = { readonly gnu: string } | { readonly bsd: string }
+const BTRFS: FileSystemAnswer = { gnu: "btrfs" }
+const EXT4: FileSystemAnswer = { gnu: "ext4" }
+const APFS: FileSystemAnswer = { bsd: "apfs" }
+
+const answered = (output: string, exitCode = 0) =>
+  ChildProcess.make("sh", ["-c", `printf '%s\\n' "$0"; exit ${exitCode}`, output], {
+    forceKillAfter: "1 second",
+  })
+
+/** The `stat` and `mount` answers of a system whose file system is `fs`, for `args`. */
+const fileSystemProcess = (fs: FileSystemAnswer, command: string, args: ReadonlyArray<string>) => {
+  if ("gnu" in fs) return answered(fs.gnu)
+  if (command === "stat" && args.includes("-c")) return answered("stat: illegal option -- c", 1)
+  if (command === "stat") return answered("disk9s9")
+  return answered(`/dev/disk1s1 on / (hfs, local)\n/dev/disk9s9 on /x (${fs.bsd}, local)`)
+}
+
+/**
+ * The platform with `stat`, `mount` and `df` answered, where a test needs a
+ * file system this machine may not have (btrfs, ext4, APFS as macOS names
+ * it), or one whose free space is unknown. Every other process runs.
+ */
+const platformWith = (answers: {
+  readonly fs?: FileSystemAnswer
+  readonly noFreeSpace?: boolean
+}) =>
   Layer.effect(
     ChildProcessSpawner.ChildProcessSpawner,
     Effect.gen(function* () {
       const real = yield* ChildProcessSpawner.ChildProcessSpawner
       return ChildProcessSpawner.make((command) => {
-        if (command._tag === "StandardCommand" && command.command === "stat" && answers.btrfs) {
-          return real.spawn(
-            ChildProcess.make("printf", ["btrfs\\n"], { forceKillAfter: "1 second" }),
-          )
+        if (
+          command._tag === "StandardCommand" &&
+          (command.command === "stat" || command.command === "mount") &&
+          Predicate.isNotUndefined(answers.fs)
+        ) {
+          return real.spawn(fileSystemProcess(answers.fs, command.command, command.args))
         }
         if (command._tag === "StandardCommand" && command.command === "df" && answers.noFreeSpace) {
           return real.spawn(
@@ -224,6 +273,9 @@ const parentA: Parent = { sessionId: SessionId.make("parent-a"), branchId: Branc
 const parentB: Parent = { sessionId: SessionId.make("parent-b"), branchId: BranchId.make("main-a") }
 
 const key = (id: string) => RequestId.make(id)
+const SNAPSHOT = WorkspaceKind.cases.Snapshot.make({})
+const riftKind = (name: string, from?: string) =>
+  WorkspaceKind.cases.Rift.make({ name, ...omitUndefined({ from }) })
 const childSession = SessionId.make("child-session")
 
 /**
@@ -268,16 +320,32 @@ const installed = (home: string, options: WorkspacesOptions) =>
           ),
         )
     const within = as(parentA)
-    /** A start from `cwd` for the call `id`, as a thread start makes one. */
+    /** The place `workspace` asks for, from `cwd` for the call `id`, as a thread start makes one. */
+    const place = (
+      id: string,
+      cwd: string,
+      workspace: WorkspaceKind = SNAPSHOT,
+      parent: Parent = parentA,
+    ) =>
+      as(parent)(
+        places.locate({ key: key(id), cwd, workspace }).pipe(Effect.flatMap(places.acquire)),
+      )
+    /** A snapshot start from `cwd` for the call `id`: a copy. */
     const start = (id: string, cwd: string, parent: Parent = parentA) =>
-      as(parent)(places.locate({ key: key(id), cwd }).pipe(Effect.flatMap(places.acquire)))
+      place(id, cwd, SNAPSHOT, parent).pipe(
+        Effect.filterOrElse(
+          (found): found is Extract<WorkspacePlace, { readonly _tag: "Copy" }> =>
+            found._tag === "Copy",
+          () => Effect.die("a snapshot is not a copy"),
+        ),
+      )
     /** The session delete of `sessionId`, as the host runs the hook. */
     const deleted = (sessionId: SessionId) =>
       within(deletedSlot.hook.handler({ sessionId, branchIds: [] })).pipe(
         Effect.provideContext(services),
       )
     const recordFile = (name: string) => `${home}/.gent/workspaces/${name}.json`
-    return { places, within, start, deleted, recordFile }
+    return { places, within, place, start, deleted, recordFile }
   })
 
 const RecordJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
@@ -485,7 +553,9 @@ describe("a worktree copy", () => {
         )
         const home = yield* makeTempDirectoryScoped("ws-home-")
         const { places, within } = yield* installed(home, { rift: NO_RIFT })
-        const start = yield* within(places.locate({ key: key("call-1"), cwd: origin }))
+        const start = yield* within(
+          places.locate({ key: key("call-1"), cwd: origin, workspace: SNAPSHOT }),
+        )
         const making = yield* within(places.acquire(start)).pipe(Effect.forkScoped)
         const copy = `${home}/.gent/workspaces/worktrees/${start.name}`
         yield* waitFor(exists(`${copy}/started`), (found) => found, 10_000, "the hook started")
@@ -759,7 +829,9 @@ describe("a record gent cannot prove", () => {
           })
           const head = yield* sh(origin, "git rev-parse HEAD")
           // Someone holds the base ref's name before the start.
-          const taken = yield* within(places.locate({ key: key("call-1"), cwd: origin }))
+          const taken = yield* within(
+            places.locate({ key: key("call-1"), cwd: origin, workspace: SNAPSHOT }),
+          )
           yield* sh(origin, `git update-ref refs/gent/base/${taken.name} HEAD`)
           const refused = yield* start("call-1", origin).pipe(Effect.flip)
           expect(refused.message).toContain(`refs/gent/base/${taken.name}`)
@@ -819,6 +891,16 @@ describe("a record gent cannot prove", () => {
 })
 
 // ── the rift copy ───────────────────────────────────────────────────────────
+
+/** Where rift puts the copies of the rift workspace `origin`: `.rifts/<name>` beside it. */
+const storageOf = (origin: string) =>
+  `${origin.slice(0, origin.lastIndexOf("/"))}/.rifts/${origin.slice(origin.lastIndexOf("/") + 1)}`
+
+/** The `create` requests a rift stub was sent. */
+const createsOf = (requests: ReadonlyArray<unknown>) =>
+  requests.filter(
+    (request) => Predicate.hasProperty(request, "command") && request.command === "create",
+  )
 
 describe("a rift copy", () => {
   it.live(
@@ -888,7 +970,7 @@ describe("a rift copy", () => {
           // A repeated start does not adopt a retained copy.
           const refused = yield* start("call-1", origin).pipe(Effect.flip)
           expect(refused.message).toContain("retained")
-        }).pipe(Effect.provide(platformWith({ btrfs: true }))),
+        }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
       ),
   )
 
@@ -921,12 +1003,14 @@ describe("a rift copy", () => {
             ["call-1", linked],
             ["call-2", moved],
           ] as const) {
-            const located = yield* within(places.locate({ key: key(id), cwd: origin }))
+            const located = yield* within(
+              places.locate({ key: key(id), cwd: origin, workspace: SNAPSHOT }),
+            )
             expect(yield* recordOf(recordFile(located.name))).toMatchObject({ phase: "retained" })
             yield* within(places.release(located.name))
             expect(yield* exists(recordFile(located.name))).toBe(true)
           }
-        }).pipe(Effect.provide(platformWith({ btrfs: true }))),
+        }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
       ),
   )
 
@@ -966,12 +1050,12 @@ describe("a rift copy", () => {
           path: second,
         })
         expect(yield* sh(origin, "git branch --list 'gent/*'")).toBe("")
-      }).pipe(Effect.provide(platformWith({ btrfs: true }))),
+      }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
     ),
   )
 
   it.live(
-    "is never a filtered copy: off btrfs the copy is a worktree, with every tracked file",
+    "is never a filtered copy: on a file system rift does not copy on (ext4) the copy is a worktree, with every tracked file",
     () =>
       live(
         Effect.gen(function* () {
@@ -981,14 +1065,16 @@ describe("a rift copy", () => {
           const { places, within, start } = yield* installed(home, { rift: rift.program })
           const place = yield* start("call-1", origin)
           expect(place.backend).toBe("worktree")
-          expect(place.notes[0]).toContain("not btrfs")
+          expect(place.notes[0]).toContain(
+            "the origin's file system is ext4, which rift does not copy on",
+          )
           expect(yield* rift.requests).toEqual([])
           // rift's filter drops `build/`; a worktree holds the tracked file, and no deletion is work.
           expect(yield* sh(place.path, "cat build/source.ts")).toBe("source")
           yield* within(places.bind(place.name, childSession))
           const work = yield* within(places.collect(childSession))
           expect(Option.map(work, (found) => found.files)).toEqual(Option.some(0))
-        }),
+        }).pipe(Effect.provide(platformWith({ fs: EXT4 }))),
       ),
   )
 
@@ -1002,7 +1088,270 @@ describe("a rift copy", () => {
         const place = yield* start("call-1", origin)
         expect(place.backend).toBe("worktree")
         expect(place.notes[0]).toContain("rift could not copy (cow_unavailable)")
-      }).pipe(Effect.provide(platformWith({ btrfs: true }))),
+      }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
+    ),
+  )
+
+  it.live("is the snapshot's backend on APFS, as macOS names its file system", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const rift = yield* riftStub("ok")
+        const { start } = yield* installed(home, { rift: rift.program })
+        const place = yield* start("call-1", origin)
+        expect(place.backend).toBe("rift")
+        expect(place.path).toBe(`${storageOf(origin)}/${place.name}`)
+        expect(yield* worktreeCount(origin)).toBe("1")
+      }).pipe(Effect.provide(platformWith({ fs: APFS }))),
+    ),
+  )
+})
+
+// ── the rift workspace ──────────────────────────────────────────────────────
+
+describe("a rift workspace", () => {
+  it.live(
+    "is refused where rift does not copy, cannot copy, or is missing, and is never a worktree",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const origin = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const ok = yield* riftStub("ok")
+          const cow = yield* riftStub("cow")
+          const ask = riftKind("w1")
+          // A file system rift does not copy on: refused before rift is asked to copy.
+          const onExt4 = yield* installed(home, { rift: ok.program })
+          const unsupported = yield* onExt4
+            .place("call-1", origin, ask)
+            .pipe(Effect.flip, Effect.provide(platformWith({ fs: EXT4 })))
+          expect(unsupported.message).toContain("gent makes no copy and no worktree")
+          expect(createsOf(yield* ok.requests)).toEqual([])
+          // rift refuses the copy: the record goes, and no worktree takes its place.
+          const refusing = yield* installed(home, { rift: cow.program })
+          const refused = yield* refusing
+            .place("call-2", origin, ask)
+            .pipe(Effect.flip, Effect.provide(platformWith({ fs: BTRFS })))
+          expect(refused.message).toContain("rift could not copy (cow_unavailable)")
+          expect(refused.message).toContain("gent makes no worktree in its place")
+          // No rift at all: refused when the source is read.
+          const missing = yield* installed(home, { rift: NO_RIFT })
+          const absent = yield* missing
+            .place("call-3", origin, ask)
+            .pipe(Effect.flip, Effect.provide(platformWith({ fs: BTRFS })))
+          expect(absent.message).toContain("A rift workspace needs rift")
+          expect(yield* worktreeCount(origin)).toBe("1")
+          expect(yield* exists(`${storageOf(origin)}/w1`)).toBe(false)
+          for (const [id, at] of [
+            ["call-1", onExt4],
+            ["call-2", refusing],
+          ] as const) {
+            const located = yield* at.within(
+              at.places.locate({ key: key(id), cwd: origin, workspace: ask }),
+            )
+            expect(yield* exists(at.recordFile(located.name))).toBe(false)
+          }
+        }),
+      ),
+  )
+
+  it.live(
+    "copies the warm source of the caller's copy by default, and refuses a source that is itself a copy, writing nothing",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const warm = yield* dirtyRepository
+          // The caller works in a copy of the warm source.
+          const copy = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const rift = yield* riftStub("ok", { [copy]: [warm] })
+          const { place, recordFile } = yield* installed(home, { rift: rift.program })
+          const made = yield* place("call-1", copy, riftKind("w1"))
+          expect(made._tag).toBe("Copy")
+          expect(made.path).toBe(`${storageOf(warm)}/w1`)
+          expect(createsOf(yield* rift.requests)).toEqual([
+            {
+              command: "create",
+              from: warm,
+              name: "w1",
+              into: storageOf(warm),
+              copyAll: true,
+              hooks: false,
+            },
+          ])
+          expect(yield* recordOf(recordFile(made.name))).toMatchObject({
+            kind: "rift",
+            copyName: "w1",
+            sourceId: "rift-root",
+            origin: warm,
+            phase: "ready",
+          })
+          // `from` names the copy: refused, and nothing is asked of rift or written.
+          const refused = yield* place("call-2", warm, riftKind("w2", copy)).pipe(Effect.flip)
+          expect(refused.message).toContain(`${copy} is a rift copy of ${warm}`)
+          expect(createsOf(yield* rift.requests)).toHaveLength(1)
+          expect(yield* exists(`${storageOf(copy)}/w2`)).toBe(false)
+          expect(yield* exists(`${storageOf(warm)}/w2`)).toBe(false)
+        }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
+      ),
+  )
+
+  it.live(
+    "refuses a target that is there already and leaves it; the same start adopts its own copy",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const origin = yield* dirtyRepository
+          const home = yield* makeTempDirectoryScoped("ws-home-")
+          const rift = yield* riftStub("ok")
+          const { place, within, places, recordFile } = yield* installed(home, {
+            rift: rift.program,
+          })
+          const first = yield* place("call-1", origin, riftKind("w1"))
+          yield* sh(first.path, "printf 'mid\\n' > mid-turn.txt")
+          const again = yield* place("call-1", origin, riftKind("w1"))
+          expect(again.path).toBe(first.path)
+          expect(createsOf(yield* rift.requests)).toHaveLength(1)
+          // Another start that names the same copy: refused before rift is asked.
+          const taken = yield* place("call-2", origin, riftKind("w1")).pipe(Effect.flip)
+          expect(taken.message).toContain("gent does not adopt it")
+          expect(yield* sh(first.path, "cat mid-turn.txt")).toBe("mid")
+          // A directory someone else made there: the same.
+          yield* sh(
+            origin,
+            `mkdir -p ${storageOf(origin)}/w2 && printf 'mine\\n' > ${storageOf(origin)}/w2/mine.txt`,
+          )
+          const theirs = yield* place("call-3", origin, riftKind("w2")).pipe(Effect.flip)
+          expect(theirs.message).toContain("gent does not adopt it")
+          expect(yield* sh(`${storageOf(origin)}/w2`, "ls -A")).toBe("mine.txt")
+          expect(createsOf(yield* rift.requests)).toHaveLength(1)
+          for (const [id, name] of [
+            ["call-2", "w1"],
+            ["call-3", "w2"],
+          ] as const) {
+            const located = yield* within(
+              places.locate({ key: key(id), cwd: origin, workspace: riftKind(name) }),
+            )
+            expect(yield* exists(recordFile(located.name))).toBe(false)
+          }
+        }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
+      ),
+  )
+
+  it.live("a target rift finds there already stays as it is, and gent forgets its record", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        // Another start makes the copy between gent's look and rift's create.
+        const rift = yield* riftStub("taken")
+        const { places, within, place, recordFile } = yield* installed(home, {
+          rift: rift.program,
+        })
+        const refused = yield* place("call-1", origin, riftKind("w1")).pipe(Effect.flip)
+        expect(refused.message).toContain("rift could not copy (already_exists)")
+        expect(yield* sh(`${storageOf(origin)}/w1`, "ls -A")).toBe("theirs.txt")
+        const located = yield* within(
+          places.locate({ key: key("call-1"), cwd: origin, workspace: riftKind("w1") }),
+        )
+        expect(yield* exists(recordFile(located.name))).toBe(false)
+      }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
+    ),
+  )
+
+  it.live("whose setup hook fails fails the start, names the copy it keeps, and retains it", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        yield* sh(
+          origin,
+          `printf 'version = 1\\n[[hooks.postcreate]]\\nrun = "exit 3"\\n' > .rift.toml`,
+        )
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const rift = yield* riftStub("ok")
+        const { places, within, place, recordFile } = yield* installed(home, {
+          rift: rift.program,
+        })
+        const failed = yield* place("call-1", origin, riftKind("w1")).pipe(Effect.flip)
+        const copy = `${storageOf(origin)}/w1`
+        expect(failed._tag).toBe("WorkspaceHookFailed")
+        if (failed._tag !== "WorkspaceHookFailed") return
+        expect(failed.path).toBe(copy)
+        expect(failed.message).toContain(`gent keeps the copy at ${copy}`)
+        expect(yield* exists(`${copy}/kept.txt`)).toBe(true)
+        const located = yield* within(
+          places.locate({ key: key("call-1"), cwd: origin, workspace: riftKind("w1") }),
+        )
+        expect(yield* recordOf(recordFile(located.name))).toMatchObject({ phase: "retained" })
+      }).pipe(Effect.provide(platformWith({ fs: BTRFS }))),
+    ),
+  )
+})
+
+// ── the path workspace ──────────────────────────────────────────────────────
+
+describe("a path workspace", () => {
+  it.live("attaches the directory as it is: no copy, no hook, and its end deletes nothing", () =>
+    live(
+      Effect.gen(function* () {
+        const origin = yield* dirtyRepository
+        yield* sh(
+          origin,
+          `printf 'version = 1\\n[[hooks.postcreate]]\\nrun = "touch ran"\\n' > .rift.toml`,
+        )
+        const before = yield* treeState(origin)
+        const home = yield* makeTempDirectoryScoped("ws-home-")
+        const rift = yield* riftStub("ok")
+        const { places, within, place, deleted, recordFile } = yield* installed(home, {
+          rift: rift.program,
+        })
+        const attached = yield* place(
+          "call-1",
+          origin,
+          WorkspaceKind.cases.Path.make({ path: "sub" }),
+        )
+        expect(attached._tag).toBe("Attached")
+        expect(attached).toMatchObject({
+          path: `${origin}/sub`,
+          cwd: `${origin}/sub`,
+        })
+        expect(yield* exists(`${origin}/sub/ran`)).toBe(false)
+        expect(yield* exists(`${origin}/ran`)).toBe(false)
+        expect(yield* rift.requests).toEqual([])
+        expect(yield* worktreeCount(origin)).toBe("1")
+        // Bound, it gives no work back, and the session's delete only forgets it.
+        yield* within(places.bind(attached.name, childSession))
+        expect(yield* within(places.collect(childSession))).toEqual(Option.none())
+        yield* deleted(childSession)
+        expect(yield* sh(origin, "cat sub/deep.txt")).toBe("deep")
+        expect(yield* treeState(origin)).toEqual(before)
+        expect(yield* exists(recordFile(attached.name))).toBe(false)
+        // Released unbound, the same.
+        const unbound = yield* place(
+          "call-2",
+          origin,
+          WorkspaceKind.cases.Path.make({ path: origin }),
+        )
+        yield* within(places.release(unbound.name))
+        expect(yield* sh(origin, "cat kept.txt")).toBe("one")
+        expect(yield* treeState(origin)).toEqual(before)
+        expect(yield* exists(recordFile(unbound.name))).toBe(false)
+        // A directory outside git, or a path that is not there, is refused.
+        const plain = yield* makeTempDirectoryScoped("ws-plain-")
+        const outside = yield* place(
+          "call-3",
+          origin,
+          WorkspaceKind.cases.Path.make({ path: plain }),
+        ).pipe(Effect.flip)
+        expect(outside.message).toContain("needs a git repository")
+        const nowhere = yield* place(
+          "call-4",
+          origin,
+          WorkspaceKind.cases.Path.make({ path: "missing" }),
+        ).pipe(Effect.flip)
+        expect(nowhere.message).toContain("to exist")
+      }),
     ),
   )
 })
@@ -1018,6 +1367,9 @@ const snapshotStart = {
   notify: "starter",
   workspace: { snapshot: true },
 }
+
+/** `snapshotStart` as the tool's handler gets it: its input decoded. */
+const decodedSnapshotStart = { ...snapshotStart, workspace: SNAPSHOT }
 
 /** Every text part of the prompt's user and assistant messages, in order. */
 const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
@@ -1138,8 +1490,6 @@ const WorkOfRoundEnd = Schema.Struct({
   sessionId: SessionId,
   workspace: Schema.Struct({ path: Schema.String, branch: Schema.String }),
 })
-
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 /**
  * The request id `thread.start` gives its thread's create for the tool call
@@ -1522,7 +1872,7 @@ describe("a snapshot thread", () => {
             Effect.gen(function* () {
               const host = yield* runtimeHostContext(starter)
               // @effect-diagnostics-next-line anyUnknownInErrorContext:off -- a registered tool's channels are erased, as at the extension membrane
-              return yield* runToolWithCtx(startTool, snapshotStart, {
+              return yield* runToolWithCtx(startTool, decodedSnapshotStart, {
                 ...host,
                 Session: { ...host.Session, listSessions: () => Ref.get(stored), ...session },
                 extensionId: SESSION_TOOLS_EXTENSION_ID,

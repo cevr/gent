@@ -62,7 +62,7 @@ export {
 } from "./session-tools.js"
 // threadRoundText has only a test reader here: it writes the text
 // threadRoundBody reads, so a client test builds a real round with it, not a
-// copy.
+// copy. WorkspacePlace builds the place such a round names.
 export {
   roundFailureNames,
   THREAD_ROUND_END_TYPE,
@@ -72,4 +72,5 @@ export {
   threadRoundEndAnswer,
   threadRoundText,
 } from "./threads.js"
+export { WorkspacePlace } from "./workspaces.js"
 export { type MachineRunView, MachinesRpc } from "./machines.js"

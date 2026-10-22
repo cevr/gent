@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { flow } from "effect/Function"
 import {
   Clock,
@@ -37,6 +37,7 @@ import {
   omitUndefined,
   type QuotaReading,
   reportProviderQuota,
+  runProcess,
   sessionThread,
   tool,
 } from "@gent/core/extensions/api"
@@ -66,9 +67,11 @@ import {
   THREAD_ROUND_TYPE,
   ThreadBusy,
   threadRoundText,
+  StartParams,
   Threads,
   ThreadsOverCap,
 } from "../src/threads.js"
+import { WorkspaceKind } from "../src/workspaces.js"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   acted,
@@ -2237,6 +2240,60 @@ describe("thread round ownership", () => {
           ])
           expect(second?.failed).toBe(true)
           expect(textOf(second?.result)).toContain("already runs 1 thread:")
+        }).pipe(Effect.timeout("25 seconds")),
+      ),
+    30_000,
+  )
+
+  test("a workspace names exactly one place, and decodes to the kind it names", () => {
+    const decode = Schema.decodeResult(StartParams)
+    // The wire shape lets every key be absent, so the one-key rule is the filter's.
+    type WorkspaceInput = NonNullable<(typeof StartParams.Encoded)["workspace"]>
+    const workspaceOf = (workspace: WorkspaceInput) =>
+      Result.map(decode({ workspace }), (params) => params.workspace)
+    expect(Result.getOrThrow(workspaceOf({ snapshot: true }))).toEqual(
+      WorkspaceKind.cases.Snapshot.make({}),
+    )
+    expect(Result.getOrThrow(workspaceOf({ rift: { name: "fix", from: "../warm" } }))).toEqual(
+      WorkspaceKind.cases.Rift.make({ name: "fix", from: "../warm" }),
+    )
+    expect(Result.getOrThrow(workspaceOf({ path: "sub" }))).toEqual(
+      WorkspaceKind.cases.Path.make({ path: "sub" }),
+    )
+    const refusals: ReadonlyArray<WorkspaceInput> = [
+      {},
+      { snapshot: true, path: "sub" },
+      { rift: { name: "fix" }, path: "sub" },
+    ]
+    for (const refused of refusals) {
+      expect(Result.isFailure(workspaceOf(refused))).toBe(true)
+    }
+  })
+
+  it.live(
+    "a start that names a workspace and a cwd is refused, and no thread starts",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { client, sessionId, branchId } = yield* roundHarness()
+          // A directory a path workspace could attach.
+          const repo = yield* makeTempDirectoryScoped("threads-repo-")
+          const init = yield* runProcess("git", ["init", "-q"], { cwd: repo }).pipe(
+            Effect.orDie,
+            Effect.provide(BunServices.layer),
+          )
+          expect(init.exitCode).toBe(0)
+          const [both] = yield* call(client, { sessionId, branchId }, [
+            [
+              "thread.start",
+              "start-both",
+              { agent: "worker", task: "ECHO both", workspace: { path: repo }, cwd: repo },
+            ],
+          ])
+          expect(both?.failed).toBe(true)
+          expect(textOf(both?.result)).toContain("a workspace or a cwd, not both")
+          const sessions = yield* client.session.list()
+          expect(sessions.filter((session) => session.parentSessionId === sessionId)).toEqual([])
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,

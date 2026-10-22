@@ -22,7 +22,7 @@ import {
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
-import { threadRoundText } from "@gent/extensions/client"
+import { threadRoundText, WorkspacePlace } from "@gent/extensions/client"
 import { renderFrame, renderScoped } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
@@ -144,7 +144,17 @@ describe("windows on a branch", () => {
           message: "fix the csv quoting",
           reply: Option.none(),
           notify: "starter",
-          place: Option.some({ cwd: "/copies/csv", branch: "gent/csv" }),
+          place: Option.some(
+            WorkspacePlace.cases.Copy.make({
+              kind: "snapshot",
+              name: "csv",
+              path: "/copies/csv",
+              cwd: "/copies/csv",
+              branch: "gent/csv",
+              backend: "worktree",
+              notes: [],
+            }),
+          ),
         }),
         1,
       ),

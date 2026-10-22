@@ -1,18 +1,23 @@
 /**
- * Private places for threads: a copy of a session's working tree that a
- * thread edits, whose work comes back to the origin repository as one branch.
+ * Places for threads: where a thread works, named at its start. Three kinds:
  *
- * `thread.start` asks for a place when it names `workspace: { snapshot: true }`
- * and creates the thread session with its `cwd` inside the copy, so the
- * thread's profile, tools, shell and cell all run there. On btrfs, where a
- * whole-tree copy is one snapshot, `rift` makes the copy (`rift rpc`, a
- * process, never its FFI; gent never runs `rift init` or `rift gc`).
- * Everywhere else, and when rift fails, gent makes a `git worktree add
- * --detach` with the origin's uncommitted state. gent runs the `.rift.toml`
- * `postcreate` hooks in the copy for both. A copy is not a sandbox: the
- * thread still reaches every path on the machine.
+ * - `Snapshot`: a copy of the caller's working tree. Where the file system is
+ *   one rift copies on (APFS, btrfs, XFS) and the origin is a rift workspace,
+ *   `rift` makes the copy (`rift rpc`, a process, never its FFI; gent never
+ *   runs `rift init` or `rift gc`). Everywhere else, and when rift fails, gent
+ *   makes a `git worktree add --detach` with the origin's uncommitted state.
+ * - `Rift`: a named rift copy of a source that is not itself a rift copy (by
+ *   default the caller's warm source). Rift only: a missing rift, a file
+ *   system rift does not copy on, a source that is a copy or a target that is
+ *   there already is refused before gent writes anything, and a failed
+ *   `postcreate` hook fails the start.
+ * - `Path`: an existing directory in a git repository, attached as it is. No
+ *   copy, no hook, no collect; gent never removes or owns it.
  *
- * Work comes back at each thread turn end: the copy's committed and
+ * gent runs the `.rift.toml` `postcreate` hooks in a copy. A place is not a
+ * sandbox: the thread still reaches every path on the machine.
+ *
+ * A copy's work comes back at each thread turn end: its committed and
  * uncommitted work, as one commit over the copy's state after its hooks
  * (`base`), on `refs/heads/gent/<name>` of the origin. gent moves that branch
  * only from the commit it last wrote (compare and swap), and never while a
@@ -21,9 +26,10 @@
  * refuse, in one step, to remove a copy that has copies of its own, so a rift
  * copy is kept (`retained`) when its session goes.
  *
- * One record per place under `<data directory>/workspaces/<name>.json`,
- * written before gent makes the copy, and an ownership marker in the copy's
- * git directory written after. The marker binds the start, the copy's real
+ * One record per place under `<data directory>/workspaces/<name>.json`, where
+ * `name` is the digest of the start, never a name the caller gave. A copy's
+ * record is written before gent makes the copy, and an ownership marker in the
+ * copy's git directory after. The marker binds the start, the copy's real
  * path, its backend and its rift id. gent adopts or removes a copy only when
  * the two agree and the copy lies where its backend puts copies; any other
  * directory it keeps.
@@ -36,6 +42,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   Option,
   Path,
   Predicate,
@@ -51,6 +58,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   ExtensionId,
+  omitUndefined,
   RequestId,
   resolveDataDir,
   runProcess,
@@ -75,6 +83,29 @@ export class WorkspaceError extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+/** A `postcreate` hook of a rift workspace failed: the start fails, and gent keeps the copy at `path`. */
+export class WorkspaceHookFailed extends Schema.TaggedError<
+  WorkspaceHookFailed,
+  { readonly brand: unique symbol }
+>()("WorkspaceHookFailed", {
+  message: Schema.String,
+  /** The copy gent keeps: it cannot remove a rift copy yet. */
+  path: Schema.String,
+}) {}
+
+/**
+ * What a start asks for. `Snapshot`: a copy of the caller's working tree,
+ * rift where rift copies, else a git worktree. `Rift`: a rift copy named
+ * `name` of `from` (default: the caller's warm source), rift only. `Path`: an
+ * existing directory, attached as it is.
+ */
+export const WorkspaceKind = Schema.TaggedUnion({
+  Snapshot: {},
+  Rift: { name: Schema.String, from: Schema.optionalKey(Schema.String) },
+  Path: { path: Schema.String },
+})
+export type WorkspaceKind = typeof WorkspaceKind.Type
+
 const WorkspaceBackend = Schema.Literals(["rift", "worktree"])
 
 /** What one collect found. `branch` is absent when the copy holds no work. */
@@ -88,18 +119,27 @@ const CollectedWorkSchema = Schema.Struct({
   problem: Schema.optionalKey(Schema.String),
 })
 
-/** One place on disk, and the child session that works in it once one does. */
-const WorkspaceRecord = Schema.Struct({
+/** A place gent made: a copy on disk, and the child session that works in it once one does. */
+const CopyRecord = Schema.Struct({
+  /** A record written before the kinds has none: it is a snapshot's. */
+  kind: Schema.Literals(["snapshot", "rift"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("snapshot" as const)),
+  ),
+  /** The record's key: the digest of the start, never a name the caller gave. */
   name: Schema.String,
   /** The start that asked for the place: its parent session and branch, and its tool call. */
   parentSessionId: SessionId,
   parentBranchId: BranchId,
   requestId: RequestId,
-  /** The origin repository's top level, resolved. */
+  /** The origin repository's top level, resolved: the source of the copy. */
   origin: Schema.String,
+  /** The origin's rift id, from its `.rift` file, when it is a rift workspace. */
+  sourceId: Schema.optionalKey(Schema.String),
   /** The real directory that holds the copy: gent's worktrees directory, or rift's storage. */
   root: Schema.String,
-  /** The copy's root, `<root>/<name>`, decided before gent makes it. */
+  /** The copy's directory name under `root` when it is not `name`: the name a rift workspace asked for. */
+  copyName: Schema.optionalKey(Schema.String),
+  /** The copy's root, `<root>/<copy name>`, decided before gent makes it. */
   path: Schema.String,
   /** The child's working directory: the parent's place in the origin, inside the copy. */
   cwd: Schema.String,
@@ -119,6 +159,8 @@ const WorkspaceRecord = Schema.Struct({
   notes: Schema.Array(Schema.String),
   createdAt: Schema.Finite,
   sessionId: Schema.optionalKey(SessionId),
+  /** The thread that works in the place: its key, its first session's id. */
+  thread: Schema.optionalKey(SessionId),
   /** The commit gent last wrote to the branch. */
   tip: Schema.optionalKey(Schema.String),
   /** A commit gent is writing to the branch now; a crash can leave the branch on it. */
@@ -126,7 +168,33 @@ const WorkspaceRecord = Schema.Struct({
   /** The last collect and the turn it ran for, so a second collect of one turn reads it. */
   collected: Schema.optionalKey(Schema.Struct({ turn: Schema.String, work: CollectedWorkSchema })),
 })
+type CopyRecord = typeof CopyRecord.Type
+
+/** A directory a start attached: gent made none of it, and removes, copies or collects nothing there. */
+const PathRecord = Schema.Struct({
+  kind: Schema.Literal("path"),
+  name: Schema.String,
+  parentSessionId: SessionId,
+  parentBranchId: BranchId,
+  requestId: RequestId,
+  /** The repository's top level, resolved. */
+  origin: Schema.String,
+  /** The attached directory, resolved; the child works there. */
+  path: Schema.String,
+  cwd: Schema.String,
+  /** An attached directory is ready at once. */
+  phase: Schema.Literal("ready"),
+  notes: Schema.Array(Schema.String),
+  createdAt: Schema.Finite,
+  sessionId: Schema.optionalKey(SessionId),
+  thread: Schema.optionalKey(SessionId),
+})
+type PathRecord = typeof PathRecord.Type
+
+const WorkspaceRecord = Schema.Union([CopyRecord, PathRecord])
 type WorkspaceRecord = typeof WorkspaceRecord.Type
+
+const isCopyRecord = (record: WorkspaceRecord): record is CopyRecord => record.kind !== "path"
 
 const recordCodec = Schema.fromJsonString(WorkspaceRecord)
 const decodeRecord = Schema.decodeUnknownOption(recordCodec)
@@ -134,15 +202,30 @@ const encodeRecord = Schema.encodeSync(recordCodec)
 
 type Work = typeof CollectedWorkSchema.Type
 
-/** A place as a thread start uses it. `notes` say, one line each, what the acquire did not do as asked. */
-interface WorkspacePlace {
-  readonly name: string
-  readonly path: string
-  readonly cwd: string
-  readonly branch: string
-  readonly backend: typeof WorkspaceBackend.Type
-  readonly notes: ReadonlyArray<string>
-}
+/**
+ * A place as a thread start uses it. `Copy`: a copy gent made, whose work
+ * returns on `branch`. `Attached`: a directory gent only names. `notes` say,
+ * one line each, what the acquire did not do as asked.
+ */
+export const WorkspacePlace = Schema.TaggedUnion({
+  Copy: {
+    /** What the start asked for: a snapshot of its working tree, or a named rift workspace. */
+    kind: Schema.Literals(["snapshot", "rift"]),
+    name: Schema.String,
+    path: Schema.String,
+    cwd: Schema.String,
+    branch: Schema.String,
+    backend: WorkspaceBackend,
+    notes: Schema.Array(Schema.String),
+  },
+  Attached: {
+    name: Schema.String,
+    path: Schema.String,
+    cwd: Schema.String,
+    notes: Schema.Array(Schema.String),
+  },
+})
+export type WorkspacePlace = typeof WorkspacePlace.Type
 
 /** What a collect found, and the copy it came from. */
 export interface CollectedWork extends Schema.Schema.Type<typeof CollectedWorkSchema> {
@@ -151,6 +234,9 @@ export interface CollectedWork extends Schema.Schema.Type<typeof CollectedWorkSc
 
 /** The branch a place's work lands on in the origin. */
 const workspaceBranch = (name: string) => `gent/${name}`
+
+/** The copy's directory name under its root: the name a rift workspace asked for, else the record's key. */
+const copyDirectory = (record: CopyRecord) => record.copyName ?? record.name
 
 /** Below this much free space where the copy lands, an acquire is refused. */
 const DEFAULT_MINIMUM_FREE_BYTES = 2 * 1024 ** 3
@@ -356,6 +442,12 @@ const RiftAnswer = Schema.Union([
     }),
   }),
 ])
+/** rift's own refusal of a request, with its code (`already_exists`, `cow_unavailable`, ...). */
+class RiftRefused extends Schema.TaggedError<RiftRefused, { readonly brand: unique symbol }>()(
+  "RiftRefused",
+  { code: Schema.String, message: Schema.String },
+) {}
+
 const decodeRiftAnswer = Schema.decodeUnknownOption(Schema.fromJsonString(RiftAnswer))
 const decodePaths = Schema.decodeUnknownOption(Schema.Array(Schema.String))
 
@@ -416,12 +508,62 @@ const riftPaths = Effect.fn("Workspaces.riftPaths")(function* (
   )
 })
 
-/** The file system type (`btrfs`, `xfs`, ...), or none where `stat -f` does not say. */
-const fileSystemType = (directory: string) =>
-  runProcess("stat", ["-f", "-c", "%T", directory], { timeout: GIT_TIMEOUT }).pipe(
+/** A process's trimmed stdout when it exits 0; none when it fails or does not run. */
+const processText = (command: string, args: ReadonlyArray<string>) =>
+  runProcess(command, args, { timeout: GIT_TIMEOUT }).pipe(
     Effect.map((result) => Option.liftPredicate(result.stdout.trim(), () => result.exitCode === 0)),
     Effect.orElseSucceed(() => Option.none<string>()),
   )
+
+/** The type in a `mount` line `<device> on <mount point> (<type>, <flags>...)`. */
+const mountedType = (line: string) => {
+  const open = line.lastIndexOf(" (")
+  if (open === -1) return Option.none<string>()
+  return Option.liftPredicate(
+    line
+      .slice(open + 2)
+      .split(/[,)]/)[0]
+      ?.trim() ?? "",
+    (type) => type.length > 0,
+  )
+}
+
+/**
+ * The file system type (`btrfs`, `xfs`, `apfs`, ...), or none where the
+ * system does not say. GNU `stat -f -c %T` names it; BSD `stat` (macOS) has
+ * no such format, so there the device that holds the directory is read
+ * (`stat -f %Sd`) and its line in `mount` names the type.
+ */
+const fileSystemType = Effect.fn("Workspaces.fileSystemType")(function* (directory: string) {
+  const gnu = yield* processText("stat", ["-f", "-c", "%T", directory])
+  if (Option.isSome(gnu)) return Option.map(gnu, (type) => type.toLowerCase())
+  const device = yield* processText("stat", ["-f", "%Sd", directory])
+  if (Option.isNone(device)) return Option.none<string>()
+  const table = yield* processText("mount", [])
+  const line = Option.flatMap(table, (text) =>
+    Option.fromUndefinedOr(
+      text.split("\n").find((entry) => entry.startsWith(`/dev/${device.value} on `)),
+    ),
+  )
+  return Option.map(Option.flatMap(line, mountedType), (type) => type.toLowerCase())
+})
+
+/**
+ * The file systems rift copies on: APFS (`clonefile`) on macOS, btrfs
+ * (snapshots) and XFS (reflinks) on Linux. rift itself refuses a file system
+ * without copy-on-write (`cow_unavailable`); gent refuses the rest before it
+ * asks.
+ */
+const RIFT_FILE_SYSTEMS: ReadonlyArray<string> = ["apfs", "btrfs", "xfs"]
+
+/** Whether rift copies on the file system that holds `directory`; else why not. */
+const riftFileSystem = Effect.fn("Workspaces.riftFileSystem")(function* (directory: string) {
+  const type = yield* fileSystemType(directory)
+  if (Option.exists(type, (found) => RIFT_FILE_SYSTEMS.includes(found))) return Result.void
+  return Result.fail(
+    `the origin's file system is ${Option.getOrElse(type, () => "unknown")}, which rift does not copy on (${RIFT_FILE_SYSTEMS.join(", ")})`,
+  )
+})
 
 /** What is at a path, without following a link there: `stat` follows links, `readLink` tells them. */
 type EntryKind = "absent" | "link" | "file" | "directory" | "other"
@@ -514,7 +656,7 @@ const inside = (path: Path.Path, inner: string, outer: string) => {
   return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
-/** Where a start's copy comes from, and the name its identity gives it. */
+/** Where a start's place comes from, what it asks for, and the name its identity gives it. */
 interface WorkspaceStart {
   readonly name: string
   /** The digest of the identity; the copy's marker holds it. */
@@ -522,9 +664,13 @@ interface WorkspaceStart {
   readonly parentSessionId: SessionId
   readonly parentBranchId: BranchId
   readonly requestId: RequestId
+  /** The source's top level: the tree a copy copies, or the repository an attached directory is in. */
   readonly origin: string
-  /** The parent's cwd, relative to the origin. */
+  /** The origin's rift id, when it is a rift workspace. */
+  readonly sourceId: Option.Option<string>
+  /** The child's place, relative to the origin: the parent's cwd, or the attached directory. */
   readonly relative: string
+  readonly ask: WorkspaceKind
 }
 
 const makeWorkspaces = (options: WorkspacesOptions) => {
@@ -607,14 +753,25 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     )
   const nameOfDigest = (digest: string) => `child-${digest.slice(0, 12)}`
 
-  const placeOf = (record: WorkspaceRecord, notes: ReadonlyArray<string>): WorkspacePlace => ({
-    name: record.name,
-    path: record.path,
-    cwd: record.cwd,
-    branch: workspaceBranch(record.name),
-    backend: record.backend,
-    notes,
-  })
+  const placeOf = (record: WorkspaceRecord): WorkspacePlace => {
+    if (record.kind === "path") {
+      return WorkspacePlace.cases.Attached.make({
+        name: record.name,
+        path: record.path,
+        cwd: record.cwd,
+        notes: record.notes,
+      })
+    }
+    return WorkspacePlace.cases.Copy.make({
+      kind: record.kind,
+      name: record.name,
+      path: record.path,
+      cwd: record.cwd,
+      branch: workspaceBranch(record.name),
+      backend: record.backend,
+      notes: record.notes,
+    })
+  }
 
   /** Refuses a copy where the file system holding `at` is nearly full, or says nothing of its space. */
   const requireSpace = Effect.fn("Workspaces.requireSpace")(function* (at: string) {
@@ -636,15 +793,16 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   // ── ownership ──
 
   /** Why gent may not touch the record's path, by the record alone, if it may not. */
-  const unsafePath = Effect.fn("Workspaces.unsafePath")(function* (record: WorkspaceRecord) {
+  const unsafePath = Effect.fn("Workspaces.unsafePath")(function* (record: CopyRecord) {
     const path = yield* Path.Path
     const copy = record.path
     if (!path.isAbsolute(copy) || copy === record.origin) return Option.some("it is the origin")
     if (inside(path, record.origin, copy) || inside(path, copy, record.origin)) {
       return Option.some("it overlaps the origin")
     }
-    if (path.basename(copy) !== record.name) return Option.some("its name is not the record's")
-    if (copy !== path.join(record.root, record.name)) {
+    const named = copyDirectory(record)
+    if (path.basename(copy) !== named) return Option.some("its name is not the record's")
+    if (copy !== path.join(record.root, named)) {
       return Option.some("it is not in the directory its record names")
     }
     if (inside(path, record.origin, record.root) || inside(path, record.root, record.origin)) {
@@ -669,9 +827,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * to an entry of the origin's `.git/worktrees/`. git must agree on both.
    * Else why not.
    */
-  const copyGitDirectory = Effect.fn("Workspaces.copyGitDirectory")(function* (
-    record: WorkspaceRecord,
-  ) {
+  const copyGitDirectory = Effect.fn("Workspaces.copyGitDirectory")(function* (record: CopyRecord) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const real = yield* fs.realPath(record.path).pipe(Effect.option)
@@ -724,7 +880,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   })
 
   /** What the marker holds: the start, the copy's real path, its backend and its rift id. */
-  const markerDigest = Effect.fn("Workspaces.markerDigest")(function* (record: WorkspaceRecord) {
+  const markerDigest = Effect.fn("Workspaces.markerDigest")(function* (record: CopyRecord) {
     return yield* sha256(
       [yield* digestOf(record), record.path, record.backend, record.copyId ?? ""].join("\n"),
     )
@@ -737,7 +893,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * and its marker holds the record's digest. Any other path or directory is
    * kept, and the call fails with why.
    */
-  const ownership = Effect.fn("Workspaces.ownership")(function* (record: WorkspaceRecord) {
+  const ownership = Effect.fn("Workspaces.ownership")(function* (record: CopyRecord) {
     const path = yield* Path.Path
     const kept = (why: string) =>
       new WorkspaceError({ message: `gent keeps ${record.path} (${record.name}): ${why}` })
@@ -771,7 +927,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * goes to a new file beside it, then a rename puts it in place: a rename
    * replaces a directory entry, never the file a link names.
    */
-  const writeMarker = Effect.fn("Workspaces.writeMarker")(function* (record: WorkspaceRecord) {
+  const writeMarker = Effect.fn("Workspaces.writeMarker")(function* (record: CopyRecord) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const crypto = yield* Crypto.Crypto
@@ -806,7 +962,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * session index goes. gent never adopts, collects or removes a retained
    * copy; the owner removes it.
    */
-  const retain = Effect.fn("Workspaces.retain")(function* (record: WorkspaceRecord, why: string) {
+  const retain = Effect.fn("Workspaces.retain")(function* (record: CopyRecord, why: string) {
     const fs = yield* FileSystem.FileSystem
     yield* publish({ ...record, phase: "retained", retained: why })
     if (Predicate.isNotUndefined(record.sessionId)) {
@@ -819,20 +975,20 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   // ── making a copy ──
 
+  /** Where rift puts the copies of the rift workspace `root`: `.rifts/<name>` beside it. */
+  const riftStorageOf = (path: Path.Path, root: string) =>
+    path.join(path.dirname(root), ".rifts", path.basename(root))
+
   /**
-   * Where rift would put the copy, when rift is the backend: the origin is a
-   * rift workspace on btrfs, where a whole-tree copy is one snapshot. Else
-   * the one line that says why the copy is a worktree.
+   * Where rift would put a snapshot's copy, when rift is the backend: the
+   * origin is a rift workspace on a file system rift copies on. Else the one
+   * line that says why the copy is a worktree.
    */
   const riftStorage = Effect.fn("Workspaces.riftStorage")(function* (origin: string) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const type = yield* fileSystemType(origin)
-    if (!Option.contains(type, "btrfs")) {
-      return Result.fail(
-        `the origin's file system is ${Option.getOrElse(type, () => "unknown")}, not btrfs`,
-      )
-    }
+    const supported = yield* riftFileSystem(origin)
+    if (Result.isFailure(supported)) return Result.fail(supported.failure)
     if (!(yield* fs.exists(path.join(origin, ".rift")).pipe(Effect.orElseSucceed(() => false)))) {
       return Result.fail("the origin is not a rift workspace")
     }
@@ -840,22 +996,22 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       Effect.result,
     )
     if (Result.isFailure(ancestors)) return Result.fail(ancestors.failure.message)
-    const root = ancestors.success.at(-1) ?? origin
-    return Result.succeed(path.join(path.dirname(root), ".rifts", path.basename(root)))
+    return Result.succeed(riftStorageOf(path, ancestors.success.at(-1) ?? origin))
   })
 
-  /** A rift copy at `record.path`, without rift's hooks. */
-  const riftCopy = Effect.fn("Workspaces.riftCopy")(function* (record: WorkspaceRecord) {
+  /** A rift copy at `record.path`, without rift's hooks. rift's own refusal fails as `RiftRefused`, with its code. */
+  const riftCopy = Effect.fn("Workspaces.riftCopy")(function* (record: CopyRecord) {
     const answer = yield* riftCall(riftProgram, {
       command: "create",
       from: record.origin,
-      name: record.name,
+      name: copyDirectory(record),
       into: record.root,
       copyAll: true,
       hooks: false,
     })
     if (answer.status === "error") {
-      return yield* new WorkspaceError({
+      return yield* new RiftRefused({
+        code: answer.error.code,
         message: `rift could not copy (${answer.error.code}): ${answer.error.message}`,
       })
     }
@@ -867,7 +1023,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   })
 
   /** A detached worktree of the origin's `HEAD`, not yet checked out. No repository hook runs. */
-  const addWorktree = Effect.fn("Workspaces.addWorktree")(function* (record: WorkspaceRecord) {
+  const addWorktree = Effect.fn("Workspaces.addWorktree")(function* (record: CopyRecord) {
     yield* git(record.origin, [
       "worktree",
       "add",
@@ -883,7 +1039,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * Fills a new worktree with the origin's working tree: tracked changes and
    * untracked files arrive as unstaged, the index is `HEAD`'s.
    */
-  const fillWorktree = Effect.fn("Workspaces.fillWorktree")(function* (record: WorkspaceRecord) {
+  const fillWorktree = Effect.fn("Workspaces.fillWorktree")(function* (record: CopyRecord) {
     const tree = yield* captureTree(record.origin)
     yield* git(record.path, ["read-tree", "-u", "--reset", tree])
     yield* git(record.path, ["reset", "-q"])
@@ -894,7 +1050,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * `refs/gent/base/<name>`, in the repository that holds it (the origin for
    * a worktree, the copy for rift).
    */
-  const baseRef = (record: WorkspaceRecord) => {
+  const baseRef = (record: CopyRecord) => {
     const ref = `refs/gent/base/${record.name}`
     if (record.backend === "worktree") return { repo: record.origin, ref }
     return { repo: record.path, ref }
@@ -905,10 +1061,12 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * hooks, its base and the base ref, then `ready`. The base is in the record
    * before the ref is made, so a crash leaves a ref gent can prove its own.
    * The base ref is made only where none is (compare and swap): one that is
-   * there already is someone else's, and gent keeps the copy and says so.
+   * there already is someone else's, and gent keeps the copy and says so. A
+   * snapshot's failed hook is a note; a rift workspace's retains the copy and
+   * fails the start.
    */
   const finish = Effect.fn("Workspaces.finish")(function* (
-    record: WorkspaceRecord,
+    record: CopyRecord,
     notes: ReadonlyArray<string>,
   ) {
     // The marker goes in first, so a failure or a crash after it leaves a copy gent can prove.
@@ -916,10 +1074,17 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     if (record.backend === "worktree") yield* fillWorktree(record)
     const ids: HookIds = {
       id: record.copyId ?? record.name,
-      parentId: Option.getOrElse(yield* riftId(record.origin), () => ""),
+      parentId: record.sourceId ?? "",
     }
     const hookNote = yield* runPostcreate(record.origin, record.path, ids)
-    const based: WorkspaceRecord = { ...record, base: yield* captureBase(record.path, record.name) }
+    if (record.kind === "rift" && Option.isSome(hookNote)) {
+      yield* retain(record, hookNote.value)
+      return yield* new WorkspaceHookFailed({
+        message: `The rift workspace's setup failed: ${hookNote.value}. gent keeps the copy at ${record.path}, as it is; it cannot remove a rift copy.`,
+        path: record.path,
+      })
+    }
+    const based: CopyRecord = { ...record, base: yield* captureBase(record.path, record.name) }
     yield* publish(based)
     const held = baseRef(based)
     const made = yield* git(held.repo, ["update-ref", held.ref, based.base ?? "", ""]).pipe(
@@ -930,7 +1095,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       yield* retain(based, why)
       return yield* new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` })
     }
-    const ready: WorkspaceRecord = {
+    const ready: CopyRecord = {
       ...based,
       phase: "ready",
       notes: [...notes, ...Option.toArray(hookNote)],
@@ -940,84 +1105,198 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   })
 
   /**
-   * Makes the copy for a start: the record is written as `creating` first,
-   * so a crash at any later step leaves a record that names the path. A rift
-   * copy that exists is gent's to keep from then on: a step after it that
-   * fails retains it.
+   * The rest of a rift copy rift has just made: its id, then `finish`. The
+   * copy is gent's to keep from here on: a step after it that fails retains
+   * it.
    */
-  const create = Effect.fn("Workspaces.create")(function* (start: WorkspaceStart) {
-    const fs = yield* FileSystem.FileSystem
+  const finishRift = Effect.fn("Workspaces.finishRift")(function* (
+    record: CopyRecord,
+    notes: ReadonlyArray<string>,
+  ) {
+    const kept = (latest: CopyRecord, why: string) =>
+      retain(latest, why).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` }),
+          ),
+        ),
+      )
+    const copyId = yield* riftId(record.path)
+    if (Option.isNone(copyId)) return yield* kept(record, "it has no rift id")
+    const identified: CopyRecord = { ...record, copyId: copyId.value }
+    yield* publish(identified)
+    return yield* finish(identified, notes).pipe(
+      Effect.catchTag("WorkspaceError", (error) =>
+        Effect.gen(function* () {
+          // A step that already retained the copy said why; any other is why now.
+          const latest = Option.getOrElse(
+            Option.filter(yield* readRecord(record.name), isCopyRecord),
+            () => identified,
+          )
+          if (latest.phase === "retained") return yield* error
+          return yield* kept(latest, error.message)
+        }),
+      ),
+    )
+  })
+
+  /** A copy's record, written as `creating` before gent makes anything. */
+  const copyRecord = Effect.fn("Workspaces.copyRecord")(function* (
+    start: WorkspaceStart,
+    copy: {
+      readonly kind: CopyRecord["kind"]
+      readonly backend: CopyRecord["backend"]
+      readonly root: string
+      readonly copyName?: string
+    },
+  ) {
     const path = yield* Path.Path
-    const now = yield* Clock.currentTimeMillis
-    const storage = yield* riftStorage(start.origin)
-    const inRoot = (backend: typeof WorkspaceBackend.Type, root: string): WorkspaceRecord => ({
+    const directoryName = copy.copyName ?? start.name
+    const record: CopyRecord = {
+      kind: copy.kind,
       name: start.name,
       parentSessionId: start.parentSessionId,
       parentBranchId: start.parentBranchId,
       requestId: start.requestId,
       origin: start.origin,
-      root,
-      path: path.join(root, start.name),
-      cwd: path.join(root, start.name, start.relative),
-      backend,
+      root: copy.root,
+      path: path.join(copy.root, directoryName),
+      cwd: path.join(copy.root, directoryName, start.relative),
+      backend: copy.backend,
       phase: "creating",
       notes: [],
-      createdAt: now,
-    })
+      createdAt: yield* Clock.currentTimeMillis,
+      ...omitUndefined({
+        copyName: copy.copyName,
+        sourceId: Option.getOrUndefined(start.sourceId),
+      }),
+    }
+    return record
+  })
+
+  /**
+   * Makes the copy for a snapshot start: the record is written as `creating`
+   * first, so a crash at any later step leaves a record that names the path.
+   * Rift where rift copies; else, or when rift fails with nothing left, a
+   * git worktree, and a note says why.
+   */
+  const createSnapshot = Effect.fn("Workspaces.createSnapshot")(function* (start: WorkspaceStart) {
+    const fs = yield* FileSystem.FileSystem
+    const storage = yield* riftStorage(start.origin)
     let notes: ReadonlyArray<string> = []
     if (Result.isSuccess(storage)) {
       yield* requireSpace(start.origin)
-      const record = inRoot("rift", yield* canonical(storage.success))
+      const record = yield* copyRecord(start, {
+        kind: "snapshot",
+        backend: "rift",
+        root: yield* canonical(storage.success),
+      })
       yield* publish(record)
       const made = yield* riftCopy(record).pipe(Effect.result)
-      if (Result.isSuccess(made)) {
-        const kept = (latest: WorkspaceRecord, why: string) =>
-          retain(latest, why).pipe(
-            Effect.andThen(
-              Effect.fail(
-                new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` }),
-              ),
-            ),
-          )
-        const copyId = yield* riftId(record.path)
-        if (Option.isNone(copyId)) return yield* kept(record, "it has no rift id")
-        const identified: WorkspaceRecord = { ...record, copyId: copyId.value }
-        yield* publish(identified)
-        return yield* finish(identified, notes).pipe(
-          Effect.catchTag("WorkspaceError", (error) =>
-            Effect.gen(function* () {
-              // A step that already retained the copy said why; any other is why now.
-              const latest = Option.getOrElse(yield* readRecord(record.name), () => identified)
-              if (latest.phase === "retained") return yield* error
-              return yield* kept(latest, error.message)
-            }),
-          ),
-        )
-      }
+      if (Result.isSuccess(made)) return yield* finishRift(record, notes)
+      const why = made.failure.message
       // A failed rift that still left something there: gent keeps it.
       if ((yield* entryKind(record.path)) !== "absent") {
-        yield* retain(record, made.failure.message)
-        return yield* made.failure
+        yield* retain(record, why)
+        return yield* new WorkspaceError({ message: why })
       }
-      notes = [`a git worktree, because ${made.failure.message}`]
+      notes = [`a git worktree, because ${why}`]
     } else {
       notes = [`a git worktree, because ${storage.failure}`]
     }
     const worktrees = yield* worktreesDirectory
     yield* fs.makeDirectory(worktrees, { recursive: true }).pipe(asError)
     yield* requireSpace(worktrees)
-    const record = inRoot("worktree", yield* canonical(worktrees))
+    const record = yield* copyRecord(start, {
+      kind: "snapshot",
+      backend: "worktree",
+      root: yield* canonical(worktrees),
+    })
     yield* publish(record)
     yield* addWorktree(record)
     return yield* finish(record, notes)
   })
 
+  /**
+   * Makes a rift workspace: rift only, never a worktree. A file system rift
+   * does not copy on, or a target that is there already, is refused before
+   * gent writes anything: a target is never adopted, whoever made it. When
+   * rift fails, a target it says was there already stays as it is, and only
+   * the record goes.
+   */
+  const createRift = Effect.fn("Workspaces.createRift")(function* (
+    start: WorkspaceStart,
+    copyName: string,
+  ) {
+    const path = yield* Path.Path
+    const supported = yield* riftFileSystem(start.origin)
+    if (Result.isFailure(supported)) {
+      return yield* new WorkspaceError({
+        message: `A rift workspace needs a file system rift copies on, and ${supported.failure}. gent makes no copy and no worktree.`,
+      })
+    }
+    const root = yield* canonical(riftStorageOf(path, start.origin))
+    const target = path.join(root, copyName)
+    const there = yield* entryKind(target)
+    if (there !== "absent") {
+      return yield* new WorkspaceError({
+        message: `A ${there} is at ${target} already; gent does not adopt it. Name another rift workspace.`,
+      })
+    }
+    yield* requireSpace(start.origin)
+    const record = yield* copyRecord(start, { kind: "rift", backend: "rift", root, copyName })
+    yield* publish(record)
+    const made = yield* riftCopy(record).pipe(Effect.result)
+    if (Result.isSuccess(made)) return yield* finishRift(record, [])
+    const why = made.failure.message
+    // rift refuses a destination that is there already and leaves it: it is not gent's.
+    const theirs = made.failure._tag === "RiftRefused" && made.failure.code === "already_exists"
+    if (!theirs && (yield* entryKind(record.path)) !== "absent") {
+      yield* retain(record, why)
+      return yield* new WorkspaceError({ message: `gent keeps the copy ${record.path}: ${why}` })
+    }
+    yield* forget(record)
+    return yield* new WorkspaceError({
+      message: `rift made no workspace at ${record.path}: ${why}. gent makes no worktree in its place.`,
+    })
+  })
+
+  /** A directory a start attaches, as its record: ready at once, nothing made. */
+  const attach = Effect.fn("Workspaces.attach")(function* (start: WorkspaceStart) {
+    const path = yield* Path.Path
+    const directory = path.join(start.origin, start.relative)
+    const record: PathRecord = {
+      kind: "path",
+      name: start.name,
+      parentSessionId: start.parentSessionId,
+      parentBranchId: start.parentBranchId,
+      requestId: start.requestId,
+      origin: start.origin,
+      path: directory,
+      cwd: directory,
+      phase: "ready",
+      notes: [],
+      createdAt: yield* Clock.currentTimeMillis,
+    }
+    yield* publish(record)
+    return record
+  })
+
+  /** Makes the place a start asks for. */
+  const create = Effect.fn("Workspaces.create")(function* (start: WorkspaceStart) {
+    return yield* Match.value(start.ask).pipe(
+      Match.tagsExhaustive({
+        Snapshot: () => createSnapshot(start),
+        Rift: (ask) => createRift(start, ask.name),
+        Path: () => attach(start),
+      }),
+    )
+  })
+
   // ── removing a copy ──
 
   /** Removes an owned worktree copy. A failure keeps the copy: gent never deletes what git would not. */
-  const removeWorktree = Effect.fn("Workspaces.removeWorktree")(function* (
-    record: WorkspaceRecord,
-  ) {
+  const removeWorktree = Effect.fn("Workspaces.removeWorktree")(function* (record: CopyRecord) {
     yield* git(record.origin, ["worktree", "remove", "--force", "--force", record.path]).pipe(
       Effect.mapError(
         (error) =>
@@ -1027,12 +1306,12 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   })
 
   /** A worktree's base ref, where it is now. */
-  const currentBase = (record: WorkspaceRecord) => {
+  const currentBase = (record: CopyRecord) => {
     const held = baseRef(record)
     return gitOption(held.repo, ["rev-parse", "--verify", "-q", held.ref])
   }
 
-  /** Drops what gent keeps for a copy that is gone: the session index, the record. */
+  /** Drops what gent keeps for a place that is gone or was only attached: the session index, the record. */
   const forget = Effect.fn("Workspaces.forget")(function* (record: WorkspaceRecord) {
     const fs = yield* FileSystem.FileSystem
     if (Predicate.isNotUndefined(record.sessionId)) {
@@ -1048,7 +1327,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * Anything gent cannot prove stays, and the call fails with why.
    */
   const discard = Effect.fn("Workspaces.discard")(function* (
-    record: WorkspaceRecord,
+    record: CopyRecord,
     state: "absent" | "owned",
   ) {
     if (record.backend === "rift") {
@@ -1080,32 +1359,166 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   // ── acquire and bind ──
 
-  /** Where the copy for the start `key` from `cwd` comes from, and its name. The parent is the caller's session and branch. */
+  /** The resolved top level of the repository that holds `at`; refused, naming `what`, when there is none. */
+  const repositoryTop = Effect.fn("Workspaces.repositoryTop")(function* (at: string, what: string) {
+    const fs = yield* FileSystem.FileSystem
+    const top = yield* git(at, ["rev-parse", "--show-toplevel"]).pipe(
+      Effect.mapError(
+        () =>
+          new WorkspaceError({
+            message: `${what} needs a git repository, and ${at} is not in one.`,
+          }),
+      ),
+    )
+    return yield* fs.realPath(top).pipe(asError)
+  })
+
+  /** Refuses, naming `what`, a repository with no commit yet. */
+  const requireCommit = (top: string, what: string) =>
+    git(top, ["rev-parse", "--verify", "HEAD^{commit}"]).pipe(
+      Effect.mapError(
+        () =>
+          new WorkspaceError({
+            message: `${what} needs a commit in ${top}; the repository has none yet.`,
+          }),
+      ),
+    )
+
+  /** The rift workspaces `at` is a copy of, nearest first; none for a source. A missing rift is refused here. */
+  const riftAncestors = (at: string) =>
+    riftPaths(riftProgram, { command: "ancestors", of: at }).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceError({
+            message: `A rift workspace needs rift, and gent cannot ask it about ${at}: ${error.message}`,
+          }),
+      ),
+    )
+
+  /** A rift workspace's name: one path segment that does not start with `.`, as rift takes it. */
+  const RIFT_NAME = /^[^./\\\0][^/\\\0]*$/
+
+  /**
+   * The source a rift workspace copies, resolved and verified: `from` (its
+   * repository's top level), or by default the warm source of the caller's
+   * repository: the rift workspace the caller's is a copy of, or the caller's
+   * own when it is no copy. The source must be a rift workspace with a commit
+   * and no copy itself (a copy's copies would block its removal later).
+   */
+  const riftSource = Effect.fn("Workspaces.riftSource")(function* (
+    cwd: string,
+    from: Option.Option<string>,
+  ) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const what = "A rift workspace"
+    let source: string
+    if (Option.isSome(from)) {
+      source = yield* repositoryTop(path.resolve(cwd, from.value), `${what}'s source`)
+    } else {
+      const top = yield* repositoryTop(cwd, what)
+      if (Option.isNone(yield* riftId(top))) {
+        return yield* new WorkspaceError({
+          message: `${what} copies a rift workspace, and ${top} is not one (it has no .rift file). Run \`rift init\` there, or name a source with \`from\`.`,
+        })
+      }
+      const chain = yield* riftAncestors(top)
+      source = yield* fs.realPath(chain.at(-1) ?? top).pipe(asError)
+    }
+    const sourceId = yield* riftId(source)
+    if (Option.isNone(sourceId)) {
+      return yield* new WorkspaceError({
+        message: `${what} copies a rift workspace, and ${source} is not one (it has no .rift file). Run \`rift init\` there.`,
+      })
+    }
+    const chain = yield* riftAncestors(source)
+    if (chain.length > 0) {
+      return yield* new WorkspaceError({
+        message: `${source} is a rift copy of ${chain[0] ?? "another workspace"}; a rift workspace copies a source that is no copy, such as ${chain.at(-1) ?? "its warm source"}.`,
+      })
+    }
+    yield* requireCommit(source, what)
+    return { source, sourceId }
+  })
+
+  /** The directory a path workspace attaches, resolved: it must exist, be a directory, and lie in a git repository. */
+  const attachedDirectory = Effect.fn("Workspaces.attachedDirectory")(function* (
+    cwd: string,
+    asked: string,
+  ) {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const target = path.resolve(cwd, asked)
+    const real = yield* fs.realPath(target).pipe(
+      Effect.mapError(
+        () =>
+          new WorkspaceError({
+            message: `A path workspace needs ${target} to exist; it does not.`,
+          }),
+      ),
+    )
+    const info = yield* fs.stat(real).pipe(asError)
+    if (info.type !== "Directory") {
+      return yield* new WorkspaceError({
+        message: `A path workspace attaches a directory, and ${target} is not one.`,
+      })
+    }
+    return { directory: real, top: yield* repositoryTop(real, "A path workspace") }
+  })
+
+  /**
+   * Where the place for the start `key` from `cwd` comes from, what it asks
+   * for, and its record's name. The parent is the caller's session and
+   * branch. Every refusal here comes before gent writes anything.
+   */
   const locate = Effect.fn("Workspaces.locate")(function* (input: {
     readonly key: RequestId
     readonly cwd: string
+    readonly workspace: WorkspaceKind
   }) {
     const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const top = yield* git(input.cwd, ["rev-parse", "--show-toplevel"]).pipe(
-      Effect.mapError(
-        () =>
-          new WorkspaceError({
-            message: `A snapshot workspace needs a git repository, and ${input.cwd} is not in one.`,
-          }),
-      ),
-    )
-    yield* git(top, ["rev-parse", "--verify", "HEAD^{commit}"]).pipe(
-      Effect.mapError(
-        () =>
-          new WorkspaceError({
-            message: `A snapshot workspace needs a commit in ${top}; the repository has none yet.`,
-          }),
-      ),
-    )
-    const origin = yield* fs.realPath(top).pipe(asError)
-    const real = yield* fs.realPath(input.cwd).pipe(asError)
+    const ask = input.workspace
+    let origin: string
+    let relative: string
+    let sourceId: Option.Option<string>
+    switch (ask._tag) {
+      case "Snapshot": {
+        const what = "A snapshot workspace"
+        origin = yield* repositoryTop(input.cwd, what)
+        yield* requireCommit(origin, what)
+        relative = path.relative(origin, yield* fs.realPath(input.cwd).pipe(asError))
+        sourceId = yield* riftId(origin)
+        break
+      }
+      case "Rift": {
+        if (!RIFT_NAME.test(ask.name)) {
+          return yield* new WorkspaceError({
+            message: `A rift workspace's name is one path segment that does not start with ".", and "${ask.name}" is not.`,
+          })
+        }
+        const found = yield* riftSource(input.cwd, Option.fromUndefinedOr(ask.from))
+        origin = found.source
+        sourceId = found.sourceId
+        // The caller's place in its own repository, where the source has that directory too.
+        const top = yield* gitOption(input.cwd, ["rev-parse", "--show-toplevel"])
+        const real = yield* fs.realPath(input.cwd).pipe(Effect.option)
+        relative = ""
+        if (Option.isSome(top) && Option.isSome(real)) {
+          const candidate = path.relative(yield* canonical(top.value), real.value)
+          if ((yield* entryKind(path.join(origin, candidate))) === "directory") relative = candidate
+        }
+        break
+      }
+      case "Path": {
+        const attached = yield* attachedDirectory(input.cwd, ask.path)
+        origin = attached.top
+        relative = path.relative(origin, attached.directory)
+        sourceId = Option.none()
+        break
+      }
+    }
     const identity = {
       parentSessionId: ctx.sessionId,
       parentBranchId: ctx.branchId,
@@ -1117,42 +1530,61 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
       ...identity,
       name: nameOfDigest(digest),
       digest,
-      relative: path.relative(origin, real),
+      sourceId,
+      relative,
+      ask,
     }
     return start
   })
 
+  /** Whether a record is the place `start` asks for: its kind, and the copy name or directory it named. */
+  const sameAsk = (path: Path.Path, record: WorkspaceRecord, start: WorkspaceStart) =>
+    Match.value(start.ask).pipe(
+      Match.tagsExhaustive({
+        Snapshot: () => record.kind === "snapshot",
+        Rift: (ask) => record.kind === "rift" && record.copyName === ask.name,
+        Path: () =>
+          record.kind === "path" && record.path === path.join(start.origin, start.relative),
+      }),
+    )
+
   /**
    * The place for a start. The same start (parent session, parent branch,
-   * tool call, origin) adopts the copy it made before, so a repeated start
-   * gets one copy. A record left by a crash recovers by its phase: a
-   * `creating` record with nothing at its path is made again; a worktree
-   * whose copy holds the marker is removed and made again; a rift copy is
-   * retained and the start fails; any other directory is kept and the start
-   * fails. A retained copy is never adopted.
+   * tool call, origin) adopts the place it made before, so a repeated start
+   * gets one place; a record of the same start that asked for another place
+   * is refused. An attached directory is only named again. A copy's record
+   * left by a crash recovers by its phase: a `creating` record with nothing
+   * at its path is made again; a worktree whose copy holds the marker is
+   * removed and made again; a rift copy is retained and the start fails; any
+   * other directory is kept and the start fails. A retained copy is never
+   * adopted.
    */
   const acquire = Effect.fn("Workspaces.acquire")(function* (start: WorkspaceStart) {
     return yield* locked(
       start.name,
       Effect.gen(function* () {
+        const path = yield* Path.Path
         const existing = yield* readRecord(start.name)
-        if (Option.isNone(existing)) {
-          const made = yield* create(start)
-          return placeOf(made, made.notes)
-        }
+        if (Option.isNone(existing)) return placeOf(yield* create(start))
         const record = existing.value
         if ((yield* digestOf(record)) !== start.digest) {
           return yield* new WorkspaceError({
             message: `Workspace ${start.name} belongs to another start; gent keeps it`,
           })
         }
+        if (!sameAsk(path, record, start)) {
+          return yield* new WorkspaceError({
+            message: `Workspace ${start.name} of this start is another kind of place (${record.kind}) than it asks for now; gent keeps it`,
+          })
+        }
+        if (!isCopyRecord(record)) return placeOf(record)
         if (record.phase === "retained") {
           return yield* new WorkspaceError({
             message: `gent keeps the copy ${record.path} (retained: ${record.retained ?? "no reason recorded"}); it makes no other for this start`,
           })
         }
         const state = yield* ownership(record)
-        if (record.phase === "ready" && state === "owned") return placeOf(record, record.notes)
+        if (record.phase === "ready" && state === "owned") return placeOf(record)
         if (record.phase === "ready" && Predicate.isNotUndefined(record.sessionId)) {
           return yield* new WorkspaceError({
             message: `the copy at ${record.path} of this start is gone`,
@@ -1164,8 +1596,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
             message: `gent keeps the copy ${record.path}, which a start that did not finish made: ${RIFT_RETAINED}`,
           })
         }
-        const made = yield* create(start)
-        return placeOf(made, made.notes)
+        return placeOf(yield* create(start))
       }),
     )
   })
@@ -1181,10 +1612,15 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
 
   /**
    * Names the child session that works in the place, so its turns collect
-   * and its delete releases it. A place bound to another session stays its,
-   * and a session whose index names another place stays with that one.
+   * and its delete releases it, and the thread that owns it (its key). A
+   * place bound to another session stays its, and a session whose index
+   * names another place stays with that one.
    */
-  const bind = Effect.fn("Workspaces.bind")(function* (name: string, sessionId: SessionId) {
+  const bind = Effect.fn("Workspaces.bind")(function* (
+    name: string,
+    sessionId: SessionId,
+    thread?: SessionId,
+  ) {
     yield* locked(
       name,
       Effect.gen(function* () {
@@ -1206,7 +1642,9 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
           })
         }
         // The record is the binding; the session index after it only finds it faster.
-        if (Option.isNone(owner)) yield* publish({ ...record.value, sessionId })
+        if (Option.isNone(owner)) {
+          yield* publish({ ...record.value, sessionId, ...omitUndefined({ thread }) })
+        }
         yield* fs.makeDirectory(yield* inDirectory("sessions"), { recursive: true }).pipe(asError)
         yield* writeFileAtomic(yield* linkFile(sessionId), name).pipe(
           asError,
@@ -1233,7 +1671,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     const name = yield* linkedName(sessionId)
     if (Option.isNone(name)) return Option.none<WorkspacePlace>()
     const record = yield* boundRecord(name.value, sessionId)
-    return Option.map(record, (found) => placeOf(found, found.notes))
+    return Option.map(record, placeOf)
   })
 
   // ── collect ──
@@ -1246,7 +1684,7 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
    * own, so its commit's objects are fetched first, by id, into no ref. A
    * copy that matches `base` holds no work: gent's branch goes.
    */
-  const collectRecord = Effect.fn("Workspaces.collectRecord")(function* (input: WorkspaceRecord) {
+  const collectRecord = Effect.fn("Workspaces.collectRecord")(function* (input: CopyRecord) {
     let record = input
     const base = Option.getOrElse(Option.fromUndefinedOr(record.base), () => "")
     if ((yield* ownership(record)) === "absent") {
@@ -1334,7 +1772,8 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
     return yield* locked(
       name.value,
       Effect.gen(function* () {
-        const found = yield* boundRecord(name.value, sessionId)
+        // An attached directory is not a copy: nothing comes back from it.
+        const found = Option.filter(yield* boundRecord(name.value, sessionId), isCopyRecord)
         if (Option.isNone(found)) return Option.none<CollectedWork>()
         const record = found.value
         const previous = Option.fromUndefinedOr(record.collected)
@@ -1357,12 +1796,14 @@ const makeWorkspaces = (options: WorkspacesOptions) => {
   // ── release ──
 
   /**
-   * Ends a copy: a worktree is removed with what gent keeps for it, a rift
-   * copy is retained. A bound copy's last work is collected first, under the
+   * Ends a place: a worktree is removed with what gent keeps for it, a rift
+   * copy is retained, an attached directory is only forgotten (gent deletes
+   * nothing there). A bound copy's last work is collected first, under the
    * same lock; a collect that fails, or that leaves the work in the copy,
    * keeps everything.
    */
   const retire = Effect.fn("Workspaces.retire")(function* (record: WorkspaceRecord) {
+    if (!isCopyRecord(record)) return yield* forget(record)
     const state = yield* ownership(record)
     let current = record
     if (

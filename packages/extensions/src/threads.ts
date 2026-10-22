@@ -11,9 +11,10 @@
  * `thread.start` opens a thread: a session spawned under the starter, as the
  * starter's agent or the one it names (`worker` keeps the session prompt
  * cache; `delegate` is the one-round subagent). With a task, the task is its
- * first round. A thread may work in a snapshot copy of the working tree
- * (`workspace: { snapshot: true }`, from `@gent/workspaces`) and may start
- * from the starter's context window (`fork`). `thread.send` admits one
+ * first round. A thread may work in a place from `@gent/workspaces`
+ * (`workspace`: a snapshot copy of the working tree, a named rift copy, or an
+ * attached directory) and may start from the starter's context window
+ * (`fork`). `thread.send` admits one
  * round, a turn on the thread's current session, and returns the round's id
  * at admission, never its answer: a thread runs one round at a time, and only
  * the thread that started it sends to it. The `turnAfter` hook of the
@@ -37,6 +38,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Match,
   Option,
   Order,
   Path,
@@ -45,6 +47,7 @@ import {
   PubSub,
   Ref,
   Schema,
+  SchemaGetter,
   Semaphore,
   Stream,
 } from "effect"
@@ -93,7 +96,14 @@ import {
   usageOf,
 } from "./child-turns.js"
 import { childSessionName } from "./session-names.js"
-import { type CollectedWork, type WorkspaceError, Workspaces } from "./workspaces.js"
+import {
+  type CollectedWork,
+  type WorkspaceError,
+  type WorkspaceHookFailed,
+  WorkspaceKind,
+  type WorkspacePlace,
+  Workspaces,
+} from "./workspaces.js"
 
 // ── the agents ──────────────────────────────────────────────────────────────
 
@@ -200,6 +210,7 @@ const asThreadError = (what: string) =>
         | FollowUpQueueFull
         | ThreadStorageError
         | WorkspaceError
+        | WorkspaceHookFailed
         | ThreadBusy
         | ThreadsOverCap
         | LaneUnavailable
@@ -1110,19 +1121,19 @@ const answerLine = (notify: RoundNotify) => {
   return "Your final text in this turn is the round's answer, and it goes back to that session; do not send it with session.send."
 }
 
-/** Where a snapshot thread works: its copy, and the branch its work returns on. */
-interface WorkPlace {
-  readonly cwd: string
-  readonly branch: string
+/** The line every round to a thread with a workspace carries: where it works, and where its work goes. */
+const placeLine = (place: WorkspacePlace) => {
+  if (place._tag === "Attached") {
+    return `You work in ${place.cwd}, a directory your starter named. It is not a copy: your changes stay there, and nothing brings them back as a branch.`
+  }
+  const back = `When each of your turns ends, your changes go back to that session as the git branch ${place.branch}; you do not need to commit or push.`
+  if (place.kind === "rift") return `You work in your own rift copy at ${place.cwd}. ${back}`
+  return `You work in a private copy of your starter's working tree at ${place.cwd}. ${back}`
 }
-
-/** The line every round to a snapshot thread carries. */
-const placeLine = (place: WorkPlace) =>
-  `You work in a private copy of your starter's working tree at ${place.cwd}. When each of your turns ends, your changes go back to that session as the git branch ${place.branch}; you do not need to commit or push.`
 
 /**
  * A round's message: lines that say where it came from, where its answer
- * goes and, for a snapshot thread, where it works; a blank line; the
+ * goes and, for a thread with a workspace, where it works; a blank line; the
  * starter's words; and the value it asks for when it asks for one. Without
  * the lines, a session a parent spawned reads the sessions section and
  * reports to its parent with session.send, and takes its own task for an
@@ -1134,7 +1145,7 @@ export const threadRoundText = (input: {
   readonly message: string
   readonly reply: Option.Option<string>
   readonly notify: RoundNotify
-  readonly place: Option.Option<WorkPlace>
+  readonly place: Option.Option<WorkspacePlace>
 }) =>
   [
     `${ROUND_PREFIX}${input.number} from session ${input.starter}. ${answerLine(input.notify)}`,
@@ -1206,7 +1217,7 @@ const replyNote = (round: RoundRow): Option.Option<string> => {
  * `metadata.details` of a round's end on the starter's branch. The row that
  * draws it commits to scrollback once, after the round ends, so it carries
  * everything the row shows: the thread's name and agent, the turn's flags and
- * bill, its last calls and its time, and a snapshot thread's work.
+ * bill, its last calls and its time, and the work of a thread in a copy.
  */
 export const ThreadRoundEndDetails = Schema.Struct({
   round: Schema.String,
@@ -1237,7 +1248,7 @@ export const ThreadRoundEndDetails = Schema.Struct({
   ),
   /** From the round's message to its turn's last message. */
   durationMs: Schema.Finite,
-  /** A snapshot thread's work: its copy, the branch that holds it, and its size. */
+  /** The work of a thread in a copy: the copy, the branch that holds it, and its size. */
   workspace: Schema.optionalKey(
     Schema.Struct({
       path: Schema.optionalKey(Schema.String),
@@ -1251,7 +1262,7 @@ export const ThreadRoundEndDetails = Schema.Struct({
 })
 type ThreadRoundEndDetails = typeof ThreadRoundEndDetails.Type
 
-/** A snapshot thread's work as its round's end carries it. */
+/** The work of a thread in a copy, as its round's end carries it. */
 interface RoundWork {
   readonly line: string
   readonly details: NonNullable<ThreadRoundEndDetails["workspace"]>
@@ -1474,7 +1485,7 @@ const wakeTarget = Effect.fn("Threads.wakeTarget")(function* (round: RoundRow) {
 })
 
 /**
- * A snapshot thread's work, brought back to the origin as a branch before
+ * The work of a thread in a copy, brought back to the origin as a branch before
  * the round's end goes out; a thread with no copy has none. The workspaces
  * turn end collects the same turn under the same key (the round's message),
  * so the turn is collected once, whichever runs first. A collect that fails
@@ -1973,13 +1984,68 @@ const clearReadStopNotices = Effect.fn("Threads.clearStopNotices")(function* (
 // ── the threads service ─────────────────────────────────────────────────────
 
 /**
- * Where a thread works besides its `cwd`. `snapshot`: a private copy of the
- * working tree from `@gent/workspaces`, whose work returns as a branch.
+ * Where a thread works in place of a `cwd`, from `@gent/workspaces`, as the
+ * model writes it: one key of `snapshot`, `rift` and `path`. It decodes to a
+ * `WorkspaceKind`.
  */
-const ThreadWorkspace = Schema.Struct({ snapshot: Schema.Literal(true) }).annotate({
-  description:
-    "{ snapshot: true }: the thread works in its own copy of the git working tree it would work in, and each turn's work comes back as the branch gent/<name> that nothing merges. A copy is not a sandbox.",
+const ThreadWorkspaceInput = Schema.Struct({
+  snapshot: Schema.optionalKey(Schema.Literal(true)),
+  rift: Schema.optionalKey(
+    Schema.Struct({
+      name: Schema.String,
+      from: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  path: Schema.optionalKey(Schema.String),
 })
+  .annotate({
+    description:
+      'Where the thread works, in place of cwd; one key. { snapshot: true }: its own copy of the git working tree it would work in. { rift: { name, from? } }: a rift copy named name of the rift workspace from (default: the warm source of your repository); no other kind of copy. Each turn\'s work in a copy comes back as the branch gent/<id> that nothing merges. { path: "<dir>" }: an existing directory in a git repository, as it is: no copy, no setup hook, nothing comes back. A workspace is not a sandbox.',
+  })
+  .check(
+    Schema.makeFilter(
+      (input) =>
+        [input.snapshot, input.rift, input.path].filter(Predicate.isNotUndefined).length === 1,
+      { message: "names exactly one of snapshot, rift and path" },
+    ),
+  )
+
+/** A `WorkspaceKind` as the model writes it. */
+const workspaceInputOf = Match.type<WorkspaceKind>().pipe(
+  Match.tagsExhaustive({
+    Snapshot: (): typeof ThreadWorkspaceInput.Type => ({ snapshot: true }),
+    Rift: (kind): typeof ThreadWorkspaceInput.Type => ({
+      rift: { name: kind.name, ...omitUndefined({ from: kind.from }) },
+    }),
+    Path: (kind): typeof ThreadWorkspaceInput.Type => ({ path: kind.path }),
+  }),
+)
+
+/** The branch a place's work comes back on: a copy's; an attached directory has none. */
+const placeBranch = Match.type<WorkspacePlace>().pipe(
+  Match.tagsExhaustive({
+    Copy: (copy) => ({ branch: copy.branch }),
+    Attached: () => ({}),
+  }),
+)
+
+const ThreadWorkspace = ThreadWorkspaceInput.pipe(
+  Schema.decodeTo(WorkspaceKind, {
+    decode: SchemaGetter.transform((input: typeof ThreadWorkspaceInput.Type) => {
+      if (Predicate.isNotUndefined(input.rift)) {
+        return WorkspaceKind.cases.Rift.make({
+          name: input.rift.name,
+          ...omitUndefined({ from: input.rift.from }),
+        })
+      }
+      if (Predicate.isNotUndefined(input.path)) {
+        return WorkspaceKind.cases.Path.make({ path: input.path })
+      }
+      return WorkspaceKind.cases.Snapshot.make({})
+    }),
+    encode: SchemaGetter.transform(workspaceInputOf),
+  }),
+)
 
 export const StartParams = Schema.Struct({
   task: Schema.optionalKey(
@@ -2047,11 +2113,11 @@ const StartResult = Schema.Struct({
   branchId: BranchId,
   /** The task's round, when a task was given. */
   round: Schema.optionalKey(RoundHandle),
-  /** A snapshot thread's copy and the branch its work returns on. */
+  /** The thread's workspace, and for a copy the branch its work returns on. */
   workspace: Schema.optionalKey(
     Schema.Struct({
       path: Schema.String,
-      branch: Schema.String,
+      branch: Schema.optionalKey(Schema.String),
       /** What the copy did not do as asked, one line each (a worktree in place of rift, a failed hook). */
       note: Schema.optionalKey(Schema.String),
     }),
@@ -2181,8 +2247,8 @@ interface RoundRequest {
   readonly message: string
   readonly reply: Option.Option<string>
   readonly notify: RoundNotify
-  /** A snapshot thread's copy, which the round's text names. */
-  readonly workPlace: Option.Option<WorkPlace>
+  /** The thread's workspace, which the round's text names. */
+  readonly workPlace: Option.Option<WorkspacePlace>
 }
 
 /** The round a start or a send under `key` admits: the same key, the same round. */
@@ -2306,41 +2372,49 @@ const storedThreadIn = Effect.fn("Threads.storedThreadIn")(function* (cwd: strin
 })
 
 /**
- * A snapshot thread's copy, made outside the admission permit: a copy runs
- * its `postcreate` hooks, which can take minutes, and must not hold every
- * other admission on the server. `precheck` refuses a start past the cap
- * before the copy is made. The copy's record exists from the first step of
- * its making. When the start fails or is interrupted (the finalizer on the
- * start's scope), storage decides what happens to the copy, not what this
+ * A thread's workspace, made outside the admission permit: a copy runs its
+ * `postcreate` hooks, which can take minutes, and must not hold every other
+ * admission on the server. `precheck` refuses a start past the cap before
+ * the place is made. A copy's record exists from the first step of its
+ * making. When the start fails or is interrupted (the finalizer on the
+ * start's scope), storage decides what happens to a copy, not what this
  * fiber saw: core can store the session and then be interrupted before
  * `Session.create` returns. A stored thread session gets the copy (bound); a
  * copy is released only when storage shows no session works in it; a check
- * that fails keeps the copy. The same start (the same key) adopts the copy it
- * made before.
+ * that fails keeps the copy. An attached directory's record is only
+ * forgotten: gent deletes nothing there. The same start (the same key)
+ * adopts the place it made before.
  */
-const snapshotPlace = Effect.fn("Threads.snapshotPlace")(function* <E, R>(input: {
+const workspacePlace = Effect.fn("Threads.workspacePlace")(function* <E, R>(input: {
   readonly key: RequestId
   readonly cwd: string
+  readonly workspace: WorkspaceKind
   readonly precheck: Effect.Effect<void, E, R>
 }) {
   const places = yield* Effect.serviceOption(Workspaces)
   if (Option.isNone(places)) {
     return yield* new ThreadError({
       message:
-        "workspace { snapshot: true } needs the @gent/workspaces extension, which is not active for this session",
+        "A thread workspace needs the @gent/workspaces extension, which is not active for this session",
     })
   }
   yield* input.precheck
-  const start = yield* places.value.locate({ key: input.key, cwd: input.cwd })
-  const acquired = yield* Ref.make(Option.none<string>())
+  const start = yield* places.value.locate({
+    key: input.key,
+    cwd: input.cwd,
+    workspace: input.workspace,
+  })
+  const acquired = yield* Ref.make(Option.none<WorkspacePlace>())
   yield* Effect.addFinalizer((exit) =>
     Effect.gen(function* () {
       if (Exit.isSuccess(exit)) return
-      // No copy yet: `Session.create` never ran, so no session can work in it.
-      const cwd = yield* Ref.get(acquired)
+      // No copy yet, or an attached directory: no session's binding needs keeping.
+      const copy = Option.filter(yield* Ref.get(acquired), (place) => place._tag === "Copy")
       let stored = Option.none<{ readonly id: SessionId }>()
-      if (Option.isSome(cwd)) stored = yield* storedThreadIn(cwd.value)
-      if (Option.isSome(stored)) return yield* places.value.bind(start.name, stored.value.id)
+      if (Option.isSome(copy)) stored = yield* storedThreadIn(copy.value.cwd)
+      if (Option.isSome(stored)) {
+        return yield* places.value.bind(start.name, stored.value.id, stored.value.id)
+      }
       yield* places.value.release(start.name)
     }).pipe(
       Effect.catchCause((cause) =>
@@ -2351,16 +2425,23 @@ const snapshotPlace = Effect.fn("Threads.snapshotPlace")(function* <E, R>(input:
     ),
   )
   const place = yield* places.value.acquire(start)
-  yield* Ref.set(acquired, Option.some(place.cwd))
+  yield* Ref.set(acquired, Option.some(place))
   return {
     place,
-    bind: (sessionId: SessionId) => places.value.bind(place.name, sessionId),
+    // A thread's key is its first session's id: the session this start makes.
+    bind: (sessionId: SessionId) => places.value.bind(place.name, sessionId, sessionId),
   }
 })
 
 const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInput) {
   const ctx = yield* ExtensionContext
   const path = yield* Path.Path
+  if (Predicate.isNotUndefined(input.workspace) && Predicate.isNotUndefined(input.cwd)) {
+    return yield* new ThreadError({
+      message:
+        "A thread takes a workspace or a cwd, not both: its workspace decides where it works.",
+    })
+  }
   const starter = yield* ctx.Session.getSession()
   if (Predicate.isUndefined(starter)) {
     return yield* new ThreadError({ message: "This session no longer exists" })
@@ -2398,15 +2479,15 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         yield* admitLane(roundId, lane(cwd))
         yield* Ref.set(admitted, true)
       })
-      // `{ snapshot: true }` is the one workspace a start names today. A copy
-      // that fails after this call's precheck took the lane runs no round.
-      const snapshot = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
+      // A workspace that fails after this call's precheck took the lane runs no round.
+      const workspace = yield* Option.match(Option.fromUndefinedOr(input.workspace), {
         onNone: () => Effect.succeedNone,
-        onSome: () =>
+        onSome: (workspace) =>
           Effect.asSome(
-            snapshotPlace({
+            workspacePlace({
               key: requestId,
-              cwd: Option.getOrElse(cwd, () => ctx.cwd),
+              cwd: ctx.cwd,
+              workspace,
               precheck,
             }),
           ).pipe(
@@ -2426,7 +2507,7 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
           ...route,
           cwd: Option.getOrUndefined(
             Option.orElse(
-              Option.map(snapshot, (found) => found.place.cwd),
+              Option.map(workspace, (found) => found.place.cwd),
               () => cwd,
             ),
           ),
@@ -2439,18 +2520,15 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         }),
         requestId,
       }).pipe(
-        // The binding names the session that works in the copy; a repeat binds the same one.
+        // The binding names the session that works in the place; a repeat binds the same one.
         Effect.tap((created) =>
-          Option.match(snapshot, {
+          Option.match(workspace, {
             onNone: () => Effect.void,
             onSome: (found) => found.bind(created.sessionId),
           }),
         ),
       )
-      const workPlace = Option.map(snapshot, (found) => ({
-        cwd: found.place.cwd,
-        branch: found.place.branch,
-      }))
+      const workPlace = Option.map(workspace, (found) => found.place)
       // With a task, the cap admits the thread before its session is made. A
       // retry finds its round before the cap and its session after it.
       const round = yield* Option.match(task, {
@@ -2461,7 +2539,7 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
             input.key,
             lane(
               Option.orElse(
-                Option.map(snapshot, (found) => found.place.cwd),
+                Option.map(workspace, (found) => found.place.cwd),
                 () => cwd,
               ),
             ),
@@ -2488,9 +2566,9 @@ const startThread = Effect.fn("Threads.start")(function* (input: ThreadStartInpu
         ...omitUndefined({
           round: Option.getOrUndefined(round),
           workspace: Option.getOrUndefined(
-            Option.map(snapshot, ({ place }) => ({
+            Option.map(workspace, ({ place }) => ({
               path: place.cwd,
-              branch: place.branch,
+              ...placeBranch(place),
               ...omitUndefined({
                 note: Option.getOrUndefined(
                   Option.liftPredicate(place.notes.join("; "), (note) => note.length > 0),
@@ -2528,12 +2606,11 @@ export interface ThreadSendInput extends Omit<Schema.Schema.Type<typeof SendPara
   readonly notify?: RoundNotify
 }
 
-/** The copy a thread's session works in, for its round's text; none without `@gent/workspaces`. */
+/** The workspace a thread's session works in, for its round's text; none without `@gent/workspaces`. */
 const workPlaceOf = Effect.fn("Threads.workPlaceOf")(function* (sessionId: SessionId) {
   const places = yield* Effect.serviceOption(Workspaces)
-  if (Option.isNone(places)) return Option.none<WorkPlace>()
-  const found = yield* places.value.find(sessionId)
-  return Option.map(found, ({ cwd, branch }): WorkPlace => ({ cwd, branch }))
+  if (Option.isNone(places)) return Option.none<WorkspacePlace>()
+  return yield* places.value.find(sessionId)
 })
 
 /** A round to the thread's current session, so it reaches the thread after a handoff. */

@@ -59,6 +59,7 @@ import {
   THREAD_ROUND_END_TYPE,
   THREAD_ROUND_TYPE,
   threadRoundText,
+  WorkspacePlace,
 } from "@gent/extensions/client"
 import {
   batch,
@@ -1031,7 +1032,7 @@ describe("transcript message rows", () => {
         const round = (
           message: string,
           notify: "user" | "starter",
-          place: Option.Option<{ readonly cwd: string; readonly branch: string }>,
+          place: Parameters<typeof threadRoundText>[0]["place"],
         ) =>
           threadRoundText({
             number: 1,
@@ -1048,7 +1049,17 @@ describe("transcript message rows", () => {
           round(
             "Fix the csv quoting.",
             "starter",
-            Option.some({ cwd: "/copies/csv", branch: "gent/csv" }),
+            Option.some(
+              WorkspacePlace.cases.Copy.make({
+                kind: "snapshot",
+                name: "csv",
+                path: "/copies/csv",
+                cwd: "/copies/csv",
+                branch: "gent/csv",
+                backend: "worktree",
+                notes: [],
+              }),
+            ),
           ),
         )
         const frame = yield* renderLoaded([side, delegated])

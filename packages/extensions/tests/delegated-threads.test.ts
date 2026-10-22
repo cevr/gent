@@ -65,7 +65,11 @@ import {
   threadRoundText,
   ThreadStartTool,
 } from "../src/threads.js"
-import { makeWorkspacesExtension, WORKSPACES_EXTENSION_ID } from "../src/workspaces.js"
+import {
+  makeWorkspacesExtension,
+  WORKSPACES_EXTENSION_ID,
+  WorkspacePlace,
+} from "../src/workspaces.js"
 import { e2ePreset, shippedPreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import * as AiError from "effect/ai/AiError"
@@ -2458,12 +2462,43 @@ describe("thread guidance", () => {
       message: "do it",
       reply: Option.none(),
       notify: "starter",
-      place: Option.some({ cwd: "/nonexistent/copy", branch: "gent/copy" }),
+      place: Option.some(
+        WorkspacePlace.cases.Copy.make({
+          kind: "snapshot",
+          name: "copy",
+          path: "/nonexistent/copy",
+          cwd: "/nonexistent/copy",
+          branch: "gent/copy",
+          backend: "worktree",
+          notes: [],
+        }),
+      ),
     }).split("\n")
     expect(lines[0]).toStartWith("Round 2 from session parent-1.")
     expect(lines[2]).toContain("private copy of your starter's working tree at /nonexistent/copy")
     expect(lines[2]).toContain("the git branch gent/copy")
     expect(lines.slice(3)).toEqual(["", "do it"])
+  })
+
+  test("a path thread's round names its directory and says nothing comes back as a branch", () => {
+    const lines = threadRoundText({
+      number: 1,
+      starter: SessionId.make("parent-1"),
+      message: "do it",
+      reply: Option.none(),
+      notify: "starter",
+      place: Option.some(
+        WorkspacePlace.cases.Attached.make({
+          name: "attached",
+          path: "/nonexistent/dir",
+          cwd: "/nonexistent/dir",
+          notes: [],
+        }),
+      ),
+    }).split("\n")
+    expect(lines[2]).toContain("You work in /nonexistent/dir")
+    expect(lines[2]).toContain("It is not a copy")
+    expect(lines[2]).not.toContain("branch gent/")
   })
 
   it.live(
