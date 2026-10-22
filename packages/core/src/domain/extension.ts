@@ -1406,6 +1406,15 @@ export interface LaneRun {
 }
 
 /**
+ * The owner's model tiers (config `tiers`), each in the owner's order; a
+ * list the config does not name is empty.
+ */
+interface ModelTiers {
+  readonly strongest: ReadonlyArray<ModelId>
+  readonly efficient: ReadonlyArray<ModelId>
+}
+
+/**
  * The server's accounts: how many runs their quota windows carry. A run
  * that starts other runs asks for their lanes here, as threads do.
  */
@@ -1421,6 +1430,15 @@ export interface ExtensionAccountsService {
    * sign-in that reported no quota window admits every run.
    */
   readonly admit: (run: LaneRun) => Effect.Effect<void, LaneUnavailable>
+  /**
+   * Whether `admit` would admit `run` now: it fails as `admit` would, and
+   * holds nothing. A caller choosing a model asks each before it starts a
+   * run on one; the admission may still refuse it when a lane filled
+   * meanwhile.
+   */
+  readonly probe: (run: Omit<LaneRun, "message">) => Effect.Effect<void, LaneUnavailable>
+  /** The owner's model tiers as the config of `cwd` names them. */
+  readonly tiers: (cwd: string) => Effect.Effect<ModelTiers>
   /**
    * The start admitted for `message` will not run: the caller's own
    * admission refused it after `admit` (a busy thread, a full queue, a

@@ -3797,6 +3797,13 @@ interface CredentialPlacementService {
    * capacity read, every run is admitted.
    */
   readonly admitLane: (request: LaneRequest) => Effect.Effect<void, LaneUnavailable>
+  /**
+   * Whether `admitLane` would admit the run now: it fails as that would, and
+   * holds nothing. A caller choosing among models asks each before it starts
+   * a run on one; the admission itself may still refuse a run a lane filled
+   * for meanwhile.
+   */
+  readonly probeLane: (request: Omit<LaneRequest, "key">) => Effect.Effect<void, LaneUnavailable>
   /** The session's turn opened on `provider`: it holds a lane until it ends, and the start admitted under `key` no longer does. */
   readonly openLane: (lane: OpenLane) => Effect.Effect<void>
   /**
@@ -5764,6 +5771,53 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       )
     return Math.min(...ready)
   }
+  /**
+   * Why a run of `request` gets no lane now, under the lock: the runs that
+   * hold one reach the capacity of the account's windows or of the model's
+   * own. None when it would be admitted.
+   */
+  const laneRefusal = (
+    request: Omit<LaneRequest, "key">,
+    now: number,
+  ): Option.Option<LaneUnavailable> => {
+    settle(request.provider, request.scope)
+    const scope = request.scope.map((account) => account.slot)
+    // The account's windows bound every run on it; a model's own bound
+    // only that model's runs, so each counts its own load.
+    const full = Arr.findFirst(
+      [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
+      (model) => {
+        const lanes = providerLanes(request.provider, scope, model, now)
+        const load = laneLoad(request.provider, scope, model, request.asker, now)
+        return Option.filter(
+          Option.map(Option.fromUndefinedOr(lanes.capacity), (capacity) => ({
+            lanes,
+            load,
+            capacity,
+          })),
+          (check) => check.load >= check.capacity,
+        )
+      },
+    )
+    return Option.map(full, ({ lanes, load, capacity }) => {
+      let reason: LaneUnavailable["reason"] = "Busy"
+      let retryAt = now + LANE_BUSY_RETRY_MS
+      let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running; one frees when a run ends`
+      if (capacity === 0) {
+        reason = "Spent"
+        retryAt = Math.max(spentUntil(lanes, now), retryAt)
+        message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
+      }
+      return new LaneUnavailable({
+        message,
+        provider: request.provider,
+        reason,
+        capacity,
+        load,
+        retryAt,
+      })
+    })
+  }
   return {
     place: Effect.fn("CredentialPlacement.place")(function* (request: PlacementRequest) {
       const now = yield* Clock.currentTimeMillis
@@ -5882,55 +5936,28 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
         for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
         // A start admitted again under its key keeps the lane it holds.
         if (reserved.has(request.key)) return Option.none()
-        settle(request.provider, request.scope)
-        const scope = request.scope.map((account) => account.slot)
-        // The account's windows bound every run on it; a model's own bound
-        // only that model's runs, so each counts its own load.
-        const full = Arr.findFirst(
-          [Option.none<ModelId>(), ...Option.toArray(request.model).map(Option.some)],
-          (model) => {
-            const lanes = providerLanes(request.provider, scope, model, now)
-            const load = laneLoad(request.provider, scope, model, request.asker, now)
-            return Option.filter(
-              Option.map(Option.fromUndefinedOr(lanes.capacity), (capacity) => ({
-                lanes,
-                load,
-                capacity,
-              })),
-              (check) => check.load >= check.capacity,
-            )
-          },
-        )
-        if (Option.isSome(full)) {
-          const { lanes, load, capacity } = full.value
-          let reason: LaneUnavailable["reason"] = "Busy"
-          let retryAt = now + LANE_BUSY_RETRY_MS
-          let message = `No lane on ${request.provider}: ${load} of ${capacity} lanes are running; one frees when a run ends`
-          if (capacity === 0) {
-            reason = "Spent"
-            retryAt = Math.max(spentUntil(lanes, now), retryAt)
-            message = `No lane on ${request.provider}: its quota windows carry no run before ${DateTime.formatIso(DateTime.makeUnsafe(retryAt))}`
-          }
-          return Option.some(
-            new LaneUnavailable({
-              message,
-              provider: request.provider,
-              reason,
-              capacity,
-              load,
-              retryAt,
-            }),
-          )
-        }
+        const refused = laneRefusal(request, now)
+        if (Option.isSome(refused)) return refused
         reserved.set(request.key, {
           provider: request.provider,
-          scope,
+          scope: request.scope.map((account) => account.slot),
           model: request.model,
           until: now + LANE_RESERVATION_MS,
           holders: 0,
           admission: (lastAdmission += 1),
         })
         return Option.none()
+      })
+      if (Option.isSome(refusal)) return yield* refusal.value
+    }),
+    probeLane: Effect.fn("CredentialPlacement.probeLane")(function* (
+      request: Omit<LaneRequest, "key">,
+    ) {
+      const now = yield* Clock.currentTimeMillis
+      const refusal = yield* locked(() => {
+        trim(now)
+        for (const [key, held] of reserved) if (!reserving(held, now)) reserved.delete(key)
+        return laneRefusal(request, now)
       })
       if (Option.isSome(refusal)) return yield* refusal.value
     }),

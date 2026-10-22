@@ -281,6 +281,8 @@ const testExtensionExtensions = (): ExtensionExtensionsService => ({
 /** A stub with no quota read: every run is admitted, and no provider has lanes. */
 const testExtensionAccounts = (): ExtensionAccountsService => ({
   admit: () => Effect.void,
+  probe: () => Effect.void,
+  tiers: () => Effect.succeed({ strongest: [], efficient: [] }),
   cancel: () => Effect.void,
   hold: () => Effect.void,
   lanes: Effect.succeed({ providers: [] }),

@@ -1461,6 +1461,42 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("a project's model tier list shadows the user's, list by list", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const plain = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(
+          userConfigPath,
+          encodeJson({ tiers: { strongest: ["a/plan", "b/plan"], efficient: ["a/work"] } }),
+        )
+        yield* fs.makeDirectory(path.join(project, ".gent"), { recursive: true })
+        yield* fs.writeFileString(
+          path.join(project, ".gent", "config.json"),
+          encodeJson({ tiers: { efficient: ["c/work", "a/work"] } }),
+        )
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: plain, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get(project)).tiers).toEqual({
+            strongest: [ModelId.make("a/plan"), ModelId.make("b/plan")],
+            efficient: [ModelId.make("c/work"), ModelId.make("a/work")],
+          })
+          expect((yield* cfg.get(plain)).tiers).toEqual({
+            strongest: [ModelId.make("a/plan"), ModelId.make("b/plan")],
+            efficient: [ModelId.make("a/work")],
+          })
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("an unknown cwd falls back to user-only config", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

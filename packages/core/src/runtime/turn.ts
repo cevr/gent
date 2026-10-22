@@ -1800,22 +1800,25 @@ export const makeExtensionAccounts = Effect.gen(function* () {
       )
     }),
   )
+  /** The lane a run of `run` takes, as the profile and config of its cwd route it. */
+  const runLane = (run: Omit<LaneRun, "message">) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { registryService } = yield* profiles.resolve(run.cwd)
+        return yield* sessionLane({
+          cwd: Option.some(run.cwd),
+          admission: Option.fromUndefinedOr(run.admission),
+          modelId: Option.fromUndefinedOr(run.modelId),
+        }).pipe(
+          Effect.provideService(ExtensionRegistry, registryService),
+          Effect.provideService(ConfigService, configService),
+          Effect.provideService(ModelRegistry, modelRegistry),
+        )
+      }),
+    )
   return (asker: SessionId): ExtensionAccountsService => ({
     admit: Effect.fn("ExtensionAccounts.admit")(function* (run: LaneRun) {
-      const lane = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const { registryService } = yield* profiles.resolve(run.cwd)
-          return yield* sessionLane({
-            cwd: Option.some(run.cwd),
-            admission: Option.fromUndefinedOr(run.admission),
-            modelId: Option.fromUndefinedOr(run.modelId),
-          }).pipe(
-            Effect.provideService(ExtensionRegistry, registryService),
-            Effect.provideService(ConfigService, configService),
-            Effect.provideService(ModelRegistry, modelRegistry),
-          )
-        }),
-      )
+      const lane = yield* runLane(run)
       if (Option.isNone(lane)) return
       yield* placement.admitLane({
         provider: lane.value.provider,
@@ -1824,6 +1827,20 @@ export const makeExtensionAccounts = Effect.gen(function* () {
         asker: Option.some(asker),
         model: Option.some(lane.value.modelId),
       })
+    }),
+    probe: Effect.fn("ExtensionAccounts.probe")(function* (run: Omit<LaneRun, "message">) {
+      const lane = yield* runLane(run)
+      if (Option.isNone(lane)) return
+      yield* placement.probeLane({
+        provider: lane.value.provider,
+        scope: lane.value.scope,
+        asker: Option.some(asker),
+        model: Option.some(lane.value.modelId),
+      })
+    }),
+    tiers: Effect.fn("ExtensionAccounts.tiers")(function* (cwd: string) {
+      const { tiers } = yield* configService.get(cwd)
+      return { strongest: tiers?.strongest ?? [], efficient: tiers?.efficient ?? [] }
     }),
     cancel: (message) => placement.freeReservation(message),
     hold: (message) => placement.holdReservation(message),

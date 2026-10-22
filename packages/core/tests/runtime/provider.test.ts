@@ -5673,7 +5673,20 @@ describe("account lanes", () => {
           left: new Set(),
           ttlMs: Option.none(),
         })
-      return { placement, read, spend, lanes, windowOf, admit, place }
+      /** Ask whether a start of `model` over `scope` would be admitted: "admitted", else the refusal's reason. */
+      const probe = (scope: Scope, model = planModel) =>
+        placement
+          .probeLane({
+            provider: "plan",
+            scope: Arr.map(scope, receiptOf),
+            asker: Option.none(),
+            model: Option.some(model),
+          })
+          .pipe(
+            Effect.as("admitted" as const),
+            Effect.catchTag("LaneUnavailable", (refused) => Effect.succeed(refused.reason)),
+          )
+      return { placement, read, spend, lanes, windowOf, admit, probe, place }
     })
   /** A ledger store over a ref, as the file is over a restart. */
   const ledgerRef = Effect.gen(function* () {
@@ -6475,6 +6488,28 @@ describe("account lanes", () => {
       // 800,000 fuel over 4 points; glm's 200,000 over 2.
       expect(fiveHourRate(report)).toBeCloseTo(200_000, 3)
       expect(fiveHourRate(report, glm)).toBeCloseTo(100_000, 3)
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect("a probe refuses exactly where an admission would, and holds no lane", () =>
+    Effect.gen(function* () {
+      const fixture = yield* accounts()
+      const { placement, admit, probe } = fixture
+      yield* TestClock.adjust("1 hour")
+      // The account's window carries 2 runs, glm's 1.
+      yield* fuelBothWindows(fixture, yield* Clock.currentTimeMillis, 2 * HOUR)
+      // Probes hold nothing: three of them leave glm's one lane free.
+      expect(yield* probe([a], glm)).toBe("admitted")
+      expect(yield* probe([a], glm)).toBe("admitted")
+      expect(yield* probe([a])).toBe("admitted")
+      expect(yield* admit([a], "glm-start", glm)).toBe("admitted")
+      expect(yield* probe([a], glm)).toBe("Busy")
+      expect(yield* probe([a])).toBe("admitted")
+      expect(yield* admit([a], "plan-start")).toBe("admitted")
+      expect(yield* probe([a])).toBe("Busy")
+      yield* placement.freeReservation("plan-start")
+      expect(yield* probe([a])).toBe("admitted")
+      expect(yield* probe([a], glm)).toBe("Busy")
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
