@@ -3628,14 +3628,11 @@ describe("an integrate state while CI runs", () => {
 
 // ── the shipped orchestrate machine ─────────────────────────────────────────
 
-const UNIT_DIR = "/units/u1"
-
-/** A unit's run input; an empty gate is the unit with none named. */
-const unitInput = (gate: string) => ({ unit: "u1", goal: "G", dir: UNIT_DIR, gate })
-
 const UNIT_VERDICTS = new Map([
   ["plan", "ready"],
   ["implement", "ready"],
+  ["fix", "ready"],
+  ["resume", "ready"],
   ["review", "accepted"],
   ["verify", "pass"],
 ])
@@ -3646,8 +3643,7 @@ const unitWorker =
   (round: RoundCall): Effect.Effect<WorkerStream> => {
     const next =
       verdicts[`${round.state}:${round.visit}`] ?? UNIT_VERDICTS.get(round.state) ?? "unknown"
-    const file = `${UNIT_DIR}/${round.state}-${round.visit}.md`
-    return Effect.succeed(replyWith(round, { next, file }))
+    return Effect.succeed(replyWith(round, { next, file: `${round.state}-${round.visit}.md` }))
   }
 
 /** The orchestrate machine's tiers, each its own model: a round's model names its tier. */
@@ -3674,22 +3670,33 @@ const answerAsk = (
     return ask
   })
 
-const unitRun = (verdicts: Readonly<Record<string, string>>, input: Schema.Json = unitInput("")) =>
+/** A unit run in a real unit dir under the home's cwd; an empty gate is the unit with none named. */
+const unitRun = (verdicts: Readonly<Record<string, string>>, gate = "") =>
   Effect.gen(function* () {
     const home = yield* restartableHome
+    const dir = `${home.cwd}/unit`
+    yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(dir)).pipe(
+      Effect.provide(BunServices.layer),
+    )
     const models = yield* makeModels(unitWorker(verdicts))
     const { client } = yield* createRpcClient(home.layerFor(machineModels(models), unitTiers()))
     const owner = ownerOf(yield* client.session.create({}))
+    const input = { unit: "u1", goal: "G", dir, gate }
     const run = yield* startRun(client, owner, ORCHESTRATE_MACHINE, "orchestrate", input)
-    return { home, models, client, owner, run }
+    return { home, models, client, owner, run, dir }
   })
+
+const fileExists = (file: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file)).pipe(
+    Effect.provide(BunServices.layer),
+  )
 
 describe("the shipped orchestrate machine", () => {
   it.live(
     "plans, implements, reviews and verifies a unit, each role on its tier, then decides",
     () =>
       Effect.gen(function* () {
-        const { home, models, client, owner, run } = yield* unitRun({})
+        const { home, models, client, owner, run, dir } = yield* unitRun({})
         const approve = yield* answerAsk(client, owner, 1, "go")
         expect(approve).toMatchObject({ state: "approve", choices: ["go", "replan", "drop"] })
         const decide = yield* answerAsk(client, owner, 2, "drop")
@@ -3716,65 +3723,75 @@ describe("the shipped orchestrate machine", () => {
           "review:1",
           "verify:1",
         ])
-        // The reviewer and the verifier read the request the implementor's reply named.
+        // The reviewer and the verifier read the spec and the newest request in the unit dir.
         const texts = new Map(yield* Ref.get(models.texts))
-        expect(texts.get("review:1")).toContain(`Request: ${UNIT_DIR}/implement-1.md`)
-        expect(texts.get("verify:1")).toContain(`Request: ${UNIT_DIR}/implement-1.md`)
+        for (const round of ["review:1", "verify:1"]) {
+          expect(texts.get(round)).toContain(`Spec: ${dir}/spec.md`)
+          expect(texts.get(round)).toContain("the newest round-N-request.md")
+        }
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
 
   it.live(
-    "a review's changes and a verify's fail each go back to implement, and the third failed round goes to decide",
+    "only failed rounds count toward the cap: a blocked round does not, and the third failed round goes to decide",
     () =>
       Effect.gen(function* () {
         const { home, models, client, owner, run } = yield* unitRun({
+          "implement:1": "blocked",
           "review:1": "changes",
           "verify:1": "fail",
           "review:3": "changes",
         })
         yield* answerAsk(client, owner, 1, "go")
-        yield* answerAsk(client, owner, 2, "drop")
+        const blocked = yield* answerAsk(client, owner, 2, "resume")
+        expect(blocked).toMatchObject({ state: "blocked", choices: ["resume", "replan", "drop"] })
+        const decide = yield* answerAsk(client, owner, 3, "drop")
+        expect(decide.state).toBe("decide")
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
         const steps = yield* home.sql(stepsOf(run))
         expect(moves(steps)).toEqual([
           "plan→approve",
           "approve→implement",
-          "implement→review",
-          "review→implement",
-          "implement→review",
+          "implement→blocked",
+          "blocked→resume",
+          "resume→review",
+          "review→fix",
+          "fix→review",
           "review→verify",
-          "verify→implement",
-          "implement→review",
-          "review→implement",
-          "implement→decide",
+          "verify→fix",
+          "fix→review",
+          "review→fix",
+          "fix→decide",
           "decide→dropped",
         ])
         expect(yield* Ref.get(models.calls)).toEqual([
           "plan:1",
           "implement:1",
+          "resume:1",
           "review:1",
-          "implement:2",
+          "fix:1",
           "review:2",
           "verify:1",
-          "implement:3",
+          "fix:2",
           "review:3",
         ])
-        // Implement keeps its thread for two visits and takes a new one from the third; review is fresh each time.
-        const [, impl1, rev1, impl2, rev2, , impl3] = roundThreads(steps)
-        expect(impl2).toBe(impl1)
-        expect(impl3).not.toBe(impl1)
+        // One implementor through the unit: the fresh first round's thread is
+        // the role's, and resume and fix continue it. Review is fresh each time.
+        const [, impl1, resume1, rev1, fix1, rev2, , fix2] = roundThreads(steps)
+        expect([resume1, fix1, fix2]).toEqual([impl1, impl1, impl1])
         expect(rev2).not.toBe(rev1)
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
 
   it.live(
-    "a stuck review and a stuck verify each go to decide, and changes there carry the note to implement",
+    "a stuck review goes to decide, and changes there start a new implementor that later fixes continue",
     () =>
       Effect.gen(function* () {
         const { home, models, client, owner, run } = yield* unitRun({
           "review:1": "stuck",
+          "review:2": "changes",
           "verify:1": "stuck",
         })
         yield* answerAsk(client, owner, 1, "go")
@@ -3783,31 +3800,37 @@ describe("the shipped orchestrate machine", () => {
         const second = yield* answerAsk(client, owner, 3, "drop")
         expect(second.state).toBe("decide")
         yield* waitFor(home.sql(runRow(run)), isSettled, 10_000, "the run's end was told")
-        expect(moves(yield* home.sql(stepsOf(run)))).toEqual([
+        const steps = yield* home.sql(stepsOf(run))
+        expect(moves(steps)).toEqual([
           "plan→approve",
           "approve→implement",
           "implement→review",
           "review→decide",
           "decide→implement",
           "implement→review",
+          "review→fix",
+          "fix→review",
           "review→verify",
           "verify→decide",
           "decide→dropped",
         ])
         const texts = new Map(yield* Ref.get(models.texts))
         expect(texts.get("implement:2")).toContain("split the parser")
+        const [, impl1, , impl2, , fix1] = roundThreads(steps)
+        expect(impl2).not.toBe(impl1)
+        expect(fix1).toBe(impl2)
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )
 
   it.live(
-    "merge runs the unit's gate first: a unit with no gate goes back to implement, never to the push",
+    "merge runs the unit's gate first: a unit with no gate goes back to the implementor, never to the push",
     () =>
       Effect.gen(function* () {
-        const { home, client, owner, run } = yield* unitRun({ "implement:2": "blocked" })
+        const { home, client, owner, run, dir } = yield* unitRun({ "resume:1": "blocked" })
         yield* answerAsk(client, owner, 1, "go")
         yield* answerAsk(client, owner, 2, "merge")
-        // The gate failed, so the unit went back to implement, whose round is blocked.
+        // The gate failed, so the unit went back to the implementor, whose round is blocked.
         expect(yield* askDetails(client, owner, 3)).toMatchObject({
           state: "blocked",
           choices: ["resume", "replan", "drop"],
@@ -3821,10 +3844,33 @@ describe("the shipped orchestrate machine", () => {
           "review→verify",
           "verify→decide",
           "decide→gate",
-          "gate→implement",
-          "implement→blocked",
+          "gate→resume",
+          "resume→blocked",
           "blocked→dropped",
         ])
+        // The empty gate never parsed, so nothing ran into the gate's log.
+        expect(yield* fileExists(`${dir}/merge-gate-1.log`)).toBe(false)
+      }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "merge runs a named gate into the unit dir and goes on to the push",
+    () =>
+      Effect.gen(function* () {
+        const { home, client, owner, run, dir } = yield* unitRun({}, "echo gate-ran")
+        yield* answerAsk(client, owner, 1, "go")
+        yield* answerAsk(client, owner, 2, "merge")
+        yield* waitFor(
+          home.sql(stepsOf(run)),
+          (steps) => moves(steps).includes("gate→merge"),
+          10_000,
+          "the gate passed to the push",
+        )
+        const log = yield* Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.readFileString(`${dir}/merge-gate-1.log`),
+        ).pipe(Effect.provide(BunServices.layer))
+        expect(log).toContain("gate-ran")
       }).pipe(Effect.scoped, Effect.timeout("40 seconds")),
     45_000,
   )

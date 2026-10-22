@@ -172,7 +172,11 @@ const ThreadState = Schema.Struct({
   next: Schema.optionalKey(StateName),
   /** By verdict: the round must `thread.reply` a value whose `next` is one of these keys. */
   on: Schema.optionalKey(Schema.Record(Verdict, StateName)),
-  /** `true`: a new thread on every visit. A number: a new thread from that visit on. */
+  /**
+   * `true`: a new thread on every visit. A number: a new thread from that
+   * visit on. The new thread becomes the role's: a later round of the role
+   * in a state that is not fresh continues it, never the thread before it.
+   */
   fresh: Schema.optionalKey(Schema.Union([Schema.Boolean, PositiveInt])),
   ...VisitCap,
 })
@@ -736,7 +740,7 @@ interface Run {
   readonly input: Schema.Json
   readonly context: RunContext
   readonly visits: Visits
-  /** The thread of each role that is not fresh. */
+  /** The thread of each role: its last round's, unless that round was a retry or a rerun. */
   readonly roles: Readonly<Record<string, SessionId>>
   readonly state: StateName
   readonly status: RunStatus
@@ -2315,8 +2319,11 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
     round,
     ...omitUndefined({ model: Option.getOrUndefined(ran) }),
   })
+  // A retry's or a rerun's thread is the round's own; a fresh state's
+  // replaces the role's thread.
   let roles = run.roles
-  if (!fresh) roles = { ...run.roles, [state.thread]: thread }
+  if (action.attempt === 1 && action.fresh !== true)
+    roles = { ...run.roles, [state.thread]: thread }
   const committed = yield* commitMove(run, { ...run, roles, pending: Option.some(recorded) }, [
     MachineStep.cases.Recorded.make({ action: recorded }),
   ])
@@ -3255,18 +3262,47 @@ const writeDefinition = Effect.fn("Machines.writeDefinition")(function* (
   const file = yield* definitionPath(definition.name)
   const content = `${yield* Schema.encodeEffect(DefinitionFile)(definition)}\n`
   const digest = (yield* sha256Hex(content)).slice(0, 16)
-  const existing = yield* fs.readFileString(file).pipe(Effect.option)
+  // Only a missing file is absent: an unreadable one fails the write.
+  const read = fs.readFileString(file).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeedNone,
+    ),
+  )
+  const existing = yield* read
   const written = (outcome: DefinitionWrite) => ({
     name: definition.name,
     path: file,
     digest,
     outcome,
   })
+  const settled = (found: Option.Option<string>) => {
+    if (Option.contains(found, content)) return written("unchanged")
+    return written("kept")
+  }
   if (Option.contains(existing, content)) return written("unchanged")
-  if (Option.isSome(existing) && !options.replace) return written("kept")
+  if (Option.isSome(existing) && !options.replace) return settled(existing)
   yield* fs.makeDirectory(path.dirname(file), { recursive: true })
-  yield* writeFileAtomic(file, content)
-  return written("written")
+  if (options.replace) {
+    yield* writeFileAtomic(file, content)
+    return written("written")
+  }
+  // A hard link publishes the whole file and fails on a file that appeared
+  // since the read, so a write that does not replace never replaces.
+  const crypto = yield* Crypto.Crypto
+  const staged = `${file}.${yield* crypto.randomUUIDv7()}.tmp`
+  const linked = yield* fs.writeFileString(staged, content).pipe(
+    Effect.andThen(fs.link(staged, file)),
+    Effect.as(true),
+    Effect.catchIf(
+      (error) => error.reason._tag === "AlreadyExists",
+      () => Effect.succeed(false),
+    ),
+    Effect.ensuring(fs.remove(staged).pipe(Effect.ignore)),
+  )
+  if (linked) return written("written")
+  return settled(yield* read)
 })
 
 /** A definition as JSON holds it, before the schema brands its names. */

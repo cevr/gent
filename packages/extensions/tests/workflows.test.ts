@@ -233,6 +233,12 @@ describe("WorkflowsExtension via RPC", () => {
         yield* fs.writeFileString(machineFile, own)
         yield* orchestrate("plans/next.md")
         expect(yield* fs.readFileString(machineFile)).toBe(own)
+        // A project file the command cannot read is not absent: the command fails and never replaces it.
+        yield* fs.chmod(machineFile, 0o000)
+        const unreadable = yield* Effect.exit(orchestrate("plans/next.md"))
+        yield* fs.chmod(machineFile, 0o644)
+        expect(unreadable._tag).toBe("Failure")
+        expect(yield* fs.readFileString(machineFile)).toBe(own)
         yield* orchestrate("")
         const { followUp } = yield* client.queue.get({ sessionId, branchId })
         const [shipped, kept, empty] = followUp.map((item) => item.content)

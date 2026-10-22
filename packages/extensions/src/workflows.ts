@@ -76,14 +76,38 @@ const WORKER_RULES =
 const BLOCKED_RULE =
   "When something blocks you, write blocked.md in the unit dir (what blocks you, what you tried, the options and your recommendation) and reply blocked with that path."
 
+/** An implementor round entered as `name`: the three differ only in how they count and whether the thread is new. */
+const implementorRound = (
+  name: string,
+  entry: { readonly fresh?: boolean; readonly maxVisits?: number; readonly exhausted?: string },
+) => ({
+  kind: "thread" as const,
+  thread: "implementor",
+  say: [
+    `Unit {{input.unit}}, ${name}, visit {{visit}}.`,
+    "Spec: {{input.dir}}/spec.md. Gate: {{input.gate}}",
+    "Before any edit, read the spec, state.md, and every round-*-findings.md, round-*-verify.md, blocked.md and merge-gate-*.log in the unit dir that is newer than your last request.",
+    "The orchestrator's latest notes: {{blocked.note}} {{decide.note}}",
+    "The last push through the integration gate: {{merge}}",
+    "Write round-N-request.md, N one more than the last request in the unit dir.",
+  ].join("\n"),
+  on: { ready: "review", blocked: "blocked" },
+  ...entry,
+})
+
 /**
- * One unit of `/orchestrate`: plan, implement, review, verify, decide. A
- * round that fails (review `changes`, verify `fail`) goes back to implement;
- * the fourth visit there (three failed rounds) goes to decide. Planning and
- * review take the strongest tier, implementing and verifying the efficient
- * one. Merging runs the unit's gate under one server-wide permit, then
- * pushes through the integration gate. A rewrite ends the run: the
- * orchestrator starts a new one on a new branch, whose rounds count from 1.
+ * One unit of `/orchestrate`: plan, implement, review, verify, decide. The
+ * implementor's rounds enter by three states, so the cap counts only failed
+ * rounds: `implement` starts a direction (the first round, a replan, a
+ * decide `changes`) on a new implementor, `fix` follows a failed round
+ * (review `changes`, verify `fail`) and its third entry (the third failed
+ * round) goes to decide, `resume` follows a blocked answer, a red gate or a
+ * red push and counts nothing. Planning and review take the strongest tier,
+ * implementing and verifying the efficient one. The run's `input.gate` is
+ * the gate of every round and of the merge. Merging runs it under one
+ * server-wide permit, then pushes through the integration gate. A rewrite
+ * ends the run: the orchestrator starts a new one on a new branch, whose
+ * rounds count from 1.
  */
 export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
   name: "orchestrate",
@@ -93,7 +117,7 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, one command; Risks, what review should attack hardest. When Done states a rule, the check includes a generated property over the rule's whole domain. Verdict: ready or blocked.",
+        "You are the planner; you change no product code. Write spec.md in the unit dir: Goal; Done, one line; Acceptance check, objective and runnable, red now and green when done (run it and record that it is red); Owns and Do not touch, as exact paths; Gate, exactly the command the round message names (a unit that needs another gate is blocked); Risks, what review should attack hardest. When Done states a rule, the check includes a generated property over the rule's whole domain. Verdict: ready or blocked.",
       ].join("\n"),
     },
     implementor: {
@@ -101,14 +125,14 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       instructions: [
         WORKER_RULES,
         BLOCKED_RULE,
-        "You are the implementor, the sole writer. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the spec's gate into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report that names every finding of the last round as fixed <hash> or rejected: <reason>. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
+        "You are the implementor, the sole writer. Work in your cwd on its branch, and change only the files the spec gives the unit. Commit in Conventional Commits form, one logical unit each, staged by exact path. When the spec leaves a choice open, take the simpler, reversible option and record it in state.md. Before each request, run the gate the round message names into gate-N.log in the unit dir and read its exit line. Write round-N-request.md: the spec path, the base and head commits, what changed by file, how to run it, the gate log and its exit line, the acceptance check's result, known gaps; from round 2, a fix report that names every finding of the last round as fixed <hash> or rejected: <reason>. When a finding is a repeat of an earlier round's (repeat of rN <id>), the round's first commit is a generated property or model test that owns that class, red on the unfixed code for every earlier instance, before any case fix. Work outside the spec goes under Follow-ups in state.md. Verdict: ready or blocked.",
       ].join("\n"),
     },
     reviewer: {
       tier: "strongest",
       instructions: [
         WORKER_RULES,
-        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. From round 2, check every line of the fix report against the code, then review the new commits. Write round-N-findings.md: first line Verdict: ACCEPTED, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted; stuck is for a unit no further round can help. Verdict: accepted, changes or stuck.",
+        "You are the reviewer: read-only on the deliverables, you write only into the unit dir. Read the spec, the request, the diff from its base to its head, and the earlier rounds' findings. Attack the change: look for reasons it is wrong, not reasons it is fine. From round 2, check every line of the fix report against the code, then review the new commits. Write round-N-findings.md: first line Verdict: ACCEPTED, CHANGES REQUIRED or STUCK; then Blockers, Major, Minor and Optional, each with an id, file:line, a concrete failure and the expected repair; a new trigger of an earlier finding says repeat of rN <id>. A remaining Blocker or Major is changes; only Minor or Optional is accepted; stuck is for a unit no further round can help, or a review you could not finish, never accepted. Verdict: accepted, changes or stuck.",
       ].join("\n"),
     },
     verifier: {
@@ -137,36 +161,23 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       ask: "Unit {{input.unit}}: the planner replied {{plan.reply.next}} with {{plan.reply.file}}. Read the spec and correct it before go; replan sends your note to the planner.",
       on: { go: "implement", replan: "plan", drop: "dropped" },
     },
-    implement: {
-      kind: "thread",
-      thread: "implementor",
-      say: [
-        "Unit {{input.unit}}, implement, visit {{visit}}.",
-        "Spec: {{input.dir}}/spec.md. Gate: {{input.gate}}",
-        "Before any edit, read the spec, state.md, and every round-*-findings.md, round-*-verify.md and merge-gate-*.log in the unit dir that is newer than your last request.",
-        "The orchestrator's latest notes: {{blocked.note}} {{decide.note}}",
-        "The last push through the integration gate: {{merge}}",
-        "Write round-N-request.md, N one more than the last request in the unit dir.",
-      ].join("\n"),
-      on: { ready: "review", blocked: "blocked" },
-      fresh: 3,
-      maxVisits: 3,
-      exhausted: "decide",
-    },
+    implement: implementorRound("implement", { fresh: true }),
+    fix: implementorRound("fix", { maxVisits: 2, exhausted: "decide" }),
+    resume: implementorRound("resume", {}),
     blocked: {
       kind: "ask",
-      ask: "Unit {{input.unit}}: the implementor is blocked, see {{implement.reply.file}}. Answer in the note: resume sends it to the implementor, replan to the planner.",
-      on: { resume: "implement", replan: "plan", drop: "dropped" },
+      ask: "Unit {{input.unit}}: the implementor is blocked, see {{input.dir}}/blocked.md. Answer in the note: resume sends it to the implementor, replan to the planner.",
+      on: { resume: "resume", replan: "plan", drop: "dropped" },
     },
     review: {
       kind: "thread",
       thread: "reviewer",
       say: [
         "Unit {{input.unit}}, review, visit {{visit}}.",
-        "Spec: {{input.dir}}/spec.md. Request: {{implement.reply.file}}",
+        "Spec: {{input.dir}}/spec.md. Request: the newest round-N-request.md in the unit dir.",
         "Write round-N-findings.md in the unit dir, with the request's N.",
       ].join("\n"),
-      on: { accepted: "verify", changes: "implement", stuck: "decide" },
+      on: { accepted: "verify", changes: "fix", stuck: "decide" },
       fresh: true,
     },
     verify: {
@@ -174,15 +185,15 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       thread: "verifier",
       say: [
         "Unit {{input.unit}}, verify, visit {{visit}}.",
-        "Spec: {{input.dir}}/spec.md. Request: {{implement.reply.file}}",
+        "Spec: {{input.dir}}/spec.md. Request: the newest round-N-request.md in the unit dir.",
         "Write round-N-verify.md in the unit dir, with the request's N.",
       ].join("\n"),
-      on: { pass: "decide", fail: "implement", stuck: "decide" },
+      on: { pass: "decide", fail: "fix", stuck: "decide" },
       fresh: true,
     },
     decide: {
       kind: "ask",
-      ask: "Unit {{input.unit}} decides. Latest: review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}}. Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes and replan send your note to the implementor or the planner; rewrite ends this run for a new one from base.",
+      ask: "Unit {{input.unit}} decides. Latest: review {{review.reply.next}} {{review.reply.file}}, verify {{verify.reply.next}} {{verify.reply.file}}. Check the request's claims against the code in the unit dir {{input.dir}}. merge runs the gate, then pushes to main; changes sends your note to a new implementor, replan to the planner; rewrite ends this run for a new one from base.",
       on: {
         merge: "gate",
         changes: "implement",
@@ -196,9 +207,9 @@ export const ORCHESTRATE_MACHINE: MachineDefinitionJson = {
       // An empty gate is a syntax error here, so it never passes.
       run: 'set -o pipefail\nunit_gate() {\n{{input.gate}}\n}\nunit_gate 2>&1 | tee "{{input.dir}}/merge-gate-{{visit}}.log"',
       permit: { name: "gate" },
-      on: { pass: "merge", fail: "implement" },
+      on: { pass: "merge", fail: "resume" },
     },
-    merge: { kind: "integrate", ref: "main", on: { green: "merged", red: "implement" } },
+    merge: { kind: "integrate", ref: "main", on: { green: "merged", red: "resume" } },
     merged: { kind: "final", say: "Unit {{input.unit}} merged." },
     rewrite: {
       kind: "final",
@@ -221,8 +232,8 @@ const orchestrateRecipe = (input: string, recordPath: string, machine: string) =
   return [
     `Orchestrate: ${input}`,
     `You coordinate and write no product code. Keep the run's record in ${recordPath}: the units, their order, and each unit's workspace, dir, run and outcome. Read it first; it may hold an earlier run.`,
-    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from main) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate }. Start units at once only when their files do not overlap.",
-    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the verdicts are accepted and pass and the request's claims hold. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user. A failure class seen twice gets a property test in the next spec.",
+    "Split the work into units, each one reviewable change with a gate. For each unit, in dependency order: make its workspace (a rift or worktree on a new branch from the remote main after a fetch: a merge pushes to the remote main and does not move a local main, so a unit starts only after the units it depends on merged) and its dir beside the record, then machine.start the orchestrate machine with cwd the workspace and input { unit, goal, dir, gate }. Start units at once only when their files do not overlap.",
+    "Answer each ask from the unit's files: at approve, read spec.md and correct it before go; at blocked, answer in the note; at decide, merge only when the verdicts are accepted and pass and the request's claims hold; after stuck, replan or rewrite. On rewrite, start a new run on a new branch from base with a new spec; a rewrite that ends at decide again goes to the user.",
     machine,
   ].join("\n")
 }
