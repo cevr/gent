@@ -36,8 +36,10 @@ import {
   type ExtensionContextService,
   ExtensionHost,
   ExtensionId,
+  Model,
   ModelId,
   omitUndefined,
+  ProviderId,
   type QuotaReading,
   ref,
   reportProviderQuota,
@@ -323,6 +325,7 @@ const StepView = Schema.Struct({
   from: Schema.optionalKey(Schema.String),
   to: Schema.optionalKey(Schema.String),
   askId: Schema.optionalKey(Schema.String),
+  round: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),
   costUsd: Schema.optionalKey(Schema.Finite),
   action: Schema.optionalKey(
@@ -2118,11 +2121,14 @@ const OPUS = ModelId.make("anthropic/claude-opus-5")
 const HAIKU = ModelId.make("anthropic/claude-haiku-4-5")
 const SONNET = TEST_MODEL_ID
 
-/** The `work` account, with the owner's tiers, over the catalog's models and prices. */
-const tieredAccount = (tiers: {
-  strongest?: ReadonlyArray<ModelId>
-  efficient?: ReadonlyArray<ModelId>
-}) => ({
+/** The `work` account, with the owner's tiers, over the catalog's models and prices unless `models` names others. */
+const tieredAccount = (
+  tiers: {
+    strongest?: ReadonlyArray<ModelId>
+    efficient?: ReadonlyArray<ModelId>
+  },
+  models: ReadonlyArray<Model> | "catalog" = "catalog",
+) => ({
   configServiceLayer: ConfigService.Test(
     new UserConfig({
       model: TEST_MODEL_ID,
@@ -2130,8 +2136,18 @@ const tieredAccount = (tiers: {
       tiers,
     }),
   ),
-  models: "catalog" as const,
+  models,
 })
+
+/** An Anthropic model at `pricing` per million tokens; zero is a subscription view, which lists no price. */
+const anthropicModel = (id: ModelId, pricing: { input: number; output: number }) =>
+  Model.make({
+    id,
+    name: id,
+    provider: ProviderId.make("anthropic"),
+    contextLength: 200_000,
+    pricing,
+  })
 
 /** `model`'s own 5-hour window, refusing its runs until `resetAt`. */
 const modelSpentUntil = (model: ModelId, resetAt: number): QuotaReading => ({
@@ -2178,6 +2194,52 @@ const roundsRan = (steps: ReadonlyArray<typeof StepView.Type>) =>
   steps.flatMap((step) => {
     if (step._tag !== "RoundEnded") return []
     return [{ model: step.model, priced: Predicate.isNotUndefined(step.costUsd) }]
+  })
+
+/** Efficient rounds, each on a thread of its own, with an ask after each. */
+const EFFICIENT_AGAIN = {
+  name: "efficient-again",
+  threads: { worker: { tier: "efficient" } },
+  start: "work",
+  states: {
+    work: {
+      kind: "thread",
+      thread: "worker",
+      say: "STATE work {{visit}}",
+      next: "gate",
+      fresh: true,
+    },
+    gate: { kind: "ask", ask: "Again?", on: { again: "work", end: "done" } },
+    done: { kind: "final" },
+  },
+}
+
+/** An ended round as the run's log stores it. */
+const SeededRound = Schema.TaggedStruct("RoundEnded", {
+  state: Schema.String,
+  round: Schema.String,
+  dead: Schema.Boolean,
+  model: Schema.String,
+  costUsd: Schema.optionalKey(Schema.Finite),
+})
+const encodeSeededRound = Schema.encodeSync(Schema.fromJsonString(SeededRound))
+
+/** Ended rounds of `state` written into the run's log, as earlier rounds of its machine left them. */
+const seedRounds = (
+  run: string,
+  state: string,
+  rounds: ReadonlyArray<{ readonly model: ModelId; readonly costUsd?: number }>,
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    for (const [index, round] of rounds.entries()) {
+      const seq = 10_000 + index
+      const step = encodeSeededRound(
+        SeededRound.make({ state, round: `seeded-${seq}`, dead: false, ...round }),
+      )
+      yield* sql`INSERT INTO machine_steps (run, seq, at, state, step_json)
+        VALUES (${run}, ${seq}, 0, ${state}, ${step})`
+    }
   })
 
 /** The thread each recorded round ran on, in order. */
@@ -2283,6 +2345,10 @@ describe("a tier role's round", () => {
         yield* settle
         expect(yield* Ref.get(models.calls)).toEqual([])
         expect(roundThreads(yield* home.sql(stepsOf(run)))).toEqual([])
+        // No thread session was made for a model the round cannot run.
+        expect((yield* client.session.list()).map((session) => session.id)).toEqual([
+          owner.sessionId,
+        ])
         yield* advanceUntil(Ref.get(models.calls), (calls) => calls.length > 0, "the round ran")
         yield* askAt(client, owner, 1)
         const steps = yield* home.sql(stepsOf(run))
@@ -2312,6 +2378,78 @@ describe("a tier role's round", () => {
           { model: HAIKU, priced: true },
           { model: HAIKU, priced: true },
         ])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "reads a zero price over spent tokens as no price, so a subscription model never ranks free",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(
+            machineModels(models),
+            tieredAccount({ efficient: [HAIKU, SONNET] }, [
+              anthropicModel(HAIKU, { input: 0, output: 0 }),
+              anthropicModel(SONNET, { input: 3, output: 15 }),
+            ]),
+          ),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, EFFICIENT_THRICE, "efficient-thrice")
+        yield* eventually(home.sql(runRow(run)), isSettled, "the run's end was told")
+        // Each measured once; then Sonnet, the one whose price says what a round costs.
+        expect(roundsRan(yield* home.sql(stepsOf(run)))).toEqual([
+          { model: HAIKU, priced: false },
+          { model: SONNET, priced: true },
+          { model: SONNET, priced: true },
+        ])
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
+    45_000,
+  )
+
+  it.live(
+    "divides a model's priced cost by its priced rounds alone: unpriced ones are not free work",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* restartableHome
+        const models = yield* makeModels((round) =>
+          Effect.succeed(billed(`${round.state} ${round.visit} done`)),
+        )
+        const { client } = yield* createRpcClient(
+          home.layerFor(machineModels(models), tieredAccount({ efficient: [HAIKU, SONNET] })),
+        )
+        const owner = ownerOf(yield* client.session.create({}))
+        const run = yield* startRunOn(client, owner, EFFICIENT_AGAIN, "efficient-again")
+        const first = yield* askAt(client, owner, 1)
+        yield* callOn(client, owner, [
+          ["machine.answer", "again-1", { run, askId: first.askId, choice: "again" }],
+        ])
+        const second = yield* askAt(client, owner, 2)
+        const sonnet = (yield* home.sql(stepsOf(run))).find(
+          (step) => step._tag === "RoundEnded" && step.model === SONNET,
+        )?.costUsd
+        expect(sonnet).toBeGreaterThan(0)
+        // Haiku's history: one priced round at five Sonnet rounds, nine unpriced ones.
+        yield* home.sql(
+          seedRounds(run, "work", [
+            { model: HAIKU, costUsd: 5 * (sonnet ?? 0) },
+            ...Array.from({ length: 9 }, () => ({ model: HAIKU })),
+          ]),
+        )
+        yield* callOn(client, owner, [
+          ["machine.answer", "again-2", { run, askId: second.askId, choice: "again" }],
+        ])
+        yield* askAt(client, owner, 3)
+        // Haiku costs (its round + five Sonnet rounds) over two priced rounds: Sonnet is cheaper.
+        const ran = (yield* home.sql(stepsOf(run))).filter(
+          (step) => !(step.round ?? "").startsWith("seeded-"),
+        )
+        expect(roundsRan(ran).map((round) => round.model)).toEqual([HAIKU, SONNET, SONNET])
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("40 seconds")),
     45_000,
   )

@@ -88,6 +88,7 @@ import {
   runBashCommand,
   stopLostCommand,
 } from "./exec-tools.js"
+import type { ChildUsage } from "./child-turns.js"
 import { generationOf, Integration, type GateKey, type GateRecord } from "./integration.js"
 import {
   currentThreadPlace,
@@ -887,8 +888,24 @@ const machineTablesMigration = Effect.gen(function* () {
   )
 })
 
+/** A tier pick reads one machine's rounds of one state: the runs by machine, their steps by state. */
+const machineRoundsMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* Effect.forEach(
+    [
+      `CREATE INDEX IF NOT EXISTS machine_runs_machine ON machine_runs (machine)`,
+      `CREATE INDEX IF NOT EXISTS machine_steps_state ON machine_steps (run, state)`,
+    ],
+    (statement) => sql.unsafe(statement),
+    { discard: true },
+  )
+})
+
 const migrateMachineTables = Migrator.make({})({
-  loader: Migrator.fromRecord({ "1_machine_tables": machineTablesMigration }),
+  loader: Migrator.fromRecord({
+    "1_machine_tables": machineTablesMigration,
+    "2_machine_rounds": machineRoundsMigration,
+  }),
   table: "machine_migrations",
 }).pipe(Effect.mapError(storageError("Machine table migration failed")))
 
@@ -1161,11 +1178,10 @@ export class MachineStore extends Context.Service<MachineStore, MachineStoreServ
         ),
         roundsOf: Effect.fn("MachineStore.roundsOf")(
           function* (machine, state) {
-            const rows = yield* sql`SELECT s.seq, s.at, s.step_json FROM machine_steps s
-              JOIN machine_runs r ON r.run = s.run
+            const rows = yield* sql`SELECT s.seq, s.at, s.step_json FROM machine_runs r
+              JOIN machine_steps s ON s.run = r.run AND s.state = ${state}
               WHERE r.machine = ${machine}
                 AND json_extract(s.step_json, '$._tag') = 'RoundEnded'
-                AND json_extract(s.step_json, '$.state') = ${state}
                 AND json_extract(s.step_json, '$.model') IS NOT NULL
               ORDER BY s.at ASC, s.seq ASC`
             const decoded = yield* decodeStepRows(rows)
@@ -2265,7 +2281,11 @@ const recordRoundTarget = Effect.fn("Machines.recordRoundTarget")(function* (
 
 // ── model tiers ─────────────────────────────────────────────────────────────
 
-/** One model's ended rounds of a state: their priced cost, and how many finished with a verdict. */
+/**
+ * One model's ended rounds of a state, as far as they carried a price: the
+ * priced rounds' cost, dead ones too, and how many of them finished. An
+ * unpriced round says nothing of what a finished one costs.
+ */
 interface ModelRounds {
   readonly costUsd: number
   readonly priced: number
@@ -2277,9 +2297,13 @@ const modelRounds = (ended: ReadonlyArray<RoundEnded>): ReadonlyMap<ModelId, Mod
   for (const round of ended) {
     if (Predicate.isUndefined(round.model)) continue
     const before = byModel.get(round.model) ?? { costUsd: 0, priced: 0, finished: 0 }
+    if (Predicate.isUndefined(round.costUsd)) {
+      byModel.set(round.model, before)
+      continue
+    }
     byModel.set(round.model, {
-      costUsd: before.costUsd + (round.costUsd ?? 0),
-      priced: before.priced + Number(Predicate.isNotUndefined(round.costUsd)),
+      costUsd: before.costUsd + round.costUsd,
+      priced: before.priced + 1,
       finished: before.finished + Number(!round.dead),
     })
   }
@@ -2404,9 +2428,23 @@ const tierPick = Effect.fn("Machines.tierPick")(function* (
   return Result.map(free, (model) => Option.some({ model, keep: Option.contains(first, model) }))
 })
 
-/** The round's model and its turn's priced cost, as its `RoundEnded` step keeps them. */
-const roundBill = (action: RoundAction, view: { readonly usage?: { readonly costUsd?: number } }) =>
-  omitUndefined({ model: action.model, costUsd: view.usage?.costUsd })
+/**
+ * The round's model and its turn's priced cost, as its `RoundEnded` step
+ * keeps them. A zero cost over spent tokens is a catalog with no price (a
+ * subscription view): unknown, never free, as placement reads fuel.
+ */
+const roundBill = (action: RoundAction, view: { readonly usage?: typeof ChildUsage.Type }) => {
+  const usage = Option.fromUndefinedOr(view.usage)
+  const costUsd = Option.flatMap(usage, (spent) =>
+    Option.filter(
+      Option.fromUndefinedOr(spent.costUsd),
+      (cost) =>
+        cost > 0 ||
+        spent.input + spent.output + (spent.cacheRead ?? 0) + (spent.cacheWrite ?? 0) === 0,
+    ),
+  )
+  return omitUndefined({ model: action.model, costUsd: Option.getOrUndefined(costUsd) })
+}
 
 /**
  * Waits for the pending round's end, then takes its receipt: a verdict moves
