@@ -78,6 +78,15 @@ describe("user configuration", () => {
       ).toBe(true)
     }),
   )
+  it.live("rejects an empty model tier list; an absent one is fine", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownOption(UserConfig)
+      expect(Option.isNone(decode({ tiers: { strongest: [] } }))).toBe(true)
+      expect(Option.isNone(decode({ tiers: { efficient: [] } }))).toBe(true)
+      expect(Option.isSome(decode({ tiers: {} }))).toBe(true)
+      expect(Option.isSome(decode({ tiers: { efficient: ["a/work"] } }))).toBe(true)
+    }),
+  )
   describe("in-memory reads and writes", () => {
     it.live("seeded initial config reads back unchanged", () => {
       const initial = new UserConfig({ disabledExtensions: ["@gent/todo"] })

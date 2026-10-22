@@ -6513,6 +6513,29 @@ describe("account lanes", () => {
     }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )
 
+  it.effect("a probe's refusal of a spent window is the admission's, to its retry time", () =>
+    Effect.gen(function* () {
+      const { placement, read } = yield* accounts()
+      yield* TestClock.adjust("1 hour")
+      const now = yield* Clock.currentTimeMillis
+      yield* read(a, [
+        { window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR },
+        { window: "5h", model: glm, utilization: 1, resetAt: now + 2 * HOUR, rejected: true },
+      ])
+      const request = {
+        provider: "plan",
+        scope: Arr.map([a] as const, receiptOf),
+        asker: Option.none(),
+        model: Option.some(glm),
+      }
+      const probed = yield* Effect.flip(placement.probeLane(request))
+      const admitted = yield* Effect.flip(placement.admitLane({ ...request, key: "glm-start" }))
+      expect(probed.reason).toBe("Spent")
+      expect(probed.retryAt).toBe(now + 2 * HOUR)
+      expect({ ...probed }).toEqual({ ...admitted })
+    }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
   it.effect("a model's window counts that model's runs alone; the account's counts every run", () =>
     Effect.gen(function* () {
       const fixture = yield* accounts()
