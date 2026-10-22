@@ -17,6 +17,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  Scope,
   Stream,
 } from "effect"
 import { TestClock } from "effect/testing"
@@ -6362,6 +6363,37 @@ describe("account lanes", () => {
         expect((yield* lanes([a])).load).toBe(0)
         // A hold on a key with no lane held holds nothing.
         yield* Effect.scoped(placement.holdReservation("none"))
+        expect((yield* lanes([a])).load).toBe(0)
+      }).pipe(Effect.scoped, Effect.provide(placementLayer)),
+  )
+
+  it.effect(
+    "a reservation two holders hold lasts until the last one ends, and a hold ends only the admission it held",
+    () =>
+      Effect.gen(function* () {
+        const { placement, read, admit, lanes } = yield* accounts()
+        yield* TestClock.adjust("1 hour")
+        const now = yield* Clock.currentTimeMillis
+        yield* read(a, [{ window: "5h", utilization: 0.1, resetAt: now + 5 * HOUR }])
+        expect(yield* admit([a], "start")).toBe("admitted")
+        const first = yield* Scope.make()
+        const second = yield* Scope.make()
+        yield* Scope.provide(placement.holdReservation("start"), first)
+        yield* Scope.provide(placement.holdReservation("start"), second)
+        yield* Scope.close(first, Exit.void)
+        yield* TestClock.adjust("3 minutes")
+        expect((yield* lanes([a])).load).toBe(1)
+        // The start opens its turn and a new one is admitted under the key.
+        yield* placement.freeReservation("start")
+        expect(yield* admit([a], "start")).toBe("admitted")
+        const third = yield* Scope.make()
+        yield* Scope.provide(placement.holdReservation("start"), third)
+        // The earlier admission's last hold ends; the new admission's hold stays.
+        yield* Scope.close(second, Exit.void)
+        yield* TestClock.adjust("3 minutes")
+        expect((yield* lanes([a])).load).toBe(1)
+        yield* Scope.close(third, Exit.void)
+        yield* TestClock.adjust("3 minutes")
         expect((yield* lanes([a])).load).toBe(0)
       }).pipe(Effect.scoped, Effect.provide(placementLayer)),
   )

@@ -3740,8 +3740,9 @@ interface CredentialPlacementService {
   /**
    * While the scope is open, the start admitted under `key` keeps its lane
    * past its 2 minutes: a caller preparing the run's place holds it through.
-   * When the scope closes, its 2 minutes start again. A key with no lane
-   * held is a no-op.
+   * When the last hold on that admission closes, its 2 minutes start again;
+   * a hold's end never touches a later admission under the key. A key with
+   * no lane held is a no-op.
    */
   readonly holdReservation: (key: string) => Effect.Effect<void, never, Scope.Scope>
   /**
@@ -4279,7 +4280,9 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
   const renamed = new Map<string, { readonly to: CredentialSlot; readonly signedInAt: number }>()
   /**
    * message key → a start admitted to a lane whose turn has not opened, until
-   * `until`, or while a caller `held` it through its preparation.
+   * `until`, or while any of its `holders` holds it through its preparation.
+   * `admission` tells one admission under a key from a later one, so a hold
+   * releases only the reservation it held.
    */
   const reserved = new Map<
     string,
@@ -4287,11 +4290,13 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       readonly provider: string
       readonly scope: ReadonlyArray<CredentialSlot>
       readonly until: number
-      readonly held: boolean
+      readonly holders: number
+      readonly admission: number
     }
   >()
-  const reserving = (entry: { readonly until: number; readonly held: boolean }, now: number) =>
-    entry.held || entry.until > now
+  let lastAdmission = 0
+  const reserving = (entry: { readonly until: number; readonly holders: number }, now: number) =>
+    entry.holders > 0 || entry.until > now
   /**
    * The runs holding a lane on `provider` that share an account with
    * `scope`; `asker`'s own open turn is left out.
@@ -5081,7 +5086,8 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
           provider: request.provider,
           scope,
           until: now + LANE_RESERVATION_MS,
-          held: false,
+          holders: 0,
+          admission: (lastAdmission += 1),
         })
         return Option.none()
       })
@@ -5111,19 +5117,36 @@ export const makeCredentialPlacement = Effect.fn("CredentialPlacement.make")(fun
       })
     }),
     holdReservation: (key: string) => {
-      const mark = (held: boolean) =>
+      // The last holder out starts the 2 minutes again.
+      const mark = (admission: Option.Option<number>, holders: 1 | -1) =>
         Effect.flatMap(Clock.currentTimeMillis, (now) =>
           locked(() => {
-            const entry = Option.filter(Option.fromUndefinedOr(reserved.get(key)), (found) =>
-              reserving(found, now),
+            const entry = Option.filter(
+              Option.fromUndefinedOr(reserved.get(key)),
+              (found) =>
+                reserving(found, now) &&
+                Option.getOrElse(
+                  Option.map(admission, (held) => held === found.admission),
+                  () => true,
+                ),
             )
-            if (Option.isNone(entry)) return
-            reserved.set(key, { ...entry.value, held, until: now + LANE_RESERVATION_MS })
+            if (Option.isNone(entry)) return Option.none<number>()
+            reserved.set(key, {
+              ...entry.value,
+              holders: entry.value.holders + holders,
+              until: now + LANE_RESERVATION_MS,
+            })
+            return Option.some(entry.value.admission)
           }),
         )
-      return Effect.acquireRelease(mark(true), () => mark(false)).pipe(
-        Effect.withSpan("CredentialPlacement.holdReservation"),
-      )
+      return Effect.acquireRelease(mark(Option.none(), 1), (held) =>
+        Effect.asVoid(
+          Option.match(held, {
+            onNone: () => Effect.void,
+            onSome: (admission) => mark(Option.some(admission), -1),
+          }),
+        ),
+      ).pipe(Effect.withSpan("CredentialPlacement.holdReservation"))
     },
     renameLabel: Effect.fn("CredentialPlacement.renameLabel")(function* (rename) {
       yield* locked(() => {

@@ -713,7 +713,7 @@ const migrateThreadRounds = Migrator.make({})({
  * started with `cwd` runs in another place than its starter, and its round's
  * sender and end must meet one feed and one permit.
  */
-class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
+export class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
   "@gent/extensions/src/threads/ThreadRounds",
 ) {
   static Live: Layer.Layer<ThreadRounds, ThreadStorageError, SqlClient.SqlClient> = Layer.effect(
@@ -722,10 +722,15 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
       const sql = yield* SqlClient.SqlClient
       const ended = yield* PubSub.unbounded<RoundEnded>()
       const admissions = yield* Semaphore.make(1)
-      /** round → the starter thread of a start that is preparing its workspace. */
-      const starting = new Map<string, SessionId>()
+      /**
+       * round → the starter thread of a start that is preparing its workspace,
+       * and how many calls under the round's key prepare it: the last one out
+       * ends the preparation.
+       */
+      const starting = new Map<string, { readonly thread: SessionId; readonly holders: number }>()
       const preparingOthers = (starterThread: string, round: string) =>
-        [...starting].filter(([key, thread]) => key !== round && thread === starterThread).length
+        [...starting].filter(([key, entry]) => key !== round && entry.thread === starterThread)
+          .length
       const reconciled = yield* makeReconciledBranches
       yield* migrateThreadRounds
 
@@ -1025,11 +1030,16 @@ class ThreadRounds extends Context.Service<ThreadRounds, ThreadRoundsService>()(
         prepare: (round, starterThread) =>
           Effect.acquireRelease(
             Effect.sync(() => {
-              starting.set(round, starterThread)
+              const holders = starting.get(round)?.holders ?? 0
+              starting.set(round, { thread: starterThread, holders: holders + 1 })
             }),
             () =>
               Effect.sync(() => {
-                starting.delete(round)
+                const entry = Option.fromUndefinedOr(starting.get(round))
+                if (Option.isNone(entry)) return
+                const holders = entry.value.holders - 1
+                if (holders > 0) starting.set(round, { ...entry.value, holders })
+                else starting.delete(round)
               }),
           ),
         preparing: (starterThread, round) =>

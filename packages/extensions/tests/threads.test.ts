@@ -14,14 +14,16 @@ import {
   PubSub,
   Record,
   Result,
+  Exit,
   Schema,
-  type Scope,
+  Scope,
   Stream,
 } from "effect"
 import { SqlClient } from "effect/sql"
 import { BunServices } from "@effect/platform-bun"
 import type * as Prompt from "effect/ai/Prompt"
 import { workspaceIdForCwd } from "@gent/core/host"
+import { BunSqlite } from "@gent/core/host-bun"
 import {
   CredentialSlot,
   DEFAULT_SESSION_NAME,
@@ -68,6 +70,7 @@ import {
   ThreadBusy,
   threadRoundText,
   StartParams,
+  ThreadRounds,
   Threads,
   ThreadsOverCap,
 } from "../src/threads.js"
@@ -2257,6 +2260,25 @@ describe("thread round ownership", () => {
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.effect(
+    "a start two calls under one round's key prepare counts until the last of them ends",
+    () =>
+      Effect.gen(function* () {
+        const rounds = yield* ThreadRounds
+        const thread = SessionId.make("thread-preparing")
+        const first = yield* Scope.make()
+        const second = yield* Scope.make()
+        yield* Scope.provide(rounds.prepare("round-shared", thread), first)
+        yield* Scope.provide(rounds.prepare("round-shared", thread), second)
+        // A retry that ends (interrupted, or refused its place) leaves the first call's count.
+        yield* Scope.close(second, Exit.void)
+        expect(yield* rounds.preparing(thread, "round-other")).toBe(1)
+        expect(yield* rounds.preparing(thread, "round-shared")).toBe(0)
+        yield* Scope.close(first, Exit.void)
+        expect(yield* rounds.preparing(thread, "round-other")).toBe(0)
+      }).pipe(Effect.provide(ThreadRounds.Live.pipe(Layer.provide(BunSqlite.memory)))),
   )
 
   it.live(
