@@ -1346,6 +1346,8 @@ export interface ModelContextProjection {
   readonly historyTokens: number
   readonly availableInputTokens: number
   readonly omittedMessageIds: ReadonlyArray<MessageId>
+  /** The first message sent past the omitted ones; none when nothing was omitted. */
+  readonly keptFromMessageId: Option.Option<MessageId>
 }
 
 /** A tool-call or tool-result part: its id, its tool, and the message that holds it. */
@@ -1761,6 +1763,10 @@ const projectUnits = (
   ]
   const selectedMessages = selectedUnits.flatMap((unit) => unit.messages)
   const omittedMessageIds = messageIds(earlier.filter((unit) => !isWindowMarkerUnit(unit)))
+  const keptFromMessageId = Option.fromUndefinedOr(units[selected.success.start]?.messages[0]).pipe(
+    Option.filter(() => omittedMessageIds.length > 0),
+    Option.map((message) => message.id),
+  )
   // The selected units before the anchor, each at the estimate the total took.
   const historyTokens = Option.match(anchor, {
     onNone: () => 0,
@@ -1779,6 +1785,7 @@ const projectUnits = (
     historyTokens,
     availableInputTokens,
     omittedMessageIds,
+    keptFromMessageId,
   }
   return Result.succeed(projection)
 }
@@ -2190,6 +2197,9 @@ export class ModelContextLedger extends Context.Service<
  * - The items' sizes are then scaled to the context the call measured.
  * - A window marker (a handoff or `context.newWindow()`) starts a window at
  *   the next call: the base again, and the marker holding the rest.
+ * - A projection that omits the window's oldest messages takes their items
+ *   out of the context, and a hidden message never joins it: the meter holds
+ *   what the model was sent.
  *
  * Uncached input counts as written at weight 1, so a provider that reports no
  * cache writes still charges its new tokens. The weights are the reference
@@ -2209,6 +2219,8 @@ type RenterName = Pick<ContextRenter, "id" | "kind" | "tool">
 interface RentItem {
   /** None for the base and for the growth no item holds. */
   readonly name: Option.Option<RenterName>
+  /** The stored message that holds the item; none for the base and the unattributed growth. */
+  readonly owner: Option.Option<MessageId>
   readonly tokens: number
   readonly rent: number
   readonly calls: number
@@ -2217,6 +2229,7 @@ interface RentItem {
 /** An item the next call carries for the first time: a reply's exact tokens, else its length. */
 interface RentPending {
   readonly name: RenterName
+  readonly owner: MessageId
   readonly chars: number
   readonly tokens: Option.Option<number>
 }
@@ -2232,6 +2245,8 @@ export interface ContextRent {
   readonly marker: Option.Option<MessageId>
   /** The reply the last call wrote, with its output tokens. */
   readonly reply: Option.Option<{ readonly id: MessageId; readonly tokens: number }>
+  /** The window's messages since its marker, oldest first: what an omission cuts from. */
+  readonly window: ReadonlyArray<MessageId>
 }
 
 export const emptyContextRent: ContextRent = {
@@ -2241,6 +2256,7 @@ export const emptyContextRent: ContextRent = {
   baseTokens: Option.none(),
   marker: Option.none(),
   reply: Option.none(),
+  window: [],
 }
 
 /** The items a stored message adds to the context. */
@@ -2253,6 +2269,7 @@ const pendingOf = (message: Message, rent: ContextRent): ReadonlyArray<RentPendi
       return [
         {
           name: { id: part.id, kind: "tool", tool: part.name },
+          owner: message.id,
           chars: partChars(part, Option.none()),
           tokens: Option.none(),
         },
@@ -2262,6 +2279,7 @@ const pendingOf = (message: Message, rent: ContextRent): ReadonlyArray<RentPendi
     return [
       {
         name: { id: message.id, kind: "reply" },
+        owner: message.id,
         chars: chars(message.parts),
         tokens: Option.map(
           Option.filter(rent.reply, (reply) => reply.id === message.id),
@@ -2272,6 +2290,7 @@ const pendingOf = (message: Message, rent: ContextRent): ReadonlyArray<RentPendi
   return [
     {
       name: { id: message.id, kind: "prompt" },
+      owner: message.id,
       chars: chars(message.parts),
       tokens: Option.none(),
     },
@@ -2320,7 +2339,7 @@ const freshItems = (
     if (Option.isSome(item.tokens)) {
       const tokens = Math.min(item.tokens.value, left)
       left -= tokens
-      fresh.push({ name: Option.some(item.name), tokens })
+      fresh.push({ name: Option.some(item.name), owner: Option.some(item.owner), tokens })
     }
   const sized = pending.filter((item) => Option.isNone(item.tokens))
   const chars = sized.reduce((sum, item) => sum + item.chars, 0)
@@ -2328,9 +2347,9 @@ const freshItems = (
   for (const item of sized) {
     const tokens = Math.min(item.chars / 2, (room * item.chars) / Math.max(chars, 1))
     left -= tokens
-    fresh.push({ name: Option.some(item.name), tokens })
+    fresh.push({ name: Option.some(item.name), owner: Option.some(item.owner), tokens })
   }
-  if (left > 1) fresh.push({ name: Option.none(), tokens: left })
+  if (left > 1) fresh.push({ name: Option.none(), owner: Option.none(), tokens: left })
   return fresh
 }
 
@@ -2352,6 +2371,7 @@ const settleCall = (
     contextTokens: call.context,
     marker: Option.none<MessageId>(),
     reply: call.reply,
+    window: rent.window,
   }
   const cost = call.rate * call.written + READ_WEIGHT * call.read
   if (rent.live.length === 0 || Option.isSome(rent.marker)) {
@@ -2361,12 +2381,17 @@ const settleCall = (
     const marker = Option.match(rent.marker, {
       onNone: () => [],
       onSome: (id) => [
-        { name: Option.some<RenterName>({ id, kind: "handoff" }), tokens: call.context - fixed },
+        {
+          name: Option.some<RenterName>({ id, kind: "handoff" }),
+          owner: Option.some(id),
+          tokens: call.context - fixed,
+        },
       ],
     })
-    const opened = [{ name: Option.none<RenterName>(), tokens: fixed }, ...marker].filter(
-      (item) => item.tokens > 0,
-    )
+    const opened = [
+      { name: Option.none<RenterName>(), owner: Option.none<MessageId>(), tokens: fixed },
+      ...marker,
+    ].filter((item) => item.tokens > 0)
     return {
       ...settled,
       baseTokens: Option.some(base),
@@ -2401,19 +2426,51 @@ const settleCall = (
 }
 
 /**
+ * The context once a projection omitted the window's messages before
+ * `keptFrom`: their items leave it, and the context the next call grows from
+ * shrinks by what they held. A message the window does not know cuts nothing.
+ */
+const omittedBefore = (rent: ContextRent, keptFrom: MessageId): ContextRent => {
+  const at = rent.window.indexOf(keptFrom)
+  if (at <= 0) return rent
+  const omitted = new Set(rent.window.slice(0, at))
+  const held = (owner: Option.Option<MessageId>) =>
+    Option.match(owner, { onNone: () => true, onSome: (id) => !omitted.has(id) })
+  const live = rent.live.filter((item) => held(item.owner))
+  return {
+    ...rent,
+    live,
+    pending: rent.pending.filter((item) => !omitted.has(item.owner)),
+    contextTokens: rent.contextTokens - sumTokens(rent.live) + sumTokens(live),
+    window: rent.window.slice(at),
+  }
+}
+
+/**
  * One event of the branch into the meter: a stored message joins the next
  * call, a step's receipt settles its call, a window marker opens a window.
  */
 export const foldContextRent = (rent: ContextRent, event: AgentEvent): ContextRent => {
   if (event._tag === "MessageReceived") {
+    // The model is never sent a hidden message (`runTurn`).
+    if (event.message.metadata?.hidden === true) return rent
     // What came before the marker is summarized or dropped: the marker holds it.
     if (Option.isSome(contextWindowOf(event.message)))
-      return { ...rent, pending: [], marker: Option.some(event.message.id) }
+      return { ...rent, pending: [], marker: Option.some(event.message.id), window: [] }
     const added = pendingOf(event.message, rent).filter(
       (item) => item.chars > 0 || Option.isSome(item.tokens),
     )
-    return { ...rent, pending: [...rent.pending, ...added] }
+    return {
+      ...rent,
+      pending: [...rent.pending, ...added],
+      window: [...rent.window, event.message.id],
+    }
   }
+  if (event._tag === "ModelContextProjected")
+    return Option.match(Option.fromUndefinedOr(event.keptFromMessageId), {
+      onNone: () => rent,
+      onSome: (keptFrom) => omittedBefore(rent, keptFrom),
+    })
   if (event._tag !== "StreamEnded" || Predicate.isUndefined(event.usage)) return rent
   const usage = event.usage
   if (usage.inputTokens <= 0) return rent
@@ -2457,6 +2514,23 @@ export const contextRenters = (
     )
     .sort((left, right) => right.rent - left.rent)
     .slice(0, limit)
+
+/**
+ * The renters of the context a projection sends: none once it hands off (the
+ * window starts at the next call), and none it omitted.
+ */
+export const projectionRenters = (
+  rent: ContextRent,
+  projected: { readonly compacted: boolean; readonly keptFrom: Option.Option<MessageId> },
+): ReadonlyArray<ContextRenter> => {
+  if (projected.compacted || Option.isSome(rent.marker)) return []
+  return contextRenters(
+    Option.match(projected.keptFrom, {
+      onNone: () => rent,
+      onSome: (keptFrom) => omittedBefore(rent, keptFrom),
+    }),
+  )
+}
 
 // ── turn-window ─────────────────────────────────────────────────────────────
 

@@ -42,6 +42,7 @@ import {
   contextRenters,
   emptyContextRent,
   foldContextRent,
+  projectionRenters,
   hostContextUpdateText,
   isHostContextUpdate,
   promptForModel,
@@ -118,6 +119,7 @@ import {
   EventId,
   EventStore,
   MessageReceived,
+  ModelContextProjected,
   StreamEnded,
 } from "../../src/domain/event"
 import * as Response from "effect/ai/Response"
@@ -239,6 +241,7 @@ describe("projectModelContext", () => {
     const projection = success(projectModelContext(messages, budget(400)))
     expect(ids(projection)).toEqual(["prompt", "a1", "line", "a2"])
     expect(projection.omittedMessageIds).toEqual([MessageId.make("old")])
+    expect(projection.keptFromMessageId).toEqual(Option.some(MessageId.make("prompt")))
   })
 
   test("a window whose newest handoff marker and later steps exceed the budget fails as BudgetExceeded", () => {
@@ -647,6 +650,7 @@ describe("model input cap and measured size", () => {
 
     expect(uncapped.availableInputTokens).toBe(900)
     expect(uncapped.omittedMessageIds).toEqual([])
+    expect(uncapped.keptFromMessageId).toEqual(Option.none())
     expect(underCap.availableInputTokens).toBe(100)
     expect(underCap.omittedMessageIds).toEqual([MessageId.make("u1"), MessageId.make("a1")])
   })
@@ -839,6 +843,10 @@ describe("context compaction degrade path", () => {
       expect(last?.role).toBe("assistant")
       expect(result.metrics.context?.omittedMessages).toBeGreaterThan(0)
       expect(result.metrics.context?.compactions).toBe(0)
+      // The receipt names where the sent context starts, past what it omitted.
+      const projected = result.events.find((event) => event._tag === "ModelContextProjected")
+      const keptFrom = projected?._tag === "ModelContextProjected" && projected.keptFromMessageId
+      expect(result.durable.findIndex((message) => message.id === keptFrom)).toBeGreaterThan(0)
     }),
   )
 })
@@ -3677,8 +3685,11 @@ describe("context rent", () => {
       ...twoCalls({ read: 1_000, write: 1_050 }),
       // The second step's reply is stored after its receipt, as the turn writes it.
       received(stepReply(2)),
-      stepEnded({ step: 3, input: 2_080, output: 10, read: 2_050, write: 30 }),
+      // A prompt shares the growth: by length the reply would take 77 of it.
+      received(message("u2", "user", [text("b".repeat(400))])),
+      stepEnded({ step: 3, input: 2_280, output: 10, read: 2_050, write: 230 }),
     ])
+    // 1.25 × 230 written: 30 of 230 to the reply, the prompt's 200 the rest.
     expect(rent.find((renter) => renter.id === assistantMessageIdForTurn(turnId, 2))).toEqual({
       id: assistantMessageIdForTurn(turnId, 2),
       kind: "reply",
@@ -3686,6 +3697,62 @@ describe("context rent", () => {
       rent: 38,
       calls: 1,
     })
+    expect(rent.find((renter) => renter.id === "u2")).toMatchObject({ tokens: 200, rent: 250 })
+  })
+
+  test("a hidden message is never sent, so it takes none of the growth", () => {
+    const [prompt, first, reply, result, second] = twoCalls({ read: 1_000, write: 1_050 })
+    const note = message("h1", "assistant", [text("x".repeat(10_000))], { hidden: true })
+    expect(rentOf([prompt!, first!, reply!, received(note), result!, second!])).toEqual(
+      rentOf(twoCalls({ read: 1_000, write: 1_050 })),
+    )
+  })
+
+  /** The projection's receipt; it names the first message it kept past an omission. */
+  const projected = (keptFrom: string): AgentEvent =>
+    ModelContextProjected.make({
+      sessionId,
+      branchId,
+      estimatedTokens: 2_000,
+      availableInputTokens: 2_000,
+      contextLimitTokens: 4_000,
+      omittedMessages: 2,
+      keptFromMessageId: MessageId.make(keptFrom),
+      compacted: false,
+    })
+
+  test("an omitted message's items leave the context, and the next call charges what is left", () => {
+    const rent = rentOf([
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      received(message("u2", "user", [text("next")])),
+      // The prompt and the first reply leave; the tool result and the new prompt stay.
+      projected("t1"),
+      stepEnded({ step: 3, input: 2_010, output: 10, read: 2_000, write: 10 }),
+    ])
+    expect(rent.map((renter) => renter.id)).toEqual(["call-1", "u2"])
+    // 0.1 × 2,000 read, 1,000 of the 2,000 left of it.
+    expect(rent[0]).toMatchObject({ tokens: 1_000, rent: 1_350, calls: 2 })
+  })
+
+  test("a projection reports the renters of what it sends: none it omitted, none once it hands off", () => {
+    const rent = [
+      ...twoCalls({ read: 1_000, write: 1_050 }),
+      received(message("u2", "user", [text("next")])),
+    ].reduce(foldContextRent, emptyContextRent)
+    const reply = assistantMessageIdForTurn(turnId, 1)
+    expect(contextRenters(rent).map((renter) => renter.id)).toEqual(["call-1", reply])
+    expect(
+      projectionRenters(rent, { compacted: false, keptFrom: Option.none() }).map(
+        (renter) => renter.id,
+      ),
+    ).toEqual(["call-1", reply])
+    expect(
+      projectionRenters(rent, {
+        compacted: false,
+        keptFrom: Option.some(MessageId.make("t1")),
+      }).map((renter) => renter.id),
+    ).toEqual(["call-1"])
+    expect(projectionRenters(rent, { compacted: true, keptFrom: Option.none() })).toEqual([])
   })
 
   test("a window marker starts a window: the base again, and the marker holding the rest", () => {
@@ -3749,6 +3816,53 @@ describe("context rent", () => {
       expect(renters.at(2)).toContainEqual(
         expect.objectContaining({ id: "call-rent", kind: "tool", tool: "lookup", calls: 1 }),
       )
+    }),
+  )
+
+  it.live("a projection that hands off names none of the window it leaves", () =>
+    Effect.gen(function* () {
+      const result = yield* runOverflowTurn({
+        steps: [
+          {
+            parts: [
+              toolCallPart("lookup", {}, { toolCallId: ToolCallId.make("call-rent") }),
+              finishPart({
+                finishReason: "tool-calls",
+                usage: { inputTokens: 1_000, outputTokens: 20, cacheWriteTokens: 1_000 },
+              }),
+            ],
+          },
+          {
+            parts: [
+              textDeltaPart("first reply"),
+              finishPart({
+                finishReason: "stop",
+                usage: {
+                  inputTokens: 1_400,
+                  outputTokens: 30,
+                  cacheReadTokens: 1_000,
+                  cacheWriteTokens: 400,
+                },
+              }),
+            ],
+          },
+          overflowStep,
+          textStep("reply after truncation"),
+        ],
+        model: wideModel,
+        extraLayers: [],
+        prompts: ["first", "second"],
+      })
+      const projections = result.events.flatMap((event) => {
+        if (event._tag !== "ModelContextProjected") return []
+        return [event]
+      })
+      // The refused request still carried the tool result; the retry drops it behind a marker.
+      expect(projections.at(2)?.renters).toContainEqual(
+        expect.objectContaining({ id: "call-rent" }),
+      )
+      expect(projections.at(3)?.compacted).toBe(true)
+      expect(projections.at(3)?.renters).toEqual([])
     }),
   )
 

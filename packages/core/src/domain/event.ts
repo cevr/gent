@@ -330,6 +330,11 @@ export const AgentEvent = Schema.TaggedUnion({
     /** The model's input cap the step ran under; absent when its catalog names none. */
     inputLimitTokens: Schema.optional(Schema.Natural),
     omittedMessages: Schema.Natural,
+    /**
+     * The first message the projection sent past the ones it omitted. Absent
+     * when it omitted none, and in receipts from before it was recorded.
+     */
+    keptFromMessageId: Schema.optional(MessageId),
     /** The handoff marker leading this window, when it carries a summary. */
     handoffMessageId: Schema.optional(MessageId),
     /** This projection wrote a handoff. */

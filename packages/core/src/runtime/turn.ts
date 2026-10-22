@@ -127,7 +127,6 @@ import {
 } from "../domain/driver.js"
 import {
   type AgentEvent,
-  type ContextRenter,
   CredentialAssigned,
   ErrorOccurred,
   type EventEnvelope,
@@ -205,7 +204,6 @@ import {
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
   type ContextRent,
-  contextRenters,
   currentHandoffId,
   emptyContextRent,
   estimateHistoryTokens,
@@ -215,6 +213,7 @@ import {
   messagesInCurrentWindow,
   isTokenLimit,
   outputReserveTokens,
+  projectionRenters,
   ModelContextBudget,
   ModelContextCapabilityError,
   ModelContextCapabilityFailure,
@@ -3297,8 +3296,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   activeStream: ActiveStreamHandle
   /** What the provider reported the branch's last settled step took. */
   measure: Option.Option<StepMeasure>
-  /** The context's costliest items so far (`contextRenters`). */
-  renters: ReadonlyArray<ContextRenter>
+  /** What each item of the context has cost so far (`foldContextRent`). */
+  rent: ContextRent
   /** When the branch's last model request went out, in epoch milliseconds. */
   lastCallAtMillis: Option.Option<number>
   /** The model the branch's last model request ran on. */
@@ -3884,13 +3883,17 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     measure: params.measure,
   })
   const handoffMessageId = Option.getOrUndefined(currentHandoffId(finalWindow))
+  const renters = projectionRenters(params.rent, {
+    compacted,
+    keptFrom: projection.keptFromMessageId,
+  })
   yield* ledger.recordProjection({
     estimatedTokens: projection.estimatedTokens,
     availableInputTokens: projection.availableInputTokens,
     contextLimitTokens: stepWindow.contextLimit,
     omittedMessages: projection.omittedMessageIds.length,
     handoffMessageId,
-    renters: params.renters,
+    renters,
   })
   // Acknowledged only after the projection it shaped succeeded, so a failed
   // projection retries it and a successful one applies it exactly once.
@@ -3905,9 +3908,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       reservedOutputTokens: stepWindow.budget.reservedOutputTokens,
       inputLimitTokens: stepWindow.budget.inputLimitTokens,
       omittedMessages: projection.omittedMessageIds.length,
+      keptFromMessageId: Option.getOrUndefined(projection.keptFromMessageId),
       handoffMessageId,
       compacted,
-      renters: params.renters,
+      renters,
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
@@ -5276,7 +5280,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       resolved: ResolvedTurnContext
       activeStream: ActiveStreamHandle
       measure: Option.Option<StepMeasure>
-      renters: ReadonlyArray<ContextRenter>
+      rent: ContextRent
       lastCallAtMillis: Option.Option<number>
       lastCallModel: Option.Option<ModelIdType>
       stepEfforts: ReadonlyMap<string, StepEffort>
@@ -5331,7 +5335,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
         measure: params.measure,
-        renters: params.renters,
+        rent: params.rent,
         lastCallAtMillis: params.lastCallAtMillis,
         lastCallModel: params.lastCallModel,
         stepEfforts: params.stepEfforts,
@@ -6529,7 +6533,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             resolved,
             activeStream,
             measure: knownSteps.measure,
-            renters: contextRenters(knownSteps.rent),
+            rent: knownSteps.rent,
             lastCallAtMillis: knownSteps.lastCallAtMillis,
             lastCallModel: knownSteps.lastCallModel,
             stepEfforts: knownSteps.stepEfforts,

@@ -42,12 +42,18 @@
   base, each later call spreads its cache reads (0.1) and a cache miss's
   re-write over the held items by size, a reply joins at its step's output
   tokens and the rest of the growth splits by length, and a window marker
-  starts a window with the marker holding what came before. The turn keeps
-  the fold beside its step reads (`KnownSteps.rent`), each projection carries
-  the costliest five (`ModelContextProjected.renters`), `context.status()`
+  starts a window with the marker holding what came before. The meter holds
+  what the model was sent: a hidden message never joins it, and a projection
+  that omits the oldest messages names the first it kept
+  (`ModelContextProjected.keptFromMessageId`), so their items leave it. The
+  turn keeps the fold beside its step reads (`KnownSteps.rent`), each
+  projection carries the costliest five of what it sends
+  (`ModelContextProjected.renters`, none once it hands off), `context.status()`
   returns them, and the TUI's gauge names the costliest (`ctx 42% · read
   12k`). Gent charges a tool result at its bounded size, the text its model
-  sees. A forked branch starts its meter fresh.
+  sees. The meter reads the turn's calls only: a compaction summary's call
+  reports its usage on `CompactionSummary`, not on a step. A forked branch
+  starts its meter fresh.
 - The window a role compacts at is a seam too: `ModelContextWindowPolicy`
   (`@gent/core/extensions/branch-tools`) answers `window({ agent, child })`
   with `Option<number>`. The loop reads it with `Effect.serviceOption`, so
