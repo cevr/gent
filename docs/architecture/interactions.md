@@ -65,9 +65,9 @@ extension request runs, a message it sends to the request's own branch keeps
 the client origin. A send to any other branch, or one made after the request
 ended, is an extension send. Every extension gets the same rule. Neither
 boundary passes the loop's marks: `joinedTurn` and a runtime custom type
-(`continuation`, `steering`, ...) would make recovery skip the turn, so both
-are removed; an extension keeps its own custom types, a client sets none. A child row stored
-before the stamp existed has no origin, so its turn declines on recovery. A
+(`RuntimeUserMessageType` in `domain/message.ts`) would make recovery skip the
+turn, so both are removed; an extension keeps its own custom types, a client
+sets none. A
 declined turn's `approve` answers at once, and the tools that ask the user are
 withheld. The loop reads the fact from the turn's opening message and the
 stored session, so it survives a restart. The decline's notes say to report

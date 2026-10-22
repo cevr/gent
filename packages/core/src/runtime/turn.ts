@@ -6064,9 +6064,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * - The record names a pending step. Its assistant message carries the
      *   call arguments, which the row deliberately does not duplicate.
      * - The turn has no row. Either it is starting -- its first step has not
-     *   committed yet, so there is nothing to resume -- or it was written
-     *   before the record existed. The probe separates those two, and adopts
-     *   whatever it derives, so it runs at most once per turn.
+     *   committed yet, so there is nothing to resume -- or a crash came
+     *   between its messages and its first record write. The probe separates
+     *   those two, and adopts whatever it derives, so it runs at most once per
+     *   turn.
      */
     const resolveTurnPosition = Effect.fn("AgentLoop.resolveTurnPosition")(function* (
       messageId: RunningState["message"]["id"],

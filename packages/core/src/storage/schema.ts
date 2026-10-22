@@ -43,8 +43,7 @@ export const SessionRow = Schema.Struct({
   name: Schema.NullOr(Schema.String),
   cwd: Schema.NullOr(Schema.String),
   model_id: Schema.NullOr(ModelId),
-  // Read as text: a level this build no longer knows reads as unset (the
-  // default), so an older session still loads (see rowToSession).
+  // Text: `auto` or a reasoning level (see rowToSession).
   reasoning_level: Schema.NullOr(Schema.String),
   active_branch_id: Schema.NullOr(BranchId),
   parent_session_id: Schema.NullOr(SessionId),
